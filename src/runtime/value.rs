@@ -3,6 +3,7 @@
 //! Lua 5.5's native i64 forces NaN-boxed integers into 47-bit smis plus
 //! range checks, losing 24% on the arithmetic dispatch path.
 
+use crate::runtime::function::LuaClosure;
 use crate::runtime::heap::Gc;
 use crate::runtime::string::LuaStr;
 use crate::runtime::table::Table;
@@ -15,6 +16,7 @@ pub enum Value {
     Float(f64),
     Str(Gc<LuaStr>),
     Table(Gc<Table>),
+    Closure(Gc<LuaClosure>),
 }
 
 impl Value {
@@ -25,6 +27,7 @@ impl Value {
             Value::Int(_) | Value::Float(_) => "number",
             Value::Str(_) => "string",
             Value::Table(_) => "table",
+            Value::Closure(_) => "function",
         }
     }
 
@@ -51,6 +54,7 @@ impl Value {
             }
             (Value::Str(a), Value::Str(b)) => str_eq(a, b),
             (Value::Table(a), Value::Table(b)) => a.ptr_eq(b),
+            (Value::Closure(a), Value::Closure(b)) => a.ptr_eq(b),
             _ => false,
         }
     }
@@ -85,9 +89,14 @@ pub(crate) mod raw {
     pub const TRUE: u8 = 2;
     pub const INT: u8 = 3;
     pub const FLOAT: u8 = 4;
-    pub const STR: u8 = 5;
-    pub const TABLE: u8 = 6;
+    /// reserved for native functions (P03 slice 3: not heap-managed)
+    #[allow(dead_code)]
+    pub const NATIVE: u8 = 5;
+    pub const STR: u8 = 6;
+    pub const TABLE: u8 = 7;
+    pub const CLOSURE: u8 = 8;
 
+    /// Heap-managed tags only (NATIVE is a bare fn pointer).
     pub fn is_gc(tag: u8) -> bool {
         tag >= STR
     }
@@ -100,6 +109,7 @@ pub(crate) union RawVal {
     pub f: f64,
     pub s: *mut LuaStr,
     pub t: *mut Table,
+    pub c: *mut LuaClosure,
 }
 
 impl RawVal {
@@ -116,6 +126,7 @@ impl Value {
             Value::Float(f) => (raw::FLOAT, RawVal { f }),
             Value::Str(s) => (raw::STR, RawVal { s: s.as_ptr() }),
             Value::Table(t) => (raw::TABLE, RawVal { t: t.as_ptr() }),
+            Value::Closure(c) => (raw::CLOSURE, RawVal { c: c.as_ptr() }),
         }
     }
 
@@ -131,6 +142,7 @@ impl Value {
                 raw::FLOAT => Value::Float(v.f),
                 raw::STR => Value::Str(Gc::from_ptr(v.s)),
                 raw::TABLE => Value::Table(Gc::from_ptr(v.t)),
+                raw::CLOSURE => Value::Closure(Gc::from_ptr(v.c)),
                 _ => unreachable!("bad raw value tag"),
             }
         }

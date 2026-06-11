@@ -7,3 +7,4 @@ pub mod frontend;
 pub mod numeric;
 pub mod runtime;
 pub mod version;
+pub mod vm;

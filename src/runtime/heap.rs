@@ -10,6 +10,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 
+use crate::runtime::function::{LuaClosure, Proto, UpvalState, Upvalue};
 use crate::runtime::string::{self, LuaStr, StringTable};
 use crate::runtime::table::Table;
 use crate::runtime::value::Value;
@@ -19,6 +20,9 @@ use crate::runtime::value::Value;
 pub enum ObjTag {
     Str,
     Table,
+    Proto,
+    Closure,
+    Upvalue,
 }
 
 #[repr(C)]
@@ -113,10 +117,38 @@ impl Heap {
         self.live += 1;
     }
 
-    pub fn new_table(&mut self) -> Gc<Table> {
-        let p = Box::into_raw(Box::new(Table::new(GcHeader::new(ObjTag::Table))));
+    /// Take ownership of a boxed object and put it under GC management.
+    /// SAFETY-by-convention: `T` must be `repr(C)` with a `GcHeader` first
+    /// field whose tag matches `T` (enforced by the typed constructors).
+    pub(crate) fn adopt<T>(&mut self, obj: Box<T>) -> Gc<T> {
+        let p = Box::into_raw(obj);
         self.link(p as *mut GcHeader);
         Gc::from_ptr(p)
+    }
+
+    pub fn new_table(&mut self) -> Gc<Table> {
+        self.adopt(Box::new(Table::new(GcHeader::new(ObjTag::Table))))
+    }
+
+    /// Adopt a compiler-built prototype (its `hdr` must carry ObjTag::Proto).
+    pub fn adopt_proto(&mut self, proto: Proto) -> Gc<Proto> {
+        debug_assert!(proto.hdr.tag == ObjTag::Proto);
+        self.adopt(Box::new(proto))
+    }
+
+    pub fn new_closure(&mut self, proto: Gc<Proto>, upvals: Box<[Gc<Upvalue>]>) -> Gc<LuaClosure> {
+        self.adopt(Box::new(LuaClosure {
+            hdr: GcHeader::new(ObjTag::Closure),
+            proto,
+            upvals,
+        }))
+    }
+
+    pub fn new_upvalue(&mut self, state: UpvalState) -> Gc<Upvalue> {
+        self.adopt(Box::new(Upvalue {
+            hdr: GcHeader::new(ObjTag::Upvalue),
+            state,
+        }))
     }
 
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned.
@@ -145,15 +177,18 @@ impl Heap {
     /// Mark from `roots`, sweep everything unreachable. Returns the number of
     /// objects freed.
     pub fn collect(&mut self, roots: &[Value]) -> usize {
-        let mut stack: Vec<*mut GcHeader> = Vec::new();
+        let mut m = Marker { stack: Vec::new() };
         for &r in roots {
-            mark_value(r, &mut stack);
+            m.value(r);
         }
-        while let Some(h) = stack.pop() {
+        while let Some(h) = m.stack.pop() {
             unsafe {
-                if (*h).tag == ObjTag::Table {
-                    let t = &*(h as *mut Table);
-                    t.trace(&mut |v| mark_value(v, &mut stack));
+                match (*h).tag {
+                    ObjTag::Str => {}
+                    ObjTag::Table => (*(h as *mut Table)).trace(&mut m),
+                    ObjTag::Proto => (*(h as *mut Proto)).trace(&mut m),
+                    ObjTag::Closure => (*(h as *mut LuaClosure)).trace(&mut m),
+                    ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(&mut m),
                 }
             }
         }
@@ -191,6 +226,9 @@ impl Heap {
         unsafe {
             match (*h).tag {
                 ObjTag::Table => drop(Box::from_raw(h as *mut Table)),
+                ObjTag::Proto => drop(Box::from_raw(h as *mut Proto)),
+                ObjTag::Closure => drop(Box::from_raw(h as *mut LuaClosure)),
+                ObjTag::Upvalue => drop(Box::from_raw(h as *mut Upvalue)),
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
                     if (*s).is_short() {
@@ -223,16 +261,29 @@ impl Default for Heap {
     }
 }
 
-fn mark_value(v: Value, stack: &mut Vec<*mut GcHeader>) {
-    let h = match v {
-        Value::Str(s) => s.as_ptr() as *mut GcHeader,
-        Value::Table(t) => t.as_ptr() as *mut GcHeader,
-        _ => return,
-    };
-    unsafe {
-        if (*h).flags & MARK == 0 {
-            (*h).flags |= MARK;
-            stack.push(h);
+/// Mark accumulator: gray stack plus entry points for Values and bare
+/// object headers (Protos/Upvalues are not first-class Values).
+pub(crate) struct Marker {
+    stack: Vec<*mut GcHeader>,
+}
+
+impl Marker {
+    pub(crate) fn value(&mut self, v: Value) {
+        let h = match v {
+            Value::Str(s) => s.as_ptr() as *mut GcHeader,
+            Value::Table(t) => t.as_ptr() as *mut GcHeader,
+            Value::Closure(c) => c.as_ptr() as *mut GcHeader,
+            _ => return,
+        };
+        self.header(h);
+    }
+
+    pub(crate) fn header(&mut self, h: *mut GcHeader) {
+        unsafe {
+            if (*h).flags & MARK == 0 {
+                (*h).flags |= MARK;
+                self.stack.push(h);
+            }
         }
     }
 }
@@ -254,6 +305,52 @@ fn make_seed() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::isa::{Inst, Op};
+
+    #[test]
+    fn collect_traces_function_objects() {
+        let mut heap = Heap::new();
+        let source = heap.intern(b"@test");
+        let kstr = heap.intern(b"a-constant-string");
+        let inner = Proto {
+            hdr: GcHeader::new(ObjTag::Proto),
+            code: Box::new([Inst::iabc(Op::Return0, 0, 0, 0, false)]),
+            consts: Box::new([]),
+            protos: Box::new([]),
+            upvals: Box::new([]),
+            num_params: 0,
+            is_vararg: false,
+            max_stack: 2,
+            lines: Box::new([1]),
+            source,
+            line_defined: 1,
+        };
+        let inner = heap.adopt_proto(inner);
+        let outer = Proto {
+            hdr: GcHeader::new(ObjTag::Proto),
+            code: Box::new([Inst::iabc(Op::Return0, 0, 0, 0, false)]),
+            consts: Box::new([Value::Str(kstr)]),
+            protos: Box::new([inner]),
+            upvals: Box::new([]),
+            num_params: 0,
+            is_vararg: true,
+            max_stack: 2,
+            lines: Box::new([1]),
+            source,
+            line_defined: 0,
+        };
+        let outer = heap.adopt_proto(outer);
+        let captured = heap.intern(b"captured-value-string-xxxxxxxxxxxxxxxxxxxxxxxxx");
+        let uv = heap.new_upvalue(UpvalState::Closed(Value::Str(captured)));
+        let cl = heap.new_closure(outer, Box::new([uv]));
+        // objects: source, kstr, inner, outer, captured, uv, cl
+        assert_eq!(heap.live_objects(), 7);
+        // rooting the closure keeps the whole graph alive
+        assert_eq!(heap.collect(&[Value::Closure(cl)]), 0);
+        assert_eq!(heap.live_objects(), 7);
+        assert_eq!(heap.collect(&[]), 7);
+        assert_eq!(heap.live_objects(), 0);
+    }
 
     #[test]
     fn collect_unreachable() {
