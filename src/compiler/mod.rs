@@ -71,12 +71,39 @@ struct BlockCx {
     reg_floor: u32,
     is_loop: bool,
     breaks: Vec<usize>,
+    /// visible labels defined in this block
+    labels: Vec<LabelDef>,
+    /// forward gotos not yet matched to a label
+    gotos: Vec<GotoRef>,
+    /// explicit `global` declarations in this block (name, read_only)
+    gdecls: Vec<(Box<str>, bool)>,
+    /// `global [attrib] *` in this block: Some(read_only)
+    collective: Option<bool>,
+    /// any to-be-closed local declared in this block
+    has_tbc: bool,
+}
+
+struct LabelDef {
+    name: Box<str>,
+    pc: usize,
+    /// locals active at the label (trailing labels use the block floor)
+    nactive: usize,
+}
+
+struct GotoRef {
+    name: Box<str>,
+    jmp_pc: usize,
+    line: u32,
+    nactive: usize,
 }
 
 enum VarKind {
     Local(u32),
     Upval(u32),
-    Global,
+    /// global access; read_only from 5.5 declarations
+    Global {
+        read_only: bool,
+    },
 }
 
 /// Where an expression's value currently lives.
@@ -288,6 +315,11 @@ impl<'a> Compiler<'a> {
             reg_floor: floor,
             is_loop,
             breaks: Vec::new(),
+            labels: Vec::new(),
+            gotos: Vec::new(),
+            gdecls: Vec::new(),
+            collective: None,
+            has_tbc: false,
         });
     }
 
@@ -296,18 +328,185 @@ impl<'a> Compiler<'a> {
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
         self.l().locals.truncate(b.first_local);
         self.set_freereg(b.reg_floor);
-        if captured {
+        if captured || b.has_tbc {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         for pc in b.breaks {
             self.patch_jump(pc)?;
         }
+        // propagate unmatched gotos to the enclosing block (the label may
+        // appear after this block); a goto leaving a block with captured or
+        // to-be-closed locals must run CLOSE first — route it through a
+        // trampoline
+        if !b.gotos.is_empty() {
+            let mut gotos = b.gotos;
+            if captured || b.has_tbc {
+                // each distinct label name gets its own close trampoline
+                let mut names: Vec<Box<str>> = Vec::new();
+                for g in &gotos {
+                    if !names.contains(&g.name) {
+                        names.push(g.name.clone());
+                    }
+                }
+                let skip = self.emit_jump();
+                let mut routed = Vec::with_capacity(names.len());
+                for name in names {
+                    let tramp = self.here();
+                    self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
+                    let new_jmp = self.emit_jump();
+                    for g in gotos.iter().filter(|g| g.name == name) {
+                        let off = tramp as i64 - g.jmp_pc as i64 - 1;
+                        if off.unsigned_abs() > MAX_SJ as u64 {
+                            return Err(self.err(g.line, "control structure too long"));
+                        }
+                        self.l().code[g.jmp_pc].set_sj(off as i32);
+                    }
+                    let line = gotos
+                        .iter()
+                        .find(|g| g.name == name)
+                        .map(|g| g.line)
+                        .expect("goto exists");
+                    routed.push(GotoRef {
+                        name,
+                        jmp_pc: new_jmp,
+                        line,
+                        nactive: b.first_local,
+                    });
+                }
+                self.patch_jump(skip)?;
+                gotos = routed;
+            }
+            let cap = self.lr().locals.len();
+            match self.l().blocks.last_mut() {
+                Some(parent) => {
+                    for mut g in gotos {
+                        g.nactive = g.nactive.min(cap);
+                        parent.gotos.push(g);
+                    }
+                }
+                None => {
+                    let g = &gotos[0];
+                    return Err(self.err(g.line, format!("no visible label '{}' for goto", g.name)));
+                }
+            }
+        }
         Ok(())
     }
 
+    /// Define a label here; match pending forward gotos.
+    fn define_label(&mut self, name: &str, line: u32, trailing: bool) -> Result<(), SyntaxError> {
+        let here = self.here();
+        let nactive = if trailing {
+            self.lr().blocks.last().expect("no block").first_local
+        } else {
+            self.lr().locals.len()
+        };
+        let b = self.lr().blocks.last().expect("no block");
+        if b.labels.iter().any(|l| &*l.name == name) {
+            return Err(self.err(line, format!("label '{name}' already defined")));
+        }
+        let first_local = b.first_local;
+        // match pending gotos of this block
+        let mut pending = std::mem::take(&mut self.l().blocks.last_mut().expect("no block").gotos);
+        let mut kept = Vec::new();
+        for g in pending.drain(..) {
+            if &*g.name == name {
+                if nactive > g.nactive {
+                    let lname = self.lr().locals[g.nactive].name.clone();
+                    return Err(self.err(
+                        g.line,
+                        format!("<goto {name}> jumps into the scope of local '{lname}'"),
+                    ));
+                }
+                let off = here as i64 - g.jmp_pc as i64 - 1;
+                if off.unsigned_abs() > MAX_SJ as u64 {
+                    return Err(self.err(g.line, "control structure too long"));
+                }
+                self.l().code[g.jmp_pc].set_sj(off as i32);
+            } else {
+                kept.push(g);
+            }
+        }
+        let blk = self.l().blocks.last_mut().expect("no block");
+        blk.gotos = kept;
+        blk.labels.push(LabelDef {
+            name: name.into(),
+            pc: here,
+            nactive: nactive.max(first_local),
+        });
+        Ok(())
+    }
+
+    /// Compile `goto name`: backward jump if a label is visible, else a
+    /// pending forward reference in the current block.
+    fn goto_stat(&mut self, name: &str, line: u32) -> Result<(), SyntaxError> {
+        self.last_line = line;
+        // search visible labels innermost-first (same function only)
+        let mut found: Option<(usize, usize)> = None; // (pc, nactive)
+        for b in self.lr().blocks.iter().rev() {
+            if let Some(l) = b.labels.iter().rev().find(|l| &*l.name == name) {
+                found = Some((l.pc, l.nactive));
+                break;
+            }
+        }
+        if let Some((pc, nactive)) = found {
+            // jumping back discards locals declared after the label
+            if self.lr().locals.len() > nactive {
+                let floor = self.lr().locals[nactive].reg;
+                self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+            }
+            self.jump_back(pc)?;
+            return Ok(());
+        }
+        let jmp = self.emit_jump();
+        let nactive = self.lr().locals.len();
+        self.l()
+            .blocks
+            .last_mut()
+            .expect("no block")
+            .gotos
+            .push(GotoRef {
+                name: name.into(),
+                jmp_pc: jmp,
+                line,
+                nactive,
+            });
+        Ok(())
+    }
+
+    /// 5.5 global-declaration resolution: explicit declaration > innermost
+    /// collective `global *` > implicit chunk default (void once any
+    /// declaration is in scope).
+    fn resolve_global_kind(&mut self, name: &str, line: u32) -> Result<VarKind, SyntaxError> {
+        let mut innermost_collective: Option<bool> = None;
+        let mut any_decl = false;
+        for lvl in self.levels.iter().rev() {
+            for b in lvl.blocks.iter().rev() {
+                if let Some((_, ro)) = b.gdecls.iter().rev().find(|(n, _)| &**n == name) {
+                    return Ok(VarKind::Global { read_only: *ro });
+                }
+                if innermost_collective.is_none()
+                    && let Some(ro) = b.collective
+                {
+                    innermost_collective = Some(ro);
+                }
+                any_decl |= !b.gdecls.is_empty() || b.collective.is_some();
+            }
+        }
+        if let Some(ro) = innermost_collective {
+            return Ok(VarKind::Global { read_only: ro });
+        }
+        if any_decl {
+            return Err(self.err(line, format!("undeclared global variable '{name}'")));
+        }
+        Ok(VarKind::Global { read_only: false })
+    }
+
+    /// The innermost block needs a CLOSE on its back-edge/exit paths when it
+    /// captured locals or declared to-be-closed ones.
     fn block_captured(&self) -> bool {
         let b = self.lr().blocks.last().expect("no block");
-        self.lr().locals[b.first_local..].iter().any(|l| l.captured)
+        b.has_tbc || self.lr().locals[b.first_local..].iter().any(|l| l.captured)
     }
 
     fn block_floor(&self) -> u32 {
@@ -345,10 +544,10 @@ impl<'a> Compiler<'a> {
             return VarKind::Upval(ui as u32);
         }
         if li == 0 {
-            return VarKind::Global;
+            return VarKind::Global { read_only: false };
         }
         match self.resolve_at(li - 1, name) {
-            VarKind::Global => VarKind::Global,
+            VarKind::Global { .. } => VarKind::Global { read_only: false },
             VarKind::Local(reg) => {
                 if let Some(idx) = self.levels[li - 1]
                     .locals
@@ -446,7 +645,13 @@ impl<'a> Compiler<'a> {
                 0,
                 false,
             )))),
-            VarKind::Global => self.global_access(name),
+            VarKind::Global { .. } => {
+                // declaration check (5.5): undeclared names error under a
+                // strict regime; reads are fine for const globals
+                let line = self.last_line;
+                self.resolve_global_kind(name, line)?;
+                self.global_access(name)
+            }
         }
     }
 
@@ -479,7 +684,7 @@ impl<'a> Compiler<'a> {
                     VarKind::Local(r) => {
                         self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
-                    VarKind::Global => unreachable!("_ENV always resolves"),
+                    VarKind::Global { .. } => unreachable!("_ENV always resolves"),
                 }
                 self.load_const(er + 1, c);
                 self.set_freereg(er);
@@ -986,7 +1191,18 @@ impl<'a> Compiler<'a> {
     // ---- statements ----
 
     fn stat_block(&mut self, b: &Block) -> Result<(), SyntaxError> {
-        for &sid in &b.stats {
+        for (i, &sid) in b.stats.iter().enumerate() {
+            if let Stat::Label(n) = self.ast.stat(sid) {
+                // a trailing label (only labels after it) does not enter the
+                // scope of the block's locals (continue-style jumps)
+                let trailing = b.stats[i + 1..]
+                    .iter()
+                    .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
+                let (name, line) = (n.text.clone(), n.line);
+                self.last_line = line;
+                self.define_label(&name, line, trailing)?;
+                continue;
+            }
             self.stat(sid)?;
         }
         Ok(())
@@ -1009,10 +1225,10 @@ impl<'a> Compiler<'a> {
                 names,
                 exprs,
             } => {
-                let _ = collective; // attrib enforcement: slice 5
+                let collective = *collective;
                 let names: Vec<AttribName> = names.clone();
                 let exprs: Vec<ExprId> = exprs.clone();
-                self.local_stat(&names, &exprs)
+                self.local_stat(collective, &names, &exprs)
             }
             Stat::Assign { targets, exprs } => {
                 let targets: Vec<ExprId> = targets.clone();
@@ -1109,10 +1325,15 @@ impl<'a> Compiler<'a> {
                 Ok(())
             }
             Stat::GlobalFunction { name, body } => {
-                // 5.5 global-declaration checking arrives in slice 5; compile
-                // as a plain global assignment for now
+                // `global function f` declares f, then assigns the closure
                 let (name, body) = (name.clone(), body.clone());
                 self.last_line = name.line;
+                self.l()
+                    .blocks
+                    .last_mut()
+                    .expect("no block")
+                    .gdecls
+                    .push((name.text.clone(), false));
                 let saved = self.lr().freereg;
                 let f = self.function_exp(&body, false)?;
                 let r = self.exp_to_anyreg(f)?;
@@ -1120,14 +1341,69 @@ impl<'a> Compiler<'a> {
                 self.set_freereg(saved);
                 Ok(())
             }
-            Stat::Global { .. } | Stat::GlobalAll { .. } => Err(self.err(
-                self.last_line,
-                "global declarations are not supported yet (P03 slice 5)",
-            )),
-            Stat::Goto(n) | Stat::Label(n) => {
-                Err(self.err(n.line, "goto/labels are not supported yet (P03 slice 5)"))
+            Stat::Global {
+                collective,
+                names,
+                exprs,
+            } => {
+                let (collective, names, exprs) = (*collective, names.clone(), exprs.clone());
+                self.global_decl_stat(collective, &names, &exprs)
             }
+            Stat::GlobalAll { attrib } => {
+                let attrib = *attrib;
+                if attrib == Some(ast::Attrib::Close) {
+                    return Err(self.err(
+                        self.last_line,
+                        "only local variables can have the 'close' attribute",
+                    ));
+                }
+                let ro = attrib == Some(ast::Attrib::Const);
+                self.l().blocks.last_mut().expect("no block").collective = Some(ro);
+                Ok(())
+            }
+            Stat::Goto(n) => {
+                let (name, line) = (n.text.clone(), n.line);
+                self.goto_stat(&name, line)
+            }
+            Stat::Label(_) => unreachable!("labels handled in stat_block"),
         }
+    }
+
+    /// 5.5 `global [attrib] name {, name} [= explist]`.
+    fn global_decl_stat(
+        &mut self,
+        collective: Option<ast::Attrib>,
+        names: &[AttribName],
+        exprs: &[ExprId],
+    ) -> Result<(), SyntaxError> {
+        for an in names {
+            let attrib = an.attrib.or(collective);
+            if attrib == Some(ast::Attrib::Close) {
+                return Err(self.err(
+                    an.name.line,
+                    "only local variables can have the 'close' attribute",
+                ));
+            }
+            let ro = attrib == Some(ast::Attrib::Const);
+            self.l()
+                .blocks
+                .last_mut()
+                .expect("no block")
+                .gdecls
+                .push((an.name.text.clone(), ro));
+        }
+        if !exprs.is_empty() {
+            // declaration with initializer: assign to the declared globals
+            // (allowed even for <const> — it is the defining write)
+            let saved = self.lr().freereg;
+            let base = self.explist_adjust(exprs, names.len() as u32)?;
+            for (i, an) in names.iter().enumerate() {
+                let text = an.name.text.clone();
+                self.assign_global(&text, base + i as u32)?;
+            }
+            self.set_freereg(saved);
+        }
+        Ok(())
     }
 
     fn function_stat(&mut self, name: &ast::FuncName, body: &FuncBody) -> Result<(), SyntaxError> {
@@ -1178,11 +1454,33 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn local_stat(&mut self, names: &[AttribName], exprs: &[ExprId]) -> Result<(), SyntaxError> {
+    fn local_stat(
+        &mut self,
+        collective: Option<ast::Attrib>,
+        names: &[AttribName],
+        exprs: &[ExprId],
+    ) -> Result<(), SyntaxError> {
         let n = names.len() as u32;
         let base = self.explist_adjust(exprs, n)?;
+        let mut tbc: Option<u32> = None;
         for (i, an) in names.iter().enumerate() {
-            self.declare_local(&an.name.text, base + i as u32, false);
+            let reg = base + i as u32;
+            let attrib = an.attrib.or(collective);
+            let read_only = attrib.is_some(); // const and close are both read-only
+            if attrib == Some(ast::Attrib::Close) {
+                if tbc.is_some() {
+                    return Err(self.err(
+                        an.name.line,
+                        "multiple to-be-closed variables in local list",
+                    ));
+                }
+                tbc = Some(reg);
+            }
+            self.declare_local(&an.name.text, reg, read_only);
+        }
+        if let Some(reg) = tbc {
+            self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false));
+            self.l().blocks.last_mut().expect("no block").has_tbc = true;
         }
         self.set_freereg(base + n);
         Ok(())
@@ -1259,7 +1557,18 @@ impl<'a> Compiler<'a> {
                 self.emit(Inst::iabc(Op::SetUpval, vreg, u, 0, false));
                 Ok(())
             }
-            VarKind::Global => self.assign_global(text, vreg),
+            VarKind::Global { .. } => {
+                let VarKind::Global { read_only } = self.resolve_global_kind(text, line)? else {
+                    unreachable!()
+                };
+                if read_only {
+                    return Err(self.err(
+                        line,
+                        format!("attempt to assign to const variable '{text}'"),
+                    ));
+                }
+                self.assign_global(text, vreg)
+            }
         }
     }
 
@@ -1284,7 +1593,7 @@ impl<'a> Compiler<'a> {
                     VarKind::Local(r) => {
                         self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
-                    VarKind::Global => unreachable!("_ENV always resolves"),
+                    VarKind::Global { .. } => unreachable!("_ENV always resolves"),
                 }
                 self.load_const(er + 1, c);
                 self.emit(Inst::iabc(Op::SetTable, er, er + 1, vreg, false));
@@ -1499,6 +1808,8 @@ impl<'a> Compiler<'a> {
         }
         self.emit(Inst::iabx(Op::TForLoop, base, back as u32));
         self.leave_block()?;
+        // close the iterator's closing value (4th control slot, 5.4+)
+        self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
         self.set_freereg(base);
         Ok(())
     }
