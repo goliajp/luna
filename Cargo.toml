@@ -1,0 +1,9 @@
+[package]
+name = "luna"
+version = "0.1.0"
+edition = "2024"
+description = "A Lua runtime in pure Rust"
+repository = "https://github.com/goliajp/luna"
+license = "MIT"
+
+[dependencies]
