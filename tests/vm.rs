@@ -758,3 +758,155 @@ fn runtime_stack_overflow_is_caught() {
         b"eval:1: stack overflow",
     );
 }
+
+// ---- slice 5: goto, <close>, 5.5 global declarations, attribs ----
+
+fn check_compile_error(src: &str, contains: &str) {
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    match vm.eval(src) {
+        Err(Error::Syntax(e)) => assert!(
+            e.msg.contains(contains),
+            "{src:?} compile error {:?} does not contain {contains:?}",
+            e.msg
+        ),
+        Ok(v) => panic!("{src:?} unexpectedly compiled and returned {v:?}"),
+        Err(Error::Runtime(e)) => {
+            panic!("{src:?} failed at runtime instead: {}", vm.error_text(&e))
+        }
+    }
+}
+
+#[test]
+fn goto_and_labels() {
+    // forward goto
+    check_int("do goto done end ::done:: return 1", 1);
+    check_int("local x = 1 goto skip x = 99 ::skip:: return x", 1);
+    // backward goto (loop)
+    check_int(
+        "local n = 0 ::top:: n = n + 1 if n < 5 then goto top end return n",
+        5,
+    );
+    // continue idiom: trailing label may skip over locals
+    check_int(
+        "local s = 0 for i = 1, 5 do if i % 2 == 0 then goto continue end \
+         local double = i * 2 s = s + double ::continue:: end return s",
+        18,
+    );
+    // goto out of nested blocks
+    check_int("do do goto out end end ::out:: return 7", 7);
+    // errors
+    check_compile_error("goto nowhere", "no visible label 'nowhere'");
+    check_compile_error(
+        "goto later local x = 1 ::later:: return x",
+        "jumps into the scope",
+    );
+    check_compile_error("::dup:: ::dup::", "already defined");
+    // goto leaving a block with captured locals closes them
+    check_int(
+        "local fs = {} local i = 1 ::top:: do local v = i fs[i] = function() return v end end \
+         i = i + 1 if i <= 2 then goto top end return fs[1]() * 10 + fs[2]()",
+        12,
+    );
+}
+
+#[test]
+fn to_be_closed() {
+    // closed on normal block exit, in reverse order
+    check_str(
+        "local log = '' local function tracker(n) return setmetatable({}, \
+           {__close = function() log = log .. n end}) end \
+         do local a <close> = tracker('a') local b <close> = tracker('b') end \
+         return log",
+        b"ba",
+    );
+    // closed on error, handler sees the error object
+    check_str(
+        "local seen local t = setmetatable({}, {__close = function(_, e) seen = e end}) \
+         local ok, err = pcall(function() local x <close> = t error('boom', 0) end) \
+         return seen",
+        b"boom",
+    );
+    // closed when a loop body iterates
+    check_int(
+        "local n = 0 local mt = {__close = function() n = n + 1 end} \
+         for i = 1, 3 do local x <close> = setmetatable({}, mt) end return n",
+        3,
+    );
+    // nil/false are silently accepted, others must be closable
+    check_int(
+        "do local x <close> = nil local y <close> = false end return 1",
+        1,
+    );
+    check_error("local x <close> = 42", "non-closable value");
+    check_compile_error(
+        "local a <close>, b <close> = nil, nil",
+        "multiple to-be-closed",
+    );
+    // close vars are read-only
+    check_compile_error(
+        "local x <close> = nil x = 1",
+        "attempt to assign to const variable 'x'",
+    );
+}
+
+#[test]
+fn const_attribs() {
+    check_int("local x <const> = 41 return x + 1", 42);
+    check_compile_error(
+        "local x <const> = 1 x = 2",
+        "attempt to assign to const variable 'x'",
+    );
+    // 5.5 collective attrib on locals
+    check_compile_error(
+        "local <const> a, b = 1, 2 b = 3",
+        "attempt to assign to const variable 'b'",
+    );
+    // for-loop control variables are const in 5.5
+    check_compile_error(
+        "for i = 1, 3 do i = 5 end",
+        "attempt to assign to const variable 'i'",
+    );
+    check_compile_error(
+        "for k, v in pairs({}) do k = 1 end",
+        "attempt to assign to const variable 'k'",
+    );
+    // non-control generic-for variables stay writable
+    check_int(
+        "for k, v in pairs({x = 1}) do v = 7 return v end return 0",
+        7,
+    );
+}
+
+#[test]
+fn global_declarations_55() {
+    // explicit declarations: declared names work, undeclared error
+    check_int("global x = 5 return x + 1", 6);
+    check_compile_error("global x = 1 return y", "undeclared global variable 'y'");
+    check_compile_error("global x = 1 y = 2", "undeclared global variable 'y'");
+    // collective global * restores default-style access
+    check_int("global x = 1 global * y = 2 return x + y", 3);
+    // global <const> *: reads fine, writes to undeclared error
+    check_int(
+        "global <const> * return type(print) == 'function' and 1 or 0",
+        1,
+    );
+    check_compile_error(
+        "global <const> * y = 2",
+        "attempt to assign to const variable 'y'",
+    );
+    // explicitly declared names stay writable under a const collective
+    check_int("global <const> * global n n = 41 return n + 1", 42);
+    // const global declaration: initializer allowed, later writes error
+    check_compile_error(
+        "global z <const> = 1 z = 2",
+        "attempt to assign to const variable 'z'",
+    );
+    // declarations are block-scoped: outside the block, default returns
+    check_int("do global x x = 1 end y = 2 return y", 2);
+    // global function declares its name
+    check_int("global function gf() return 21 end return gf() * 2", 42);
+    // locals are unaffected by strict mode
+    check_int("global g local a = 3 g = a return g", 3);
+    // _ENV bypass still works (declarations are purely syntactic)
+    check_int("global <const> * _ENV.bypass = 9 return _ENV.bypass", 9);
+}

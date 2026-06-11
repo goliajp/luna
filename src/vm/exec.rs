@@ -22,6 +22,8 @@ pub struct Vm {
     frames: Vec<Frame>,
     /// open upvalues, sorted ascending by stack slot
     open_upvals: Vec<(u32, Gc<Upvalue>)>,
+    /// to-be-closed slots, ascending
+    tbc: Vec<u32>,
     /// logical stack top for multi-result sequences
     top: u32,
     globals: Gc<Table>,
@@ -63,9 +65,10 @@ pub(crate) enum Mm {
     Shr,
     Unm,
     BNot,
+    Close,
 }
 
-const MM_NAMES: [&str; 25] = [
+const MM_NAMES: [&str; 26] = [
     "__index",
     "__newindex",
     "__call",
@@ -91,6 +94,7 @@ const MM_NAMES: [&str; 25] = [
     "__shr",
     "__unm",
     "__bnot",
+    "__close",
 ];
 
 /// PUC MAXTAGLOOP: bound on `__index`/`__newindex` chains.
@@ -140,6 +144,7 @@ impl Vm {
             stack: Vec::new(),
             frames: Vec::new(),
             open_upvals: Vec::new(),
+            tbc: Vec::new(),
             top: 0,
             globals,
             string_mt: None,
@@ -439,6 +444,44 @@ impl Vm {
         }
     }
 
+    /// Register a to-be-closed slot (TBC op / generic-for closing value).
+    fn register_tbc(&mut self, slot: u32) -> Result<(), LuaError> {
+        let v = self.stack[slot as usize];
+        if matches!(v, Value::Nil | Value::Bool(false)) {
+            return Ok(()); // nil and false are silently ignored
+        }
+        if self.get_mm(v, Mm::Close).is_nil() {
+            return Err(self.rt_err(&format!(
+                "variable of a to-be-closed slot has a non-closable value (a {} value)",
+                v.type_name()
+            )));
+        }
+        debug_assert!(self.tbc.last().is_none_or(|&s| s < slot));
+        self.tbc.push(slot);
+        Ok(())
+    }
+
+    /// Close upvalues and run `__close` handlers for slots ≥ `from`
+    /// (handlers in reverse registration order; PUC luaF_close).
+    fn close_slots(&mut self, from: u32, err: Option<Value>) -> Result<(), LuaError> {
+        self.close_from(from);
+        while let Some(&s) = self.tbc.last() {
+            if s < from {
+                break;
+            }
+            self.tbc.pop();
+            let v = self.stack[s as usize];
+            if matches!(v, Value::Nil | Value::Bool(false)) {
+                continue;
+            }
+            let mm = self.get_mm(v, Mm::Close);
+            if !mm.is_nil() {
+                self.call_value(mm, &[v, err.unwrap_or(Value::Nil)])?;
+            }
+        }
+        Ok(())
+    }
+
     fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
         match cl.upvals[idx as usize].state() {
             UpvalState::Open(slot) => self.stack[slot as usize],
@@ -491,15 +534,21 @@ impl Vm {
 
     fn exec(&mut self) -> Result<Vec<Value>, LuaError> {
         let entry_depth = self.frames.len();
-        let r = self.run(entry_depth);
-        if r.is_err() {
-            // unwind the frames this activation created
+        let mut r = self.run(entry_depth);
+        if let Err(ref e) = r {
+            // unwind the frames this activation created; __close handlers
+            // see the error object, and an error in a handler replaces it
+            let mut err = *e;
             while self.frames.len() >= entry_depth {
                 let f = self.frames.pop().expect("frame");
-                self.close_from(f.base);
+                if let Err(e2) = self.close_slots(f.base, Some(err.0)) {
+                    err = e2;
+                }
                 self.stack.truncate(f.func_slot as usize);
                 self.top = f.func_slot;
+                self.tbc.retain(|&s| s < f.func_slot);
             }
+            r = Err(err);
         }
         r
     }
@@ -714,10 +763,10 @@ impl Vm {
                     self.set_r(base, a, acc);
                 }
                 Op::Close => {
-                    self.close_from(base + inst.a());
+                    self.close_slots(base + inst.a(), None)?;
                 }
                 Op::Tbc => {
-                    // to-be-closed registration: slice 5
+                    self.register_tbc(base + inst.a())?;
                 }
                 Op::Jmp => {
                     self.add_pc(inst.sj());
@@ -776,7 +825,7 @@ impl Vm {
                     } else {
                         inst.b() - 1
                     };
-                    self.close_from(fr.base);
+                    self.close_slots(fr.base, None)?;
                     for i in 0..=nargs {
                         self.stack[(fr.func_slot + i) as usize] = self.stack[(abs + i) as usize];
                     }
@@ -802,8 +851,10 @@ impl Vm {
                             (abs_a, nret)
                         }
                     };
+                    // close before moving results: __close handlers run above
+                    // the stack top, so the result region stays intact
+                    self.close_slots(base, None)?;
                     let fr = self.frames.pop().expect("no frame");
-                    self.close_from(fr.base);
                     for i in 0..nret {
                         self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
                     }
@@ -816,6 +867,8 @@ impl Vm {
                 Op::ForPrep => self.for_prep(inst, base)?,
                 Op::ForLoop => self.for_loop(inst, base),
                 Op::TForPrep => {
+                    // the 4th control slot is the iterator's closing value
+                    self.register_tbc(base + inst.a() + 3)?;
                     self.add_pc(inst.bx() as i32);
                 }
                 Op::TForCall => {
