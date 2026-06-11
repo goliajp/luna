@@ -18,6 +18,7 @@ pub struct UpvalDesc {
 }
 
 /// A compiled function (PUC Proto). Immutable after compilation.
+#[repr(C)]
 pub struct Proto {
     pub(crate) hdr: GcHeader,
     pub code: Box<[Inst]>,
@@ -47,6 +48,7 @@ impl Proto {
     }
 }
 
+#[repr(C)]
 pub struct LuaClosure {
     /// read through raw casts by the GC, not by field access
     #[allow(dead_code)]
@@ -66,6 +68,7 @@ impl LuaClosure {
 
 /// An upvalue cell. Open: refers to a live VM stack slot (the stack is a GC
 /// root, so open cells trace nothing). Closed: owns the value inline.
+#[repr(C)]
 pub struct Upvalue {
     /// read through raw casts by the GC, not by field access
     #[allow(dead_code)]
