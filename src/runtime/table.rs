@@ -6,7 +6,7 @@
 //! (Brent's variation), capacity a power of two, rehash sizing per
 //! luaH_rehash/computesizes.
 
-use crate::runtime::heap::{Gc, GcHeader};
+use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::value::{RawVal, Value, f2i_exact, raw};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -403,18 +403,18 @@ impl Table {
 
     /// GC: visit every contained reference (P02 traces keys conservatively;
     /// dead-key handling arrives with weak tables in P06).
-    pub(crate) fn trace(&self, mark: &mut dyn FnMut(Value)) {
+    pub(crate) fn trace(&self, m: &mut Marker) {
         for (i, &tag) in self.atags.iter().enumerate() {
             if raw::is_gc(tag) {
-                mark(unsafe { Value::pack(tag, self.avals[i]) });
+                m.value(unsafe { Value::pack(tag, self.avals[i]) });
             }
         }
         for n in self.nodes.iter() {
-            mark(n.key);
-            mark(n.val);
+            m.value(n.key);
+            m.value(n.val);
         }
         if let Some(mt) = self.metatable {
-            mark(Value::Table(mt));
+            m.value(Value::Table(mt));
         }
     }
 }
@@ -438,6 +438,7 @@ fn hash_key(k: Value) -> u64 {
         Value::Bool(b) => b as u64 + 1,
         Value::Str(s) => s.hash() as u64,
         Value::Table(t) => mix64(t.as_ptr() as u64),
+        Value::Closure(c) => mix64(c.as_ptr() as u64),
         Value::Nil => 0, // unreachable as a stored key
     }
 }
