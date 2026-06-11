@@ -5,6 +5,7 @@
 use crate::frontend::error::SyntaxError;
 use crate::frontend::span::Span;
 use crate::frontend::token::{Token, TokenInfo};
+use crate::numeric::{self, Num, hex_digit};
 use crate::version::LuaVersion;
 
 pub struct Lexer<'s> {
@@ -558,21 +559,17 @@ impl<'s> Lexer<'s> {
             line,
             msg: format!("malformed number near '{}'", String::from_utf8_lossy(text)),
         };
-        let tok = if hex {
-            parse_hex(&text[2..], self.version)
+        let int_ok = self.version.has_integers();
+        let num = if hex {
+            numeric::hex_literal(&text[2..], int_ok, self.version.has_hex_float())
         } else {
-            parse_dec(text, self.version)
+            numeric::dec_literal(text, int_ok)
         };
-        tok.ok_or_else(malformed)
-    }
-}
-
-fn hex_digit(c: u8) -> Option<u32> {
-    match c {
-        b'0'..=b'9' => Some((c - b'0') as u32),
-        b'a'..=b'f' => Some((c - b'a' + 10) as u32),
-        b'A'..=b'F' => Some((c - b'A' + 10) as u32),
-        _ => None,
+        match num {
+            Some(Num::Int(i)) => Ok(Token::Int(i)),
+            Some(Num::Float(f)) => Ok(Token::Float(f)),
+            None => Err(malformed()),
+        }
     }
 }
 
@@ -596,186 +593,6 @@ fn push_utf8(out: &mut Vec<u8>, mut x: u32) {
     }
     out.push(((!mfb << 1) | x) as u8);
     out.extend(cont[..n].iter().rev());
-}
-
-/// Hex numeral after the `0x` prefix.
-fn parse_hex(text: &[u8], version: LuaVersion) -> Option<Token> {
-    let mut i = 0;
-    while i < text.len() && hex_digit(text[i]).is_some() {
-        i += 1;
-    }
-    let int_end = i;
-    let mut has_dot = false;
-    let mut frac = 0..0;
-    if i < text.len() && text[i] == b'.' {
-        has_dot = true;
-        i += 1;
-        let fs = i;
-        while i < text.len() && hex_digit(text[i]).is_some() {
-            i += 1;
-        }
-        frac = fs..i;
-    }
-    if int_end + frac.len() == 0 {
-        return None;
-    }
-    let has_exp = i < text.len() && matches!(text[i], b'p' | b'P');
-    let mut pexp: i64 = 0;
-    if has_exp {
-        i += 1;
-        let mut sign = 1i64;
-        if i < text.len() && matches!(text[i], b'+' | b'-') {
-            sign = if text[i] == b'-' { -1 } else { 1 };
-            i += 1;
-        }
-        let mut digits = 0;
-        let mut e: i64 = 0;
-        while i < text.len() && text[i].is_ascii_digit() {
-            e = (e * 10 + (text[i] - b'0') as i64).min(1 << 40);
-            i += 1;
-            digits += 1;
-        }
-        if digits == 0 {
-            return None;
-        }
-        pexp = sign * e;
-    }
-    if i != text.len() {
-        return None;
-    }
-    if !has_exp && !has_dot {
-        // pure hex integer: wraps modulo 2^64 (5.3+ semantics)
-        let mut v: u64 = 0;
-        for &c in &text[..int_end] {
-            v = v
-                .wrapping_mul(16)
-                .wrapping_add(hex_digit(c).unwrap() as u64);
-        }
-        return Some(if version.has_integers() {
-            Token::Int(v as i64)
-        } else {
-            Token::Float(v as f64)
-        });
-    }
-    if !version.has_hex_float() {
-        return None;
-    }
-    // value = mant * 2^(4*exp4 + pexp); digits beyond 64 mantissa bits fold
-    // into the exponent (integer part) or the sticky bit (fraction part)
-    let mut mant: u64 = 0;
-    let mut sticky = false;
-    let mut exp4: i64 = 0;
-    for &c in &text[..int_end] {
-        let d = hex_digit(c).unwrap() as u64;
-        if mant >> 60 == 0 {
-            mant = mant * 16 + d;
-        } else {
-            sticky |= d != 0;
-            exp4 += 1;
-        }
-    }
-    for &c in &text[frac] {
-        let d = hex_digit(c).unwrap() as u64;
-        if mant >> 60 == 0 {
-            mant = mant * 16 + d;
-            exp4 -= 1;
-        } else {
-            sticky |= d != 0;
-        }
-    }
-    Some(Token::Float(compose_f64(mant, sticky, exp4 * 4 + pexp)))
-}
-
-/// Round a 64-bit mantissa (+sticky) to f64 and scale by 2^exp.
-fn compose_f64(mant: u64, sticky: bool, exp: i64) -> f64 {
-    if mant == 0 {
-        return 0.0;
-    }
-    let bits = 64 - mant.leading_zeros() as i64;
-    let (m, extra) = if bits <= 53 {
-        (mant, 0i64)
-    } else {
-        let excess = (bits - 53) as u32;
-        let kept = mant >> excess;
-        let rem = mant & ((1u64 << excess) - 1);
-        let half = 1u64 << (excess - 1);
-        let round_up = rem > half || (rem == half && (sticky || kept & 1 == 1));
-        (kept + round_up as u64, excess as i64)
-    };
-    scale_f64(m as f64, exp + extra)
-}
-
-fn exp2(e: i64) -> f64 {
-    debug_assert!((-1022..=1023).contains(&e));
-    f64::from_bits(((e + 1023) as u64) << 52)
-}
-
-fn scale_f64(mut f: f64, mut e: i64) -> f64 {
-    while e > 1023 {
-        f *= exp2(1023);
-        e -= 1023;
-        if f.is_infinite() {
-            return f;
-        }
-    }
-    while e < -1022 {
-        f *= exp2(-1022);
-        e += 1022;
-        if f == 0.0 {
-            return f;
-        }
-    }
-    f * exp2(e)
-}
-
-/// Decimal numeral.
-fn parse_dec(text: &[u8], version: LuaVersion) -> Option<Token> {
-    let mut i = 0;
-    let mut int_digits = 0;
-    while i < text.len() && text[i].is_ascii_digit() {
-        i += 1;
-        int_digits += 1;
-    }
-    let mut frac_digits = 0;
-    let mut has_dot = false;
-    if i < text.len() && text[i] == b'.' {
-        has_dot = true;
-        i += 1;
-        while i < text.len() && text[i].is_ascii_digit() {
-            i += 1;
-            frac_digits += 1;
-        }
-    }
-    if int_digits + frac_digits == 0 {
-        return None;
-    }
-    let mut has_exp = false;
-    if i < text.len() && matches!(text[i], b'e' | b'E') {
-        has_exp = true;
-        i += 1;
-        if i < text.len() && matches!(text[i], b'+' | b'-') {
-            i += 1;
-        }
-        let mut digits = 0;
-        while i < text.len() && text[i].is_ascii_digit() {
-            i += 1;
-            digits += 1;
-        }
-        if digits == 0 {
-            return None;
-        }
-    }
-    if i != text.len() {
-        return None;
-    }
-    let s = str::from_utf8(text).expect("ascii numeral");
-    if !has_dot && !has_exp && version.has_integers() {
-        // decimal integer; on i64 overflow it becomes a float (PUC rule)
-        if let Ok(v) = s.parse::<i64>() {
-            return Some(Token::Int(v));
-        }
-    }
-    s.parse::<f64>().ok().map(Token::Float)
 }
 
 #[cfg(test)]
