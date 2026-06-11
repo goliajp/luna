@@ -25,8 +25,80 @@ pub struct Vm {
     /// logical stack top for multi-result sequences
     top: u32,
     globals: Gc<Table>,
+    /// shared metatable for all strings (populated by the string lib, P04)
+    string_mt: Option<Gc<Table>>,
+    /// pre-interned metamethod event names, indexed by `Mm`
+    mm_names: Vec<Gc<crate::runtime::LuaStr>>,
+    /// native↔Lua nesting depth (PUC C-stack guard analogue)
+    c_depth: u32,
     version: LuaVersion,
 }
+
+/// Metamethod events; discriminants index `Vm::mm_names`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub(crate) enum Mm {
+    Index,
+    NewIndex,
+    Call,
+    ToString,
+    Metatable,
+    Name,
+    Eq,
+    Lt,
+    Le,
+    Concat,
+    Len,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    IDiv,
+    BAnd,
+    BOr,
+    BXor,
+    Shl,
+    Shr,
+    Unm,
+    BNot,
+}
+
+const MM_NAMES: [&str; 25] = [
+    "__index",
+    "__newindex",
+    "__call",
+    "__tostring",
+    "__metatable",
+    "__name",
+    "__eq",
+    "__lt",
+    "__le",
+    "__concat",
+    "__len",
+    "__add",
+    "__sub",
+    "__mul",
+    "__div",
+    "__mod",
+    "__pow",
+    "__idiv",
+    "__band",
+    "__bor",
+    "__bxor",
+    "__shl",
+    "__shr",
+    "__unm",
+    "__bnot",
+];
+
+/// PUC MAXTAGLOOP: bound on `__index`/`__newindex` chains.
+const MAX_TAG_LOOP: u32 = 2000;
+/// PUC LUAI_MAXCCALLS analogue: native↔Lua nesting bound.
+const MAX_C_DEPTH: u32 = 200;
+/// PUC LUAI_MAXSTACK analogue: total VM stack slots.
+const MAX_LUA_STACK: u32 = 1 << 20;
 
 #[derive(Clone, Copy)]
 struct Frame {
@@ -62,6 +134,7 @@ impl Vm {
     pub fn new(version: LuaVersion) -> Vm {
         let mut heap = Heap::new();
         let globals = heap.new_table();
+        let mm_names = MM_NAMES.iter().map(|n| heap.intern(n.as_bytes())).collect();
         let mut vm = Vm {
             heap,
             stack: Vec::new(),
@@ -69,10 +142,18 @@ impl Vm {
             open_upvals: Vec::new(),
             top: 0,
             globals,
+            string_mt: None,
+            mm_names,
+            c_depth: 0,
             version,
         };
         crate::vm::builtins::open_base(&mut vm);
         vm
+    }
+
+    /// Install the shared string metatable (string library, P04).
+    pub fn set_string_metatable(&mut self, mt: Option<Gc<Table>>) {
+        self.string_mt = mt;
     }
 
     pub fn globals(&self) -> Gc<Table> {
@@ -116,16 +197,49 @@ impl Vm {
 
     /// Call any callable value from the host (or from natives like pcall).
     pub fn call_value(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+        if self.c_depth >= MAX_C_DEPTH {
+            return Err(self.rt_err("stack overflow"));
+        }
+        self.c_depth += 1;
         let func_slot = self.stack.len() as u32;
         self.stack.push(f);
         self.stack.extend_from_slice(args);
         self.top = self.stack.len() as u32;
         let r = self.call_at(func_slot, args.len() as u32);
+        self.c_depth -= 1;
         if r.is_err() {
             self.stack.truncate(func_slot as usize);
             self.top = func_slot;
         }
         r
+    }
+
+    /// Call a metamethod with a single expected result.
+    fn call_mm1(&mut self, f: Value, args: &[Value]) -> Result<Value, LuaError> {
+        let mut r = self.call_value(f, args)?;
+        Ok(if r.is_empty() {
+            Value::Nil
+        } else {
+            r.swap_remove(0)
+        })
+    }
+
+    // ---- metatables ----
+
+    pub(crate) fn metatable_of(&self, v: Value) -> Option<Gc<Table>> {
+        match v {
+            Value::Table(t) => t.metatable(),
+            Value::Str(_) => self.string_mt,
+            _ => None,
+        }
+    }
+
+    /// The metamethod of `v` for `mm`, or nil.
+    pub(crate) fn get_mm(&self, v: Value, mm: Mm) -> Value {
+        match self.metatable_of(v) {
+            Some(mt) => mt.get(Value::Str(self.mm_names[mm as usize])),
+            None => Value::Nil,
+        }
     }
 
     fn call_at(&mut self, func_slot: u32, nargs: u32) -> Result<Vec<Value>, LuaError> {
@@ -139,8 +253,14 @@ impl Vm {
 
     /// Run a full collection with the VM's roots.
     pub fn collect_garbage(&mut self) -> usize {
-        let mut roots: Vec<Value> = Vec::with_capacity(self.stack.len() + 8);
+        let mut roots: Vec<Value> = Vec::with_capacity(self.stack.len() + 32);
         roots.push(Value::Table(self.globals));
+        if let Some(mt) = self.string_mt {
+            roots.push(Value::Table(mt));
+        }
+        for &n in &self.mm_names {
+            roots.push(Value::Str(n));
+        }
         roots.extend_from_slice(&self.stack);
         for f in &self.frames {
             roots.push(Value::Closure(f.closure));
@@ -170,7 +290,7 @@ impl Vm {
         };
         match self.stack[func_slot as usize] {
             Value::Closure(cl) => {
-                self.push_frame(cl, func_slot, nargs, nresults);
+                self.push_frame(cl, func_slot, nargs, nresults)?;
                 Ok(true)
             }
             Value::Native(f) => {
@@ -178,11 +298,55 @@ impl Vm {
                 self.finish_results(func_slot, nret, nresults);
                 Ok(false)
             }
-            v => Err(self.type_err("call", v)),
+            v => {
+                // __call: insert the handler before the original value so it
+                // becomes the first argument (single level, PUC tryfuncTM).
+                // Slots above shift by one; at a call site those are dead
+                // temps of the current frame.
+                let mm = self.get_mm(v, Mm::Call);
+                if mm.is_nil() || !matches!(mm, Value::Closure(_) | Value::Native(_)) {
+                    return Err(self.type_err("call", v));
+                }
+                self.stack.insert(func_slot as usize, mm);
+                if self.top > func_slot {
+                    self.top += 1;
+                }
+                self.begin_call_inner(mm, func_slot, nargs + 1, nresults)
+            }
         }
     }
 
-    fn push_frame(&mut self, cl: Gc<LuaClosure>, func_slot: u32, nargs: u32, nresults: i32) {
+    fn begin_call_inner(
+        &mut self,
+        f: Value,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<bool, LuaError> {
+        match f {
+            Value::Closure(cl) => {
+                self.push_frame(cl, func_slot, nargs, nresults)?;
+                Ok(true)
+            }
+            Value::Native(nf) => {
+                let nret = nf(self, func_slot, nargs)?;
+                self.finish_results(func_slot, nret, nresults);
+                Ok(false)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn push_frame(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<(), LuaError> {
+        if func_slot + 256 > MAX_LUA_STACK {
+            return Err(self.rt_err("stack overflow"));
+        }
         let proto = cl.proto;
         let nparams = proto.num_params as u32;
         if proto.is_vararg {
@@ -223,6 +387,7 @@ impl Vm {
             func_slot,
             nresults,
         });
+        Ok(())
     }
 
     /// Pad/announce results sitting at func_slot.
@@ -480,17 +645,35 @@ impl Vm {
                 Op::Shr => self.arith_rr(inst, base, ArithOp::Shr)?,
                 Op::Unm => {
                     let v = self.r(base, inst.b());
-                    let r = match v {
-                        Value::Int(i) => Value::Int(i.wrapping_neg()),
-                        Value::Float(f) => Value::Float(-f),
-                        v => return Err(self.type_err("perform arithmetic on", v)),
+                    let r = match coerce_num(v) {
+                        Some(Num::Int(i)) => Value::Int(i.wrapping_neg()),
+                        Some(Num::Float(f)) => Value::Float(-f),
+                        None => {
+                            let mm = self.get_mm(v, Mm::Unm);
+                            if mm.is_nil() {
+                                return Err(self.type_err("perform arithmetic on", v));
+                            }
+                            self.call_mm1(mm, &[v, v])?
+                        }
                     };
                     self.set_r(base, inst.a(), r);
                 }
                 Op::BNot => {
                     let v = self.r(base, inst.b());
-                    let i = self.int_from(v, "perform bitwise operation on")?;
-                    self.set_r(base, inst.a(), Value::Int(!i));
+                    let r = match coerce_num(v) {
+                        Some(n) => {
+                            let i = self.int_from_num(n)?;
+                            Value::Int(!i)
+                        }
+                        None => {
+                            let mm = self.get_mm(v, Mm::BNot);
+                            if mm.is_nil() {
+                                return Err(self.type_err("perform bitwise operation on", v));
+                            }
+                            self.call_mm1(mm, &[v, v])?
+                        }
+                    };
+                    self.set_r(base, inst.a(), r);
                 }
                 Op::Not => {
                     let v = self.r(base, inst.b());
@@ -500,29 +683,35 @@ impl Vm {
                     let v = self.r(base, inst.b());
                     let r = match v {
                         Value::Str(s) => Value::Int(s.len() as i64),
-                        Value::Table(t) => Value::Int(t.len()),
-                        v => return Err(self.type_err("get length of", v)),
+                        Value::Table(_) => {
+                            let mm = self.get_mm(v, Mm::Len);
+                            if mm.is_nil() {
+                                let Value::Table(t) = v else { unreachable!() };
+                                Value::Int(t.len())
+                            } else {
+                                self.call_mm1(mm, &[v])?
+                            }
+                        }
+                        v => {
+                            let mm = self.get_mm(v, Mm::Len);
+                            if mm.is_nil() {
+                                return Err(self.type_err("get length of", v));
+                            }
+                            self.call_mm1(mm, &[v])?
+                        }
                     };
                     self.set_r(base, inst.a(), r);
                 }
                 Op::Concat => {
+                    // right fold (Lua concat is right-associative)
                     let a = inst.a();
                     let n = inst.b();
-                    let mut out: Vec<u8> = Vec::new();
-                    for i in 0..n {
-                        let v = self.r(base, a + i);
-                        match v {
-                            Value::Str(s) => out.extend_from_slice(s.as_bytes()),
-                            Value::Int(x) => out
-                                .extend_from_slice(numeric::num_to_string(Num::Int(x)).as_bytes()),
-                            Value::Float(x) => out.extend_from_slice(
-                                numeric::num_to_string(Num::Float(x)).as_bytes(),
-                            ),
-                            v => return Err(self.type_err("concatenate", v)),
-                        }
+                    let mut acc = self.r(base, a + n - 1);
+                    for i in (0..n - 1).rev() {
+                        let l = self.r(base, a + i);
+                        acc = self.concat_values(l, acc)?;
                     }
-                    let s = self.heap.intern(&out);
-                    self.set_r(base, a, Value::Str(s));
+                    self.set_r(base, a, acc);
                 }
                 Op::Close => {
                     self.close_from(base + inst.a());
@@ -536,13 +725,13 @@ impl Vm {
                 Op::Eq => {
                     let l = self.r(base, inst.a());
                     let r = self.r(base, inst.b());
-                    let cond = l.raw_eq(r);
+                    let cond = self.eq_value(l, r)?;
                     self.cond_skip(cond, inst.k());
                 }
                 Op::EqK => {
                     let l = self.r(base, inst.a());
                     let r = cl.proto.consts[inst.b() as usize];
-                    let cond = l.raw_eq(r);
+                    let cond = self.eq_value(l, r)?;
                     self.cond_skip(cond, inst.k());
                 }
                 Op::Lt => {
@@ -724,25 +913,99 @@ impl Vm {
         }
     }
 
-    // ---- indexing (raw; metamethods arrive in slice 4) ----
+    // ---- indexing (with __index/__newindex chains) ----
 
     fn index_value(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
-        match t {
-            Value::Table(t) => Ok(t.get(key)),
-            v => Err(self.type_err("index", v)),
+        let mut cur = t;
+        for _ in 0..MAX_TAG_LOOP {
+            let mm = match cur {
+                Value::Table(tb) => {
+                    let v = tb.get(key);
+                    if !v.is_nil() {
+                        return Ok(v);
+                    }
+                    let mm = self.get_mm(cur, Mm::Index);
+                    if mm.is_nil() {
+                        return Ok(Value::Nil);
+                    }
+                    mm
+                }
+                v => {
+                    let mm = self.get_mm(v, Mm::Index);
+                    if mm.is_nil() {
+                        return Err(self.type_err("index", v));
+                    }
+                    mm
+                }
+            };
+            match mm {
+                Value::Closure(_) | Value::Native(_) => {
+                    return self.call_mm1(mm, &[cur, key]);
+                }
+                next => cur = next,
+            }
         }
+        Err(self.rt_err("'__index' chain too long; possible loop"))
     }
 
     fn newindex_value(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
-        match t {
-            Value::Table(t) => match unsafe { t.as_mut() }.set(key, v) {
-                Ok(()) => Ok(()),
-                Err(TableError::NilIndex) => Err(self.rt_err("table index is nil")),
-                Err(TableError::NanIndex) => Err(self.rt_err("table index is NaN")),
-                Err(TableError::InvalidNext) => unreachable!(),
-            },
-            v => Err(self.type_err("index", v)),
+        let mut cur = t;
+        for _ in 0..MAX_TAG_LOOP {
+            let mm = match cur {
+                Value::Table(tb) => {
+                    if !tb.get(key).is_nil() {
+                        return self.raw_set(tb, key, v);
+                    }
+                    let mm = self.get_mm(cur, Mm::NewIndex);
+                    if mm.is_nil() {
+                        return self.raw_set(tb, key, v);
+                    }
+                    mm
+                }
+                bad => {
+                    let mm = self.get_mm(bad, Mm::NewIndex);
+                    if mm.is_nil() {
+                        return Err(self.type_err("index", bad));
+                    }
+                    mm
+                }
+            };
+            match mm {
+                Value::Closure(_) | Value::Native(_) => {
+                    self.call_value(mm, &[cur, key, v])?;
+                    return Ok(());
+                }
+                next => cur = next,
+            }
         }
+        Err(self.rt_err("'__newindex' chain too long; possible loop"))
+    }
+
+    fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
+        match unsafe { t.as_mut() }.set(key, v) {
+            Ok(()) => Ok(()),
+            Err(TableError::NilIndex) => Err(self.rt_err("table index is nil")),
+            Err(TableError::NanIndex) => Err(self.rt_err("table index is NaN")),
+            Err(TableError::InvalidNext) => unreachable!(),
+        }
+    }
+
+    /// Equality with __eq (tried when both operands are tables and raw
+    /// equality fails — PUC 5.4 rule).
+    fn eq_value(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
+        if l.raw_eq(r) {
+            return Ok(true);
+        }
+        if let (Value::Table(_), Value::Table(_)) = (l, r) {
+            let mut mm = self.get_mm(l, Mm::Eq);
+            if mm.is_nil() {
+                mm = self.get_mm(r, Mm::Eq);
+            }
+            if !mm.is_nil() {
+                return Ok(self.call_mm1(mm, &[l, r])?.truthy());
+            }
+        }
+        Ok(false)
     }
 
     // ---- arithmetic ----
@@ -759,26 +1022,29 @@ impl Vm {
         use ArithOp::*;
         match op {
             BAnd | BOr | BXor | Shl | Shr => {
-                let a = self.int_from(l, "perform bitwise operation on")?;
-                let b = self.int_from(r, "perform bitwise operation on")?;
-                let v = match op {
-                    BAnd => a & b,
-                    BOr => a | b,
-                    BXor => a ^ b,
-                    Shl => shift_left(a, b),
-                    Shr => shift_left(a, b.wrapping_neg()),
-                    _ => unreachable!(),
-                };
-                return Ok(Value::Int(v));
+                // strings coerce for bitwise too (PUC tointegerns via cvt2num)
+                match (coerce_num(l), coerce_num(r)) {
+                    (Some(a), Some(b)) => {
+                        let a = self.int_from_num(a)?;
+                        let b = self.int_from_num(b)?;
+                        let v = match op {
+                            BAnd => a & b,
+                            BOr => a | b,
+                            BXor => a ^ b,
+                            Shl => shift_left(a, b),
+                            Shr => shift_left(a, b.wrapping_neg()),
+                            _ => unreachable!(),
+                        };
+                        return Ok(Value::Int(v));
+                    }
+                    _ => return self.arith_mm(op, l, r, "perform bitwise operation on"),
+                }
             }
             _ => {}
         }
-        let (ln, rn) = match (as_num(l), as_num(r)) {
+        let (ln, rn) = match (coerce_num(l), coerce_num(r)) {
             (Some(a), Some(b)) => (a, b),
-            _ => {
-                let bad = if as_num(l).is_none() { l } else { r };
-                return Err(self.type_err("perform arithmetic on", bad));
-            }
+            _ => return self.arith_mm(op, l, r, "perform arithmetic on"),
         };
         match (op, ln, rn) {
             (Add, Num::Int(a), Num::Int(b)) => Ok(Value::Int(a.wrapping_add(b))),
@@ -833,6 +1099,43 @@ impl Vm {
         }
     }
 
+    fn int_from_num(&mut self, n: Num) -> Result<i64, LuaError> {
+        match n {
+            Num::Int(i) => Ok(i),
+            Num::Float(f) => match crate::runtime::value::f2i_exact(f) {
+                Some(i) => Ok(i),
+                None => Err(self.rt_err("number has no integer representation")),
+            },
+        }
+    }
+
+    /// Metamethod fallback for arithmetic/bitwise (left operand first).
+    fn arith_mm(&mut self, op: ArithOp, l: Value, r: Value, what: &str) -> Result<Value, LuaError> {
+        let event = match op {
+            ArithOp::Add => Mm::Add,
+            ArithOp::Sub => Mm::Sub,
+            ArithOp::Mul => Mm::Mul,
+            ArithOp::Div => Mm::Div,
+            ArithOp::Mod => Mm::Mod,
+            ArithOp::Pow => Mm::Pow,
+            ArithOp::IDiv => Mm::IDiv,
+            ArithOp::BAnd => Mm::BAnd,
+            ArithOp::BOr => Mm::BOr,
+            ArithOp::BXor => Mm::BXor,
+            ArithOp::Shl => Mm::Shl,
+            ArithOp::Shr => Mm::Shr,
+        };
+        let mut mm = self.get_mm(l, event);
+        if mm.is_nil() {
+            mm = self.get_mm(r, event);
+        }
+        if mm.is_nil() {
+            let bad = if coerce_num(l).is_none() { l } else { r };
+            return Err(self.type_err(what, bad));
+        }
+        self.call_mm1(mm, &[l, r])
+    }
+
     // ---- comparison ----
 
     fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
@@ -853,11 +1156,21 @@ impl Vm {
                 let (a, b) = (a.as_bytes(), b.as_bytes());
                 Ok(if or_eq { a <= b } else { a < b })
             }
-            (l, r) => Err(self.rt_err(&format!(
-                "attempt to compare {} with {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => {
+                let event = if or_eq { Mm::Le } else { Mm::Lt };
+                let mut mm = self.get_mm(l, event);
+                if mm.is_nil() {
+                    mm = self.get_mm(r, event);
+                }
+                if mm.is_nil() {
+                    return Err(self.rt_err(&format!(
+                        "attempt to compare {} with {}",
+                        l.type_name(),
+                        r.type_name()
+                    )));
+                }
+                Ok(self.call_mm1(mm, &[l, r])?.truthy())
+            }
         }
     }
 
@@ -977,7 +1290,54 @@ impl Vm {
         vals.len() as u32
     }
 
-    /// Basic tostring (no __tostring until slice 4).
+    fn concat_values(&mut self, l: Value, r: Value) -> Result<Value, LuaError> {
+        fn piece(v: Value) -> Option<Vec<u8>> {
+            match v {
+                Value::Str(s) => Some(s.as_bytes().to_vec()),
+                Value::Int(x) => Some(numeric::num_to_string(Num::Int(x)).into_bytes()),
+                Value::Float(x) => Some(numeric::num_to_string(Num::Float(x)).into_bytes()),
+                _ => None,
+            }
+        }
+        match (piece(l), piece(r)) {
+            (Some(mut a), Some(b)) => {
+                a.extend_from_slice(&b);
+                Ok(Value::Str(self.heap.intern(&a)))
+            }
+            (la, _) => {
+                let mut mm = self.get_mm(l, Mm::Concat);
+                if mm.is_nil() {
+                    mm = self.get_mm(r, Mm::Concat);
+                }
+                if mm.is_nil() {
+                    let bad = if la.is_none() { l } else { r };
+                    return Err(self.type_err("concatenate", bad));
+                }
+                self.call_mm1(mm, &[l, r])
+            }
+        }
+    }
+
+    /// tostring with __tostring / __name support.
+    pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
+        let mm = self.get_mm(v, Mm::ToString);
+        if !mm.is_nil() {
+            return match self.call_mm1(mm, &[v])? {
+                Value::Str(s) => Ok(s.as_bytes().to_vec()),
+                _ => Err(self.rt_err("'__tostring' must return a string")),
+            };
+        }
+        if let Value::Table(t) = v
+            && let Value::Str(name) = self.get_mm(v, Mm::Name)
+        {
+            let mut out = name.as_bytes().to_vec();
+            out.extend_from_slice(format!(": {:p}", t.as_ptr()).as_bytes());
+            return Ok(out);
+        }
+        Ok(self.tostring_basic(v))
+    }
+
+    /// Basic tostring (no metamethods).
     pub(crate) fn tostring_basic(&mut self, v: Value) -> Vec<u8> {
         match v {
             Value::Nil => b"nil".to_vec(),
@@ -1013,6 +1373,16 @@ fn as_num(v: Value) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),
         Value::Float(f) => Some(Num::Float(f)),
+        _ => None,
+    }
+}
+
+/// Number, or string coerced to number (5.5 default string-arith coercion).
+fn coerce_num(v: Value) -> Option<Num> {
+    match v {
+        Value::Int(i) => Some(Num::Int(i)),
+        Value::Float(f) => Some(Num::Float(f)),
+        Value::Str(s) => numeric::str2num(s.as_bytes(), true, true),
         _ => None,
     }
 }
