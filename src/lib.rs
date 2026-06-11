@@ -4,4 +4,5 @@
 //! Compat modes: Lua 5.4, Lua 5.1.
 
 pub mod frontend;
+pub mod runtime;
 pub mod version;
