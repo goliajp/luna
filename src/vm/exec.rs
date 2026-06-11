@@ -1,11 +1,17 @@
 //! The interpreter. Dispatch is a plain match over opcodes (the P10 ceiling
-//! pass owns dispatch optimization). Lua→Lua calls do not recurse the Rust
-//! stack; only native↔Lua boundaries do (slice 3).
+//! pass owns dispatch optimization). Lua→Lua calls share one loop and never
+//! recurse the Rust stack; only native↔Lua boundaries do (e.g. pcall).
+//!
+//! Varargs follow 5.5 semantics: a vararg call materializes a vararg table
+//! (fields 1..n plus "n") kept in the function's own stack slot; `...`
+//! expands from it and `...name` binds it. Stack-spread varargs for the
+//! 5.1/5.4 compat modes arrive in P08.
 
 use crate::compiler::compile_chunk;
 use crate::frontend::{SyntaxError, parse};
 use crate::numeric::{self, Num};
-use crate::runtime::{Gc, Heap, LuaClosure, Table, TableError, UpvalState, Value};
+use crate::runtime::heap::GcHeader;
+use crate::runtime::{Gc, Heap, LuaClosure, Table, TableError, UpvalState, Upvalue, Value};
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
@@ -14,17 +20,24 @@ pub struct Vm {
     pub heap: Heap,
     stack: Vec<Value>,
     frames: Vec<Frame>,
+    /// open upvalues, sorted ascending by stack slot
+    open_upvals: Vec<(u32, Gc<Upvalue>)>,
+    /// logical stack top for multi-result sequences
+    top: u32,
     globals: Gc<Table>,
     version: LuaVersion,
 }
 
+#[derive(Clone, Copy)]
 struct Frame {
     closure: Gc<LuaClosure>,
     /// stack index of register 0
     base: u32,
     pc: u32,
-    /// stack slot of the function itself (results land here)
+    /// stack slot of the function (results land here; vararg table lives here)
     func_slot: u32,
+    /// results expected by the caller (-1 = all)
+    nresults: i32,
 }
 
 #[derive(Debug)]
@@ -49,17 +62,32 @@ impl Vm {
     pub fn new(version: LuaVersion) -> Vm {
         let mut heap = Heap::new();
         let globals = heap.new_table();
-        Vm {
+        let mut vm = Vm {
             heap,
             stack: Vec::new(),
             frames: Vec::new(),
+            open_upvals: Vec::new(),
+            top: 0,
             globals,
             version,
-        }
+        };
+        crate::vm::builtins::open_base(&mut vm);
+        vm
     }
 
     pub fn globals(&self) -> Gc<Table> {
         self.globals
+    }
+
+    pub fn version(&self) -> LuaVersion {
+        self.version
+    }
+
+    pub fn set_global(&mut self, name: &str, v: Value) {
+        let k = Value::Str(self.heap.intern(name.as_bytes()));
+        unsafe { self.globals.as_mut() }
+            .set(k, v)
+            .expect("global name is a valid key");
     }
 
     /// Parse + compile a chunk and close it over the globals table.
@@ -72,10 +100,10 @@ impl Vm {
         Ok(self.heap.new_closure(proto, Box::new([env])))
     }
 
-    /// Convenience for tests: load + run, returning the chunk's results.
+    /// Convenience: load + run, returning the chunk's results.
     pub fn eval(&mut self, src: &str) -> Result<Vec<Value>, Error> {
         let cl = self.load(src.as_bytes(), b"=eval")?;
-        Ok(self.call(cl, &[])?)
+        Ok(self.call_value(Value::Closure(cl), &[])?)
     }
 
     /// Render an error value for messages/tests.
@@ -86,40 +114,182 @@ impl Vm {
         }
     }
 
-    pub fn call(&mut self, cl: Gc<LuaClosure>, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+    /// Call any callable value from the host (or from natives like pcall).
+    pub fn call_value(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
         let func_slot = self.stack.len() as u32;
-        self.stack.push(Value::Closure(cl));
-        for &a in args {
-            self.stack.push(a);
-        }
-        self.push_frame(cl, func_slot, args.len() as u32);
-        let r = self.exec();
+        self.stack.push(f);
+        self.stack.extend_from_slice(args);
+        self.top = self.stack.len() as u32;
+        let r = self.call_at(func_slot, args.len() as u32);
         if r.is_err() {
-            // unwind everything this call created
-            self.frames.truncate(0);
             self.stack.truncate(func_slot as usize);
+            self.top = func_slot;
         }
         r
     }
 
-    fn push_frame(&mut self, cl: Gc<LuaClosure>, func_slot: u32, nargs: u32) {
+    fn call_at(&mut self, func_slot: u32, nargs: u32) -> Result<Vec<Value>, LuaError> {
+        if self.begin_call(func_slot, Some(nargs), -1)? {
+            self.exec()
+        } else {
+            // native completed inline; results at func_slot..top
+            Ok(self.take_results(func_slot))
+        }
+    }
+
+    /// Run a full collection with the VM's roots.
+    pub fn collect_garbage(&mut self) -> usize {
+        let mut roots: Vec<Value> = Vec::with_capacity(self.stack.len() + 8);
+        roots.push(Value::Table(self.globals));
+        roots.extend_from_slice(&self.stack);
+        for f in &self.frames {
+            roots.push(Value::Closure(f.closure));
+        }
+        let extra: Vec<*mut GcHeader> = self
+            .open_upvals
+            .iter()
+            .map(|&(_, uv)| uv.as_ptr() as *mut GcHeader)
+            .collect();
+        self.heap.collect_ex(&roots, &extra)
+    }
+
+    // ---- frames & calls ----
+
+    /// Begin calling stack[func_slot] with `nargs` (None: up to self.top).
+    /// Returns true if a Lua frame was pushed (the dispatch loop continues
+    /// there), false if a native completed inline.
+    fn begin_call(
+        &mut self,
+        func_slot: u32,
+        nargs: Option<u32>,
+        nresults: i32,
+    ) -> Result<bool, LuaError> {
+        let nargs = match nargs {
+            Some(n) => n,
+            None => self.top - (func_slot + 1),
+        };
+        match self.stack[func_slot as usize] {
+            Value::Closure(cl) => {
+                self.push_frame(cl, func_slot, nargs, nresults);
+                Ok(true)
+            }
+            Value::Native(f) => {
+                let nret = f(self, func_slot, nargs)?;
+                self.finish_results(func_slot, nret, nresults);
+                Ok(false)
+            }
+            v => Err(self.type_err("call", v)),
+        }
+    }
+
+    fn push_frame(&mut self, cl: Gc<LuaClosure>, func_slot: u32, nargs: u32, nresults: i32) {
         let proto = cl.proto;
-        let base = func_slot + 1;
         let nparams = proto.num_params as u32;
-        // missing fixed params become nil; extra args ignored (varargs: slice 3)
-        let _ = nargs;
-        let need = base + proto.max_stack as u32;
-        let need = need.max(base + nparams);
-        self.stack.resize(need as usize, Value::Nil);
+        if proto.is_vararg {
+            // 5.5: collect extras into the vararg table, stored in the
+            // function's own slot (the Frame keeps the closure)
+            let nextra = nargs.saturating_sub(nparams);
+            let t = self.heap.new_table();
+            {
+                let tm = unsafe { t.as_mut() };
+                for i in 0..nextra {
+                    tm.set_int(
+                        i as i64 + 1,
+                        self.stack[(func_slot + 1 + nparams + i) as usize],
+                    );
+                }
+            }
+            let n_key = Value::Str(self.heap.intern(b"n"));
+            unsafe { t.as_mut() }
+                .set(n_key, Value::Int(nextra as i64))
+                .expect("'n' is a valid key");
+            self.stack[func_slot as usize] = Value::Table(t);
+        }
+        let base = func_slot + 1;
+        let need = (base + proto.max_stack as u32) as usize;
+        if self.stack.len() < need {
+            self.stack.resize(need, Value::Nil);
+        }
+        // wipe the register window beyond the kept parameters (drops extra
+        // args and stale values — required for GC-safety and codegen)
+        let kept = nargs.min(nparams);
+        for i in (base + kept) as usize..need {
+            self.stack[i] = Value::Nil;
+        }
         self.frames.push(Frame {
             closure: cl,
             base,
             pc: 0,
             func_slot,
+            nresults,
         });
     }
 
-    // ---- register / constant access ----
+    /// Pad/announce results sitting at func_slot.
+    fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
+        if wanted < 0 {
+            self.top = func_slot + nret;
+        } else {
+            let wanted = wanted as u32;
+            let need = (func_slot + wanted) as usize;
+            if self.stack.len() < need {
+                self.stack.resize(need, Value::Nil);
+            }
+            for i in nret..wanted {
+                self.stack[(func_slot + i) as usize] = Value::Nil;
+            }
+            self.top = func_slot + wanted;
+        }
+    }
+
+    fn take_results(&mut self, func_slot: u32) -> Vec<Value> {
+        let nret = self.top - func_slot;
+        let out = self.stack[func_slot as usize..(func_slot + nret) as usize].to_vec();
+        self.stack.truncate(func_slot as usize);
+        self.top = func_slot;
+        out
+    }
+
+    // ---- open upvalues ----
+
+    fn find_or_create_upval(&mut self, slot: u32) -> Gc<Upvalue> {
+        match self.open_upvals.binary_search_by_key(&slot, |&(s, _)| s) {
+            Ok(i) => self.open_upvals[i].1,
+            Err(i) => {
+                let uv = self.heap.new_upvalue(UpvalState::Open(slot));
+                self.open_upvals.insert(i, (slot, uv));
+                uv
+            }
+        }
+    }
+
+    fn close_from(&mut self, slot: u32) {
+        while let Some(&(s, uv)) = self.open_upvals.last() {
+            if s < slot {
+                break;
+            }
+            let v = self.stack[s as usize];
+            unsafe { uv.as_mut() }.set_closed(v);
+            self.open_upvals.pop();
+        }
+    }
+
+    fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
+        match cl.upvals[idx as usize].state() {
+            UpvalState::Open(slot) => self.stack[slot as usize],
+            UpvalState::Closed(v) => v,
+        }
+    }
+
+    fn upval_set(&mut self, cl: Gc<LuaClosure>, idx: u32, v: Value) {
+        let uv = cl.upvals[idx as usize];
+        match uv.state() {
+            UpvalState::Open(slot) => self.stack[slot as usize] = v,
+            UpvalState::Closed(_) => unsafe { uv.as_mut() }.set_closed(v),
+        }
+    }
+
+    // ---- register / error helpers ----
 
     #[inline(always)]
     fn r(&self, base: u32, i: u32) -> Value {
@@ -131,36 +301,50 @@ impl Vm {
         self.stack[(base + i) as usize] = v;
     }
 
-    fn upval(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
-        match cl.upvals[idx as usize].state() {
-            UpvalState::Open(slot) => self.stack[slot as usize],
-            UpvalState::Closed(v) => v,
-        }
-    }
-
-    // ---- error helpers ----
-
-    fn rt_err(&mut self, msg: &str) -> LuaError {
-        let f = self.frames.last().expect("error outside a frame");
-        let proto = f.closure.proto;
-        let line = proto.lines[(f.pc as usize).saturating_sub(1)];
-        let src = String::from_utf8_lossy(numeric_src_name(proto.source.as_ptr())).into_owned();
-        let text = format!("{src}:{line}: {msg}");
+    pub(crate) fn rt_err(&mut self, msg: &str) -> LuaError {
+        let text = match self.position_prefix() {
+            Some(p) => format!("{p}{msg}"),
+            None => msg.to_string(),
+        };
         LuaError(Value::Str(self.heap.intern(text.as_bytes())))
     }
 
-    fn type_err(&mut self, what: &str, v: Value) -> LuaError {
+    pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
         self.rt_err(&format!("attempt to {what} a {} value", v.type_name()))
+    }
+
+    /// Position prefix of the currently executing Lua frame.
+    pub(crate) fn position_prefix(&self) -> Option<String> {
+        let f = self.frames.last()?;
+        let proto = f.closure.proto;
+        let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
+        let src = String::from_utf8_lossy(chunk_display_name(proto.source.as_ptr())).into_owned();
+        Some(format!("{src}:{line}: "))
     }
 
     // ---- the interpreter ----
 
     fn exec(&mut self) -> Result<Vec<Value>, LuaError> {
         let entry_depth = self.frames.len();
+        let r = self.run(entry_depth);
+        if r.is_err() {
+            // unwind the frames this activation created
+            while self.frames.len() >= entry_depth {
+                let f = self.frames.pop().expect("frame");
+                self.close_from(f.base);
+                self.stack.truncate(f.func_slot as usize);
+                self.top = f.func_slot;
+            }
+        }
+        r
+    }
+
+    fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
         loop {
             let f = self.frames.last().expect("no frame");
             let cl = f.closure;
             let base = f.base;
+            let func_slot = f.func_slot;
             let pc = f.pc;
             let inst = cl.proto.code[pc as usize];
             self.frames.last_mut().expect("no frame").pc = pc + 1;
@@ -195,14 +379,15 @@ impl Vm {
                     }
                 }
                 Op::GetUpval => {
-                    let v = self.upval(cl, inst.b());
+                    let v = self.upval_get(cl, inst.b());
                     self.set_r(base, inst.a(), v);
                 }
                 Op::SetUpval => {
-                    return Err(self.rt_err("SETUPVAL before closures (slice 3)"));
+                    let v = self.r(base, inst.a());
+                    self.upval_set(cl, inst.b(), v);
                 }
                 Op::GetTabUp => {
-                    let t = self.upval(cl, inst.b());
+                    let t = self.upval_get(cl, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
                     let v = self.index_value(t, key)?;
                     self.set_r(base, inst.a(), v);
@@ -225,7 +410,7 @@ impl Vm {
                     self.set_r(base, inst.a(), v);
                 }
                 Op::SetTabUp => {
-                    let t = self.upval(cl, inst.a());
+                    let t = self.upval_get(cl, inst.a());
                     let key = cl.proto.consts[inst.b() as usize];
                     let v = self.r(base, inst.c());
                     self.newindex_value(t, key, v)?;
@@ -253,7 +438,12 @@ impl Vm {
                 }
                 Op::SetList => {
                     let a = inst.a();
-                    let n = inst.b();
+                    let abs_a = base + a;
+                    let n = if inst.b() == 0 {
+                        self.top - (abs_a + 1)
+                    } else {
+                        inst.b()
+                    };
                     let offset = if inst.k() {
                         let extra = cl.proto.code[self.pc_of_top() as usize];
                         self.bump_pc();
@@ -270,7 +460,11 @@ impl Vm {
                     }
                 }
                 Op::SelfOp => {
-                    return Err(self.rt_err("SELF before calls (slice 3)"));
+                    let o = self.r(base, inst.b());
+                    self.set_r(base, inst.a() + 1, o);
+                    let key = cl.proto.consts[inst.c() as usize];
+                    let m = self.index_value(o, key)?;
+                    self.set_r(base, inst.a(), m);
                 }
                 Op::Add => self.arith_rr(inst, base, ArithOp::Add)?,
                 Op::Sub => self.arith_rr(inst, base, ArithOp::Sub)?,
@@ -330,8 +524,11 @@ impl Vm {
                     let s = self.heap.intern(&out);
                     self.set_r(base, a, Value::Str(s));
                 }
-                Op::Close | Op::Tbc => {
-                    // upvalue closing / to-be-closed: slices 3 and 5
+                Op::Close => {
+                    self.close_from(base + inst.a());
+                }
+                Op::Tbc => {
+                    // to-be-closed registration: slice 5
                 }
                 Op::Jmp => {
                     self.add_pc(inst.sj());
@@ -372,35 +569,130 @@ impl Vm {
                         self.bump_pc();
                     }
                 }
+                Op::Call => {
+                    let abs = base + inst.a();
+                    let nargs = if inst.b() == 0 {
+                        None
+                    } else {
+                        Some(inst.b() - 1)
+                    };
+                    let wanted = inst.c() as i32 - 1;
+                    self.begin_call(abs, nargs, wanted)?;
+                }
+                Op::TailCall => {
+                    let fr = *self.frames.last().expect("no frame");
+                    let abs = base + inst.a();
+                    let nargs = if inst.b() == 0 {
+                        self.top - (abs + 1)
+                    } else {
+                        inst.b() - 1
+                    };
+                    self.close_from(fr.base);
+                    for i in 0..=nargs {
+                        self.stack[(fr.func_slot + i) as usize] = self.stack[(abs + i) as usize];
+                    }
+                    self.frames.pop();
+                    if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults)?
+                        && self.frames.len() < entry_depth
+                    {
+                        // a native completed what was this function's result
+                        return Ok(self.take_results(fr.func_slot));
+                    }
+                }
                 Op::Return | Op::Return0 | Op::Return1 => {
-                    let results: Vec<Value> = match inst.op() {
-                        Op::Return0 => Vec::new(),
-                        Op::Return1 => vec![self.r(base, inst.a())],
+                    let (abs_a, nret) = match inst.op() {
+                        Op::Return0 => (base, 0),
+                        Op::Return1 => (base + inst.a(), 1),
                         _ => {
-                            let a = inst.a();
-                            let n = inst.b() - 1; // B >= 1 in slice 2
-                            (0..n).map(|i| self.r(base, a + i)).collect()
+                            let abs_a = base + inst.a();
+                            let nret = if inst.b() == 0 {
+                                self.top - abs_a
+                            } else {
+                                inst.b() - 1
+                            };
+                            (abs_a, nret)
                         }
                     };
-                    let f = self.frames.pop().expect("no frame");
-                    self.stack.truncate(f.func_slot as usize);
-                    if self.frames.len() < entry_depth {
-                        return Ok(results);
+                    let fr = self.frames.pop().expect("no frame");
+                    self.close_from(fr.base);
+                    for i in 0..nret {
+                        self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
                     }
-                    // nested Lua frames: slice 3 places results for the caller
-                    return Err(self.rt_err("nested returns before calls (slice 3)"));
+                    if self.frames.len() < entry_depth {
+                        self.top = fr.func_slot + nret;
+                        return Ok(self.take_results(fr.func_slot));
+                    }
+                    self.finish_results(fr.func_slot, nret, fr.nresults);
                 }
                 Op::ForPrep => self.for_prep(inst, base)?,
                 Op::ForLoop => self.for_loop(inst, base),
-                Op::Call
-                | Op::TailCall
-                | Op::TForPrep
-                | Op::TForCall
-                | Op::TForLoop
-                | Op::Closure
-                | Op::Vararg
-                | Op::VarargPrep => {
-                    return Err(self.rt_err("calls/closures are slice 3"));
+                Op::TForPrep => {
+                    self.add_pc(inst.bx() as i32);
+                }
+                Op::TForCall => {
+                    let abs = base + inst.a();
+                    let need = (abs + 7) as usize;
+                    if self.stack.len() < need {
+                        self.stack.resize(need, Value::Nil);
+                    }
+                    self.stack[(abs + 4) as usize] = self.stack[abs as usize];
+                    self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
+                    self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
+                    let nvars = inst.c() as i32;
+                    self.begin_call(abs + 4, Some(2), nvars)?;
+                }
+                Op::TForLoop => {
+                    let a = inst.a();
+                    let ctrl = self.r(base, a + 4);
+                    if !ctrl.is_nil() {
+                        self.set_r(base, a + 2, ctrl);
+                        self.add_pc(-(inst.bx() as i32));
+                    }
+                }
+                Op::Closure => {
+                    let proto = cl.proto.protos[inst.bx() as usize];
+                    let mut ups = Vec::with_capacity(proto.upvals.len());
+                    for d in proto.upvals.iter() {
+                        if d.in_stack {
+                            ups.push(self.find_or_create_upval(base + d.index as u32));
+                        } else {
+                            ups.push(cl.upvals[d.index as usize]);
+                        }
+                    }
+                    let nc = self.heap.new_closure(proto, ups.into_boxed_slice());
+                    self.set_r(base, inst.a(), Value::Closure(nc));
+                }
+                Op::Vararg => {
+                    let abs_a = base + inst.a();
+                    let wanted = inst.c() as i32 - 1;
+                    let Value::Table(vt) = self.stack[func_slot as usize] else {
+                        unreachable!("vararg function without vararg table");
+                    };
+                    let n_key = Value::Str(self.heap.intern(b"n"));
+                    let n = match vt.get(n_key) {
+                        Value::Int(n) => n.max(0) as u32,
+                        _ => 0,
+                    };
+                    let count = if wanted < 0 { n } else { wanted as u32 };
+                    let need = (abs_a + count) as usize;
+                    if self.stack.len() < need {
+                        self.stack.resize(need, Value::Nil);
+                    }
+                    for i in 0..count {
+                        let v = if i < n {
+                            vt.get_int(i as i64 + 1)
+                        } else {
+                            Value::Nil
+                        };
+                        self.stack[(abs_a + i) as usize] = v;
+                    }
+                    if wanted < 0 {
+                        self.top = abs_a + count;
+                    }
+                }
+                Op::GetVarg => {
+                    let v = self.stack[func_slot as usize];
+                    self.set_r(base, inst.a(), v);
                 }
                 Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
             }
@@ -432,7 +724,7 @@ impl Vm {
         }
     }
 
-    // ---- indexing (raw in slice 2; metamethods arrive in slice 4) ----
+    // ---- indexing (raw; metamethods arrive in slice 4) ----
 
     fn index_value(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
         match t {
@@ -530,7 +822,7 @@ impl Vm {
         }
     }
 
-    fn int_from(&mut self, v: Value, what: &str) -> Result<i64, LuaError> {
+    pub(crate) fn int_from(&mut self, v: Value, what: &str) -> Result<i64, LuaError> {
         match v {
             Value::Int(i) => Ok(i),
             Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
@@ -553,7 +845,6 @@ impl Vm {
                 int_lt_float(a, b)
             }),
             (Value::Float(a), Value::Int(b)) => Ok(if or_eq {
-                // a <= b  ⟺  not (b < a)
                 !int_lt_float(b, a)
             } else {
                 !int_le_float(b, a)
@@ -594,7 +885,6 @@ impl Vm {
                 if st == 0 {
                     return Err(self.rt_err("'for' step is zero"));
                 }
-                // integer loop; a float limit clips to the integer range
                 let (lim, empty) = int_for_limit(limit_n, i0, st);
                 if empty {
                     self.add_pc(inst.bx() as i32);
@@ -663,6 +953,42 @@ impl Vm {
                 }
             }
             _ => unreachable!("corrupt for-loop state"),
+        }
+    }
+
+    // ---- native helpers (used by builtins) ----
+
+    pub(crate) fn nat_arg(&self, func_slot: u32, nargs: u32, i: u32) -> Value {
+        if i < nargs {
+            self.stack[(func_slot + 1 + i) as usize]
+        } else {
+            Value::Nil
+        }
+    }
+
+    pub(crate) fn nat_return(&mut self, func_slot: u32, vals: &[Value]) -> u32 {
+        let need = func_slot as usize + vals.len();
+        if self.stack.len() < need {
+            self.stack.resize(need, Value::Nil);
+        }
+        for (i, &v) in vals.iter().enumerate() {
+            self.stack[func_slot as usize + i] = v;
+        }
+        vals.len() as u32
+    }
+
+    /// Basic tostring (no __tostring until slice 4).
+    pub(crate) fn tostring_basic(&mut self, v: Value) -> Vec<u8> {
+        match v {
+            Value::Nil => b"nil".to_vec(),
+            Value::Bool(true) => b"true".to_vec(),
+            Value::Bool(false) => b"false".to_vec(),
+            Value::Int(i) => numeric::num_to_string(Num::Int(i)).into_bytes(),
+            Value::Float(f) => numeric::num_to_string(Num::Float(f)).into_bytes(),
+            Value::Str(s) => s.as_bytes().to_vec(),
+            Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
+            Value::Closure(c) => format!("function: {:p}", c.as_ptr()).into_bytes(),
+            Value::Native(f) => format!("function: builtin: {:p}", f as *const ()).into_bytes(),
         }
     }
 }
@@ -778,7 +1104,7 @@ fn int_for_limit(limit: Num, init: i64, step: i64) -> (i64, bool) {
 
 /// Strip the load-prefix sigil from a chunk name for messages (PUC keeps
 /// `@file` / `=name` markers in `source`).
-fn numeric_src_name(p: *const crate::runtime::LuaStr) -> &'static [u8] {
+fn chunk_display_name(p: *const crate::runtime::LuaStr) -> &'static [u8] {
     let b = unsafe { crate::runtime::string::bytes_of(p) };
     match b.first() {
         Some(b'@') | Some(b'=') => &b[1..],

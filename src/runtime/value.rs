@@ -8,6 +8,12 @@ use crate::runtime::heap::Gc;
 use crate::runtime::string::LuaStr;
 use crate::runtime::table::Table;
 
+/// Native (host) function: receives the VM, the absolute stack slot of the
+/// function value, and the argument count; writes results starting at that
+/// slot and returns how many.
+pub type NativeFn =
+    fn(&mut crate::vm::Vm, func_slot: u32, nargs: u32) -> Result<u32, crate::vm::LuaError>;
+
 #[derive(Clone, Copy, Debug)]
 pub enum Value {
     Nil,
@@ -17,6 +23,7 @@ pub enum Value {
     Str(Gc<LuaStr>),
     Table(Gc<Table>),
     Closure(Gc<LuaClosure>),
+    Native(NativeFn),
 }
 
 impl Value {
@@ -27,7 +34,7 @@ impl Value {
             Value::Int(_) | Value::Float(_) => "number",
             Value::Str(_) => "string",
             Value::Table(_) => "table",
-            Value::Closure(_) => "function",
+            Value::Closure(_) | Value::Native(_) => "function",
         }
     }
 
@@ -55,6 +62,7 @@ impl Value {
             (Value::Str(a), Value::Str(b)) => str_eq(a, b),
             (Value::Table(a), Value::Table(b)) => a.ptr_eq(b),
             (Value::Closure(a), Value::Closure(b)) => a.ptr_eq(b),
+            (Value::Native(a), Value::Native(b)) => std::ptr::fn_addr_eq(a, b),
             _ => false,
         }
     }
@@ -89,8 +97,7 @@ pub(crate) mod raw {
     pub const TRUE: u8 = 2;
     pub const INT: u8 = 3;
     pub const FLOAT: u8 = 4;
-    /// reserved for native functions (P03 slice 3: not heap-managed)
-    #[allow(dead_code)]
+    /// native function: a bare fn pointer, not heap-managed
     pub const NATIVE: u8 = 5;
     pub const STR: u8 = 6;
     pub const TABLE: u8 = 7;
@@ -110,6 +117,7 @@ pub(crate) union RawVal {
     pub s: *mut LuaStr,
     pub t: *mut Table,
     pub c: *mut LuaClosure,
+    pub n: NativeFn,
 }
 
 impl RawVal {
@@ -127,6 +135,7 @@ impl Value {
             Value::Str(s) => (raw::STR, RawVal { s: s.as_ptr() }),
             Value::Table(t) => (raw::TABLE, RawVal { t: t.as_ptr() }),
             Value::Closure(c) => (raw::CLOSURE, RawVal { c: c.as_ptr() }),
+            Value::Native(n) => (raw::NATIVE, RawVal { n }),
         }
     }
 
@@ -140,6 +149,7 @@ impl Value {
                 raw::TRUE => Value::Bool(true),
                 raw::INT => Value::Int(v.i),
                 raw::FLOAT => Value::Float(v.f),
+                raw::NATIVE => Value::Native(v.n),
                 raw::STR => Value::Str(Gc::from_ptr(v.s)),
                 raw::TABLE => Value::Table(Gc::from_ptr(v.t)),
                 raw::CLOSURE => Value::Closure(Gc::from_ptr(v.c)),

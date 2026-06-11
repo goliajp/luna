@@ -87,6 +87,10 @@ impl Upvalue {
         self.state
     }
 
+    pub(crate) fn set_closed(&mut self, v: Value) {
+        self.state = UpvalState::Closed(v);
+    }
+
     pub(crate) fn trace(&self, m: &mut Marker) {
         if let UpvalState::Closed(v) = self.state {
             m.value(v);

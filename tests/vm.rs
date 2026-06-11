@@ -320,3 +320,285 @@ fn error_positions() {
     let msg = vm.error_text(&e);
     assert!(msg.starts_with("eval:3:"), "position missing: {msg}");
 }
+
+// ---- slice 3: functions, closures, varargs, generic for, pcall ----
+
+#[test]
+fn functions_and_calls() {
+    check_int(
+        "local function add(a, b) return a + b end return add(2, 3)",
+        5,
+    );
+    check_int("local f = function(x) return x * 2 end return f(21)", 42);
+    check_int("function double(x) return x + x end return double(7)", 14);
+    check_int(
+        "local function fib(n) if n < 2 then return n end return fib(n-1) + fib(n-2) end \
+         return fib(15)",
+        610,
+    );
+    // nested definitions and method syntax
+    check_int(
+        "local t = {v = 10} function t.get() return 1 end function t:geti() return self.v end \
+         return t.get() + t:geti()",
+        11,
+    );
+    check_int(
+        "local M = {} M.sub = {} function M.sub:m(x) return x + (self.k or 0) end \
+         M.sub.k = 5 return M.sub:m(2)",
+        7,
+    );
+    // missing args are nil, extra args dropped
+    check_int(
+        "local function f(a, b) return (a or 10) + (b or 20) end return f(1)",
+        21,
+    );
+    check_int("local function f(a) return a end return f(1, 2, 3)", 1);
+    check_error("local x = 5 x()", "attempt to call a number value");
+}
+
+#[test]
+fn closures_and_upvalues() {
+    check_int(
+        "local function counter() local n = 0 return function() n = n + 1 return n end end \
+         local c = counter() c() c() return c()",
+        3,
+    );
+    // two closures share one upvalue
+    check_int(
+        "local n = 0 local function inc() n = n + 1 end local function get() return n end \
+         inc() inc() return get()",
+        2,
+    );
+    // per-iteration capture: each closure sees its own i
+    check_int(
+        "local fs = {} for i = 1, 3 do fs[i] = function() return i end end \
+         return fs[1]() * 100 + fs[2]() * 10 + fs[3]()",
+        123,
+    );
+    // upvalue through two levels
+    check_int(
+        "local x = 7 local function outer() local function inner() return x end return inner() end \
+         return outer()",
+        7,
+    );
+    // assignment through SETUPVAL
+    check_int(
+        "local x = 1 local function set(v) x = v end set(99) return x",
+        99,
+    );
+    // _ENV as upvalue keeps globals working inside functions
+    check_int(
+        "g = 5 local function f() g = g + 1 return g end return f()",
+        6,
+    );
+}
+
+#[test]
+fn varargs_55_semantics() {
+    check_int(
+        "local function f(...) local a, b = ... return a + b end return f(3, 4)",
+        7,
+    );
+    check_int(
+        "local function f(...) return select('#', ...) end return f(1, nil, 3)",
+        3,
+    );
+    check_int(
+        "local function f(...) return ... end return (f(1, 2, 3))",
+        1,
+    );
+    let v = eval("local function f(...) return ... end return f(1, 2, 3)");
+    assert_eq!(v.len(), 3);
+    // named vararg table: t[i], t.n, read-only binding
+    check_int(
+        "local function f(...t) return t.n end return f(10, 20, 30)",
+        3,
+    );
+    check_int(
+        "local function f(...t) return t[2] end return f(10, 20, 30)",
+        20,
+    );
+    check_int("local function f(...t) return t.n end return f()", 0);
+    // ... still works alongside the named table
+    check_int(
+        "local function f(...t) local a = ... return a + t.n end return f(5, 6)",
+        7,
+    );
+    // vararg in the middle truncates to one value
+    check_int(
+        "local function f(...) local a, b = (...), 100 return a + b end return f(7, 8)",
+        107,
+    );
+    // chunk varargs exist (main is vararg)
+    check_int("local n = select('#', ...) return n", 0);
+}
+
+#[test]
+fn multret_semantics() {
+    check_int(
+        "local function two() return 1, 2 end local a, b = two() return a * 10 + b",
+        12,
+    );
+    // call in the middle truncates to 1
+    check_int(
+        "local function two() return 1, 2 end local a, b, c = two(), 9 \
+         return a * 100 + b * 10 + (c or 0)",
+        190,
+    );
+    // call results expand in table constructors and call args
+    check_int(
+        "local function two() return 1, 2 end local t = {two()} return #t",
+        2,
+    );
+    check_int(
+        "local function two() return 1, 2 end local t = {two(), two()} return #t",
+        3,
+    );
+    check_int(
+        "local function two() return 1, 2 end local function sum(a, b, c) return a + b + (c or 0) end \
+         return sum(two(), 10)",
+        11,
+    );
+    check_int(
+        "local function two() return 1, 2 end local function sum(a, b, c) return a + b + (c or 0) end \
+         return sum(10, two())",
+        13,
+    );
+    // nested propagation through return
+    let v =
+        eval("local function two() return 1, 2 end local function f() return two() end return f()");
+    assert_eq!(v.len(), 2);
+}
+
+#[test]
+fn tail_calls_do_not_grow_frames() {
+    // a million tail-recursive iterations natively (smaller under miri):
+    // would explode without frame reuse
+    const N: i64 = if cfg!(miri) { 2_000 } else { 1_000_000 };
+    check_int(
+        &format!(
+            "local function loop(n, acc) if n == 0 then return acc end return loop(n - 1, acc + 1) end return loop({N}, 0)"
+        ),
+        N,
+    );
+    // tail method call
+    check_int(
+        "local t = {} function t:f(n) if n == 0 then return 42 end return self:f(n - 1) end \
+         return t:f(10000)",
+        42,
+    );
+}
+
+#[test]
+fn generic_for_loops() {
+    check_int(
+        "local t = {10, 20, 30} local s = 0 for i, v in ipairs(t) do s = s + i + v end return s",
+        66,
+    );
+    check_int(
+        "local t = {a = 1, b = 2, c = 3} local s = 0 for k, v in pairs(t) do s = s + v end return s",
+        6,
+    );
+    check_int(
+        "local t = {x = 1} local n = 0 for k in pairs(t) do n = n + 1 end return n",
+        1,
+    );
+    // custom closure iterator
+    check_int(
+        "local function range(n) local i = 0 return function() i = i + 1 if i <= n then return i end end end \
+         local s = 0 for v in range(5) do s = s + v end return s",
+        15,
+    );
+    // break inside generic for
+    check_int(
+        "local s = 0 for i, v in ipairs({5, 6, 7}) do if i == 2 then break end s = s + v end return s",
+        5,
+    );
+    check_error("for x in 5 do end", "attempt to call a number value");
+}
+
+#[test]
+fn pcall_and_error() {
+    check_bool("local ok = pcall(function() return 1 end) return ok", true);
+    check_bool(
+        "local ok = pcall(function() error('boom') end) return ok",
+        false,
+    );
+    check_str(
+        "local _, e = pcall(function() error('boom') end) return e",
+        b"eval:1: boom",
+    );
+    // error with a non-string value: passed through unprefixed
+    check_int(
+        "local _, e = pcall(function() error({code = 42}) end) return e.code",
+        42,
+    );
+    // error(msg, 0): no position
+    check_str(
+        "local _, e = pcall(function() error('raw', 0) end) return e",
+        b"raw",
+    );
+    // pcall returns the function's results after true
+    check_int(
+        "local ok, a, b = pcall(function() return 3, 4 end) return a + b",
+        7,
+    );
+    // nested pcall
+    check_bool(
+        "local ok = pcall(function() local ok2 = pcall(error) return ok2 end) return ok",
+        true,
+    );
+    // runtime errors are caught too
+    check_bool(
+        "local ok = pcall(function() local x = nil return x.y end) return ok",
+        false,
+    );
+    // assert message and passthrough
+    check_str(
+        "local _, e = pcall(function() assert(false, 'msg') end) return e",
+        b"eval:1: msg",
+    );
+    check_int("return assert(42)", 42);
+}
+
+#[test]
+fn builtin_basics() {
+    check_str("return type(nil)", b"nil");
+    check_str("return type(1)", b"number");
+    check_str("return type('x')", b"string");
+    check_str("return type({})", b"table");
+    check_str("return type(print)", b"function");
+    check_str("return type(function() end)", b"function");
+    check_str("return tostring(12)", b"12");
+    check_str("return tostring(1.5)", b"1.5");
+    check_str("return tostring(nil)", b"nil");
+    check_str("return tostring(true)", b"true");
+    check_int("return select('#', 1, 2, 3)", 3);
+    check_int("return (select(2, 7, 8, 9))", 8);
+    check_int("return (select(-1, 7, 8, 9))", 9);
+    check_bool("return rawequal('a', 'a')", true);
+    check_bool("return rawequal({}, {})", false);
+    check_int("return rawlen({1, 2, 3})", 3);
+    check_int(
+        "local t = setmetatable({}, {}) return rawget(t, 'x') == nil and 1 or 0",
+        1,
+    );
+    check_str("return _VERSION", b"Lua 5.5");
+    check_int("_G.zz1 = 8 return zz1", 8);
+}
+
+#[test]
+fn closures_survive_gc() {
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    vm.eval(
+        "local n = 0
+         counter = function() n = n + 1 return n end",
+    )
+    .unwrap();
+    vm.collect_garbage();
+    let v = vm.eval("return counter() + counter()").unwrap();
+    assert!(v[0].raw_eq(Value::Int(3)));
+    vm.collect_garbage();
+    let v = vm.eval("return counter()").unwrap();
+    assert!(v[0].raw_eq(Value::Int(3)));
+}
