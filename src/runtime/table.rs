@@ -35,6 +35,7 @@ impl Node {
     };
 }
 
+#[repr(C)]
 pub struct Table {
     /// read through raw casts by the GC, not by field access
     #[allow(dead_code)]
