@@ -68,7 +68,8 @@ pub enum Op {
     SetList,
     Closure,
     Vararg,
-    VarargPrep,
+    /// 5.5: load the vararg table itself (named vararg binding)
+    GetVarg,
     ExtraArg,
 }
 

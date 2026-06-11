@@ -440,6 +440,7 @@ fn hash_key(k: Value) -> u64 {
         Value::Str(s) => s.hash() as u64,
         Value::Table(t) => mix64(t.as_ptr() as u64),
         Value::Closure(c) => mix64(c.as_ptr() as u64),
+        Value::Native(n) => mix64(n as usize as u64),
         Value::Nil => 0, // unreachable as a stored key
     }
 }

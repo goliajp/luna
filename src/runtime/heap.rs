@@ -177,9 +177,18 @@ impl Heap {
     /// Mark from `roots`, sweep everything unreachable. Returns the number of
     /// objects freed.
     pub fn collect(&mut self, roots: &[Value]) -> usize {
+        self.collect_ex(roots, &[])
+    }
+
+    /// Like `collect`, with additional bare-object roots (e.g. the VM's open
+    /// upvalues, which are not first-class Values).
+    pub(crate) fn collect_ex(&mut self, roots: &[Value], extra: &[*mut GcHeader]) -> usize {
         let mut m = Marker { stack: Vec::new() };
         for &r in roots {
             m.value(r);
+        }
+        for &h in extra {
+            m.header(h);
         }
         while let Some(h) = m.stack.pop() {
             unsafe {
