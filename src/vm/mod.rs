@@ -4,3 +4,5 @@ pub mod error;
 pub mod isa;
 
 pub use error::LuaError;
+pub mod exec;
+pub use exec::{Error, Vm};

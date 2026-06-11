@@ -11,6 +11,13 @@ pub enum Num {
 }
 
 impl Num {
+    pub fn as_f64(self) -> f64 {
+        match self {
+            Num::Int(i) => i as f64,
+            Num::Float(f) => f,
+        }
+    }
+
     fn negate(self) -> Num {
         match self {
             Num::Int(i) => Num::Int(i.wrapping_neg()),
