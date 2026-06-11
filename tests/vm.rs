@@ -99,7 +99,10 @@ fn arithmetic_semantics() {
     check_int("return 1 + 2", 3);
     check_int("return 7 * 6 - 2", 40);
     check_float("return 7 / 2", 3.5);
-    check_float("return 2 ^ 10", 1024.0);
+    if !cfg!(miri) {
+        // miri perturbs powf; exactness is asserted natively only
+        check_float("return 2 ^ 10", 1024.0);
+    }
     check_int("return 7 // 2", 3);
     check_int("return -7 // 2", -4);
     check_int("return 7 % 3", 1);
@@ -601,4 +604,157 @@ fn closures_survive_gc() {
     vm.collect_garbage();
     let v = vm.eval("return counter()").unwrap();
     assert!(v[0].raw_eq(Value::Int(3)));
+}
+
+// ---- slice 4: metamethods ----
+
+#[test]
+fn mm_index_and_newindex() {
+    // __index table chain (inheritance)
+    check_int(
+        "local Base = {greet = 4} local Mid = setmetatable({x = 2}, {__index = Base}) \
+         local obj = setmetatable({}, {__index = Mid}) return obj.greet + obj.x",
+        6,
+    );
+    // __index function
+    check_int(
+        "local t = setmetatable({}, {__index = function(t, k) return #k end}) return t.abc",
+        3,
+    );
+    // raw hit short-circuits the chain
+    check_int(
+        "local t = setmetatable({v = 1}, {__index = function() return 99 end}) return t.v",
+        1,
+    );
+    // __newindex function redirects writes
+    check_int(
+        "local log = {} local t = setmetatable({}, {__newindex = function(t, k, v) log[k] = v * 2 end}) \
+         t.a = 21 return log.a",
+        42,
+    );
+    // __newindex table redirects writes (and reads stay separate)
+    check_int(
+        "local store = {} local t = setmetatable({}, {__newindex = store}) t.k = 7 \
+         return store.k + (rawget(t, 'k') == nil and 1 or 0)",
+        8,
+    );
+    // assignment to an existing key ignores __newindex
+    check_int(
+        "local n = 0 local t = setmetatable({k = 1}, {__newindex = function() n = 99 end}) \
+         t.k = 2 return t.k + n",
+        2,
+    );
+    // chain loop detection
+    check_error(
+        "local t = {} setmetatable(t, {__index = t}) return t.x",
+        "chain too long",
+    );
+}
+
+#[test]
+fn mm_arithmetic_and_string_coercion() {
+    check_int(
+        "local function val(x) return type(x) == 'table' and x.v or x end \
+         local V = {} V.__add = function(a, b) return val(a) + val(b) end \
+         local x = setmetatable({v = 40}, V) return x + 2",
+        42,
+    );
+    // right operand's metamethod is found too
+    check_int(
+        "local V = {__sub = function(a, b) return 7 end} \
+         local x = setmetatable({}, V) return 1 - x",
+        7,
+    );
+    check_int(
+        "local V = {__unm = function(x) return 5 end} return -setmetatable({}, V)",
+        5,
+    );
+    // string arithmetic coercion (5.5 default)
+    check_int("return '10' + 1", 11);
+    check_float("return '2.5' * 2", 5.0);
+    check_int("return '0x10' + 0", 16);
+    check_int("return '8' // '3'", 2);
+    check_int("return '12' & 4", 4);
+    check_error(
+        "return 'abc' + 1",
+        "attempt to perform arithmetic on a string value",
+    );
+}
+
+#[test]
+fn mm_comparison() {
+    let v = "local V = {__eq = function(a, b) return a.id == b.id end, \
+              __lt = function(a, b) return a.id < b.id end, \
+              __le = function(a, b) return a.id <= b.id end} \
+              local a = setmetatable({id = 1}, V) local b = setmetatable({id = 1}, V) \
+              local c = setmetatable({id = 2}, V) ";
+    check_bool(&format!("{v} return a == b"), true);
+    check_bool(&format!("{v} return a ~= b"), false);
+    check_bool(&format!("{v} return a == c"), false);
+    check_bool(&format!("{v} return a < c"), true);
+    check_bool(&format!("{v} return c <= a"), false);
+    check_bool(&format!("{v} return a > c"), false);
+    // __eq only fires between tables, never table vs other types
+    check_bool(
+        "local t = setmetatable({}, {__eq = function() return true end}) return t == 1",
+        false,
+    );
+}
+
+#[test]
+fn mm_call_concat_len_tostring() {
+    check_int(
+        "local t = setmetatable({base = 40}, {__call = function(self, x) return self.base + x end}) \
+         return t(2)",
+        42,
+    );
+    check_str(
+        "local t = setmetatable({}, {__concat = function(a, b) return 'C' end}) return t .. 'x'",
+        b"C",
+    );
+    check_str(
+        "local t = setmetatable({}, {__concat = function(a, b) return a .. '!' end}) return 'hi' .. t",
+        b"hi!",
+    );
+    check_int(
+        "local t = setmetatable({}, {__len = function() return 99 end}) return #t",
+        99,
+    );
+    check_str(
+        "local t = setmetatable({}, {__tostring = function() return 'OBJ' end}) return tostring(t)",
+        b"OBJ",
+    );
+    // __metatable protection
+    check_str(
+        "local t = setmetatable({}, {__metatable = 'locked'}) return getmetatable(t)",
+        b"locked",
+    );
+    check_error(
+        "local t = setmetatable({}, {__metatable = 'locked'}) setmetatable(t, {})",
+        "protected metatable",
+    );
+}
+
+#[test]
+fn class_pattern_end_to_end() {
+    check_int(
+        "local Account = {} Account.__index = Account \
+         function Account.new(b) return setmetatable({balance = b}, Account) end \
+         function Account:deposit(v) self.balance = self.balance + v end \
+         function Account:get() return self.balance end \
+         local a = Account.new(100) a:deposit(20) a:deposit(3) return a:get()",
+        123,
+    );
+}
+
+#[test]
+fn runtime_stack_overflow_is_caught() {
+    check_bool(
+        "local function f() return 1 + f() end local ok = pcall(f) return ok",
+        false,
+    );
+    check_str(
+        "local function f() return 1 + f() end local _, e = pcall(f) return e",
+        b"eval:1: stack overflow",
+    );
 }

@@ -130,7 +130,7 @@ fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             out.push(b'\t');
         }
         let v = vm.nat_arg(fs, nargs, i);
-        out.extend(vm.tostring_basic(v));
+        out.extend(vm.tostring_value(v)?);
     }
     out.push(b'\n');
     let _ = std::io::stdout().write_all(&out);
@@ -139,7 +139,7 @@ fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = vm.nat_arg(fs, nargs, 0);
-    let bytes = vm.tostring_basic(v);
+    let bytes = vm.tostring_value(v)?;
     let s = Value::Str(vm.heap.intern(&bytes));
     Ok(vm.nat_return(fs, &[s]))
 }
@@ -182,8 +182,12 @@ fn nat_rawlen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    use crate::vm::exec::Mm;
     let tv = vm.nat_arg(fs, nargs, 0);
     let t = check_table(vm, tv, "setmetatable")?;
+    if !vm.get_mm(tv, Mm::Metatable).is_nil() {
+        return Err(raise_str(vm, "cannot change a protected metatable"));
+    }
     let mt = vm.nat_arg(fs, nargs, 1);
     match mt {
         Value::Nil => unsafe { t.as_mut() }.set_metatable(None),
@@ -194,11 +198,14 @@ fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 fn nat_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    use crate::vm::exec::Mm;
     let v = vm.nat_arg(fs, nargs, 0);
-    let mt = match v {
-        Value::Table(t) => t.metatable().map(Value::Table).unwrap_or(Value::Nil),
-        _ => Value::Nil,
-    };
+    // __metatable protection: return that field instead
+    let protected = vm.get_mm(v, Mm::Metatable);
+    if !protected.is_nil() {
+        return Ok(vm.nat_return(fs, &[protected]));
+    }
+    let mt = vm.metatable_of(v).map(Value::Table).unwrap_or(Value::Nil);
     Ok(vm.nat_return(fs, &[mt]))
 }
 
