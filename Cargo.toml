@@ -7,3 +7,7 @@ repository = "https://github.com/goliajp/luna"
 license = "MIT"
 
 [dependencies]
+
+[[bench]]
+name = "value_repr"
+harness = false
