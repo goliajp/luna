@@ -98,6 +98,9 @@ pub struct Heap {
     strings: StringTable,
     seed: u32,
     live: usize,
+    /// approximate allocated bytes (object shells; internal Vec/Box growth
+    /// of tables is not tracked — refined in P06)
+    bytes: usize,
 }
 
 impl Heap {
@@ -107,6 +110,7 @@ impl Heap {
             strings: StringTable::new(),
             seed: make_seed(),
             live: 0,
+            bytes: 0,
         }
     }
 
@@ -124,6 +128,7 @@ impl Heap {
     pub(crate) fn adopt<T>(&mut self, obj: Box<T>) -> Gc<T> {
         let p = Box::into_raw(obj);
         self.link(p as *mut GcHeader);
+        self.bytes += std::mem::size_of::<T>();
         Gc::from_ptr(p)
     }
 
@@ -170,17 +175,24 @@ impl Heap {
             let (p, is_new) = self.strings.intern(bytes, self.seed);
             if is_new {
                 self.link(p as *mut GcHeader);
+                self.bytes += string::alloc_size(bytes.len());
             }
             Gc::from_ptr(p)
         } else {
             let p = string::alloc_long(bytes, self.seed);
             self.link(p as *mut GcHeader);
+            self.bytes += string::alloc_size(bytes.len());
             Gc::from_ptr(p)
         }
     }
 
     pub fn live_objects(&self) -> usize {
         self.live
+    }
+
+    /// Approximate heap size in bytes.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// Forward write barrier hook (no-op until incremental GC in P06).
@@ -248,13 +260,31 @@ impl Heap {
     unsafe fn free_obj(&mut self, h: *mut GcHeader) {
         unsafe {
             match (*h).tag {
-                ObjTag::Table => drop(Box::from_raw(h as *mut Table)),
-                ObjTag::Proto => drop(Box::from_raw(h as *mut Proto)),
-                ObjTag::Closure => drop(Box::from_raw(h as *mut LuaClosure)),
-                ObjTag::Upvalue => drop(Box::from_raw(h as *mut Upvalue)),
-                ObjTag::Native => drop(Box::from_raw(h as *mut NativeClosure)),
+                ObjTag::Table => {
+                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Table>());
+                    drop(Box::from_raw(h as *mut Table));
+                }
+                ObjTag::Proto => {
+                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Proto>());
+                    drop(Box::from_raw(h as *mut Proto));
+                }
+                ObjTag::Closure => {
+                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<LuaClosure>());
+                    drop(Box::from_raw(h as *mut LuaClosure));
+                }
+                ObjTag::Upvalue => {
+                    self.bytes = self.bytes.saturating_sub(std::mem::size_of::<Upvalue>());
+                    drop(Box::from_raw(h as *mut Upvalue));
+                }
+                ObjTag::Native => {
+                    self.bytes = self
+                        .bytes
+                        .saturating_sub(std::mem::size_of::<NativeClosure>());
+                    drop(Box::from_raw(h as *mut NativeClosure));
+                }
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
+                    self.bytes = self.bytes.saturating_sub(string::alloc_size((*s).len()));
                     if (*s).is_short() {
                         self.strings.remove(s);
                     }

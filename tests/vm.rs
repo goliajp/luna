@@ -910,3 +910,137 @@ fn global_declarations_55() {
     // _ENV bypass still works (declarations are purely syntactic)
     check_int("global <const> * _ENV.bypass = 9 return _ENV.bypass", 9);
 }
+
+// ---- P04 slice 1: math, table, base additions ----
+
+#[test]
+fn math_library() {
+    check_int("return math.floor(2.7)", 2);
+    check_int("return math.floor(-2.7)", -3);
+    check_int("return math.ceil(2.1)", 3);
+    check_int("return math.abs(-5)", 5);
+    check_float("return math.abs(-5.5)", 5.5);
+    check_int("return math.max(3, 1, 4, 1, 5)", 5);
+    check_int("return math.min(3, 1, 4, 1, 5)", 1);
+    check_float("return math.sqrt(16)", 4.0);
+    check_float("return math.huge", f64::INFINITY);
+    check_int("return math.maxinteger", i64::MAX);
+    check_int("return math.mininteger", i64::MIN);
+    check_str("return math.type(1)", b"integer");
+    check_str("return math.type(1.0)", b"float");
+    check_bool("return math.type('x') == nil", true);
+    check_int("return math.tointeger(3.0)", 3);
+    check_bool("return math.tointeger(3.5) == nil", true);
+    check_int("return math.fmod(7, 3)", 1);
+    check_int("return math.fmod(-7, 3)", -1); // fmod truncates, % floors
+    check_error("return math.fmod(1, 0)", "zero");
+    check_bool("return math.ult(-1, 1)", false); // -1 is huge unsigned
+    check_float("return math.log(8, 2)", 3.0);
+    let v = eval("local ip, fp = math.modf(3.7) return ip");
+    assert!(matches!(v[0], Value::Float(f) if f == 3.0));
+    // random: determinism after seeding, ranges respected
+    check_bool(
+        "math.randomseed(42) local a = math.random() math.randomseed(42) \
+         return a == math.random()",
+        true,
+    );
+    check_bool(
+        "math.randomseed(7) for i = 1, 100 do local r = math.random(3, 9) \
+         if r < 3 or r > 9 then return false end end return true",
+        true,
+    );
+    check_error("return math.random(5, 2)", "interval is empty");
+}
+
+#[test]
+fn table_library() {
+    check_int("local t = {1, 2, 3} table.insert(t, 4) return t[4] + #t", 8);
+    check_int(
+        "local t = {1, 3} table.insert(t, 2, 2) return t[1] * 100 + t[2] * 10 + t[3]",
+        123,
+    );
+    check_error("table.insert({}, 5, 1)", "position out of bounds");
+    check_int(
+        "local t = {1, 2, 3} local v = table.remove(t) return v * 10 + #t",
+        32,
+    );
+    check_int(
+        "local t = {1, 2, 3} local v = table.remove(t, 1) return v * 10 + t[1]",
+        12,
+    );
+    check_str("return table.concat({1, 'b', 2.5}, '-')", b"1-b-2.5");
+    check_str("return table.concat({}, 'x')", b"");
+    check_str("return table.concat({9, 8, 7}, '', 2, 3)", b"87");
+    check_error("table.concat({{}})", "invalid value");
+    check_int(
+        "local a, b, c = table.unpack({7, 8, 9}) return a * 100 + b * 10 + c",
+        789,
+    );
+    check_int("return (table.unpack({1, 2, 3}, 2))", 2);
+    check_int("return select('#', table.unpack({1, 2, 3}))", 3);
+    check_int("local p = table.pack(4, 5, 6) return p.n * 100 + p[3]", 306);
+    check_int(
+        "local t = {1, 2, 3, 4, 5} table.move(t, 1, 3, 3) \
+         return t[3] * 100 + t[4] * 10 + t[5]",
+        123,
+    );
+    check_int(
+        "local d = table.move({7, 8}, 1, 2, 1, {}) return d[1] * 10 + d[2]",
+        78,
+    );
+    check_int("return #table.create(16)", 0);
+    // sort: default order, comparator, strings, invalid order caught
+    check_str(
+        "local t = {3, 1, 4, 1, 5, 9, 2, 6} table.sort(t) return table.concat(t, '')",
+        b"11234569",
+    );
+    check_str(
+        "local t = {3, 1, 4, 1, 5} table.sort(t, function(a, b) return a > b end) \
+         return table.concat(t, '')",
+        b"54311",
+    );
+    check_str(
+        "local t = {'pear', 'apple', 'fig'} table.sort(t) return table.concat(t, ',')",
+        b"apple,fig,pear",
+    );
+    check_bool(
+        "local t = {} for i = 1, 200 do t[i] = (i * 37) % 101 end table.sort(t) \
+         for i = 2, 200 do if t[i - 1] > t[i] then return false end end return true",
+        true,
+    );
+    check_error(
+        "local t = {} for i = 1, 64 do t[i] = i end \
+         table.sort(t, function() return true end)",
+        "invalid order function",
+    );
+}
+
+#[test]
+fn base_additions() {
+    check_int("return tonumber('42')", 42);
+    check_float("return tonumber('2.5')", 2.5);
+    check_int("return tonumber('0x10')", 16);
+    check_bool("return tonumber('zz') == nil", true);
+    check_bool("return tonumber({}) == nil", true);
+    check_int("return tonumber('ff', 16)", 255);
+    check_int("return tonumber('111', 2)", 7);
+    check_int("return tonumber('-z', 36)", -35);
+    check_bool("return tonumber('12', 2) == nil", true);
+    check_error("return tonumber('1', 99)", "base out of range");
+    // load
+    check_int("local f = load('return 1 + 1') return f()", 2);
+    check_int("local f = load('return ...', 'chunk') return f(9)", 9);
+    check_bool(
+        "local f, e = load('syntax ! error') return f == nil and type(e) == 'string'",
+        true,
+    );
+    // load with custom env
+    check_int(
+        "local env = {x = 5} local f = load('return x', 'c', 't', env) return f()",
+        5,
+    );
+    // collectgarbage
+    check_bool("return collectgarbage('count') > 0", true);
+    check_int("return collectgarbage()", 0);
+    check_bool("return pairs({}) == next", true);
+}

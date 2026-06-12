@@ -33,6 +33,8 @@ pub struct Vm {
     mm_names: Vec<Gc<crate::runtime::LuaStr>>,
     /// native↔Lua nesting depth (PUC C-stack guard analogue)
     c_depth: u32,
+    /// xoshiro256** state (math.random)
+    rng: [u64; 4],
     version: LuaVersion,
 }
 
@@ -150,10 +152,55 @@ impl Vm {
             string_mt: None,
             mm_names,
             c_depth: 0,
+            rng: [0; 4],
             version,
         };
+        let (a, b) = vm.rng_auto_seed();
+        vm.rng_seed(a as u64, b as u64);
         crate::vm::builtins::open_base(&mut vm);
+        crate::vm::lib_math::open_math(&mut vm);
+        crate::vm::lib_table::open_table(&mut vm);
         vm
+    }
+
+    /// xoshiro256** next.
+    pub(crate) fn rng_next(&mut self) -> u64 {
+        let s = &mut self.rng;
+        let result = s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
+        let t = s[1] << 17;
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+        s[2] ^= t;
+        s[3] = s[3].rotate_left(45);
+        result
+    }
+
+    /// Seed the RNG via splitmix64 expansion (PUC randseed shape).
+    pub(crate) fn rng_seed(&mut self, a: u64, b: u64) {
+        let mut sm = a ^ b.rotate_left(32);
+        let mut next = move || {
+            sm = sm.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = sm;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        self.rng = [next(), next(), next(), next()];
+        for _ in 0..16 {
+            self.rng_next();
+        }
+    }
+
+    /// Entropy for math.randomseed() with no arguments.
+    pub(crate) fn rng_auto_seed(&mut self) -> (i64, i64) {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let addr = &self.rng as *const _ as u64;
+        (t as i64, addr as i64)
     }
 
     /// Allocate a native function object (no upvalues): builtin registration.
@@ -1205,7 +1252,7 @@ impl Vm {
 
     // ---- comparison ----
 
-    fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
+    pub(crate) fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
         match (l, r) {
             (Value::Int(a), Value::Int(b)) => Ok(if or_eq { a <= b } else { a < b }),
             (Value::Float(a), Value::Float(b)) => Ok(if or_eq { a <= b } else { a < b }),
