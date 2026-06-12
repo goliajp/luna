@@ -1044,3 +1044,114 @@ fn base_additions() {
     check_int("return collectgarbage()", 0);
     check_bool("return pairs({}) == next", true);
 }
+
+// ---- P04 slices 2+3: string library and patterns ----
+
+#[test]
+fn string_core() {
+    check_int("return string.len('hello')", 5);
+    check_int("return ('hello'):len()", 5); // method syntax via string metatable
+    check_str("return ('hello'):sub(2, 4)", b"ell");
+    check_str("return ('hello'):sub(-3)", b"llo");
+    check_str("return ('hello'):sub(2)", b"ello");
+    check_str("return ('hello'):sub(4, 2)", b"");
+    check_str("return ('hello'):sub(-100, 100)", b"hello");
+    check_str("return ('aBc'):upper()", b"ABC");
+    check_str("return ('aBc'):lower()", b"abc");
+    check_str("return ('ab'):rep(3)", b"ababab");
+    check_str("return ('ab'):rep(3, '-')", b"ab-ab-ab");
+    check_str("return ('ab'):rep(0)", b"");
+    check_str("return ('abc'):reverse()", b"cba");
+    check_int("return ('A'):byte()", 65);
+    check_int("return select('#', ('abc'):byte(1, 3))", 3);
+    check_str("return string.char(104, 105)", b"hi");
+    check_error("return string.char(300)", "value out of range");
+    // numbers coerce in string functions
+    check_int("return string.len(123)", 3);
+}
+
+#[test]
+fn string_find_and_match() {
+    check_int("return (string.find('hello', 'll'))", 3);
+    check_int("return select(2, string.find('hello', 'll'))", 4);
+    check_bool("return string.find('hello', 'xyz') == nil", true);
+    check_int("return (string.find('hello', 'l+'))", 3);
+    check_int("return (string.find('a.b', '.', 1, true))", 2); // plain
+    check_int("return (string.find('hello', 'l', -2))", 4); // negative init
+    check_str("return (string.match('key=val', '(%w+)=(%w+)'))", b"key");
+    check_str(
+        "return select(2, string.match('key=val', '(%w+)=(%w+)'))",
+        b"val",
+    );
+    check_str("return string.match('hello 42!', '%d+')", b"42");
+    check_bool("return string.match('abc', '%d') == nil", true);
+    check_int("return string.match('abc', '()b')", 2); // position capture
+    check_str("return string.match('  trim  ', '^%s*(.-)%s*$')", b"trim");
+    check_error("return string.match('x', '%')", "malformed pattern");
+}
+
+#[test]
+fn string_gmatch() {
+    check_int(
+        "local n = 0 for w in ('one two three'):gmatch('%a+') do n = n + 1 end return n",
+        3,
+    );
+    check_str(
+        "local t = {} for k, v in ('a=1,b=2'):gmatch('(%w+)=(%w+)') do t[#t+1] = k .. v end \
+         return table.concat(t, ' ')",
+        b"a1 b2",
+    );
+    // standalone iterator calls work (closure state, no generic for)
+    check_str(
+        "local it = ('x y'):gmatch('%a') local a = it() local b = it() return a .. b",
+        b"xy",
+    );
+    // empty matches make progress
+    check_int(
+        "local n = 0 for _ in ('abc'):gmatch('x*') do n = n + 1 end return n",
+        4,
+    );
+}
+
+#[test]
+fn string_gsub() {
+    check_str("return (('hello world'):gsub('o', '0'))", b"hell0 w0rld");
+    check_int("return select(2, ('hello'):gsub('l', 'L'))", 2);
+    check_str("return (('hello'):gsub('l', 'L', 1))", b"heLlo");
+    check_str("return (('abc'):gsub('(%a)', '%1%1'))", b"aabbcc");
+    check_str(
+        "return (('key=val'):gsub('(%w+)=(%w+)', '%2=%1'))",
+        b"val=key",
+    );
+    check_str("return (('ab'):gsub('b', '100%%'))", b"a100%");
+    // table replacement
+    check_str(
+        "return (('$name is $age'):gsub('%$(%w+)', {name = 'lua', age = 30}))",
+        b"lua is 30",
+    );
+    // function replacement; false/nil keeps the original
+    check_str(
+        "return (('1 2 3'):gsub('%d', function(d) return tonumber(d) * 2 end))",
+        b"2 4 6",
+    );
+    check_str(
+        "return (('keep drop'):gsub('%a+', function(w) if w == 'drop' then return 'X' end end))",
+        b"keep X",
+    );
+    // empty pattern progress
+    check_str("return (('ab'):gsub('', '-'))", b"-a-b-");
+    check_error("return ('x'):gsub('x', '%9')", "invalid capture index");
+    check_str("return (('x'):gsub('x', {}))", b"x"); // table lookup nil keeps original
+}
+
+#[test]
+fn pattern_classes_balanced_frontier() {
+    check_str("return string.match('foo (bar) baz', '%b()')", b"(bar)");
+    check_str("return string.match('THE quick', '%f[%l]%a+')", b"quick");
+    check_str("return string.match('abc123', '%a+')", b"abc");
+    check_str("return string.match('abc123', '%A+')", b"123"); // complement... wait %A = non-alpha → 123
+    check_str("return string.match('a-b', '%p')", b"-");
+    check_str("return string.match('x\\ty', '%s')", b"\t");
+    check_str("return string.match('abcabc', '(a%w+)%1')", b"abc"); // backref... wait (a%w+) greedy
+    check_str("return string.match('[x]', '%[(%a)%]')", b"x");
+}
