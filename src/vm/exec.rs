@@ -161,6 +161,7 @@ impl Vm {
         crate::vm::lib_math::open_math(&mut vm);
         crate::vm::lib_table::open_table(&mut vm);
         crate::vm::lib_string::open_string(&mut vm);
+        crate::vm::lib_utf8::open_utf8(&mut vm);
         vm
     }
 
