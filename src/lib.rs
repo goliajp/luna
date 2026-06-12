@@ -6,6 +6,7 @@
 pub mod compiler;
 pub mod frontend;
 pub mod numeric;
+pub mod pattern;
 pub mod runtime;
 pub mod version;
 pub mod vm;

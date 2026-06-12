@@ -160,6 +160,7 @@ impl Vm {
         crate::vm::builtins::open_base(&mut vm);
         crate::vm::lib_math::open_math(&mut vm);
         crate::vm::lib_table::open_table(&mut vm);
+        crate::vm::lib_string::open_string(&mut vm);
         vm
     }
 
@@ -1391,6 +1392,14 @@ impl Vm {
             unreachable!("native frame without native closure");
         };
         nc.upvals[i]
+    }
+
+    /// Write a native function's own upvalue (stateful iterators).
+    pub(crate) fn nat_set_upval(&mut self, func_slot: u32, i: usize, v: Value) {
+        let Value::Native(nc) = self.stack[func_slot as usize] else {
+            unreachable!("native frame without native closure");
+        };
+        unsafe { nc.as_mut() }.upvals[i] = v;
     }
 
     pub(crate) fn nat_arg(&self, func_slot: u32, nargs: u32, i: u32) -> Value {
