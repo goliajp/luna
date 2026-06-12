@@ -459,6 +459,27 @@ fn ceil_log2(k: u64) -> usize {
     (u64::BITS - (k - 1).leading_zeros()) as usize
 }
 
+impl Table {
+    /// Preallocate the array part (table.create); existing contents are
+    /// preserved.
+    pub fn ensure_array(&mut self, n: usize) {
+        if n > self.asize() {
+            let hash_entries = self.nodes.iter().filter(|nd| !nd.val.is_nil()).count();
+            self.resize(n, hash_entries);
+        }
+    }
+}
+
+impl Table {
+    /// Preallocate hash-part capacity (table.create's second size).
+    pub fn ensure_hash(&mut self, n: usize) {
+        let entries = self.nodes.iter().filter(|nd| !nd.val.is_nil()).count();
+        if n > self.nodes.len() {
+            self.resize(self.asize(), n.max(entries));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,26 +688,5 @@ mod tests {
                 assert!(t.get_int(i).raw_eq(Value::Int(i)));
             }
         });
-    }
-}
-
-impl Table {
-    /// Preallocate the array part (table.create); existing contents are
-    /// preserved.
-    pub fn ensure_array(&mut self, n: usize) {
-        if n > self.asize() {
-            let hash_entries = self.nodes.iter().filter(|nd| !nd.val.is_nil()).count();
-            self.resize(n, hash_entries);
-        }
-    }
-}
-
-impl Table {
-    /// Preallocate hash-part capacity (table.create's second size).
-    pub fn ensure_hash(&mut self, n: usize) {
-        let entries = self.nodes.iter().filter(|nd| !nd.val.is_nil()).count();
-        if n > self.nodes.len() {
-            self.resize(self.asize(), n.max(entries));
-        }
     }
 }
