@@ -8,22 +8,40 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
 pub(crate) fn open_base(vm: &mut Vm) {
-    vm.set_global("assert", Value::Native(nat_assert));
-    vm.set_global("error", Value::Native(nat_error));
-    vm.set_global("pcall", Value::Native(nat_pcall));
-    vm.set_global("type", Value::Native(nat_type));
-    vm.set_global("print", Value::Native(nat_print));
-    vm.set_global("tostring", Value::Native(nat_tostring));
-    vm.set_global("rawget", Value::Native(nat_rawget));
-    vm.set_global("rawset", Value::Native(nat_rawset));
-    vm.set_global("rawequal", Value::Native(nat_rawequal));
-    vm.set_global("rawlen", Value::Native(nat_rawlen));
-    vm.set_global("setmetatable", Value::Native(nat_setmetatable));
-    vm.set_global("getmetatable", Value::Native(nat_getmetatable));
-    vm.set_global("select", Value::Native(nat_select));
-    vm.set_global("next", Value::Native(nat_next));
-    vm.set_global("pairs", Value::Native(nat_pairs));
-    vm.set_global("ipairs", Value::Native(nat_ipairs));
+    let f = vm.native(nat_assert);
+    vm.set_global("assert", f);
+    let f = vm.native(nat_error);
+    vm.set_global("error", f);
+    let f = vm.native(nat_pcall);
+    vm.set_global("pcall", f);
+    let f = vm.native(nat_type);
+    vm.set_global("type", f);
+    let f = vm.native(nat_print);
+    vm.set_global("print", f);
+    let f = vm.native(nat_tostring);
+    vm.set_global("tostring", f);
+    let f = vm.native(nat_rawget);
+    vm.set_global("rawget", f);
+    let f = vm.native(nat_rawset);
+    vm.set_global("rawset", f);
+    let f = vm.native(nat_rawequal);
+    vm.set_global("rawequal", f);
+    let f = vm.native(nat_rawlen);
+    vm.set_global("rawlen", f);
+    let f = vm.native(nat_setmetatable);
+    vm.set_global("setmetatable", f);
+    let f = vm.native(nat_getmetatable);
+    vm.set_global("getmetatable", f);
+    let f = vm.native(nat_select);
+    vm.set_global("select", f);
+    // pairs returns the same object as the global next (PUC identity)
+    let next_obj = vm.native(nat_next);
+    vm.set_global("next", next_obj);
+    let pairs_obj = vm.native_with(nat_pairs, Box::new([next_obj]));
+    vm.set_global("pairs", pairs_obj);
+    let ipairs_it = vm.native(ipairs_iter);
+    let ipairs_obj = vm.native_with(nat_ipairs, Box::new([ipairs_it]));
+    vm.set_global("ipairs", ipairs_obj);
     let version = match vm.version() {
         crate::version::LuaVersion::Lua51 => "Lua 5.1",
         crate::version::LuaVersion::Lua54 => "Lua 5.4",
@@ -255,7 +273,8 @@ fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = vm.nat_arg(fs, nargs, 0);
     check_table(vm, t, "pairs")?;
-    Ok(vm.nat_return(fs, &[Value::Native(nat_next), t, Value::Nil]))
+    let it = vm.nat_upval(fs, 0);
+    Ok(vm.nat_return(fs, &[it, t, Value::Nil]))
 }
 
 fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -277,5 +296,6 @@ fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = vm.nat_arg(fs, nargs, 0);
     check_table(vm, t, "ipairs")?;
-    Ok(vm.nat_return(fs, &[Value::Native(ipairs_iter), t, Value::Int(0)]))
+    let it = vm.nat_upval(fs, 0);
+    Ok(vm.nat_return(fs, &[it, t, Value::Int(0)]))
 }

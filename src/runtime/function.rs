@@ -66,6 +66,26 @@ impl LuaClosure {
     }
 }
 
+/// A native (host) function with captured upvalues — the analogue of PUC C
+/// closures. Builtins are allocated once at registration so identity is
+/// stable; stateful iterators (gmatch) mutate their upvalues via `as_mut`.
+#[repr(C)]
+pub struct NativeClosure {
+    /// read through raw casts by the GC, not by field access
+    #[allow(dead_code)]
+    pub(crate) hdr: GcHeader,
+    pub f: crate::runtime::value::NativeFn,
+    pub upvals: Box<[Value]>,
+}
+
+impl NativeClosure {
+    pub(crate) fn trace(&self, m: &mut Marker) {
+        for &v in self.upvals.iter() {
+            m.value(v);
+        }
+    }
+}
+
 /// An upvalue cell. Open: refers to a live VM stack slot (the stack is a GC
 /// root, so open cells trace nothing). Closed: owns the value inline.
 #[repr(C)]
