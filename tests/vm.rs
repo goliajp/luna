@@ -1155,3 +1155,92 @@ fn pattern_classes_balanced_frontier() {
     check_str("return string.match('abcabc', '(a%w+)%1')", b"abc"); // backref... wait (a%w+) greedy
     check_str("return string.match('[x]', '%[(%a)%]')", b"x");
 }
+
+// ---- P04 slice 4: string.format ----
+
+#[test]
+fn string_format() {
+    check_str("return string.format('%d', 42)", b"42");
+    check_str("return string.format('%d', -42)", b"-42");
+    check_str("return string.format('%5d', 42)", b"   42");
+    check_str("return string.format('%-5d|', 42)", b"42   |");
+    check_str("return string.format('%05d', 42)", b"00042");
+    check_str("return string.format('%+d %+d', 5, -5)", b"+5 -5");
+    check_str("return string.format('%x', 255)", b"ff");
+    check_str("return string.format('%X', 255)", b"FF");
+    check_str("return string.format('%#x', 255)", b"0xff");
+    check_str("return string.format('%o', 8)", b"10");
+    check_str("return string.format('%x', -1)", b"ffffffffffffffff");
+    check_str("return string.format('%c%c', 104, 105)", b"hi");
+    check_str("return string.format('%s=%s', 'a', 1)", b"a=1");
+    check_str("return string.format('%10s|', 'hi')", b"        hi|");
+    check_str("return string.format('%-10s|', 'hi')", b"hi        |");
+    check_str("return string.format('%.3s', 'hello')", b"hel");
+    check_str("return string.format('%f', 1.5)", b"1.500000");
+    check_str("return string.format('%.2f', 3.14159)", b"3.14");
+    check_str("return string.format('%.0f', 2.5)", b"2");
+    check_str("return string.format('%e', 1500.0)", b"1.500000e+03");
+    check_str("return string.format('%.2E', 0.0001)", b"1.00E-04");
+    check_str("return string.format('%g', 100000.0)", b"100000");
+    check_str("return string.format('%g', 1e+20)", b"1e+20");
+    check_str("return string.format('%g', 0.0001)", b"0.0001");
+    check_str("return string.format('%g', 0.00001)", b"1e-05");
+    check_str("return string.format('%.3g', 3.14159)", b"3.14");
+    check_str("return string.format('%g', 2.0)", b"2");
+    check_str("return string.format('%a', 1.0)", b"0x1p+0");
+    check_str("return string.format('%a', 0.5)", b"0x1p-1");
+    check_str("return string.format('%a', 3.0)", b"0x1.8p+1");
+    check_str("return string.format('%d%%', 99)", b"99%");
+    // %q round-trips
+    check_str(
+        "return string.format('%q', 'a\\nb\"c\\\\d')",
+        b"\"a\\nb\\\"c\\\\d\"",
+    );
+    check_str("return string.format('%q', 7)", b"7");
+    check_bool(
+        "return load('return ' .. string.format('%q', 'x\\0y'))() == 'x\\0y'",
+        true,
+    );
+    check_str("return string.format('%q', 0/0)", b"(0/0)");
+    check_str("return string.format('%q', 2.0)", b"2.0");
+    // tostring path honors __tostring in %s
+    check_str(
+        "local t = setmetatable({}, {__tostring = function() return 'T' end}) \
+         return string.format('[%s]', t)",
+        b"[T]",
+    );
+    // errors
+    check_error(
+        "return string.format('%d', 1.5)",
+        "no integer representation",
+    );
+    check_error("return string.format('%d')", "no value");
+    check_error("return string.format('%k', 1)", "invalid conversion");
+}
+
+#[test]
+fn utf8_library() {
+    check_str("return utf8.char(72, 105)", b"Hi");
+    check_str("return utf8.char(0x4F60, 0x597D)", "你好".as_bytes());
+    check_int("return utf8.len('héllo')", 5);
+    check_int("return utf8.len('你好')", 2);
+    check_int("return (utf8.codepoint('你好'))", 0x4F60);
+    check_int("return select(2, utf8.codepoint('你好', 1, -1))", 0x597D);
+    check_int("return (utf8.offset('你好', 2))", 4);
+    // 5.5: offset also returns the character's final byte position
+    check_int("return select(2, utf8.offset('你好', 1))", 3);
+    check_int("return (utf8.offset('你好x', -1))", 7);
+    check_int(
+        "local n = 0 for p, c in utf8.codes('a你b') do n = n + 1 end return n",
+        3,
+    );
+    check_int(
+        "local last for p in utf8.codes('a你b') do last = p end return last",
+        5,
+    );
+    // invalid sequences
+    check_bool("return utf8.len('\\xFF') == nil", true);
+    check_int("return select(2, utf8.len('a\\xFFb'))", 2);
+    check_error("return utf8.codepoint('\\x80')", "invalid UTF-8 code");
+    check_bool("return utf8.charpattern ~= nil", true);
+}
