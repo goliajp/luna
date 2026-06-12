@@ -42,6 +42,12 @@ pub(crate) fn open_base(vm: &mut Vm) {
     let ipairs_it = vm.native(ipairs_iter);
     let ipairs_obj = vm.native_with(nat_ipairs, Box::new([ipairs_it]));
     vm.set_global("ipairs", ipairs_obj);
+    let f = vm.native(nat_tonumber);
+    vm.set_global("tonumber", f);
+    let f = vm.native(nat_load);
+    vm.set_global("load", f);
+    let f = vm.native(nat_collectgarbage);
+    vm.set_global("collectgarbage", f);
     let version = match vm.version() {
         crate::version::LuaVersion::Lua51 => "Lua 5.1",
         crate::version::LuaVersion::Lua54 => "Lua 5.4",
@@ -53,7 +59,11 @@ pub(crate) fn open_base(vm: &mut Vm) {
     vm.set_global("_G", g);
 }
 
-fn check_table(vm: &mut Vm, v: Value, who: &str) -> Result<crate::runtime::Gc<Table>, LuaError> {
+pub(crate) fn check_table(
+    vm: &mut Vm,
+    v: Value,
+    who: &str,
+) -> Result<crate::runtime::Gc<Table>, LuaError> {
     match v {
         Value::Table(t) => Ok(t),
         v => Err(vm.rt_err(&format!(
@@ -110,7 +120,7 @@ fn raise(vm: &mut Vm, msg: Value) -> LuaError {
     }
 }
 
-fn raise_str(vm: &mut Vm, msg: &str) -> LuaError {
+pub(crate) fn raise_str(vm: &mut Vm, msg: &str) -> LuaError {
     let s = Value::Str(vm.heap.intern(msg.as_bytes()));
     raise(vm, s)
 }
@@ -298,4 +308,136 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     check_table(vm, t, "ipairs")?;
     let it = vm.nat_upval(fs, 0);
     Ok(vm.nat_return(fs, &[it, t, Value::Int(0)]))
+}
+
+// ---- shared helpers for the library modules ----
+
+/// PUC luaL_argerror shape: bad argument #n to 'who' (extra).
+pub(crate) fn arg_error(vm: &mut Vm, n: u32, who: &str, extra: &str) -> LuaError {
+    raise_str(vm, &format!("bad argument #{n} to '{who}' ({extra})"))
+}
+
+pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let v = vm.nat_arg(fs, nargs, 0);
+    if nargs < 2 || vm.nat_arg(fs, nargs, 1).is_nil() {
+        let out = match v {
+            Value::Int(_) | Value::Float(_) => v,
+            Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
+                Some(crate::numeric::Num::Int(i)) => Value::Int(i),
+                Some(crate::numeric::Num::Float(f)) => Value::Float(f),
+                None => Value::Nil,
+            },
+            _ => Value::Nil,
+        };
+        return Ok(vm.nat_return(fs, &[out]));
+    }
+    let base = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as a base")?;
+    if !(2..=36).contains(&base) {
+        return Err(arg_error(vm, 2, "tonumber", "base out of range"));
+    }
+    let Value::Str(s) = v else {
+        return Err(arg_error(
+            vm,
+            1,
+            "tonumber",
+            &format!("string expected, got {}", v.type_name()),
+        ));
+    };
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let neg = i < bytes.len() && bytes[i] == b'-';
+    if i < bytes.len() && (bytes[i] == b'-' || bytes[i] == b'+') {
+        i += 1;
+    }
+    let digits_start = i;
+    let mut acc: u64 = 0;
+    while i < bytes.len() {
+        let d = match bytes[i] {
+            c @ b'0'..=b'9' => (c - b'0') as i64,
+            c @ b'a'..=b'z' => (c - b'a' + 10) as i64,
+            c @ b'A'..=b'Z' => (c - b'A' + 10) as i64,
+            _ => break,
+        };
+        if d >= base {
+            break;
+        }
+        acc = acc.wrapping_mul(base as u64).wrapping_add(d as u64);
+        i += 1;
+    }
+    let had_digits = i > digits_start;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let out = if had_digits && i == bytes.len() {
+        let v = if neg { acc.wrapping_neg() } else { acc };
+        Value::Int(v as i64)
+    } else {
+        Value::Nil
+    };
+    Ok(vm.nat_return(fs, &[out]))
+}
+
+pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let chunk = vm.nat_arg(fs, nargs, 0);
+    let Value::Str(src) = chunk else {
+        // function-reader chunks arrive with the io work (P07)
+        return Err(arg_error(
+            vm,
+            1,
+            "load",
+            &format!("string expected, got {}", chunk.type_name()),
+        ));
+    };
+    let name: Vec<u8> = match vm.nat_arg(fs, nargs, 1) {
+        Value::Str(s) => s.as_bytes().to_vec(),
+        _ => src.as_bytes().to_vec(), // PUC default: the chunk itself
+    };
+    let src_bytes = src.as_bytes().to_vec();
+    match vm.load(&src_bytes, &name) {
+        Ok(cl) => {
+            if nargs >= 4 {
+                let env = vm.nat_arg(fs, nargs, 3);
+                let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
+                unsafe { cl.as_mut() }.upvals[0] = uv;
+            }
+            Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
+        }
+        Err(e) => {
+            let msg = format!("[string \"{}\"]:{}", String::from_utf8_lossy(&name), e);
+            let m = Value::Str(vm.heap.intern(msg.as_bytes()));
+            Ok(vm.nat_return(fs, &[Value::Nil, m]))
+        }
+    }
+}
+
+pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let opt: Vec<u8> = match vm.nat_arg(fs, nargs, 0) {
+        Value::Nil => b"collect".to_vec(),
+        Value::Str(s) => s.as_bytes().to_vec(),
+        v => {
+            return Err(arg_error(
+                vm,
+                1,
+                "collectgarbage",
+                &format!("string expected, got {}", v.type_name()),
+            ));
+        }
+    };
+    let out = match opt.as_slice() {
+        b"collect" => {
+            vm.collect_garbage();
+            Value::Int(0)
+        }
+        b"count" => Value::Float(vm.heap.bytes() as f64 / 1024.0),
+        b"step" => {
+            vm.collect_garbage();
+            Value::Bool(true)
+        }
+        // pacing/mode options become meaningful with the P06 collector
+        _ => Value::Int(0),
+    };
+    Ok(vm.nat_return(fs, &[out]))
 }
