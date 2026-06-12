@@ -274,13 +274,17 @@ fn codes_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Err(raise_str(vm, "bad iterator state for 'codes'"));
     };
     let prev = match vm.nat_arg(fs, nargs, 1) {
-        Value::Int(i) => i as usize,
+        Value::Int(i) => i,
         _ => 0,
     };
     let lax = vm.nat_upval(fs, 0).truthy();
     let bytes = s.as_bytes().to_vec();
+    // out-of-range control values end the iteration (PUC behavior)
+    if prev < 0 || prev as usize > bytes.len() {
+        return Ok(vm.nat_return(fs, &[Value::Nil]));
+    }
     // advance past the character at prev (or start)
-    let mut pos = prev;
+    let mut pos = prev as usize;
     if pos > 0 {
         let Some((_, next)) = decode(&bytes, pos - 1, !lax) else {
             return Err(raise_str(vm, "invalid UTF-8 code"));

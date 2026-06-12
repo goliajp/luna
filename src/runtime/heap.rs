@@ -195,6 +195,11 @@ impl Heap {
         self.bytes
     }
 
+    /// Note out-of-band allocation (e.g. preallocated table arrays).
+    pub(crate) fn add_bytes(&mut self, n: usize) {
+        self.bytes += n;
+    }
+
     /// Forward write barrier hook (no-op until incremental GC in P06).
     #[inline(always)]
     pub fn barrier_forward(&mut self, _parent: Value, _child: Value) {}

@@ -14,6 +14,8 @@ pub(crate) fn open_base(vm: &mut Vm) {
     vm.set_global("error", f);
     let f = vm.native(nat_pcall);
     vm.set_global("pcall", f);
+    let f = vm.native(nat_xpcall);
+    vm.set_global("xpcall", f);
     let f = vm.native(nat_type);
     vm.set_global("type", f);
     let f = vm.native(nat_print);
@@ -440,4 +442,35 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
         _ => Value::Int(0),
     };
     Ok(vm.nat_return(fs, &[out]))
+}
+
+pub(crate) fn nat_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    if nargs < 2 {
+        return Err(raise_str(
+            vm,
+            "bad argument #2 to 'xpcall' (value expected)",
+        ));
+    }
+    let f = vm.nat_arg(fs, nargs, 0);
+    let h = vm.nat_arg(fs, nargs, 1);
+    let args: Vec<Value> = (2..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
+    match vm.call_value(f, &args) {
+        Ok(results) => {
+            let mut out = Vec::with_capacity(results.len() + 1);
+            out.push(Value::Bool(true));
+            out.extend(results);
+            Ok(vm.nat_return(fs, &out))
+        }
+        Err(e) => match vm.call_value(h, &[e.0]) {
+            Ok(hr) => {
+                let v = hr.first().copied().unwrap_or(Value::Nil);
+                Ok(vm.nat_return(fs, &[Value::Bool(false), v]))
+            }
+            Err(_) => {
+                // error while handling the error (PUC LUA_ERRERR)
+                let m = Value::Str(vm.heap.intern(b"error in error handling"));
+                Ok(vm.nat_return(fs, &[Value::Bool(false), m]))
+            }
+        },
+    }
 }

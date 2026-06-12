@@ -7,7 +7,9 @@ pub mod isa;
 
 pub use error::LuaError;
 pub use exec::{Error, Vm};
+pub mod lib_debug;
 pub mod lib_math;
+pub mod lib_os_io;
 pub mod lib_string;
 pub mod lib_table;
 pub mod lib_utf8;

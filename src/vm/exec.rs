@@ -35,6 +35,8 @@ pub struct Vm {
     c_depth: u32,
     /// xoshiro256** state (math.random)
     rng: [u64; 4],
+    /// VM creation time (os.clock)
+    started: std::time::Instant,
     version: LuaVersion,
 }
 
@@ -153,6 +155,7 @@ impl Vm {
             mm_names,
             c_depth: 0,
             rng: [0; 4],
+            started: std::time::Instant::now(),
             version,
         };
         let (a, b) = vm.rng_auto_seed();
@@ -162,6 +165,9 @@ impl Vm {
         crate::vm::lib_table::open_table(&mut vm);
         crate::vm::lib_string::open_string(&mut vm);
         crate::vm::lib_utf8::open_utf8(&mut vm);
+        crate::vm::lib_os_io::open_os_io(&mut vm);
+        crate::vm::lib_debug::open_debug(&mut vm);
+        crate::vm::lib_os_io::open_package(&mut vm);
         vm
     }
 
@@ -193,6 +199,11 @@ impl Vm {
         for _ in 0..16 {
             self.rng_next();
         }
+    }
+
+    /// Wall-clock since VM creation (os.clock approximation).
+    pub(crate) fn uptime(&self) -> std::time::Duration {
+        self.started.elapsed()
     }
 
     /// Entropy for math.randomseed() with no arguments.
@@ -1263,7 +1274,9 @@ impl Vm {
             } else {
                 int_lt_float(a, b)
             }),
-            (Value::Float(a), Value::Int(b)) => Ok(if or_eq {
+            (Value::Float(a), Value::Int(b)) => Ok(if a.is_nan() {
+                false
+            } else if or_eq {
                 !int_lt_float(b, a)
             } else {
                 !int_le_float(b, a)
@@ -1611,5 +1624,81 @@ fn chunk_display_name(p: *const crate::runtime::LuaStr) -> &'static [u8] {
     match b.first() {
         Some(b'@') | Some(b'=') => &b[1..],
         _ => b,
+    }
+}
+
+impl Vm {
+    /// Frame introspection for debug.getinfo: `level` 1 = the Lua function
+    /// that called the current native. Returns (closure, current line,
+    /// extra vararg count).
+    pub(crate) fn frame_info(&mut self, level: i64) -> Option<(Gc<LuaClosure>, u32, i64)> {
+        if level < 1 || level as usize > self.frames.len() {
+            return None;
+        }
+        let n_key = Value::Str(self.heap.intern(b"n"));
+        let f = &self.frames[self.frames.len() - level as usize];
+        let proto = f.closure.proto;
+        let pc = (f.pc as usize)
+            .saturating_sub(1)
+            .min(proto.lines.len().saturating_sub(1));
+        let line = proto.lines.get(pc).copied().unwrap_or(0);
+        let extra = if proto.is_vararg {
+            match self.stack[f.func_slot as usize] {
+                Value::Table(t) => match t.get(n_key) {
+                    Value::Int(n) => n,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        Some((f.closure, line, extra))
+    }
+
+    /// Read an upvalue cell of a closure (debug.getupvalue).
+    pub(crate) fn upvalue_value(&self, cl: Gc<LuaClosure>, idx: usize) -> Value {
+        match cl.upvals[idx].state() {
+            UpvalState::Open(slot) => self.stack[slot as usize],
+            UpvalState::Closed(v) => v,
+        }
+    }
+
+    /// Write an upvalue cell of a closure (debug.setupvalue).
+    pub(crate) fn upvalue_set_value(&mut self, cl: Gc<LuaClosure>, idx: usize, v: Value) {
+        let uv = cl.upvals[idx];
+        match uv.state() {
+            UpvalState::Open(slot) => self.stack[slot as usize] = v,
+            UpvalState::Closed(_) => unsafe { uv.as_mut() }.set_closed(v),
+        }
+    }
+
+    /// Lines for debug.traceback.
+    pub(crate) fn traceback_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for f in self.frames.iter().rev() {
+            let proto = f.closure.proto;
+            let src = chunk_display_name(proto.source.as_ptr());
+            let pc = (f.pc as usize)
+                .saturating_sub(1)
+                .min(proto.lines.len().saturating_sub(1));
+            let line = proto.lines.get(pc).copied().unwrap_or(0);
+            out.extend_from_slice(b"\n\t");
+            out.extend_from_slice(src);
+            out.extend_from_slice(format!(":{line}: in ").as_bytes());
+            if proto.line_defined == 0 {
+                out.extend_from_slice(b"main chunk");
+            } else {
+                out.extend_from_slice(
+                    format!(
+                        "function <{}:{}>",
+                        String::from_utf8_lossy(src),
+                        proto.line_defined
+                    )
+                    .as_bytes(),
+                );
+            }
+        }
+        out
     }
 }
