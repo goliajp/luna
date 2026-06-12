@@ -173,8 +173,11 @@ fn s_reverse(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = check_str(vm, fs, nargs, 0, "byte")?;
     let len = s.len();
-    let i = posrelat(opt_int(vm, fs, nargs, 1, 1)?, len).max(1);
-    let j = posrelat(opt_int(vm, fs, nargs, 2, i)?, len).min(len as i64);
+    // PUC: clamp AFTER both translations; j defaults to the raw i position
+    let pi = posrelat(opt_int(vm, fs, nargs, 1, 1)?, len);
+    let pj = posrelat(opt_int(vm, fs, nargs, 2, pi)?, len);
+    let i = pi.max(1);
+    let j = pj.min(len as i64);
     if i > j {
         return Ok(0);
     }
@@ -859,6 +862,17 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     b
                 };
                 pad(&mut out, body, &spec, true);
+            }
+            b'p' => {
+                // 5.4+: object address (PUC lua_topointer)
+                let body = match arg {
+                    Value::Str(s) => format!("{:p}", s.as_ptr()).into_bytes(),
+                    Value::Table(t) => format!("{:p}", t.as_ptr()).into_bytes(),
+                    Value::Closure(c) => format!("{:p}", c.as_ptr()).into_bytes(),
+                    Value::Native(n) => format!("{:p}", n.as_ptr()).into_bytes(),
+                    _ => b"(null)".to_vec(),
+                };
+                pad(&mut out, body, &spec, false);
             }
             b's' => {
                 let mut bytes = vm.tostring_value(arg)?;

@@ -170,6 +170,10 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // PUC fast path: an integer argument is returned unchanged (+ 0.0)
+    if let Value::Int(i) = vm.nat_arg(fs, nargs, 0) {
+        return Ok(vm.nat_return(fs, &[Value::Int(i), Value::Float(0.0)]));
+    }
     let x = check_f64(vm, fs, nargs, 0, "modf")?;
     let ip = if x >= 0.0 { x.floor() } else { x.ceil() };
     let fp = if x.is_infinite() { 0.0 } else { x - ip };

@@ -90,6 +90,7 @@ fn class_match(c: u8, cl: u8) -> bool {
         b'u' => c.is_ascii_uppercase(),
         b'w' => c.is_ascii_alphanumeric(),
         b'x' => c.is_ascii_hexdigit(),
+        b'z' => c == 0,      // the \0 class (kept by PUC for compatibility)
         _ => return c == cl, // escaped literal (%%, %., ...)
     };
     if cl.is_ascii_uppercase() { !res } else { res }
@@ -138,11 +139,12 @@ fn class_end(st: &State, p: usize) -> Result<usize, PatError> {
             Ok(p + 2)
         }
         Some(b'[') => {
+            // PUC classEnd: do-while consumes one char before checking ']',
+            // so a ']' right after '[' or '[^' is a literal set member
             let mut q = p + 1;
             if pat.get(q) == Some(&b'^') {
                 q += 1;
             }
-            // the first ']' may appear as a literal
             loop {
                 if q >= pat.len() {
                     return Err(PatError("malformed pattern (missing ']')".into()));
@@ -154,13 +156,9 @@ fn class_end(st: &State, p: usize) -> Result<usize, PatError> {
                         return Err(PatError("malformed pattern (ends with '%')".into()));
                     }
                     q += 1;
-                } else if c == b']' && q > p + 2 {
-                    return Ok(q);
-                } else if c == b']' && q == p + 2 && pat.get(p + 1) != Some(&b'^') {
-                    // "[]" with literal ']' as first set element
-                    continue;
-                } else if c == b']' {
-                    continue;
+                }
+                if pat.get(q) == Some(&b']') {
+                    return Ok(q + 1);
                 }
             }
         }

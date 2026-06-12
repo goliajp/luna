@@ -208,9 +208,19 @@ fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    // 5.5: size hints only; semantics are a fresh empty table
-    let _ = vm.int_from(vm.nat_arg(fs, nargs, 0), "use as a size")?;
+    let n = vm.int_from(vm.nat_arg(fs, nargs, 0), "use as a size")?;
+    if !(0..=i32::MAX as i64).contains(&n) {
+        return Err(arg_error(vm, 1, "create", "out of range"));
+    }
+    let m = match vm.nat_arg(fs, nargs, 1) {
+        Value::Nil => 0,
+        v => vm.int_from(v, "use as a size")?.clamp(0, i32::MAX as i64),
+    };
     let t = vm.heap.new_table();
+    unsafe { t.as_mut() }.ensure_array(n as usize);
+    unsafe { t.as_mut() }.ensure_hash(m as usize);
+    // account preallocated storage (approximate; refined with P06)
+    vm.heap.add_bytes(n as usize * 9 + m as usize * 40);
     Ok(vm.nat_return(fs, &[Value::Table(t)]))
 }
 
