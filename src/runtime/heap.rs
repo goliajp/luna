@@ -10,7 +10,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
 
-use crate::runtime::function::{LuaClosure, Proto, UpvalState, Upvalue};
+use crate::runtime::function::{LuaClosure, NativeClosure, Proto, UpvalState, Upvalue};
 use crate::runtime::string::{self, LuaStr, StringTable};
 use crate::runtime::table::Table;
 use crate::runtime::value::Value;
@@ -23,6 +23,7 @@ pub enum ObjTag {
     Proto,
     Closure,
     Upvalue,
+    Native,
 }
 
 #[repr(C)]
@@ -144,6 +145,18 @@ impl Heap {
         }))
     }
 
+    pub fn new_native(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: Box<[Value]>,
+    ) -> Gc<NativeClosure> {
+        self.adopt(Box::new(NativeClosure {
+            hdr: GcHeader::new(ObjTag::Native),
+            f,
+            upvals,
+        }))
+    }
+
     pub fn new_upvalue(&mut self, state: UpvalState) -> Gc<Upvalue> {
         self.adopt(Box::new(Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
@@ -198,6 +211,7 @@ impl Heap {
                     ObjTag::Proto => (*(h as *mut Proto)).trace(&mut m),
                     ObjTag::Closure => (*(h as *mut LuaClosure)).trace(&mut m),
                     ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(&mut m),
+                    ObjTag::Native => (*(h as *mut NativeClosure)).trace(&mut m),
                 }
             }
         }
@@ -238,6 +252,7 @@ impl Heap {
                 ObjTag::Proto => drop(Box::from_raw(h as *mut Proto)),
                 ObjTag::Closure => drop(Box::from_raw(h as *mut LuaClosure)),
                 ObjTag::Upvalue => drop(Box::from_raw(h as *mut Upvalue)),
+                ObjTag::Native => drop(Box::from_raw(h as *mut NativeClosure)),
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
                     if (*s).is_short() {
@@ -282,6 +297,7 @@ impl Marker {
             Value::Str(s) => s.as_ptr() as *mut GcHeader,
             Value::Table(t) => t.as_ptr() as *mut GcHeader,
             Value::Closure(c) => c.as_ptr() as *mut GcHeader,
+            Value::Native(n) => n.as_ptr() as *mut GcHeader,
             _ => return,
         };
         self.header(h);

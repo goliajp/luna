@@ -156,6 +156,20 @@ impl Vm {
         vm
     }
 
+    /// Allocate a native function object (no upvalues): builtin registration.
+    pub fn native(&mut self, f: crate::runtime::value::NativeFn) -> Value {
+        Value::Native(self.heap.new_native(f, Box::new([])))
+    }
+
+    /// Allocate a native function object with captured upvalues.
+    pub fn native_with(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: Box<[Value]>,
+    ) -> Value {
+        Value::Native(self.heap.new_native(f, upvals))
+    }
+
     /// Install the shared string metatable (string library, P04).
     pub fn set_string_metatable(&mut self, mt: Option<Gc<Table>>) {
         self.string_mt = mt;
@@ -298,8 +312,8 @@ impl Vm {
                 self.push_frame(cl, func_slot, nargs, nresults)?;
                 Ok(true)
             }
-            Value::Native(f) => {
-                let nret = f(self, func_slot, nargs)?;
+            Value::Native(nc) => {
+                let nret = (nc.f)(self, func_slot, nargs)?;
                 self.finish_results(func_slot, nret, nresults);
                 Ok(false)
             }
@@ -333,8 +347,8 @@ impl Vm {
                 self.push_frame(cl, func_slot, nargs, nresults)?;
                 Ok(true)
             }
-            Value::Native(nf) => {
-                let nret = nf(self, func_slot, nargs)?;
+            Value::Native(nc) => {
+                let nret = (nc.f)(self, func_slot, nargs)?;
                 self.finish_results(func_slot, nret, nresults);
                 Ok(false)
             }
@@ -1324,6 +1338,14 @@ impl Vm {
 
     // ---- native helpers (used by builtins) ----
 
+    /// A native function's own captured upvalue (self lives at func_slot).
+    pub(crate) fn nat_upval(&self, func_slot: u32, i: usize) -> Value {
+        let Value::Native(nc) = self.stack[func_slot as usize] else {
+            unreachable!("native frame without native closure");
+        };
+        nc.upvals[i]
+    }
+
     pub(crate) fn nat_arg(&self, func_slot: u32, nargs: u32, i: u32) -> Value {
         if i < nargs {
             self.stack[(func_slot + 1 + i) as usize]
@@ -1401,7 +1423,7 @@ impl Vm {
             Value::Str(s) => s.as_bytes().to_vec(),
             Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
             Value::Closure(c) => format!("function: {:p}", c.as_ptr()).into_bytes(),
-            Value::Native(f) => format!("function: builtin: {:p}", f as *const ()).into_bytes(),
+            Value::Native(n) => format!("function: builtin: {:p}", n.as_ptr()).into_bytes(),
         }
     }
 }

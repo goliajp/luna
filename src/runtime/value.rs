@@ -9,10 +9,13 @@ use crate::runtime::string::LuaStr;
 use crate::runtime::table::Table;
 
 /// Native (host) function: receives the VM, the absolute stack slot of the
-/// function value, and the argument count; writes results starting at that
-/// slot and returns how many.
+/// function value (its own NativeClosure — read upvalues through it), and
+/// the argument count; writes results starting at that slot and returns how
+/// many.
 pub type NativeFn =
     fn(&mut crate::vm::Vm, func_slot: u32, nargs: u32) -> Result<u32, crate::vm::LuaError>;
+
+use crate::runtime::function::NativeClosure;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Value {
@@ -23,7 +26,7 @@ pub enum Value {
     Str(Gc<LuaStr>),
     Table(Gc<Table>),
     Closure(Gc<LuaClosure>),
-    Native(NativeFn),
+    Native(Gc<NativeClosure>),
 }
 
 impl Value {
@@ -62,7 +65,7 @@ impl Value {
             (Value::Str(a), Value::Str(b)) => str_eq(a, b),
             (Value::Table(a), Value::Table(b)) => a.ptr_eq(b),
             (Value::Closure(a), Value::Closure(b)) => a.ptr_eq(b),
-            (Value::Native(a), Value::Native(b)) => std::ptr::fn_addr_eq(a, b),
+            (Value::Native(a), Value::Native(b)) => a.ptr_eq(b),
             _ => false,
         }
     }
@@ -97,13 +100,12 @@ pub(crate) mod raw {
     pub const TRUE: u8 = 2;
     pub const INT: u8 = 3;
     pub const FLOAT: u8 = 4;
-    /// native function: a bare fn pointer, not heap-managed
-    pub const NATIVE: u8 = 5;
-    pub const STR: u8 = 6;
-    pub const TABLE: u8 = 7;
-    pub const CLOSURE: u8 = 8;
+    pub const STR: u8 = 5;
+    pub const TABLE: u8 = 6;
+    pub const CLOSURE: u8 = 7;
+    pub const NATIVE: u8 = 8;
 
-    /// Heap-managed tags only (NATIVE is a bare fn pointer).
+    /// Heap-managed tags.
     pub fn is_gc(tag: u8) -> bool {
         tag >= STR
     }
@@ -117,7 +119,7 @@ pub(crate) union RawVal {
     pub s: *mut LuaStr,
     pub t: *mut Table,
     pub c: *mut LuaClosure,
-    pub n: NativeFn,
+    pub n: *mut NativeClosure,
 }
 
 impl RawVal {
@@ -135,7 +137,7 @@ impl Value {
             Value::Str(s) => (raw::STR, RawVal { s: s.as_ptr() }),
             Value::Table(t) => (raw::TABLE, RawVal { t: t.as_ptr() }),
             Value::Closure(c) => (raw::CLOSURE, RawVal { c: c.as_ptr() }),
-            Value::Native(n) => (raw::NATIVE, RawVal { n }),
+            Value::Native(n) => (raw::NATIVE, RawVal { n: n.as_ptr() }),
         }
     }
 
@@ -149,7 +151,7 @@ impl Value {
                 raw::TRUE => Value::Bool(true),
                 raw::INT => Value::Int(v.i),
                 raw::FLOAT => Value::Float(v.f),
-                raw::NATIVE => Value::Native(v.n),
+                raw::NATIVE => Value::Native(Gc::from_ptr(v.n)),
                 raw::STR => Value::Str(Gc::from_ptr(v.s)),
                 raw::TABLE => Value::Table(Gc::from_ptr(v.t)),
                 raw::CLOSURE => Value::Closure(Gc::from_ptr(v.c)),
