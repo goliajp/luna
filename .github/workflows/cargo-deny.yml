@@ -1,0 +1,39 @@
+name: cargo-deny
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly check catches new advisories that hit existing pins
+    - cron: '0 4 * * 1'  # Monday 04:00 UTC
+
+jobs:
+  cargo-deny:
+    name: cargo deny check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          log-level: warn
+
+  luna-core-zero-dep:
+    name: luna-core 0 third-party dep contract (F1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo tree -p luna-core
+        run: |
+          set -euo pipefail
+          OUTPUT=$(cargo tree -p luna-core --prefix none)
+          echo "$OUTPUT"
+          COUNT=$(echo "$OUTPUT" | grep -cE ' v[0-9]')
+          echo "third-party dep count: $((COUNT - 1))"
+          if [ "$COUNT" -ne 1 ]; then
+            echo "::error::luna-core must depend on zero third-party crates (F1 contract). Found $COUNT crates in tree."
+            exit 1
+          fi
