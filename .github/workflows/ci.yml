@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # Native build + test matrix.
+  # Stable toolchain across three OS × the standard cargo commands.
+  # ─────────────────────────────────────────────────────────────────
+  native:
+    name: ${{ matrix.os }} stable
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo build --workspace
+        run: cargo build --workspace --all-targets
+      - name: cargo test --workspace --lib
+        run: cargo test --workspace --lib
+      - name: cargo test --workspace --release
+        run: cargo test --workspace --release
+      - name: cargo test --doc --workspace
+        run: cargo test --doc --workspace
+
+  # ─────────────────────────────────────────────────────────────────
+  # wasm32 build of luna-core only (luna pulls Cranelift, which has
+  # no wasm32 target). Proves the 0-dep core also satisfies the
+  # wasm portability contract documented in docs/architecture.md.
+  # ─────────────────────────────────────────────────────────────────
+  wasm32:
+    name: wasm32-unknown-unknown — luna-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: cargo build -p luna-core --target wasm32-unknown-unknown
+        run: cargo build -p luna-core --target wasm32-unknown-unknown
+      - name: cargo build -p luna-core --target wasm32-unknown-unknown --release
+        run: cargo build -p luna-core --target wasm32-unknown-unknown --release
+
+  # ─────────────────────────────────────────────────────────────────
+  # cargo doc: catches dangling intra-doc links and undocumented
+  # public items (luna-core declares missing_docs warn-by-default
+  # in lib.rs once F2 lands; for v1.1 in progress this stays soft).
+  # ─────────────────────────────────────────────────────────────────
+  doc:
+    name: cargo doc --workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # ─────────────────────────────────────────────────────────────────
+  # cargo fmt + clippy gates intentionally NOT enabled in v1.1.
+  # luna v1.0 shipped without cargo fmt; running `cargo fmt --check`
+  # currently reports 606 drift sites (historic manual style). clippy
+  # reports ~9 lints (mostly `not_unsafe_ptr_arg_deref` on luna_jit_*
+  # extern "C" helpers — by design, JIT codegen passes raw pointers).
+  # Both are v1.2 ship-prep follow-ons; see .dev/known-bugs/
+  # historic-fmt-clippy-drift.md.
+  # ─────────────────────────────────────────────────────────────────
