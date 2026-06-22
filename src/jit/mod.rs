@@ -84,6 +84,27 @@ pub type IntChunkFn = unsafe extern "C" fn() -> i64;
 // P12 — trace JIT (data structures only at S1; wiring lands at S2+).
 pub mod trace;
 
+// v1.1 A1 Session A — backend trait surface. Defines IntChunkCompiler /
+// TraceCompiler / CompileResult / NullJitBackend / CraneliftBackend so
+// Vm dispatches JIT through `Box<dyn …>`. Bodies still live in this
+// crate; the workspace split (RFC steps 4-11) happens later.
+mod abi;
+pub use abi::{
+    CompileResult, CraneliftBackend, IntChunkCompiler, NullJitBackend, TraceCompiler,
+};
+
+/// v1.1 A1 Session A — construct an inert [`JitVmGuard`] that performs
+/// neither TLS install nor TLS clear. Used by [`NullJitBackend::enter`]
+/// (in `abi.rs`): since `try_compile` / `try_compile_trace` always skip
+/// work, no JIT mcode ever fires and no helper consults the TLS slots,
+/// so the guard only has to keep the trait method signature symmetric
+/// with [`CraneliftBackend::enter`]. `JitVmGuard::drop` is itself a
+/// no-op today (see `impl Drop for JitVmGuard` below).
+#[inline]
+pub fn noop_jit_guard() -> JitVmGuard {
+    JitVmGuard { _private: () }
+}
+
 /// S4 — cross-`Vm` JIT cache. Look up the proto by a hash of its
 /// bytecode + structural ABI fields; on miss, compile through
 /// `try_compile_int_chunk` and store the result. Compiled mmap
