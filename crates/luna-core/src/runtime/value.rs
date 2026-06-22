@@ -161,6 +161,29 @@ impl Value {
         }
     }
 
+    /// Borrow the Lua string's bytes as a UTF-8 `&str` (B7 — Phase 2).
+    /// Returns `None` if this value is not a `Value::Str`, or if the
+    /// string's bytes are not valid UTF-8.
+    ///
+    /// Embedders dealing with text data use this. For binary data
+    /// (Redis protocol buffers, etc.) use [`Value::as_bytes`].
+    pub fn try_as_str(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) => std::str::from_utf8(s.as_bytes()).ok(),
+            _ => None,
+        }
+    }
+
+    /// Borrow the raw bytes of a `Value::Str` (B7 — Phase 2). Returns
+    /// `None` for non-string variants. Always safe — Lua strings are
+    /// byte sequences and may carry non-UTF-8 content.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Value::Str(s) => Some(s.as_bytes()),
+            _ => None,
+        }
+    }
+
     /// Raw equality (no metamethods): `rawequal` and table-key identity.
     /// Mixed int/float numbers are equal iff the float is exactly integral
     /// and equals the integer (PUC luaV_equalobj F2Ieq rule).
