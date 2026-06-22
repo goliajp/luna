@@ -74,7 +74,7 @@ fn populate_arg(vm: &mut Vm, script_name: Option<&str>, extra: &[String]) {
         // SAFETY: CLI driver — pointer / call set up by the binary entry and matches the expected Vm / luna handle contract.
         let _ = unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i as i64 + 1), v);
     }
-    vm.set_global("arg", Value::Table(t));
+    vm.set_global("arg", Value::Table(t)).expect("CLI arg setup");
 }
 
 fn main() {

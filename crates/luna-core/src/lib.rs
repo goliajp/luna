@@ -7,6 +7,16 @@
 //! Primary dialect: Lua 5.5 (tracks official upstream).
 //! Compat modes: Lua 5.1 / 5.2 / 5.3 / 5.4.
 //!
+//! # Threading model
+//!
+//! [`Vm`] is **`!Send + !Sync`** — one Vm per OS thread. The GC uses
+//! raw `NonNull<T>` over an intrusive mark-sweep heap (not
+//! reference-counted handles). Embedders wanting concurrency spawn
+//! one Vm per worker thread and exchange data via channels; async
+//! embedders use `tokio::main(flavor = "current_thread")` or a
+//! `LocalSet`. See [`docs/threading.md`](../../docs/threading.md) for
+//! canonical patterns and the post-v1.1 `feature = "send"` roadmap.
+//!
 //! # Embedding contract (script-host sandbox)
 //!
 //! The minimal embedding flow:

@@ -29,7 +29,7 @@ pub(crate) fn open_bit32(vm: &mut Vm) {
     set(vm, "rrotate", b_rrotate);
     set(vm, "extract", b_extract);
     set(vm, "replace", b_replace);
-    vm.set_global("bit32", Value::Table(t));
+    vm.set_global("bit32", Value::Table(t)).expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 

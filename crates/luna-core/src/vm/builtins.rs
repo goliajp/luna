@@ -9,78 +9,78 @@ use crate::vm::exec::Vm;
 
 pub(crate) fn open_base(vm: &mut Vm) {
     let f = vm.native(nat_assert);
-    vm.set_global("assert", f);
+    vm.set_global("assert", f).expect("stdlib registration");
     let f = vm.native(nat_error);
-    vm.set_global("error", f);
+    vm.set_global("error", f).expect("stdlib registration");
     let f = vm.native(nat_pcall);
-    vm.set_global("pcall", f);
+    vm.set_global("pcall", f).expect("stdlib registration");
     let f = vm.native(nat_xpcall);
-    vm.set_global("xpcall", f);
+    vm.set_global("xpcall", f).expect("stdlib registration");
     let f = vm.native(nat_type);
-    vm.set_global("type", f);
+    vm.set_global("type", f).expect("stdlib registration");
     let f = vm.native(nat_print);
-    vm.set_global("print", f);
+    vm.set_global("print", f).expect("stdlib registration");
     let f = vm.native(nat_tostring);
-    vm.set_global("tostring", f);
+    vm.set_global("tostring", f).expect("stdlib registration");
     let f = vm.native(nat_rawget);
-    vm.set_global("rawget", f);
+    vm.set_global("rawget", f).expect("stdlib registration");
     let f = vm.native(nat_rawset);
-    vm.set_global("rawset", f);
+    vm.set_global("rawset", f).expect("stdlib registration");
     let f = vm.native(nat_rawequal);
-    vm.set_global("rawequal", f);
+    vm.set_global("rawequal", f).expect("stdlib registration");
     let f = vm.native(nat_rawlen);
-    vm.set_global("rawlen", f);
+    vm.set_global("rawlen", f).expect("stdlib registration");
     let f = vm.native(nat_setmetatable);
-    vm.set_global("setmetatable", f);
+    vm.set_global("setmetatable", f).expect("stdlib registration");
     let f = vm.native(nat_getmetatable);
-    vm.set_global("getmetatable", f);
+    vm.set_global("getmetatable", f).expect("stdlib registration");
     let f = vm.native(nat_select);
-    vm.set_global("select", f);
+    vm.set_global("select", f).expect("stdlib registration");
     // pairs returns the same object as the global next (PUC identity)
     let next_obj = vm.native(nat_next);
-    vm.set_global("next", next_obj);
+    vm.set_global("next", next_obj).expect("stdlib registration");
     let pairs_obj = vm.native_with(nat_pairs, Box::new([next_obj]));
-    vm.set_global("pairs", pairs_obj);
+    vm.set_global("pairs", pairs_obj).expect("stdlib registration");
     let ipairs_it = vm.native(ipairs_iter);
     let ipairs_obj = vm.native_with(nat_ipairs, Box::new([ipairs_it]));
-    vm.set_global("ipairs", ipairs_obj);
+    vm.set_global("ipairs", ipairs_obj).expect("stdlib registration");
     let f = vm.native(nat_tonumber);
-    vm.set_global("tonumber", f);
+    vm.set_global("tonumber", f).expect("stdlib registration");
     let load_obj = vm.native(nat_load);
-    vm.set_global("load", load_obj);
+    vm.set_global("load", load_obj).expect("stdlib registration");
     let f = vm.native(nat_collectgarbage);
-    vm.set_global("collectgarbage", f);
+    vm.set_global("collectgarbage", f).expect("stdlib registration");
     // PUC 5.4 introduced the warning system. `warn(msg1, …, msgN)` emits
     // pieces of one message via the default warnf (`lauxlib.c::warnfon/off`),
     // which recognises `@on` / `@off` control messages and starts disabled.
     if vm.version() >= crate::version::LuaVersion::Lua54 {
         let f = vm.native(nat_warn);
-        vm.set_global("warn", f);
+        vm.set_global("warn", f).expect("stdlib registration");
     }
     // PUC 5.1 globals retired in 5.2 (`unpack` → `table.unpack`) and 5.2
     // (`loadstring` → `load`). Provide aliases so the 5.1 test suite, which
     // is full of `unpack(...)` and `loadstring("...")` calls, still resolves.
     if vm.version() == crate::version::LuaVersion::Lua51 {
-        vm.set_global("loadstring", load_obj);
+        vm.set_global("loadstring", load_obj).expect("stdlib registration");
         let f = vm.native(crate::vm::lib_table::t_unpack);
-        vm.set_global("unpack", f);
+        vm.set_global("unpack", f).expect("stdlib registration");
         // PUC 5.1 also exposed `gcinfo()` (memory in KB) and `newproxy()`
         // (debug-table proxy with `__gc`). gcinfo is a thin wrapper around
         // `collectgarbage("count")`; newproxy is left in the backlog —
         // its `__gc` finalizer integration is non-trivial.
         let f = vm.native(nat_gcinfo);
-        vm.set_global("gcinfo", f);
+        vm.set_global("gcinfo", f).expect("stdlib registration");
         // PUC 5.1 `setfenv`/`getfenv` — every Lua function carries its own
         // env (5.1 `LClosure.env`); 5.2 retired them in favour of the `_ENV`
         // upvalue model. The Op::Closure path here clones cell 0 per
         // closure under 5.1, so writing through the per-closure cell only
         // affects that closure (events.lua / locals.lua / nextvar.lua).
         let f = vm.native(nat_setfenv);
-        vm.set_global("setfenv", f);
+        vm.set_global("setfenv", f).expect("stdlib registration");
         let f = vm.native(nat_getfenv);
-        vm.set_global("getfenv", f);
+        vm.set_global("getfenv", f).expect("stdlib registration");
         let f = vm.native(nat_newproxy);
-        vm.set_global("newproxy", f);
+        vm.set_global("newproxy", f).expect("stdlib registration");
     }
     let version = match vm.version() {
         crate::version::LuaVersion::Lua51 => "Lua 5.1",
@@ -90,9 +90,9 @@ pub(crate) fn open_base(vm: &mut Vm) {
         crate::version::LuaVersion::Lua55 => "Lua 5.5",
     };
     let v = Value::Str(vm.heap.intern(version.as_bytes()));
-    vm.set_global("_VERSION", v);
+    vm.set_global("_VERSION", v).expect("stdlib registration");
     let g = Value::Table(vm.globals());
-    vm.set_global("_G", g);
+    vm.set_global("_G", g).expect("stdlib registration");
 }
 
 pub(crate) fn check_table(

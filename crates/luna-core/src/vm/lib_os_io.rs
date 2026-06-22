@@ -30,7 +30,7 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
     set(vm, os, "rename", os_rename);
     set(vm, os, "execute", os_execute);
     set(vm, os, "exit", os_exit);
-    vm.set_global("os", Value::Table(os));
+    vm.set_global("os", Value::Table(os)).expect("stdlib registration");
     vm.barrier_back_table(os);
 
     let io = vm.heap.new_table();
@@ -98,13 +98,13 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
             _ => {}
         }
     }
-    vm.set_global("io", Value::Table(io));
+    vm.set_global("io", Value::Table(io)).expect("stdlib registration");
     vm.barrier_back_table(io);
 
     let f = vm.native(nat_loadfile);
-    vm.set_global("loadfile", f);
+    vm.set_global("loadfile", f).expect("stdlib registration");
     let f = vm.native(nat_dofile);
-    vm.set_global("dofile", f);
+    vm.set_global("dofile", f).expect("stdlib registration");
 }
 
 /// Howard Hinnant's calendar algorithm: days from civil (y, m, d) since the
@@ -1853,7 +1853,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
     let spk = Value::Str(vm.heap.intern(b"searchpath"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }.set(&mut vm.heap, spk, sp).expect("valid key");
-    vm.set_global("package", Value::Table(pkg));
+    vm.set_global("package", Value::Table(pkg)).expect("stdlib registration");
     // require reads package.path/cpath from the live `package` table each call
     // — attrib.lua mutates them inside `do … end` blocks and require must see
     // the override. Stash no upvalues; fetch from globals on demand.
@@ -1869,7 +1869,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
         nat_require,
         Box::new([Value::Table(pkg), Value::Table(loaded), Value::Table(preload)]),
     );
-    vm.set_global("require", req);
+    vm.set_global("require", req).expect("stdlib registration");
     // PUC 5.1 `module(name, ...)` and `package.seeall` (retired in 5.2). The
     // pair only makes sense alongside `setfenv`; gating on the dialect keeps
     // the 5.2+ surface clean.
@@ -1879,7 +1879,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
         // userland `package = {}` reassignment (attrib.lua's `do … end`
         // preload block does exactly that).
         let m = vm.native_with(nat_module, Box::new([Value::Table(loaded)]));
-        vm.set_global("module", m);
+        vm.set_global("module", m).expect("stdlib registration");
         let s = vm.native(nat_package_seeall);
         let sk = Value::Str(vm.heap.intern(b"seeall"));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).

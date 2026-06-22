@@ -31,7 +31,7 @@ pub(crate) fn open_table(vm: &mut Vm) {
         set(vm, "foreachi", t_foreachi);
         set(vm, "maxn", t_maxn);
     }
-    vm.set_global("table", Value::Table(t));
+    vm.set_global("table", Value::Table(t)).expect("stdlib registration");
     // once-per-table barrier so a post-init `Vm::open_table` call (P09 embed
     // API can re-open libraries mid-Propagate) demotes `t` back to gray —
     // no-op when phase != Propagate, where t was born current_white.

@@ -20,6 +20,29 @@ use crate::vm::builtins::{nat_pairs, nat_pcall, nat_xpcall};
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
 
+/// A Lua virtual machine: one OS thread's worth of Lua state.
+///
+/// # Threading model
+///
+/// `Vm` is **`!Send + !Sync`**. The GC uses `Gc<T> = NonNull<T>` over
+/// an intrusive mark-sweep heap (not `Rc<RefCell<T>>`), and the trace
+/// JIT side-table uses `Rc<CompiledTrace>` — both single-threaded by
+/// design. Embedders that want concurrency spawn one `Vm` per OS
+/// thread (or per single-thread Tokio worker) and exchange data via
+/// channels. See [`docs/threading.md`](../../docs/threading.md) for
+/// canonical embedding patterns including Tokio `current_thread`,
+/// `LocalSet` on multi-thread, and `Vm`-per-OS-thread + channels.
+///
+/// The constraint is enforced at compile time:
+///
+/// ```compile_fail
+/// fn must_be_send<T: Send>() {}
+/// must_be_send::<luna_core::Vm>(); // error[E0277]: `Vm` cannot be sent between threads safely
+/// ```
+///
+/// A future `feature = "send"` (post-v1.1 sprint) will gate an
+/// opt-in `Arc<RwLock<T>>` mode with a hard ≤8% perf regression
+/// budget. See `.dev/rfcs/v1.1-rfc-vm-send-sync.md` for the design.
 pub struct Vm {
     pub heap: Heap,
     stack: Vec<Value>,
@@ -1159,14 +1182,17 @@ impl Vm {
         self.version
     }
 
-    pub fn set_global(&mut self, name: &str, v: Value) {
+    /// Set a global by name. Returns `Err(LuaError)` only if the globals
+    /// table overflows (extremely unlikely in practice — `MAX_ASIZE = 1 << 27`).
+    /// String interning + key construction cannot fail.
+    pub fn set_global(&mut self, name: &str, v: Value) -> Result<(), LuaError> {
         let k = Value::Str(self.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { self.globals.as_mut() }
-            .set(&mut self.heap, k, v)
-            .expect("global name is a valid key");
+            .set(&mut self.heap, k, v)?;
         self.heap
             .barrier_back(self.globals.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        Ok(())
     }
 
     /// Backward write barrier shorthand for native lib code: demote `t` from

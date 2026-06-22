@@ -120,10 +120,13 @@ impl<T> Gc<T> {
 
     /// SAFETY: caller must ensure no other live reference to the object and
     /// no collect() while the borrow is held (single-threaded runtime).
-    /// Embedders use this to mutate freshly-allocated `Heap::new_table`
-    /// tables — the `&mut Heap` they pass to `Table::set` keeps the
-    /// allocation symmetric, and a host that owns the Gc handle exclusively
-    /// satisfies the no-aliasing requirement by construction.
+    ///
+    /// `#[doc(hidden)]` (Track A4 — pub-surface 0 unsafe): embedders should
+    /// not see this in rustdoc. The safe path for mutating freshly-allocated
+    /// tables is the `TableBuilder` / `vm.table_of(...)` API (Track B3).
+    /// Cross-crate access from `luna` (e.g. `jit_backend`, `capi`) keeps
+    /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
+    #[doc(hidden)]
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { &mut *self.ptr.as_ptr() }

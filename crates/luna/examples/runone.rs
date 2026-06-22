@@ -42,13 +42,13 @@ fn main() {
         .stack_size(16 << 20)
         .spawn(move || {
             let mut vm = luna::new_with_jit(version);
-            vm.set_global("_U", Value::Bool(true));
+            vm.set_global("_U", Value::Bool(true)).unwrap();
             // Mirror official_run.rs so diagnosis matches the test gate.
             if label == "attrib.lua" || label == "files.lua" {
-                vm.set_global("_port", Value::Bool(true));
+                vm.set_global("_port", Value::Bool(true)).unwrap();
             }
             if label == "files.lua" {
-                vm.set_global("_noposix", Value::Bool(true));
+                vm.set_global("_noposix", Value::Bool(true)).unwrap();
             }
             let chunkname = format!("@{label}");
             let r = match vm.load(&src, chunkname.as_bytes()) {

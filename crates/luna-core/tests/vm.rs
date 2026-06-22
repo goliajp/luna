@@ -3115,7 +3115,7 @@ fn embedding_kevy_shape_short_script_per_request() {
     assert!(matches!(v[0], Value::Int(15)));
 
     // (4) Globals persist across requests — the host can pin shared state.
-    vm.set_global("counter", Value::Int(0));
+    vm.set_global("counter", Value::Int(0)).unwrap();
     for expected in 1..=5 {
         vm.set_instr_budget(Some(10_000));
         let v = vm.eval("counter = counter + 1; return counter").unwrap();
@@ -3162,9 +3162,9 @@ fn embedding_native_panic_caught_as_lua_error() {
     // it into a "native panic: <msg>" Lua error that pcall can catch.
     let mut vm = Vm::new(LuaVersion::Lua55);
     let f1 = vm.native(panic_string_native);
-    vm.set_global("p1", f1);
+    vm.set_global("p1", f1).unwrap();
     let f2 = vm.native(panic_static_str_native);
-    vm.set_global("p2", f2);
+    vm.set_global("p2", f2).unwrap();
     let v = vm
         .eval("return pcall(p1)")
         .expect("pcall returns normally");
@@ -4121,7 +4121,7 @@ fn api_native_sees_correct_nargs() {
     // call frame. luna's nargs parameter to `NativeFn` is the same.
     let mut vm = Vm::new(LuaVersion::Lua55);
     let f = vm.native(api_count_args);
-    vm.set_global("count_args", f);
+    vm.set_global("count_args", f).unwrap();
     let v = vm
         .eval("return count_args(), count_args(1), count_args(1,2,3,4,5)")
         .unwrap();
@@ -4135,7 +4135,7 @@ fn api_native_sees_correct_nargs() {
 fn api_native_multi_return_passthrough() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let f = vm.native(api_echo);
-    vm.set_global("echo", f);
+    vm.set_global("echo", f).unwrap();
     // echo(...) inside a vararg position spreads all results.
     let v = vm.eval("return echo('a','b','c')").unwrap();
     assert_eq!(v.len(), 3);
@@ -4153,7 +4153,7 @@ fn api_globals_round_trip_through_set_and_lua_read() {
     // `Vm::set_global` from Rust must be visible to Lua, and a value Lua
     // stores into a global must be readable via the globals table.
     let mut vm = Vm::new(LuaVersion::Lua55);
-    vm.set_global("from_host", Value::Int(42));
+    vm.set_global("from_host", Value::Int(42)).unwrap();
     let v = vm.eval("return from_host").unwrap();
     assert_eq!(v.len(), 1);
     assert!(matches!(v[0], Value::Int(42)));
@@ -4242,7 +4242,7 @@ fn api_native_runs_lua_callback_through_call_value() {
     }
     let mut vm = Vm::new(LuaVersion::Lua55);
     let f = vm.native(api_with_callback);
-    vm.set_global("with_cb", f);
+    vm.set_global("with_cb", f).unwrap();
     let v = vm
         .eval("return with_cb(function (x) return x * 3 end)")
         .unwrap();

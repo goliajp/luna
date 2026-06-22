@@ -99,7 +99,7 @@ fn sandbox_host_callback_registered() {
     }
     let mut vm = sandbox_51();
     let f = vm.native(host_get);
-    vm.set_global("host_get", f);
+    vm.set_global("host_get", f).unwrap();
     let r = run(&mut vm, b"return host_get('life'), host_get('other')").unwrap();
     assert!(matches!(r.as_slice(), [Value::Int(42), Value::Nil]));
 }

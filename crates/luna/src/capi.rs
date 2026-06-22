@@ -253,7 +253,7 @@ pub unsafe extern "C" fn lua_setglobal(L: *mut LuaState, name: *const c_char) {
     let v = vm.capi_stack.pop().unwrap_or(Value::Nil);
     // SAFETY: Lua C API contract — the caller guarantees the passed `*const c_char` points to a NUL-terminated byte string that stays valid for the duration of this call.
     let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("?") };
-    vm.set_global(name_str, v);
+    let _ = vm.set_global(name_str, v);  // capi swallows: lua_setglobal is void in C ABI
 }
 
 // ─── stack push ──────────────────────────────────────────────────────────

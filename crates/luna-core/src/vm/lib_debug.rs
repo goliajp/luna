@@ -38,7 +38,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
         set(vm, "setfenv", d_setfenv);
         set(vm, "getfenv", d_getfenv);
     }
-    vm.set_global("debug", Value::Table(t));
+    vm.set_global("debug", Value::Table(t)).expect("stdlib registration");
     vm.barrier_back_table(t);
     // PUC's LUA_REGISTRYINDEX table — eagerly built so `_HOOKKEY` (weak-key)
     // is observable from db.lua :328 the moment the debug library loads.

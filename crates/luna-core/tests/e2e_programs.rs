@@ -68,7 +68,7 @@ fn run_on_luna(version: LuaVersion, src: &str) -> Vec<u8> {
     let mut vm = Vm::new(version);
     // Override print with the capture variant.
     let f = vm.native(capture_print);
-    vm.set_global("print", f);
+    vm.set_global("print", f).unwrap();
     // PUC's `lua -e 'src'` reports errors with chunkname `(command line)`;
     // matching that lets `tostring(err)` outputs diff cleanly.
     let cl = vm
