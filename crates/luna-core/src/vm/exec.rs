@@ -165,169 +165,18 @@ pub struct Vm {
     /// frame budgets). `None` = unbounded; reset on each call via
     /// `set_instr_budget`.
     pub(crate) instr_budget: Option<i64>,
-    /// JIT enable flag. Default `true` (perf). Sandbox embedders that rely
-    /// on `instr_budget` for DoS containment **must** call
-    /// `set_jit_enabled(false)` before running untrusted scripts — JIT'd
-    /// counted-for loops compile to native Cranelift IR that does not tick
-    /// the budget, so a malicious `for i=1,1e18 do end` would otherwise
-    /// run unmetered.
-    pub(crate) jit_enabled: bool,
-    /// P12-S1 — trace JIT master switch. `false` by default so existing
-    /// benchmarks see zero overhead while the sprint develops. Flip to
-    /// `true` (via `set_trace_jit_enabled`) when the trace recording
-    /// loop, cranelift lowerer, and side-exit dispatcher are all
-    /// landed and validated against the BASELINE.md cells. While
-    /// `false`, `Op::Jmp` skips back-edge counter increment and
-    /// `active_trace` is never `Some`.
-    pub(crate) trace_jit_enabled: bool,
-    /// P16-A — opt-in flag for the self-link cycle catch (mirrors
-    /// LuaJIT `check_call_unroll`). When `false` (default), the
-    /// recorder never trips `SelfLink` close; pre-P16 behavior is
-    /// preserved. When `true`, the cycle catch fires at deep
-    /// recursion entries.
-    ///
-    /// SHIPPED-DISABLED-BY-DEFAULT in this commit because P16-B's
-    /// snapshot-restore-and-branch-to-self tail produces CORRECTNESS-
-    /// WRONG results on fib_28 (e.g. `fib(15) = 30` instead of `610`,
-    /// `fib(28) = 45` instead of `317811`). Root cause: the SelfLink
-    /// loop overwrites the head frame's registers in mcode without
-    /// reifying the intermediate inlined frames in `self.frames`.
-    /// When a cmp side-exit fires mid-iteration (which fib does on
-    /// EVERY base-case hit), the interp resumes with stale frame
-    /// state and computes the wrong recursion result. Fixing this
-    /// requires either:
-    ///   1. RETF-guards (P16-C) + full frame materialization on
-    ///      side-exit (write back per-iter inlined frame chains)
-    ///   2. Down-recursion side trace stitching (P16-F)
-    /// Both are substantial multi-week architectural work — see
-    /// docs/perf-baselines/2026-06-22-p16-correctness-blocker.md
-    /// (added in the same atomic batch as this flag).
-    pub(crate) p16_self_link_enabled: bool,
-    /// P12-S1 — the trace currently being recorded, or `None` if the
-    /// dispatch loop is in normal interpretation mode. Set when a
-    /// back-edge counter exceeds `TRACE_HOT_THRESHOLD` and the
-    /// dispatcher enters recording at the back-edge target. Cleared
-    /// on trace close (committed to `Proto.traces` cache) or abort
-    /// (un-recordable op / over `MAX_TRACE_LEN`).
-    pub(crate) active_trace: Option<Box<crate::jit::trace::TraceRecord>>,
-    /// P12-S4 — index into `self.frames` of the Lua frame that the
-    /// recorder started in. Set when `active_trace` flips to `Some`
-    /// (from `Op::Jmp` back-edge, `Op::ForLoop` back-edge, or
-    /// `begin_call`'s trace-on-call trigger). Re-read each recorder
-    /// iteration to compute `cur_depth = self.frames.len() - 1 -
-    /// recording_frame_base` — feeds the `inline_depth` field on each
-    /// pushed `RecordedOp` (S4-step1) and the depth gating on close
-    /// detection (this step). Meaningful only while `active_trace` is
-    /// `Some`; ignored otherwise.
-    pub(crate) recording_frame_base: usize,
-    /// P12-S4-step1 — running max of `inline_depth` observed on any
-    /// `RecordedOp` pushed by the recorder, across the Vm's lifetime.
-    /// Diagnostic only; used by S4-step1 tests to verify the depth
-    /// tracker actually walks past 0 on recursive bodies. Saturates
-    /// at `MAX_INLINE_DEPTH`.
-    pub(crate) trace_max_depth_seen: u8,
-    /// P12-S1.D — diagnostic counters for trace recording outcomes.
-    /// Used by tests + future tuning to verify the recorder closes
-    /// cleanly on typical loops and aborts only on pathological
-    /// shapes. Not part of the steady-state API.
-    pub(crate) trace_closed_count: u64,
-    pub(crate) trace_aborted_count: u64,
-    /// P13-S13-G v2 — number of compiled traces that closed at a
-    /// `TraceEnd::InlineAbort` exit (depth>0 boundary the lowerer
-    /// couldn't continue past — depth past MAX_INLINE_DEPTH /
-    /// Op::Call non-self-rec @ depth>0 / Op::ForLoop @ depth>0 /
-    /// Op::TForLoop @ depth>0 / proto mismatch). These traces
-    /// pin `dispatchable=false`; the count tells future-tuning
-    /// (binary_trees pathology, deep recursive callers) how many
-    /// bench cells would benefit from the frame-mat unlock.
-    pub(crate) trace_inline_abort_count: u64,
-    /// P13-S13-G v2.5 — every compiled trace's `dispatch_off_reason`
-    /// pushed at compile time (None → not pushed). Lets a probe see
-    /// the actual emit-pass site that pinned dispatch off for a
-    /// workload (binary_trees Cause B was the trigger for this).
-    pub(crate) trace_dispatch_off_reasons: Vec<&'static str>,
-    /// P13-S13-G v2.6 — every `try_compile_trace_with_options`
-    /// None return's last checkpoint, captured via the lowerer's
-    /// thread-local. Lets a probe see WHICH compile phase bailed
-    /// (fib(20/25) compile_failed case — see RFC).
-    pub(crate) trace_compile_failed_reasons: Vec<&'static str>,
-    /// P13-S13-H — every closed trace's `ops.len()` at close time,
-    /// captured for `is_call_triggered` analysis. The S13-G v2.5
-    /// `length-gate` finding showed call-triggered traces firing at
-    /// pathologically-short base-case entries (fib(0)/fib(1)) produce
-    /// traces too short to amortise dispatch overhead. This counter
-    /// gives a probe per-recording visibility into the shape so the
-    /// S13-H "long-trace bias" fix can quantify the gain.
-    pub(crate) trace_closed_lens: Vec<(bool, usize)>,
-    /// P12-S2.C — count of closed traces the lowerer successfully
-    /// compiled and parked on `cl.proto.traces`. Invariant:
-    /// `trace_compiled_count + trace_compile_failed_count <=
-    /// trace_closed_count` (dedup may skip recompiling a head_pc
-    /// the Proto already carries a trace for, so the strict
-    /// equality doesn't hold).
-    pub(crate) trace_compiled_count: u64,
-    pub(crate) trace_compile_failed_count: u64,
-    /// P12-S3 — number of times the dispatcher actually jumped
-    /// into a compiled trace. Includes both clean closes (loop
-    /// continues by returning head_pc) and side-exits. Bumps even
-    /// when the trace immediately deopts via `jit_pending_err` —
-    /// it's a count of *entries*, not successes.
-    pub(crate) trace_dispatched_count: u64,
-    /// P12-S3 — number of trace entries that came back with
-    /// `jit_pending_err` set (typically a metatable seen by a
-    /// helper). Discounted from "real" trace work for tuning.
-    pub(crate) trace_deopt_count: u64,
-    /// P15-A v1 — count of side-trace recordings the dispatcher
-    /// started. Bumped once per fresh `active_trace = Some(start_
-    /// side_trace(...))` flip in the exit-hit increment block.
-    /// Side traces compile through the same lowerer; their compile
-    /// success counts under `trace_compiled_count` like any other
-    /// trace. This counter isolates the "side-trace pipeline fired"
-    /// signal from the "primary back-edge / call-trigger fired"
-    /// signal so probes can distinguish architectural progress.
-    pub(crate) trace_side_trace_started_count: u64,
-    /// P15-A v2-A — count of side-trace recordings that closed AND
-    /// reached the lowerer with a non-None outcome. Each unit means
-    /// the parent's `exit_side_trace_ptrs[parent_exit_idx]` was
-    /// written to point at the new trace's `entry` fn ptr.
-    /// `<= trace_side_trace_started_count`; gap = abort / compile
-    /// fail / dedup-skip. v2-B/C will wire the parent's IR to read
-    /// these ptrs and indirect-call when non-null.
-    pub(crate) trace_side_trace_compiled_count: u64,
-    /// P15-A v2-C-A5-C — count of side traces that compiled
-    /// successfully BUT failed the close-handler shape-match gate
-    /// (`exit_tags_match_entry_tags`). The parent's per-cell ptr
-    /// stays null; future `call_indirect` (v2-C-A2 redo) at that
-    /// exit stays inert. Diagnostic for the architecture's
-    /// coverage cost.
-    pub(crate) trace_side_trace_shape_mismatch_count: u64,
-    /// P12-S5-A — tally of NewTable sites flagged Sinkable by the
-    /// pre-emit escape sweep, summed across every successfully
-    /// compiled trace on this Vm. Diagnostic only.
-    pub(crate) trace_sinkable_seen_count: u64,
-    /// P14-S14-B v1 — cumulative count of `BufferState::Bufferable`
-    /// accumulator sites detected across all compiled traces in
-    /// this Vm. Probe-only telemetry for v1;v2+ will use the sites
-    /// for buffered emit.
-    pub(crate) trace_accum_bufferable_seen_count: u64,
-    /// P12-S5-B — tally of Sinkable sites that actually took the
-    /// sunk-emit path (NewTable became a no-op; the array part lives
-    /// as Cranelift `Variable`s instead of a heap `Gc<Table>`).
-    /// Summed across every successfully compiled trace on this Vm.
-    /// Always `<= trace_sinkable_seen_count` — pre-emit demotion
-    /// drops sites that don't meet v1 criteria back to Escaped.
-    pub(crate) trace_sunk_alloc_count: u64,
-    /// P12-S5-C — tally of materialise-helper emit sites across
-    /// every successfully compiled trace on this Vm. Each unit is
-    /// a (site × cmp side-exit) pair whose IR reconstructs a heap
-    /// `Gc<Table>` from the virt slots on deopt. Static — the
-    /// runtime number of helper calls depends on dispatch shape.
-    pub(crate) trace_materialize_emit_count: u64,
-    /// P12-S7-A — total `Op::Closure` ops the trace JIT lowered
-    /// to `luna_jit_op_closure` helper calls across this Vm's life.
-    /// Bumped on compile success by the trace's static
-    /// `closure_seen` count.
-    pub(crate) trace_closure_emit_count: u64,
+    // v1.1 A2 — JIT-specific fields moved to `JitState` sidecar; see
+    // `self.jit` below + `crate::vm::jit_state` for field docs.
+    // (Was: jit_enabled here.)
+    // v1.1 A2 — was: trace_jit_enabled (moved to JitState).
+    // v1.1 A2 — was: p16_self_link_enabled (moved to JitState).
+    // v1.1 A2 — was: active_trace, recording_frame_base, trace_max_depth_seen,
+    // trace_closed_count, trace_aborted_count, trace_inline_abort_count,
+    // trace_dispatch_off_reasons, trace_compile_failed_reasons, trace_closed_lens,
+    // trace_compiled_count, trace_compile_failed_count, trace_dispatched_count,
+    // trace_deopt_count, trace_side_trace_{started,compiled,shape_mismatch}_count,
+    // trace_{sinkable,accum_bufferable}_seen_count, trace_{sunk_alloc,
+    // materialize_emit,closure_emit}_count — all moved to JitState.
     /// Bytecode-loading gate. Default `true`. Sandbox embedders should
     /// call `set_bytecode_loading(false)` so `load`/`loadstring` reject
     /// precompiled chunks (which bypass the parser's depth / opcode
@@ -405,50 +254,20 @@ pub struct Vm {
     /// the native's argument-window head and width, so `debug.getlocal`
     /// can index it like PUC's `luaG_findlocal` `(C temporary)` path.
     pub(crate) running_native_slots: Vec<(u32, u32)>,
-    /// P11-S5d.E' — set by a JIT table helper when it detects a metatable
-    /// on the target table. The helper returns a sentinel and any later
-    /// helper short-circuits on the same flag; the dispatcher takes this
-    /// after the JIT entry returns and falls back to the interpreter so
-    /// the interp path re-executes the call with proper __index/__newindex
-    /// semantics. Always `None` outside a JIT entry window.
-    pub jit_pending_err: Option<LuaError>,
-    /// P13-S13-D — reusable buffer for the trace JIT dispatcher's
-    /// per-entry `reg_state` (the i64-typed register window passed
-    /// to the trace fn). Avoids allocating a fresh `Vec<i64>` on
-    /// each dispatch. The dispatcher `mem::take`s it into a local,
-    /// clears + resizes, marshals, calls the trace fn, then writes
-    /// the local back into this slot. Steady-state cost = zero
-    /// alloc.
-    pub(crate) jit_reg_state_buf: Vec<i64>,
-    /// P14-S14-B v2 — pool of reusable per-trace string accumulator
-    /// buffers. `luna_jit_str_buf_acquire` pops a `Vec<u8>` from
-    /// here (or allocates one if empty), the trace fn extends it
-    /// per Op::Concat hit, and `luna_jit_str_buf_release` returns
-    /// it to the pool (after `clear()`). Avoids per-dispatch
-    /// alloc churn — mirrors S13-D's `jit_reg_state_buf` reuse
-    /// model.
-    pub(crate) jit_str_buf_pool: Vec<Vec<u8>>,
-    /// P14-S14-B v2 — cap on the buffer pool size. Trace fns return
-    /// buffers to the pool on exit; excess (e.g. from rare large
-    /// concats) get dropped instead of held forever.
-    pub(crate) jit_str_buf_pool_cap: usize,
-    /// P13-S13-D — companion buffer for `entry_tags` (one u8 per
-    /// register at trace dispatch entry). Re-used analogously to
-    /// `jit_reg_state_buf`.
-    pub(crate) jit_entry_tags_buf: Vec<u8>,
-    /// v1.1 A1 Session A — closure-compile backend the dispatcher
-    /// routes through. Default is [`crate::jit::CraneliftBackend`]
-    /// (installed by `Vm::new_inner`); embedders can opt into the
-    /// no-op backend via [`Vm::install_null_jit`]. The vtable cost
-    /// is paid only on the cold `populate_jit_cache` path (once per
-    /// Proto); the hot dispatch path reads
-    /// `Proto.jit: Cell<JitProtoState>` directly.
-    pub(crate) chunk_compiler: Box<dyn crate::jit::IntChunkCompiler>,
-    /// v1.1 A1 Session A — trace-JIT backend the dispatcher routes
-    /// through. Default is [`crate::jit::CraneliftBackend`]. Fires
-    /// once per closed `TraceRecord`; the recording loop itself
-    /// stays in pure interpreter code.
-    pub(crate) trace_compiler: Box<dyn crate::jit::TraceCompiler>,
+    // v1.1 A2 — was: jit_pending_err, jit_reg_state_buf, jit_str_buf_pool,
+    // jit_str_buf_pool_cap, jit_entry_tags_buf, chunk_compiler,
+    // trace_compiler — all moved to JitState. See `jit` below.
+
+    /// v1.1 A2 — JIT sidecar. Always present (never `Option`); inert
+    /// when `chunk_compiler` / `trace_compiler` are
+    /// [`crate::jit::NullJitBackend`]. See [`crate::vm::jit_state`].
+    ///
+    /// `#[doc(hidden)] pub` so the `luna` crate's
+    /// `extern "C"` JIT helpers can write `vm.jit.pending_err`
+    /// directly (same pattern as the pre-A2 `pub Vm::jit_pending_err`
+    /// field). Not part of the embedder-facing API surface.
+    #[doc(hidden)]
+    pub jit: crate::vm::jit_state::JitState,
 }
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -912,30 +731,6 @@ impl Vm {
             warn_buf: Vec::new(),
             warn_log: Vec::new(),
             instr_budget: None,
-            jit_enabled: true,
-            trace_jit_enabled: false,
-            p16_self_link_enabled: false,
-            active_trace: None,
-            recording_frame_base: 0,
-            trace_max_depth_seen: 0,
-            trace_closed_count: 0,
-            trace_aborted_count: 0,
-            trace_inline_abort_count: 0,
-            trace_dispatch_off_reasons: Vec::new(),
-            trace_compile_failed_reasons: Vec::new(),
-            trace_closed_lens: Vec::new(),
-            trace_compiled_count: 0,
-            trace_compile_failed_count: 0,
-            trace_dispatched_count: 0,
-            trace_deopt_count: 0,
-            trace_side_trace_started_count: 0,
-            trace_side_trace_compiled_count: 0,
-            trace_side_trace_shape_mismatch_count: 0,
-            trace_sinkable_seen_count: 0,
-            trace_accum_bufferable_seen_count: 0,
-            trace_sunk_alloc_count: 0,
-            trace_materialize_emit_count: 0,
-            trace_closure_emit_count: 0,
             bytecode_loading: true,
             registry: None,
             file_mt: None,
@@ -953,18 +748,11 @@ impl Vm {
             public_call_depth: 0,
             running_natives: Vec::new(),
             running_native_slots: Vec::new(),
-            jit_pending_err: None,
-            jit_reg_state_buf: Vec::new(),
-            jit_str_buf_pool: Vec::new(),
-            jit_str_buf_pool_cap: 4,
-            jit_entry_tags_buf: Vec::new(),
-            // v1.1 A1 Session C — luna-core defaults to the no-op
-            // backend (zero three-party dep). The `luna` crate's
-            // `Vm::new_minimal_with_jit` / `install_default_jit` /
-            // `luaL_newstate` swap in `CraneliftBackend` for callers
-            // that want JIT acceleration.
-            chunk_compiler: Box::new(crate::jit::NullJitBackend),
-            trace_compiler: Box::new(crate::jit::NullJitBackend),
+            // v1.1 A2 — JIT-specific state factored into `JitState`
+            // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
+            // `install_jit_backend` / `luaL_newstate` swap in
+            // `CraneliftBackend` for callers that want JIT acceleration.
+            jit: crate::vm::jit_state::JitState::with_null_backend(),
         };
         vm
     }
@@ -1010,8 +798,8 @@ impl Vm {
         C: crate::jit::IntChunkCompiler + 'static,
         T: crate::jit::TraceCompiler + 'static,
     {
-        self.chunk_compiler = Box::new(chunk);
-        self.trace_compiler = Box::new(trace);
+        self.jit.chunk_compiler = Box::new(chunk);
+        self.jit.trace_compiler = Box::new(trace);
     }
 
     /// v1.1 A1 Session A — install the no-op JIT backend. `try_compile`
@@ -1026,8 +814,8 @@ impl Vm {
     /// cached entries — the dispatcher will still call into them. For
     /// a truly JIT-free run, call this immediately after construction.
     pub fn install_null_jit(&mut self) {
-        self.chunk_compiler = Box::new(crate::jit::NullJitBackend);
-        self.trace_compiler = Box::new(crate::jit::NullJitBackend);
+        self.jit.chunk_compiler = Box::new(crate::jit::NullJitBackend);
+        self.jit.trace_compiler = Box::new(crate::jit::NullJitBackend);
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
@@ -1311,7 +1099,7 @@ impl Vm {
     /// `try_jit_call_op` from inside `begin_call`.)
     fn try_jit_call(&mut self, cl: Gc<LuaClosure>) -> Option<Vec<Value>> {
         use crate::runtime::function::JitProtoState;
-        if !self.jit_enabled {
+        if !self.jit.enabled {
             return None;
         }
         let proto = cl.proto;
@@ -1339,9 +1127,9 @@ impl Vm {
                 // v1.1 A1 Session A — route through chunk_compiler so
                 // the NullJitBackend path stays inert. Raw-ptr arg
                 // avoids the &mut self borrow conflict against the
-                // shared self.chunk_compiler read.
+                // shared self.jit.chunk_compiler read.
                 let vm_ptr: *mut Vm = self;
-                let _jit_vm_guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
+                let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
                 // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
@@ -1350,7 +1138,7 @@ impl Vm {
                 // Discard the sentinel value and return None so the caller
                 // re-runs the call through the interpreter, which honours
                 // __index/__newindex.
-                if self.jit_pending_err.take().is_some() {
+                if self.jit.pending_err.take().is_some() {
                     return None;
                 }
                 Some(if returns_one {
@@ -1391,7 +1179,7 @@ impl Vm {
         // are Float). The JIT's `GetUpval` ValueRead path uses this
         // to default-pin upvalue reads to Float without a tag check.
         let float_only = version <= crate::version::LuaVersion::Lua52;
-        match self.chunk_compiler.try_compile(proto, pre53, float_only) {
+        match self.jit.chunk_compiler.try_compile(proto, pre53, float_only) {
             crate::jit::CompileResult::Compiled {
                 entry,
                 num_args,
@@ -1433,7 +1221,7 @@ impl Vm {
         wanted: i32,
     ) -> bool {
         use crate::runtime::function::JitProtoState;
-        if !self.jit_enabled {
+        if !self.jit.enabled {
             return false;
         }
         // Any active debug hook means the interpreter has to run the
@@ -1485,7 +1273,7 @@ impl Vm {
         // matching guard in `try_jit_call`.
         // v1.1 A1 Session A — route through chunk_compiler.
         let vm_ptr: *mut Vm = self;
-        let _jit_vm_guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
+        let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
         // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
         let r = unsafe {
             match num_args {
@@ -1505,7 +1293,7 @@ impl Vm {
         // P11-S5d.E' — see matching path in `try_jit_call`. A helper
         // flagged a metatable on a table operand; bail to the interpreter
         // so `push_frame` runs the call from scratch.
-        if self.jit_pending_err.take().is_some() {
+        if self.jit.pending_err.take().is_some() {
             return false;
         }
         // Write result at func_slot, replacing the closure value, then
@@ -2642,12 +2430,12 @@ impl Vm {
     /// **must** disable JIT when relying on `instr_budget` — see the
     /// `jit_enabled` field doc for the rationale.
     pub fn set_jit_enabled(&mut self, enabled: bool) {
-        self.jit_enabled = enabled;
+        self.jit.enabled = enabled;
     }
 
     /// Current JIT enable state.
     pub fn jit_enabled(&self) -> bool {
-        self.jit_enabled
+        self.jit.enabled
     }
 
     /// Toggle the trace JIT (P12). Off by default while the sprint
@@ -2657,22 +2445,22 @@ impl Vm {
     /// mode at the back-edge target. Stays a no-op until S2's
     /// trace lowerer and S3's dispatcher land.
     pub fn set_trace_jit_enabled(&mut self, enabled: bool) {
-        self.trace_jit_enabled = enabled;
+        self.jit.trace_enabled = enabled;
     }
 
     /// P16-A — opt-in flag for the self-link cycle catch. See field
     /// docs for the correctness blocker. Default `false`.
     pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {
-        self.p16_self_link_enabled = enabled;
+        self.jit.p16_self_link_enabled = enabled;
     }
 
     pub fn p16_self_link_enabled(&self) -> bool {
-        self.p16_self_link_enabled
+        self.jit.p16_self_link_enabled
     }
 
     /// Current trace-JIT enable state.
     pub fn trace_jit_enabled(&self) -> bool {
-        self.trace_jit_enabled
+        self.jit.trace_enabled
     }
 
     /// Number of traces that have closed cleanly (looped back to the
@@ -2680,13 +2468,13 @@ impl Vm {
     /// tests + tuning. Will become the dominant signal once S2's
     /// compile + cache lands.
     pub fn trace_closed_count(&self) -> u64 {
-        self.trace_closed_count
+        self.jit.counters.closed
     }
 
     /// Number of traces that have aborted (exceeded MAX_TRACE_LEN or
     /// hit an un-recordable op — the latter lands at S2).
     pub fn trace_aborted_count(&self) -> u64 {
-        self.trace_aborted_count
+        self.jit.counters.aborted
     }
 
     /// P13-S13-G v2 — number of compiled traces whose close shape
@@ -2697,23 +2485,23 @@ impl Vm {
     /// the InlineAbort emit path isn't wired up yet — fresh
     /// pickup work for S13-G v2-full.
     pub fn trace_inline_abort_count(&self) -> u64 {
-        self.trace_inline_abort_count
+        self.jit.counters.inline_abort
     }
 
-    /// P13-S13-G v2.5 — see `trace_dispatch_off_reasons` field.
+    /// P13-S13-G v2.5 — see `JitCounters::dispatch_off_reasons`.
     pub fn trace_dispatch_off_reasons(&self) -> &[&'static str] {
-        &self.trace_dispatch_off_reasons
+        &self.jit.counters.dispatch_off_reasons
     }
 
-    /// P13-S13-G v2.6 — see `trace_compile_failed_reasons` field.
+    /// P13-S13-G v2.6 — see `JitCounters::compile_failed_reasons`.
     pub fn trace_compile_failed_reasons(&self) -> &[&'static str] {
-        &self.trace_compile_failed_reasons
+        &self.jit.counters.compile_failed_reasons
     }
 
-    /// P13-S13-H — see `trace_closed_lens` field. Returns
+    /// P13-S13-H — see `JitCounters::closed_lens`. Returns
     /// `(is_call_triggered, ops_len)` for every trace that closed.
     pub fn trace_closed_lens(&self) -> &[(bool, usize)] {
-        &self.trace_closed_lens
+        &self.jit.counters.closed_lens
     }
 
     /// P12-S2.C — number of closed traces the lowerer compiled and
@@ -2721,14 +2509,14 @@ impl Vm {
     /// deduped (the second close finds the head_pc already cached
     /// and skips compile), so this never exceeds `trace_closed_count`.
     pub fn trace_compiled_count(&self) -> u64 {
-        self.trace_compiled_count
+        self.jit.counters.compiled
     }
 
     /// P12-S2.C — number of closed traces the lowerer rejected
     /// (any of the bail conditions in
     /// [`crate::jit::trace::try_compile_trace`]).
     pub fn trace_compile_failed_count(&self) -> u64 {
-        self.trace_compile_failed_count
+        self.jit.counters.compile_failed
     }
 
     /// P12-S3 — number of times the dispatcher jumped into a
@@ -2736,7 +2524,7 @@ impl Vm {
     /// counts the subset where the trace returned with a parked
     /// `jit_pending_err`.
     pub fn trace_dispatched_count(&self) -> u64 {
-        self.trace_dispatched_count
+        self.jit.counters.dispatched
     }
 
     /// P12-S3 — number of trace entries that came back with
@@ -2744,7 +2532,7 @@ impl Vm {
     /// index inside a helper, forcing the dispatcher to fall back
     /// to the interpreter without committing the trace's result).
     pub fn trace_deopt_count(&self) -> u64 {
-        self.trace_deopt_count
+        self.jit.counters.deopt
     }
 
     /// P15-A v1 — number of times the dispatcher started a side
@@ -2758,7 +2546,7 @@ impl Vm {
     /// signal so v0-v3 architectural progress is visible without
     /// reading per-counter histograms.
     pub fn trace_side_trace_started_count(&self) -> u64 {
-        self.trace_side_trace_started_count
+        self.jit.counters.side_trace_started
     }
 
     /// P15-A v2-A — number of side-trace recordings that closed,
@@ -2768,7 +2556,7 @@ impl Vm {
     /// counter + ptr write proves the compile + link pipeline is
     /// complete end-to-end.
     pub fn trace_side_trace_compiled_count(&self) -> u64 {
-        self.trace_side_trace_compiled_count
+        self.jit.counters.side_trace_compiled
     }
 
     /// P15-A v2-C-A5-C — number of side traces that compiled
@@ -2780,7 +2568,7 @@ impl Vm {
     /// gate or for child-IR re-specialisation against parent's
     /// exit shape.
     pub fn trace_side_trace_shape_mismatch_count(&self) -> u64 {
-        self.trace_side_trace_shape_mismatch_count
+        self.jit.counters.side_trace_shape_mismatch
     }
 
     /// P12-S5-A — sum of NewTable sites the pre-emit escape sweep
@@ -2791,12 +2579,12 @@ impl Vm {
     /// `trace_sunk_alloc_count` matches one-for-one today (every
     /// surviving Sinkable site goes through sunk emit).
     pub fn trace_sinkable_seen_count(&self) -> u64 {
-        self.trace_sinkable_seen_count
+        self.jit.counters.sinkable_seen
     }
 
-    /// P14-S14-B v1 — see `trace_accum_bufferable_seen_count` field.
+    /// P14-S14-B v1 — see `JitCounters::accum_bufferable_seen`.
     pub fn trace_accum_bufferable_seen_count(&self) -> u64 {
-        self.trace_accum_bufferable_seen_count
+        self.jit.counters.accum_bufferable_seen
     }
 
     /// P15-prep — total dispatch hits across all known traces,
@@ -2899,7 +2687,7 @@ impl Vm {
     /// allocation per dispatch; the array part lives as Cranelift
     /// `Variable`s for the duration of the trace.
     pub fn trace_sunk_alloc_count(&self) -> u64 {
-        self.trace_sunk_alloc_count
+        self.jit.counters.sunk_alloc
     }
 
     /// P12-S5-C — sum of materialise-helper emit sites across every
@@ -2908,7 +2696,7 @@ impl Vm {
     /// `Gc<Table>` from the virt slots on deopt — proves S5-C
     /// emit is wiring materialise into the right side-exits.
     pub fn trace_materialize_emit_count(&self) -> u64 {
-        self.trace_materialize_emit_count
+        self.jit.counters.materialize_emit
     }
 
     /// P12-S7-A diagnostic — total `Op::Closure` ops the trace JIT
@@ -2917,7 +2705,7 @@ impl Vm {
     /// path; the count is static (one per matching op per compiled
     /// trace), summed at compile success.
     pub fn trace_closure_emit_count(&self) -> u64 {
-        self.trace_closure_emit_count
+        self.jit.counters.closure_emit
     }
 
     /// P12-S4-step1 diagnostic — max `inline_depth` ever seen on any
@@ -2926,7 +2714,7 @@ impl Vm {
     /// tracker past 0. Saturates at `MAX_INLINE_DEPTH`. Persists
     /// across traces and Vm activations; reset only on `Vm::new`.
     pub fn trace_max_depth_seen(&self) -> u8 {
-        self.trace_max_depth_seen
+        self.jit.max_depth_seen
     }
 
     /// P12-S4-step4b — last live Lua frame (the trace head's frame at
@@ -2960,11 +2748,11 @@ impl Vm {
     /// Returns are i64-shaped so the cranelift import sig stays
     /// trivial (i64 → i64 mapping).
     #[doc(hidden)] pub fn jit_op_close(&mut self, start_offset: u32) -> i64 {
-        if self.jit_pending_err.is_some() {
+        if self.jit.pending_err.is_some() {
             return 1;
         }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit_pending_err =
+            self.jit.pending_err =
                 Some(self.rt_err("JIT op_close: no Lua frame"));
             return 1;
         };
@@ -2977,7 +2765,7 @@ impl Vm {
                 }
         });
         if has_handler {
-            self.jit_pending_err = Some(
+            self.jit.pending_err = Some(
                 self.rt_err("JIT deopt: Op::Close with active tbc handler"),
             );
             return 1;
@@ -3016,7 +2804,7 @@ impl Vm {
         raw_bits: u64,
     ) {
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit_pending_err =
+            self.jit.pending_err =
                 Some(self.rt_err("JIT spill: no Lua frame on jit_last_lua_frame()"));
             return;
         };
@@ -3096,11 +2884,11 @@ impl Vm {
         slot_offset: u32,
         n: i32,
     ) -> i64 {
-        if self.jit_pending_err.is_some() {
+        if self.jit.pending_err.is_some() {
             return -1;
         }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit_pending_err =
+            self.jit.pending_err =
                 Some(self.rt_err("JIT Concat: no Lua frame"));
             return -1;
         };
@@ -3116,11 +2904,11 @@ impl Vm {
             frames_pop_sync(&mut self.frames, &mut self.frames_top);
         }
         if let Err(e) = result {
-            self.jit_pending_err = Some(e);
+            self.jit.pending_err = Some(e);
             return -1;
         }
         if post_frames > pre_frames {
-            self.jit_pending_err = Some(
+            self.jit.pending_err = Some(
                 self.rt_err("JIT Concat: __concat metamethod path"),
             );
             return -1;
@@ -3138,7 +2926,7 @@ impl Vm {
     /// `jit_str_buf_release` is called or the Vm is dropped. The
     /// caller MUST not retain it across `enter_jit` boundaries.
     #[doc(hidden)] pub fn jit_str_buf_acquire(&mut self) -> *mut Vec<u8> {
-        let buf = self.jit_str_buf_pool.pop().unwrap_or_else(Vec::new);
+        let buf = self.jit.str_buf_pool.pop().unwrap_or_else(Vec::new);
         // Move into a Box so the pointer is stable until release.
         Box::into_raw(Box::new(buf))
     }
@@ -3157,8 +2945,8 @@ impl Vm {
         // SAFETY: `ptr` round-trips through `Box::into_raw` set up earlier in this dispatch (or owned by a long-lived VM handle); ownership re-acquired here.
         let mut owned = unsafe { Box::from_raw(buf) };
         owned.clear();
-        if self.jit_str_buf_pool.len() < self.jit_str_buf_pool_cap {
-            self.jit_str_buf_pool.push(*owned);
+        if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
+            self.jit.str_buf_pool.push(*owned);
         }
         // Else: drop the buffer.
     }
@@ -3238,11 +3026,11 @@ impl Vm {
         key_out: *mut i64,
         val_out: *mut i64,
     ) -> i64 {
-        if self.jit_pending_err.is_some() {
+        if self.jit.pending_err.is_some() {
             return -1;
         }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit_pending_err =
+            self.jit.pending_err =
                 Some(self.rt_err("JIT TForCall: no Lua frame"));
             return -1;
         };
@@ -3290,12 +3078,12 @@ impl Vm {
             self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
             self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
             if !matches!(self.stack[abs as usize], Value::Native(_)) {
-                self.jit_pending_err =
+                self.jit.pending_err =
                     Some(self.rt_err("JIT TForCall: non-Native iter (v2 only)"));
                 return -1;
             }
             if let Err(e) = self.begin_call(abs + 4, Some(2), nvars, false) {
-                self.jit_pending_err = Some(e);
+                self.jit.pending_err = Some(e);
                 return -1;
             }
         }
@@ -3660,7 +3448,7 @@ impl Vm {
                     //
                     // Gated on `trace_jit_enabled`, so the default
                     // dispatch pays a single not-taken branch.
-                    if self.trace_jit_enabled {
+                    if self.jit.trace_enabled {
                         let proto = cl.proto;
                         let c = proto.call_hot_count.get();
                         if c < u32::MAX / 2 {
@@ -3694,7 +3482,7 @@ impl Vm {
                             .iter()
                             .any(|t| t.head_pc == 0);
                         if c >= crate::jit::trace::CALL_HOT_THRESHOLD
-                            && self.active_trace.is_none()
+                            && self.jit.active_trace.is_none()
                             && !call_already_cached
                         {
                             // The new frame is on top: index in
@@ -3715,12 +3503,12 @@ impl Vm {
                                 let (tag, _) = self.stack[base_us + i].unpack();
                                 entry_tags.push(tag);
                             }
-                            self.active_trace = Some(Box::new(
+                            self.jit.active_trace = Some(Box::new(
                                 crate::jit::trace::TraceRecord::start(
                                     cl.proto, 0, entry_tags, true,
                                 ),
                             ));
-                            self.recording_frame_base = frame_idx;
+                            self.jit.recording_frame_base = frame_idx;
                         }
                     }
                     return Ok(true);
@@ -5160,8 +4948,8 @@ impl Vm {
             //   take the record (S2 will compile + cache).
             // - Otherwise, capture the op. If the record overflows
             //   MAX_TRACE_LEN, abort by dropping it.
-            if self.trace_jit_enabled
-                && let Some(_rec) = self.active_trace.as_mut()
+            if self.jit.trace_enabled
+                && let Some(_rec) = self.jit.active_trace.as_mut()
             {
                 // P12-S4 — depth tracking. The trace head's frame is
                 // at index `recording_frame_base`; every Op::Call that
@@ -5188,15 +4976,15 @@ impl Vm {
                 //   with the body we have. Lowerer's existing length
                 //   gate + InlineAbort path handles short bodies.
                 let returned_past_head =
-                    self.frames.len() <= self.recording_frame_base;
+                    self.frames.len() <= self.jit.recording_frame_base;
                 let cur_depth = if returned_past_head {
                     0
                 } else {
-                    self.frames.len() - 1 - self.recording_frame_base
+                    self.frames.len() - 1 - self.jit.recording_frame_base
                 };
                 let depth_cap_hit =
                     cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
-                let rec = self.active_trace.as_mut().expect("just checked Some");
+                let rec = self.jit.active_trace.as_mut().expect("just checked Some");
                 let at_head_loop = cur_depth == 0
                     && !rec.ops.is_empty()
                     && !returned_past_head
@@ -5228,7 +5016,7 @@ impl Vm {
                 // tail-call elision pops the caller frame and we'd
                 // hit `at_head_loop` instead.
                 let self_link_trip: Option<crate::jit::trace::SelfRecKind> = {
-                    if self.p16_self_link_enabled
+                    if self.jit.p16_self_link_enabled
                         && !returned_past_head
                         && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
                         && pc == rec.head_pc
@@ -5242,7 +5030,7 @@ impl Vm {
                         let head_proto_ptr = rec.head_proto.as_ptr();
                         let last_idx = self.frames.len() - 1;
                         let mut count = 0usize;
-                        for i in self.recording_frame_base..last_idx {
+                        for i in self.jit.recording_frame_base..last_idx {
                             if let CallFrame::Lua(f) = &self.frames[i]
                                 && std::ptr::eq(f.closure.proto.as_ptr(), head_proto_ptr)
                             {
@@ -5375,12 +5163,12 @@ impl Vm {
                         rec.head_proto
                             .trace_discard_count
                             .set(prior_discards + 1);
-                        self.trace_closed_count += 1;
-                        self.trace_closed_lens.push((
+                        self.jit.counters.closed += 1;
+                        self.jit.counters.closed_lens.push((
                             rec.is_call_triggered,
                             rec.ops.len(),
                         ));
-                        self.active_trace = None;
+                        self.jit.active_trace = None;
                         // Continue with interp loop — don't
                         // fall through to compile path.
                         // The op at `pc` hasn't dispatched yet;
@@ -5401,11 +5189,12 @@ impl Vm {
                     // dispatch — until then, this is bookkeeping.
                     let head_pc_val = rec.head_pc;
                     let closed_record = self
+                        .jit
                         .active_trace
                         .take()
                         .expect("active_trace was Some this branch");
-                    self.trace_closed_count += 1;
-                    self.trace_closed_lens.push((
+                    self.jit.counters.closed += 1;
+                    self.jit.counters.closed_lens.push((
                         closed_record.is_call_triggered,
                         closed_record.ops.len(),
                     ));
@@ -5460,7 +5249,7 @@ impl Vm {
                             pre53: self.version() <= LuaVersion::Lua53,
                         };
                         // v1.1 A1 Session A — route through trace_compiler.
-                        match self.trace_compiler.try_compile_trace(
+                        match self.jit.trace_compiler.try_compile_trace(
                             &closed_record,
                             opts,
                         ) {
@@ -5469,21 +5258,21 @@ impl Vm {
                                 // + actually-sunk-emit sites + materialise
                                 // emit sites before moving `ct` into
                                 // Proto.traces.
-                                self.trace_sinkable_seen_count +=
+                                self.jit.counters.sinkable_seen +=
                                     ct.sinkable_sites_seen as u64;
-                                self.trace_accum_bufferable_seen_count +=
+                                self.jit.counters.accum_bufferable_seen +=
                                     ct.accum_bufferable_seen as u64;
-                                self.trace_sunk_alloc_count +=
+                                self.jit.counters.sunk_alloc +=
                                     ct.sunk_alloc_seen as u64;
-                                self.trace_materialize_emit_count +=
+                                self.jit.counters.materialize_emit +=
                                     ct.materialize_emit_count as u64;
-                                self.trace_closure_emit_count +=
+                                self.jit.counters.closure_emit +=
                                     ct.closure_seen as u64;
                                 if ct.is_inline_abort_close {
-                                    self.trace_inline_abort_count += 1;
+                                    self.jit.counters.inline_abort += 1;
                                 }
                                 if let Some(reason) = ct.dispatch_off_reason {
-                                    self.trace_dispatch_off_reasons.push(reason);
+                                    self.jit.counters.dispatch_off_reasons.push(reason);
                                 }
                                 // P15-A v2-A — side-trace finalisation.
                                 // Pin `dispatchable=false` so the
@@ -5548,7 +5337,7 @@ impl Vm {
                                                 &parent_ct.entry_tags,
                                             );
                                         if !shape_ok {
-                                            self.trace_side_trace_shape_mismatch_count += 1;
+                                            self.jit.counters.side_trace_shape_mismatch += 1;
                                         }
                                         // P15-A v2-C-A4 — write the child's
                                         // entry fn ptr to BOTH the legacy
@@ -5608,7 +5397,7 @@ impl Vm {
                                                     0,
                                                 )
                                             };
-                                            self.trace_side_trace_compiled_count += 1;
+                                            self.jit.counters.side_trace_compiled += 1;
                                             // P15-A v2-D-A8 — flip the
                                             // parent's fast-path hint so
                                             // the dispatcher knows to do
@@ -5656,12 +5445,12 @@ impl Vm {
                                     drop(parent_traces);
                                 }
                                 head_proto.traces.borrow_mut().push(std::rc::Rc::new(ct));
-                                self.trace_compiled_count += 1;
+                                self.jit.counters.compiled += 1;
                             }
                             None => {
-                                self.trace_compile_failed_count += 1;
-                                self.trace_compile_failed_reasons.push(
-                                    self.trace_compiler.last_compile_checkpoint(),
+                                self.jit.counters.compile_failed += 1;
+                                self.jit.counters.compile_failed_reasons.push(
+                                    self.jit.trace_compiler.last_compile_checkpoint(),
                                 );
                             }
                         }
@@ -5675,8 +5464,8 @@ impl Vm {
                     // means `cur_depth <= MAX_INLINE_DEPTH` and the
                     // trace head's frame is still live.
                     let depth_u8 = cur_depth as u8;
-                    if depth_u8 > self.trace_max_depth_seen {
-                        self.trace_max_depth_seen = depth_u8;
+                    if depth_u8 > self.jit.max_depth_seen {
+                        self.jit.max_depth_seen = depth_u8;
                     }
                     // P12-S9-A — fix up a prior `Op::Call C=0` (multi-
                     // return / variable return count). Recorder pushed
@@ -5724,8 +5513,8 @@ impl Vm {
                         var_count,
                     };
                     if !rec.push(op) {
-                        self.active_trace = None;
-                        self.trace_aborted_count += 1;
+                        self.jit.active_trace = None;
+                        self.jit.counters.aborted += 1;
                     }
                 }
             }
@@ -5751,7 +5540,7 @@ impl Vm {
             // pass (slots that were Nil/Float at one moment can
             // settle to Int by the time the next back-edge fires).
             //
-            // A trace that comes back with `vm.jit_pending_err`
+            // A trace that comes back with `vm.jit.pending_err`
             // parked is treated as a deopt: clear the err, leave
             // the stack as the trace wrote it, and let the
             // interpreter run from the same `pc`. The trace itself
@@ -5763,7 +5552,7 @@ impl Vm {
             // reads fields via auto-deref. fib_28 saves ~5 Rc::clone
             // operations per dispatch × 434k = ~2.2M Rc atomic ops
             // (~1-2% gain measured separately).
-            if self.trace_jit_enabled
+            if self.jit.trace_enabled
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
@@ -5800,11 +5589,11 @@ impl Vm {
                 // at the end of the dispatch block (success +
                 // deopt paths both fall through to the restore).
                 let mut entry_tags: Vec<u8> =
-                    std::mem::take(&mut self.jit_entry_tags_buf);
+                    std::mem::take(&mut self.jit.entry_tags_buf);
                 entry_tags.clear();
                 entry_tags.reserve(max_stack);
                 let mut reg_state: Vec<i64> =
-                    std::mem::take(&mut self.jit_reg_state_buf);
+                    std::mem::take(&mut self.jit.reg_state_buf);
                 reg_state.clear();
                 reg_state.resize(window_size_us, 0i64);
                 let mut dispatch_ok = true;
@@ -5860,7 +5649,7 @@ impl Vm {
 
                 if dispatch_ok {
                     debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
-                    self.jit_pending_err = None;
+                    self.jit.pending_err = None;
                     // P12-S4-step4b-C-2 — snapshot the pre-entry frame
                     // count. A cmp@d>0 side-exit calls the materialize
                     // helper which pushes inlined frames onto
@@ -5873,15 +5662,15 @@ impl Vm {
                         // (CraneliftBackend delegates to enter_jit;
                         // NullJitBackend returns an inert guard).
                         let vm_ptr: *mut Vm = self;
-                        let _guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
+                        let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         unsafe { entry_fn(reg_state.as_mut_ptr()) }
                     };
-                    self.trace_dispatched_count += 1;
+                    self.jit.counters.dispatched += 1;
 
-                    if self.jit_pending_err.is_some() {
-                        self.jit_pending_err = None;
-                        self.trace_deopt_count += 1;
+                    if self.jit.pending_err.is_some() {
+                        self.jit.pending_err = None;
+                        self.jit.counters.deopt += 1;
                         // P12-S4-step4b-C-2 — unwind any helper-pushed
                         // inlined frames before the interpreter resumes.
                         // Don't restore reg_state — the trace's partial
@@ -6047,7 +5836,7 @@ impl Vm {
                                         // (side-trace entry).
                                         let vm_ptr: *mut Vm = self;
                                         let _guard =
-                                            self.chunk_compiler.enter(vm_ptr, Some(cl));
+                                            self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
                                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                                         unsafe { cent(reg_state.as_mut_ptr()) }
                                     };
@@ -6105,8 +5894,8 @@ impl Vm {
                             let v = c.get();
                             if v < u32::MAX { c.set(v + 1); }
                             if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
-                                && self.active_trace.is_none()
-                                && self.trace_jit_enabled
+                                && self.jit.active_trace.is_none()
+                                && self.jit.trace_enabled
                             {
                                 side_trace_should_start = true;
                             }
@@ -6319,7 +6108,7 @@ impl Vm {
                                     self.stack[resume_base + i].unpack();
                                 side_entry_tags.push(tag);
                             }
-                            self.active_trace = Some(Box::new(
+                            self.jit.active_trace = Some(Box::new(
                                 crate::jit::trace::TraceRecord::start_side_trace(
                                     resume_proto,
                                     cont_pc,
@@ -6329,23 +6118,23 @@ impl Vm {
                                     exit_hit_idx,
                                 ),
                             ));
-                            self.recording_frame_base =
+                            self.jit.recording_frame_base =
                                 self.frames.len() - 1;
-                            self.trace_side_trace_started_count += 1;
+                            self.jit.counters.side_trace_started += 1;
                         }
                         // P13-S13-D — put the dispatch buffers back
                         // before the `continue;` so the next
                         // dispatch picks up the same allocation.
-                        self.jit_reg_state_buf = reg_state;
-                        self.jit_entry_tags_buf = entry_tags;
+                        self.jit.reg_state_buf = reg_state;
+                        self.jit.entry_tags_buf = entry_tags;
                         continue;
                     }
                 }
                 // P13-S13-D — !dispatch_ok / deopt path / non-cont
                 // exit also restore the buffers before falling
                 // through to the interp.
-                self.jit_reg_state_buf = reg_state;
-                self.jit_entry_tags_buf = entry_tags;
+                self.jit.reg_state_buf = reg_state;
+                self.jit.entry_tags_buf = entry_tags;
             }
 
             // PUC `vmfetch` increments savedpc BEFORE firing traceexec, so
@@ -6656,7 +6445,7 @@ match inst.op() {
                     // whole block is gated on `trace_jit_enabled` so
                     // existing benches see one branch-not-taken and no
                     // counter writes.
-                    if self.trace_jit_enabled && off < 0 {
+                    if self.jit.trace_enabled && off < 0 {
                         let proto = cl.proto;
                         let c = proto.trace_hot_count.get();
                         if c < u32::MAX / 2 {
@@ -6691,7 +6480,7 @@ match inst.op() {
                                 .any(|t| t.head_pc == target_pc)
                         };
                         if c >= crate::jit::trace::TRACE_HOT_THRESHOLD
-                            && self.active_trace.is_none()
+                            && self.jit.active_trace.is_none()
                             && !back_edge_already_cached
                         {
                             // Back-edge target = pc after `add_pc(off)`,
@@ -6709,7 +6498,7 @@ match inst.op() {
                                 let (tag, _) = self.stack[base_us + i].unpack();
                                 entry_tags.push(tag);
                             }
-                            self.active_trace = Some(Box::new(
+                            self.jit.active_trace = Some(Box::new(
                                 crate::jit::trace::TraceRecord::start(
                                     cl.proto, target, entry_tags, false,
                                 ),
@@ -6718,7 +6507,7 @@ match inst.op() {
                             // started in. `self.frames.len() - 1`
                             // since we're inside the currently-running
                             // Lua frame's dispatch.
-                            self.recording_frame_base = self.frames.len() - 1;
+                            self.jit.recording_frame_base = self.frames.len() - 1;
                         }
                     }
                     self.add_pc(off);
@@ -6936,7 +6725,7 @@ match inst.op() {
                     // the 5.4+ Int form, comparable predicates in
                     // pre-5.3 / Float). The cheap check up front
                     // matches the for_loop helper's branch.
-                    if self.trace_jit_enabled {
+                    if self.jit.trace_enabled {
                         let a = inst.a();
                         let pre53 = self.version() <= LuaVersion::Lua53;
                         let take_back_edge = match (
@@ -6964,7 +6753,7 @@ match inst.op() {
                                 proto.trace_hot_count.set(c + 1);
                             }
                             if c == crate::jit::trace::TRACE_HOT_THRESHOLD
-                                && self.active_trace.is_none()
+                                && self.jit.active_trace.is_none()
                             {
                                 // ForLoop's back-edge target = pc
                                 // after `add_pc(-bx)` runs from the
@@ -6978,7 +6767,7 @@ match inst.op() {
                                     let (tag, _) = self.stack[base_us + i].unpack();
                                     entry_tags.push(tag);
                                 }
-                                self.active_trace = Some(Box::new(
+                                self.jit.active_trace = Some(Box::new(
                                     crate::jit::trace::TraceRecord::start(
                                         cl.proto, target, entry_tags, false,
                                     ),
@@ -6986,7 +6775,7 @@ match inst.op() {
                                 // P12-S4 — record the frame the trace
                                 // started in. The currently-running
                                 // Lua frame is at len() - 1.
-                                self.recording_frame_base = self.frames.len() - 1;
+                                self.jit.recording_frame_base = self.frames.len() - 1;
                             }
                         }
                     }
@@ -7021,14 +6810,14 @@ match inst.op() {
                         // (= `ctrl != nil`) so empty-iter loops don't
                         // pollute hot_count. v1 only adds the trigger;
                         // whitelist + helper + emit live in v2.
-                        if self.trace_jit_enabled {
+                        if self.jit.trace_enabled {
                             let proto = cl.proto;
                             let c = proto.trace_hot_count.get();
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
                             }
                             if c == crate::jit::trace::TRACE_HOT_THRESHOLD
-                                && self.active_trace.is_none()
+                                && self.jit.active_trace.is_none()
                             {
                                 // TForLoop back-edge target = pc after
                                 // `add_pc(-bx)` runs from the already-
@@ -7073,8 +6862,8 @@ match inst.op() {
                                 );
                                 rec.tfor_iter_ptr = iter_ptr;
                                 rec.tfor_val_tag = val_tag;
-                                self.active_trace = Some(Box::new(rec));
-                                self.recording_frame_base = self.frames.len() - 1;
+                                self.jit.active_trace = Some(Box::new(rec));
+                                self.jit.recording_frame_base = self.frames.len() - 1;
                             }
                         }
                         self.set_r(base, a + 2, ctrl);

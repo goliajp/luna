@@ -310,7 +310,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     // Returning a NULL ptr is safe because subsequent helpers also
     // early-return on `jit_pending_err`, and the dispatcher will deopt
     // to the interpreter as soon as the JIT entry returns.
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let g = vm.heap.new_table();
@@ -329,7 +329,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
 pub unsafe extern "C" fn luna_jit_new_table_sized(asize: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let n = if asize > 0 { asize as usize } else { 0 };
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
 ) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let cap_u = if cap > 0 { cap as usize } else { 0 };
@@ -430,7 +430,7 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
 pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
     // a deopt request and let the dispatcher re-run the call through the
     // interpreter so __newindex / raw-set semantics are honoured.
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -467,13 +467,13 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(
 ) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
         luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -507,13 +507,13 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
 ) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
         luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
     let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
@@ -544,13 +544,13 @@ pub unsafe extern "C" fn luna_jit_table_get_field(
 ) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
         luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return 0;
     }
     let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
@@ -576,13 +576,13 @@ pub unsafe extern "C" fn luna_jit_table_get_field(
 pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
         luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -601,13 +601,13 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
 pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, val_bits: i64) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
         luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -628,7 +628,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, v
 pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
@@ -639,7 +639,7 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // the interpreter, which walks __index correctly (including the
     // infinite-loop error events.lua relies on).
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return 0;
     }
     // P11-S5d.B — return the raw 8-byte payload of the stored
@@ -668,13 +668,13 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
         luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return 0;
     }
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
@@ -820,7 +820,7 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -860,7 +860,7 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(
 ) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     vm.jit_stack_update_raw(slot_offset as u32, raw_bits as u64);
@@ -1037,7 +1037,7 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(
 ) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return;
     }
     vm.jit_spill_stack(slot_offset as u32, tag as u8, raw_bits as u64);
@@ -1072,7 +1072,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     use luna_core::runtime::function::{INLINE_UPVALS_N, Upvalue, UpvalState};
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -1087,7 +1087,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base as u32,
         None => {
-            vm.jit_pending_err =
+            vm.jit.pending_err =
                 Some(vm.rt_err("JIT op_closure: no Lua frame"));
             return 0;
         }
@@ -1206,7 +1206,7 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     // Honour the existing deopt protocol: if any earlier helper in
     // this JIT entry parked a deopt, don't push frames — the
     // dispatcher will unwind via the deopt path.
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return -1;
     }
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -1236,7 +1236,7 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
 pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    if vm.jit_pending_err.is_some() {
+    if vm.jit.pending_err.is_some() {
         return 0;
     }
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
@@ -1244,7 +1244,7 @@ pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
     // P11-S5d.E' — 5.4+ honours __len on tables; the helper bypasses it.
     // Park a deopt request and let the interpreter compute the length.
     if g.metatable().is_some() {
-        vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return 0;
     }
     g.len()
