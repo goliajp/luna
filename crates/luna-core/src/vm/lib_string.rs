@@ -47,7 +47,7 @@ pub(crate) fn open_string(vm: &mut Vm) {
         set(vm, "unpack", crate::vm::lib_strpack::s_unpack);
         set(vm, "packsize", crate::vm::lib_strpack::s_packsize);
     }
-    vm.set_global("string", Value::Table(t));
+    vm.set_global("string", Value::Table(t)).expect("stdlib registration");
     vm.barrier_back_table(t);
     // shared string metatable: methods resolve through the library table
     let mt = vm.heap.new_table();

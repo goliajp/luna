@@ -23,7 +23,7 @@ pub(crate) fn open_coroutine(vm: &mut Vm) {
     set(vm, "isyieldable", co_isyieldable);
     set(vm, "wrap", co_wrap);
     set(vm, "close", co_close);
-    vm.set_global("coroutine", Value::Table(t));
+    vm.set_global("coroutine", Value::Table(t)).expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 

@@ -71,7 +71,7 @@ fn main() {
     // ─── Case 1: ordinary script with host function ────────────────
     let mut vm = make_sandbox();
     let host_fn = vm.native(host_redis_get);
-    vm.set_global("redis_get", host_fn);
+    vm.set_global("redis_get", host_fn).unwrap();
     run_script(
         "host call works",
         &mut vm,

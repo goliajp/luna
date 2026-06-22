@@ -226,12 +226,12 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
         .stack_size(16 << 20)
         .spawn(move || {
             let mut vm = Vm::new(version);
-            vm.set_global("_U", Value::Bool(true));
+            vm.set_global("_U", Value::Bool(true)).unwrap();
             // attrib.lua's lines 79-356 exercise dynamic C-library loading
             // (`package.loadlib`) which luna does not ship; `_port=true` is the
             // PUC-sanctioned escape hatch for non-portable subsections.
             if label == "attrib.lua" {
-                vm.set_global("_port", Value::Bool(true));
+                vm.set_global("_port", Value::Bool(true)).unwrap();
             }
             // main.lua exercises the standalone-interpreter command line
             // (`os.execute`, `arg[-N]` for the binary name, tmpfile-based
@@ -239,7 +239,7 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
             // interpreter binary to dispatch back into, so set `_port=true`
             // and let the `if _port then return end` at top exit cleanly.
             if label == "main.lua" {
-                vm.set_global("_port", Value::Bool(true));
+                vm.set_global("_port", Value::Bool(true)).unwrap();
             }
             // big.lua / verybig.lua's `if _soft then return … end` short-circuits
             // the multi-megabyte-prog / 70k-line-prog generation that PUC's
@@ -250,7 +250,7 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
             // top-level `coroutine.yield` driver (big.lua) or platform-tunable
             // limits (verybig.lua).
             if label == "big.lua" || label == "verybig.lua" {
-                vm.set_global("_soft", Value::Bool(true));
+                vm.set_global("_soft", Value::Bool(true)).unwrap();
             }
             // files.lua's `if not _port` block runs popen/execute/`io.tmpfile`
             // off the `arg` global (which luna does not populate from a host
@@ -259,8 +259,8 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
             // still run. 5.2 / 5.3 use `_noposix` (not `_port`) for the same
             // popen/`os.execute` block, so set both for cross-dialect coverage.
             if label == "files.lua" {
-                vm.set_global("_port", Value::Bool(true));
-                vm.set_global("_noposix", Value::Bool(true));
+                vm.set_global("_port", Value::Bool(true)).unwrap();
+                vm.set_global("_noposix", Value::Bool(true)).unwrap();
             }
             let chunkname = format!("@{label}");
             // PUC's outer driver (`all.lua`) wraps every chunk in

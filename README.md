@@ -90,6 +90,15 @@ cargo run --release --example sandbox_demo
 See `cargo doc --open` (top-level `src/lib.rs` rustdoc) for the full
 embedding contract and sandbox caveats.
 
+### Threading model
+
+`luna::Vm` is `!Send + !Sync` — pin one Vm per OS thread (or per
+single-thread Tokio worker). For async embedders, use Tokio's
+`current_thread` runtime flavor or wrap `Vm` access in a `LocalSet`.
+See [`docs/threading.md`](docs/threading.md) for canonical patterns
+(single-thread Tokio, `LocalSet` on multi-thread, `Vm`-per-OS-thread
++ channels) and the post-v1.1 `feature = "send"` roadmap.
+
 ### Standalone CLI
 
 ```sh

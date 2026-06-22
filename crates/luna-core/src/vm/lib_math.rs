@@ -64,7 +64,7 @@ pub(crate) fn open_math(vm: &mut Vm) {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }.set(&mut vm.heap, k, v).expect("valid key");
     }
-    vm.set_global("math", Value::Table(t));
+    vm.set_global("math", Value::Table(t)).expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 
