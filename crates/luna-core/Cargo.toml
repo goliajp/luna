@@ -1,0 +1,22 @@
+[package]
+name = "luna-core"
+description = "Pure-Rust Lua runtime (interpreter only, zero third-party dependencies). The JIT-equipped variant lives in the `luna` crate."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[lib]
+# Same shape as the v1.0 root crate so embedders can swap `luna` →
+# `luna-core` without re-evaluating their linkage model. cdylib +
+# staticlib live in the `luna` crate (capi side); luna-core stays
+# `rlib`-only — embedders that need a C ABI bring in `luna`.
+crate-type = ["rlib"]
+
+[dependencies]
+# v1.1 F1 acceptance: this list must remain empty so
+# `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` == 1.
