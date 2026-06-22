@@ -81,6 +81,18 @@ impl RegKind {
 /// `JitHandle::returns_one`).
 pub type IntChunkFn = unsafe extern "C" fn() -> i64;
 
+// v1.1 A1 Session B — type-vs-codegen split inside src/jit/. Pure
+// data types + small cranelift-free helpers extracted from trace.rs
+// into trace_types.rs; codegen stays in trace.rs. Re-exported via
+// `pub use trace_types::*;` so existing call sites
+// (`crate::jit::CompiledTrace`, `crate::jit::trace::CompiledTrace`)
+// keep resolving — trace.rs itself does `pub use super::trace_types::*;`
+// so the longer path still works. See
+// `.dev/rfcs/v1.1-rfc-crate-split.md` §Migration Step 6 + L560 (impl
+// notes).
+pub mod trace_types;
+pub use trace_types::*;
+
 // P12 — trace JIT (data structures only at S1; wiring lands at S2+).
 pub mod trace;
 
