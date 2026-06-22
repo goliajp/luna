@@ -1,0 +1,65 @@
+[graph]
+all-features = false
+no-default-features = false
+exclude-dev = false
+
+[output]
+feature-depth = 1
+
+# ─────────────────────────────────────────────────────────────────────
+# Advisories — RustSec database checks for known vulnerabilities.
+# ─────────────────────────────────────────────────────────────────────
+[advisories]
+db-path = "~/.cargo/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+ignore = []
+
+# ─────────────────────────────────────────────────────────────────────
+# Licenses — only permissive, no GPL contamination.
+# ─────────────────────────────────────────────────────────────────────
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+# ─────────────────────────────────────────────────────────────────────
+# Bans — luna-core's 0-third-party-dep contract.
+#
+# The hard rule is enforced separately by CI step:
+#     cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"
+#     # must return 1
+#
+# This [bans] section catches the *workspace*-level concerns:
+# duplicate versions of any dep, accidental wildcard deps, etc.
+# ─────────────────────────────────────────────────────────────────────
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# ─────────────────────────────────────────────────────────────────────
+# Sources — only crates.io and the official rustsec repo.
+# Embedders auditing luna's supply chain see a clean source list.
+# ─────────────────────────────────────────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
