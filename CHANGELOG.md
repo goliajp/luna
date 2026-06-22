@@ -19,6 +19,40 @@ optimization.
 
 ---
 
+## [Unreleased]
+
+### Added (Track A — crate / dep / safety)
+- **Workspace split**: `luna-core` (0 third-party deps; lexer / parser /
+  compiler / interpreter / runtime / stdlib / GC / pattern / JIT trait
+  surface) and `luna` (Cranelift JIT + capi + CLI binary). `cargo add
+  luna-core` pulls only the interpreter; `cargo add luna` pulls the
+  full JIT'd stack. CI gate: `cargo tree -p luna-core` must show
+  exactly one crate.
+- **JIT trait boundary**: `IntChunkCompiler` / `TraceCompiler` traits
+  in `luna_core::jit::abi` decouple the dispatcher from Cranelift.
+  `NullJitBackend` (in `luna-core`) and `CraneliftBackend` (in `luna`)
+  implement the traits; embedders can swap backends or install
+  `NullJitBackend` for interpreter-only mode.
+- **`Vm::new_minimal_with_jit`** in the `luna` crate — one-line
+  constructor for embedders wanting the v1.0 JIT-on-by-default
+  behavior through `cargo add luna`.
+- New doc: `docs/architecture.md` — crate layout, source classification,
+  JIT pipeline overview, threading model, sandbox surface.
+- New doc: `docs/threading.md` — canonical embedding patterns for
+  async + multi-thread hosts (`Vm: !Send` rationale, Tokio
+  `current_thread` / `LocalSet` / per-thread-Vm patterns,
+  forward-looking `feature = "send"` outline).
+
+### Changed
+- `src/jit/trace.rs` (9483 LOC) split in place into `trace.rs`
+  (Cranelift codegen body) and `trace_types.rs` (type definitions
+  + thresholds + cranelift-free helpers). Type paths preserved via
+  re-exports; downstream callers see no API change.
+
+(In progress — A2-A7 + Tracks B/C/D/E/F/G work follows.)
+
+---
+
 ## [1.0.0] — 2026-06-23
 
 First stable release. luna implements **Lua 5.1, 5.2, 5.3, 5.4, and
