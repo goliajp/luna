@@ -3,6 +3,7 @@ name = "luna"
 description = "A Lua runtime in pure Rust — full 5.1/5.2/5.3/5.4/5.5 support. Equivalent to `luna-core` plus a Cranelift-backed JIT (method + trace) and the lua.h-compatible C ABI."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

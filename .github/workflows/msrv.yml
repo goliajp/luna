@@ -1,0 +1,27 @@
+name: msrv
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  msrv-check:
+    name: MSRV (1.86) — cargo check --workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - name: Verify Cargo.toml rust-version matches
+        run: |
+          set -euo pipefail
+          DECLARED=$(grep -E '^rust-version' Cargo.toml | head -1 | awk -F'"' '{print $2}')
+          if [ "$DECLARED" != "1.86" ]; then
+            echo "::error::Cargo.toml rust-version ($DECLARED) does not match CI matrix (1.86). Bump both together."
+            exit 1
+          fi
+      - name: cargo check --workspace
+        run: cargo check --workspace --all-targets
+      - name: cargo check -p luna-core
+        run: cargo check -p luna-core --all-targets

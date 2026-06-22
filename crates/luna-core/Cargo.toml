@@ -3,6 +3,7 @@ name = "luna-core"
 description = "Pure-Rust Lua runtime (interpreter only, zero third-party dependencies). The JIT-equipped variant lives in the `luna` crate."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
