@@ -1,0 +1,15 @@
+# attrib.lua creates these fixtures at runtime when `_port` is false. We run
+# the suite with `_port = true` (luna does not ship dynamic-library loading)
+# so they should never appear in fresh checkouts, but a stale run-tree can
+# leave them around. Track only the lib*.c sources + makefile that ship with
+# the PUC test suite.
+A
+A.lc
+B.lua
+C.lua
+L
+P1
+XXxX
+err.lua
+names.lua
+synerr.lua
