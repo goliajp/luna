@@ -1045,10 +1045,13 @@ impl Vm {
         Ok(self.heap.new_closure(proto, ups.into_boxed_slice()))
     }
 
-    /// Convenience: load + run, returning the chunk's results.
-    pub fn eval(&mut self, src: &str) -> Result<Vec<Value>, Error> {
-        let cl = self.load(src.as_bytes(), b"=eval")?;
-        Ok(self.call_value(Value::Closure(cl), &[])?)
+    /// Compile and run `src` as an anonymous chunk; return its results.
+    /// Source name in the traceback is `"=eval"`. Syntax errors are
+    /// surfaced as `LuaError` carrying the formatted PUC-style message
+    /// (interned through the heap so the error value composes with
+    /// `pcall` / `error_text` like any runtime error).
+    pub fn eval(&mut self, src: &str) -> Result<Vec<Value>, LuaError> {
+        self.eval_chunk(src, "=eval")
     }
 
     /// Render an error value for messages/tests. Non-string errors —

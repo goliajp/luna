@@ -10,8 +10,7 @@ fn eval(src: &str) -> Vec<Value> {
     let mut vm = Vm::new(LuaVersion::Lua55);
     match vm.eval(src) {
         Ok(v) => v,
-        Err(Error::Syntax(e)) => panic!("syntax error in {src:?}: {e}"),
-        Err(Error::Runtime(e)) => panic!("runtime error in {src:?}: {}", vm.error_text(&e)),
+        Err(e) => panic!("runtime error in {src:?}: {}", vm.error_text(&e)),
     }
 }
 
@@ -33,8 +32,7 @@ fn check_str(src: &str, expect: &[u8]) {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let v = match vm.eval(src) {
         Ok(v) => v,
-        Err(Error::Syntax(e)) => panic!("syntax error in {src:?}: {e}"),
-        Err(Error::Runtime(e)) => panic!("runtime error in {src:?}: {}", vm.error_text(&e)),
+        Err(e) => panic!("runtime error in {src:?}: {}", vm.error_text(&e)),
     };
     assert_eq!(v.len(), 1, "expected 1 result from {src:?}");
     match v[0] {
@@ -83,14 +81,13 @@ fn check_error(src: &str, contains: &str) {
     let mut vm = Vm::new(LuaVersion::Lua55);
     match vm.eval(src) {
         Ok(v) => panic!("{src:?} unexpectedly returned {v:?}"),
-        Err(Error::Runtime(e)) => {
+        Err(e) => {
             let msg = vm.error_text(&e);
             assert!(
                 msg.contains(contains),
                 "{src:?} error {msg:?} does not contain {contains:?}"
             );
         }
-        Err(Error::Syntax(e)) => panic!("{src:?} failed to compile: {e}"),
     }
 }
 
@@ -328,7 +325,7 @@ fn globals_via_env() {
 #[test]
 fn error_positions() {
     let mut vm = Vm::new(LuaVersion::Lua55);
-    let Err(Error::Runtime(e)) = vm.eval("local x = 1\nlocal y = nil\nreturn y.z") else {
+    let Err(e) = vm.eval("local x = 1\nlocal y = nil\nreturn y.z") else {
         panic!("expected runtime error")
     };
     let msg = vm.error_text(&e);
@@ -794,16 +791,13 @@ fn runtime_stack_overflow_is_caught() {
 fn check_compile_error(src: &str, contains: &str) {
     let mut vm = Vm::new(LuaVersion::Lua55);
     match vm.eval(src) {
-        Err(Error::Syntax(e)) => {
-            let m = e.msg_str();
+        Ok(v) => panic!("{src:?} unexpectedly compiled and returned {v:?}"),
+        Err(e) => {
+            let m = vm.error_text(&e);
             assert!(
                 m.contains(contains),
-                "{src:?} compile error {m:?} does not contain {contains:?}"
+                "{src:?} error {m:?} does not contain {contains:?}"
             );
-        }
-        Ok(v) => panic!("{src:?} unexpectedly compiled and returned {v:?}"),
-        Err(Error::Runtime(e)) => {
-            panic!("{src:?} failed at runtime instead: {}", vm.error_text(&e))
         }
     }
 }
@@ -2874,7 +2868,7 @@ fn warn_library_absent_on_5_3() {
     let mut vm = Vm::new(LuaVersion::Lua53);
     let result = vm.eval("warn('test')");
     match result {
-        Err(Error::Runtime(e)) => {
+        Err(e) => {
             let msg = vm.error_text(&e);
             assert!(
                 msg.contains("attempt to call") || msg.contains("nil value"),
@@ -2882,7 +2876,6 @@ fn warn_library_absent_on_5_3() {
             );
         }
         Ok(_) => panic!("warn should be absent on 5.3 (no error)"),
-        Err(Error::Syntax(e)) => panic!("unexpected syntax error: {e}"),
     }
 }
 
@@ -2995,7 +2988,7 @@ fn embedding_new_minimal_has_no_globals() {
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
     let result = vm.eval("print('hi')");
     match result {
-        Err(Error::Runtime(e)) => {
+        Err(e) => {
             let msg = vm.error_text(&e);
             assert!(
                 msg.contains("attempt to call") || msg.contains("nil"),
@@ -3003,7 +2996,6 @@ fn embedding_new_minimal_has_no_globals() {
             );
         }
         Ok(_) => panic!("print should not exist on a new_minimal vm"),
-        Err(Error::Syntax(e)) => panic!("unexpected syntax error: {e}"),
     }
 }
 
@@ -3098,10 +3090,7 @@ fn embedding_kevy_shape_short_script_per_request() {
     // the embedder didn't wrap in pcall; the host catches it and continues.
     vm.set_instr_budget(Some(500));
     let err = vm.eval("while true do end").expect_err("budget must trip");
-    let msg = match err {
-        Error::Runtime(e) => vm.error_text(&e),
-        e => panic!("unexpected error: {e:?}"),
-    };
+    let msg = vm.error_text(&err);
     assert!(msg.contains("instruction budget"), "got: {msg}");
     // After the trip the budget disarmed — important so a paranoid host
     // doesn't have to reset before EVERY eval.
@@ -3516,14 +3505,13 @@ fn pattern_backref_zero_is_invalid() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     match vm.eval("return string.match('abc', '%0')") {
         Ok(v) => panic!("expected error, got {v:?}"),
-        Err(Error::Runtime(e)) => {
+        Err(e) => {
             let msg = vm.error_text(&e);
             assert!(
                 msg.contains("invalid capture index"),
                 "unexpected error: {msg}"
             );
         }
-        Err(Error::Syntax(e)) => panic!("unexpected syntax error: {e}"),
     }
 }
 
@@ -3676,12 +3664,11 @@ fn getobjname_global_via_gettable() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     match vm.eval(&src) {
         Ok(v) => panic!("expected error, got {v:?}"),
-        Err(Error::Runtime(e)) => assert!(
+        Err(e) => assert!(
             vm.error_text(&e).contains("global 'bbb'"),
             "unexpected: {}",
             vm.error_text(&e)
         ),
-        Err(Error::Syntax(e)) => panic!("syntax error: {e}"),
     }
 }
 
