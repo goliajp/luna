@@ -413,6 +413,19 @@ pub struct Vm {
     /// register at trace dispatch entry). Re-used analogously to
     /// `jit_reg_state_buf`.
     pub(crate) jit_entry_tags_buf: Vec<u8>,
+    /// v1.1 A1 Session A — closure-compile backend the dispatcher
+    /// routes through. Default is [`crate::jit::CraneliftBackend`]
+    /// (installed by `Vm::new_inner`); embedders can opt into the
+    /// no-op backend via [`Vm::install_null_jit`]. The vtable cost
+    /// is paid only on the cold `populate_jit_cache` path (once per
+    /// Proto); the hot dispatch path reads
+    /// `Proto.jit: Cell<JitProtoState>` directly.
+    pub(crate) chunk_compiler: Box<dyn crate::jit::IntChunkCompiler>,
+    /// v1.1 A1 Session A — trace-JIT backend the dispatcher routes
+    /// through. Default is [`crate::jit::CraneliftBackend`]. Fires
+    /// once per closed `TraceRecord`; the recording loop itself
+    /// stays in pure interpreter code.
+    pub(crate) trace_compiler: Box<dyn crate::jit::TraceCompiler>,
 }
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -922,6 +935,12 @@ impl Vm {
             jit_str_buf_pool: Vec::new(),
             jit_str_buf_pool_cap: 4,
             jit_entry_tags_buf: Vec::new(),
+            // v1.1 A1 Session A — install the default Cranelift backend so
+            // Vm::new_minimal preserves v1.0 behavior (JIT on by default).
+            // Tests / embedders that want interp-only run can call
+            // `vm.install_null_jit()` right after construction.
+            chunk_compiler: Box::new(crate::jit::CraneliftBackend),
+            trace_compiler: Box::new(crate::jit::CraneliftBackend),
         };
         vm
     }
@@ -948,6 +967,33 @@ impl Vm {
         let (a, b) = vm.rng_auto_seed();
         vm.rng_seed(a as u64, b as u64);
         vm
+    }
+
+    /// v1.1 A1 Session A — swap in the default Cranelift JIT backend
+    /// for both the closure-compile and trace-JIT slots. `Vm::new_inner`
+    /// already installs this, so the method is idempotent on a freshly
+    /// constructed Vm; it exists so a Vm running under
+    /// [`Vm::install_null_jit`] can be re-armed without going through
+    /// `Vm::new_minimal`.
+    pub fn install_default_jit(&mut self) {
+        self.chunk_compiler = Box::new(crate::jit::CraneliftBackend);
+        self.trace_compiler = Box::new(crate::jit::CraneliftBackend);
+    }
+
+    /// v1.1 A1 Session A — install the no-op JIT backend. `try_compile`
+    /// reports "skipped" so every closure stays on the interpreter
+    /// path, and the trace recorder's compile attempt always returns
+    /// `None`. Intended for tests that want to verify the trait
+    /// boundary works in a JIT-free configuration, and for the future
+    /// `luna-core` build path that ships without Cranelift.
+    ///
+    /// Calling this on a Vm whose closures already populated
+    /// `Proto.jit: JitProtoState::Compiled` does NOT evict those
+    /// cached entries — the dispatcher will still call into them. For
+    /// a truly JIT-free run, call this immediately after construction.
+    pub fn install_null_jit(&mut self) {
+        self.chunk_compiler = Box::new(crate::jit::NullJitBackend);
+        self.trace_compiler = Box::new(crate::jit::NullJitBackend);
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
@@ -1251,7 +1297,12 @@ impl Vm {
                 // cranelift `Linkage::Import`. RAII clear on return.
                 // Chunks with no upvalue reads don't touch the closure
                 // slot, paying nothing.
-                let _jit_vm_guard = crate::jit::enter_jit(self, Some(cl));
+                // v1.1 A1 Session A — route through chunk_compiler so
+                // the NullJitBackend path stays inert. Raw-ptr arg
+                // avoids the &mut self borrow conflict against the
+                // shared self.chunk_compiler read.
+                let vm_ptr: *mut Vm = self;
+                let _jit_vm_guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
                 // P11-S5d.E' — a JIT helper may have detected a metatable
@@ -1300,17 +1351,8 @@ impl Vm {
         // are Float). The JIT's `GetUpval` ValueRead path uses this
         // to default-pin upvalue reads to Float without a tag check.
         let float_only = version <= crate::version::LuaVersion::Lua52;
-        if let Some((
-            entry,
-            num_args,
-            returns_one,
-            arg_float_mask,
-            arg_table_mask,
-            ret_is_float,
-            ret_is_table,
-        )) = crate::jit::cache_lookup_or_compile(proto, pre53, float_only)
-        {
-            proto.jit.set(JitProtoState::Compiled {
+        match self.chunk_compiler.try_compile(proto, pre53, float_only) {
+            crate::jit::CompileResult::Compiled {
                 entry,
                 num_args,
                 returns_one,
@@ -1318,9 +1360,20 @@ impl Vm {
                 arg_table_mask,
                 ret_is_float,
                 ret_is_table,
-            });
-        } else {
-            proto.jit.set(JitProtoState::Failed);
+            } => {
+                proto.jit.set(JitProtoState::Compiled {
+                    entry,
+                    num_args,
+                    returns_one,
+                    arg_float_mask,
+                    arg_table_mask,
+                    ret_is_float,
+                    ret_is_table,
+                });
+            }
+            crate::jit::CompileResult::Skipped => {
+                proto.jit.set(JitProtoState::Failed);
+            }
         }
     }
 
@@ -1390,7 +1443,9 @@ impl Vm {
         }
         // P11-S5c / S5d.J — Vm + closure pin for helpers; see the
         // matching guard in `try_jit_call`.
-        let _jit_vm_guard = crate::jit::enter_jit(self, Some(cl));
+        // v1.1 A1 Session A — route through chunk_compiler.
+        let vm_ptr: *mut Vm = self;
+        let _jit_vm_guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
         let r = unsafe {
             match num_args {
                 0 => (std::mem::transmute::<*const u8, crate::jit::IntChunkFn>(entry))(),
@@ -5329,7 +5384,8 @@ impl Vm {
                                 .is_none(),
                             pre53: self.version() <= LuaVersion::Lua53,
                         };
-                        match crate::jit::trace::try_compile_trace_with_options(
+                        // v1.1 A1 Session A — route through trace_compiler.
+                        match self.trace_compiler.try_compile_trace(
                             &closed_record,
                             opts,
                         ) {
@@ -5530,7 +5586,7 @@ impl Vm {
                             None => {
                                 self.trace_compile_failed_count += 1;
                                 self.trace_compile_failed_reasons.push(
-                                    crate::jit::trace::last_compile_checkpoint(),
+                                    self.trace_compiler.last_compile_checkpoint(),
                                 );
                             }
                         }
@@ -5737,7 +5793,11 @@ impl Vm {
                     // the stack grows unboundedly per deopted dispatch.
                     let pre_frames = self.frames.len();
                     let continuation_pc = {
-                        let _guard = crate::jit::enter_jit(self, Some(cl));
+                        // v1.1 A1 Session A — chunk_compiler.enter
+                        // (CraneliftBackend delegates to enter_jit;
+                        // NullJitBackend returns an inert guard).
+                        let vm_ptr: *mut Vm = self;
+                        let _guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
                         unsafe { entry_fn(reg_state.as_mut_ptr()) }
                     };
                     self.trace_dispatched_count += 1;
@@ -5906,8 +5966,11 @@ impl Vm {
                                     child_invoke
                                 {
                                     let child_raw_ret = {
+                                        // v1.1 A1 Session A — chunk_compiler.enter
+                                        // (side-trace entry).
+                                        let vm_ptr: *mut Vm = self;
                                         let _guard =
-                                            crate::jit::enter_jit(self, Some(cl));
+                                            self.chunk_compiler.enter(vm_ptr, Some(cl));
                                         unsafe { cent(reg_state.as_mut_ptr()) }
                                     };
                                     (cpi, cpt, cet, chc, child_raw_ret as u64)
