@@ -1,0 +1,61 @@
+[package]
+name = "luna"
+version = "1.0.0"
+edition = "2024"
+authors = ["GOLIA K.K. <lihao@golia.jp>"]
+description = "A Lua runtime in pure Rust — full 5.1/5.2/5.3/5.4/5.5 support"
+repository = "https://github.com/goliajp/luna"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["lua", "vm", "interpreter", "jit", "embedded"]
+categories = ["compilers", "no-std"]
+
+# rlib: Rust embedders. cdylib + staticlib: existing C/C++ hosts can link
+# against luna through its `capi` module (lua.h-compatible subset).
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+# JIT backend. cranelift is the mainstream Rust codegen for embedded
+# JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
+# mature regalloc + opt. luna lowers Lua bytecode → Cranelift IR →
+# mmap RWX. Pinned: API churns enough that floating without a lock
+# would burn audit time.
+cranelift = "0.124"
+cranelift-jit = "0.124"
+cranelift-module = "0.124"
+cranelift-codegen = "0.124"
+cranelift-frontend = "0.124"
+cranelift-native = "0.124"
+
+[[bench]]
+name = "lua_microbench"
+harness = false
+
+[[bench]]
+name = "cross_dialect"
+harness = false
+
+[[bench]]
+name = "run_only"
+harness = false
+
+[profile.release]
+# Enable LTO to allow cross-crate inlining of JIT helpers
+# (luna_jit_upval_get, luna_jit_trace_materialize_frames, etc.) into
+# the dispatcher hot path. codegen-units=16 (default) preserved
+# because units=1 regressed loop_int_1m -10% (likely i-cache / less-
+# flexible regalloc with a monolithic codegen unit).
+#
+# Trade-off: release build time ~5s → ~40s. Acceptable for shipped
+# binaries; the `release-dbg` profile keeps lto=false for fast dev
+# iteration.
+lto = true
+codegen-units = 16
+
+[profile.release-dbg]
+inherits = "release"
+debug = true
+strip = false
+lto = false
+codegen-units = 16

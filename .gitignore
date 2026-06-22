@@ -1,0 +1,17 @@
+# Build artifacts
+/target
+
+# Cargo
+**/*.rs.bk
+
+# Development scratch — not part of the public source tree
+.dev/
+.tmp/
+.claude/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
