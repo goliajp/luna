@@ -278,6 +278,7 @@ pub fn enter_jit(
 unsafe fn current_jit_vm<'a>() -> &'a mut luna_core::vm::Vm {
     let p = JIT_VM.with(|cell| cell.get());
     debug_assert!(!p.is_null(), "JIT helper called outside enter_jit scope");
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { &mut *p }
 }
 
@@ -299,8 +300,10 @@ unsafe fn current_jit_closure() -> luna_core::runtime::Gc<luna_core::runtime::Lu
 /// only through the Cranelift Variable the JIT writes it into; no
 /// `maybe_collect_garbage` runs inside the helper so the SSA-only
 /// rooting suffices for the duration of the JIT entry.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     // P11-S5d.E' — a prior helper in this JIT entry parked a deopt
     // request; short-circuit so we don't touch the heap unnecessarily.
@@ -321,8 +324,10 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
 /// `rehash` rounds for N=10000, which dominates the hot loop's
 /// wall-clock on `table_alloc_10k`. Negative or zero hints
 /// degrade to an empty table (matches `new_table`).
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_new_table_sized(asize: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
@@ -345,7 +350,9 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(asize: i64) -> i64 {
 /// space as `Value::pack`. Unset slots in `virt_kinds` map to
 /// `raw::NIL` at emit time so the table sees a NIL fill — matches
 /// Lua's "table created with array part, slot unwritten" semantics.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     cap: i64,
     raws_ptr: *const u64,
@@ -355,6 +362,7 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     hash_raws_ptr: *const u64,
     hash_kinds_ptr: *const u8,
 ) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
@@ -362,14 +370,18 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     let cap_u = if cap > 0 { cap as usize } else { 0 };
     let n_hash_u = if n_hash > 0 { n_hash as usize } else { 0 };
     let g = vm.heap.new_table_sized(cap_u);
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let table = unsafe { g.as_mut() };
     // Array slots.
     if cap_u > 0 {
         for i in 0..cap_u {
+            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
             let raw_bits = unsafe { *raws_ptr.add(i) };
+            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
             let kind = unsafe { *kinds_ptr.add(i) };
             let raw =
                 luna_core::runtime::value::RawVal { zero: raw_bits };
+            // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
             let v = unsafe { luna_core::runtime::Value::pack(kind, raw) };
             let _ = table.set_int(
                 &mut vm.heap,
@@ -384,13 +396,17 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     // const-string ptr at compile time from head_proto.consts.
     if n_hash_u > 0 {
         for i in 0..n_hash_u {
+            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
             let key_ptr_bits = unsafe { *hash_keys_ptr.add(i) };
+            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
             let raw_bits = unsafe { *hash_raws_ptr.add(i) };
+            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
             let kind = unsafe { *hash_kinds_ptr.add(i) };
             let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
                 luna_core::runtime::Gc::from_ptr(key_ptr_bits as *mut luna_core::runtime::LuaStr);
             let raw =
                 luna_core::runtime::value::RawVal { zero: raw_bits };
+            // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
             let v = unsafe { luna_core::runtime::Value::pack(kind, raw) };
             let _ = table.set(
                 &mut vm.heap,
@@ -409,8 +425,10 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
 /// interpreter would also surface; JIT'd workloads bounded by N=10k
 /// don't reach it). Future caller-visible error reporting would
 /// route through a deopt return path.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -425,6 +443,7 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
         vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let table = unsafe { g.as_mut() };
     let _ = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
 }
@@ -437,13 +456,16 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
 /// Op::Closure trace JIT) silently wraps the closure pointer as
 /// `Value::Int(ptr_bits)` — a number that later calls fail with
 /// "attempt to call a number value".
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_table_set_raw(
     t: i64,
     key: i64,
     raw_bits: i64,
     tag: i64,
 ) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -454,7 +476,9 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(
         vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let table = unsafe { g.as_mut() };
+    // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
     let v = unsafe {
         luna_core::runtime::Value::pack(
             tag as u8,
@@ -472,13 +496,16 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(
 ///
 /// Same metatable / pending_err short-circuit as the other table
 /// helpers — `__newindex` cases deopt to interp.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_table_set_field(
     t: i64,
     key_ptr: i64,
     val_raw: i64,
     val_tag: i64,
 ) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -492,7 +519,9 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
         luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
     let key = luna_core::runtime::Value::Str(key_gc);
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let table = unsafe { g.as_mut() };
+    // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
     let v = unsafe {
         luna_core::runtime::Value::pack(
             val_tag as u8,
@@ -506,11 +535,14 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
 /// String key is a `Gc<LuaStr>` raw pointer baked into IR. Caller
 /// (trace JIT GetField emit) infers exit_tag for the dst slot via
 /// `infer_getx_exit`; absent inference, dispatchable=false.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_table_get_field(
     t: i64,
     key_ptr: i64,
 ) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
@@ -525,6 +557,7 @@ pub unsafe extern "C" fn luna_jit_table_get_field(
         luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
     let v = g.get(luna_core::runtime::Value::Str(key_gc));
     let (_tag, raw) = v.unpack();
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
 }
 
@@ -538,8 +571,10 @@ pub unsafe extern "C" fn luna_jit_table_get_field(
 /// Same metatable / `jit_pending_err` short-circuit as the other
 /// `_table_set_*` helpers — caller deopts on `pending_err` and
 /// the interpreter re-runs the op to honour `__newindex`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -550,6 +585,7 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
         vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let table = unsafe { g.as_mut() };
     let _ = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Nil);
 }
@@ -560,8 +596,10 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
 /// arguments arrive as f64 bit-patterns. `Table::set` normalizes
 /// integral Float keys back to Int slots so `#t` still reports the
 /// array length we'd expect — same shape PUC produces.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, val_bits: i64) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -572,6 +610,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, v
         vm.jit_pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
         return;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let table = unsafe { g.as_mut() };
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
@@ -584,8 +623,10 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, v
 /// Str, …) the helper returns 0 — the JIT scan only admits
 /// chunks that store Ints, so the divergence is observable only
 /// when the user-facing semantics violate the static expectation.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
@@ -611,6 +652,7 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // chain calling itself on `t[1]`).
     let v = g.get_int(key);
     let (_tag, raw) = v.unpack();
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
 }
 
@@ -621,8 +663,10 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
 /// `Table::get` normalises integral Floats back to the Int slot, so
 /// `t[1.0]` lands on `t[1]` exactly like PUC does. Returns the raw
 /// 8-byte payload (same convention as `luna_jit_table_get_int`).
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
@@ -636,6 +680,7 @@ pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = g.get(k);
     let (_tag, raw) = v.unpack();
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
 }
 
@@ -778,9 +823,11 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     if vm.jit_pending_err.is_some() {
         return 0;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let cl = unsafe { current_jit_closure() };
     let v = vm.upval_get(cl, idx as u32);
     let (_tag, raw) = v.unpack();
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
 }
 
@@ -788,8 +835,10 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
 /// returns 0 to continue the trace, 1 to deopt (handler would run
 /// or pre-existing pending_err).
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_close(start_offset as u32)
 }
@@ -802,11 +851,14 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 /// but have no `RegKind::Str` variant). The interp's previous
 /// execution of the same op already wrote the right `tag` to
 /// that slot — the trace just needs to refresh the raw bits.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_stack_update_raw(
     slot_offset: i64,
     raw_bits: i64,
 ) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -825,11 +877,14 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(
 /// Returns `0` on success (result lives at `vm.stack[base + a]`),
 /// `-1` on deopt (pending_err set; metamethod path, type error,
 /// length overflow, or pre-existing pending_err).
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_op_concat(
     slot_offset: i64,
     n: i64,
 ) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_concat(slot_offset as u32, n as i32)
 }
@@ -870,6 +925,7 @@ pub unsafe extern "C" fn luna_jit_str_buf_extend(
     buf: i64,
     str_ptr: i64,
 ) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_str_buf_extend(buf as *mut Vec<u8>, str_ptr)
 }
@@ -916,6 +972,7 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
     key_out: *mut i64,
     val_out: *mut i64,
 ) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_tforcall(
         abs_offset as u32,
@@ -937,6 +994,7 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
 /// unreachable).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_stack_load(slot_offset: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_stack_load(slot_offset as u32)
 }
@@ -977,6 +1035,7 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(
     tag: i64,
     raw_bits: i64,
 ) {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return;
@@ -1011,10 +1070,12 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     use luna_core::runtime::function::{INLINE_UPVALS_N, Upvalue, UpvalState};
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let cl = unsafe { current_jit_closure() };
     let inner = cl.proto.protos[proto_idx as usize];
     let n_ups = inner.upvals.len();
@@ -1102,6 +1163,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
         }
     };
     let (_tag, raw) = luna_core::runtime::Value::Closure(nc).unpack();
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
 }
 
@@ -1132,11 +1194,14 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
 ///   `FrameMaterializeInfo`, alive for the duration of the call —
 ///   today it's a pointer into the owning `CompiledTrace.frame_metas`
 ///   `Box`, which lives at least as long as the trace's mmap.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     n: u64,
     metas: *const luna_core::jit::trace::FrameMaterializeInfo,
 ) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     // Honour the existing deopt protocol: if any earlier helper in
     // this JIT entry parked a deopt, don't push frames — the
@@ -1144,6 +1209,7 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     if vm.jit_pending_err.is_some() {
         return -1;
     }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let cl = unsafe { current_jit_closure() };
     let head_frame = match vm.jit_last_lua_frame() {
         Some(f) => f,
@@ -1165,8 +1231,10 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
 }
 
 /// P11-S5c — `#t` (table length).
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit_pending_err.is_some() {
         return 0;
@@ -4717,7 +4785,9 @@ impl JitHandle {
             self.num_args, 0,
             "JitHandle::call() is the zero-arg form; use call_with for higher arity"
         );
+        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
         let f: IntChunkFn = unsafe { std::mem::transmute(self.entry_raw) };
+        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
         unsafe { f() }
     }
 
@@ -4726,6 +4796,7 @@ impl JitHandle {
     /// shape and transmutes at the call site.
     pub fn call_with(&self, args: &[i64]) -> i64 {
         debug_assert_eq!(args.len(), self.num_args as usize);
+        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
         unsafe {
             match self.num_args {
                 0 => (std::mem::transmute::<*const u8, IntChunkFn>(self.entry_raw))(),
@@ -6978,6 +7049,7 @@ impl IntChunkCompiler for CraneliftBackend {
         // `?Send` / single-threaded. The raw-ptr indirection here
         // only sidesteps the lexical borrow conflict against
         // `self.chunk_compiler`.
+        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
         let vm_ref: &mut luna_core::vm::Vm = unsafe { &mut *vm };
         enter_jit(vm_ref, cl)
     }

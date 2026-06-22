@@ -16,6 +16,7 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
     let set = |vm: &mut Vm, t: crate::runtime::Gc<crate::runtime::Table>, name: &str, f| {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
     };
     set(vm, os, "time", os_time);
@@ -59,6 +60,7 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
     {
         let put = |vm: &mut Vm, k: &[u8], v: Value| {
             let kk = Value::Str(vm.heap.intern(k));
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { file_mt.as_mut() }.set(&mut vm.heap, kk, v).expect("valid key");
         };
         let mname = Value::Str(vm.heap.intern(b"FILE*"));
@@ -86,6 +88,7 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
         let writable = !matches!(fh, FileHandle::Stdin);
         let h = new_file(vm, fh, writable);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { io.as_mut() }
             .set(&mut vm.heap, k, Value::Userdata(h))
             .expect("valid key");
@@ -294,6 +297,7 @@ fn bound_i32(vm: &mut Vm, name: &str, v: i64) -> Result<i32, LuaError> {
 
 fn set_int_field(vm: &mut Vm, t: crate::runtime::Gc<crate::runtime::Table>, name: &str, v: i64) {
     let k = Value::Str(vm.heap.intern(name.as_bytes()));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { t.as_mut() }
         .set(&mut vm.heap, k, Value::Int(v))
         .expect("valid key");
@@ -375,6 +379,7 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // same as `isdst = false` when libc returns `tm_isdst == 0`; the test
         // (`files.lua` :957) accepts `nil` for "no daylight saving info".
         let k = Value::Str(vm.heap.intern(b"isdst"));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { table.as_mut() }
             .set(&mut vm.heap, k, Value::Bool(false))
             .expect("valid key");
@@ -487,6 +492,7 @@ fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn new_file(vm: &mut Vm, fh: FileHandle, writable: bool) -> Gc<Userdata> {
     let u = vm.heap.new_userdata(UserdataPayload::File(fh), writable);
     if let Some(mt) = vm.file_mt {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { u.as_mut() }.set_metatable(Some(mt));
     }
     u
@@ -610,11 +616,13 @@ fn close_file(vm: &mut Vm, fs: u32, u: Gc<Userdata>) -> Result<u32, LuaError> {
     // surfaces as `(nil, msg, errno)` from the close call. The handle is
     // dropped regardless so the OS resource is not leaked.
     let drain = drain_write_buf(u);
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     *unsafe { u.as_mut() }.file_mut() = FileHandle::Closed;
     // popen handle: take the child out of the userdata, drop the pipe (so
     // the child sees EOF on its end), and wait. PUC `lua_pclose` returns
     // the same triple as `os.execute`; for 5.1 we mirror its integer-status
     // shape.
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     let popen_child = unsafe { u.as_mut() }.popen_child.take();
     if let Some(mut child) = popen_child {
         // Drop the pipe-end File the userdata held *before* waiting so the
@@ -662,6 +670,7 @@ fn f_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // always passes the object, so finalization stays error-free.
     let u = check_file(vm, fs, nargs, "__gc")?;
     if matches!(u.file(), FileHandle::File(_)) {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         *unsafe { u.as_mut() }.file_mut() = FileHandle::Closed;
     }
     Ok(vm.nat_return(fs, &[]))
@@ -836,6 +845,7 @@ fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         pipe_to_file(pipe)
     };
     let u = new_file(vm, FileHandle::File(file), !read_mode);
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { u.as_mut() }.popen_child = Some(child);
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }
@@ -859,6 +869,7 @@ trait PipeAsFile {
 impl PipeAsFile for std::process::ChildStdout {
     fn into_file(self) -> std::fs::File {
         use std::os::unix::io::{FromRawFd, IntoRawFd};
+        // SAFETY: the raw fd/handle was produced by a matching `into_raw_*` on a `File` that this code now owns exclusively (the previous owner has been consumed); wrapping it back into a `File` re-establishes unique ownership.
         unsafe { std::fs::File::from_raw_fd(self.into_raw_fd()) }
     }
 }
@@ -866,6 +877,7 @@ impl PipeAsFile for std::process::ChildStdout {
 impl PipeAsFile for std::process::ChildStdin {
     fn into_file(self) -> std::fs::File {
         use std::os::unix::io::{FromRawFd, IntoRawFd};
+        // SAFETY: the raw fd/handle was produced by a matching `into_raw_*` on a `File` that this code now owns exclusively (the previous owner has been consumed); wrapping it back into a `File` re-establishes unique ownership.
         unsafe { std::fs::File::from_raw_fd(self.into_raw_fd()) }
     }
 }
@@ -873,6 +885,7 @@ impl PipeAsFile for std::process::ChildStdin {
 impl PipeAsFile for std::process::ChildStdout {
     fn into_file(self) -> std::fs::File {
         use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+        // SAFETY: the raw fd/handle was produced by a matching `into_raw_*` on a `File` that this code now owns exclusively (the previous owner has been consumed); wrapping it back into a `File` re-establishes unique ownership.
         unsafe { std::fs::File::from_raw_handle(self.into_raw_handle()) }
     }
 }
@@ -880,6 +893,7 @@ impl PipeAsFile for std::process::ChildStdout {
 impl PipeAsFile for std::process::ChildStdin {
     fn into_file(self) -> std::fs::File {
         use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+        // SAFETY: the raw fd/handle was produced by a matching `into_raw_*` on a `File` that this code now owns exclusively (the previous owner has been consumed); wrapping it back into a `File` re-establishes unique ownership.
         unsafe { std::fs::File::from_raw_handle(self.into_raw_handle()) }
     }
 }
@@ -907,6 +921,7 @@ fn gather_write(vm: &mut Vm, fs: u32, nargs: u32, start: u32) -> Result<Vec<u8>,
 /// Write `bytes` directly to the OS handle behind `u`, bypassing the
 /// user-space buffer. Used to drain a previously buffered write.
 fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.write_all(bytes),
         FileHandle::Stdout => std::io::stdout().write_all(bytes),
@@ -921,6 +936,7 @@ fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
 /// data lost (the error is what gets returned to the caller). No-op when the
 /// buffer is already empty or `u`'s handle is a standard stream / closed.
 fn drain_write_buf(u: Gc<Userdata>) -> std::io::Result<()> {
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     let buf = std::mem::take(&mut unsafe { u.as_mut() }.write_buf);
     if buf.is_empty() {
         return Ok(());
@@ -953,13 +969,16 @@ fn f_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // buffered until the next flush/close. files.lua 5.1 :245 polls
             // a paired reader that sees nothing until '\n' is written.
             1 => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { u.as_mut() }.write_buf.extend_from_slice(&bytes);
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let last_nl = unsafe { u.as_mut() }
                     .write_buf
                     .iter()
                     .rposition(|&b| b == b'\n');
                 if let Some(last_nl) = last_nl {
                     let split = last_nl + 1;
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                     let to_flush: Vec<u8> = unsafe {
                         let buf = &mut u.as_mut().write_buf;
                         buf.drain(..split).collect()
@@ -972,6 +991,7 @@ fn f_write(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             }
             // "full" (default): stage and let close/seek/flush drain it.
             _ => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { u.as_mut() }.write_buf.extend_from_slice(&bytes);
                 return Ok(vm.nat_return(fs, &[Value::Userdata(u)]));
             }
@@ -987,6 +1007,7 @@ fn seek_handle(u: Gc<Userdata>, from: SeekFrom) -> std::io::Result<u64> {
     // PUC `fseek` flushes the FILE*'s output buffer before moving the file
     // position; without this, a buffered write would land at the new offset.
     drain_write_buf(u)?;
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.seek(from),
         // standard streams are not seekable (PUC returns the OS error)
@@ -1066,6 +1087,7 @@ fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // write, `"full"` only flushes on `close`/`seek`/explicit `flush`. Apply
     // immediately: if there's already pending data and the new mode is
     // tighter (`"no"`), flush it now so the switch takes effect right away.
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { u.as_mut() }.buf_mode = buf_mode;
     if buf_mode == 2 {
         let _ = drain_write_buf(u);
@@ -1098,6 +1120,7 @@ fn io_flush(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
 
 fn flush_file(u: Gc<Userdata>) -> std::io::Result<()> {
     drain_write_buf(u)?;
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.flush(),
         FileHandle::Stdout => std::io::stdout().flush(),
@@ -1109,10 +1132,12 @@ fn flush_file(u: Gc<Userdata>) -> std::io::Result<()> {
 /// Read one byte from the handle (None at EOF). Returns a pushed-back byte
 /// first. Only files and stdin read.
 fn read_byte(u: Gc<Userdata>) -> std::io::Result<Option<u8>> {
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     if let Some(b) = unsafe { u.as_mut() }.peeked.take() {
         return Ok(Some(b));
     }
     let mut b = [0u8; 1];
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     let n = match unsafe { u.as_mut() }.file_mut() {
         FileHandle::File(f) => f.read(&mut b)?,
         FileHandle::Stdin => std::io::stdin().read(&mut b)?,
@@ -1123,6 +1148,7 @@ fn read_byte(u: Gc<Userdata>) -> std::io::Result<Option<u8>> {
 
 /// Return one byte to the stream (PUC ungetc), seen by the next `read_byte`.
 fn unread_byte(u: Gc<Userdata>, b: u8) {
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { u.as_mut() }.peeked = Some(b);
 }
 
@@ -1436,6 +1462,7 @@ fn lines_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
         if let Value::Bool(true) = vm.nat_upval(fs, 1)
             && !u.file().is_std()
         {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             *unsafe { u.as_mut() }.file_mut() = FileHandle::Closed;
         }
     }
@@ -1731,6 +1758,7 @@ fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             if nargs >= 3 {
                 let env = vm.nat_arg(fs, nargs, 2);
                 let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
             }
             Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
@@ -1777,14 +1805,17 @@ pub(crate) fn open_package(vm: &mut Vm) {
             let gk = Value::Str(vm.heap.intern(name.as_bytes()));
             vm.globals().get(gk)
         };
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { loaded.as_mut() }.set(&mut vm.heap, k, v).expect("valid key");
     }
     let lk = Value::Str(vm.heap.intern(b"loaded"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }
         .set(&mut vm.heap, lk, Value::Table(loaded))
         .expect("valid key");
     let preload = vm.heap.new_table();
     let plk = Value::Str(vm.heap.intern(b"preload"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }
         .set(&mut vm.heap, plk, Value::Table(preload))
         .expect("valid key");
@@ -1792,16 +1823,19 @@ pub(crate) fn open_package(vm: &mut Vm) {
     // rewrites it freely so this is just a sane starting value.
     let pk = Value::Str(vm.heap.intern(b"path"));
     let pv = Value::Str(vm.heap.intern(b"./?.lua;./?/init.lua"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }.set(&mut vm.heap, pk, pv).expect("valid key");
     // package.cpath: luna does not ship dynamic-library loading, so the
     // default is empty. attrib.lua's require-message test rewrites it.
     let ck = Value::Str(vm.heap.intern(b"cpath"));
     let cv = Value::Str(vm.heap.intern(b""));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }.set(&mut vm.heap, ck, cv).expect("valid key");
     // package.config: PUC's five-line POSIX layout — dir-sep "/", path-sep
     // ";", template mark "?", exec-mark "!", ignore-mark "-".
     let cfk = Value::Str(vm.heap.intern(b"config"));
     let cfv = Value::Str(vm.heap.intern(b"/\n;\n?\n!\n-\n"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }.set(&mut vm.heap, cfk, cfv).expect("valid key");
     // package.searchers: present as a table so attrib.lua's type checks pass.
     // luna's `require` does not dispatch through it (the searchers run in a
@@ -1809,6 +1843,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
     // a userland test forces real dispatch.
     let searchers = vm.heap.new_table();
     let sk = Value::Str(vm.heap.intern(b"searchers"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }
         .set(&mut vm.heap, sk, Value::Table(searchers))
         .expect("valid key");
@@ -1816,6 +1851,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
     // beyond probing readability), shared with userland and exposed here.
     let sp = vm.native(nat_searchpath);
     let spk = Value::Str(vm.heap.intern(b"searchpath"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }.set(&mut vm.heap, spk, sp).expect("valid key");
     vm.set_global("package", Value::Table(pkg));
     // require reads package.path/cpath from the live `package` table each call
@@ -1846,6 +1882,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
         vm.set_global("module", m);
         let s = vm.native(nat_package_seeall);
         let sk = Value::Str(vm.heap.intern(b"seeall"));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { pkg.as_mut() }.set(&mut vm.heap, sk, s).expect("valid key");
     }
     // PUC's `package.loadlib` opens a shared library and returns the named
@@ -1854,6 +1891,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
     // and skips the C-only suite) runs rather than blowing up on a nil call.
     let ll = vm.native(nat_loadlib_stub);
     let llk = Value::Str(vm.heap.intern(b"loadlib"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { pkg.as_mut() }.set(&mut vm.heap, llk, ll).expect("valid key");
     // Once-per-table barriers for the four sub-tables built above —
     // covers the post-init `Vm::open_package` re-open path (mid-Propagate).
@@ -1922,6 +1960,7 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // X.a.b table, the existing table is adopted as the module
             // (carrying its `.c` subtable along) rather than overwritten.
             let t = resolve_or_create_dotted(vm, &name_bytes)?;
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { loaded.as_mut() }.set(&mut vm.heap, name_key, Value::Table(t)).expect("valid key");
             t
         }
@@ -1937,8 +1976,11 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let name_k = Value::Str(vm.heap.intern(b"_NAME"));
     let m_k = Value::Str(vm.heap.intern(b"_M"));
     let p_k = Value::Str(vm.heap.intern(b"_PACKAGE"));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { module_tab.as_mut() }.set(&mut vm.heap, name_k, name_val).expect("valid key");
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { module_tab.as_mut() }.set(&mut vm.heap, m_k, Value::Table(module_tab)).expect("valid key");
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { module_tab.as_mut() }.set(&mut vm.heap, p_k, pkg_val).expect("valid key");
     // 3. run option functions on the module table
     for i in 1..nargs {
@@ -1968,6 +2010,7 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             ));
         };
         let uv = cl.upvals()[env_idx];
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { uv.as_mut() }.set_closed(Value::Table(module_tab));
         vm.barrier_forward_upvalue(uv, Value::Table(module_tab));
     } else {
@@ -2004,6 +2047,7 @@ fn resolve_or_create_dotted(
             Value::Table(t) => t,
             Value::Nil => {
                 let t = vm.heap.new_table();
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { tab.as_mut() }.set(&mut vm.heap, k, Value::Table(t)).expect("valid key");
                 t
             }
@@ -2031,7 +2075,9 @@ fn nat_package_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let mt = vm.heap.new_table();
     let k = Value::Str(vm.heap.intern(b"__index"));
     let g = Value::Table(vm.globals());
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { mt.as_mut() }.set(&mut vm.heap, k, g).expect("valid key");
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { t.as_mut() }.set_metatable(Some(mt));
     Ok(vm.nat_return(fs, &[]))
 }
@@ -2217,6 +2263,7 @@ fn nat_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 Value::Bool(true)
             }
         };
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { loaded.as_mut() }
             .set(&mut vm.heap, key, value)
             .expect("valid key");
@@ -2298,6 +2345,7 @@ fn nat_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // 25; require'C'`); honour that value over the chunk's return.
         let post = loaded.get(key);
         let final_v = if !post.is_nil() { post } else { value };
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { loaded.as_mut() }
             .set(&mut vm.heap, key, final_v)
             .expect("valid key");

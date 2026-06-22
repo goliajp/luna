@@ -13,6 +13,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
     let set = |vm: &mut Vm, name: &str, f| {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
     };
     set(vm, "getinfo", d_getinfo);
@@ -48,6 +49,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
         let lk = Value::Str(vm.heap.intern(b"loaded"));
         if let Value::Table(loaded) = pkg.get(lk) {
             let dk = Value::Str(vm.heap.intern(b"debug"));
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { loaded.as_mut() }
                 .set(&mut vm.heap, dk, Value::Table(t))
                 .expect("valid key");
@@ -58,6 +60,7 @@ pub(crate) fn open_debug(vm: &mut Vm) {
 
 fn set_field(vm: &mut Vm, t: Gc<crate::runtime::Table>, k: &str, v: Value) {
     let key = Value::Str(vm.heap.intern(k.as_bytes()));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { t.as_mut() }.set(&mut vm.heap, key, v).expect("valid key");
 }
 
@@ -72,6 +75,7 @@ fn init_registry(vm: &mut Vm) {
     let mode_k = Value::Str(vm.heap.intern(b"k"));
     set_field(vm, mt, "__mode", mode_k);
     vm.barrier_back_table(mt);
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { hook_t.as_mut() }.set_metatable(Some(mt));
     vm.barrier_back_table(hook_t);
     set_field(vm, reg, "_HOOKKEY", Value::Table(hook_t));
@@ -149,6 +153,7 @@ fn info_for_closure(
     want_lines: bool,
 ) {
     let proto = cl.proto;
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     let raw = unsafe { crate::runtime::string::bytes_of(proto.source.as_ptr()) };
     // PUC `funcinfo` substitutes "=?" when a Proto has no source (the binary
     // dump was stripped, so loadFunction left source NULL with no parent).
@@ -233,6 +238,7 @@ fn info_for_closure(
         let lines = vm.heap.new_table();
         for &ln in proto.lines.iter() {
             let k = Value::Int(ln as i64);
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { lines.as_mut() }
                 .set(&mut vm.heap, k, Value::Bool(true))
                 .expect("valid line key");
@@ -558,6 +564,7 @@ fn d_upvaluejoin(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Err(raise_str(vm, "invalid upvalue index"));
     }
     let uv = f2.upvals()[(n2 - 1) as usize];
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { f1.as_mut() }.upvals_mut()[(n1 - 1) as usize] = uv;
     // f1 is user-passed; its upvals slot is the field we just changed.
     // barrier_back demotes f1 back to gray so propagate re-traces.
@@ -928,6 +935,7 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         _ => return Err(arg_error(vm, 2, "setmetatable", "nil or table expected")),
     };
     if let Value::Table(t) = v {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }.set_metatable(m);
         vm.barrier_back_table(t);
     } else {
@@ -965,6 +973,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 .position(|d| &*d.name == "_ENV")
                 .ok_or_else(|| raise_str(vm, "'setfenv' target has no '_ENV' upvalue"))?;
             let uv = cl.upvals()[env_idx];
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { uv.as_mut() }.set_closed(Value::Table(env_t));
             vm.barrier_forward_upvalue(uv, Value::Table(env_t));
         }
@@ -975,6 +984,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             if vm.is_current_thread(Some(co)) {
                 vm.set_globals(env_t);
             } else {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { co.as_mut() }.globals = env_t;
                 // co.globals is traced by Coro::trace — demote co back to
                 // gray so propagate re-traces the new env table.

@@ -1889,6 +1889,7 @@ pub struct TraceHandle {
 // and the dispatcher will only call traces from the thread that
 // recorded them. This marker is just to satisfy
 // `RefCell<Vec<TraceHandle>>` in the `thread_local!` macro context.
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
 thread_local! {

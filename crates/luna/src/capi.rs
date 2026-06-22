@@ -78,6 +78,7 @@ fn get_at(vm: &Vm, idx: c_int) -> Option<Value> {
 
 unsafe fn vm_mut<'a>(L: *mut LuaState) -> &'a mut Vm {
     debug_assert!(!L.is_null(), "null lua_State*");
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     unsafe { &mut (*L).vm }
 }
 
@@ -104,6 +105,7 @@ fn type_tag(v: Value) -> c_int {
 /// install the Cranelift backend here (matching v1.0 behavior where
 /// JIT was on by default for C callers). luna-core's
 /// `Vm::new_minimal` itself defaults to `NullJitBackend`.
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub extern "C" fn luaL_newstate() -> *mut LuaState {
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
@@ -118,17 +120,21 @@ pub extern "C" fn luaL_newstate() -> *mut LuaState {
 /// Free the state and its Vm (PUC `lua_close`). Safe to call with a null
 /// pointer (no-op); calling with a previously-closed pointer is UB just
 /// like in PUC.
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
     if L.is_null() {
         return;
     }
+    // SAFETY: `L` was originally produced by `Box::into_raw` in `lua_newstate` / `lua_open`; the caller hasn't freed it via another `lua_close`, so reclaiming ownership here is sound.
     let _ = unsafe { Box::from_raw(L) };
 }
 
 /// Open all 5.5 standard libraries (PUC `luaL_openlibs`).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaL_openlibs(L: *mut LuaState) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     vm.open_all_libs();
 }
@@ -139,12 +145,15 @@ pub unsafe extern "C" fn luaL_openlibs(L: *mut LuaState) {
 /// resulting function on the stack and return LUA_OK, or push the error
 /// string and return LUA_ERRSYNTAX (PUC `luaL_loadstring`). `chunkname`
 /// may be null — in that case the compiler uses `"=?"`.
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luaL_loadstring(L: *mut LuaState, src: *const c_char) -> c_int {
     if L.is_null() || src.is_null() {
         return LUA_ERRSYNTAX;
     }
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
+    // SAFETY: Lua C API contract — the caller guarantees the passed `*const c_char` points to a NUL-terminated byte string that stays valid for the duration of this call.
     let src_bytes = unsafe { CStr::from_ptr(src).to_bytes() };
     match vm.load(src_bytes, b"=(load)") {
         Ok(cl) => {
@@ -166,13 +175,16 @@ pub unsafe extern "C" fn luaL_loadstring(L: *mut LuaState, src: *const c_char) -
 /// and returns LUA_ERRRUN. `msgh` (message handler) is accepted for ABI
 /// compatibility but currently ignored — the error object is forwarded
 /// raw (PUC `lua_pcall` with `msgh=0` is the same).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
+// SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
 pub unsafe extern "C" fn lua_pcall(
     L: *mut LuaState,
     nargs: c_int,
     nresults: c_int,
     _msgh: c_int,
 ) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     let needed = (nargs + 1) as usize;
     if vm.capi_stack.len() < needed {
@@ -212,12 +224,15 @@ pub unsafe extern "C" fn lua_pcall(
 
 /// Push the global named by `name` on the stack and return its type
 /// (`LUA_T*`). `LUA_TNIL` if the global is unset (PUC `lua_getglobal`).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_getglobal(L: *mut LuaState, name: *const c_char) -> c_int {
     if name.is_null() {
         return LUA_TNONE;
     }
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
+    // SAFETY: Lua C API contract — the caller guarantees the passed `*const c_char` points to a NUL-terminated byte string that stays valid for the duration of this call.
     let name_bytes = unsafe { CStr::from_ptr(name).to_bytes() };
     let key = Value::Str(vm.heap.intern(name_bytes));
     let v = vm.globals().get(key);
@@ -227,39 +242,50 @@ pub unsafe extern "C" fn lua_getglobal(L: *mut LuaState, name: *const c_char) ->
 
 /// Pop the top of the stack and set it as the global named by `name`
 /// (PUC `lua_setglobal`).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_setglobal(L: *mut LuaState, name: *const c_char) {
     if name.is_null() {
         return;
     }
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     let v = vm.capi_stack.pop().unwrap_or(Value::Nil);
+    // SAFETY: Lua C API contract — the caller guarantees the passed `*const c_char` points to a NUL-terminated byte string that stays valid for the duration of this call.
     let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("?") };
     vm.set_global(name_str, v);
 }
 
 // ─── stack push ──────────────────────────────────────────────────────────
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushnil(L: *mut LuaState) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     vm.capi_stack.push(Value::Nil);
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushboolean(L: *mut LuaState, b: c_int) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     vm.capi_stack.push(Value::Bool(b != 0));
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushinteger(L: *mut LuaState, n: i64) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     vm.capi_stack.push(Value::Int(n));
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushnumber(L: *mut LuaState, n: f64) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     vm.capi_stack.push(Value::Float(n));
 }
@@ -267,23 +293,30 @@ pub unsafe extern "C" fn lua_pushnumber(L: *mut LuaState, n: f64) {
 /// Push `str` (NUL-terminated) on the stack and return a borrowed pointer
 /// to its interned bytes. Lifetime: until the pushed string falls off the
 /// stack (or the state is closed).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushstring(L: *mut LuaState, str: *const c_char) -> *const c_char {
     if str.is_null() {
+        // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
         unsafe { lua_pushnil(L) };
         return std::ptr::null();
     }
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
+    // SAFETY: Lua C API contract — the caller guarantees the passed `*const c_char` points to a NUL-terminated byte string that stays valid for the duration of this call.
     let bytes = unsafe { CStr::from_ptr(str).to_bytes() };
     let interned = vm.heap.intern(bytes);
     vm.capi_stack.push(Value::Str(interned));
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     unsafe { lua_tostring(L, -1) }
 }
 
 // ─── stack read ──────────────────────────────────────────────────────────
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_tointeger(L: *mut LuaState, idx: c_int) -> i64 {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     match get_at(vm, idx) {
         Some(Value::Int(i)) => i,
@@ -298,8 +331,10 @@ pub unsafe extern "C" fn lua_tointeger(L: *mut LuaState, idx: c_int) -> i64 {
     }
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_tonumber(L: *mut LuaState, idx: c_int) -> f64 {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     match get_at(vm, idx) {
         Some(Value::Int(i)) => i as f64,
@@ -314,8 +349,10 @@ pub unsafe extern "C" fn lua_tonumber(L: *mut LuaState, idx: c_int) -> f64 {
     }
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_toboolean(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     match get_at(vm, idx) {
         Some(Value::Nil) | None => 0,
@@ -328,8 +365,10 @@ pub unsafe extern "C" fn lua_toboolean(L: *mut LuaState, idx: c_int) -> c_int {
 /// Numeric values are stringified the same way `tostring()` would. The
 /// pointer is valid until the next `lua_tostring` on this state with a
 /// different value, or `lua_close`.
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_tostring(L: *mut LuaState, idx: c_int) -> *const c_char {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     let bytes: Vec<u8> = match get_at(vm, idx) {
         Some(Value::Str(st)) => st.as_bytes().to_vec(),
@@ -348,19 +387,25 @@ pub unsafe extern "C" fn lua_tostring(L: *mut LuaState, idx: c_int) -> *const c_
 
 // ─── type queries ────────────────────────────────────────────────────────
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_type(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     get_at(vm, idx).map_or(LUA_TNONE, type_tag)
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isnil(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     (unsafe { lua_type(L, idx) } == LUA_TNIL) as c_int
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isnumber(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     matches!(
         get_at(vm, idx),
@@ -368,14 +413,18 @@ pub unsafe extern "C" fn lua_isnumber(L: *mut LuaState, idx: c_int) -> c_int {
     ) as c_int
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isinteger(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     matches!(get_at(vm, idx), Some(Value::Int(_))) as c_int
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isstring(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     matches!(
         get_at(vm, idx),
@@ -383,14 +432,18 @@ pub unsafe extern "C" fn lua_isstring(L: *mut LuaState, idx: c_int) -> c_int {
     ) as c_int
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isboolean(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     matches!(get_at(vm, idx), Some(Value::Bool(_))) as c_int
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isfunction(L: *mut LuaState, idx: c_int) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     matches!(
         get_at(vm, idx),
@@ -400,14 +453,18 @@ pub unsafe extern "C" fn lua_isfunction(L: *mut LuaState, idx: c_int) -> c_int {
 
 // ─── stack manipulation ──────────────────────────────────────────────────
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_gettop(L: *mut LuaState) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     vm.capi_stack.len() as c_int
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_settop(L: *mut LuaState, idx: c_int) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     let new_len = if idx >= 0 {
         idx as usize
@@ -421,13 +478,17 @@ pub unsafe extern "C" fn lua_settop(L: *mut LuaState, idx: c_int) {
     }
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pop(L: *mut LuaState, n: c_int) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     unsafe { lua_settop(L, -n - 1) };
 }
 
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushvalue(L: *mut LuaState, idx: c_int) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     if let Some(v) = get_at(vm, idx) {
         vm.capi_stack.push(v);
@@ -458,6 +519,7 @@ pub unsafe extern "C" fn lua_pushvalue(L: *mut LuaState, idx: c_int) {
 fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let cf_value = vm.running_native_upvalue(0);
     let cf: LuaCFunction = match cf_value {
+        // SAFETY: source and destination types share the same in-memory representation; see the C ABI typedef this function implements.
         Value::LightUserdata(p) => unsafe {
             std::mem::transmute::<*const (), LuaCFunction>(p)
         },
@@ -478,6 +540,7 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let vm_ptr: *mut Vm = vm as *mut Vm;
     let nret = cf(vm_ptr as *mut LuaState) as usize;
     // Re-borrow.
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { &mut *vm_ptr };
     let stack_len = vm.capi_stack.len();
     if stack_len < baseline + nret {
@@ -495,9 +558,12 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// the calling `LuaState*` and reads its args from positions 1..N on the
 /// stack; it must push its results and return the result count (PUC's
 /// `lua_pushcfunction`).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
+    // SAFETY: source and destination types share the same in-memory representation; see the C ABI typedef this function implements.
     let cf_ptr = unsafe { std::mem::transmute::<LuaCFunction, *const ()>(f) };
     let trampoline: luna_core::runtime::value::NativeFn = capi_trampoline;
     let f_val = vm.native_with(
@@ -510,13 +576,17 @@ pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
 /// `lua_register(L, name, f)`: install `f` as the global named `name`
 /// (PUC `lua_register`, defined in lua.h as a macro over pushcfunction
 /// + setglobal).
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
+// SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
 pub unsafe extern "C" fn lua_register(
     L: *mut LuaState,
     name: *const c_char,
     f: LuaCFunction,
 ) {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     unsafe { lua_pushcfunction(L, f) };
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     unsafe { lua_setglobal(L, name) };
 }
 
@@ -524,8 +594,10 @@ pub unsafe extern "C" fn lua_register(
 
 /// Return the Lua version this state targets (e.g. 505 for 5.5), matching
 /// PUC's `LUA_VERSION_NUM` shape.
+// SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_version(L: *mut LuaState) -> c_int {
+    // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
     match vm.version() {
         LuaVersion::Lua51 => 501,

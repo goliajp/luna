@@ -267,6 +267,7 @@ pub enum RecordOutcome {
 /// Step 1's `() -> i64` sig has been retired — only the lowerer
 /// itself has been refined; the rest of the recording pipeline
 /// (`Vm.active_trace`) is untouched.
+// SAFETY: `TraceFn` is the ABI of native code emitted by the Cranelift lowerer (see `jit_backend::trace`); callers guarantee the `*mut i64` points to a reg_state buffer of size `window_size` and survive the trace call.
 pub type TraceFn = unsafe extern "C" fn(*mut i64) -> i64;
 
 /// What tag a register holds at the trace's exit point (relative

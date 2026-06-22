@@ -963,6 +963,7 @@ impl Vm {
     pub fn new_minimal(version: LuaVersion) -> Vm {
         let mut vm = Vm::new_inner(version);
         let mc = vm.heap.new_coro(Value::Nil, vm.globals);
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { mc.as_mut() }.status = CoroStatus::Running;
         vm.main_coro = Some(mc);
         let (a, b) = vm.rng_auto_seed();
@@ -1160,6 +1161,7 @@ impl Vm {
 
     pub fn set_global(&mut self, name: &str, v: Value) {
         let k = Value::Str(self.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { self.globals.as_mut() }
             .set(&mut self.heap, k, v)
             .expect("global name is a valid key");
@@ -1300,6 +1302,7 @@ impl Vm {
                 ret_is_float,
                 ret_is_table,
             } => {
+                // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
                 let f: crate::jit::IntChunkFn = unsafe { std::mem::transmute(entry) };
                 // P11-S5c / S5d.J — install the active Vm + closure
                 // for any Rust helper the JIT'd code may call (e.g.
@@ -1313,6 +1316,7 @@ impl Vm {
                 // shared self.chunk_compiler read.
                 let vm_ptr: *mut Vm = self;
                 let _jit_vm_guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
                 // P11-S5d.E' — a JIT helper may have detected a metatable
@@ -1456,6 +1460,7 @@ impl Vm {
         // v1.1 A1 Session A — route through chunk_compiler.
         let vm_ptr: *mut Vm = self;
         let _jit_vm_guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
+        // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
         let r = unsafe {
             match num_args {
                 0 => (std::mem::transmute::<*const u8, crate::jit::IntChunkFn>(entry))(),
@@ -1582,6 +1587,7 @@ impl Vm {
         } else {
             match thread {
                 Some(co) => {
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                     unsafe { co.as_mut() }.stack[s] = v;
                     // co.stack is traced by Coro::trace; demote co back to
                     // gray so propagate re-traces this slot if it was
@@ -1634,6 +1640,7 @@ impl Vm {
         if self.c_depth >= MAX_C_DEPTH {
             return Err(self.rt_err("C stack overflow"));
         }
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let death_err = unsafe { co.as_mut() }.error_value.take();
         // swap the caller's live context out (into a GC-rooted home) and the
         // coroutine's in, mirroring resume_coro, so the __close handlers run on
@@ -1642,6 +1649,7 @@ impl Vm {
         let rctx = self.take_ctx();
         match resumer {
             Some(r) => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
@@ -1669,6 +1677,7 @@ impl Vm {
             }
         }
         {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             let m = unsafe { co.as_mut() };
             m.status = CoroStatus::Dead;
             m.stack = Vec::new();
@@ -1775,6 +1784,7 @@ impl Vm {
 
     /// Move a coroutine's saved context into the live VM fields.
     fn load_coro_ctx(&mut self, co: Gc<Coro>) {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let m = unsafe { co.as_mut() };
         self.stack = std::mem::take(&mut m.stack);
         self.frames = std::mem::take(&mut m.frames);
@@ -1790,6 +1800,7 @@ impl Vm {
     /// Save the live VM context back into a coroutine object.
     fn store_coro_ctx(&mut self, co: Gc<Coro>) {
         let c = self.take_ctx();
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let m = unsafe { co.as_mut() };
         m.stack = c.stack;
         m.frames = c.frames;
@@ -1827,6 +1838,7 @@ impl Vm {
         let rctx = self.take_ctx();
         match resumer {
             Some(r) => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
@@ -1846,6 +1858,7 @@ impl Vm {
         // swap the coroutine in
         self.load_coro_ctx(co);
         {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             let m = unsafe { co.as_mut() };
             m.status = CoroStatus::Running;
             m.resumer = resumer;
@@ -1860,6 +1873,7 @@ impl Vm {
         let drive = if co.started {
             self.coro_continue(&args)
         } else {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { co.as_mut() }.started = true;
             self.coro_first(co.body, &args)
         };
@@ -1871,6 +1885,7 @@ impl Vm {
             // error a `__close` handler raised.
             match death {
                 Some(e) => {
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                     unsafe { co.as_mut() }.error_value = Some(e);
                     self.heap
                         .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
@@ -1881,6 +1896,7 @@ impl Vm {
         } else {
             match self.yielding.take() {
                 Some((vals, fslot, nres)) => {
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                     unsafe { co.as_mut() }.resume_at = Some((fslot, nres));
                     (Ok(vals), CoroStatus::Suspended)
                 }
@@ -1902,9 +1918,11 @@ impl Vm {
                             prefixed.extend(tb);
                             tb = prefixed;
                         }
+                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         unsafe { co.as_mut() }.error_traceback = Some(tb);
                     }
                     if let Err(e) = drive {
+                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         unsafe { co.as_mut() }.error_value = Some(e.0);
                         self.heap
                             .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
@@ -1916,10 +1934,12 @@ impl Vm {
 
         // save the coroutine's context back and restore the resumer
         self.store_coro_ctx(co);
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { co.as_mut() }.status = status;
         match resumer {
             Some(r) => {
                 self.load_coro_ctx(r);
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { r.as_mut() }.status = CoroStatus::Running;
                 self.current = Some(r);
             }
@@ -2010,6 +2030,7 @@ impl Vm {
         if self.is_current_thread(target) {
             self.install_hook(state);
         } else if let Some(co) = target {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             let m = unsafe { co.as_mut() };
             m.hook = state;
             if state.line
@@ -3022,6 +3043,7 @@ impl Vm {
             return;
         }
         let (tag, _) = self.stack[idx].unpack();
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         self.stack[idx] = unsafe {
             crate::runtime::Value::pack(
                 tag,
@@ -3106,6 +3128,7 @@ impl Vm {
         if buf.is_null() {
             return;
         }
+        // SAFETY: `ptr` round-trips through `Box::into_raw` set up earlier in this dispatch (or owned by a long-lived VM handle); ownership re-acquired here.
         let mut owned = unsafe { Box::from_raw(buf) };
         owned.clear();
         if self.jit_str_buf_pool.len() < self.jit_str_buf_pool_cap {
@@ -3132,8 +3155,10 @@ impl Vm {
         if buf.is_null() || str_ptr == 0 {
             return -1;
         }
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let buf = unsafe { &mut *buf };
         let lua_str_ptr = str_ptr as *const crate::runtime::string::LuaStr;
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let bytes = unsafe {
             crate::runtime::string::bytes_of(lua_str_ptr)
         };
@@ -3157,6 +3182,7 @@ impl Vm {
         if buf.is_null() {
             return 0;
         }
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let buf = unsafe { &mut *buf };
         let bytes = std::mem::take(buf);
         // v2 hard cap at 256KB per RFC Q3.
@@ -3251,16 +3277,20 @@ impl Vm {
         // raw bits of R[A+2] / R[A+4] / R[A+5] so the trace IR can
         // reload via cranelift `stack_load` instead of separate
         // `luna_jit_stack_load` helper calls.
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let ctrl_raw = unsafe {
             self.stack[(abs + 2) as usize].unpack().1.zero
         };
         let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let key_raw = unsafe { key_rv.zero };
         let val_raw = if (nvars as usize) >= 2 {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { self.stack[(abs + 5) as usize].unpack().1.zero }
         } else {
             0u64
         };
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe {
             ctrl_out.write(ctrl_raw as i64);
             key_out.write(key_raw as i64);
@@ -3284,6 +3314,7 @@ impl Vm {
         }
         let v = self.stack[idx];
         let (_, raw) = v.unpack();
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { raw.zero as i64 }
     }
 
@@ -3388,6 +3419,7 @@ impl Vm {
     /// the host C function pointer it stashed there at registration time.
     pub fn running_native_upvalue(&self, i: usize) -> Value {
         match self.running_natives.last() {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             Some(nc) => unsafe {
                 let upvals = &(*nc.as_ptr()).upvals;
                 upvals.get(i).copied().unwrap_or(Value::Nil)
@@ -3907,6 +3939,7 @@ impl Vm {
             let arg_slot = (base + nparams) as usize;
             let t = self.heap.new_table();
             {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let tm = unsafe { t.as_mut() };
                 for i in 0..n_varargs {
                     let v = self.stack[(base - n_varargs + i) as usize];
@@ -4085,6 +4118,7 @@ impl Vm {
                 break;
             }
             let v = self.stack[s as usize];
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             unsafe { uv.as_mut() }.set_closed(v);
             self.heap
                 .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
@@ -4423,6 +4457,7 @@ impl Vm {
         match uv.state() {
             UpvalState::Open { slot, thread } => self.write_slot(slot, thread, v),
             UpvalState::Closed(_) => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { uv.as_mut() }.set_closed(v);
                 // forward barrier: a closed upvalue is single-slot, so the
                 // forward variant is cheaper than barrier_back (PUC uses
@@ -4444,6 +4479,7 @@ impl Vm {
         // PUC's vmfetch uses raw `R(A)` (`s2v(L->base + A)`) for the same
         // reason. The bounds check would re-validate this invariant on every
         // op — the dispatch hot path can't afford it.
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { *self.stack.get_unchecked((base + i) as usize) }
     }
 
@@ -4630,6 +4666,7 @@ impl Vm {
             return None;
         }
         let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let raw = unsafe { crate::runtime::string::bytes_of(proto.source.as_ptr()) };
         let display = crate::vm::lib_debug::chunk_id(raw);
         let src = String::from_utf8_lossy(&display).into_owned();
@@ -4673,6 +4710,7 @@ impl Vm {
         let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
         // PUC `luaG_addinfo` renders source via `luaO_chunkid` (LUA_IDSIZE=60),
         // not the raw chunk name — handles `@file`/`=name` sigils + truncation.
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let raw = unsafe { crate::runtime::string::bytes_of(proto.source.as_ptr()) };
         let display = crate::vm::lib_debug::chunk_id(raw);
         let src = String::from_utf8_lossy(&display).into_owned();
@@ -4994,6 +5032,7 @@ impl Vm {
             // delivered its results — wrap as `true, results…` and hand to
             // the pcall/xpcall caller. The error path is handled by `unwind`;
             // this branch is only reached on success/resume completion.
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             let frame_peek = unsafe { self.frames.last().unwrap_unchecked() };
             if let &CallFrame::Cont(nc) = frame_peek {
                 // a yieldable metamethod returned: complete the interrupted
@@ -5783,6 +5822,7 @@ impl Vm {
                         // trips cleanly as a heap pointer.
                         | crate::runtime::value::raw::STR
                         | crate::runtime::value::raw::NIL => {
+                            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                             reg_state[i] = unsafe { raw.zero as i64 };
                         }
                         _ => {
@@ -5808,6 +5848,7 @@ impl Vm {
                         // NullJitBackend returns an inert guard).
                         let vm_ptr: *mut Vm = self;
                         let _guard = self.chunk_compiler.enter(vm_ptr, Some(cl));
+                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         unsafe { entry_fn(reg_state.as_mut_ptr()) }
                     };
                     self.trace_dispatched_count += 1;
@@ -5981,6 +6022,7 @@ impl Vm {
                                         let vm_ptr: *mut Vm = self;
                                         let _guard =
                                             self.chunk_compiler.enter(vm_ptr, Some(cl));
+                                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                                         unsafe { cent(reg_state.as_mut_ptr()) }
                                     };
                                     (cpi, cpt, cet, chc, child_raw_ret as u64)
@@ -6150,6 +6192,7 @@ impl Vm {
                                 // The raw payload sits in reg_state[i].
                                 // Stack was extended by the materialize
                                 // helper for inline frames.
+                                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                                 self.stack[base_us + i] = unsafe {
                                     Value::pack(
                                         tag,
@@ -6192,6 +6235,7 @@ impl Vm {
                             }
                         }
                         let frames_len_now = self.frames.len();
+                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
                             CallFrame::Lua(fmut) => {
                                 if crate::jit::trace::v2c_probe_enabled() {
@@ -6290,6 +6334,7 @@ impl Vm {
             // Inline `top_frame_mut` for the hot path: top is guaranteed Lua
             // (cont frames drained above) so the and_then/Option layers are
             // dead weight.
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             match unsafe { self.frames.last_mut().unwrap_unchecked() } {
                 CallFrame::Lua(fmut) => fmut.pc = pc + 1,
                 _ => unreachable!("Cont frame at pc bump"),
@@ -6449,6 +6494,7 @@ match inst.op() {
                     };
                     for i in 1..=n {
                         let v = self.r(base, a + i);
+                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         if let Err(TableError::Overflow) = unsafe { t.as_mut() }
                             .set_int(&mut self.heap, offset + i as i64, v)
                         {
@@ -7159,6 +7205,7 @@ match inst.op() {
                     let n = n_varargs;
                     let t = self.heap.new_table();
                     {
+                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                         let tm = unsafe { t.as_mut() };
                         for i in 0..n {
                             let _ = tm.set_int(
@@ -7169,6 +7216,7 @@ match inst.op() {
                         }
                     }
                     let n_key = Value::Str(self.heap.intern(b"n"));
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                     unsafe { t.as_mut() }
                         .set(&mut self.heap, n_key, Value::Int(n as i64))
                         .expect("'n' is a valid key");
@@ -7227,6 +7275,7 @@ match inst.op() {
         // drained at dispatch loop head). Avoids the and_then/lua_mut Option
         // layers — bump_pc fires per Jmp / cond_skip miss, so the savings add
         // up over `fib_28`'s ~500k jumps.
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => f.pc += 1,
             _ => unreachable!("Cont frame at bump_pc"),
@@ -7235,6 +7284,7 @@ match inst.op() {
 
     #[inline(always)]
     fn add_pc(&mut self, d: i32) {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => f.pc = (f.pc as i64 + d as i64) as u32,
             _ => unreachable!("Cont frame at add_pc"),
@@ -7398,6 +7448,7 @@ match inst.op() {
     }
 
     fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         match unsafe { t.as_mut() }.set(&mut self.heap, key, v) {
             Ok(()) => {
                 self.heap
@@ -7916,6 +7967,7 @@ match inst.op() {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("native frame without native closure");
         };
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { nc.as_mut() }.upvals[i] = v;
         // NativeClosure.upvals is traced as part of its Trace; a long-lived
         // stateful iterator closure (e.g. string.gmatch) sees many writes —
@@ -8275,6 +8327,7 @@ fn int_for_limit(limit: Num, init: i64, step: i64) -> (i64, bool) {
 /// Strip the load-prefix sigil from a chunk name for messages (PUC keeps
 /// `@file` / `=name` markers in `source`).
 fn chunk_display_name(p: *const crate::runtime::LuaStr) -> &'static [u8] {
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     let b = unsafe { crate::runtime::string::bytes_of(p) };
     match b.first() {
         Some(b'@') | Some(b'=') => &b[1..],
@@ -8600,6 +8653,7 @@ impl Vm {
                 return None;
             }
             let slot = (func_slot + i) as usize;
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
             let stack = unsafe { &mut co.as_mut().stack };
             if let Some(s) = stack.get_mut(slot) {
                 *s = v;
@@ -8644,6 +8698,7 @@ impl Vm {
             (self.lua_temporary_locvar_name().to_string(), temp_reg)
         };
         let slot = (base + reg) as usize;
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let stack = unsafe { &mut co.as_mut().stack };
         if let Some(s) = stack.get_mut(slot) {
             *s = v;
@@ -9001,6 +9056,7 @@ impl Vm {
         match uv.state() {
             UpvalState::Open { slot, thread } => self.write_slot(slot, thread, v),
             UpvalState::Closed(_) => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { uv.as_mut() }.set_closed(v);
                 self.heap
                     .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);

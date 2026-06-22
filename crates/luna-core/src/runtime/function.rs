@@ -424,11 +424,13 @@ impl LuaClosure {
     /// storage when `upvals_len <= INLINE_UPVALS_N`, else by overflow.
     #[inline(always)]
     pub fn upvals(&self) -> &[Gc<Upvalue>] {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { std::slice::from_raw_parts(self.upvals_ptr, self.upvals_len as usize) }
     }
 
     #[inline(always)]
     pub(crate) fn upvals_mut(&mut self) -> &mut [Gc<Upvalue>] {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { std::slice::from_raw_parts_mut(self.upvals_ptr, self.upvals_len as usize) }
     }
 
