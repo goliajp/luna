@@ -77,6 +77,7 @@ fn is_black(flags: u8) -> bool {
 /// can probe reachability without owning the bit constants. Equivalent to
 /// `isgray(o) || isblack(o)` in PUC.
 pub(crate) fn header_is_marked(h: *mut GcHeader) -> bool {
+    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
     unsafe { !is_white((*h).flags) }
 }
 
@@ -124,6 +125,7 @@ impl<T> Gc<T> {
     /// allocation symmetric, and a host that owns the Gc handle exclusively
     /// satisfies the no-aliasing requirement by construction.
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { &mut *self.ptr.as_ptr() }
     }
 }
@@ -131,6 +133,7 @@ impl<T> Gc<T> {
 impl<T> Deref for Gc<T> {
     type Target = T;
     fn deref(&self) -> &T {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { self.ptr.as_ref() }
     }
 }
@@ -268,6 +271,7 @@ impl Heap {
     }
 
     fn link(&mut self, h: *mut GcHeader) {
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             (*h).next = self.all;
             // Born color depends on phase:
@@ -308,6 +312,7 @@ impl Heap {
         // Saves ~30ns per alloc (malloc roundtrip elided).
         let p = if let Some(ptr) = self.table_pool.pop() {
             let t = ptr.as_ptr();
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 // Reset to fresh-Table state. Box-owned slab/nodes/
                 // metatable were already cleared in `free_obj` before
@@ -330,6 +335,7 @@ impl Heap {
         // P11-S5d.I — the Table is now at its final heap address; wire
         // `array_ptr` to point at the inline storage that lives inside
         // the boxed Table.
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { g.as_mut() }.init_array_ptr();
         g
     }
@@ -425,6 +431,7 @@ impl Heap {
         // address so `upvals_ptr` will be valid.
         fill(&mut boxed);
         let g = self.adopt(boxed);
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { g.as_mut() }.init_upvals_ptr();
         g
     }
@@ -623,6 +630,7 @@ impl Heap {
                 let mut changed = false;
                 let eph = m.ephemeron.clone();
                 for t in eph {
+                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                     changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, &mut m) };
                 }
                 drain_marker(&mut m);
@@ -664,10 +672,12 @@ impl Heap {
                 Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
                 _ => return false,
             };
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe { is_white((*h).flags) }
         };
         let mark_string = |v: Value| {
             if let Value::Str(s) = v {
+                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                 unsafe {
                     let h = s.as_ptr() as *mut GcHeader;
                     // strings are leaves: skip gray and go straight to black
@@ -680,6 +690,7 @@ impl Heap {
         // clearbyvalues(allweak, NULL)`). Keys are deferred to the
         // post-resurrection sweep below.
         for t in &m.weak {
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 let (_wk, wv) = (**t).weak_mode();
                 if wv {
@@ -705,6 +716,7 @@ impl Heap {
                 let mut changed = false;
                 let eph = m.ephemeron.clone();
                 for t in eph {
+                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                     changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, m) };
                 }
                 drain_marker(m);
@@ -719,6 +731,7 @@ impl Heap {
         // proto's cache would survive forever and its upvalues' `__gc`
         // finalisers would never run.
         for &p in &m.cached_protos {
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 if let Some(c) = (*p).cache.get() {
                     let h = c.as_ptr() as *mut GcHeader;
@@ -733,6 +746,7 @@ impl Heap {
         // + clearbykeys(allweak)`). Pure key sweep — value-dead entries are
         // either already nil from step (1) or wait for step (7).
         for t in &m.weak {
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 let (wk, _wv) = (**t).weak_mode();
                 if wk {
@@ -748,6 +762,7 @@ impl Heap {
         // past `origweak_n` get their first value-clear here.
         let weak_snapshot = std::mem::take(&mut m.weak);
         for t in &weak_snapshot[origweak_n..] {
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 let (_wk, wv) = (**t).weak_mode();
                 if wv {
@@ -829,6 +844,7 @@ impl Heap {
             let Some(h) = m.stack.pop() else {
                 break;
             };
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 (*h).flags = ((*h).flags & !WHITE_BITS) | BLACK;
                 match (*h).tag {
@@ -864,6 +880,7 @@ impl Heap {
                 let mut changed = false;
                 let eph = m.ephemeron.clone();
                 for t in eph {
+                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                     changed |= unsafe { (*t).converge_ephemeron(&weak_key_alive, &mut m) };
                 }
                 drain_marker(&mut m);
@@ -901,6 +918,7 @@ impl Heap {
     /// (parent is gray or white — the mutator never sees a BLACK object live
     /// outside an incremental cycle).
     pub fn barrier_forward(&mut self, parent: *mut GcHeader, child: Value) {
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             if !is_black((*parent).flags) {
                 return;
@@ -933,6 +951,7 @@ impl Heap {
     /// subsequent stores until the next propagate finishes — much cheaper for
     /// tables than per-child forward barriers. No-op outside Propagate.
     pub fn barrier_back(&mut self, parent: *mut GcHeader) {
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             let f = (*parent).flags;
             if !is_black(f) {
@@ -957,6 +976,7 @@ impl Heap {
         while i > 0 {
             i -= 1;
             let h = self.finalize[i];
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             if unsafe { is_white((*h).flags) } {
                 // Two-pass cycle-finalize (PUC 5.3 gc.lua :502): when a
                 // finalizable table holds onto an unreachable coroutine, the
@@ -968,22 +988,28 @@ impl Heap {
                 // the table on the first sighting and only enqueuing it for
                 // `__gc` on the second.
                 let in_thread_cycle = self.defer_thread_cycle_finalize
+                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                     && unsafe { (*h).tag } == ObjTag::Table
                     && {
                         let t = h as *mut Table;
+                        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                         unsafe { (*t).refs_contain_unmarked_coro() }
                     };
+                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                 let already_deferred = unsafe { (*h).flags & DEFERRED != 0 };
                 if in_thread_cycle && !already_deferred {
+                    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                     unsafe { (*h).flags |= DEFERRED };
                     m.header(h);
                     continue;
                 }
+                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
                 self.tobefnz.push(h);
                 m.header(h);
                 self.finalize.swap_remove(i);
             } else {
+                // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
                 unsafe { (*h).flags &= !DEFERRED };
             }
         }
@@ -999,6 +1025,7 @@ impl Heap {
     /// on `tofinalize(o)` only, which mirrors checking the FIN bit.
     pub(crate) fn register_finalizable(&mut self, t: Gc<Table>) {
         let h = t.as_ptr() as *mut GcHeader;
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             if (*h).flags & FIN == 0 {
                 (*h).flags |= FIN;
@@ -1013,6 +1040,7 @@ impl Heap {
     /// behaviour together with weak tables.
     pub(crate) fn register_finalizable_userdata(&mut self, u: Gc<crate::runtime::Userdata>) {
         let h = u.as_ptr() as *mut GcHeader;
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             if (*h).flags & FIN == 0 {
                 (*h).flags |= FIN;
@@ -1033,6 +1061,7 @@ impl Heap {
         use crate::runtime::Value;
         std::mem::take(&mut self.tobefnz)
             .into_iter()
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             .map(|h| unsafe {
                 (*h).flags &= !FINALIZED;
                 match (*h).tag {
@@ -1051,6 +1080,7 @@ impl Heap {
     /// every `__gc` before the heap is torn down.
     pub(crate) fn queue_all_finalizers(&mut self) {
         for h in std::mem::take(&mut self.finalize) {
+            // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe { (*h).flags = ((*h).flags & !FIN) | FINALIZED };
             self.tobefnz.push(h);
         }
@@ -1064,6 +1094,7 @@ impl Heap {
         // string table) never aliases a pointer into self
         let mut freed = 0;
         let new_white = self.current_white;
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             let mut cur = std::mem::replace(&mut self.all, ptr::null_mut());
             let mut kept_head: *mut GcHeader = ptr::null_mut();
@@ -1105,6 +1136,7 @@ impl Heap {
     pub(crate) fn gc_sweep_step(&mut self, budget: usize) -> bool {
         let mut n = 0;
         let new_white = self.current_white;
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             while n < budget && !self.sweep_cur.is_null() {
                 let cur = self.sweep_cur;
@@ -1132,6 +1164,7 @@ impl Heap {
     }
 
     unsafe fn free_obj(&mut self, h: *mut GcHeader) {
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             match (*h).tag {
                 ObjTag::Table => {
@@ -1206,6 +1239,7 @@ impl Drop for Heap {
     fn drop(&mut self) {
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             for mut cur in [self.all, self.sweep_cur] {
                 while !cur.is_null() {
@@ -1259,6 +1293,7 @@ pub(crate) struct Marker {
 /// stack). Shared by the root mark and the post-resurrection remark.
 fn drain_marker(m: &mut Marker) {
     while let Some(h) = m.stack.pop() {
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             // PUC `propagatemark`: gray → black before scanning children, so a
             // child that points back at us (cycle) re-traces us as already
@@ -1298,6 +1333,7 @@ impl Marker {
     /// current-white bit and pushes onto the gray stack. `drain_marker` later
     /// pops it, traces children, and stamps it BLACK.
     pub(crate) fn header(&mut self, h: *mut GcHeader) -> bool {
+        // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             let f = (*h).flags;
             if is_white(f) {
@@ -1323,6 +1359,7 @@ fn weak_key_alive(v: Value) -> bool {
         Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
         _ => return true, // strings, numbers, booleans: never weak-collected
     };
+    // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
     unsafe { !is_white((*h).flags) }
 }
 

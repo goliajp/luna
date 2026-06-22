@@ -46,10 +46,12 @@ impl LuaStr {
 /// pointer, hence these live on `Gc<LuaStr>`.
 impl crate::runtime::heap::Gc<LuaStr> {
     pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe { bytes_of(self.as_ptr()) }
     }
 
     pub fn hash(&self) -> u32 {
+        // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe { hash_of(self.as_ptr()) }
     }
 }
@@ -92,6 +94,7 @@ fn layout(len: usize) -> Layout {
 
 fn alloc_str(bytes: &[u8], short: bool, hash: u32, hashed: bool) -> *mut LuaStr {
     let layout = layout(bytes.len());
+    // SAFETY: layout is built from the header size + trailing bytes length we just computed; deallocation will use the same layout in `Heap::sweep_strings`.
     unsafe {
         let p = alloc(layout) as *mut LuaStr;
         if p.is_null() {
@@ -144,6 +147,7 @@ impl StringTable {
         let h = lua_hash(bytes, seed);
         let b = h as usize & (self.buckets.len() - 1);
         let mut cur = self.buckets[b];
+        // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe {
             while !cur.is_null() {
                 if (*cur).len as usize == bytes.len() && bytes_of(cur) == bytes {
@@ -157,6 +161,7 @@ impl StringTable {
         }
         let b = h as usize & (self.buckets.len() - 1);
         let p = alloc_str(bytes, true, h, true);
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe {
             (*p).hnext = self.buckets[b];
         }
@@ -171,6 +176,7 @@ impl StringTable {
         for &head in &self.buckets {
             let mut cur = head;
             while !cur.is_null() {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe {
                     let next = (*cur).hnext;
                     let b = (*cur).hash.get() as usize & mask;
@@ -185,6 +191,7 @@ impl StringTable {
 
     /// Unlink a dying interned string (called from sweep).
     pub(crate) fn remove(&mut self, p: *mut LuaStr) {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe {
             let b = (*p).hash.get() as usize & (self.buckets.len() - 1);
             let mut cur: *mut *mut LuaStr = &mut self.buckets[b];

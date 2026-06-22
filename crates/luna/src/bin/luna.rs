@@ -66,10 +66,12 @@ fn populate_arg(vm: &mut Vm, script_name: Option<&str>, extra: &[String]) {
     // For -e / stdin chunks `arg[0]` is absent (PUC convention).
     if let Some(name) = script_name {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        // SAFETY: CLI driver — pointer / call set up by the binary entry and matches the expected Vm / luna handle contract.
         let _ = unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(0), k);
     }
     for (i, s) in extra.iter().enumerate() {
         let v = Value::Str(vm.heap.intern(s.as_bytes()));
+        // SAFETY: CLI driver — pointer / call set up by the binary entry and matches the expected Vm / luna handle contract.
         let _ = unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i as i64 + 1), v);
     }
     vm.set_global("arg", Value::Table(t));

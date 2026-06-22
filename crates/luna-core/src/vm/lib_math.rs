@@ -12,6 +12,7 @@ pub(crate) fn open_math(vm: &mut Vm) {
     let set = |vm: &mut Vm, name: &str, f| {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
     };
     set(vm, "abs", m_abs);
@@ -60,6 +61,7 @@ pub(crate) fn open_math(vm: &mut Vm) {
     ];
     for (name, v) in consts {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }.set(&mut vm.heap, k, v).expect("valid key");
     }
     vm.set_global("math", Value::Table(t));

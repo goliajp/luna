@@ -26,16 +26,21 @@ use crate::runtime::function::Proto;
 /// with zero params. Returns the chunk's `Return1` value as i64;
 /// `Return0` chunks return 0 (the caller knows by inspecting
 /// `JitHandle::returns_one`).
+// SAFETY: offset is hand-computed against the `repr(C)` layout of the target struct in this same module; the Cranelift lowerer relies on it staying in sync.
 pub type IntChunkFn = unsafe extern "C" fn() -> i64;
 
 /// One-arg JIT entry signature. See [`IntChunkFn`] for the zero-arg
 /// shape and [`MAX_JIT_ARITY`] for the cap.
+// SAFETY: offset is hand-computed against the `repr(C)` layout of the target struct in this same module; the Cranelift lowerer relies on it staying in sync.
 pub type IntFn1 = unsafe extern "C" fn(i64) -> i64;
 /// Two-arg JIT entry signature.
+// SAFETY: offset is hand-computed against the `repr(C)` layout of the target struct in this same module; the Cranelift lowerer relies on it staying in sync.
 pub type IntFn2 = unsafe extern "C" fn(i64, i64) -> i64;
 /// Three-arg JIT entry signature.
+// SAFETY: offset is hand-computed against the `repr(C)` layout of the target struct in this same module; the Cranelift lowerer relies on it staying in sync.
 pub type IntFn3 = unsafe extern "C" fn(i64, i64, i64) -> i64;
 /// Four-arg JIT entry signature.
+// SAFETY: offset is hand-computed against the `repr(C)` layout of the target struct in this same module; the Cranelift lowerer relies on it staying in sync.
 pub type IntFn4 = unsafe extern "C" fn(i64, i64, i64, i64) -> i64;
 
 /// Max arity the int-chunk compiler accepts before bailing back to

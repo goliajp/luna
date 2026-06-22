@@ -174,6 +174,7 @@ impl Table {
         if n == 0 {
             return &mut [];
         }
+        // SAFETY: `array_ptr` was allocated by `Heap::init_array_ptr` with `array_cap` slots; the table holds it for its lifetime and the heap is single-threaded so no concurrent writers exist.
         unsafe {
             let ptr = self.array_ptr.add(n * 8);
             std::slice::from_raw_parts_mut(ptr, n)
@@ -201,6 +202,7 @@ impl Table {
         if n == 0 {
             return &mut [];
         }
+        // SAFETY: `array_ptr` was allocated by `Heap::init_array_ptr` with `array_cap` slots; the table holds it for its lifetime and the heap is single-threaded so no concurrent writers exist.
         unsafe { std::slice::from_raw_parts_mut(self.array_ptr as *mut RawVal, n) }
     }
 
@@ -538,7 +540,9 @@ impl Table {
             let avals_base = self.array_ptr as *const RawVal;
             let atags_base = unsafe { self.array_ptr.add(old_asize * 8) as *const u8 };
             for i in 0..old_asize {
+                // SAFETY: `i < array_len` is enforced by the surrounding loop bound; `atags_base` / `avals_base` point into the table's parallel arrays allocated in lockstep by `init_array_ptr`.
                 let tag = unsafe { *atags_base.add(i) };
+                // SAFETY: `i < array_len` is enforced by the surrounding loop bound; `atags_base` / `avals_base` point into the table's parallel arrays allocated in lockstep by `init_array_ptr`.
                 let val = unsafe { *avals_base.add(i) };
                 old_pairs.push((tag, val));
             }
@@ -580,6 +584,7 @@ impl Table {
         // entry count).
         for (i, (tag, val)) in old_pairs.into_iter().enumerate() {
             if tag != raw::NIL {
+                // SAFETY: `tag` and the raw value come from this table's parallel `atags` / `avals` arrays, which the table writers always keep in sync — the tag byte matches the raw payload's discriminator (see `runtime::value` `raw` module).
                 let v = unsafe { Value::pack(tag, val) };
                 let _ = self.set_norm(heap, Value::Int(i as i64 + 1), v);
             }
@@ -722,6 +727,7 @@ impl Table {
         let avals = self.avals();
         for (i, &tag) in atags.iter().enumerate() {
             if tag == raw::CORO {
+                // SAFETY: raw union access — the tag byte at the same index in `atags` was previously confirmed to be `co` (closure/object pointer) so the `co` variant of `RawVal` holds the valid payload.
                 let p = unsafe { avals[i].co } as *mut crate::runtime::heap::GcHeader;
                 if !header_is_marked(p) {
                     return true;
@@ -764,6 +770,7 @@ impl Table {
             let avals = self.avals();
             for (i, &tag) in atags.iter().enumerate() {
                 if raw::is_gc(tag) {
+                    // SAFETY: `tag` and the raw value come from this table's parallel `atags` / `avals` arrays, which the table writers always keep in sync — the tag byte matches the raw payload's discriminator (see `runtime::value` `raw` module).
                     m.value(unsafe { Value::pack(tag, avals[i]) });
                 }
             }
@@ -820,6 +827,7 @@ impl Table {
             for i in 0..n {
                 let tag = self.atags()[i];
                 if raw::is_gc(tag) {
+                    // SAFETY: `tag` and the raw value come from this table's parallel `atags` / `avals` arrays, which the table writers always keep in sync — the tag byte matches the raw payload's discriminator (see `runtime::value` `raw` module).
                     let v = unsafe { Value::pack(tag, self.avals()[i]) };
                     if is_dead(v) {
                         self.atags_mut()[i] = raw::NIL;

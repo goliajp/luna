@@ -316,6 +316,7 @@ fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = check_table(vm, tv, "rawset")?;
     let k = vm.nat_arg(fs, nargs, 1);
     let v = vm.nat_arg(fs, nargs, 2);
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     match unsafe { t.as_mut() }.set(&mut vm.heap, k, v) {
         Ok(()) => {
             vm.barrier_back_table(t);
@@ -352,7 +353,9 @@ fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let mt = vm.nat_arg(fs, nargs, 1);
     match mt {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         Value::Nil => unsafe { t.as_mut() }.set_metatable(None),
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         Value::Table(m) => unsafe { t.as_mut() }.set_metatable(Some(m)),
         _ => return Err(raise_str(vm, "nil or table expected")),
     }
@@ -687,6 +690,7 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             if nargs >= 4 {
                 let env = vm.nat_arg(fs, nargs, 3);
                 let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
             }
             Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
@@ -743,6 +747,7 @@ fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     };
     let u = vm.heap.new_userdata(UserdataPayload::Empty, false);
     if let Some(mt) = mt {
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { u.as_mut() }.set_metatable(Some(mt));
         // PUC 5.1 registered *every* userdata with a metatable for
         // finalization (`luaC_checkfinalizer` deferred the `__gc` check to
@@ -856,6 +861,7 @@ fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         .position(|d| &*d.name == "_ENV")
         .ok_or_else(|| raise_str(vm, "'setfenv' target has no '_ENV' upvalue"))?;
     let uv = cl.upvals()[env_idx];
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { uv.as_mut() }.set_closed(env_table);
     vm.barrier_forward_upvalue(uv, env_table);
     Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
