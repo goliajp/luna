@@ -5,6 +5,7 @@ pub mod dump;
 pub mod error;
 pub mod exec;
 pub mod isa;
+pub mod jit_state;
 pub mod lib_bit32;
 pub mod lib_coroutine;
 

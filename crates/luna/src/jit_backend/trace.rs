@@ -1931,7 +1931,7 @@ thread_local! {
 /// - `SetI / GetI` — `R[A][B_imm] = R[C_reg]` / `R[A] = R[B_reg][C_imm]`,
 ///   where the key is the bytecode immediate. Lowered as
 ///   `luna_jit_table_set_int` / `luna_jit_table_get_int`. Both
-///   helpers park `vm.jit_pending_err` on a metatable hit so the
+///   helpers park `vm.jit.pending_err` on a metatable hit so the
 ///   dispatcher can deopt — semantics that bypass `__index` /
 ///   `__newindex` would silently miscompile.
 /// - `Len` — `R[A] = #R[B]`. Lowered as `luna_jit_table_len`,
@@ -2361,7 +2361,7 @@ fn emit_store_back_and_return_site(
 /// and returns the failing PC. Each `NewTable / SetI / GetI / Len`
 /// op emits a cranelift `call` to the matching `luna_jit_*` helper
 /// (`Linkage::Import`, resolved via `JITBuilder::symbol`); helpers
-/// short-circuit on `vm.jit_pending_err` so a metatable-bearing
+/// short-circuit on `vm.jit.pending_err` so a metatable-bearing
 /// table parks a deopt request the dispatcher (S2.C / S3) can
 /// detect after the trace returns. The clean-close tail stores
 /// reg state back and returns `head_pc as i64`.
@@ -2389,7 +2389,7 @@ fn emit_store_back_and_return_site(
 /// dispatcher tomorrow) must call [`crate::jit_backend::enter_jit`] to pin
 /// the active Vm in the `JIT_VM` thread-local — the table helpers
 /// pick that up to reach `vm.heap`. After the call, the caller
-/// must inspect `vm.jit_pending_err` to decide whether a metatable
+/// must inspect `vm.jit.pending_err` to decide whether a metatable
 /// deopt fired; on `Some`, treat the trace's result as invalid and
 /// re-run the work through the interpreter.
 ///
@@ -7563,7 +7563,7 @@ mod s2b_table_ops {
         let r = run_trace(&mut vm, &ct, &mut state);
         assert_eq!(r, 0);
         assert!(state[0] != 0, "NewTable must return a non-null Gc<Table> ptr");
-        assert!(vm.jit_pending_err.is_none(), "no deopt expected");
+        assert!(vm.jit.pending_err.is_none(), "no deopt expected");
     }
 
     #[test]
@@ -7584,7 +7584,7 @@ mod s2b_table_ops {
         state[2] = 42; // value to write
         let r = run_trace(&mut vm, &ct, &mut state);
         assert_eq!(r, 0);
-        assert!(vm.jit_pending_err.is_none(), "no metatable → no deopt");
+        assert!(vm.jit.pending_err.is_none(), "no metatable → no deopt");
         assert_eq!(state[3], 42, "Get must see the value Set wrote");
     }
 
@@ -7637,7 +7637,7 @@ mod s2b_table_ops {
 
         assert_eq!(r, 0, "trace still returns head_pc");
         assert!(
-            vm.jit_pending_err.is_some(),
+            vm.jit.pending_err.is_some(),
             "metatable-bearing table must park a deopt request"
         );
     }
@@ -7658,7 +7658,7 @@ mod s2b_table_ops {
         state[0] = t.as_ptr() as i64;
         run_trace(&mut vm, &ct, &mut state);
 
-        assert!(vm.jit_pending_err.is_some(), "GetI deopt on metatable");
+        assert!(vm.jit.pending_err.is_some(), "GetI deopt on metatable");
     }
 
     #[test]
@@ -7676,7 +7676,7 @@ mod s2b_table_ops {
         state[0] = t.as_ptr() as i64;
         run_trace(&mut vm, &ct, &mut state);
 
-        assert!(vm.jit_pending_err.is_some(), "Len deopt on metatable");
+        assert!(vm.jit.pending_err.is_some(), "Len deopt on metatable");
     }
 
     /// Once a helper has parked `jit_pending_err`, subsequent
@@ -7706,7 +7706,7 @@ mod s2b_table_ops {
         let r = run_trace(&mut vm, &ct, &mut state);
 
         assert_eq!(r, 0);
-        assert!(vm.jit_pending_err.is_some());
+        assert!(vm.jit.pending_err.is_some());
         // GetI short-circuit returns 0 sentinel; trace tail stores
         // that back into R[2].
         assert_eq!(state[2], 0);
