@@ -28,10 +28,10 @@ luna-core = "1.1"
 ```toml
 # Full embedding — JIT'd hot loops, cdylib for C/C++ hosts.
 [dependencies]
-luna = "1.1"
+luna-jit = "1.1"
 ```
 
-`cargo install luna` installs the `luna` CLI binary (REPL + script runner).
+`cargo install luna-jit` installs the `luna` CLI binary (REPL + script runner).
 
 The 0-dep `luna-core` is a hard contract enforced by `cargo deny check` in CI:
 `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` must equal `1`
@@ -55,7 +55,7 @@ vm.open_base();
 vm.eval("return 1 + 2")?;
 
 // luna (interpreter + Cranelift JIT) — hot loops compile.
-let mut vm = luna::Vm::new_minimal_with_jit(LuaVersion::Lua55);
+let mut vm = luna_jit::Vm::new_minimal_with_jit(LuaVersion::Lua55);
 vm.open_base();
 vm.eval("for i = 1, 1e6 do end")?;
 ```
@@ -255,8 +255,8 @@ Public API surface contracts:
 
 - **Backwards-compatible re-exports**. The `luna` crate's `pub use
   luna_core::*` plus the `pub mod jit { pub use luna_core::jit::*; ... }`
-  re-exports keep `use luna::vm::Vm`, `use luna::jit::TraceRecord`,
-  `use luna::capi::LuaState` working unchanged from v1.0.
+  re-exports keep `use luna_jit::vm::Vm`, `use luna_jit::jit::TraceRecord`,
+  `use luna_jit::capi::LuaState` working unchanged from v1.0.
 
 ---
 
@@ -265,12 +265,12 @@ Public API surface contracts:
 | You want to | Read |
 |---|---|
 | Embed luna in a Rust program | [`embedding.md`](embedding.md) (cookbook) |
-| Embed luna in a C/C++ program | `crates/luna/src/capi.rs` (full `lua_*` ABI) |
+| Embed luna in a C/C++ program | `crates/luna-jit/src/capi.rs` (full `lua_*` ABI) |
 | Use luna from the CLI | `luna --help` and the examples in [README](../README.md) |
 | Understand which Lua features work | [`compatibility.md`](compatibility.md) |
 | Compare luna against PUC/LuaJIT | [`performance.md`](performance.md) |
 | Run luna in an async runtime | [`threading.md`](threading.md) |
-| Hack on the JIT | `crates/luna/src/jit_backend/` |
+| Hack on the JIT | `crates/luna-jit/src/jit_backend/` |
 | Hack on the interpreter | `crates/luna-core/src/vm/exec.rs` |
 | Hack on the GC | `crates/luna-core/src/runtime/gc.rs` |
 | Hack on a stdlib library | `crates/luna-core/src/vm/lib_*.rs` |

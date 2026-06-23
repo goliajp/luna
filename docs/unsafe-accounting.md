@@ -6,7 +6,7 @@ Cranelift-emitted machine code, and the `lua.h`-compatible C ABI.
 Every `unsafe` block carries a `SAFETY:` justification.
 
 This page is the human-readable companion to `cargo-geiger`'s
-machine-grepable summary. Run `cargo geiger -p luna --bin luna` for
+machine-grepable summary. Run `cargo geiger -p luna-jit --bin luna` for
 the tool's per-crate breakdown; the numbers and pattern explanations
 below give the equivalent picture without requiring the install.
 
@@ -39,7 +39,7 @@ crates/luna-core/src/
   vm/lib_strpack.rs           ~5  string.pack reads
   vm/typed_native.rs          ~5  fn-pointer transmute (typed wrapper trampolines)
 
-crates/luna/src/
+crates/luna-jit/src/
   jit_backend/mod.rs        ~75  Cranelift FFI, JIT_VM thread-local, luna_jit_*
                                  #[unsafe(no_mangle)] extern "C" helpers
   jit_backend/trace.rs      ~80  Trace IR lowering scratch, register class transitions
@@ -78,7 +78,7 @@ the validity proof.
 
 ### 3. `unsafe extern "C" fn` helpers (~30 of 461)
 
-The 26 `luna_jit_*` helpers in `crates/luna/src/jit_backend/mod.rs`
+The 26 `luna_jit_*` helpers in `crates/luna-jit/src/jit_backend/mod.rs`
 have stable C ABI shapes Cranelift can call. Each is annotated
 `#[unsafe(no_mangle)]` (Rust 2024 edition form) so the linker
 exposes the symbol; SAFETY rationale at each helper cites the
@@ -123,7 +123,7 @@ for the future Arc-ification sprint (Track A7 forward roadmap).
 
 ```sh
 cargo install --locked cargo-geiger
-cargo geiger -p luna --bin luna
+cargo geiger -p luna-jit --bin luna
 ```
 
 The tool's output groups unsafe by category (`unsafe expressions`,

@@ -20,7 +20,7 @@ whether you need the Cranelift JIT:
 ```toml
 # Most embedders — full interpreter + Cranelift JIT + capi.
 [dependencies]
-luna = "1.1"
+luna-jit = "1.1"
 ```
 
 ```toml
@@ -38,7 +38,7 @@ luna-core` shows exactly one crate — luna-core itself). The full
 The CLI binary lives in `luna`:
 
 ```sh
-cargo install luna  # installs the `luna` REPL + script runner
+cargo install luna-jit  # installs the `luna` REPL + script runner
 ```
 
 ---
@@ -46,8 +46,8 @@ cargo install luna  # installs the `luna` REPL + script runner
 ## 2. Hello, world
 
 ```rust
-use luna::vm::Vm;
-use luna::version::LuaVersion;
+use luna_jit::vm::Vm;
+use luna_jit::version::LuaVersion;
 
 fn main() {
     let mut vm = Vm::new(LuaVersion::Lua55);  // 5.5 + full stdlib + JIT on
@@ -71,8 +71,8 @@ cap, and rejects precompiled bytecode (which bypasses the parser's
 safety gates):
 
 ```rust
-use luna::Lua;  // or `luna::vm::Vm` for the low-level handle
-use luna::version::LuaVersion;
+use luna_jit::Lua;  // or `luna_jit::vm::Vm` for the low-level handle
+use luna_jit::version::LuaVersion;
 
 let mut lua = Lua::sandbox(LuaVersion::Lua54)
     .open_base()
@@ -117,8 +117,8 @@ the GC handle types (`Gc<Table>`, `Gc<LuaClosure>`, `Gc<NativeClosure>`).
 Embedders adding their own types implement `IntoValue` directly:
 
 ```rust
-use luna::vm::{IntoValue, Vm};
-use luna::runtime::Value;
+use luna_jit::vm::{IntoValue, Vm};
+use luna_jit::runtime::Value;
 
 struct UserId(u64);
 
@@ -140,7 +140,7 @@ The dogfood §4.1 friction point was building tables. v1.1 ships two
 ergonomic paths:
 
 ```rust
-use luna::runtime::Value;
+use luna_jit::runtime::Value;
 
 // One-shot, fixed-size:
 let t = vm.table_of([
@@ -183,8 +183,8 @@ let split = vm.native_typed(|x: i64| -> (i64, i64) { (x / 10, x % 10) });
 vm.set_global("split", split)?;
 
 // Fallible (use Result<T, LuaError> in the return):
-use luna::vm::LuaError;
-use luna::runtime::Value;
+use luna_jit::vm::LuaError;
+use luna_jit::runtime::Value;
 
 let safe_div = vm.native_typed(|a: i64, b: i64| -> Result<i64, LuaError> {
     if b == 0 {
@@ -220,7 +220,7 @@ fall back to `vm.native_with(...)` with explicit upvals.
 Stash arbitrary `T: 'static` Rust values inside Lua userdata:
 
 ```rust
-use luna::vm::Vm;
+use luna_jit::vm::Vm;
 
 #[derive(Debug)]
 struct DbConn {
@@ -264,7 +264,7 @@ Drive Lua coroutines without going through `coroutine.create` /
 `:resume` on the Lua side:
 
 ```rust
-use luna::runtime::Value;
+use luna_jit::runtime::Value;
 
 // Compile a Lua coroutine body:
 let body = vm.eval(r#"
@@ -299,8 +299,8 @@ Install a Rust callback that fires on script events without going
 through Lua-side `debug.sethook`:
 
 ```rust
-use luna::vm::Vm;
-use luna::vm::exec::{
+use luna_jit::vm::Vm;
+use luna_jit::vm::exec::{
     RustHookEvent,
     HOOK_MASK_CALL, HOOK_MASK_RETURN, HOOK_MASK_LINE, HOOK_MASK_COUNT,
 };
@@ -339,7 +339,7 @@ the Lua-side `error(...)` argument (usually a string); rich context
 lives on the `Vm`:
 
 ```rust
-use luna::vm::{LuaError, LuaErrorKind};
+use luna_jit::vm::{LuaError, LuaErrorKind};
 
 match vm.eval("error('something failed')") {
     Ok(v) => println!("ok: {:?}", v),
@@ -375,11 +375,11 @@ so it composes with `?` and the `anyhow` / `thiserror` ecosystem.
 
 ## 11. The `Lua` newtype facade
 
-`luna::Lua` is an mlua-shape front door:
+`luna_jit::Lua` is an mlua-shape front door:
 
 ```rust
-use luna::Lua;
-use luna::version::LuaVersion;
+use luna_jit::Lua;
+use luna_jit::version::LuaVersion;
 
 let mut lua = Lua::new();  // JIT on, Lua 5.5
 lua.open_base();
