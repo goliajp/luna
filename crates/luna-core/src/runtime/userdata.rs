@@ -96,7 +96,10 @@ impl FileHandle {
 
     /// Standard streams cannot be closed (io.close(io.stdin) fails in PUC).
     pub fn is_std(&self) -> bool {
-        matches!(self, FileHandle::Stdin | FileHandle::Stdout | FileHandle::Stderr)
+        matches!(
+            self,
+            FileHandle::Stdin | FileHandle::Stdout | FileHandle::Stderr
+        )
     }
 }
 

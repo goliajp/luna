@@ -265,7 +265,7 @@ pub unsafe extern "C" fn lua_setglobal(L: *mut LuaState, name: *const c_char) {
     let v = vm.capi_stack.pop().unwrap_or(Value::Nil);
     // SAFETY: Lua C API contract — the caller guarantees the passed `*const c_char` points to a NUL-terminated byte string that stays valid for the duration of this call.
     let name_str = unsafe { CStr::from_ptr(name).to_str().unwrap_or("?") };
-    let _ = vm.set_global(name_str, v);  // capi swallows: lua_setglobal is void in C ABI
+    let _ = vm.set_global(name_str, v); // capi swallows: lua_setglobal is void in C ABI
 }
 
 // ─── stack push ──────────────────────────────────────────────────────────
@@ -433,10 +433,7 @@ pub unsafe extern "C" fn lua_isnil(L: *mut LuaState, idx: c_int) -> c_int {
 pub unsafe extern "C" fn lua_isnumber(L: *mut LuaState, idx: c_int) -> c_int {
     // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
-    matches!(
-        get_at(vm, idx),
-        Some(Value::Int(_)) | Some(Value::Float(_))
-    ) as c_int
+    matches!(get_at(vm, idx), Some(Value::Int(_)) | Some(Value::Float(_))) as c_int
 }
 
 /// PUC `lua_isinteger` (5.3+) — true iff the value at `idx` is exactly `Int`.
@@ -557,9 +554,7 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let cf_value = vm.running_native_upvalue(0);
     let cf: LuaCFunction = match cf_value {
         // SAFETY: source and destination types share the same in-memory representation; see the C ABI typedef this function implements.
-        Value::LightUserdata(p) => unsafe {
-            std::mem::transmute::<*const (), LuaCFunction>(p)
-        },
+        Value::LightUserdata(p) => unsafe { std::mem::transmute::<*const (), LuaCFunction>(p) },
         _ => {
             let s = Value::Str(vm.heap.intern(b"missing C function pointer upvalue"));
             return Err(LuaError(s));
@@ -582,7 +577,10 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let stack_len = vm.capi_stack.len();
     if stack_len < baseline + nret {
         // C function lied about its return count.
-        let s = Value::Str(vm.heap.intern(b"C function returned more values than were pushed"));
+        let s = Value::Str(
+            vm.heap
+                .intern(b"C function returned more values than were pushed"),
+        );
         return Err(LuaError(s));
     }
     let results_start = stack_len - nret;
@@ -603,10 +601,7 @@ pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
     // SAFETY: source and destination types share the same in-memory representation; see the C ABI typedef this function implements.
     let cf_ptr = unsafe { std::mem::transmute::<LuaCFunction, *const ()>(f) };
     let trampoline: luna_core::runtime::value::NativeFn = capi_trampoline;
-    let f_val = vm.native_with(
-        trampoline,
-        Box::new([Value::LightUserdata(cf_ptr)]),
-    );
+    let f_val = vm.native_with(trampoline, Box::new([Value::LightUserdata(cf_ptr)]));
     vm.capi_stack.push(f_val);
 }
 
@@ -616,11 +611,7 @@ pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
-pub unsafe extern "C" fn lua_register(
-    L: *mut LuaState,
-    name: *const c_char,
-    f: LuaCFunction,
-) {
+pub unsafe extern "C" fn lua_register(L: *mut LuaState, name: *const c_char, f: LuaCFunction) {
     // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     unsafe { lua_pushcfunction(L, f) };
     // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.

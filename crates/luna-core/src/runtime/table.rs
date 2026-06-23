@@ -153,7 +153,6 @@ impl Table {
         self.array_ptr = self.inline_storage.as_mut_ptr() as *mut u8;
     }
 
-
     /// P11-S5d.H/I — read view onto the array-part tag bytes. Trails
     /// the avals portion in the active backing (inline or slab).
     #[inline(always)]
@@ -805,11 +804,7 @@ impl Table {
     /// (`alive` decides — strong/marked keys, plus strings/numbers which are
     /// never weakly collected). Returns true if any value was newly marked, so
     /// the caller can iterate to a fixpoint (PUC `traverseephemeron`).
-    pub(crate) fn converge_ephemeron(
-        &self,
-        alive: &dyn Fn(Value) -> bool,
-        m: &mut Marker,
-    ) -> bool {
+    pub(crate) fn converge_ephemeron(&self, alive: &dyn Fn(Value) -> bool, m: &mut Marker) -> bool {
         let mut changed = false;
         for n in self.nodes.iter() {
             if !n.val.is_nil() && alive(n.key) {
@@ -1030,7 +1025,10 @@ mod tests {
     #[test]
     fn bad_keys() {
         with_table(|heap, t| {
-            assert_eq!(t.set(heap, Value::Nil, Value::Int(1)), Err(TableError::NilIndex));
+            assert_eq!(
+                t.set(heap, Value::Nil, Value::Int(1)),
+                Err(TableError::NilIndex)
+            );
             assert_eq!(
                 t.set(heap, Value::Float(f64::NAN), Value::Int(1)),
                 Err(TableError::NanIndex)

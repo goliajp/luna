@@ -64,10 +64,7 @@ fn recorder_keeps_depth_zero_on_pure_loop() {
              return s",
         )
         .unwrap();
-    assert!(matches!(
-        r[0],
-        luna_jit::runtime::Value::Int(500500)
-    ));
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(500500)));
     assert_eq!(
         vm.trace_max_depth_seen(),
         0,

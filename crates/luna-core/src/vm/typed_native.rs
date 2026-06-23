@@ -402,8 +402,7 @@ where
             nargs: u32,
         ) -> Result<u32, LuaError> {
             let f: F = reconstruct(vm, fs);
-            let (a0, a1) =
-                <(In0, In1) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
+            let (a0, a1) = <(In0, In1) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
             f(a0, a1).into_lua_return(vm, fs)
         }
         (trampoline::<F, In0, In1, Out>, pack(self))
@@ -432,8 +431,7 @@ where
             nargs: u32,
         ) -> Result<u32, LuaError> {
             let f: F = reconstruct(vm, fs);
-            let (a0, a1, a2) =
-                <(In0, In1, In2) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
+            let (a0, a1, a2) = <(In0, In1, In2) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
             f(a0, a1, a2).into_lua_return(vm, fs)
         }
         (trampoline::<F, In0, In1, In2, Out>, pack(self))
@@ -502,10 +500,7 @@ where
                 <(In0, In1, In2, In3, In4) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
             f(a0, a1, a2, a3, a4).into_lua_return(vm, fs)
         }
-        (
-            trampoline::<F, In0, In1, In2, In3, In4, Out>,
-            pack(self),
-        )
+        (trampoline::<F, In0, In1, In2, In3, In4, Out>, pack(self))
     }
 }
 

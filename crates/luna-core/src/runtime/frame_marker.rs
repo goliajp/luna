@@ -182,7 +182,11 @@ mod tests {
         assert_eq!(FrameKind::Cont.tag(), 1);
         assert_eq!(FrameKind::from_tag(0), Some(FrameKind::Lua));
         assert_eq!(FrameKind::from_tag(1), Some(FrameKind::Cont));
-        assert_eq!(FrameKind::from_tag(2), None, "FRAME_CONT_LJ not emitted yet");
+        assert_eq!(
+            FrameKind::from_tag(2),
+            None,
+            "FRAME_CONT_LJ not emitted yet"
+        );
         assert_eq!(FrameKind::from_tag(7), None, "invalid tag rejected");
     }
 

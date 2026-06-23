@@ -41,17 +41,16 @@ pub mod lua_facade;
 
 pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, LuaTable};
 
-
 /// Unified `jit` namespace — combines luna-core's trait surface +
 /// pure types with luna's Cranelift-backed implementations. Existing
 /// `use luna_jit::jit::TraceRecord`, `use luna_jit::jit::CraneliftBackend`,
 /// `use luna_jit::jit::cache_lookup_or_compile`, etc. resolve through
 /// this module.
 pub mod jit {
-    pub use luna_core::jit::*;
     pub use crate::jit_backend::{
         CraneliftBackend, cache_lookup_or_compile, enter_jit, try_compile_int_chunk,
     };
+    pub use luna_core::jit::*;
     // `cache_clear` + `cache_entry_count` are #[cfg(test)] in the
     // jit_backend, so they aren't re-exportable here (they don't
     // exist in non-test builds). Tests reach them via
@@ -64,10 +63,10 @@ pub mod jit {
     /// `crate::jit::trace::TraceRecord` paths in user code keep
     /// working; new code can `use luna_jit::jit::trace::try_compile_trace_with_options`.
     pub mod trace {
-        pub use luna_core::jit::trace_types::*;
         pub use crate::jit_backend::trace::{
             last_compile_checkpoint, try_compile_trace, try_compile_trace_with_options,
         };
+        pub use luna_core::jit::trace_types::*;
     }
 }
 
@@ -101,10 +100,7 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// to `luna_core::vm::Vm` from this crate. The `VmExt` extension
 /// trait below restores the dotted-method form.
 pub fn install_default_jit(vm: &mut vm::Vm) {
-    vm.install_jit_backend(
-        jit_backend::CraneliftBackend,
-        jit_backend::CraneliftBackend,
-    );
+    vm.install_jit_backend(jit_backend::CraneliftBackend, jit_backend::CraneliftBackend);
 }
 
 /// Extension trait that exposes the JIT-installing constructors and

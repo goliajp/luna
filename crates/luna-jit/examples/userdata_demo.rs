@@ -64,10 +64,7 @@ fn main() {
     {
         let c: &Counter = lua.vm().userdata_borrow("counter").unwrap();
         assert_eq!(c.value, 150);
-        println!(
-            "4. after GC + mutation: counter.value = {}",
-            c.value
-        );
+        println!("4. after GC + mutation: counter.value = {}", c.value);
     }
 
     // 6. Downcast typechecks; wrong type returns None.

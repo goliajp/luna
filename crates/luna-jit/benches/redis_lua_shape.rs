@@ -157,8 +157,17 @@ fn main() {
     println!("# Redis-Lua-shape micro-bench (D1)");
     println!("# Median of N runs, wall-clock around Vm::eval. JIT on (luna default).");
     println!();
-    println!("{:>26} | {:>10} | {:>6} | {:>8}", "name", "median_ms", "iters", "runtime");
-    println!("{:>26} | {:>10} | {:>6} | {:>8}", "-".repeat(26), "-".repeat(10), "-".repeat(6), "-".repeat(8));
+    println!(
+        "{:>26} | {:>10} | {:>6} | {:>8}",
+        "name", "median_ms", "iters", "runtime"
+    );
+    println!(
+        "{:>26} | {:>10} | {:>6} | {:>8}",
+        "-".repeat(26),
+        "-".repeat(10),
+        "-".repeat(6),
+        "-".repeat(8)
+    );
 
     for b in BENCHES {
         if let Some(ref f) = filter {

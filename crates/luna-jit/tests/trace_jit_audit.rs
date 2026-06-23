@@ -89,7 +89,11 @@ fn trace_audit_hot_float_sum() {
             Value::Float(f) => (f - 1500.0).abs() < 1e-9,
             _ => false,
         };
-        assert!(ok, "hot-float-sum[{}]: expected ~1500.0, got {:?}", label, r);
+        assert!(
+            ok,
+            "hot-float-sum[{}]: expected ~1500.0, got {:?}",
+            label, r
+        );
     }
 }
 
@@ -205,7 +209,11 @@ fn trace_audit_string_concat_loop() {
         match r {
             Value::Str(s) => {
                 assert_eq!(s.as_bytes().len(), 100, "{} concat len", label);
-                assert!(s.as_bytes().iter().all(|&b| b == b'x'), "{} concat content", label);
+                assert!(
+                    s.as_bytes().iter().all(|&b| b == b'x'),
+                    "{} concat content",
+                    label
+                );
             }
             _ => panic!("concat-loop[{}]: not str: {:?}", label, r),
         }
@@ -320,7 +328,11 @@ fn trace_audit_pre53_for_loop_interp_fallback() {
             Value::Int(500500) => true,
             _ => false,
         };
-        assert!(ok, "pre53-for-fallback[{}]: expected ~500500, got {:?}", label, r);
+        assert!(
+            ok,
+            "pre53-for-fallback[{}]: expected ~500500, got {:?}",
+            label, r
+        );
         // The closed_count may be 0 or higher depending on what other
         // shapes engage. We don't assert engagement count here — just
         // correctness.
@@ -381,7 +393,8 @@ fn trace_audit_repeated_runs_consistent() {
 /// JIT disabled vs JIT enabled — same result.
 #[test]
 fn trace_audit_jit_off_vs_on_same_result() {
-    let src = b"local function f(n) if n < 2 then return n end return f(n-1) + f(n-2) end; return f(18)";
+    let src =
+        b"local function f(n) if n < 2 then return n end return f(n-1) + f(n-2) end; return f(18)";
     for (v, label) in POST53_DIALECTS {
         let mut vm_off = vm_default(*v);
         vm_off.set_jit_enabled(false);
@@ -411,8 +424,7 @@ fn trace_audit_jit_off_vs_on_same_result() {
 /// Method JIT only (trace JIT off) vs both on.
 #[test]
 fn trace_audit_method_only_vs_both() {
-    let src =
-        b"local s = 0; for i = 1, 200 do s = s + i end; return s";
+    let src = b"local s = 0; for i = 1, 200 do s = s + i end; return s";
     for (v, label) in POST53_DIALECTS {
         let mut vm_m = vm_default(*v);
         vm_m.set_trace_jit_enabled(false);
@@ -617,8 +629,7 @@ fn trace_audit_mixed_int_float_nested() {
         assert!(
             ok,
             "mixed-int-float-nested[{}]: expected 5000, got {:?}",
-            label,
-            r
+            label, r
         );
     }
 }
@@ -697,12 +708,7 @@ fn trace_audit_pre53_nested_loops_interp() {
             Value::Float(f) => (f - 10000.0).abs() < 1e-9,
             _ => false,
         };
-        assert!(
-            ok,
-            "pre53-nested[{}]: expected ~10000, got {:?}",
-            label,
-            r
-        );
+        assert!(ok, "pre53-nested[{}]: expected ~10000, got {:?}", label, r);
     }
 }
 
@@ -739,7 +745,7 @@ fn trace_audit_break_inside_inner_loop() {
 #[test]
 fn trace_audit_default_vm_nested_still_correct() {
     for (_v, label) in DIALECTS {
-        let mut vm = vm_default(*_v);  // both JITs
+        let mut vm = vm_default(*_v); // both JITs
         let r = eval_one(
             &mut vm,
             "local s = 0
@@ -753,6 +759,10 @@ fn trace_audit_default_vm_nested_still_correct() {
             Value::Float(f) => (f - 10000.0).abs() < 1e-9,
             _ => false,
         };
-        assert!(ok, "default-vm-nested[{}]: expected 10000, got {:?}", label, r);
+        assert!(
+            ok,
+            "default-vm-nested[{}]: expected 10000, got {:?}",
+            label, r
+        );
     }
 }

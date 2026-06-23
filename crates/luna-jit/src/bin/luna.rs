@@ -12,7 +12,7 @@
 //! args, matching PUC behaviour. If the chunk returns values, they're
 //! printed after the script finishes.
 
-use luna_jit::VmExt;  // brings install_default_jit / install_null_jit dotted-method form
+use luna_jit::VmExt; // brings install_default_jit / install_null_jit dotted-method form
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
@@ -90,7 +90,8 @@ fn populate_arg(vm: &mut Vm, script_name: Option<&str>, extra: &[String]) {
         // SAFETY: CLI driver — pointer / call set up by the binary entry and matches the expected Vm / luna handle contract.
         let _ = unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i as i64 + 1), v);
     }
-    vm.set_global("arg", Value::Table(t)).expect("CLI arg setup");
+    vm.set_global("arg", Value::Table(t))
+        .expect("CLI arg setup");
 }
 
 /// Interactive REPL (C1 — single-line for v1.1; C2/C3 add multi-line,
@@ -282,13 +283,19 @@ fn main() {
     // C5 — pretty error rendering: ANSI color when stderr is a TTY
     // and NO_COLOR isn't set. Embedders piping luna output to logs
     // get plain text automatically.
-    let color =
-        std::env::var_os("NO_COLOR").is_none() && std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let color = std::env::var_os("NO_COLOR").is_none()
+        && std::io::IsTerminal::is_terminal(&std::io::stderr());
 
     let cl = match vm.load(&src, chunkname.as_bytes()) {
         Ok(cl) => cl,
         Err(e) => {
-            print_pretty_error(&mut vm, &format!("{e}"), &src, color, /*compile=*/ true);
+            print_pretty_error(
+                &mut vm,
+                &format!("{e}"),
+                &src,
+                color,
+                /*compile=*/ true,
+            );
             std::process::exit(1);
         }
     };
@@ -300,11 +307,20 @@ fn main() {
         eprintln!("profile (trace JIT counters):");
         eprintln!("  trace_closed_count: {}", vm.jit.counters.closed);
         eprintln!("  trace_compiled_count: {}", vm.jit.counters.compiled);
-        eprintln!("  trace_compile_failed_count: {}", vm.jit.counters.compile_failed);
+        eprintln!(
+            "  trace_compile_failed_count: {}",
+            vm.jit.counters.compile_failed
+        );
         eprintln!("  trace_dispatched_count: {}", vm.jit.counters.dispatched);
         eprintln!("  trace_deopt_count: {}", vm.jit.counters.deopt);
-        eprintln!("  trace_side_trace_started_count: {}", vm.jit.counters.side_trace_started);
-        eprintln!("  trace_side_trace_compiled_count: {}", vm.jit.counters.side_trace_compiled);
+        eprintln!(
+            "  trace_side_trace_started_count: {}",
+            vm.jit.counters.side_trace_started
+        );
+        eprintln!(
+            "  trace_side_trace_compiled_count: {}",
+            vm.jit.counters.side_trace_compiled
+        );
     }
 
     match result {

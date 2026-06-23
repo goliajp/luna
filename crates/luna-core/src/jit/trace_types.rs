@@ -214,11 +214,7 @@ impl TraceRecord {
             is_call_triggered: false,
             tfor_iter_ptr: None,
             tfor_val_tag: None,
-            side_trace_parent: Some((
-                parent_head_proto,
-                parent_head_pc,
-                parent_exit_idx,
-            )),
+            side_trace_parent: Some((parent_head_proto, parent_head_pc, parent_exit_idx)),
             self_link_kind: None,
         }
     }
@@ -336,7 +332,8 @@ pub enum TagResKind {
 
 /// Walk an `exit_tags` slice and classify it for the
 /// dispatcher fast path.
-#[doc(hidden)] pub fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
+#[doc(hidden)]
+pub fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
     if tags.iter().all(|t| matches!(t, ExitTag::Untouched)) {
         return TagResKind::AllUntouched;
     }
@@ -502,9 +499,7 @@ pub struct CompiledTrace {
     /// `RefCell<HashMap<u32, u32>>` because the close handler
     /// holds only `&CompiledTrace` (the parent's traces borrow is
     /// immutable while we're walking it to find the parent_ct).
-    pub side_trace_cache: std::cell::RefCell<
-        std::collections::HashMap<u32, u32>,
-    >,
+    pub side_trace_cache: std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     /// P15-A v2-D-A8 — fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when ANY of this trace's
@@ -668,8 +663,7 @@ pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
 /// so production runs pay no overhead — even the IR-emitted probe
 /// call is conditional on the probe helper itself short-circuiting
 /// when the OnceLock resolves to `false`.
-static V2C_PROBE_ON: std::sync::OnceLock<bool> =
-    std::sync::OnceLock::new();
+static V2C_PROBE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// True iff the side-trace dispatch probes are enabled via
 /// `LUNA_V2C_PROBE=1`. Diagnostic-only; production builds keep this
 /// off so the IR-emitted probe call short-circuits cheaply.

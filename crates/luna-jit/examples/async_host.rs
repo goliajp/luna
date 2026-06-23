@@ -13,9 +13,9 @@
 //! `#[tokio::main(flavor = "current_thread")]` or a `LocalSet`;
 //! see `docs/threading.md` for the canonical patterns.
 
-use luna_jit::Lua;
 use luna_core::runtime::Value;
 use luna_core::vm::LuaError;
+use luna_jit::Lua;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
@@ -40,8 +40,12 @@ fn block_on<F: Future>(mut fut: F) -> F::Output {
 
 fn noop_waker() -> Waker {
     use std::task::{RawWaker, RawWakerVTable};
-    static VTABLE: RawWakerVTable =
-        RawWakerVTable::new(|_| RawWaker::new(std::ptr::null(), &VTABLE), |_| {}, |_| {}, |_| {});
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(
+        |_| RawWaker::new(std::ptr::null(), &VTABLE),
+        |_| {},
+        |_| {},
+        |_| {},
+    );
     let raw = RawWaker::new(std::ptr::null(), &VTABLE);
     // SAFETY: VTABLE is a `'static` and all four entries are no-ops
     // returning either another raw or unit; the data pointer is null

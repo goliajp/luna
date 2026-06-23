@@ -72,7 +72,8 @@ const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua54,
         dir: "tests/official/lua-5.4.8-tests",
-        expected_pass: &["verybig.lua",
+        expected_pass: &[
+            "verybig.lua",
             "main.lua",
             "api.lua",
             "attrib.lua",
@@ -109,7 +110,8 @@ const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua53,
         dir: "tests/official/lua-5.3.4-tests",
-        expected_pass: &["verybig.lua",
+        expected_pass: &[
+            "verybig.lua",
             "main.lua",
             "api.lua",
             "attrib.lua",
@@ -141,7 +143,8 @@ const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua52,
         dir: "tests/official/lua-5.2.2-tests",
-        expected_pass: &["verybig.lua",
+        expected_pass: &[
+            "verybig.lua",
             "main.lua",
             "api.lua",
             "attrib.lua",
@@ -303,8 +306,7 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
 
 fn run_suite(suite: &Suite) -> Vec<String> {
     let root = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(suite.dir)
-        .unwrap_or_else(|e| panic!("cd {}: {}", suite.dir, e));
+    std::env::set_current_dir(suite.dir).unwrap_or_else(|e| panic!("cd {}: {}", suite.dir, e));
     // attrib.lua's sub-package section writes `libs/P1/init.lua` and
     // `libs/P1/xuxu.lua` via `io.output(filename)`, which fails when
     // the parent dir doesn't exist (POSIX `open(O_WRONLY|O_CREAT)`

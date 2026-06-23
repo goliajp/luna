@@ -151,11 +151,31 @@ struct Dialect {
 }
 
 const DIALECTS: &[Dialect] = &[
-    Dialect { version: LuaVersion::Lua51, label: "Lua 5.1", refs: &["lua-5.1", "lua5.1"] },
-    Dialect { version: LuaVersion::Lua52, label: "Lua 5.2", refs: &["lua-5.2", "lua5.2"] },
-    Dialect { version: LuaVersion::Lua53, label: "Lua 5.3", refs: &["lua-5.3", "lua5.3"] },
-    Dialect { version: LuaVersion::Lua54, label: "Lua 5.4", refs: &["lua-5.4", "lua5.4"] },
-    Dialect { version: LuaVersion::Lua55, label: "Lua 5.5", refs: &["lua-5.5", "lua5.5", "lua"] },
+    Dialect {
+        version: LuaVersion::Lua51,
+        label: "Lua 5.1",
+        refs: &["lua-5.1", "lua5.1"],
+    },
+    Dialect {
+        version: LuaVersion::Lua52,
+        label: "Lua 5.2",
+        refs: &["lua-5.2", "lua5.2"],
+    },
+    Dialect {
+        version: LuaVersion::Lua53,
+        label: "Lua 5.3",
+        refs: &["lua-5.3", "lua5.3"],
+    },
+    Dialect {
+        version: LuaVersion::Lua54,
+        label: "Lua 5.4",
+        refs: &["lua-5.4", "lua5.4"],
+    },
+    Dialect {
+        version: LuaVersion::Lua55,
+        label: "Lua 5.5",
+        refs: &["lua-5.5", "lua5.5", "lua"],
+    },
 ];
 
 fn main() {
@@ -182,7 +202,9 @@ fn main() {
             let luna_d = measure_luna(dialect.version, b);
             let puc_d = puc_bin.and_then(|bin| measure_external(bin, b.source, b.iters));
             let puc_s = puc_d.map(fmt_us).unwrap_or_else(|| "-".into());
-            let puc_r = puc_d.map(|d| ratio(luna_d, d)).unwrap_or_else(|| "-".into());
+            let puc_r = puc_d
+                .map(|d| ratio(luna_d, d))
+                .unwrap_or_else(|| "-".into());
             println!(
                 "{:<22} {:>5} {:>10} {:>12} {:>8}",
                 b.name,
@@ -198,16 +220,14 @@ fn main() {
     // LuaJIT 2.1 is the production-favourite community runtime for the
     // 5.1 lineage (5.2 extensions opt-in). Show it side-by-side with luna
     // configured as 5.1 since that's what LuaJIT implements.
-    let ljit_bin: Option<&str> = ["luajit", "luajit-2.1", "luajit2"]
-        .iter()
-        .find_map(|b| {
-            let probe = std::process::Command::new(b)
-                .arg("-v")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            if probe.is_ok() { Some(*b) } else { None }
-        });
+    let ljit_bin: Option<&str> = ["luajit", "luajit-2.1", "luajit2"].iter().find_map(|b| {
+        let probe = std::process::Command::new(b)
+            .arg("-v")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if probe.is_ok() { Some(*b) } else { None }
+    });
     if let Some(bin) = ljit_bin {
         println!("=== LuaJIT 2.1 (vs luna @ Lua 5.1) ===");
         println!(
@@ -219,7 +239,9 @@ fn main() {
             let luna_d = measure_luna(LuaVersion::Lua51, b);
             let ljit_d = measure_external(bin, b.source, b.iters);
             let ljit_s = ljit_d.map(fmt_us).unwrap_or_else(|| "-".into());
-            let ljit_r = ljit_d.map(|d| ratio(luna_d, d)).unwrap_or_else(|| "-".into());
+            let ljit_r = ljit_d
+                .map(|d| ratio(luna_d, d))
+                .unwrap_or_else(|| "-".into());
             println!(
                 "{:<22} {:>5} {:>10} {:>12} {:>8}",
                 b.name,

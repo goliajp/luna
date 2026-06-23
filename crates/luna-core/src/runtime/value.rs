@@ -316,7 +316,8 @@ pub mod tag {
 /// "compact arrays" layout: 1 tag byte + 8 payload bytes per slot. The
 /// payload is a union (PUC `Value` union shape) rather than u64 bits so that
 /// pointer provenance survives the round-trip (strict-provenance clean).
-#[doc(hidden)] pub mod raw {
+#[doc(hidden)]
+pub mod raw {
     pub const NIL: u8 = 0;
     pub const FALSE: u8 = 1;
     pub const TRUE: u8 = 2;
@@ -338,7 +339,8 @@ pub mod tag {
 }
 
 #[derive(Clone, Copy)]
-#[doc(hidden)] pub union RawVal {
+#[doc(hidden)]
+pub union RawVal {
     pub zero: u64,
     pub i: i64,
     pub f: f64,
@@ -356,7 +358,8 @@ impl RawVal {
 }
 
 impl Value {
-    #[doc(hidden)] pub fn unpack(self) -> (u8, RawVal) {
+    #[doc(hidden)]
+    pub fn unpack(self) -> (u8, RawVal) {
         match self {
             Value::Nil => (raw::NIL, RawVal::NIL),
             Value::Bool(false) => (raw::FALSE, RawVal::NIL),
@@ -423,7 +426,10 @@ mod tests {
         assert_eq!(Value::Float(3.14).tag_byte(), tag::FLOAT);
         let s = heap.intern(b"hi");
         assert_eq!(Value::Str(s).tag_byte(), tag::STR);
-        assert_eq!(Value::LightUserdata(std::ptr::null()).tag_byte(), tag::LIGHTUSERDATA);
+        assert_eq!(
+            Value::LightUserdata(std::ptr::null()).tag_byte(),
+            tag::LIGHTUSERDATA
+        );
     }
 
     #[test]

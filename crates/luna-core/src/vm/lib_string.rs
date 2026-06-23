@@ -15,7 +15,9 @@ pub(crate) fn open_string(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "len", s_len);
     set(vm, "sub", s_sub);
@@ -32,11 +34,15 @@ pub(crate) fn open_string(vm: &mut Vm) {
     let gmatch_v = vm.native(s_gmatch);
     let k = Value::Str(vm.heap.intern(b"gmatch"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }.set(&mut vm.heap, k, gmatch_v).expect("valid key");
+    unsafe { t.as_mut() }
+        .set(&mut vm.heap, k, gmatch_v)
+        .expect("valid key");
     if vm.version() == crate::version::LuaVersion::Lua51 {
         let k = Value::Str(vm.heap.intern(b"gfind"));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, gmatch_v).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, gmatch_v)
+            .expect("valid key");
     }
     set(vm, "gsub", s_gsub);
     set(vm, "format", s_format);
@@ -47,7 +53,8 @@ pub(crate) fn open_string(vm: &mut Vm) {
         set(vm, "unpack", crate::vm::lib_strpack::s_unpack);
         set(vm, "packsize", crate::vm::lib_strpack::s_packsize);
     }
-    vm.set_global("string", Value::Table(t)).expect("stdlib registration");
+    vm.set_global("string", Value::Table(t))
+        .expect("stdlib registration");
     vm.barrier_back_table(t);
     // shared string metatable: methods resolve through the library table
     let mt = vm.heap.new_table();
@@ -100,19 +107,22 @@ fn opt_int(
     match vm.nat_arg(fs, nargs, i) {
         Value::Nil => Ok(default),
         Value::Int(x) => Ok(x),
-        Value::Float(f) => crate::runtime::value::f2i_exact(f).ok_or_else(|| {
-            arg_error(vm, i + 1, who, "number has no integer representation")
-        }),
+        Value::Float(f) => crate::runtime::value::f2i_exact(f)
+            .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
         Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
             Some(Num::Int(x)) => Ok(x),
-            Some(Num::Float(f)) => crate::runtime::value::f2i_exact(f).ok_or_else(|| {
-                arg_error(vm, i + 1, who, "number has no integer representation")
-            }),
+            Some(Num::Float(f)) => crate::runtime::value::f2i_exact(f)
+                .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
             None => Err(arg_error(vm, i + 1, who, "number expected, got string")),
         },
         v => {
             let tn = vm.obj_typename(v);
-            Err(arg_error(vm, i + 1, who, &format!("number expected, got {tn}")))
+            Err(arg_error(
+                vm,
+                i + 1,
+                who,
+                &format!("number expected, got {tn}"),
+            ))
         }
     }
 }
@@ -792,7 +802,11 @@ fn fmt_hex_float(v: f64, upper: bool, prec: Option<usize>) -> Vec<u8> {
                             lead += 1;
                         }
                     }
-                    if p == 0 { String::new() } else { format!("{r:0width$x}", width = p) }
+                    if p == 0 {
+                        String::new()
+                    } else {
+                        format!("{r:0width$x}", width = p)
+                    }
                 }
             }
         };
@@ -830,9 +844,7 @@ fn quote_value(vm: &mut Vm, v: Value, out: &mut Vec<u8>) -> Result<(), LuaError>
                     c if c.is_ascii_control() => {
                         let always_three =
                             c == 0 && vm.version() == crate::version::LuaVersion::Lua51;
-                        if always_three
-                            || bytes.get(i + 1).is_some_and(|d| d.is_ascii_digit())
-                        {
+                        if always_three || bytes.get(i + 1).is_some_and(|d| d.is_ascii_digit()) {
                             out.extend_from_slice(format!("\\{c:03}").as_bytes());
                         } else {
                             out.extend_from_slice(format!("\\{c}").as_bytes());
@@ -1059,7 +1071,10 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         if vm.version() <= crate::version::LuaVersion::Lua53
             && (spec.width >= 100 || spec.prec.unwrap_or(0) >= 100)
         {
-            return Err(raise_str(vm, "invalid format (width or precision too long)"));
+            return Err(raise_str(
+                vm,
+                "invalid format (width or precision too long)",
+            ));
         }
         if argi >= nargs && conv != b'%' {
             return Err(arg_error(vm, argi + 1, "format", "no value"));
@@ -1081,7 +1096,10 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     _ => false,
                 };
                 if neg {
-                    return Err(raise_str(vm, "bad argument to 'format' (value out of range)"));
+                    return Err(raise_str(
+                        vm,
+                        "bad argument to 'format' (value out of range)",
+                    ));
                 }
             }
             // PUC `luaL_checkinteger` runs every integer-format operand through

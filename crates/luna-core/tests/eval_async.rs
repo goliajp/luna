@@ -124,7 +124,10 @@ fn eval_async_compile_error() {
     let err = block_on(vm.eval_async("function function function")).unwrap_err();
     // Compile error path — message is non-empty and classified.
     let msg = vm.error_text(&err);
-    assert!(!msg.is_empty(), "expected a syntax-error message, got empty");
+    assert!(
+        !msg.is_empty(),
+        "expected a syntax-error message, got empty"
+    );
     assert_eq!(
         vm.error_kind(),
         luna_core::vm::LuaErrorKind::Syntax,

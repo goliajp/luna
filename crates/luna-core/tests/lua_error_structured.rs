@@ -1,7 +1,7 @@
 //! P3 B6 smoke tests: LuaError Display/Error impls + Vm::error_kind tracking.
 
-use luna_core::vm::{LuaError, LuaErrorKind, Vm};
 use luna_core::version::LuaVersion;
+use luna_core::vm::{LuaError, LuaErrorKind, Vm};
 use std::error::Error;
 
 fn vm() -> Vm {

@@ -85,10 +85,7 @@ fn depth_zero_gate_holds_for_loop_triggered_traces() {
              return s",
         )
         .unwrap();
-    assert!(matches!(
-        r[0],
-        luna_jit::runtime::Value::Int(40200)
-    ));
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(40200)));
     // The trace either compiles or aborts (helper's body uses
     // upvals/etc. the whitelist may not cover) — what we verify is
     // that the dispatcher did NOT fire a degenerate empty trace

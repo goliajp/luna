@@ -159,11 +159,7 @@ fn measure_external(bin: &str, bench: &Bench) -> Option<Duration> {
         samples = bench.samples,
         inner = bench.inner_calls,
     );
-    let out = Command::new(bin)
-        .arg("-e")
-        .arg(&wrapper)
-        .output()
-        .ok()?;
+    let out = Command::new(bin).arg("-e").arg(&wrapper).output().ok()?;
     if !out.status.success() {
         return None;
     }

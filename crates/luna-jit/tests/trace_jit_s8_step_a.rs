@@ -111,8 +111,5 @@ fn move_does_not_break_when_src_equals_dst_via_loop_var() {
         .unwrap();
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(6000)));
     // The contract is: still works (no panic / no compile bail).
-    let _ = (
-        vm.trace_compiled_count(),
-        vm.trace_compile_failed_count(),
-    );
+    let _ = (vm.trace_compiled_count(), vm.trace_compile_failed_count());
 }
