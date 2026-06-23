@@ -10,11 +10,15 @@ pub mod lib_bit32;
 pub mod lib_coroutine;
 
 pub mod ergo;
+pub mod into_value;
 pub mod sandbox;
+pub mod table_builder;
 
 pub use error::LuaError;
 pub use exec::{Error, Vm};
+pub use into_value::IntoValue;
 pub use sandbox::SandboxBuilder;
+pub use table_builder::TableBuilder;
 pub mod lib_debug;
 pub mod lib_math;
 pub mod lib_os_io;
