@@ -1,23 +1,27 @@
-//! D1 — Redis-Lua-shape micro-bench. Workloads modelled on the dogfood
+//! D1+D2 — Redis-Lua-shape micro-bench. Workloads modelled on the dogfood
 //! report §5#1: BullMQ token-bucket / Redlock-style sliding window /
 //! method dispatch via metatables / string ops. These are luna's
 //! "real-world embedder shape" baselines (vs the fib_28 / loop_int_1m
 //! academic shapes in lua_microbench).
 //!
-//! Zero deps. Median of N runs via `std::time::Instant` — same harness
-//! style as lua_microbench. D2 (criterion + CPU pin + n=1000) refines
-//! the methodology; D1 ships the workload corpus.
+//! D2 (v1.2): criterion harness with statistical sampling. macOS local
+//! variance gate ~2.5% (M-series, no public CPU pin API). Linux CI gate
+//! ~1-2% via `taskset -c 1` (set up in `.github/workflows/ci.yml`'s
+//! `perf-gate` job). Replaces the D1 hand-rolled median-of-N harness;
+//! the workload corpus is unchanged so D1 baselines remain comparable.
 //!
 //! Run: `cargo bench --bench redis_lua_shape`
+//!     `cargo bench --bench redis_lua_shape -- token_bucket_1k`  (filter)
+//!     `cargo bench --bench redis_lua_shape -- --quick`          (sanity)
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use luna_jit::version::LuaVersion;
 
 struct Bench {
     name: &'static str,
     source: &'static str,
-    iters: usize,
 }
 
 const BENCHES: &[Bench] = &[
@@ -48,7 +52,6 @@ const BENCHES: &[Bench] = &[
             end
             return bucket.tokens, refilled
         "#,
-        iters: 50,
     },
     // ── Sliding window limiter ─────────────────────────────────────
     //
@@ -83,7 +86,6 @@ const BENCHES: &[Bench] = &[
             end
             return kept
         "#,
-        iters: 30,
     },
     // ── Method dispatch via metatables ─────────────────────────────
     //
@@ -113,7 +115,6 @@ const BENCHES: &[Bench] = &[
             end
             return last
         "#,
-        iters: 20,
     },
     // ── String ops (KEYS / ARGV concat + parse) ───────────────────
     //
@@ -139,69 +140,46 @@ const BENCHES: &[Bench] = &[
             end
             return total
         "#,
-        iters: 20,
     },
 ];
 
-fn main() {
-    let argv: Vec<String> = std::env::args().collect();
-    // Skip `--bench` and similar harness-passthrough args; only use
-    // a final user-supplied positional as the filter.
-    let filter = argv
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with("--") && a.as_str() != "redis_lua_shape")
-        .cloned();
+fn bench_redis_shape(c: &mut Criterion) {
+    let mut group = c.benchmark_group("redis_lua_shape");
 
-    let label = "luna       ";
-    println!("# Redis-Lua-shape micro-bench (D1)");
-    println!("# Median of N runs, wall-clock around Vm::eval. JIT on (luna default).");
-    println!();
-    println!(
-        "{:>26} | {:>10} | {:>6} | {:>8}",
-        "name", "median_ms", "iters", "runtime"
-    );
-    println!(
-        "{:>26} | {:>10} | {:>6} | {:>8}",
-        "-".repeat(26),
-        "-".repeat(10),
-        "-".repeat(6),
-        "-".repeat(8)
-    );
+    // P-A1 audit: macOS variance gate ~2.5% (no public CPU pin API on
+    // M-series); the criterion noise_threshold below is the regression
+    // boundary, paired with `measurement_time` long enough that the
+    // outlier-rejection statistics converge. Linux CI runs via taskset
+    // tighten this further (see the `perf-gate` job in ci.yml).
+    group.measurement_time(Duration::from_secs(8));
+    group.warm_up_time(Duration::from_secs(2));
+    group.sample_size(100);
+    group.noise_threshold(0.025);
 
     for b in BENCHES {
-        if let Some(ref f) = filter {
-            if !b.name.contains(f.as_str()) {
-                continue;
-            }
-        }
-        let med = run_luna(b);
-        println!(
-            "{:>26} | {:>10.3} | {:>6} | {:>8}",
-            b.name,
-            med.as_secs_f64() * 1000.0,
-            b.iters,
-            label.trim()
-        );
+        group.bench_function(b.name, |bencher| {
+            bencher.iter_batched(
+                || {
+                    // Fresh Vm per timed iteration. Setup time is NOT
+                    // included in the per-iter measurement (criterion's
+                    // iter_batched contract); this matches the D1
+                    // hand-rolled harness which timed `vm.eval` only.
+                    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+                    vm.open_base();
+                    vm.open_math();
+                    vm.open_string();
+                    vm.open_table();
+                    vm
+                },
+                |mut vm| {
+                    black_box(vm.eval(b.source).expect("bench script must run cleanly"));
+                },
+                BatchSize::SmallInput,
+            );
+        });
     }
+    group.finish();
 }
 
-fn run_luna(b: &Bench) -> Duration {
-    let mut samples: Vec<Duration> = (0..b.iters)
-        .map(|_| {
-            // Fresh Vm per iter so allocations / interp state stay
-            // comparable across runs and the per-iter wall-clock
-            // doesn't accumulate caches that fade between runs.
-            let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
-            vm.open_base();
-            vm.open_math();
-            vm.open_string();
-            vm.open_table();
-            let start = Instant::now();
-            vm.eval(b.source).expect("bench script must run cleanly");
-            start.elapsed()
-        })
-        .collect();
-    samples.sort();
-    samples[samples.len() / 2]
-}
+criterion_group!(benches, bench_redis_shape);
+criterion_main!(benches);

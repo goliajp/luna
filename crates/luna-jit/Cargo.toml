@@ -41,6 +41,14 @@ cranelift-codegen = "0.124"
 cranelift-frontend = "0.124"
 cranelift-native = "0.124"
 
+# v1.2 D2 (P-A1 audit): criterion as luna-jit-only dev-dep. The luna-core
+# 0-third-party-dep contract is unaffected (CI `zero-dep` job verifies).
+# `harness = false` on bench targets stays — criterion ships its own
+# bench harness. macOS local variance gate: 2.5% (M-series with no
+# public CPU pin API); Linux CI variance gate: ~1-2% via `taskset -c 1`.
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
 [[bench]]
 name = "lua_microbench"
 harness = false
