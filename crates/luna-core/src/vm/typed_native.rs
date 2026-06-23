@@ -131,13 +131,24 @@ impl<T: FromLuaValue> FromLuaValue for Option<T> {
 /// Decode a tuple of typed Rust values from the VM's stack arguments
 /// (B5 — typed Rust native function trampoline).
 pub trait FromLuaArgs: Sized {
-    /// Decode `nargs` consecutive arguments starting at `fs+1` into `Self`.
+    /// Decode `nargs` consecutive arguments starting at index `0` into `Self`.
     fn from_lua_args(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError>;
+
+    /// Decode `nargs - 1` arguments starting at index `1` — i.e. the
+    /// `obj:method(args)` shape where slot `0` is the receiver and
+    /// `args` start at slot `1`. v1.2 Track B `LuaUserdata` method
+    /// trampolines call this; regular [`Vm::native_typed`] callers use
+    /// [`from_lua_args`](Self::from_lua_args).
+    fn from_lua_args_skip_self(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError>;
 }
 
 impl FromLuaArgs for () {
     #[inline]
     fn from_lua_args(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<Self, LuaError> {
+        Ok(())
+    }
+    #[inline]
+    fn from_lua_args_skip_self(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<Self, LuaError> {
         Ok(())
     }
 }
@@ -154,6 +165,18 @@ macro_rules! impl_from_lua_args_tuple {
                         )+
                     ))
                 }
+                #[inline]
+                fn from_lua_args_skip_self(
+                    vm: &mut Vm,
+                    fs: u32,
+                    nargs: u32,
+                ) -> Result<Self, LuaError> {
+                    Ok((
+                        $(
+                            $name::from_lua_value(vm.nat_arg(fs, nargs, $idx + 1))?,
+                        )+
+                    ))
+                }
             }
         )+
     };
@@ -165,6 +188,32 @@ impl_from_lua_args_tuple! {
     (T0: 0, T1: 1, T2: 2, T3: 3),
     (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4),
     (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5),
+}
+
+/// Variadic decoder: collect **all** positional args into a
+/// `Vec<Value>`. Useful for variadic natives (`redis.call(cmd, ...)`,
+/// dispatch tables, etc.) where fixed-arity tuples would force an
+/// artificial cap. v1.2 Track B side-task.
+impl FromLuaArgs for Vec<Value> {
+    #[inline]
+    fn from_lua_args(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError> {
+        let mut out = Vec::with_capacity(nargs as usize);
+        for i in 0..nargs {
+            out.push(vm.nat_arg(fs, nargs, i));
+        }
+        Ok(out)
+    }
+    #[inline]
+    fn from_lua_args_skip_self(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError> {
+        if nargs <= 1 {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::with_capacity((nargs - 1) as usize);
+        for i in 1..nargs {
+            out.push(vm.nat_arg(fs, nargs, i));
+        }
+        Ok(out)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
