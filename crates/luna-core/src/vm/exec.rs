@@ -6606,7 +6606,22 @@ impl Vm {
                 Op::GetField => {
                     let t = self.r(base, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    self.op_index(t, key, base + inst.a())?;
+                    // v1.2 D4 A1 — fast path: known-Str const key + no
+                    // metatable on the table → skip `op_index` /
+                    // `index_step`'s MAX_TAG_LOOP setup and the outer
+                    // `Value` match. Falls through to the slow path
+                    // unchanged when either invariant breaks (so
+                    // `__index` metamethods, non-Table receivers, and
+                    // non-Str keys behave exactly as before).
+                    if let Value::Table(tb) = t
+                        && tb.metatable().is_none()
+                        && let Value::Str(s) = key
+                    {
+                        let v = tb.get_str(s);
+                        self.stack[(base + inst.a()) as usize] = v;
+                    } else {
+                        self.op_index(t, key, base + inst.a())?;
+                    }
                 }
                 Op::SetTabUp => {
                     let t = self.upval_get(cl, inst.a());

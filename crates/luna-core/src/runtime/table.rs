@@ -313,6 +313,19 @@ impl Table {
         self.get_hash(Value::Int(i))
     }
 
+    /// String-keyed variant of [`Self::get`] for v1.2 D4 A1 GetField fast
+    /// path: the GetField interp arm always has a `Gc<LuaStr>` key from
+    /// `Proto.consts`. Skips the outer `Value` match (which would only
+    /// take the `_ => self.get_hash(k)` arm anyway) so the dispatcher
+    /// pays one less branch per call. ~5 GetField/iter × 1000 iters/cell
+    /// on the Redis-Lua-shape workload — every shaved nanosecond shows
+    /// up at the bench level. Counter-validated via
+    /// `examples/diag_opcode_breakdown.rs`.
+    #[inline]
+    pub fn get_str(&self, key: crate::runtime::Gc<crate::runtime::string::LuaStr>) -> Value {
+        self.get_hash(Value::Str(key))
+    }
+
     fn get_hash(&self, k: Value) -> Value {
         match self.find_node(k) {
             Some(idx) => self.nodes[idx].val,
