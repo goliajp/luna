@@ -768,6 +768,7 @@ fn d_sethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         HookState {
             func: Some(hook),
+            rust_func: None,
             call: mask.contains(&b'c'),
             ret: mask.contains(&b'r'),
             line: mask.contains(&b'l'),
