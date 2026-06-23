@@ -970,10 +970,27 @@ impl Vm {
         self.version
     }
 
-    /// Set a global by name. Returns `Err(LuaError)` only if the globals
-    /// table overflows (extremely unlikely in practice — `MAX_ASIZE = 1 << 27`).
+    /// Set a global by name. `v` may be any `IntoValue`: a primitive
+    /// (`i64`, `f64`, `bool`, `&str`, `String`, `Vec<u8>`), a `Value`
+    /// directly, an `Option<T>`, or a `Gc<Table>` / `Gc<LuaClosure>` /
+    /// `Gc<NativeClosure>` handle.
+    ///
+    /// Returns `Err(LuaError)` only if the globals table overflows
+    /// (extremely unlikely in practice — `MAX_ASIZE = 1 << 27`).
     /// String interning + key construction cannot fail.
-    pub fn set_global(&mut self, name: &str, v: Value) -> Result<(), LuaError> {
+    ///
+    /// ```
+    /// # use luna_core::vm::Vm;
+    /// # use luna_core::version::LuaVersion;
+    /// let mut vm = Vm::sandbox(LuaVersion::Lua55).open_base().build();
+    /// vm.set_global("answer", 42).unwrap();
+    /// vm.set_global("ratio", 0.5_f64).unwrap();
+    /// vm.set_global("hello", "world").unwrap();
+    /// let r = vm.eval("return answer, ratio, hello").unwrap();
+    /// assert_eq!(r.len(), 3);
+    /// ```
+    pub fn set_global<V: crate::vm::IntoValue>(&mut self, name: &str, v: V) -> Result<(), LuaError> {
+        let v = v.into_value(self);
         let k = Value::Str(self.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { self.globals.as_mut() }
