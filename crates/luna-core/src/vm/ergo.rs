@@ -135,4 +135,99 @@ impl Vm {
         self.last_error_kind = crate::vm::error::LuaErrorKind::default();
         self.last_error_source = None;
     }
+
+    // ─── B8 LuaUserdata host payloads ────────────────────────────
+    //
+    // The closed-world userdata GC infrastructure (`Gc<Userdata>` +
+    // metatable + `__gc`) is already in place; B8 just unlocks the
+    // `Host { type_id, data: Box<dyn Any> }` payload variant for
+    // embedders to stash arbitrary `T: 'static` Rust values.
+    //
+    // v1.1 restricts host types to `'static` (typically heap-only
+    // `Box<...>` or `Rc<...>` to non-Gc objects). Trace-bearing host
+    // payloads land in Phase 4+ alongside the userdata Trace ripple.
+
+    /// Allocate a host userdata wrapping `value`. Returns the
+    /// `Value::Userdata` you can `set_global` / pin / pass to scripts.
+    ///
+    /// ```
+    /// use luna_core::vm::Vm;
+    /// use luna_core::version::LuaVersion;
+    /// use luna_core::runtime::Value;
+    ///
+    /// #[derive(Debug)]
+    /// struct Counter(i64);
+    ///
+    /// let mut vm = Vm::sandbox(LuaVersion::Lua55).open_base().build();
+    /// let ud = vm.create_userdata(Counter(42));
+    /// vm.set_global("counter", ud).unwrap();
+    ///
+    /// match ud {
+    ///     Value::Userdata(g) => {
+    ///         // SAFETY: single-threaded heap; pointer is live.
+    ///         let r = unsafe { &*g.as_ptr() };
+    ///         assert_eq!(r.downcast::<Counter>().unwrap().0, 42);
+    ///     }
+    ///     _ => unreachable!(),
+    /// }
+    /// ```
+    pub fn create_userdata<T: std::any::Any + 'static>(&mut self, value: T) -> Value {
+        let payload = crate::runtime::userdata::UserdataPayload::Host {
+            type_id: std::any::TypeId::of::<T>(),
+            data: Box::new(value),
+        };
+        let g = self.heap.new_userdata(payload, /* writable */ true);
+        Value::Userdata(g)
+    }
+
+    /// Convenience: [`Self::create_userdata`] + [`Self::set_global`].
+    pub fn set_userdata<T: std::any::Any + 'static>(
+        &mut self,
+        name: &str,
+        value: T,
+    ) -> Result<(), LuaError> {
+        let ud = self.create_userdata(value);
+        self.set_global(name, ud)
+    }
+
+    /// Borrow the host payload of a global userdata as `&T`. Returns
+    /// `None` if the global doesn't exist, isn't a userdata, isn't a
+    /// host userdata, or holds a different type than `T`.
+    ///
+    /// Takes `&mut self` because the lookup interns the key string;
+    /// returning a borrow tied to `&mut Vm` mirrors `vm.set_global`
+    /// ergonomics.
+    pub fn userdata_borrow<T: std::any::Any + 'static>(&mut self, name: &str) -> Option<&T> {
+        let key = Value::Str(self.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> = NonNull<T> over the single-threaded GC heap.
+        let v = unsafe { (*self.globals().as_ptr()).get(key) };
+        match v {
+            Value::Userdata(g) => {
+                // SAFETY: single-threaded GC heap; the Gc<Userdata>
+                // stays live as long as it's reachable from globals.
+                let ud = unsafe { &*g.as_ptr() };
+                ud.downcast::<T>()
+            }
+            _ => None,
+        }
+    }
+
+    /// Mutable variant of [`Self::userdata_borrow`].
+    pub fn userdata_borrow_mut<T: std::any::Any + 'static>(
+        &mut self,
+        name: &str,
+    ) -> Option<&mut T> {
+        let key = Value::Str(self.heap.intern(name.as_bytes()));
+        // SAFETY: see userdata_borrow.
+        let v = unsafe { (*self.globals().as_ptr()).get(key) };
+        match v {
+            Value::Userdata(g) => {
+                // SAFETY: see userdata_borrow; the returned &mut is
+                // exclusive within the &mut self window.
+                let ud = unsafe { &mut *g.as_ptr() };
+                ud.downcast_mut::<T>()
+            }
+            _ => None,
+        }
+    }
 }

@@ -43,15 +43,25 @@ pub struct Userdata {
     pub(crate) popen_child: Option<std::process::Child>,
 }
 
-/// A userdata's host-side payload. Beyond io file handles luna exposes one
-/// more shape — an `Empty` proxy used by PUC 5.1 `newproxy()`, which only
-/// carries identity + an optional metatable for `__index` / `__newindex` /
-/// `__gc` (5.1 module tests treat it like a metatable hook).
+/// A userdata's host-side payload. Beyond io file handles luna exposes:
+///
+/// - `Empty` — PUC 5.1 `newproxy()` carries only identity + an optional
+///   metatable hook for `__index` / `__newindex` / `__gc`.
+/// - `Host` — embedder-supplied Rust value (v1.1 B8). The host owns the
+///   value; luna treats it as opaque Any. v1.1 restricts host types to
+///   `'static` non-GC-bearing types; Trace-bearing host payloads land
+///   in Phase 4+ alongside the userdata GC ripple.
 pub enum UserdataPayload {
     /// an io stream/file handle
     File(FileHandle),
     /// a PUC 5.1 `newproxy` userdata — no host payload, only identity
     Empty,
+    /// B8 — embedder-supplied Rust value. `type_id` keys the downcast;
+    /// `data` is the boxed payload.
+    Host {
+        type_id: std::any::TypeId,
+        data: Box<dyn std::any::Any + 'static>,
+    },
 }
 
 /// The OS resource behind a file userdata. Standard streams cannot be closed;
@@ -113,6 +123,7 @@ impl Userdata {
         match &self.payload {
             UserdataPayload::File(fh) => fh,
             UserdataPayload::Empty => panic!("file() on a newproxy userdata"),
+            UserdataPayload::Host { .. } => panic!("file() on a host userdata"),
         }
     }
 
@@ -120,6 +131,7 @@ impl Userdata {
         match &mut self.payload {
             UserdataPayload::File(fh) => fh,
             UserdataPayload::Empty => panic!("file_mut() on a newproxy userdata"),
+            UserdataPayload::Host { .. } => panic!("file_mut() on a host userdata"),
         }
     }
 
@@ -128,5 +140,42 @@ impl Userdata {
     /// "bad argument" error rather than panicking on `file()`.
     pub fn is_proxy(&self) -> bool {
         matches!(self.payload, UserdataPayload::Empty)
+    }
+
+    /// True for B8 host userdata (embedder-supplied `T: 'static`).
+    pub fn is_host(&self) -> bool {
+        matches!(self.payload, UserdataPayload::Host { .. })
+    }
+
+    /// Borrow the host payload as `&T` if this userdata holds a `T`.
+    /// Returns `None` when the userdata isn't a host payload, or holds
+    /// a different `T`. Embedders typically reach this through
+    /// [`crate::vm::Vm::userdata_borrow`] or via a `Value::Userdata`
+    /// match arm.
+    pub fn downcast<T: std::any::Any + 'static>(&self) -> Option<&T> {
+        match &self.payload {
+            UserdataPayload::Host { type_id, data } => {
+                if *type_id == std::any::TypeId::of::<T>() {
+                    data.downcast_ref::<T>()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Mutable borrow variant of [`Self::downcast`].
+    pub fn downcast_mut<T: std::any::Any + 'static>(&mut self) -> Option<&mut T> {
+        match &mut self.payload {
+            UserdataPayload::Host { type_id, data } => {
+                if *type_id == std::any::TypeId::of::<T>() {
+                    data.downcast_mut::<T>()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }
