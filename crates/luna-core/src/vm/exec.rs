@@ -282,6 +282,15 @@ pub struct Vm {
     /// growth have a richer ergonomics envelope to live in.
     pub(crate) host_roots: Vec<Value>,
 
+    /// v1.2 Track B — per-Vm cache of `Gc<Table>` metatables keyed
+    /// by `TypeId::of::<T>()` for embedder types implementing
+    /// [`crate::vm::userdata_trait::LuaUserdata`]. Populated lazily by
+    /// [`Vm::register_userdata`]; metatables are pinned via
+    /// [`Vm::pin_host`] at registration time so the entry's
+    /// `Gc<Table>` stays live for the rest of the Vm's lifetime.
+    pub(crate) userdata_metatables:
+        std::collections::HashMap<std::any::TypeId, Gc<crate::runtime::table::Table>>,
+
     /// B6 — classification of the most recent error raised on this Vm.
     /// Embedders read via [`Vm::error_kind`]; the dispatcher sets it
     /// at well-known sites (syntax errors, instr-budget trips, native
@@ -902,6 +911,9 @@ impl Vm {
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // v1.1 B12 — host roots ticket pool for the `Lua` facade.
             host_roots: Vec::new(),
+            // v1.2 Track B — LuaUserdata trait sugar's per-Vm
+            // metatable cache. Populated lazily by register_userdata.
+            userdata_metatables: std::collections::HashMap::new(),
             // v1.1 B6 — error classification metadata. Defaults to
             // Runtime; set at known sites (syntax / budget trip /
             // native error / type error).

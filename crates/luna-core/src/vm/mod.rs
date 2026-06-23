@@ -15,6 +15,7 @@ pub mod into_value;
 pub mod sandbox;
 pub mod table_builder;
 pub mod typed_native;
+pub mod userdata_trait;
 
 pub use async_drive::{AsyncNativeFn, EvalFuture};
 pub use error::{LuaError, LuaErrorKind};
@@ -23,6 +24,7 @@ pub use into_value::IntoValue;
 pub use sandbox::SandboxBuilder;
 pub use table_builder::TableBuilder;
 pub use typed_native::{FromLuaArgs, FromLuaValue, IntoLuaReturn, NativeTypedSig};
+pub use userdata_trait::{LuaUserdata, MetaMethod, MetatableBuilder, UserdataMethods};
 pub mod lib_debug;
 pub mod lib_math;
 pub mod lib_os_io;

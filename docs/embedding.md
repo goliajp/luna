@@ -217,10 +217,13 @@ fall back to `vm.native_with(...)` with explicit upvals.
 
 ## 7. Userdata — exposing host types
 
-Stash arbitrary `T: 'static` Rust values inside Lua userdata:
+Stash arbitrary `T: 'static` Rust values inside Lua userdata. v1.2
+exposes Lua-callable methods + metamethods through the
+[`LuaUserdata`] trait; for plain `T: 'static` types without
+Lua-side methods, an empty impl is the one-line bridge:
 
 ```rust
-use luna_jit::vm::Vm;
+use luna_core::vm::LuaUserdata;
 
 #[derive(Debug)]
 struct DbConn {
@@ -228,33 +231,144 @@ struct DbConn {
     pool_size: u32,
 }
 
+impl LuaUserdata for DbConn {}
+```
+
+```rust
 let conn = DbConn {
     url: "postgres://localhost/app".to_string(),
     pool_size: 8,
 };
 vm.set_userdata("db", conn)?;
 
-// Later, on the host side:
+// Host-side read/write:
 let c: &DbConn = vm.userdata_borrow("db").unwrap();
 println!("pool size: {}", c.pool_size);
-
-// Mutable variant:
 let c: &mut DbConn = vm.userdata_borrow_mut("db").unwrap();
 c.pool_size = 16;
 ```
 
-The script sees `db` as a regular `userdata` value (`type(db) ==
-"userdata"`). Attach a metatable for method-style dispatch (see PUC
-manual §2.4):
+> v1.1 → v1.2 migration: `Vm::create_userdata` / `Vm::set_userdata`
+> now require `T: LuaUserdata`. Existing `T: 'static` types upgrade
+> with an empty `impl LuaUserdata for T {}`. The metatable produced
+> by the trait is auto-installed on the userdata at creation time
+> (cached per-Vm by `TypeId::of::<T>()`).
+
+### 7.1 `LuaUserdata` trait — methods + metamethods
 
 ```rust
-// In a real embedder, you'd register `__index` etc. on the userdata's
-// metatable using `set_metatable`. v1.1 ships the raw infrastructure;
-// a LuaUserdata trait with sugared method registration lands in v1.2.
+use luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
+
+struct Counter {
+    value: i64,
+}
+
+impl LuaUserdata for Counter {
+    fn type_name() -> &'static str { "Counter" }
+
+    fn add_methods<M: UserdataMethods<Self>>(m: &mut M) {
+        // Regular method — `obj:get()`.
+        m.add_method("get", |_vm, this, ()| Ok::<_, _>(this.value));
+
+        // Mutating method — `obj:incr(by)`.
+        m.add_method_mut("incr", |_vm, this, (by,): (i64,)| {
+            this.value += by;
+            Ok::<_, _>(())
+        });
+
+        // Metamethod — `tostring(obj)`.
+        m.add_meta_method(MetaMethod::ToString, |_vm, this, ()| {
+            Ok::<_, _>(format!("Counter({})", this.value))
+        });
+    }
+}
+
+vm.set_userdata("c", Counter { value: 100 })?;
+vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)
 ```
 
-For the low-level path, get the `Gc<Userdata>` handle out of `Value::Userdata(g)`
-and use `g.as_ptr()` (or the heap-safe accessors) to inspect/mutate.
+The closure shape is `Fn(&mut Vm, &T, A) -> Result<R, LuaError>` for
+`add_method` and `Fn(&mut Vm, &mut T, A) -> Result<R, LuaError>` for
+`add_method_mut`. `A` is any [`FromLuaArgs`] tuple (0-6 fixed args,
+`(T0, T1, …)`) or `Vec<Value>` for variadic dispatch. `R` is any
+[`IntoLuaReturn`] (primitives, tuples, `Value`, …). Closures must
+be **non-capturing** (`Copy + 'static + ZST`) — capture state by
+making it part of `T` itself.
+
+[`LuaUserdata`]: https://docs.rs/luna-core/latest/luna_core/vm/trait.LuaUserdata.html
+[`FromLuaArgs`]: https://docs.rs/luna-core/latest/luna_core/vm/trait.FromLuaArgs.html
+[`IntoLuaReturn`]: https://docs.rs/luna-core/latest/luna_core/vm/trait.IntoLuaReturn.html
+
+### 7.2 Static constructors via `add_function`
+
+`add_function` registers an entry directly on the metatable (not
+under `__index`), so it is callable as a static fn when the
+metatable is exposed as a global:
+
+```rust
+impl LuaUserdata for Vec3 {
+    fn add_methods<M: UserdataMethods<Self>>(m: &mut M) {
+        m.add_function("new", |vm, (x, y, z): (f64, f64, f64)| {
+            Ok::<_, _>(vm.create_userdata(Vec3 { x, y, z }))
+        });
+        m.add_meta_method(MetaMethod::Add, /* ... */);
+    }
+}
+
+// Expose the metatable as the `Vec3` global so scripts can call
+// `Vec3.new(1, 2, 3)`:
+let mt = vm.register_userdata::<Vec3>()?;
+vm.set_global("Vec3", luna_core::runtime::Value::Table(mt))?;
+```
+
+See `crates/luna-jit/examples/userdata_vec3.rs` for the runnable
+version with `__add` / `__sub` arithmetic metamethods.
+
+### 7.3 Variadic dispatch (`Vec<Value>`)
+
+For a Redis-style `obj:call(cmd, ...)` dispatcher, take `Vec<Value>`
+to collect all positional args:
+
+```rust
+m.add_method_mut("call", |vm, this, args: Vec<Value>| {
+    // args[0] = cmd; args[1..] = command-specific.
+    this.dispatch(vm, args)
+});
+```
+
+See `crates/luna-jit/examples/userdata_redis_stub.rs` for the
+full pattern.
+
+### 7.4 Field-style sugar — v1.2 limitation
+
+`add_field_method_get` exists today as sugar for a 0-arg method
+returning a single value. **It uses call-syntax** in v1.2 — `obj:width()`
+not `obj.width`. True field-style access (no parentheses) needs
+`__index` as a function dispatcher rather than a table; that is a
+v1.3 polish item, tracked in the v1.2 release notes.
+
+### 7.5 GC + `__gc` finalizers
+
+A trait-installed `MetaMethod::Gc` metamethod fires **before** the
+Rust `Drop` on the boxed `T`. PUC's contract is that `__gc` is
+registered for finalization at metatable-set time, not at later
+mutations of the metatable; v1.2's auto-install honors this by
+calling `check_finalizer_userdata` at `create_userdata` time.
+
+### 7.6 Trait contract reminders
+
+- `T` must be `'static`. Trait-bearing host payloads with `Gc<...>`
+  fields are **not** supported in v1.2 — the collector traces the
+  metatable but not the boxed payload (`runtime/userdata.rs`).
+- Method closures must be ZST (non-capturing). Capture state in `T`.
+- During an `add_method_mut` body, do **not** concurrently borrow
+  the same userdata payload through another API (e.g. a host-side
+  `userdata_borrow_mut("name")` on the same global). The trampoline's
+  `&mut T` is exclusive within the call; aliasing is undefined.
+
+For the low-level path, get the `Gc<Userdata>` handle out of
+`Value::Userdata(g)` and use `g.as_ptr()` (or the heap-safe
+accessors) to inspect/mutate.
 
 ---
 

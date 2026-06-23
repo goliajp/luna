@@ -2,16 +2,20 @@
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
-use luna_core::vm::Vm;
+use luna_core::vm::{LuaUserdata, Vm};
 
 #[derive(Debug, PartialEq)]
 struct Counter(i64);
+
+impl LuaUserdata for Counter {}
 
 #[derive(Debug)]
 struct Settings {
     name: String,
     max_clients: u32,
 }
+
+impl LuaUserdata for Settings {}
 
 fn vm() -> Vm {
     Vm::sandbox(LuaVersion::Lua55).open_base().build()

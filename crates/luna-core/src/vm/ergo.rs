@@ -146,17 +146,35 @@ impl Vm {
     // v1.1 restricts host types to `'static` (typically heap-only
     // `Box<...>` or `Rc<...>` to non-Gc objects). Trace-bearing host
     // payloads land in Phase 4+ alongside the userdata Trace ripple.
+    //
+    // v1.2 Track B: bounds tightened from `T: Any + 'static` to
+    // `T: LuaUserdata` so the metatable produced by `T::add_methods`
+    // is auto-installed at `create_userdata` time. Source-compatible
+    // for B8 users via a one-line `impl LuaUserdata for T {}`.
 
     /// Allocate a host userdata wrapping `value`. Returns the
     /// `Value::Userdata` you can `set_global` / pin / pass to scripts.
     ///
+    /// The metatable produced by [`crate::vm::LuaUserdata::add_methods`]
+    /// is auto-installed on the userdata (cached per `Vm` keyed by
+    /// `TypeId::of::<T>()`). For a type that only needs identity +
+    /// raw host-side access (no Lua-callable methods), provide an
+    /// empty impl:
+    ///
     /// ```
-    /// use luna_core::vm::Vm;
+    /// # use luna_core::vm::LuaUserdata;
+    /// struct Counter(i64);
+    /// impl LuaUserdata for Counter {}
+    /// ```
+    ///
+    /// ```
+    /// use luna_core::vm::{LuaUserdata, Vm};
     /// use luna_core::version::LuaVersion;
     /// use luna_core::runtime::Value;
     ///
     /// #[derive(Debug)]
     /// struct Counter(i64);
+    /// impl LuaUserdata for Counter {}
     ///
     /// let mut vm = Vm::sandbox(LuaVersion::Lua55).open_base().build();
     /// let ud = vm.create_userdata(Counter(42));
@@ -171,17 +189,32 @@ impl Vm {
     ///     _ => unreachable!(),
     /// }
     /// ```
-    pub fn create_userdata<T: std::any::Any + 'static>(&mut self, value: T) -> Value {
+    pub fn create_userdata<T: crate::vm::LuaUserdata>(&mut self, value: T) -> Value {
         let payload = crate::runtime::userdata::UserdataPayload::Host {
             type_id: std::any::TypeId::of::<T>(),
             data: Box::new(value),
         };
         let g = self.heap.new_userdata(payload, /* writable */ true);
+        // v1.2 Track B — install the trait-derived metatable (or
+        // fetch the cached one). Build only fails if the metatable's
+        // table set overflows MAX_ASIZE, which is impossible with
+        // <100 entries; expect-on-fail is appropriate here.
+        let mt = self
+            .register_userdata::<T>()
+            .expect("LuaUserdata metatable build overflowed");
+        // SAFETY: g is a freshly allocated Gc<Userdata>; the heap is
+        // single-threaded and the pointer is live.
+        unsafe { g.as_mut() }.set_metatable(Some(mt));
+        self.heap
+            .barrier_back(g.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        // PUC contract: __gc is registered for finalization at
+        // metatable-set time, not at later mutation of the metatable.
+        self.check_finalizer_userdata(g);
         Value::Userdata(g)
     }
 
     /// Convenience: [`Self::create_userdata`] + [`Self::set_global`].
-    pub fn set_userdata<T: std::any::Any + 'static>(
+    pub fn set_userdata<T: crate::vm::LuaUserdata>(
         &mut self,
         name: &str,
         value: T,
