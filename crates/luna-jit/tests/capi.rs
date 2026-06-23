@@ -2,6 +2,7 @@
 //! is the only API surface used so we exercise exactly the bytes a real
 //! `lua.h` consumer would.
 #![allow(non_snake_case)]
+#![allow(clippy::approx_constant)] // 3.14 is a float test fixture in this file, not π.
 
 use luna_jit::capi::*;
 use std::ffi::CString;

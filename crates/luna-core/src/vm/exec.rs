@@ -3189,6 +3189,7 @@ impl Vm {
     /// Safety: `buf` must have been returned by a prior
     /// `jit_str_buf_acquire` on the same Vm.
     #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` round-trips through `Box::into_raw`; SAFETY documented below.
     pub fn jit_str_buf_release(&mut self, buf: *mut Vec<u8>) {
         if buf.is_null() {
             return;
@@ -3213,6 +3214,7 @@ impl Vm {
     /// Safety: `buf` from prior `acquire`; `str_ptr` from the
     /// trace's piece slot raw bits.
     #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` from prior `acquire`; `str_ptr` from trace piece slot; SAFETY documented below.
     pub fn jit_str_buf_extend(&mut self, buf: *mut Vec<u8>, str_ptr: i64) -> i64 {
         if buf.is_null() || str_ptr == 0 {
             return -1;
@@ -3236,6 +3238,7 @@ impl Vm {
     /// Safety: `buf` from prior `acquire`. The buffer is left
     /// CLEAR (drained) ready for `release`.
     #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` from prior `acquire`; SAFETY documented below.
     pub fn jit_str_buf_intern(&mut self, buf: *mut Vec<u8>) -> i64 {
         if buf.is_null() {
             return 0;
@@ -3263,6 +3266,7 @@ impl Vm {
     ///     `luna_jit_stack_tag` call by reading the buffer via
     ///     cranelift `stack_load` IR instead. Returns -1 on deopt.
     #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `ctrl_out`/`key_out`/`val_out` are caller-stack buffers from Cranelift-emitted prologue; SAFETY documented below.
     pub fn jit_op_tforcall(
         &mut self,
         slot_offset: u32,

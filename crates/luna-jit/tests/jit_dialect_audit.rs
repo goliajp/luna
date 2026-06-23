@@ -1,3 +1,6 @@
+// 3.14 used as float fixture in JIT dialect tests, not as π.
+#![allow(clippy::approx_constant)]
+
 //! Method JIT × dialect × Value-introspection audit.
 //!
 //! Each test runs ONE Op pattern (or small Op combination) under every

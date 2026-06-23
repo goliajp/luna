@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(Value::Bool(true).tag_byte(), tag::BOOL);
         assert_eq!(Value::Int(0).tag_byte(), tag::INT);
         assert_eq!(Value::Int(-1).tag_byte(), tag::INT);
-        assert_eq!(Value::Float(3.14).tag_byte(), tag::FLOAT);
+        assert_eq!(Value::Float(std::f64::consts::PI).tag_byte(), tag::FLOAT);
         let s = heap.intern(b"hi");
         assert_eq!(Value::Str(s).tag_byte(), tag::STR);
         assert_eq!(

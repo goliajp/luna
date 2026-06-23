@@ -970,6 +970,7 @@ impl Heap {
     /// step traces it. Mirrors PUC `luaC_barrier_`. No-op outside Propagate
     /// (parent is gray or white — the mutator never sees a BLACK object live
     /// outside an incremental cycle).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
     pub fn barrier_forward(&mut self, parent: *mut GcHeader, child: Value) {
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
@@ -1003,6 +1004,7 @@ impl Heap {
     /// Mirrors PUC `luaC_barrierback_`. One call covers any number of
     /// subsequent stores until the next propagate finishes — much cheaper for
     /// tables than per-child forward barriers. No-op outside Propagate.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
     pub fn barrier_back(&mut self, parent: *mut GcHeader) {
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
