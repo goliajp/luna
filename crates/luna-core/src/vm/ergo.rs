@@ -281,6 +281,25 @@ impl Vm {
         self.hook.rust_func = None;
     }
 
+    /// Read the most recently dispatched Lua opcode, if the Vm is currently
+    /// executing inside a Lua frame. Intended for use from a Count hook
+    /// (installed via [`Self::set_rust_debug_hook`] with `HOOK_MASK_COUNT`)
+    /// to tally per-opcode distribution against a workload — the v1.2
+    /// methodology gate ([`perf-decomposition-vs-polish.md`] §2 Phase A)
+    /// requires runtime-counter validation of per-iter op mix before
+    /// any stage decomposition is acted on.
+    ///
+    /// Returns `None` outside a Lua frame (top-level setup, while a
+    /// native callback or Cont guard is on top of the call stack, etc.).
+    /// Reads `self.frames.last() → CallFrame::Lua(f) → f.closure.proto.code[f.pc - 1]`
+    /// — the just-dispatched opcode (PC has already advanced past it).
+    pub fn current_op(&self) -> Option<crate::vm::isa::Op> {
+        let f = self.jit_last_lua_frame()?;
+        let pc = (f.pc as usize).checked_sub(1)?;
+        let inst = f.closure.proto.code.get(pc)?;
+        Some(inst.op())
+    }
+
     /// Mutable variant of [`Self::userdata_borrow`].
     pub fn userdata_borrow_mut<T: std::any::Any + 'static>(
         &mut self,
