@@ -21,6 +21,27 @@ optimization.
 
 ## [1.1.0] — 2026-06-23
 
+### Ship-time crate rename
+
+The JIT-equipped crate is published as **`luna-jit`** instead of
+`luna` because the `luna` name on crates.io is taken by an
+unrelated utilities library. The directory layout, library
+exports, and CLI binary name (`luna`) are unchanged; only the
+crate name visible on crates.io is `luna-jit`. Embedders use:
+
+```toml
+[dependencies]
+luna-jit = "1.1"   # or:   luna-core = "1.1"   for the 0-dep core
+```
+
+```rust
+use luna_jit::Lua;   // (was `use luna::Lua;`)
+```
+
+The CLI binary still installs as `luna` (`cargo install luna-jit`
+puts a binary named `luna` on PATH). `luna-core` keeps its name
+(0-dep interpreter is the pure thing).
+
 ### Track A — Crate / Dep / Safety
 
 - **Workspace split** (A1): `luna-core` (0 third-party deps; lexer /

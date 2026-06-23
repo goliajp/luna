@@ -6,7 +6,7 @@ that hits **2× faster than PUC** across the cross-dialect bench and
 **competitive with LuaJIT 2.1** on numeric workloads.
 
 ```rust
-use luna::Lua;
+use luna_jit::Lua;
 
 let mut lua = Lua::new();
 lua.open_base();
@@ -57,7 +57,7 @@ luna ships as a Cargo workspace with two publishable crates:
 ```toml
 # Most embedders — full interp + Cranelift JIT + capi.
 [dependencies]
-luna = "1.1"
+luna-jit = "1.1"
 ```
 
 ```toml
@@ -73,7 +73,7 @@ adds 6 Cranelift crates and their transitive deps for the JIT side.
 For the CLI binary:
 
 ```sh
-cargo install luna   # `luna` REPL + script runner
+cargo install luna-jit   # `luna` REPL + script runner
 ```
 
 ## Embedding (quick demo)
@@ -82,8 +82,8 @@ The sandbox builder + ergo APIs collapse the v1.0 dance into a
 handful of lines:
 
 ```rust
-use luna::Lua;
-use luna::version::LuaVersion;
+use luna_jit::Lua;
+use luna_jit::version::LuaVersion;
 
 let mut lua = Lua::sandbox(LuaVersion::Lua54)
     .open_base()
@@ -115,7 +115,7 @@ newtype facade, and threading).
 
 ## Threading model
 
-`luna::Vm` is `!Send + !Sync` — pin one Vm per OS thread (or per
+`luna_jit::Vm` is `!Send + !Sync` — pin one Vm per OS thread (or per
 single-thread Tokio worker). For async embedders, use Tokio's
 `current_thread` runtime flavor or wrap `Vm` access in a `LocalSet`.
 See [`docs/threading.md`](docs/threading.md) for canonical patterns
@@ -134,7 +134,7 @@ cargo run --release --bin luna -- path/to/script.lua
 ## Linking from C
 
 `luna` ships a `cdylib` / `staticlib` exposing a `lua.h`-compatible
-subset under `crates/luna/src/capi.rs`. Existing C / C++ hosts that
+subset under `crates/luna-jit/src/capi.rs`. Existing C / C++ hosts that
 need a drop-in PUC replacement can link against it.
 
 ## Build
@@ -160,7 +160,7 @@ crates/luna-core/        # 0 third-party deps; pure interp + types
 │                        #  their own implementations against this contract)
 └── src/lib.rs           # module roots
 
-crates/luna/             # depends on luna-core + cranelift × 6
+crates/luna-jit/             # depends on luna-core + cranelift × 6
 ├── src/jit_backend/     # Cranelift-backed CraneliftBackend implementations
 ├── src/capi.rs          # lua.h-compatible C ABI
 ├── src/lua_facade.rs    # `Lua` newtype mlua-shape facade

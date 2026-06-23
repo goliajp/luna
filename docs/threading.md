@@ -32,7 +32,7 @@ something that wouldn't work — at which point the Rust type checker
 catches it. For example:
 
 ```rust
-let vm = luna::Vm::new_minimal_with_jit(LuaVersion::Lua55);
+let vm = luna_jit::Vm::new_minimal_with_jit(LuaVersion::Lua55);
 tokio::spawn(async move {
     vm.eval("return 1").await  // error[E0277]: `Vm` cannot be sent between threads safely
 });
@@ -54,8 +54,8 @@ Simplest case. `current_thread` flavor runs the executor on one OS
 thread; `Vm` lives there.
 
 ```rust
-use luna::Vm;
-use luna::version::LuaVersion;
+use luna_jit::Vm;
+use luna_jit::version::LuaVersion;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,8 +79,8 @@ Use when your host already runs on a multi-thread Tokio runtime
 async tasks.
 
 ```rust
-use luna::Vm;
-use luna::version::LuaVersion;
+use luna_jit::Vm;
+use luna_jit::version::LuaVersion;
 use tokio::task::LocalSet;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -111,8 +111,8 @@ Lua work concurrently), spawn one OS thread per `Vm` and exchange
 data through channels.
 
 ```rust
-use luna::Vm;
-use luna::version::LuaVersion;
+use luna_jit::Vm;
+use luna_jit::version::LuaVersion;
 use std::sync::mpsc;
 use std::thread;
 
@@ -199,7 +199,7 @@ instruction budget exhausts. Embedders register async natives via
 exposing host-side futures to Lua scripts:
 
 ```rust
-use luna::Lua;
+use luna_jit::Lua;
 use luna_core::runtime::Value;
 use luna_core::vm::LuaError;
 use std::future::Future;
@@ -238,7 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 For a runnable, dependency-free walkthrough, see
-[`examples/async_host.rs`](../crates/luna/examples/async_host.rs)
+[`examples/async_host.rs`](../crates/luna-jit/examples/async_host.rs)
 (`cargo run --example async_host -p luna`). It uses a hand-rolled
 `block_on` so the example stands alone; production embedders
 substitute `#[tokio::main(flavor = "current_thread")]` or a

@@ -1,0 +1,55 @@
+[package]
+name = "luna-jit"
+description = "A Lua runtime in pure Rust — full 5.1/5.2/5.3/5.4/5.5 support. Equivalent to `luna-core` plus a Cranelift-backed JIT (method + trace) and the lua.h-compatible C ABI. (The `luna` crate name on crates.io is taken by an unrelated utility library; this crate is the JIT-equipped variant of the goliajp/luna Lua runtime.)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+# rlib: Rust embedders. cdylib + staticlib: existing C/C++ hosts can link
+# against luna through its `capi` module (lua.h-compatible subset).
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "luna"
+path = "src/bin/luna.rs"
+
+[dependencies]
+# v1.1 A1 — pure-interp + JIT trait surface lives here. `version = "= 1.1.0"`
+# pins the matching luna-core release for `cargo publish` lookups when the
+# `path` fallback isn't in play.
+luna-core = { path = "../luna-core", version = "= 1.1.0" }
+
+# JIT backend. cranelift is the mainstream Rust codegen for embedded
+# JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
+# mature regalloc + opt. luna lowers Lua bytecode → Cranelift IR →
+# mmap RWX. Pinned: API churns enough that floating without a lock
+# would burn audit time.
+cranelift = "0.124"
+cranelift-jit = "0.124"
+cranelift-module = "0.124"
+cranelift-codegen = "0.124"
+cranelift-frontend = "0.124"
+cranelift-native = "0.124"
+
+[[bench]]
+name = "lua_microbench"
+harness = false
+
+[[bench]]
+name = "cross_dialect"
+harness = false
+
+[[bench]]
+name = "run_only"
+harness = false
+
+[[bench]]
+name = "redis_lua_shape"
+harness = false
