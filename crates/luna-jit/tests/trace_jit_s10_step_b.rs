@@ -12,7 +12,6 @@
 //! here verify correctness preservation + leaf-trace regression.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// binary_trees full program — result must be correct. Pre-S10-B
 /// the `has_inline_cmp` gate demoted all sites when ANY cmp@d>0

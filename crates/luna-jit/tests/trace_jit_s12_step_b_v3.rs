@@ -9,7 +9,6 @@
 //! ipairs traces stay unchanged.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Canonical ipairs over Int array — exercise the fast path.
 #[test]

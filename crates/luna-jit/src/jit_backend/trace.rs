@@ -157,8 +157,8 @@ fn try_match_trace_math_fold(
     Some(TraceMathFold {
         start_idx: i,
         fn_name,
-        arg_reg: arg_reg as u32,
-        dst_reg: a as u32,
+        arg_reg,
+        dst_reg: a,
     })
 }
 
@@ -1091,10 +1091,7 @@ fn escape_analyze(
                 let b_bytecode = ins.b();
                 let c = ins.c();
                 let effective_b = if b_bytecode == 0 {
-                    match record.ops[i].var_count {
-                        Some(n) => n,
-                        None => 0, // No snapshot — bail by mismatching cap
-                    }
+                    record.ops[i].var_count.unwrap_or_default()
                 } else {
                     b_bytecode
                 };
@@ -1257,7 +1254,7 @@ fn escape_analyze(
                 if (b as usize) < max_stack
                     && let Some(sid) = lookup(&bindings, depth, b)
                 {
-                    if c >= 1 && c <= sites[sid].array_cap as u32 {
+                    if c >= 1 && c <= sites[sid].array_cap {
                         op_actions[i] = Some(OpAction::GetIRead {
                             site_idx: sid as u32,
                             key: c,
@@ -2581,7 +2578,7 @@ pub fn try_compile_trace_with_options(
             }
         }
         if let Some(idx) = last_call_idx {
-            let bump_off = op_offsets[idx] + record.ops[idx].inst.a() as u32 + 1;
+            let bump_off = op_offsets[idx] + record.ops[idx].inst.a() + 1;
             let needed = bump_off + max_stack as u32;
             if needed > window_size {
                 window_size = needed;
@@ -2607,11 +2604,11 @@ pub fn try_compile_trace_with_options(
     // back-edge side traces (e.g. recursive call branches that
     // re-compute their inputs each iter) can now compile and
     // amortize the parent's hot-exit dispatch cost.
-    if record.side_trace_parent.is_some() {
+    if let Some((parent_proto, parent_head_pc, _)) = record.side_trace_parent {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
         let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
             luna_core::vm::isa::Op::ForLoop | luna_core::vm::isa::Op::TForLoop => true,
-            luna_core::vm::isa::Op::Jmp => (op.inst.sbx() as i32) < 0,
+            luna_core::vm::isa::Op::Jmp => op.inst.sbx() < 0,
             _ => false,
         });
         if has_back_edge {
@@ -2652,7 +2649,6 @@ pub fn try_compile_trace_with_options(
             // Pure back-edge trace: still check live-in vs parent
             // writes (Add/Move loops can still re-read a stale
             // parent-written slot each iter).
-            let (parent_proto, parent_head_pc, _) = record.side_trace_parent.unwrap();
             let child_live_in = compute_live_in_slots(record, &op_offsets);
             if !child_live_in.is_empty() {
                 let parent_writes_opt = {
@@ -2842,7 +2838,7 @@ pub fn try_compile_trace_with_options(
                     let is_self_recursive = nxt
                         .map(|n_op| {
                             n_op.inline_depth as usize == depth + 1
-                                && depth + 1 <= MAX_INLINE_DEPTH as usize
+                                && depth < MAX_INLINE_DEPTH as usize
                                 && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
                         })
                         .unwrap_or(false);
@@ -2880,15 +2876,14 @@ pub fn try_compile_trace_with_options(
                     }
                     break;
                 }
-                Op::Return0 | Op::Return1 => {
-                    if depth == 0 {
+                Op::Return0 | Op::Return1
+                    if depth == 0 => {
                         found = Some((i, TraceEnd::Return));
                         break;
                     }
                     // depth>0 Returns are inline-path unwinds; the
                     // step3b emit loop handles them (Return0 no-op,
                     // Return1 copy-back). Don't terminate.
-                }
                 _ => {}
             }
         }
@@ -3392,7 +3387,7 @@ pub fn try_compile_trace_with_options(
                 } else if skipped_jmp {
                     let slot = (rop.pc + 1) as usize;
                     let jmp_inst = head_proto.code.get(slot).copied();
-                    if !jmp_inst.map_or(false, |x| matches!(x.op(), Op::Jmp)) {
+                    if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
                         {
                             checkpoint("bail:cmp-dirs-body-other");
                             return None;
@@ -3433,7 +3428,7 @@ pub fn try_compile_trace_with_options(
                 } else if skipped_jmp {
                     let slot = (rop.pc + 1) as usize;
                     let jmp_inst = head_proto.code.get(slot).copied();
-                    if !jmp_inst.map_or(false, |x| matches!(x.op(), Op::Jmp)) {
+                    if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
                         {
                             checkpoint("bail:cmp-dirs-body-other");
                             return None;
@@ -3497,7 +3492,7 @@ pub fn try_compile_trace_with_options(
                     // is actually a Jmp in the Proto's bytecode.
                     let slot = (rop.pc + 1) as usize;
                     let jmp_inst = head_proto.code.get(slot).copied();
-                    if !jmp_inst.map_or(false, |x| matches!(x.op(), Op::Jmp)) {
+                    if !jmp_inst.is_some_and(|x| matches!(x.op(), Op::Jmp)) {
                         {
                             checkpoint("bail:cmp-skipped-but-no-jmp-slot");
                             return None;
@@ -4550,7 +4545,7 @@ pub fn try_compile_trace_with_options(
                 // Float operand → bitcast i64→f64.
                 let arg_kind = k_op(&current_kinds, off as u32 + fold.arg_reg);
                 let arg_f64 = if matches!(arg_kind, RegKind::Float) {
-                    use_var_f64(&mut bcx, &regs, fold.arg_reg)
+                    use_var_f64(&mut bcx, regs, fold.arg_reg)
                 } else {
                     // Treat Int/Unset/Nil as Int → fcvt. (Calling
                     // math.sin on a non-numeric is a runtime error
@@ -4631,14 +4626,14 @@ pub fn try_compile_trace_with_options(
                 // Float via fcvt_from_sint.
                 if matches!(op, Op::Pow) {
                     let lhs = match kb {
-                        RegKind::Float => use_var_f64(&mut bcx, &regs, ins.b()),
+                        RegKind::Float => use_var_f64(&mut bcx, regs, ins.b()),
                         _ => {
                             let raw = bcx.use_var(regs[ins.b() as usize]);
                             bcx.ins().fcvt_from_sint(types::F64, raw)
                         }
                     };
                     let rhs = match kc {
-                        RegKind::Float => use_var_f64(&mut bcx, &regs, ins.c()),
+                        RegKind::Float => use_var_f64(&mut bcx, regs, ins.c()),
                         _ => {
                             let raw = bcx.use_var(regs[ins.c() as usize]);
                             bcx.ins().fcvt_from_sint(types::F64, raw)
@@ -4668,8 +4663,8 @@ pub fn try_compile_trace_with_options(
                     if !matches!(kb, RegKind::Float) || !matches!(kc, RegKind::Float) {
                         return None;
                     }
-                    let lhs = use_var_f64(&mut bcx, &regs, ins.b());
-                    let rhs = use_var_f64(&mut bcx, &regs, ins.c());
+                    let lhs = use_var_f64(&mut bcx, regs, ins.b());
+                    let rhs = use_var_f64(&mut bcx, regs, ins.c());
                     let r = match op {
                         Op::Add => bcx.ins().fadd(lhs, rhs),
                         Op::Sub => bcx.ins().fsub(lhs, rhs),
@@ -4734,7 +4729,7 @@ pub fn try_compile_trace_with_options(
                 }
                 if matches!(op, Op::Unm) && matches!(kb, RegKind::Float) {
                     // Float negation.
-                    let src = use_var_f64(&mut bcx, &regs, ins.b());
+                    let src = use_var_f64(&mut bcx, regs, ins.b());
                     let r = bcx.ins().fneg(src);
                     def_var_f64(&mut bcx, regs[ins.a() as usize], r);
                     current_kinds[off + ins.a() as usize] = RegKind::Float;
@@ -4774,7 +4769,7 @@ pub fn try_compile_trace_with_options(
                         if !matches!(ka, RegKind::Float) {
                             return None;
                         }
-                        let lhs = use_var_f64(&mut bcx, &regs, ins.a());
+                        let lhs = use_var_f64(&mut bcx, regs, ins.a());
                         let rhs = bcx.ins().f64const(f);
                         let float_cc = if ins.k() {
                             FloatCC::Equal
@@ -4925,7 +4920,7 @@ pub fn try_compile_trace_with_options(
                 let k_bit = ins.k();
                 let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::SkippedJmp));
                 if let Some(truthy) = truthy_known {
-                    let test_passed = (!truthy) == k_bit;
+                    let test_passed = truthy != k_bit;
                     if test_passed != recorded_passed {
                         // Provably can't reproduce recorded
                         // direction; bail compile.
@@ -5059,8 +5054,8 @@ pub fn try_compile_trace_with_options(
                     if !matches!(ka, RegKind::Float) || !matches!(kb, RegKind::Float) {
                         return None;
                     }
-                    let lhs = use_var_f64(&mut bcx, &regs, ins.a());
-                    let rhs = use_var_f64(&mut bcx, &regs, ins.b());
+                    let lhs = use_var_f64(&mut bcx, regs, ins.a());
+                    let rhs = use_var_f64(&mut bcx, regs, ins.b());
                     let float_cc = match (op, k_effective) {
                         (Op::Lt, true) => FloatCC::LessThan,
                         (Op::Lt, false) => FloatCC::GreaterThanOrEqual,
@@ -5660,7 +5655,7 @@ pub fn try_compile_trace_with_options(
                 // current_kinds, so those exits restore as Untouched.
                 //
                 // Path C #1 — memoize per upval idx via `upval_cache`.
-                let idx_b = ins.b() as u32;
+                let idx_b = ins.b();
                 let v = if let Some(&cached_var) = upval_cache.get(&idx_b) {
                     bcx.use_var(cached_var)
                 } else {

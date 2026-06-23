@@ -10,7 +10,6 @@
 //! (GetI / SetList writeback) to verify the alias propagates.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `for i = 1, N do local t = {1,2,3}; local u = t; s = s + u[1] +
 /// u[2] + u[3] end` — Move u=t propagates the binding; GetI on u

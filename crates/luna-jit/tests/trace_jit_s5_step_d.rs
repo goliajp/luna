@@ -15,7 +15,6 @@
 //!    gate; result stays correct via the heap helper path.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `for i = 1, 1000 do local t = {1,2,3}; s = s + t[1]+t[2]+t[3] end`.
 /// Each iter's NewTable is sunk; the trace dispatches once (the

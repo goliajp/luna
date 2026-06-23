@@ -8,7 +8,6 @@
 //! until S3.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Every closed trace must move into one of three buckets:
 /// (1) dedup-skip (head_pc already in `Proto.traces`),

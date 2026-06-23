@@ -662,7 +662,7 @@ impl Heap {
         };
         // Drain any barrier-grayed objects carried over: each was demoted from
         // BLACK back to gray by a write barrier and is awaiting (re-)trace.
-        m.stack.extend(self.gray.drain(..));
+        m.stack.append(&mut self.gray);
         for &r in roots {
             m.value(r);
         }

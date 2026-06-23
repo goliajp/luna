@@ -23,7 +23,6 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 

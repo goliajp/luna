@@ -25,7 +25,6 @@
 //! pointer. Tests stick to uniform-Str arrays.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `s = s .. v` over an ipairs-iterated Str array — the canonical
 /// case v1 couldn't compile. Verifies correctness + dispatch.

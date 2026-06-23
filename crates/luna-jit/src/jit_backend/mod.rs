@@ -228,7 +228,7 @@ thread_local! {
     /// Append-only — cached pointers stay valid for the thread's
     /// lifetime.
     static JIT_CACHE_HANDLES: std::cell::RefCell<Vec<JitHandle>> =
-        std::cell::RefCell::new(Vec::new());
+        const { std::cell::RefCell::new(Vec::new()) };
     /// P11-S5c — current `Vm` pointer for Rust helpers called from
     /// JIT'd code. Set by [`enter_jit`] just before invoking the
     /// entry fn; cleared (RAII via [`JitVmGuard`]) on return. Helpers
@@ -1052,7 +1052,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     // Op::Closure emit to inline_depth=0 only, so no deeper frame
     // exists).
     let base = match vm.jit_last_lua_frame() {
-        Some(f) => f.base as u32,
+        Some(f) => f.base,
         None => {
             vm.jit.pending_err = Some(vm.rt_err("JIT op_closure: no Lua frame"));
             return 0;
@@ -1794,9 +1794,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
                 // (PUC's `cond_skip` invariant). luna's compiler never
                 // emits one without the other; if we see a lone Lt/Le/Eq
                 // the proto is malformed for our purposes — bail out.
-                let Some(&jmp) = proto.code.get(pc + 1) else {
-                    return None;
-                };
+                let &jmp = proto.code.get(pc + 1)?;
                 if !matches!(jmp.op(), Op::Jmp) {
                     return None;
                 }
@@ -1820,9 +1818,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
                 // numeric-for steps via a `LoadI` (`for i = 1, N do …` →
                 // step register pre-loaded with `LoadI 1`). A non-Int
                 // step (`for i = 1, N, x` where x is a variable) bails.
-                let Some(step_imm) = step_const.get(a + 2).copied().flatten() else {
-                    return None;
-                };
+                let step_imm = step_const.get(a + 2).copied().flatten()?;
                 if step_imm == 0 {
                     return None;
                 }
@@ -2544,7 +2540,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
         // See docs/known-bugs/fixed/jit-uninitialized-local-arith.md
         // (filed 2026-06-22 by tests/e2e_programs.rs::err_arith_on_nil).
         is_nil_writer = vec![false; max_stack];
-        for r in (num_params as usize)..max_stack {
+        for r in num_params..max_stack {
             is_nil_writer[r] = true;
         }
         let mut pc = 0;
@@ -4703,8 +4699,8 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
     Some(MathFold {
         start_pc,
         fn_name,
-        arg_reg: arg_reg as u32,
-        dst_reg: a as u32,
+        arg_reg,
+        dst_reg: a,
     })
 }
 
@@ -4926,7 +4922,7 @@ mod s1 {
     use super::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn jit_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -4992,7 +4988,7 @@ mod s1 {
 mod s2 {
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5061,7 +5057,7 @@ mod s2b {
     use super::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn jit_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5160,7 +5156,7 @@ mod s2c_a {
     use super::{IntFn1, IntFn2, try_compile_int_chunk};
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     /// Keep the `Vm` alive across the body so the GC doesn't reap the
     /// inner closure's Proto. Returning the `Gc<Proto>` past the Vm's
@@ -5264,7 +5260,7 @@ mod s2c_b {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5322,14 +5318,13 @@ mod s2c_b {
     #[test]
     fn jit_failed_state_falls_through() {
         // String body — lowerer bails; interpreter runs the chunk.
-        assert_eq!(
+        assert!(
             crate::jit_backend::test_vm_new(LuaVersion::Lua55)
                 .eval("local function f(n) return tostring(n) end; return #f(42)")
                 .unwrap()
                 .first()
                 .map(|v| matches!(v, Value::Int(_)))
                 .unwrap_or(false),
-            true,
         );
     }
 }
@@ -5343,7 +5338,7 @@ mod s2c_c {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5425,7 +5420,7 @@ mod s2c_c_perf_check {
     //! Sanity check that fib_28's Proto actually flips to Compiled.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     #[test]
     fn fib28_bench_source_flips_proto_to_compiled() {
@@ -5456,7 +5451,7 @@ mod s3 {
     use super::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_float_55(src: &str) -> f64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5619,7 +5614,7 @@ mod s5a {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int_55(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5785,7 +5780,7 @@ mod s5a_b {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int_53(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
@@ -5873,7 +5868,7 @@ mod s5a_c {
     //! R[A+3] register.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_float_with(version: LuaVersion, src: &str) -> f64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6027,7 +6022,7 @@ mod s5b {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_float_with(version: LuaVersion, src: &str) -> f64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6268,7 +6263,7 @@ mod s5c {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int_with(version: LuaVersion, src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6440,7 +6435,7 @@ mod s5c_b {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     fn eval_int_with(version: LuaVersion, src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6588,7 +6583,7 @@ mod s5d_a {
     //! actually compile.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     /// `function f(t) return t[1] end` — Table param + Int return.
     /// JIT path: param marshalled as Gc ptr, GetI reads array slot,
@@ -6659,7 +6654,7 @@ mod s5d_b {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    use luna_core::vm::Vm;
+    
 
     /// Simple SetList literal — `{1, 2, 3}` in a fn body. NewTable
     /// b=3 + LoadI×3 + SetList b=3 + Return1.

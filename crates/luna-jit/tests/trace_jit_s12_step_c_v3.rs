@@ -17,7 +17,6 @@
 //! an `iconst` immediate against the runtime `val_tag` load.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// v2 regression smoke: uniform-Str array still works post-v3
 /// (guard always matches → no deopts on this shape).

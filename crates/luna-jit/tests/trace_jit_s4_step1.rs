@@ -15,7 +15,6 @@
 //! past 0 today.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// A hot for-loop whose body calls a helper function. The recorder
 /// fires on the for-loop's back-edge; inside the loop body, the

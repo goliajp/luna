@@ -11,7 +11,6 @@
 //! head's pc).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(12) = 144. fib's Proto is called 145 times in total (1 outer +
 /// 144 inner recursions across the tree), which crosses the call-hot

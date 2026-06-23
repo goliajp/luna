@@ -11,7 +11,6 @@
 //! `return {make(d-1), make(d-1)}` uses exactly this shape.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `local t = {a, f()}` where f returns 1 value — Lua frontend
 /// emits Call C=0 + SetList B=0 (the LAST arg uses variable form).

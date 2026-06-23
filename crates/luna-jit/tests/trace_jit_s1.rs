@@ -3,7 +3,6 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 #[test]
 fn trace_recording_inactive_by_default() {

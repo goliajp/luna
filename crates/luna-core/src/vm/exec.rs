@@ -840,7 +840,8 @@ impl Vm {
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
         let globals = heap.new_table();
         let mm_names = MM_NAMES.iter().map(|n| heap.intern(n.as_bytes())).collect();
-        let vm = Vm {
+        
+        Vm {
             heap,
             stack: Vec::new(),
             frames: Vec::new(),
@@ -918,8 +919,7 @@ impl Vm {
             // async-marked NativeClosure is invoked under async_mode.
             pending_async_native_fut: None,
             pending_async_native_ctx: None,
-        };
-        vm
+        }
     }
 
     /// Build a fully-loaded Vm — the default for embedders that want PUC's
@@ -1283,14 +1283,13 @@ impl Vm {
         // mmap'd native code. The lookup is one Cell::get + one match —
         // the slow path (compile attempt on first reach) is paid once per
         // Proto.
-        if args.is_empty() {
-            if let Value::Closure(cl) = f
+        if args.is_empty()
+            && let Value::Closure(cl) = f
                 && let Some(vs) = self.try_jit_call(cl)
             {
                 self.public_call_depth -= 1;
                 return Ok(vs);
             }
-        }
         let r = self.call_value_impl(f, args, true);
         self.public_call_depth -= 1;
         r
@@ -3176,7 +3175,7 @@ impl Vm {
     /// caller MUST not retain it across `enter_jit` boundaries.
     #[doc(hidden)]
     pub fn jit_str_buf_acquire(&mut self) -> *mut Vec<u8> {
-        let buf = self.jit.str_buf_pool.pop().unwrap_or_else(Vec::new);
+        let buf = self.jit.str_buf_pool.pop().unwrap_or_default();
         // Move into a Box so the pointer is stable until release.
         Box::into_raw(Box::new(buf))
     }
@@ -6145,9 +6144,9 @@ impl Vm {
                             {
                                 let tentative = crate::jit::trace::decode_exit_shape(
                                     raw_ret,
-                                    &per_exit_inline,
-                                    &per_exit_tags,
-                                    &exit_tags,
+                                    per_exit_inline,
+                                    per_exit_tags,
+                                    exit_tags,
                                 );
                                 let tentative_exit_idx = tentative.exit_hit_idx;
                                 let child_invoke = {

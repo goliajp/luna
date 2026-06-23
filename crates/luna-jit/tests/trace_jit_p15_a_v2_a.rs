@@ -12,7 +12,6 @@
 //! ptr and indirect-call when non-null.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(28) — at least one side trace must compile (counter ≥ 1)
 /// AND at least one parent exit_side_trace_ptrs cell must be

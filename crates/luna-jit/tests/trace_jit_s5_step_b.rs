@@ -16,7 +16,6 @@
 //!    The trace still compiles and produces a correct (Nil) value.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Positive path: f() = `local t = {1,2,3}; return t[1]+t[2]+t[3]`.
 /// Site at R[1] is Sinkable; trace's NewTable is a no-op, GetIs are
