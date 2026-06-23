@@ -157,9 +157,13 @@ These items are scoped out of v1.2 explicitly:
   bench confirms x86_64 budget overrun.
 - **REPL C3 tab completion + syntax highlight** — gated on adding
   `rustyline` as a non-default `repl-line-editor` cargo feature.
-- **PUC 5.4 luac body loading (Track E E1)** — Q1 conditional on
-  ship-time budget; if not v1.2, lands in a v1.3 quarter sprint
-  covering 5.1-5.5 binary formats together.
+- **PUC 5.4 luac body loading (Track E E1)** — explicitly deferred
+  to a **v1.3 quarter sprint** covering 5.1-5.5 binary formats
+  together (audit estimate 17-20d for the full matrix vs 7-10d for
+  5.4 alone). Shipping 5.4 standalone leaves an asymmetric matrix
+  that the v1.3 sprint would have to backfill anyway; deferring the
+  whole bundle to one sprint preserves the per-dialect symmetry the
+  Lua compatibility doc baselines on.
 
 ### Internal — sprint methodology
 
