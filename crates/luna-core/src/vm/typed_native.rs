@@ -257,6 +257,11 @@ pub struct Arity0;
 pub struct Arity1<In0>(std::marker::PhantomData<In0>);
 pub struct Arity2<In0, In1>(std::marker::PhantomData<(In0, In1)>);
 pub struct Arity3<In0, In1, In2>(std::marker::PhantomData<(In0, In1, In2)>);
+pub struct Arity4<In0, In1, In2, In3>(std::marker::PhantomData<(In0, In1, In2, In3)>);
+pub struct Arity5<In0, In1, In2, In3, In4>(std::marker::PhantomData<(In0, In1, In2, In3, In4)>);
+pub struct Arity6<In0, In1, In2, In3, In4, In5>(
+    std::marker::PhantomData<(In0, In1, In2, In3, In4, In5)>,
+);
 
 /// Convert a typed callable into the `(erased NativeFn, upvals)` shape
 /// the dispatcher consumes. The `Marker` type parameter encodes the
@@ -416,6 +421,115 @@ where
             f(a0, a1, a2).into_lua_return(vm, fs)
         }
         (trampoline::<F, In0, In1, In2, Out>, pack(self))
+    }
+}
+
+// Arity 4
+impl<F, In0, In1, In2, In3, Out> NativeTypedSig<(Arity4<In0, In1, In2, In3>, Out)> for F
+where
+    F: Fn(In0, In1, In2, In3) -> Out + Copy + 'static,
+    In0: FromLuaValue + 'static,
+    In1: FromLuaValue + 'static,
+    In2: FromLuaValue + 'static,
+    In3: FromLuaValue + 'static,
+    Out: IntoLuaReturn + 'static,
+{
+    fn into_native(self) -> (NativeFn, Box<[Value]>) {
+        fn trampoline<
+            F: Fn(In0, In1, In2, In3) -> Out + Copy + 'static,
+            In0: FromLuaValue + 'static,
+            In1: FromLuaValue + 'static,
+            In2: FromLuaValue + 'static,
+            In3: FromLuaValue + 'static,
+            Out: IntoLuaReturn + 'static,
+        >(
+            vm: &mut Vm,
+            fs: u32,
+            nargs: u32,
+        ) -> Result<u32, LuaError> {
+            let f: F = reconstruct(vm, fs);
+            let (a0, a1, a2, a3) =
+                <(In0, In1, In2, In3) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
+            f(a0, a1, a2, a3).into_lua_return(vm, fs)
+        }
+        (trampoline::<F, In0, In1, In2, In3, Out>, pack(self))
+    }
+}
+
+// Arity 5
+impl<F, In0, In1, In2, In3, In4, Out> NativeTypedSig<(Arity5<In0, In1, In2, In3, In4>, Out)> for F
+where
+    F: Fn(In0, In1, In2, In3, In4) -> Out + Copy + 'static,
+    In0: FromLuaValue + 'static,
+    In1: FromLuaValue + 'static,
+    In2: FromLuaValue + 'static,
+    In3: FromLuaValue + 'static,
+    In4: FromLuaValue + 'static,
+    Out: IntoLuaReturn + 'static,
+{
+    fn into_native(self) -> (NativeFn, Box<[Value]>) {
+        fn trampoline<
+            F: Fn(In0, In1, In2, In3, In4) -> Out + Copy + 'static,
+            In0: FromLuaValue + 'static,
+            In1: FromLuaValue + 'static,
+            In2: FromLuaValue + 'static,
+            In3: FromLuaValue + 'static,
+            In4: FromLuaValue + 'static,
+            Out: IntoLuaReturn + 'static,
+        >(
+            vm: &mut Vm,
+            fs: u32,
+            nargs: u32,
+        ) -> Result<u32, LuaError> {
+            let f: F = reconstruct(vm, fs);
+            let (a0, a1, a2, a3, a4) =
+                <(In0, In1, In2, In3, In4) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
+            f(a0, a1, a2, a3, a4).into_lua_return(vm, fs)
+        }
+        (
+            trampoline::<F, In0, In1, In2, In3, In4, Out>,
+            pack(self),
+        )
+    }
+}
+
+// Arity 6
+impl<F, In0, In1, In2, In3, In4, In5, Out>
+    NativeTypedSig<(Arity6<In0, In1, In2, In3, In4, In5>, Out)> for F
+where
+    F: Fn(In0, In1, In2, In3, In4, In5) -> Out + Copy + 'static,
+    In0: FromLuaValue + 'static,
+    In1: FromLuaValue + 'static,
+    In2: FromLuaValue + 'static,
+    In3: FromLuaValue + 'static,
+    In4: FromLuaValue + 'static,
+    In5: FromLuaValue + 'static,
+    Out: IntoLuaReturn + 'static,
+{
+    fn into_native(self) -> (NativeFn, Box<[Value]>) {
+        fn trampoline<
+            F: Fn(In0, In1, In2, In3, In4, In5) -> Out + Copy + 'static,
+            In0: FromLuaValue + 'static,
+            In1: FromLuaValue + 'static,
+            In2: FromLuaValue + 'static,
+            In3: FromLuaValue + 'static,
+            In4: FromLuaValue + 'static,
+            In5: FromLuaValue + 'static,
+            Out: IntoLuaReturn + 'static,
+        >(
+            vm: &mut Vm,
+            fs: u32,
+            nargs: u32,
+        ) -> Result<u32, LuaError> {
+            let f: F = reconstruct(vm, fs);
+            let (a0, a1, a2, a3, a4, a5) =
+                <(In0, In1, In2, In3, In4, In5) as FromLuaArgs>::from_lua_args(vm, fs, nargs)?;
+            f(a0, a1, a2, a3, a4, a5).into_lua_return(vm, fs)
+        }
+        (
+            trampoline::<F, In0, In1, In2, In3, In4, In5, Out>,
+            pack(self),
+        )
     }
 }
 
