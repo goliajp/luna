@@ -290,6 +290,38 @@ pub struct Vm {
     /// dispatcher / lexer / parser; cleared when a new call_value
     /// enters cleanly.
     pub(crate) last_error_source: Option<(String, u32)>,
+
+    /// v1.1 B10 Stage 1 — when `true`, `instr_budget` exhaustion in
+    /// the dispatcher hot loop yields cooperatively (sets
+    /// [`Vm::host_yield_pending`] + returns a sentinel `Err` walked up
+    /// to `EvalFuture::poll`) instead of returning a real
+    /// "instruction budget exceeded" error. Set by [`Vm::eval_async`]
+    /// for the duration of the future; restored to `false` on
+    /// `Poll::Ready`. The sync `Vm::eval` / `Vm::call_value` paths
+    /// leave it `false` so v1.0 behavior is preserved exactly.
+    pub(crate) async_mode: bool,
+
+    /// v1.1 B10 Stage 1 — host waker cloned by `EvalFuture::poll`
+    /// before driving a slice. The dispatcher itself does not call it
+    /// (the future's poll loop does `wake_by_ref` after observing
+    /// `BudgetExhausted`), but storing the waker keeps the door open
+    /// for Stage 2 async natives to wake the host directly from a
+    /// helper future.
+    pub(crate) async_waker: Option<std::task::Waker>,
+
+    /// v1.1 B10 Stage 1 — per-poll opcode quota loaded into
+    /// `instr_budget` at the start of each `EvalFuture::poll` slice.
+    /// Default 10_000 (RFC §D5). Tunable via
+    /// [`Vm::set_async_slice`].
+    pub(crate) async_slice_size: i64,
+
+    /// v1.1 B10 Stage 1 — set by the dispatcher when an async-mode
+    /// budget exhaustion fires; checked by `exec_with` (so the
+    /// sentinel propagates without `unwind` running, mirroring
+    /// `yielding.is_some()`) and by `call_value_impl` (so the call
+    /// frames survive for the next poll). Cleared by `drive_one`
+    /// after translating it to `DispatchOutcome::BudgetExhausted`.
+    pub(crate) host_yield_pending: bool,
 }
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -814,6 +846,13 @@ impl Vm {
             // native error / type error).
             last_error_kind: crate::vm::error::LuaErrorKind::default(),
             last_error_source: None,
+            // v1.1 B10 Stage 1 — async embedder fields. Defaults
+            // preserve sync behavior bit-for-bit (`async_mode = false`
+            // means the budget hot loop errors out exactly as v1.0).
+            async_mode: false,
+            async_waker: None,
+            async_slice_size: 10_000,
+            host_yield_pending: false,
         };
         vm
     }
@@ -1418,12 +1457,20 @@ impl Vm {
         self.top = self.stack.len() as u32;
         let r = self.call_at(func_slot, args.len() as u32, from_c);
         self.c_depth -= 1;
-        if r.is_err() && self.yielding.is_none() && self.terminating.is_none() {
+        if r.is_err()
+            && self.yielding.is_none()
+            && self.terminating.is_none()
+            && !self.host_yield_pending
+        {
             // A `coroutine.yield` in flight raises a sentinel error to unwind the
             // Rust stack, but the suspended coroutine's frames/registers (which
             // sit at/above `func_slot`) must survive for the next resume — so we
             // only truncate on a real error. A self-close termination is in the
             // same boat: the dying thread's state is discarded wholesale.
+            // v1.1 B10 — a `host_yield_pending` cooperative yield is in
+            // the same boat as `yielding`: the next `EvalFuture::poll`
+            // resumes the same call, so the in-flight frames must
+            // survive.
             self.stack.truncate(func_slot as usize);
             self.top = func_slot;
         }
@@ -4007,6 +4054,13 @@ impl Vm {
         }
     }
 
+    /// v1.1 B10 Stage 1 — current Lua call-frame depth (read-only).
+    /// Used by `EvalFuture` on the bootstrap poll to compute the
+    /// `entry_depth` it will pass to subsequent resume slices.
+    pub(crate) fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
     fn take_results(&mut self, func_slot: u32) -> Vec<Value> {
         let nret = self.top - func_slot;
         let out = self.stack[func_slot as usize..(func_slot + nret) as usize].to_vec();
@@ -4646,14 +4700,31 @@ impl Vm {
     /// Run from the current top frame down to (but not past) `entry_depth`
     /// frames. Coroutine driving passes `entry_depth = 1` so the whole thread
     /// runs to completion or a yield.
+    /// v1.1 B10 Stage 1 — resume the dispatcher from the saved
+    /// `entry_depth` (captured pre-yield by `drive_one`). Called by
+    /// `EvalFuture::poll` on every poll after the first to walk the
+    /// existing call frames until the next `BudgetExhausted` or
+    /// terminal `Ok`/`Err`. Not a public-API surface in Stage 1; the
+    /// embedder reaches it through `Vm::eval_async`.
+    pub(crate) fn exec_with_async(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
+        self.exec_with(entry_depth)
+    }
+
     fn exec_with(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
         loop {
             let r = self.run(entry_depth);
-            if r.is_err() && (self.yielding.is_some() || self.terminating.is_some()) {
+            if r.is_err()
+                && (self.yielding.is_some()
+                    || self.terminating.is_some()
+                    || self.host_yield_pending)
+            {
                 // a `coroutine.yield` is in flight: keep the frames intact (they
                 // are the suspended coroutine's saved state) and propagate to
                 // resume. A self-close termination propagates the same way, so a
                 // protecting pcall on the way out cannot catch (unwind) it.
+                // v1.1 B10 — `host_yield_pending` is the async-mode
+                // analogue: the sentinel must reach `drive_one` without
+                // a protecting `pcall` swallowing it.
                 return r;
             }
             match r {
@@ -4921,6 +4992,20 @@ impl Vm {
                     *b -= 1;
                     if *b <= 0 {
                         self.instr_budget = None;
+                        // v1.1 B10 Stage 1 — async-mode cooperative
+                        // yield. Set a sentinel flag so `exec_with`
+                        // propagates the Err without `unwind` running
+                        // (mirroring the `yielding.is_some()` path),
+                        // and `call_value_impl` preserves the call
+                        // frames for the next `poll`. Translation back
+                        // to `DispatchOutcome::BudgetExhausted` happens
+                        // in `drive_one`. The Err value itself is
+                        // `Value::Nil` — a pure sentinel, never seen by
+                        // user code.
+                        if self.async_mode {
+                            self.host_yield_pending = true;
+                            return Err(LuaError(Value::Nil));
+                        }
                         // B6: classify the trip so embedders can
                         // distinguish budget exhaustion from a
                         // generic Runtime error and retry / give up
