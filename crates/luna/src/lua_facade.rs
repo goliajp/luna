@@ -108,6 +108,41 @@ impl Lua {
         self.0.eval(src)
     }
 
+    /// Async variant of [`Lua::eval`]. Returns an `!Send` future that
+    /// drives the dispatcher with cooperative yields on instruction
+    /// budget exhaustion. Pin this to a `current_thread` Tokio
+    /// runtime (or a `LocalSet` inside multi-thread Tokio) — see
+    /// `docs/threading.md` and `examples/async_host.rs`.
+    pub async fn eval_async<T: FromLuaValue>(&mut self, src: &str) -> Result<T, LuaError> {
+        let mut r = self.0.eval_async(src).await?;
+        if r.is_empty() {
+            T::from_lua_value(Value::Nil)
+        } else {
+            T::from_lua_value(r.remove(0))
+        }
+    }
+
+    /// Async variant of [`Lua::eval_multi`].
+    pub async fn eval_async_multi(&mut self, src: &str) -> Result<Vec<Value>, LuaError> {
+        self.0.eval_async(src).await
+    }
+
+    /// Register an async native function callable from Lua. The
+    /// raw fn pointer ABI takes `(*mut Vm, func_slot, nargs)` and
+    /// returns a boxed future — see [`luna_core::vm::AsyncNativeFn`]
+    /// for the safety contract.
+    ///
+    /// Calling an async native from inside `vm.eval()` (sync mode)
+    /// errors with a typed `LuaError`; embedders must drive the call
+    /// through `eval_async`.
+    pub fn set_async_native(
+        &mut self,
+        name: &str,
+        f: luna_core::vm::AsyncNativeFn,
+    ) -> Result<(), LuaError> {
+        self.0.set_async_native(name, f)
+    }
+
     /// Set a global by name. Accepts any [`IntoValue`] including
     /// `LuaFunction` / `LuaTable` / `LuaRoot` (the handle types impl
     /// `IntoValue` so they fan in alongside primitives + `Value`).
