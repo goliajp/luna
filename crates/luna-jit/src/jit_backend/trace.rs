@@ -200,7 +200,7 @@ fn infer_getx_exit(getx_a: u32, next: Inst) -> Option<ExitTag> {
         }
         // Table-base reads: A := B[*]. The B operand must be a
         // table; if GetX's output feeds it, we know it's a Table.
-        Op::GetI | Op::GetTable => {
+        Op::GetI | Op::GetTable | Op::GetField => {
             if nb == getx_a {
                 Some(ExitTag::Table)
             } else {
@@ -209,7 +209,7 @@ fn infer_getx_exit(getx_a: u32, next: Inst) -> Option<ExitTag> {
         }
         // Table-base writes: A[*] := *. The A operand must be a
         // table.
-        Op::SetI | Op::SetTable | Op::SetList => {
+        Op::SetI | Op::SetTable | Op::SetList | Op::SetField => {
             if na == getx_a {
                 Some(ExitTag::Table)
             } else {
@@ -3024,11 +3024,19 @@ pub fn try_compile_trace_with_options(
         }
         // P12-S11-A — Op::GetField is lowered standalone via
         // luna_jit_table_get_field (string key from Proto.consts).
-        // Op::GetTabUp stays fold-internal only (it accesses upvalues
-        // for the math-fold env lookup; no standalone helper today).
+        // v1.2 D3 Path B — Op::GetTabUp also lowered standalone via
+        // luna_jit_op_get_tab_up. Both require K[C] = Str at compile
+        // time (the const-pool string key is baked into IR). GetTabUp
+        // additionally pins B = upvalue index in the trace head
+        // closure; the helper resolves it via JIT_CL TLS at runtime.
         if matches!(op, Op::GetTabUp) {
-            checkpoint("bail:cmp-dirs-GetTabUp");
-            return None;
+            let cx = rop.inst.c() as usize;
+            if cx >= head_proto.consts.len()
+                || !matches!(head_proto.consts[cx], luna_core::runtime::Value::Str(_))
+            {
+                checkpoint("bail:cmp-dirs-GetTabUp-key-not-str");
+                return None;
+            }
         }
         // P12-S11-A — Op::SetField uses K[B] as string key,
         // Op::GetField uses K[C]. Pre-emit verifies the const is Str.
@@ -3129,7 +3137,15 @@ pub fn try_compile_trace_with_options(
                     _ => return None,
                 }
             }
-            Op::GetTabUp => unreachable!("GetTabUp only admitted inside math fold"),
+            Op::GetTabUp => {
+                // v1.2 D3 Path B — standalone GetTabUp body bounds.
+                // K[C] = Str validated by the upstream cmp-dirs gate;
+                // here we just bounds-check the A register.
+                if a >= max_stack {
+                    checkpoint("bail:cmp-dirs-body-other");
+                    return None;
+                }
+            }
             Op::SetField | Op::GetField => {
                 // P12-S11-A — validated above (Str const at K[B] or
                 // K[C] respectively); bounds-check the reg operands
@@ -3753,6 +3769,11 @@ pub fn try_compile_trace_with_options(
         "luna_jit_table_get_field",
         super::luna_jit_table_get_field as *const u8,
     );
+    // v1.2 D3 Path B — standalone GetTabUp helper.
+    builder.symbol(
+        "luna_jit_op_get_tab_up",
+        super::luna_jit_op_get_tab_up as *const u8,
+    );
     builder.symbol(
         "luna_jit_table_get_int",
         super::luna_jit_table_get_int as *const u8,
@@ -3887,6 +3908,15 @@ pub fn try_compile_trace_with_options(
     get_field_sig.returns.push(AbiParam::new(types::I64));
     let get_field_id = module
         .declare_function("luna_jit_table_get_field", Linkage::Import, &get_field_sig)
+        .ok()?;
+
+    // v1.2 D3 Path B — `fn luna_jit_op_get_tab_up(upval_idx, key_ptr) -> raw`.
+    let mut get_tab_up_sig = module.make_signature();
+    get_tab_up_sig.params.push(AbiParam::new(types::I64));
+    get_tab_up_sig.params.push(AbiParam::new(types::I64));
+    get_tab_up_sig.returns.push(AbiParam::new(types::I64));
+    let get_tab_up_id = module
+        .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
         .ok()?;
 
     // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
@@ -5378,6 +5408,40 @@ pub fn try_compile_trace_with_options(
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetField:inference-fail"));
+                    }
+                }
+            }
+            Op::GetTabUp => {
+                // v1.2 D3 Path B — `R[A] := upvals[B][K[C]:string]`.
+                // Helper path mirrors GetField's; the sunk-table
+                // optimization does NOT apply (upvalue tables are
+                // the global env, not trace-internal alloc). Exit-tag
+                // inference identical to GetField — peek next op via
+                // `infer_getx_exit`.
+                let upval_idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
+                let key_v = match head_proto.consts[ins.c() as usize] {
+                    luna_core::runtime::Value::Str(s) => s,
+                    _ => unreachable!("pre-emit gates Str const at K[C]"),
+                };
+                let key_ptr = key_v.as_ptr() as i64;
+                let key_arg = bcx.ins().iconst(types::I64, key_ptr);
+                let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
+                let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
+                let v = bcx.inst_results(call)[0];
+                bcx.def_var(regs[ins.a() as usize], v);
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit(ins.a(), record.ops[i + 1].inst)
+                } else {
+                    None
+                };
+                match inferred {
+                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
+                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
+                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                    _ => {
+                        dispatchable = false;
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetTabUp:inference-fail"));
                     }
                 }
             }
