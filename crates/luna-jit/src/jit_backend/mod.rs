@@ -7024,6 +7024,7 @@ impl IntChunkCompiler for CraneliftBackend {
         }
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Trait impl required by IntChunkCompiler; SAFETY documented below — caller is the dispatcher with a live `&mut Vm`.
     fn enter(
         &self,
         vm: *mut luna_core::vm::Vm,

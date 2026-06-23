@@ -20,7 +20,7 @@ fn set_global_i64() {
 #[test]
 fn set_global_f64_str_bool_nil() {
     let mut vm = sandbox(LuaVersion::Lua55);
-    vm.set_global("pi", 3.14_f64).unwrap();
+    vm.set_global("pi", std::f64::consts::PI).unwrap();
     vm.set_global("name", "luna").unwrap();
     vm.set_global("flag", true).unwrap();
     vm.set_global("nothing", ()).unwrap();
