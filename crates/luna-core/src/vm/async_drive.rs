@@ -57,11 +57,61 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+/// v1.1 B10 Stage 2 — async-native function ABI. Returns a
+/// `Pin<Box<dyn Future>>` that resolves to the return-value count
+/// (same convention as sync [`crate::runtime::value::NativeFn`]: write
+/// results into the caller's slot via the borrowed `Vm`, then yield
+/// the count back).
+///
+/// # Safety contract
+///
+/// The first parameter is `*mut Vm` rather than `&mut Vm` because the
+/// returned `Pin<Box<dyn Future>>` is `'static` (the trait object
+/// erases lifetimes) and we cannot tie it to the caller's borrow
+/// without `for<'vm>` HRTBs that the trait system rejects on `dyn`
+/// futures. Implementors must reborrow inside the future:
+///
+/// ```ignore
+/// fn my_async(
+///     vm: *mut Vm,
+///     func_slot: u32,
+///     nargs: u32,
+/// ) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>> {
+///     Box::pin(async move {
+///         // SAFETY: the dispatcher is suspended and EvalFuture
+///         // holds the unique &mut Vm borrow for the future's
+///         // entire lifetime; no concurrent access can occur.
+///         let vm = unsafe { &mut *vm };
+///         // ... read args from vm.stack[func_slot+1..], do async
+///         //     work (e.g. `sleep(...).await`), write results back
+///         //     to vm.stack[func_slot..], return their count ...
+///         Ok(0)
+///     })
+/// }
+/// ```
+///
+/// The `Vm` is exclusively owned by the active [`EvalFuture`] for the
+/// suspension's full lifetime (the dispatcher is paused; the host's
+/// executor is the only driver). This makes the `unsafe { &mut *vm }`
+/// reborrow sound provided the future doesn't leak the borrow past
+/// its own `await` boundaries.
+///
+/// The native is invoked exactly once per Lua call site. The future
+/// is polled by [`EvalFuture::poll`]; on `Poll::Ready(Ok(n))` the
+/// dispatcher resumes, treats slots `[func_slot, func_slot+n)` as the
+/// return list, and continues. On `Poll::Ready(Err(e))` the error
+/// propagates as if a sync native had returned it.
+pub type AsyncNativeFn = fn(
+    *mut Vm,
+    func_slot: u32,
+    nargs: u32,
+) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>;
+
 /// v1.1 B10 Stage 1 — outcome of a single dispatcher slice driven by
-/// [`Vm::drive_one`]. Stage 2 introduces an additional
-/// `AsyncNativeAwaiting` variant for async natives; Stage 1 stops at
-/// the three variants below.
-#[derive(Debug)]
+/// [`Vm::drive_one`]. Stage 2 adds the `AsyncNativeAwaiting` variant
+/// for async natives: the dispatcher suspends in-place, hands the
+/// returned future to [`EvalFuture::poll`], and resumes the same call
+/// site once the future resolves.
 pub(crate) enum DispatchOutcome {
     /// The chunk returned cleanly; values are the Lua-side return list.
     Complete(Vec<Value>),
@@ -71,9 +121,53 @@ pub(crate) enum DispatchOutcome {
     /// call frames are intact; the next [`Vm::drive_one`] call (after
     /// the host pumps the executor) resumes from the same point.
     BudgetExhausted,
+    /// v1.1 B10 Stage 2 — the dispatcher invoked an async-marked
+    /// native; the returned future is now under host drive. The Vm
+    /// preserves the in-flight call's `(func_slot, nargs, nresults)`
+    /// context in `pending_async_native_ctx` so that
+    /// [`Vm::commit_async_native_result`] can land the future's
+    /// eventual `Ok(nret)` back into the calling frame.
+    AsyncNativeAwaiting(Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>),
 }
 
 impl Vm {
+    /// v1.1 B10 Stage 2 — allocate a `Value::Native` whose closure is
+    /// tagged as async (`NativeClosure.is_async = true`). The
+    /// underlying `NativeFn` pointer slot stores `f` transmuted from
+    /// [`AsyncNativeFn`] — same pointer width, no provenance loss —
+    /// and the marker bit is what tells the dispatcher to route it
+    /// through the cooperative-yield path.
+    ///
+    /// The returned `Value` can be installed under a Lua global via
+    /// [`Vm::set_global`], passed as a callback, stored in a table —
+    /// whatever a sync `vm.native(f)` value supports. Calling it from
+    /// a sync `Vm::eval` context raises `LuaError` ("async native
+    /// called in sync context"); only `Vm::eval_async` (or another
+    /// driver that sets `async_mode = true`) can drive it.
+    pub fn create_async_native(&mut self, f: AsyncNativeFn) -> Value {
+        // SAFETY: `AsyncNativeFn` and `NativeFn` are both Rust `fn`
+        // pointers and have identical size + alignment (single word).
+        // The `is_async` marker bit, set by `Heap::new_async_native`,
+        // is the discriminant the dispatcher reads before transmuting
+        // back to `AsyncNativeFn` at the call site; without the bit
+        // the pointer is never invoked.
+        let raw_fn: crate::runtime::value::NativeFn =
+            unsafe { std::mem::transmute(f) };
+        Value::Native(self.heap.new_async_native(raw_fn, Box::new([])))
+    }
+
+    /// v1.1 B10 Stage 2 — convenience: install an async native under
+    /// `name` as a Lua global. Equivalent to
+    /// `vm.set_global(name, vm.create_async_native(f))`.
+    pub fn set_async_native(
+        &mut self,
+        name: &str,
+        f: AsyncNativeFn,
+    ) -> Result<(), LuaError> {
+        let v = self.create_async_native(f);
+        self.set_global(name, v)
+    }
+
     /// v1.1 B10 Stage 1 — convenience entry: compile + run `src` as an
     /// anonymous chunk via the cooperative-yield dispatcher. The
     /// returned `EvalFuture` borrows `&mut self` for its full lifetime,
@@ -165,7 +259,22 @@ impl Vm {
         match raw {
             Ok(values) => DispatchOutcome::Complete(values),
             Err(e) => {
-                if self.host_yield_pending {
+                // v1.1 B10 Stage 2 — async-native suspension takes
+                // precedence: the future is the active work item, the
+                // sentinel Err is just transport. Check before
+                // `host_yield_pending` because both flags can in
+                // principle coexist (a budget exhaustion deferred by
+                // an in-flight async-native call) but the async-native
+                // future must be drained first.
+                if self.pending_async_native_fut.is_some() {
+                    let fut = self
+                        .pending_async_native_fut
+                        .take()
+                        .expect("checked above");
+                    // ctx stays in place — `commit_async_native_result`
+                    // consumes it when the future resolves.
+                    DispatchOutcome::AsyncNativeAwaiting(fut)
+                } else if self.host_yield_pending {
                     self.host_yield_pending = false;
                     DispatchOutcome::BudgetExhausted
                 } else {
@@ -173,6 +282,28 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// v1.1 B10 Stage 2 — land an async native's resolved return
+    /// count back into the calling frame's expected result slots.
+    /// Mirrors the sync-native tail of `call_at` (sans hooks +
+    /// `running_natives` bookkeeping, which Stage 2 deliberately skips
+    /// — see RFC §"Risks"). Consumes
+    /// `Vm.pending_async_native_ctx`; subsequent `drive_one` calls
+    /// resume the dispatcher above this call site.
+    ///
+    /// Called by [`EvalFuture::poll`] after the awaited future
+    /// resolves to `Poll::Ready(Ok(nret))`.
+    pub(crate) fn commit_async_native_result(&mut self, nret: u32) {
+        let ctx = self
+            .pending_async_native_ctx
+            .take()
+            .expect("commit_async_native_result without a pending ctx");
+        self.finish_results(ctx.func_slot, nret, ctx.nresults);
+        // Same post-call GC checkpoint the sync path runs: the native
+        // may have allocated, and the live boundary is now the result
+        // window.
+        self.maybe_collect_garbage(self.top);
     }
 }
 
@@ -224,6 +355,17 @@ enum EvalState {
         /// Cached for `bootstrap = Some(...)`. After bootstrap fires
         /// once, the value is `None`.
         closure: Option<Value>,
+    },
+    /// v1.1 B10 Stage 2 — an async native is mid-await. The future is
+    /// owned here (rather than on the `Vm`) so an explicit `Drop` of
+    /// `EvalFuture` cancels the in-flight future cleanly. On the next
+    /// poll: if the future resolves to `Ok(nret)`, the EvalFuture
+    /// calls `Vm::commit_async_native_result(nret)` and falls back to
+    /// `EvalState::Running` to keep driving the dispatcher; on `Err`
+    /// the EvalFuture transitions to `Done` and surfaces the error.
+    AwaitingNative {
+        entry_depth: usize,
+        fut: Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>,
     },
     Done,
 }
@@ -306,6 +448,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                     } else {
                         (None, *entry_depth)
                     };
+                    let ed_for_resume = *entry_depth;
                     let outcome = this.vm.drive_one(bootstrap_arg, ed);
                     // The first slice is consumed.
                     *first_slice = false;
@@ -340,6 +483,51 @@ impl<'vm> Future for EvalFuture<'vm> {
                             cx.waker().wake_by_ref();
                             return Poll::Pending;
                         }
+                        DispatchOutcome::AsyncNativeAwaiting(fut) => {
+                            // Stash the future + flip to AwaitingNative.
+                            // Loop back to the top so the very next
+                            // iteration polls it (gives Ready-fast
+                            // futures a one-poll completion path).
+                            this.state = EvalState::AwaitingNative {
+                                entry_depth: ed_for_resume,
+                                fut,
+                            };
+                            continue;
+                        }
+                    }
+                }
+                EvalState::AwaitingNative { entry_depth, fut } => {
+                    // Poll the in-flight async native. On Ready, land
+                    // the result into the calling Lua frame and fall
+                    // back into Running so `drive_one` resumes the
+                    // dispatcher above this call site. On Pending,
+                    // surface to the host — the future itself
+                    // registered any wakers it needs inside the host
+                    // executor (e.g. a tokio timer).
+                    match fut.as_mut().poll(cx) {
+                        Poll::Ready(Ok(nret)) => {
+                            let ed = *entry_depth;
+                            this.vm.commit_async_native_result(nret);
+                            this.state = EvalState::Running {
+                                entry_depth: ed,
+                                first_slice: false,
+                                closure: None,
+                            };
+                            continue;
+                        }
+                        Poll::Ready(Err(e)) => {
+                            // Drop the in-flight ctx — the future
+                            // failed, so its slot is gone.
+                            this.vm.pending_async_native_ctx = None;
+                            if let Some(prev) = this.saved_jit_enabled.take() {
+                                this.vm.set_jit_enabled(prev);
+                            }
+                            this.vm.async_mode = false;
+                            this.vm.async_waker = None;
+                            this.state = EvalState::Done;
+                            return Poll::Ready(Err(e));
+                        }
+                        Poll::Pending => return Poll::Pending,
                     }
                 }
                 EvalState::Initial { .. } => unreachable!("transitioned above"),
@@ -367,5 +555,12 @@ impl<'vm> Drop for EvalFuture<'vm> {
         self.vm.async_mode = false;
         self.vm.async_waker = None;
         self.vm.host_yield_pending = false;
+        // v1.1 B10 Stage 2 — async-native bookkeeping. The future is
+        // owned by `EvalFuture` (not by the Vm) once `drive_one`
+        // surfaces it, so cancelling here only needs to clear the
+        // post-call ctx; the dropped EvalFuture takes the Pin<Box<...>>
+        // with it.
+        self.vm.pending_async_native_fut = None;
+        self.vm.pending_async_native_ctx = None;
     }
 }

@@ -16,7 +16,7 @@ pub mod sandbox;
 pub mod table_builder;
 pub mod typed_native;
 
-pub use async_drive::EvalFuture;
+pub use async_drive::{AsyncNativeFn, EvalFuture};
 pub use error::{LuaError, LuaErrorKind};
 pub use exec::{Error, Vm};
 pub use into_value::IntoValue;

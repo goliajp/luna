@@ -448,6 +448,27 @@ impl Heap {
             hdr: GcHeader::new(ObjTag::Native),
             f,
             upvals,
+            is_async: false,
+        }))
+    }
+
+    /// v1.1 B10 Stage 2 — like [`Heap::new_native`] but tags the
+    /// closure with `is_async = true`. The dispatcher's native-call
+    /// path then transmutes `f` to `AsyncNativeFn` and routes through
+    /// the cooperative-yield path. The caller is responsible for
+    /// having transmuted the `AsyncNativeFn` pointer to `NativeFn`
+    /// shape (both are `fn` pointers of the same size); see
+    /// [`crate::vm::async_drive`] for the helper that does this.
+    pub fn new_async_native(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: Box<[Value]>,
+    ) -> Gc<NativeClosure> {
+        self.adopt(Box::new(NativeClosure {
+            hdr: GcHeader::new(ObjTag::Native),
+            f,
+            upvals,
+            is_async: true,
         }))
     }
 

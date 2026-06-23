@@ -464,6 +464,14 @@ pub struct NativeClosure {
     pub(crate) hdr: GcHeader,
     pub f: crate::runtime::value::NativeFn,
     pub upvals: Box<[Value]>,
+    /// v1.1 B10 Stage 2 — marker bit for async natives. When `true`,
+    /// `f` is actually an `crate::vm::async_drive::AsyncNativeFn`
+    /// (same pointer width, transmuted at the call site) returning a
+    /// `Pin<Box<dyn Future>>`. The dispatcher's native-call path checks
+    /// this bit and routes through the cooperative-yield mechanism
+    /// instead of invoking `f` synchronously. Default `false` (sync
+    /// native) for all v1.0 / v1.1-Stage-1 construction sites.
+    pub is_async: bool,
 }
 
 impl NativeClosure {

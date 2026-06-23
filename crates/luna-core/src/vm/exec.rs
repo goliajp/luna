@@ -59,7 +59,7 @@ pub struct Vm {
     /// to-be-closed slots, ascending
     tbc: Vec<u32>,
     /// logical stack top for multi-result sequences
-    top: u32,
+    pub(crate) top: u32,
     globals: Gc<Table>,
     /// shared metatable for all strings (populated by the string lib, P04)
     /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
@@ -128,7 +128,7 @@ pub struct Vm {
     /// registers above it are not rooted. Without this the collector roots the
     /// whole stack window, pinning weak-table values stranded in stale temps
     /// (e.g. closure.lua's `while x[1]` GC-detection loop).
-    gc_top: u32,
+    pub(crate) gc_top: u32,
     /// `collectgarbage("param", name [,value])` pacing parameters. The collector
     /// is still stop-the-world, so these are stored/returned for API fidelity
     /// (PUC round-trips them via `setparam`/`getparam`). Defaults mirror PUC's
@@ -322,6 +322,51 @@ pub struct Vm {
     /// frames survive for the next poll). Cleared by `drive_one`
     /// after translating it to `DispatchOutcome::BudgetExhausted`.
     pub(crate) host_yield_pending: bool,
+
+    /// v1.1 B10 Stage 2 — set by the dispatcher's native-call path
+    /// when an async-marked [`NativeClosure`] is invoked under
+    /// `async_mode`. The Vm pauses the dispatcher (same sentinel-Err
+    /// mechanism as `host_yield_pending` — see `exec_with` +
+    /// `call_value_impl`), stashes the in-flight future +
+    /// post-completion context here, and surfaces them to
+    /// `EvalFuture::poll` via `drive_one`. Cleared by `drive_one`
+    /// once the future is moved out into a
+    /// `DispatchOutcome::AsyncNativeAwaiting`.
+    pub(crate) pending_async_native_fut:
+        Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<u32, LuaError>>>>>,
+
+    /// v1.1 B10 Stage 2 — companion to `pending_async_native_fut`:
+    /// the `(func_slot, nargs, nresults, gc_top)` quad needed to
+    /// commit the future's eventual `Ok(nret)` back into the calling
+    /// frame's expected result slots. Recorded by the dispatcher;
+    /// consumed by [`Vm::commit_async_native_result`] after the
+    /// future resolves.
+    pub(crate) pending_async_native_ctx: Option<AsyncNativeCallCtx>,
+}
+
+/// v1.1 B10 Stage 2 — call-site context an in-flight async native
+/// needs preserved across the cooperative-yield boundary.
+///
+/// The dispatcher records this when it routes a `NativeClosure` with
+/// `is_async == true` through the cooperative path; `EvalFuture::poll`
+/// hands it back to [`Vm::commit_async_native_result`] once the
+/// awaited future resolves so `finish_results` (and the post-call GC
+/// checkpoint) can run as if the native had completed synchronously.
+#[derive(Clone, Copy)]
+pub(crate) struct AsyncNativeCallCtx {
+    pub func_slot: u32,
+    /// Recorded for parity with the sync native-call path's
+    /// `native_nresults`/`gc_top` bookkeeping; reserved for Stage 3+
+    /// hook firing + traceback shaping. Not yet read in Stage 2.
+    #[allow(dead_code)]
+    pub nargs: u32,
+    pub nresults: i32,
+    /// Recorded for Stage 3+ traceback + GC-root-window auditing.
+    /// Stage 2 reads `Vm.gc_top` directly post-resume, so this is
+    /// unread today; carried so an Stage 3 audit can confirm the
+    /// pre-suspend root window matches the post-resume one.
+    #[allow(dead_code)]
+    pub gc_top: u32,
 }
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -853,6 +898,11 @@ impl Vm {
             async_waker: None,
             async_slice_size: 10_000,
             host_yield_pending: false,
+            // v1.1 B10 Stage 2 — pending async-native state. Empty by
+            // default; populated only by the dispatcher when an
+            // async-marked NativeClosure is invoked under async_mode.
+            pending_async_native_fut: None,
+            pending_async_native_ctx: None,
         };
         vm
     }
@@ -1461,6 +1511,7 @@ impl Vm {
             && self.yielding.is_none()
             && self.terminating.is_none()
             && !self.host_yield_pending
+            && self.pending_async_native_fut.is_none()
         {
             // A `coroutine.yield` in flight raises a sentinel error to unwind the
             // Rust stack, but the suspended coroutine's frames/registers (which
@@ -2357,7 +2408,7 @@ impl Vm {
     /// `loadrep` stress) gets a 25M-object budget so a cycle completes in
     /// O(SWEEP_DIVISOR) safe-points regardless of size.
     #[inline(always)]
-    fn maybe_collect_garbage(&mut self, live_top: u32) {
+    pub(crate) fn maybe_collect_garbage(&mut self, live_top: u32) {
         if self.gc_finalizing {
             return;
         }
@@ -3666,6 +3717,57 @@ impl Vm {
                     return Ok(true);
                 }
                 Value::Native(nc) => {
+                    // v1.1 B10 Stage 2 — async-marked NativeClosure.
+                    // Route through the cooperative-yield mechanism
+                    // when async_mode is on; reject when called from
+                    // a sync `eval`/`call_value` path (would have no
+                    // executor to drive the returned future).
+                    if nc.is_async {
+                        if !self.async_mode {
+                            let s = Value::Str(self.heap.intern(
+                                b"async native called in sync context",
+                            ));
+                            self.last_error_kind =
+                                crate::vm::error::LuaErrorKind::Runtime;
+                            return Err(LuaError(s));
+                        }
+                        // Same root-up bookkeeping as the sync path:
+                        // pin args + result-count expectation so a
+                        // collection across the suspend boundary
+                        // keeps the arg window live.
+                        self.native_nresults = nresults;
+                        self.gc_top = func_slot + nargs + 1;
+                        // Transmute the stored NativeFn back to its
+                        // real AsyncNativeFn shape. Sound because
+                        // `set_async_native` / `create_async_native`
+                        // installed an AsyncNativeFn through the
+                        // identically-sized fn-pointer slot, and the
+                        // `is_async` marker bit is what records that
+                        // fact.
+                        let async_fn: crate::vm::async_drive::AsyncNativeFn =
+                            // SAFETY: same-size fn pointers; provenance
+                            // preserved through `mem::transmute`. The
+                            // `is_async` marker is the only safe-to-call
+                            // gate, set exclusively by
+                            // `Vm::create_async_native`.
+                            unsafe { std::mem::transmute(nc.f) };
+                        let vm_ptr: *mut Vm = self;
+                        let fut = async_fn(vm_ptr, func_slot, nargs);
+                        // Stash the future + post-call context for
+                        // `drive_one` to surface to `EvalFuture::poll`.
+                        self.pending_async_native_fut = Some(fut);
+                        self.pending_async_native_ctx =
+                            Some(AsyncNativeCallCtx {
+                                func_slot,
+                                nargs,
+                                nresults,
+                                gc_top: self.gc_top,
+                            });
+                        // Sentinel Err walked up to `drive_one` (same
+                        // shape as `host_yield_pending`'s budget yield).
+                        // Value::Nil — never seen by user code.
+                        return Err(LuaError(Value::Nil));
+                    }
                     // pcall/xpcall are yieldable: rather than calling the
                     // protected function through the Rust stack (which cannot be
                     // suspended), push a continuation frame and drive the call
@@ -4038,7 +4140,7 @@ impl Vm {
     }
 
     /// Pad/announce results sitting at func_slot.
-    fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
+    pub(crate) fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
         if wanted < 0 {
             self.top = func_slot + nret;
         } else {
@@ -4716,7 +4818,8 @@ impl Vm {
             if r.is_err()
                 && (self.yielding.is_some()
                     || self.terminating.is_some()
-                    || self.host_yield_pending)
+                    || self.host_yield_pending
+                    || self.pending_async_native_fut.is_some())
             {
                 // a `coroutine.yield` is in flight: keep the frames intact (they
                 // are the suspended coroutine's saved state) and propagate to
