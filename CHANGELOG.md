@@ -21,35 +21,168 @@ optimization.
 
 ## [Unreleased]
 
-### Added (Track A — crate / dep / safety)
-- **Workspace split**: `luna-core` (0 third-party deps; lexer / parser /
-  compiler / interpreter / runtime / stdlib / GC / pattern / JIT trait
-  surface) and `luna` (Cranelift JIT + capi + CLI binary). `cargo add
-  luna-core` pulls only the interpreter; `cargo add luna` pulls the
-  full JIT'd stack. CI gate: `cargo tree -p luna-core` must show
-  exactly one crate.
-- **JIT trait boundary**: `IntChunkCompiler` / `TraceCompiler` traits
-  in `luna_core::jit::abi` decouple the dispatcher from Cranelift.
-  `NullJitBackend` (in `luna-core`) and `CraneliftBackend` (in `luna`)
-  implement the traits; embedders can swap backends or install
-  `NullJitBackend` for interpreter-only mode.
+### Track A — Crate / Dep / Safety
+
+- **Workspace split** (A1): `luna-core` (0 third-party deps; lexer /
+  parser / compiler / interpreter / runtime / stdlib / GC / pattern /
+  JIT trait surface) and `luna` (Cranelift JIT + capi + CLI binary).
+  `cargo add luna-core` pulls only the interpreter; `cargo add luna`
+  pulls the full JIT'd stack. CI gate: `cargo tree -p luna-core`
+  must show exactly one crate.
+- **JIT trait boundary** (A1 Session A): `IntChunkCompiler` /
+  `TraceCompiler` traits in `luna_core::jit::abi` decouple the
+  dispatcher from Cranelift. `NullJitBackend` (in `luna-core`) and
+  `CraneliftBackend` (in `luna`) implement the traits.
 - **`Vm::new_minimal_with_jit`** in the `luna` crate — one-line
   constructor for embedders wanting the v1.0 JIT-on-by-default
   behavior through `cargo add luna`.
-- New doc: `docs/architecture.md` — crate layout, source classification,
-  JIT pipeline overview, threading model, sandbox surface.
-- New doc: `docs/threading.md` — canonical embedding patterns for
-  async + multi-thread hosts (`Vm: !Send` rationale, Tokio
-  `current_thread` / `LocalSet` / per-thread-Vm patterns,
-  forward-looking `feature = "send"` outline).
+- **`Vm` rustdoc + `!Send` compile_fail doctest** (A7) — `Vm: !Send + !Sync`
+  is now CI-enforced. `docs/threading.md` covers canonical
+  embedding patterns.
+- **`JitState` sidecar** (A2): JIT-specific Vm fields factored into
+  a dedicated struct, freeing the Vm hot path from JIT churn.
+- **SAFETY: comment coverage** (A6): 100% across `unsafe { ... }`
+  blocks. 342 new annotations added. See `docs/unsafe-accounting.md`.
+- **Public API 0 unsafe** (A4): 4 `pub unsafe fn` items demoted to
+  `#[doc(hidden)]`; `TableBuilder` / `IntoValue` / `native_typed`
+  cover the safe embedder flows. The dogfood §4.1 friction is closed.
+- **Panic-safe public boundaries** (A5): `Vm::set_global` returns
+  `Result<(), LuaError>`; 68 call sites updated.
+- **`cargo-deny`** (A3): CI workflow gates supply chain (advisories,
+  licenses, source registry) plus a hard `luna-core` 0-dep check.
+
+### Track B — Embedder API
+
+- **`Vm::sandbox(version).build()`** (B1): Conservative-default
+  sandbox builder; embedders whitelist stdlib modules + set
+  instr/memory budgets in one chain.
+- **`vm.eval` / `vm.eval_chunk`** (B2): Single-call source-to-value
+  evaluation returning `Result<Vec<Value>, LuaError>`. SyntaxError
+  surfaces as a heap-interned `LuaError`.
+- **`TableBuilder` + `vm.table_of`** (B3): Build tables with chained
+  `.with(k, v)` calls or a fixed-size slice. Embedders never write
+  `unsafe { gc.as_mut() }` for table construction.
+- **`IntoValue` trait** (B4): `vm.set_global("k", 42_i64)` infers;
+  blanket impls cover `i64`, `f64`, `bool`, `&str`, `String`,
+  `Vec<u8>`, `Gc<Table>`, `Gc<LuaClosure>`, `Gc<NativeClosure>`,
+  `Value`, `()`, `Option<T>`.
+- **`vm.native_typed` + `FromLuaArgs`/`IntoLuaReturn`/`FromLuaValue`**
+  (B5): Typed Rust functions exposed as Lua callables. Arities 0-6,
+  fn pointers and non-capturing closures, multi-value returns,
+  `Result<T, LuaError>` for fallible natives.
+- **Structured `LuaError`** (B6): Adds `LuaErrorKind` enum
+  (Runtime / Syntax / InstrBudget / MemoryCap / Native /
+  OutOfMemory / Type), `impl Display + Error` on `LuaError`,
+  Vm-side `error_kind` / `error_source` / `take_error_traceback`
+  accessors. `LuaError` stays `Copy`.
+- **String interop** (B7): `vm.intern_str`, `Value::try_as_str`
+  (UTF-8 validating), `Value::as_bytes` (binary-safe).
+- **Host userdata** (B8): `vm.create_userdata::<T>(value)` /
+  `set_userdata` / `userdata_borrow` / `Userdata::downcast` for
+  arbitrary `T: 'static` host types. The closed-world userdata
+  infrastructure now accepts host payloads.
+- **Rust-side coroutine drive** (B9): `vm.create_coroutine` /
+  `vm.resume_coroutine` parallel to `coroutine.create` / `:resume`.
+- **Async embedder API** (B10): `vm.eval_async` returns a `!Send`
+  Future driving the dispatcher with cooperative yields on
+  instruction budget exhaustion. `vm.set_async_native` exposes
+  async Rust functions to Lua scripts. `Lua::eval_async` /
+  `Lua::set_async_native` mirror on the facade.
+  `examples/async_host.rs` ships a runnable Tokio-substitute
+  walkthrough. 0 new third-party deps (`std::future` + `std::task`
+  suffice).
+- **Rust-side debug hook** (B11): `vm.set_rust_debug_hook` accepts
+  a `fn(&mut Vm, RustHookEvent)` plus mask flags
+  (HOOK_MASK_CALL / RETURN / LINE / COUNT). Both Lua-side
+  `debug.sethook` and Rust hooks can coexist.
+- **`Lua` newtype facade** (B12): `mlua`-shape front door with
+  owned `LuaFunction` / `LuaTable` / `LuaRoot` handles backed by
+  an append-only `Vm::host_roots` pool. Use `Lua::new()` for the
+  five-minute start; use `Vm` for the low-level handle.
+
+### Track C — CLI / REPL
+
+- **Interactive REPL** (C1): `luna` with no args drops into a
+  single-line REPL. Each line is tried as an expression
+  (`return <line>`), then as a statement on syntax error.
+- **CLI flags** (C4): `--sandbox` builds via SandboxBuilder;
+  `--budget=N` sets instr budget; `--no-jit` installs NullJitBackend;
+  `--profile` prints trace-JIT counters on exit.
+- **Pretty errors** (C5): Compile + runtime errors render with
+  classified kind tag, source location, snippet, and traceback.
+  ANSI color when stderr is a TTY and `NO_COLOR` is unset.
+
+### Track D — Bench / Perf
+
+- **Redis-Lua-shape micro-bench** (D1): New `redis_lua_shape` bench
+  with four workload shapes from the dogfood report
+  (`token_bucket_1k`, `sliding_window_500`, `method_dispatch_5k`,
+  `string_ops_2k`).
+- **`docs/performance.md` extension** (F4): D1 baseline added
+  alongside the cross-dialect snapshot.
+
+### Track E — Dialect / require / Compat
+
+- **`docs/compatibility.md` extension** (E2): v1.1 luna-specific
+  extension table + CLI options reference + REPL behavior.
+
+### Track F — Docs
+
+- `docs/architecture.md` (F5): crate layout + source classification
+  + JIT pipeline + threading + sandbox.
+- `docs/threading.md` (A7 artifact): `!Send` patterns + Tokio +
+  async embedder API.
+- `docs/embedding.md` (F1): 12-section embedder cookbook
+  (install / hello / sandbox / globals / tables / native_typed /
+  userdata / coroutines / debug hooks / errors / Lua facade /
+  threading).
+- `docs/binary-size.md` (G5): cargo-bloat snapshot
+  (cranelift_codegen 45% / luna_core 25% / std 13%).
+- `docs/unsafe-accounting.md` (G4): cargo-geiger companion;
+  461 unsafe sites, 394 SAFETY-annotated, 6 pattern categories.
+- README.md rewrite (F6): workspace + ergo + honest perf.
+
+### Track G — CI / Release
+
+- **MSRV declaration** (G1): `rust-version = "1.86"` in
+  `[workspace.package]`; CI workflow `.github/workflows/msrv.yml`
+  locks against it.
+- **CI matrix** (G2): `.github/workflows/ci.yml` runs
+  build/test/release/doc on Linux + macOS + Windows + wasm32
+  (luna-core only). `cargo doc --workspace -D warnings` gate.
+- **`cargo-deny`** (A3, listed above): supply-chain + 0-dep gate.
 
 ### Changed
-- `src/jit/trace.rs` (9483 LOC) split in place into `trace.rs`
-  (Cranelift codegen body) and `trace_types.rs` (type definitions
-  + thresholds + cranelift-free helpers). Type paths preserved via
-  re-exports; downstream callers see no API change.
 
-(In progress — A2-A7 + Tracks B/C/D/E/F/G work follows.)
+- Source tree reorganization: `src/jit/trace.rs` (9483 LOC) split
+  in place into `trace.rs` (Cranelift codegen body) and
+  `trace_types.rs` (type definitions + thresholds + cranelift-free
+  helpers). Type paths preserved via re-exports; downstream
+  callers see no API change.
+- `Vm::set_global` signature changed from
+  `(&mut self, name: &str, v: Value)` to
+  `<V: IntoValue>(&mut self, name: &str, v: V) -> Result<(), LuaError>`.
+  Existing callers passing `Value::*` directly still compile (V
+  infers to Value). New ergonomics: `vm.set_global("k", 42)`.
+
+### Deferred to v1.2
+
+- C2 (REPL multi-line continuation + history)
+- C3 (REPL tab completion + syntax highlight, likely as
+  `luna-repl` binary crate)
+- D2 (criterion infra + n=1000 + CPU pin + 10 runs)
+- D3 (token_bucket decomposition vs PUC 5.1)
+- D4 (attack-agent perf workflow)
+- E1 (require searcher table dispatch — behavior change requires
+  PUC test re-verification)
+- E3 (PUC `luac` body 5.1-5.5 compat — 20-30 day block, charter L)
+- E4 (string.pack/utf8 edge case test gaps)
+- Lint cleanup (`cargo fmt --all` 606 sites + 9 `clippy` errors,
+  see `.dev/known-bugs/historic-fmt-clippy-drift.md`)
+- `feature = "send"` `Arc<RwLock<T>>` sprint (see
+  `.dev/rfcs/v1.1-rfc-vm-send-sync.md`)
+- `LuaUserdata` trait sugar (B8 follow-on; closed-world ships
+  v1.1, trait sugar lands later)
 
 ---
 
