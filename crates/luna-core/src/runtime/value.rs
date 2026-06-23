@@ -283,11 +283,6 @@ pub fn f2i_exact(f: f64) -> Option<i64> {
 /// `Value` enum discriminant — one tag per variant — used by
 /// LJ_FR2-style frame-metadata reads in Phase 3+.
 pub mod tag {
-    //! Discriminant byte constants for [`super::Value::tag_byte`].
-    //!
-    //! Match the variant order of [`super::Value`]; reordering the
-    //! enum requires updating these in lock-step.
-
     /// Tag for `Value::Nil`.
     pub const NIL: u8 = 0;
     /// Tag for `Value::Bool`.

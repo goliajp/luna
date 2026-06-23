@@ -598,8 +598,7 @@ fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 pub unsafe extern "C" fn lua_pushcfunction(L: *mut LuaState, f: LuaCFunction) {
     // SAFETY: Lua C API contract — the caller guarantees `L` is a valid `lua_State` pointer that this thread currently owns; pointer/index arguments follow the documented Lua API requirements.
     let vm = unsafe { vm_mut(L) };
-    // SAFETY: source and destination types share the same in-memory representation; see the C ABI typedef this function implements.
-    let cf_ptr = unsafe { std::mem::transmute::<LuaCFunction, *const ()>(f) };
+    let cf_ptr = f as *const ();
     let trampoline: luna_core::runtime::value::NativeFn = capi_trampoline;
     let f_val = vm.native_with(trampoline, Box::new([Value::LightUserdata(cf_ptr)]));
     vm.capi_stack.push(f_val);

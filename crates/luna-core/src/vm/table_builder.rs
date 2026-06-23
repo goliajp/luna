@@ -30,7 +30,6 @@
 
 use crate::runtime::Table;
 use crate::runtime::heap::Gc;
-use crate::runtime::value::Value;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 use crate::vm::into_value::IntoValue;

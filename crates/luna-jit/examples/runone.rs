@@ -5,7 +5,6 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 fn parse_version(arg: &str) -> Option<(LuaVersion, &'static str)> {
     match arg {

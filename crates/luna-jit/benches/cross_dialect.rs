@@ -15,7 +15,6 @@
 use std::time::{Duration, Instant};
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 struct Bench {
     name: &'static str,

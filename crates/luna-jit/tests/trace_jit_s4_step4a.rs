@@ -16,7 +16,6 @@
 //! emit plumbing step3b shipped.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(28) recorder produces a trace containing depth>0 ops (max
 /// depth tracker at least 1). Result still correct.

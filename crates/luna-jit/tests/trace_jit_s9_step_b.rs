@@ -10,7 +10,6 @@
 //! S9-B unblocks compile success of make's body trace.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// binary_trees `make` body pre-S9-B bailed compile at the
 /// self-recursive `Call C=0`. Post-S9-B, var_count=1 → compile

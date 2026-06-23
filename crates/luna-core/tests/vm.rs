@@ -4,7 +4,7 @@
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
-use luna_core::vm::{Error, Vm};
+use luna_core::vm::Vm;
 
 fn eval(src: &str) -> Vec<Value> {
     let mut vm = Vm::new(LuaVersion::Lua55);

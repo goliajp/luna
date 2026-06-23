@@ -12,7 +12,6 @@
 use luna_jit::VmExt as _;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 fn run_to_string(version: LuaVersion, src: &str, install_null: bool) -> String {
     let mut vm = luna_jit::new_with_jit(version);

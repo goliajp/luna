@@ -20,7 +20,6 @@
 //! emit so deeper recursion levels also speed up.)
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib's trace must **close** (not abort) under the new
 /// close-on-call-reentry semantic. Whether compile succeeds is a

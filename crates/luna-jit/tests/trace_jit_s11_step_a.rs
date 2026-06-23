@@ -6,7 +6,6 @@
 //! sunk is S11-B.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `local t = {}; t.x = i; t.y = i*2; s = s + t.x + t.y` — pure
 /// hash-keyed table operations. Pre-S11-A: SetField / GetField

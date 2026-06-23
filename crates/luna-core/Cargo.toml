@@ -18,6 +18,9 @@ readme = "../../README.md"
 # `rlib`-only — embedders that need a C ABI bring in `luna`.
 crate-type = ["rlib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 # v1.1 F1 acceptance: this list must remain empty so
 # `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` == 1.

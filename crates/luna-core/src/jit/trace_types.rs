@@ -651,7 +651,7 @@ pub const SIDE_SENT_KIND_GLOBAL: u8 = 3;
 /// `side_trace_cache`.
 pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
     debug_assert!(
-        kind >= 1 && kind <= 3,
+        (1..=3).contains(&kind),
         "kind must be SIDE_SENT_KIND_* (1..=3)"
     );
     ((kind as u32 & 0x3) << 5) | (local & 0x1F)
@@ -914,7 +914,7 @@ pub fn decode_exit_shape<'a>(
                 cont_pc,
                 site_id: 0,
                 exit_hit_idx: inline_n + i,
-                exit_tags_for_pc: &**tags,
+                exit_tags_for_pc: tags,
                 using_global_exit_tags: false,
             },
             None => DecodedExit {
@@ -930,6 +930,7 @@ pub fn decode_exit_shape<'a>(
 
 /// Compile-time options for the trace lowerer.
 #[derive(Clone, Copy, Debug)]
+#[derive(Default)]
 pub struct CompileOptions {
     /// When `true`, the trace's clean-close path emits a back-edge
     /// jump to its own body-loop block instead of returning
@@ -959,11 +960,3 @@ pub struct CompileOptions {
     pub pre53: bool,
 }
 
-impl Default for CompileOptions {
-    fn default() -> Self {
-        Self {
-            internal_loop: false,
-            pre53: false,
-        }
-    }
-}
