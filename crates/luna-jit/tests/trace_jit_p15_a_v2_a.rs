@@ -165,8 +165,7 @@ fn side_trace_pinned_non_dispatchable_for_v2_a() {
     // Verify by walking traces: every side-trace-flagged CompiledTrace
     // (we identify those by trace_side_trace_compiled_count > 0 +
     // dispatchable=false existence) must be marked non-dispatchable.
-    let (dispatchable_count, non_dispatchable_count) =
-        count_dispatchable_split(cl);
+    let (dispatchable_count, non_dispatchable_count) = count_dispatchable_split(cl);
     assert!(
         vm.trace_side_trace_compiled_count() >= 1,
         "fib_28 must compile a side trace for this assertion to mean \
@@ -196,9 +195,7 @@ fn side_trace_pinned_non_dispatchable_for_v2_a() {
 fn walk_any_side_ptr_non_null(
     cl: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::LuaClosure>,
 ) -> bool {
-    fn walk(
-        proto: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::Proto>,
-    ) -> bool {
+    fn walk(proto: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::Proto>) -> bool {
         for ct in proto.traces.borrow().iter() {
             for cell in ct.exit_side_trace_ptrs.iter() {
                 if !cell.get().is_null() {

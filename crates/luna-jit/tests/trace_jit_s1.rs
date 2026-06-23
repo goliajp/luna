@@ -34,7 +34,8 @@ fn trace_recording_starts_at_hot_back_edge() {
         .unwrap();
     assert_eq!(r.len(), 1);
     let v = r[0];
-    let ok = matches!(v, Value::Int(500_500)) || matches!(v, Value::Float(f) if (f - 500_500.0).abs() < 1.0);
+    let ok = matches!(v, Value::Int(500_500))
+        || matches!(v, Value::Float(f) if (f - 500_500.0).abs() < 1.0);
     assert!(ok, "expected 500500 (sum of 1..1000), got {v:?}");
 }
 
@@ -54,9 +55,7 @@ fn trace_recording_closes_on_simple_loop() {
     // numeric `for` (which uses dedicated ForLoop opcode — back-edge
     // tracking for that is S1.E).
     let _ = vm
-        .eval(
-            "local i, s = 0, 0; while i < 1000 do i = i + 1; s = s + i end; return s",
-        )
+        .eval("local i, s = 0, 0; while i < 1000 do i = i + 1; s = s + i end; return s")
         .unwrap();
     assert!(
         vm.trace_closed_count() >= 1,

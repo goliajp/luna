@@ -151,8 +151,6 @@ fn concat_str_for_10k_no_hot_exit() {
          (single-dispatch trace, no exit reaches threshold); got {} \
          entries: {:?}",
         hot.len(),
-        hot.iter()
-            .map(|h| (h.exit_idx, h.hits))
-            .collect::<Vec<_>>()
+        hot.iter().map(|h| (h.exit_idx, h.hits)).collect::<Vec<_>>()
     );
 }

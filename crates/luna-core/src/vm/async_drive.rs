@@ -101,11 +101,8 @@ use std::task::{Context, Poll};
 /// dispatcher resumes, treats slots `[func_slot, func_slot+n)` as the
 /// return list, and continues. On `Poll::Ready(Err(e))` the error
 /// propagates as if a sync native had returned it.
-pub type AsyncNativeFn = fn(
-    *mut Vm,
-    func_slot: u32,
-    nargs: u32,
-) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>;
+pub type AsyncNativeFn =
+    fn(*mut Vm, func_slot: u32, nargs: u32) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>;
 
 /// v1.1 B10 Stage 1 — outcome of a single dispatcher slice driven by
 /// [`Vm::drive_one`]. Stage 2 adds the `AsyncNativeAwaiting` variant
@@ -151,19 +148,14 @@ impl Vm {
         // is the discriminant the dispatcher reads before transmuting
         // back to `AsyncNativeFn` at the call site; without the bit
         // the pointer is never invoked.
-        let raw_fn: crate::runtime::value::NativeFn =
-            unsafe { std::mem::transmute(f) };
+        let raw_fn: crate::runtime::value::NativeFn = unsafe { std::mem::transmute(f) };
         Value::Native(self.heap.new_async_native(raw_fn, Box::new([])))
     }
 
     /// v1.1 B10 Stage 2 — convenience: install an async native under
     /// `name` as a Lua global. Equivalent to
     /// `vm.set_global(name, vm.create_async_native(f))`.
-    pub fn set_async_native(
-        &mut self,
-        name: &str,
-        f: AsyncNativeFn,
-    ) -> Result<(), LuaError> {
+    pub fn set_async_native(&mut self, name: &str, f: AsyncNativeFn) -> Result<(), LuaError> {
         let v = self.create_async_native(f);
         self.set_global(name, v)
     }
@@ -267,10 +259,7 @@ impl Vm {
                 // an in-flight async-native call) but the async-native
                 // future must be drained first.
                 if self.pending_async_native_fut.is_some() {
-                    let fut = self
-                        .pending_async_native_fut
-                        .take()
-                        .expect("checked above");
+                    let fut = self.pending_async_native_fut.take().expect("checked above");
                     // ctx stays in place — `commit_async_native_result`
                     // consumes it when the future resolves.
                     DispatchOutcome::AsyncNativeAwaiting(fut)
@@ -398,7 +387,8 @@ impl<'vm> Future for EvalFuture<'vm> {
                     Err(syntax) => {
                         // Match `eval_chunk`'s syntax-error shaping
                         // (B6 classification + source position).
-                        this.vm.set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
+                        this.vm
+                            .set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
                         this.vm.set_error_source(name.clone(), syntax.line);
                         let msg = format!("{}", syntax);
                         let s = this.vm.intern_str(&msg);

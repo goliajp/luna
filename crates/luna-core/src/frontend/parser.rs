@@ -176,7 +176,9 @@ impl<'s> Parser<'s> {
     }
 
     fn near(&self) -> String {
-        self.tok.tok.describe(self.lex.src(), self.tok.span, self.version)
+        self.tok
+            .tok
+            .describe(self.lex.src(), self.tok.span, self.version)
     }
 
     fn error(&self, msg: impl AsRef<str>) -> SyntaxError {
@@ -1051,10 +1053,7 @@ impl<'s> Parser<'s> {
     fn bump_locals(&mut self, n: u32) -> Result<(), SyntaxError> {
         const MAXVARS: u32 = 200;
         let depth = self.func_local_count.len();
-        let &(cur, line_defined) = self
-            .func_local_count
-            .last()
-            .expect("func ctx pushed");
+        let &(cur, line_defined) = self.func_local_count.last().expect("func ctx pushed");
         let new = cur.saturating_add(n);
         if new > MAXVARS {
             let where_ = if depth == 1 {

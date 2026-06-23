@@ -402,12 +402,16 @@ fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
             // Depth increased — the previous op must be Op::Call
             // (recorder invariant for self-recursive entry).
             debug_assert!(i > 0, "first recorded op cannot be at depth > 0");
-            debug_assert!(d == offset_stack.len(),
-                "depth jumped more than 1 in a single transition");
+            debug_assert!(
+                d == offset_stack.len(),
+                "depth jumped more than 1 in a single transition"
+            );
             let caller_idx = i - 1;
             let caller = &record.ops[caller_idx];
-            debug_assert!(matches!(caller.inst.op(), Op::Call),
-                "depth bump must follow Op::Call");
+            debug_assert!(
+                matches!(caller.inst.op(), Op::Call),
+                "depth bump must follow Op::Call"
+            );
             let caller_offset = offset_stack[offset_stack.len() - 1];
             let caller_a = caller.inst.a();
             let new_offset = caller_offset + caller_a + 1;
@@ -731,20 +735,16 @@ fn emit_materialize_live_sunk(
         // Array stack-alloc buffers; for cap=0 (hash-only site)
         // pass null pointers.
         let (raws_addr, kinds_addr) = if cap > 0 {
-            let raws_ss = bcx.create_sized_stack_slot(
-                cranelift_codegen::ir::StackSlotData::new(
-                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                    (cap * 8) as u32,
-                    3,
-                ),
-            );
-            let kinds_ss = bcx.create_sized_stack_slot(
-                cranelift_codegen::ir::StackSlotData::new(
-                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                    cap as u32,
-                    0,
-                ),
-            );
+            let raws_ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                (cap * 8) as u32,
+                3,
+            ));
+            let kinds_ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                cap as u32,
+                0,
+            ));
             for vi in 0..cap {
                 let v = bcx.use_var(vars[vi]);
                 bcx.ins().stack_store(v, raws_ss, (vi * 8) as i32);
@@ -768,27 +768,24 @@ fn emit_materialize_live_sunk(
         // comes from head_proto.consts[site.hash_keys[slot]] at
         // compile time (baked in as iconst).
         let (hash_keys_addr, hash_raws_addr, hash_kinds_addr) = if n_hash > 0 {
-            let hash_keys_ss = bcx.create_sized_stack_slot(
-                cranelift_codegen::ir::StackSlotData::new(
+            let hash_keys_ss =
+                bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                     cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                     (n_hash * 8) as u32,
                     3,
-                ),
-            );
-            let hash_raws_ss = bcx.create_sized_stack_slot(
-                cranelift_codegen::ir::StackSlotData::new(
+                ));
+            let hash_raws_ss =
+                bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                     cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                     (n_hash * 8) as u32,
                     3,
-                ),
-            );
-            let hash_kinds_ss = bcx.create_sized_stack_slot(
-                cranelift_codegen::ir::StackSlotData::new(
+                ));
+            let hash_kinds_ss =
+                bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                     cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                     n_hash as u32,
                     0,
-                ),
-            );
+                ));
             for vi in 0..n_hash {
                 let slot = cap + vi;
                 let v = bcx.use_var(vars[slot]);
@@ -803,9 +800,9 @@ fn emit_materialize_live_sunk(
                         "hash_keys must point at Str consts (validated by escape sweep)"
                     ),
                 };
-                let key_ptr_v =
-                    bcx.ins().iconst(types::I64, key_str.as_ptr() as i64);
-                bcx.ins().stack_store(key_ptr_v, hash_keys_ss, (vi * 8) as i32);
+                let key_ptr_v = bcx.ins().iconst(types::I64, key_str.as_ptr() as i64);
+                bcx.ins()
+                    .stack_store(key_ptr_v, hash_keys_ss, (vi * 8) as i32);
             }
             (
                 bcx.ins().stack_addr(types::I64, hash_keys_ss, 0),
@@ -982,8 +979,7 @@ fn escape_analyze(
         };
     }
 
-    let mut bindings: Vec<Vec<Option<usize>>> =
-        vec![vec![None; max_stack]; max_depth];
+    let mut bindings: Vec<Vec<Option<usize>>> = vec![vec![None; max_stack]; max_depth];
     let mut sites: Vec<AllocSite> = Vec::new();
     let upper = effective_end.min(record.ops.len());
     let mut op_actions: Vec<Option<OpAction>> = vec![None; upper];
@@ -994,11 +990,7 @@ fn escape_analyze(
             sites[sid].state = EscapeState::Escaped;
         }
     }
-    fn lookup(
-        bindings: &[Vec<Option<usize>>],
-        depth: u8,
-        reg: u32,
-    ) -> Option<usize> {
+    fn lookup(bindings: &[Vec<Option<usize>>], depth: u8, reg: u32) -> Option<usize> {
         let d = depth as usize;
         let r = reg as usize;
         if d < bindings.len() && r < bindings[d].len() {
@@ -1014,10 +1006,7 @@ fn escape_analyze(
             bindings[d][r] = None;
         }
     }
-    fn escape_all_live(
-        bindings: &[Vec<Option<usize>>],
-        sites: &mut [AllocSite],
-    ) {
+    fn escape_all_live(bindings: &[Vec<Option<usize>>], sites: &mut [AllocSite]) {
         for row in bindings.iter() {
             for &slot in row.iter() {
                 if let Some(sid) = slot {
@@ -1400,8 +1389,7 @@ fn escape_analyze(
             let depth = term.inline_depth;
             let a = term.inst.a();
             let op = term.inst.op();
-            let in_range = (depth as usize) < max_depth
-                && (a as usize) < max_stack;
+            let in_range = (depth as usize) < max_depth && (a as usize) < max_stack;
             match end {
                 TraceEnd::Call => {
                     if in_range {
@@ -1410,8 +1398,7 @@ fn escape_analyze(
                             for off in 1..b {
                                 let src = a.wrapping_add(off);
                                 if (src as usize) < max_stack
-                                    && let Some(src_sid) =
-                                        lookup(&bindings, depth, src)
+                                    && let Some(src_sid) = lookup(&bindings, depth, src)
                                 {
                                     mark_escape(&mut sites, src_sid);
                                 }
@@ -1507,11 +1494,7 @@ fn escape_analyze(
 /// 4. Return matched idioms as `AccumSite` entries.
 ///
 /// v1 stops at analysis; v2+ wires the OpAction + buffered emit.
-fn detect_accumulators(
-    record: &TraceRecord,
-    end: usize,
-    _head_proto: Gc<Proto>,
-) -> Vec<AccumSite> {
+fn detect_accumulators(record: &TraceRecord, end: usize, _head_proto: Gc<Proto>) -> Vec<AccumSite> {
     use luna_core::vm::isa::Op;
 
     let upper = end.min(record.ops.len());
@@ -1538,19 +1521,14 @@ fn detect_accumulators(
 
         // Pre-Move 1: Move A=tmp B=s_slot
         let pre1 = &record.ops[ci - 2];
-        if pre1.inline_depth != 0
-            || !matches!(pre1.inst.op(), Op::Move)
-            || pre1.inst.a() != tmp
-        {
+        if pre1.inline_depth != 0 || !matches!(pre1.inst.op(), Op::Move) || pre1.inst.a() != tmp {
             continue;
         }
         let s_slot = pre1.inst.b();
 
         // Pre-Move 2: Move A=tmp+1 B=v_slot
         let pre2 = &record.ops[ci - 1];
-        if pre2.inline_depth != 0
-            || !matches!(pre2.inst.op(), Op::Move)
-            || pre2.inst.a() != tmp + 1
+        if pre2.inline_depth != 0 || !matches!(pre2.inst.op(), Op::Move) || pre2.inst.a() != tmp + 1
         {
             continue;
         }
@@ -1637,20 +1615,21 @@ fn detect_accumulators(
             let c = ins.c();
             let reads_slot = match op {
                 Op::Move => b == site.accum_slot,
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
-                | Op::Pow | Op::IDiv | Op::BAnd | Op::BOr
-                | Op::BXor | Op::Shl | Op::Shr => {
-                    b == site.accum_slot || c == site.accum_slot
-                }
-                Op::Unm | Op::BNot | Op::Not | Op::Len => {
-                    b == site.accum_slot
-                }
-                Op::Eq | Op::Lt | Op::Le => {
-                    a == site.accum_slot || b == site.accum_slot
-                }
-                Op::EqK | Op::Test | Op::TestSet => {
-                    a == site.accum_slot
-                }
+                Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Mod
+                | Op::Pow
+                | Op::IDiv
+                | Op::BAnd
+                | Op::BOr
+                | Op::BXor
+                | Op::Shl
+                | Op::Shr => b == site.accum_slot || c == site.accum_slot,
+                Op::Unm | Op::BNot | Op::Not | Op::Len => b == site.accum_slot,
+                Op::Eq | Op::Lt | Op::Le => a == site.accum_slot || b == site.accum_slot,
+                Op::EqK | Op::Test | Op::TestSet => a == site.accum_slot,
                 Op::Concat => {
                     let n = ins.b();
                     let end_op = a.saturating_add(n);
@@ -1663,12 +1642,12 @@ fn detect_accumulators(
                 }
                 Op::Return | Op::Return1 => a == site.accum_slot,
                 Op::Return0 => false,
-                Op::SetI | Op::SetTable | Op::SetField | Op::SetUpval
-                | Op::SetTabUp => {
+                Op::SetI | Op::SetTable | Op::SetField | Op::SetUpval | Op::SetTabUp => {
                     a == site.accum_slot || c == site.accum_slot
                 }
-                Op::GetI | Op::GetTable | Op::GetField | Op::GetTabUp
-                | Op::GetUpval => b == site.accum_slot,
+                Op::GetI | Op::GetTable | Op::GetField | Op::GetTabUp | Op::GetUpval => {
+                    b == site.accum_slot
+                }
                 Op::SetList => {
                     let lo = a;
                     let hi = lo.saturating_add(b.max(1));
@@ -1682,19 +1661,43 @@ fn detect_accumulators(
                     let hi = lo.saturating_add(b);
                     site.accum_slot >= lo && site.accum_slot <= hi
                 }
-                Op::Move | Op::LoadI | Op::LoadF | Op::LoadK
-                | Op::LoadKx | Op::LoadFalse | Op::LFalseSkip
-                | Op::LoadTrue | Op::GetUpval
-                | Op::GetTabUp | Op::GetTable | Op::GetI
-                | Op::GetField | Op::NewTable | Op::Add | Op::Sub
-                | Op::Mul | Op::Div | Op::Mod | Op::Pow
-                | Op::IDiv | Op::BAnd | Op::BOr | Op::BXor
-                | Op::Shl | Op::Shr | Op::Unm | Op::BNot
-                | Op::Not | Op::Len | Op::Concat | Op::Call
-                | Op::TailCall | Op::TestSet | Op::ForLoop
-                | Op::ForPrep | Op::TForCall => {
-                    a == site.accum_slot
-                }
+                Op::Move
+                | Op::LoadI
+                | Op::LoadF
+                | Op::LoadK
+                | Op::LoadKx
+                | Op::LoadFalse
+                | Op::LFalseSkip
+                | Op::LoadTrue
+                | Op::GetUpval
+                | Op::GetTabUp
+                | Op::GetTable
+                | Op::GetI
+                | Op::GetField
+                | Op::NewTable
+                | Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Mod
+                | Op::Pow
+                | Op::IDiv
+                | Op::BAnd
+                | Op::BOr
+                | Op::BXor
+                | Op::Shl
+                | Op::Shr
+                | Op::Unm
+                | Op::BNot
+                | Op::Not
+                | Op::Len
+                | Op::Concat
+                | Op::Call
+                | Op::TailCall
+                | Op::TestSet
+                | Op::ForLoop
+                | Op::ForPrep
+                | Op::TForCall => a == site.accum_slot,
                 _ => false,
             };
             if reads_slot || writes_slot {
@@ -1730,7 +1733,9 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         Op::LoadNil => {
             // R[A..=A+B] := nil
             let mut w = Vec::with_capacity((b + 1) as usize);
-            for i in 0..=b { w.push(a + i); }
+            for i in 0..=b {
+                w.push(a + i);
+            }
             (vec![], w)
         }
         Op::GetUpval => (vec![], vec![a]),
@@ -1742,34 +1747,53 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         Op::SetTabUp => {
             // upval[b][const_b_or_R[B]] = R[C] / K[C]
             let mut r = Vec::new();
-            if !k { r.push(c); }
+            if !k {
+                r.push(c);
+            }
             (r, vec![])
         }
         Op::SetTable => {
             let mut r = vec![a, b];
-            if !k { r.push(c); }
+            if !k {
+                r.push(c);
+            }
             (r, vec![])
         }
         Op::SetI => {
             let mut r = vec![a];
-            if !k { r.push(c); }
+            if !k {
+                r.push(c);
+            }
             (r, vec![])
         }
         Op::SetField => {
             let mut r = vec![a];
-            if !k { r.push(c); }
+            if !k {
+                r.push(c);
+            }
             (r, vec![])
         }
         Op::NewTable => (vec![], vec![a]),
         Op::SelfOp => (vec![b], vec![a, a + 1]),
-        Op::Add | Op::Sub | Op::Mul | Op::Mod | Op::Pow
-        | Op::Div | Op::IDiv | Op::BAnd | Op::BOr | Op::BXor
-        | Op::Shl | Op::Shr => (vec![b, c], vec![a]),
+        Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Mod
+        | Op::Pow
+        | Op::Div
+        | Op::IDiv
+        | Op::BAnd
+        | Op::BOr
+        | Op::BXor
+        | Op::Shl
+        | Op::Shr => (vec![b, c], vec![a]),
         Op::Unm | Op::BNot | Op::Not | Op::Len => (vec![b], vec![a]),
         Op::Concat => {
             // R[A] := concat(R[A..A+B-1])
             let mut r = Vec::with_capacity(b as usize);
-            for i in 0..b { r.push(a + i); }
+            for i in 0..b {
+                r.push(a + i);
+            }
             (r, vec![a])
         }
         Op::Close | Op::Tbc => (vec![], vec![]),
@@ -1785,22 +1809,30 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
             let nargs = if b == 0 { 0 } else { b - 1 };
             let nres = if c == 0 { 0 } else { c - 1 };
             let mut r = vec![a];
-            for i in 1..=nargs { r.push(a + i); }
+            for i in 1..=nargs {
+                r.push(a + i);
+            }
             let mut w = Vec::with_capacity(nres as usize);
-            for i in 0..nres { w.push(a + i); }
+            for i in 0..nres {
+                w.push(a + i);
+            }
             (r, w)
         }
         Op::TailCall => {
             let nargs = if b == 0 { 0 } else { b - 1 };
             let mut r = vec![a];
-            for i in 1..=nargs { r.push(a + i); }
+            for i in 1..=nargs {
+                r.push(a + i);
+            }
             (r, vec![])
         }
         Op::Return => {
             // R[A..A+B-2] returned
             let n = if b == 0 { 1 } else { b - 1 };
             let mut r = Vec::with_capacity(n as usize);
-            for i in 0..n { r.push(a + i); }
+            for i in 0..n {
+                r.push(a + i);
+            }
             (r, vec![])
         }
         Op::Return0 => (vec![], vec![]),
@@ -1818,7 +1850,9 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         Op::TForCall => {
             // R[A+4], R[A+5], ..., R[A+3+C] := R[A](R[A+1], R[A+2])
             let mut w = Vec::with_capacity(c as usize);
-            for i in 0..c { w.push(a + 4 + i); }
+            for i in 0..c {
+                w.push(a + 4 + i);
+            }
             (vec![a, a + 1, a + 2], w)
         }
         Op::TForLoop => {
@@ -1829,7 +1863,9 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
             // R[A] is the table; R[A+1..A+B] are values to set.
             let n = if b == 0 { 0 } else { b };
             let mut r = vec![a];
-            for i in 1..=n { r.push(a + i); }
+            for i in 1..=n {
+                r.push(a + i);
+            }
             (r, vec![])
         }
         Op::Closure => (vec![], vec![a]),
@@ -1860,10 +1896,7 @@ fn op_reads_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
 /// returns a sorted unique list of slot indices that ANY op writes.
 /// Stored on `CompiledTrace.body_writes` so child side traces can
 /// intersect against it at compile time.
-pub fn compute_body_writes(
-    record: &TraceRecord,
-    op_offsets: &[u32],
-) -> Vec<u32> {
+pub fn compute_body_writes(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32> {
     let mut s: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for (i, rop) in record.ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0);
@@ -1882,10 +1915,7 @@ pub fn compute_body_writes(
 /// the side trace is UNSAFE to compile with internal looping (each
 /// iter would re-read parent's stale write — see the s12_step_b
 /// `Move R[1] = R[12]` bug).
-pub fn compute_live_in_slots(
-    record: &TraceRecord,
-    op_offsets: &[u32],
-) -> Vec<u32> {
+pub fn compute_live_in_slots(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32> {
     let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut live_in: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for (i, rop) in record.ops.iter().enumerate() {
@@ -2144,17 +2174,11 @@ fn is_whitelisted_step5(op: Op) -> bool {
 /// already-emitted writers in `current_kinds`. Avoids re-deriving
 /// the kind from scratch on every operand access.
 fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
-    *current_kinds
-        .get(reg as usize)
-        .unwrap_or(&RegKind::Unset)
+    *current_kinds.get(reg as usize).unwrap_or(&RegKind::Unset)
 }
 
 /// Cast a Variable's i64 payload into f64 if its kind is Float.
-fn use_var_f64(
-    bcx: &mut FunctionBuilder<'_>,
-    regs: &[Variable],
-    reg: u32,
-) -> Value {
+fn use_var_f64(bcx: &mut FunctionBuilder<'_>, regs: &[Variable], reg: u32) -> Value {
     let raw = bcx.use_var(regs[reg as usize]);
     bcx.ins().bitcast(types::F64, MemFlags::new(), raw)
 }
@@ -2231,11 +2255,7 @@ struct FlushCtx {
     release_ref: cranelift_codegen::ir::FuncRef,
 }
 
-fn emit_flush_buf(
-    bcx: &mut FunctionBuilder<'_>,
-    ctx: &FlushCtx,
-    regs: &[Variable],
-) {
+fn emit_flush_buf(bcx: &mut FunctionBuilder<'_>, ctx: &FlushCtx, regs: &[Variable]) {
     let buf_ptr = bcx.use_var(ctx.buf_var);
     let call_inst = bcx.ins().call(ctx.intern_ref, &[buf_ptr]);
     let str_ptr = bcx.inst_results(call_inst)[0];
@@ -2276,8 +2296,9 @@ fn emit_side_trace_or_return(
         return;
     }
     let cell_addr = bcx.ins().iconst(types::I64, side_trace_cell_addr);
-    let fn_ptr =
-        bcx.ins().load(types::I64, MemFlags::trusted(), cell_addr, 0);
+    let fn_ptr = bcx
+        .ins()
+        .load(types::I64, MemFlags::trusted(), cell_addr, 0);
     let null = bcx.ins().iconst(types::I64, 0);
     let has_side = bcx.ins().icmp(IntCC::NotEqual, fn_ptr, null);
     let do_side_blk = bcx.create_block();
@@ -2291,11 +2312,11 @@ fn emit_side_trace_or_return(
     // re-decodes via the SIDE TRACE's shape inputs.
     bcx.switch_to_block(do_side_blk);
     bcx.seal_block(do_side_blk);
-    let call_inst =
-        bcx.ins().call_indirect(trace_fn_sig_ref, fn_ptr, &[reg_state]);
+    let call_inst = bcx
+        .ins()
+        .call_indirect(trace_fn_sig_ref, fn_ptr, &[reg_state]);
     let body = bcx.inst_results(call_inst)[0];
-    let mask_u64: u64 =
-        (1u64 << 63) | ((sentinel_code as u64 & 0x7F) << 56);
+    let mask_u64: u64 = (1u64 << 63) | ((sentinel_code as u64 & 0x7F) << 56);
     let mask_v = bcx.ins().iconst(types::I64, mask_u64 as i64);
     let masked = bcx.ins().bor(body, mask_v);
     bcx.ins().return_(&[masked]);
@@ -2363,8 +2384,7 @@ fn emit_store_back_and_return_site(
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlags::new(), val, reg_state, offset);
     }
-    let sentinel =
-        encode_side_sentinel(SIDE_SENT_KIND_INLINE, site_idx);
+    let sentinel = encode_side_sentinel(SIDE_SENT_KIND_INLINE, site_idx);
     emit_side_trace_or_return(
         bcx,
         reg_state,
@@ -2372,8 +2392,7 @@ fn emit_store_back_and_return_site(
         trace_fn_sig_ref,
         sentinel,
         |bcx| {
-            let encoded =
-                (((site_idx as u64) + 1) << 32) | (cont_pc as u64);
+            let encoded = (((site_idx as u64) + 1) << 32) | (cont_pc as u64);
             let v = bcx.ins().iconst(types::I64, encoded as i64);
             bcx.ins().return_(&[v]);
         },
@@ -2495,9 +2514,7 @@ pub fn try_compile_trace_with_options(
     // `compute_op_offsets`' depth-bump arithmetic; bail cleanly here
     // rather than panic deeper in.
     if let Some(first) = record.ops.first() {
-        if first.inline_depth != 0
-            || !std::ptr::eq(first.proto.as_ptr(), head_proto.as_ptr())
-        {
+        if first.inline_depth != 0 || !std::ptr::eq(first.proto.as_ptr(), head_proto.as_ptr()) {
             checkpoint("bail:first-op-shape");
             return None;
         }
@@ -2592,13 +2609,10 @@ pub fn try_compile_trace_with_options(
     // amortize the parent's hot-exit dispatch cost.
     if record.side_trace_parent.is_some() {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
-        let has_back_edge = record.ops.iter().any(|op| {
-            match op.inst.op() {
-                luna_core::vm::isa::Op::ForLoop
-                | luna_core::vm::isa::Op::TForLoop => true,
-                luna_core::vm::isa::Op::Jmp => (op.inst.sbx() as i32) < 0,
-                _ => false,
-            }
+        let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
+            luna_core::vm::isa::Op::ForLoop | luna_core::vm::isa::Op::TForLoop => true,
+            luna_core::vm::isa::Op::Jmp => (op.inst.sbx() as i32) < 0,
+            _ => false,
         });
         if has_back_edge {
             // Back-edge means the trace's IR will internal-loop OR
@@ -2618,10 +2632,17 @@ pub fn try_compile_trace_with_options(
                 use luna_core::vm::isa::Op;
                 matches!(
                     op.inst.op(),
-                    Op::Call | Op::TailCall | Op::TForCall
-                        | Op::SetTable | Op::SetI | Op::SetField
-                        | Op::SetUpval | Op::SetTabUp
-                        | Op::Closure | Op::Close | Op::Tbc
+                    Op::Call
+                        | Op::TailCall
+                        | Op::TForCall
+                        | Op::SetTable
+                        | Op::SetI
+                        | Op::SetField
+                        | Op::SetUpval
+                        | Op::SetTabUp
+                        | Op::Closure
+                        | Op::Close
+                        | Op::Tbc
                 )
             });
             if has_impure {
@@ -2631,10 +2652,8 @@ pub fn try_compile_trace_with_options(
             // Pure back-edge trace: still check live-in vs parent
             // writes (Add/Move loops can still re-read a stale
             // parent-written slot each iter).
-            let (parent_proto, parent_head_pc, _) =
-                record.side_trace_parent.unwrap();
-            let child_live_in =
-                compute_live_in_slots(record, &op_offsets);
+            let (parent_proto, parent_head_pc, _) = record.side_trace_parent.unwrap();
+            let child_live_in = compute_live_in_slots(record, &op_offsets);
             if !child_live_in.is_empty() {
                 let parent_writes_opt = {
                     let traces = parent_proto.traces.borrow();
@@ -2792,9 +2811,7 @@ pub fn try_compile_trace_with_options(
     // recorder closes the trace cleanly past the return; without
     // this truncation the Return would fail the whitelist check and
     // bail the whole compile.
-    let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(kind) =
-        record.self_link_kind
-    {
+    let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(kind) = record.self_link_kind {
         // P16-A/B — self-link close overrides the natural terminator
         // scan. Recorder stopped capturing AT the head_pc re-entry
         // (about to re-execute the deepest-inlined frame's first op);
@@ -2826,10 +2843,7 @@ pub fn try_compile_trace_with_options(
                         .map(|n_op| {
                             n_op.inline_depth as usize == depth + 1
                                 && depth + 1 <= MAX_INLINE_DEPTH as usize
-                                && std::ptr::eq(
-                                    n_op.proto.as_ptr(),
-                                    head_proto.as_ptr(),
-                                )
+                                && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
                         })
                         .unwrap_or(false);
                     if is_self_recursive {
@@ -2887,8 +2901,12 @@ pub fn try_compile_trace_with_options(
     // Escaped, so emit only honours sites we actually allocate
     // virt-slot Variables for.
     checkpoint("post:end-idx-found");
-    let mut escape =
-        escape_analyze(record, effective_end, end_idx_opt.map(|(_, k)| k), head_proto);
+    let mut escape = escape_analyze(
+        record,
+        effective_end,
+        end_idx_opt.map(|(_, k)| k),
+        head_proto,
+    );
     checkpoint("post:escape-analyze");
 
     // P14-S14-B v4-part2 — `flush_ctx` is declared mut here so
@@ -3033,7 +3051,10 @@ pub fn try_compile_trace_with_options(
             if cx >= head_proto.consts.len()
                 || !matches!(head_proto.consts[cx], luna_core::runtime::Value::Str(_))
             {
-                { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                {
+                    checkpoint("bail:cmp-dirs-body-other");
+                    return None;
+                }
             }
         }
         let ins = rop.inst;
@@ -3041,12 +3062,12 @@ pub fn try_compile_trace_with_options(
         let b = ins.b() as usize;
         let c = ins.c() as usize;
         match op {
-            Op::Call => unreachable!(
-                "Op::Call only appears at effective_end (truncation guarded above)"
-            ),
-            Op::ForLoop => unreachable!(
-                "Op::ForLoop only appears at effective_end (loop-end guarded above)"
-            ),
+            Op::Call => {
+                unreachable!("Op::Call only appears at effective_end (truncation guarded above)")
+            }
+            Op::ForLoop => {
+                unreachable!("Op::ForLoop only appears at effective_end (loop-end guarded above)")
+            }
             Op::TForLoop => unreachable!(
                 "Op::TForLoop only appears at effective_end (close-on-back-edge guarded above)"
             ),
@@ -3057,7 +3078,10 @@ pub fn try_compile_trace_with_options(
                 // body never sees TForPrep in normal pickup; bail if
                 // it shows up (mid-body / inline-depth>0 = unsupported
                 // shape).
-                { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                {
+                    checkpoint("bail:cmp-dirs-body-other");
+                    return None;
+                }
             }
             Op::TForCall => {
                 // P12-S12-B-v2 — generic-for body tail. Calls iter
@@ -3069,14 +3093,23 @@ pub fn try_compile_trace_with_options(
                 // base; inline frames aren't pushed during trace IR
                 // execution). C field = nvars in [1, 250) per PUC.
                 if rop.inline_depth > 0 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if a + 6 >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let nvars = ins.c();
                 if nvars == 0 || nvars > 250 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::Concat => {
@@ -3085,32 +3118,45 @@ pub fn try_compile_trace_with_options(
                 // operand slots in body emit. Restrict to depth=0
                 // (helper resolves base via trace head's Lua frame).
                 if rop.inline_depth > 0 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let n_operands = ins.b() as usize;
                 if n_operands < 2 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 match a.checked_add(n_operands) {
                     Some(end) if end <= max_stack => {}
                     _ => return None,
                 }
             }
-            Op::GetTabUp => unreachable!(
-                "GetTabUp only admitted inside math fold"
-            ),
+            Op::GetTabUp => unreachable!("GetTabUp only admitted inside math fold"),
             Op::SetField | Op::GetField => {
                 // P12-S11-A — validated above (Str const at K[B] or
                 // K[C] respectively); bounds-check the reg operands
                 // here.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if matches!(op, Op::SetField) && c >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if matches!(op, Op::GetField) && b >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::Jmp => {
@@ -3118,7 +3164,10 @@ pub fn try_compile_trace_with_options(
             }
             Op::Move => {
                 if a >= max_stack || b >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::LoadI => {
@@ -3126,13 +3175,19 @@ pub fn try_compile_trace_with_options(
                 // beyond A; sBx fits in i32 (decoded from u32 by
                 // Inst::sbx) so the i64 conversion is lossless.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::LoadF => {
                 // R[A] := signed-bx immediate as f64.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::LoadNil => {
@@ -3150,10 +3205,16 @@ pub fn try_compile_trace_with_options(
                 // via the trace-head frame's base; inline frames aren't
                 // pushed). Bounds check on A.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if rop.inline_depth > 0 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::Closure => {
@@ -3173,14 +3234,23 @@ pub fn try_compile_trace_with_options(
                 //   a Value. Unset would mean trace never wrote the
                 //   slot AND entry_tags didn't snapshot it.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if rop.inline_depth > 0 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let bx = ins.bx() as usize;
                 if bx >= head_proto.protos.len() {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let inner = head_proto.protos[bx];
                 for d in inner.upvals.iter() {
@@ -3189,7 +3259,10 @@ pub fn try_compile_trace_with_options(
                     }
                     let src_idx = d.index as usize;
                     if src_idx >= max_stack {
-                        { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                        {
+                            checkpoint("bail:cmp-dirs-body-other");
+                            return None;
+                        }
                     }
                 }
             }
@@ -3198,44 +3271,56 @@ pub fn try_compile_trace_with_options(
                 // Int / Float consts; Str / Bool / Nil need a
                 // wider marshalling story.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let bx = ins.bx() as usize;
                 if bx >= head_proto.consts.len() {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if !matches!(
                     head_proto.consts[bx],
                     luna_core::runtime::Value::Int(_) | luna_core::runtime::Value::Float(_)
                 ) {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
                 if a >= max_stack || b >= max_stack || c >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             // 3-reg Int arith / bitwise ops — same bounds rules as
             // Add/Sub/Mul. Operand-type assumed Int (recorder is
             // trusted); Float / mixed paths would need RegKind
             // tracking like the method JIT.
-            Op::IDiv
-            | Op::Mod
-            | Op::BAnd
-            | Op::BOr
-            | Op::BXor
-            | Op::Shl
-            | Op::Shr => {
+            Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
                 if a >= max_stack || b >= max_stack || c >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             // 2-reg unary: `R[A] := op R[B]` — Unm (negation),
             // BNot (bitwise NOT).
             Op::Unm | Op::BNot => {
                 if a >= max_stack || b >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             // `if (R[A] == const[B]) ~= K then pc++` — same
@@ -3243,26 +3328,41 @@ pub fn try_compile_trace_with_options(
             // an Int (icmp eq) or a Float (fcmp eq).
             Op::EqK => {
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let bx = ins.b() as usize;
                 if bx >= head_proto.consts.len() {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if !matches!(
                     head_proto.consts[bx],
                     luna_core::runtime::Value::Int(_) | luna_core::runtime::Value::Float(_)
                 ) {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 // EqK pairs with the same trailing Jmp at
                 // cmp_pc + 1 contract as Lt/Le/Eq.
                 if i + 1 >= effective_end {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let next = &record.ops[i + 1];
                 if !matches!(next.inst.op(), Op::Jmp) || next.pc != rop.pc + 1 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 consumed_by_cmp[i + 1] = true;
             }
@@ -3272,14 +3372,19 @@ pub fn try_compile_trace_with_options(
                 // → TookJmp (test failed); next.pc==pc+2 → SkippedJmp
                 // (test passed, K matched).
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if i + 1 >= effective_end {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let next = &record.ops[i + 1];
-                let took_jmp = matches!(next.inst.op(), Op::Jmp)
-                    && next.pc == rop.pc + 1;
+                let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
                 let skipped_jmp = next.pc == rop.pc + 2;
                 if took_jmp {
                     consumed_by_cmp[i + 1] = true;
@@ -3288,11 +3393,17 @@ pub fn try_compile_trace_with_options(
                     let slot = (rop.pc + 1) as usize;
                     let jmp_inst = head_proto.code.get(slot).copied();
                     if !jmp_inst.map_or(false, |x| matches!(x.op(), Op::Jmp)) {
-                        { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                        {
+                            checkpoint("bail:cmp-dirs-body-other");
+                            return None;
+                        }
                     }
                     cmp_dirs[i] = Some(CmpDir::SkippedJmp);
                 } else {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::TestSet => {
@@ -3302,14 +3413,19 @@ pub fn try_compile_trace_with_options(
                 //   TookJmp (pc+1 = Jmp) = test passed (no pc++)
                 //   SkippedJmp (pc+2)    = test failed (pc++)
                 if a >= max_stack || b >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if i + 1 >= effective_end {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 let next = &record.ops[i + 1];
-                let took_jmp = matches!(next.inst.op(), Op::Jmp)
-                    && next.pc == rop.pc + 1;
+                let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
                 let skipped_jmp = next.pc == rop.pc + 2;
                 if took_jmp {
                     consumed_by_cmp[i + 1] = true;
@@ -3318,16 +3434,25 @@ pub fn try_compile_trace_with_options(
                     let slot = (rop.pc + 1) as usize;
                     let jmp_inst = head_proto.code.get(slot).copied();
                     if !jmp_inst.map_or(false, |x| matches!(x.op(), Op::Jmp)) {
-                        { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                        {
+                            checkpoint("bail:cmp-dirs-body-other");
+                            return None;
+                        }
                     }
                     cmp_dirs[i] = Some(CmpDir::SkippedJmp);
                 } else {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::Lt | Op::Le | Op::Eq => {
                 if a >= max_stack || b >= max_stack {
-                    { checkpoint("bail:cmp-ab-oob"); return None; }
+                    {
+                        checkpoint("bail:cmp-ab-oob");
+                        return None;
+                    }
                 }
                 // Direction inference: peek at the next recorded
                 // op's PC relative to the cmp's PC.
@@ -3354,11 +3479,13 @@ pub fn try_compile_trace_with_options(
                 // write is gated by `i + 1 < effective_end` so
                 // we don't mark a terminator op as consumed.
                 if i + 1 >= record.ops.len() {
-                    { checkpoint("bail:cmp-at-record-end"); return None; }
+                    {
+                        checkpoint("bail:cmp-at-record-end");
+                        return None;
+                    }
                 }
                 let next = &record.ops[i + 1];
-                let took_jmp = matches!(next.inst.op(), Op::Jmp)
-                    && next.pc == rop.pc + 1;
+                let took_jmp = matches!(next.inst.op(), Op::Jmp) && next.pc == rop.pc + 1;
                 let skipped_jmp = next.pc == rop.pc + 2;
                 if took_jmp {
                     if i + 1 < effective_end {
@@ -3371,36 +3498,54 @@ pub fn try_compile_trace_with_options(
                     let slot = (rop.pc + 1) as usize;
                     let jmp_inst = head_proto.code.get(slot).copied();
                     if !jmp_inst.map_or(false, |x| matches!(x.op(), Op::Jmp)) {
-                        { checkpoint("bail:cmp-skipped-but-no-jmp-slot"); return None; }
+                        {
+                            checkpoint("bail:cmp-skipped-but-no-jmp-slot");
+                            return None;
+                        }
                     }
                     cmp_dirs[i] = Some(CmpDir::SkippedJmp);
                 } else {
-                    { checkpoint("bail:cmp-next-pc-mismatch"); return None; }
+                    {
+                        checkpoint("bail:cmp-next-pc-mismatch");
+                        return None;
+                    }
                 }
             }
             // Table ops — A is the dest / table reg per op; B/C may be
             // immediates (SetI's key, GetI's key, NewTable's hints).
             Op::NewTable => {
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::GetI => {
                 // R[A] := R[B][C_imm]
                 if a >= max_stack || b >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::GetTable => {
                 // R[A] := R[B][R[C]]
                 if a >= max_stack || b >= max_stack || c >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::SetI => {
                 // R[A][B_imm] := R[C]
                 if a >= max_stack || c >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::SetTable => {
@@ -3408,10 +3553,16 @@ pub fn try_compile_trace_with_options(
                 // Step-6 only handles the all-reg form (k=false);
                 // const RHS goes through different helpers.
                 if ins.k() {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if a >= max_stack || b >= max_stack || c >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::SetList => {
@@ -3421,26 +3572,41 @@ pub fn try_compile_trace_with_options(
                 // (which encodes a >MAX_ABC offset). The element
                 // window must fit in the frame.
                 if ins.k() || ins.b() == 0 {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if a >= max_stack || a + ins.b() as usize >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::Len => {
                 // R[A] := #R[B]
                 if a >= max_stack || b >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             Op::GetUpval => {
                 // R[A] := UpVal[B]. The upval index B is bounded by
                 // head_proto.upvals.len() at compile time.
                 if a >= max_stack {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
                 if b >= head_proto.upvals.len() {
-                    { checkpoint("bail:cmp-dirs-body-other"); return None; }
+                    {
+                        checkpoint("bail:cmp-dirs-body-other");
+                        return None;
+                    }
                 }
             }
             _ => unreachable!("whitelist gated above"),
@@ -3452,10 +3618,7 @@ pub fn try_compile_trace_with_options(
     // the loop, or the slot right before an Op::Call truncation —
     // the tail / side-exit emits the control transfer).
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        if matches!(rop.inst.op(), Op::Jmp)
-            && !consumed_by_cmp[i]
-            && i + 1 != effective_end
-        {
+        if matches!(rop.inst.op(), Op::Jmp) && !consumed_by_cmp[i] && i + 1 != effective_end {
             return None;
         }
     }
@@ -3470,8 +3633,7 @@ pub fn try_compile_trace_with_options(
         // close via TraceEnd::InlineAbort). The depth check below
         // would now be redundant but is left as a debug assert.
         let rop = &record.ops[call_idx];
-        debug_assert_eq!(rop.inline_depth, 0,
-            "TraceEnd::Call only at depth 0");
+        debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::Call only at depth 0");
         if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
             return None;
         }
@@ -3493,8 +3655,7 @@ pub fn try_compile_trace_with_options(
     // applies to Return1; Return0 has no A read.
     if let Some(return_idx) = return_idx_opt {
         let rop = &record.ops[return_idx];
-        debug_assert_eq!(rop.inline_depth, 0,
-            "TraceEnd::Return only at depth 0");
+        debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::Return only at depth 0");
         if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
             return None;
         }
@@ -3508,8 +3669,7 @@ pub fn try_compile_trace_with_options(
 
     if let Some(for_loop_idx) = for_loop_idx_opt {
         let rop = &record.ops[for_loop_idx];
-        debug_assert_eq!(rop.inline_depth, 0,
-            "TraceEnd::ForLoop only at depth 0");
+        debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::ForLoop only at depth 0");
         if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
             return None;
         }
@@ -3549,9 +3709,7 @@ pub fn try_compile_trace_with_options(
                     return None;
                 }
             }
-            _ => unreachable!(
-                "for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"
-            ),
+            _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
         }
     }
 
@@ -3571,10 +3729,7 @@ pub fn try_compile_trace_with_options(
     // finalize time. (rlib link strips `#[no_mangle]` for executables
     // like `cargo test`, so the default `dlsym(RTLD_DEFAULT)` resolver
     // misses them without an explicit `builder.symbol(...)`.)
-    builder.symbol(
-        "luna_jit_new_table",
-        super::luna_jit_new_table as *const u8,
-    );
+    builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
     builder.symbol(
         "luna_jit_table_set_int",
         super::luna_jit_table_set_int as *const u8,
@@ -3608,18 +3763,12 @@ pub fn try_compile_trace_with_options(
         "luna_jit_table_get_int",
         super::luna_jit_table_get_int as *const u8,
     );
-    builder.symbol(
-        "luna_jit_table_len",
-        super::luna_jit_table_len as *const u8,
-    );
+    builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
     // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
     // helper. Reuses the method JIT helper; the trace dispatcher's
     // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
     // the closure at runtime.
-    builder.symbol(
-        "luna_jit_upval_get",
-        super::luna_jit_upval_get as *const u8,
-    );
+    builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
     // P12-S4-step4b-A — frame materialization helper. Step4b-C will
     // emit calls to it from the cmp@d>0 side-exit path. Register the
     // symbol unconditionally so the lowerer can declare the import
@@ -3649,10 +3798,7 @@ pub fn try_compile_trace_with_options(
         super::luna_jit_spill_to_stack as *const u8,
     );
     // P12-S7-C — Op::Close predict-and-deopt helper.
-    builder.symbol(
-        "luna_jit_op_close",
-        super::luna_jit_op_close as *const u8,
-    );
+    builder.symbol("luna_jit_op_close", super::luna_jit_op_close as *const u8);
     // P12-S12-B-v2 — generic-for helpers. `op_tforcall` runs the
     // iterator function via vm.begin_call (Native iters only — Lua
     // closure iters deopt); `stack_load` / `stack_tag` read vm.stack
@@ -3666,15 +3812,9 @@ pub fn try_compile_trace_with_options(
         "luna_jit_stack_load",
         super::luna_jit_stack_load as *const u8,
     );
-    builder.symbol(
-        "luna_jit_stack_tag",
-        super::luna_jit_stack_tag as *const u8,
-    );
+    builder.symbol("luna_jit_stack_tag", super::luna_jit_stack_tag as *const u8);
     // P12-S12-C v1 — Op::Concat helpers.
-    builder.symbol(
-        "luna_jit_op_concat",
-        super::luna_jit_op_concat as *const u8,
-    );
+    builder.symbol("luna_jit_op_concat", super::luna_jit_op_concat as *const u8);
     builder.symbol(
         "luna_jit_stack_update_raw",
         super::luna_jit_stack_update_raw as *const u8,
@@ -3712,11 +3852,7 @@ pub fn try_compile_trace_with_options(
     set_int_sig.params.push(AbiParam::new(types::I64));
     set_int_sig.params.push(AbiParam::new(types::I64));
     let set_int_id = module
-        .declare_function(
-            "luna_jit_table_set_int",
-            Linkage::Import,
-            &set_int_sig,
-        )
+        .declare_function("luna_jit_table_set_int", Linkage::Import, &set_int_sig)
         .ok()?;
 
     // P12-S6-A2 — `fn luna_jit_table_set_nil(t: i64, key: i64)`.
@@ -3725,11 +3861,7 @@ pub fn try_compile_trace_with_options(
     set_nil_sig.params.push(AbiParam::new(types::I64));
     set_nil_sig.params.push(AbiParam::new(types::I64));
     let set_nil_id = module
-        .declare_function(
-            "luna_jit_table_set_nil",
-            Linkage::Import,
-            &set_nil_sig,
-        )
+        .declare_function("luna_jit_table_set_nil", Linkage::Import, &set_nil_sig)
         .ok()?;
 
     // P12-S7-C — `fn luna_jit_table_set_raw(t, key, raw_bits, tag)`.
@@ -3741,11 +3873,7 @@ pub fn try_compile_trace_with_options(
     set_raw_sig.params.push(AbiParam::new(types::I64));
     set_raw_sig.params.push(AbiParam::new(types::I64));
     let set_raw_id = module
-        .declare_function(
-            "luna_jit_table_set_raw",
-            Linkage::Import,
-            &set_raw_sig,
-        )
+        .declare_function("luna_jit_table_set_raw", Linkage::Import, &set_raw_sig)
         .ok()?;
 
     // P12-S11-A — `fn luna_jit_table_set_field(t, key_ptr, raw, tag)`.
@@ -3755,11 +3883,7 @@ pub fn try_compile_trace_with_options(
     set_field_sig.params.push(AbiParam::new(types::I64));
     set_field_sig.params.push(AbiParam::new(types::I64));
     let set_field_id = module
-        .declare_function(
-            "luna_jit_table_set_field",
-            Linkage::Import,
-            &set_field_sig,
-        )
+        .declare_function("luna_jit_table_set_field", Linkage::Import, &set_field_sig)
         .ok()?;
 
     // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
@@ -3768,11 +3892,7 @@ pub fn try_compile_trace_with_options(
     get_field_sig.params.push(AbiParam::new(types::I64));
     get_field_sig.returns.push(AbiParam::new(types::I64));
     let get_field_id = module
-        .declare_function(
-            "luna_jit_table_get_field",
-            Linkage::Import,
-            &get_field_sig,
-        )
+        .declare_function("luna_jit_table_get_field", Linkage::Import, &get_field_sig)
         .ok()?;
 
     // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
@@ -3781,11 +3901,7 @@ pub fn try_compile_trace_with_options(
     op_closure_sig.params.push(AbiParam::new(types::I64));
     op_closure_sig.returns.push(AbiParam::new(types::I64));
     let op_closure_id = module
-        .declare_function(
-            "luna_jit_op_closure",
-            Linkage::Import,
-            &op_closure_sig,
-        )
+        .declare_function("luna_jit_op_closure", Linkage::Import, &op_closure_sig)
         .ok()?;
 
     // P12-S7-B — `fn luna_jit_spill_to_stack(slot_offset, tag, raw_bits)`.
@@ -3795,11 +3911,7 @@ pub fn try_compile_trace_with_options(
     spill_sig.params.push(AbiParam::new(types::I64));
     spill_sig.params.push(AbiParam::new(types::I64));
     let spill_id = module
-        .declare_function(
-            "luna_jit_spill_to_stack",
-            Linkage::Import,
-            &spill_sig,
-        )
+        .declare_function("luna_jit_spill_to_stack", Linkage::Import, &spill_sig)
         .ok()?;
 
     // P12-S7-C — `fn luna_jit_op_close(start_offset: i64) -> i64`.
@@ -3809,11 +3921,7 @@ pub fn try_compile_trace_with_options(
     op_close_sig.params.push(AbiParam::new(types::I64));
     op_close_sig.returns.push(AbiParam::new(types::I64));
     let op_close_id = module
-        .declare_function(
-            "luna_jit_op_close",
-            Linkage::Import,
-            &op_close_sig,
-        )
+        .declare_function("luna_jit_op_close", Linkage::Import, &op_close_sig)
         .ok()?;
 
     // P12-S12-B-v4 — `fn luna_jit_op_tforcall(abs_offset, nvars,
@@ -3832,11 +3940,7 @@ pub fn try_compile_trace_with_options(
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.returns.push(AbiParam::new(types::I64));
     let op_tforcall_id = module
-        .declare_function(
-            "luna_jit_op_tforcall",
-            Linkage::Import,
-            &op_tforcall_sig,
-        )
+        .declare_function("luna_jit_op_tforcall", Linkage::Import, &op_tforcall_sig)
         .ok()?;
 
     // P12-S12-B-v2 — `fn luna_jit_stack_load(slot) -> i64` returns
@@ -3846,11 +3950,7 @@ pub fn try_compile_trace_with_options(
     stack_load_sig.params.push(AbiParam::new(types::I64));
     stack_load_sig.returns.push(AbiParam::new(types::I64));
     let stack_load_id = module
-        .declare_function(
-            "luna_jit_stack_load",
-            Linkage::Import,
-            &stack_load_sig,
-        )
+        .declare_function("luna_jit_stack_load", Linkage::Import, &stack_load_sig)
         .ok()?;
 
     // P12-S12-B-v2 — `fn luna_jit_stack_tag(slot) -> i64` returns
@@ -3861,11 +3961,7 @@ pub fn try_compile_trace_with_options(
     stack_tag_sig.params.push(AbiParam::new(types::I64));
     stack_tag_sig.returns.push(AbiParam::new(types::I64));
     let stack_tag_id = module
-        .declare_function(
-            "luna_jit_stack_tag",
-            Linkage::Import,
-            &stack_tag_sig,
-        )
+        .declare_function("luna_jit_stack_tag", Linkage::Import, &stack_tag_sig)
         .ok()?;
 
     // P12-S12-C v1 — `fn luna_jit_op_concat(a, n) -> i64`. Returns
@@ -3877,11 +3973,7 @@ pub fn try_compile_trace_with_options(
     op_concat_sig.params.push(AbiParam::new(types::I64));
     op_concat_sig.returns.push(AbiParam::new(types::I64));
     let op_concat_id = module
-        .declare_function(
-            "luna_jit_op_concat",
-            Linkage::Import,
-            &op_concat_sig,
-        )
+        .declare_function("luna_jit_op_concat", Linkage::Import, &op_concat_sig)
         .ok()?;
 
     // P14-S14-B v2 — `fn luna_jit_str_buf_acquire() -> i64`.
@@ -3958,11 +4050,7 @@ pub fn try_compile_trace_with_options(
     get_int_sig.params.push(AbiParam::new(types::I64));
     get_int_sig.returns.push(AbiParam::new(types::I64));
     let get_int_id = module
-        .declare_function(
-            "luna_jit_table_get_int",
-            Linkage::Import,
-            &get_int_sig,
-        )
+        .declare_function("luna_jit_table_get_int", Linkage::Import, &get_int_sig)
         .ok()?;
 
     let mut len_sig = module.make_signature();
@@ -4096,8 +4184,7 @@ pub fn try_compile_trace_with_options(
     let global_side_trace_box: Box<std::cell::Cell<*const u8>> =
         Box::new(std::cell::Cell::new(std::ptr::null()));
     let _global_side_trace_cell_addr =
-        (&*global_side_trace_box) as *const std::cell::Cell<*const u8>
-            as i64;
+        (&*global_side_trace_box) as *const std::cell::Cell<*const u8> as i64;
 
     // P12-S4-step3b — `regs_full` is sized to `window_size_us`, big
     // enough for every inlined frame's register window. Slots
@@ -4167,9 +4254,7 @@ pub fn try_compile_trace_with_options(
     let return_a_for_sunk_check: Option<u32> = match end_idx_opt {
         Some((idx, TraceEnd::Return)) if idx < record.ops.len() => {
             let term = &record.ops[idx];
-            if matches!(term.inst.op(), Op::Return1)
-                && term.inline_depth == 0
-            {
+            if matches!(term.inst.op(), Op::Return1) && term.inline_depth == 0 {
                 Some(term.inst.a())
             } else {
                 None
@@ -4182,10 +4267,8 @@ pub fn try_compile_trace_with_options(
     // `emit_materialize_live_sunk` to reconstruct live sunk sites
     // before the frame-mat helper pushes inline frames. depth>0
     // cmp no longer demotes sites.
-    let mut virt_vars: Vec<Option<Vec<Variable>>> =
-        vec![None; escape.sites.len()];
-    let mut virt_kinds: Vec<Option<Vec<RegKind>>> =
-        vec![None; escape.sites.len()];
+    let mut virt_vars: Vec<Option<Vec<Variable>>> = vec![None; escape.sites.len()];
+    let mut virt_kinds: Vec<Option<Vec<RegKind>>> = vec![None; escape.sites.len()];
     let mut sunk_alloc_seen: u32 = 0;
     // P12-S5-C — incremented at each cmp side-exit emit point that
     // materialises ≥1 live Sinkable site. Telemetry only; the
@@ -4293,8 +4376,7 @@ pub fn try_compile_trace_with_options(
     let mut current_kinds: Vec<RegKind> = (0..window_size_us)
         .map(|i| {
             if i < max_stack && i < record.entry_tags.len() {
-                RegKind::from_entry_tag(record.entry_tags[i])
-                    .unwrap_or(RegKind::Unset)
+                RegKind::from_entry_tag(record.entry_tags[i]).unwrap_or(RegKind::Unset)
             } else {
                 RegKind::Unset
             }
@@ -4317,11 +4399,7 @@ pub fn try_compile_trace_with_options(
     // site BEFORE the helper call so the IR's `iconst`-baked address
     // exists. Transported through into `tags_side_trace_ptrs` at the
     // end of emit (the cell never moves).
-    let mut per_exit_kinds: Vec<(
-        u32,
-        Vec<RegKind>,
-        Box<std::cell::Cell<*const u8>>,
-    )> = Vec::new();
+    let mut per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<std::cell::Cell<*const u8>>)> = Vec::new();
     // P12-S4-step4b-C-2 — per inline cmp@d>0 side-exit. Each entry
     // is built at the cmp emit site and includes the side-exit PC,
     // a window-sized exit-tag snapshot, and the frame-mat chain. The
@@ -4387,7 +4465,8 @@ pub fn try_compile_trace_with_options(
     //   only on the recursive path (e.g. block2 in fib). If a side-exit
     //   fires BEFORE that block (e.g. head-fail base case in block3),
     //   the cache is never populated and reuse never happens — correct.
-    let mut upval_cache: std::collections::HashMap<u32, Variable> = std::collections::HashMap::new();
+    let mut upval_cache: std::collections::HashMap<u32, Variable> =
+        std::collections::HashMap::new();
     // Path C #2 experiment skipped — iconst memoization adds little
     // since the arm64 backend folds `iconst+isub`/`iconst+icmp` into
     // immediate-form instructions at codegen. See layer-6 doc §3 for
@@ -4584,12 +4663,9 @@ pub fn try_compile_trace_with_options(
                 // semantically coerce to Float in Lua, but the
                 // trace's kind tracker bails to avoid the
                 // ambiguous emit.
-                let float_path = matches!(kb, RegKind::Float)
-                    || matches!(kc, RegKind::Float);
+                let float_path = matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float);
                 if float_path {
-                    if !matches!(kb, RegKind::Float)
-                        || !matches!(kc, RegKind::Float)
-                    {
+                    if !matches!(kb, RegKind::Float) || !matches!(kc, RegKind::Float) {
                         return None;
                     }
                     let lhs = use_var_f64(&mut bcx, &regs, ins.b());
@@ -4626,13 +4702,7 @@ pub fn try_compile_trace_with_options(
             // error). The recorder picked a sample run where these
             // didn't fault, but a runtime zero divisor would crash
             // the trace. Future hardening could trap-then-deopt.
-            Op::IDiv
-            | Op::Mod
-            | Op::BAnd
-            | Op::BOr
-            | Op::BXor
-            | Op::Shl
-            | Op::Shr => {
+            Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
                 // Int-only ops. Bail if either operand is Float —
                 // Lua's IDiv would coerce to Float (different
                 // semantics) and bitwise ops on Floats are
@@ -4733,16 +4803,13 @@ pub fn try_compile_trace_with_options(
                     // self-rec Call's `pc + 1` (= trace head's
                     // post-Call resume).
                     let head_resume_pc = call_chain[0].pc;
-                    let mut snapshot: Vec<FrameMaterializeInfo> =
-                        call_chain.clone();
+                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
                     if let Some(last) = snapshot.last_mut() {
                         last.pc = side_exit_pc;
                     }
-                    let chain_rc: std::rc::Rc<[FrameMaterializeInfo]> =
-                        snapshot.into();
-                    let chain_ptr = std::rc::Rc::as_ptr(&chain_rc)
-                        as *const FrameMaterializeInfo
-                        as i64;
+                    let chain_rc: std::rc::Rc<[FrameMaterializeInfo]> = snapshot.into();
+                    let chain_ptr =
+                        std::rc::Rc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
                     // P12-S10-B — materialise live Sinkable sites
@@ -4750,8 +4817,7 @@ pub fn try_compile_trace_with_options(
                     // pushes the inline frames. The window-sized
                     // snapshot updates in-place so per_exit_inline's
                     // kinds entry reflects materialised slots.
-                    let mut kinds_snapshot: Vec<RegKind> =
-                        current_kinds.clone();
+                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
                     let mat_count = emit_materialize_live_sunk(
                         &mut bcx,
                         &mut module,
@@ -4779,8 +4845,7 @@ pub fn try_compile_trace_with_options(
                     ));
                     let n_arg = bcx.ins().iconst(types::I64, chain_len);
                     let ptr_arg = bcx.ins().iconst(types::I64, chain_ptr);
-                    let mat_ref =
-                        module.declare_func_in_func(materialize_id, bcx.func);
+                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
                     let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
                     emit_store_back_and_return_site(
                         &mut bcx,
@@ -4799,8 +4864,7 @@ pub fn try_compile_trace_with_options(
                     // materialised caller-window slot so the
                     // dispatcher unpacks the heap pointer correctly
                     // on deopt.
-                    let mut snapshot: Vec<RegKind> =
-                        current_kinds[..max_stack].to_vec();
+                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
                     let mat_count = emit_materialize_live_sunk(
                         &mut bcx,
                         &mut module,
@@ -4850,17 +4914,16 @@ pub fn try_compile_trace_with_options(
                 // is consumed_by_cmp by the pre-emit pass.
                 let a_kind = k_op(&current_kinds, off as u32 + ins.a());
                 let truthy_known: Option<bool> = match a_kind {
-                    RegKind::Int | RegKind::Float | RegKind::Table | RegKind::Closure | RegKind::Str => {
-                        Some(true)
-                    }
+                    RegKind::Int
+                    | RegKind::Float
+                    | RegKind::Table
+                    | RegKind::Closure
+                    | RegKind::Str => Some(true),
                     RegKind::Nil => Some(false),
                     RegKind::Unset => None,
                 };
                 let k_bit = ins.k();
-                let recorded_passed = matches!(
-                    cmp_dirs[i],
-                    Some(CmpDir::SkippedJmp)
-                );
+                let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::SkippedJmp));
                 if let Some(truthy) = truthy_known {
                     let test_passed = (!truthy) == k_bit;
                     if test_passed != recorded_passed {
@@ -4872,34 +4935,20 @@ pub fn try_compile_trace_with_options(
                     // compile time.
                 } else {
                     // v3 — runtime tag-based truthy guard.
-                    let slot_arg = bcx.ins().iconst(
-                        types::I64,
-                        ins.a() as i64,
-                    );
-                    let stack_tag_ref = module
-                        .declare_func_in_func(stack_tag_id, bcx.func);
-                    let tag_call =
-                        bcx.ins().call(stack_tag_ref, &[slot_arg]);
+                    let slot_arg = bcx.ins().iconst(types::I64, ins.a() as i64);
+                    let stack_tag_ref = module.declare_func_in_func(stack_tag_id, bcx.func);
+                    let tag_call = bcx.ins().call(stack_tag_ref, &[slot_arg]);
                     let tag = bcx.inst_results(tag_call)[0];
                     let one = bcx.ins().iconst(types::I64, 1);
-                    let is_truthy =
-                        bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
+                    let is_truthy = bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
                     // Op::Test: test_passed_runtime = !is_truthy == k_bit
-                    let not_truthy =
-                        bcx.ins().bxor_imm(is_truthy, 1);
-                    let k_bit_const =
-                        bcx.ins().iconst(types::I8, k_bit as i64);
-                    let test_passed_runtime = bcx
+                    let not_truthy = bcx.ins().bxor_imm(is_truthy, 1);
+                    let k_bit_const = bcx.ins().iconst(types::I8, k_bit as i64);
+                    let test_passed_runtime = bcx.ins().icmp(IntCC::Equal, not_truthy, k_bit_const);
+                    let recorded_const = bcx.ins().iconst(types::I8, recorded_passed as i64);
+                    let ok = bcx
                         .ins()
-                        .icmp(IntCC::Equal, not_truthy, k_bit_const);
-                    let recorded_const = bcx
-                        .ins()
-                        .iconst(types::I8, recorded_passed as i64);
-                    let ok = bcx.ins().icmp(
-                        IntCC::Equal,
-                        test_passed_runtime,
-                        recorded_const,
-                    );
+                        .icmp(IntCC::Equal, test_passed_runtime, recorded_const);
                     let cont = bcx.create_block();
                     let deopt = bcx.create_block();
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
@@ -4930,15 +4979,16 @@ pub fn try_compile_trace_with_options(
                 // the `cont` block (so deopt path skips the Move).
                 let b_kind = k_op(&current_kinds, off as u32 + ins.b());
                 let truthy_known: Option<bool> = match b_kind {
-                    RegKind::Int | RegKind::Float | RegKind::Table | RegKind::Closure | RegKind::Str => {
-                        Some(true)
-                    }
+                    RegKind::Int
+                    | RegKind::Float
+                    | RegKind::Table
+                    | RegKind::Closure
+                    | RegKind::Str => Some(true),
                     RegKind::Nil => Some(false),
                     RegKind::Unset => None,
                 };
                 let k_bit = ins.k();
-                let recorded_passed =
-                    matches!(cmp_dirs[i], Some(CmpDir::TookJmp));
+                let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::TookJmp));
                 if let Some(truthy) = truthy_known {
                     let test_passed = truthy == k_bit;
                     if test_passed != recorded_passed {
@@ -4952,31 +5002,18 @@ pub fn try_compile_trace_with_options(
                 } else {
                     // v3 — runtime guard. Same shape as Op::Test
                     // but the basis is `is_truthy` (not `!is_truthy`).
-                    let slot_arg = bcx.ins().iconst(
-                        types::I64,
-                        ins.b() as i64,
-                    );
-                    let stack_tag_ref = module
-                        .declare_func_in_func(stack_tag_id, bcx.func);
-                    let tag_call =
-                        bcx.ins().call(stack_tag_ref, &[slot_arg]);
+                    let slot_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
+                    let stack_tag_ref = module.declare_func_in_func(stack_tag_id, bcx.func);
+                    let tag_call = bcx.ins().call(stack_tag_ref, &[slot_arg]);
                     let tag = bcx.inst_results(tag_call)[0];
                     let one = bcx.ins().iconst(types::I64, 1);
-                    let is_truthy =
-                        bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
-                    let k_bit_const =
-                        bcx.ins().iconst(types::I8, k_bit as i64);
-                    let test_passed_runtime = bcx
+                    let is_truthy = bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
+                    let k_bit_const = bcx.ins().iconst(types::I8, k_bit as i64);
+                    let test_passed_runtime = bcx.ins().icmp(IntCC::Equal, is_truthy, k_bit_const);
+                    let recorded_const = bcx.ins().iconst(types::I8, recorded_passed as i64);
+                    let ok = bcx
                         .ins()
-                        .icmp(IntCC::Equal, is_truthy, k_bit_const);
-                    let recorded_const = bcx
-                        .ins()
-                        .iconst(types::I8, recorded_passed as i64);
-                    let ok = bcx.ins().icmp(
-                        IntCC::Equal,
-                        test_passed_runtime,
-                        recorded_const,
-                    );
+                        .icmp(IntCC::Equal, test_passed_runtime, recorded_const);
                     let cont = bcx.create_block();
                     let deopt = bcx.create_block();
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
@@ -4997,8 +5034,7 @@ pub fn try_compile_trace_with_options(
                     if recorded_passed {
                         let v = bcx.use_var(regs[ins.b() as usize]);
                         bcx.def_var(regs[ins.a() as usize], v);
-                        current_kinds[off + ins.a() as usize] =
-                            RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
                     }
                 }
             }
@@ -5018,12 +5054,9 @@ pub fn try_compile_trace_with_options(
                 let k_effective = if invert { !ins.k() } else { ins.k() };
                 let ka = k_op(&current_kinds, off as u32 + ins.a());
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
-                let float_path =
-                    matches!(ka, RegKind::Float) || matches!(kb, RegKind::Float);
+                let float_path = matches!(ka, RegKind::Float) || matches!(kb, RegKind::Float);
                 let cond = if float_path {
-                    if !matches!(ka, RegKind::Float)
-                        || !matches!(kb, RegKind::Float)
-                    {
+                    if !matches!(ka, RegKind::Float) || !matches!(kb, RegKind::Float) {
                         return None;
                     }
                     let lhs = use_var_f64(&mut bcx, &regs, ins.a());
@@ -5083,23 +5116,19 @@ pub fn try_compile_trace_with_options(
                 // metadata says.
                 if !call_chain.is_empty() {
                     let head_resume_pc = call_chain[0].pc;
-                    let mut snapshot: Vec<FrameMaterializeInfo> =
-                        call_chain.clone();
+                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
                     if let Some(last) = snapshot.last_mut() {
                         last.pc = side_exit_pc;
                     }
-                    let chain_rc: std::rc::Rc<[FrameMaterializeInfo]> =
-                        snapshot.into();
-                    let chain_ptr = std::rc::Rc::as_ptr(&chain_rc)
-                        as *const FrameMaterializeInfo
-                        as i64;
+                    let chain_rc: std::rc::Rc<[FrameMaterializeInfo]> = snapshot.into();
+                    let chain_ptr =
+                        std::rc::Rc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
                     // P12-S10-B — materialise live Sinkable sites
                     // (depth=0 + depth>0) before frame-mat helper
                     // pushes the inline frames.
-                    let mut kinds_snapshot: Vec<RegKind> =
-                        current_kinds.clone();
+                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
                     let mat_count = emit_materialize_live_sunk(
                         &mut bcx,
                         &mut module,
@@ -5127,8 +5156,7 @@ pub fn try_compile_trace_with_options(
                     ));
                     let n_arg = bcx.ins().iconst(types::I64, chain_len);
                     let ptr_arg = bcx.ins().iconst(types::I64, chain_ptr);
-                    let mat_ref =
-                        module.declare_func_in_func(materialize_id, bcx.func);
+                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
                     let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
                     emit_store_back_and_return_site(
                         &mut bcx,
@@ -5143,8 +5171,7 @@ pub fn try_compile_trace_with_options(
                 } else {
                     // P12-S5-C / S10-A — materialise-on-deopt for
                     // depth=0 cmp's live Sinkable sites.
-                    let mut snapshot: Vec<RegKind> =
-                        current_kinds[..max_stack].to_vec();
+                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
                     let mat_count = emit_materialize_live_sunk(
                         &mut bcx,
                         &mut module,
@@ -5188,10 +5215,8 @@ pub fn try_compile_trace_with_options(
                 // for the site's slot stays at its entry value
                 // (Unset → maps to ExitTag::Untouched, so the
                 // dispatcher carries the entry tag in the restore).
-                if let Some(OpAction::NewTableSite { site_idx }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::NewTableSite { site_idx }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && virt_vars[site_idx as usize].is_some()
                 {
                     continue;
@@ -5207,10 +5232,8 @@ pub fn try_compile_trace_with_options(
                 // at a key in `1..=cap` becomes a `use_var` of the
                 // matching virt slot Variable, with kind carried
                 // from `virt_kinds`.
-                if let Some(OpAction::GetIRead { site_idx, key }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::GetIRead { site_idx, key }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && let Some(vars) = virt_vars[site_idx as usize].as_ref()
                 {
                     let slot = (key as usize) - 1;
@@ -5262,7 +5285,8 @@ pub fn try_compile_trace_with_options(
                     Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
                     _ => {
                         dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("GetTable:inference-fail"));
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetTable:inference-fail"));
                     }
                 }
             }
@@ -5271,10 +5295,11 @@ pub fn try_compile_trace_with_options(
                 // SetFieldSunkWrite, def_var the source register into
                 // the matching virt slot (array_cap + hash_slot) +
                 // propagate the source RegKind into virt_kinds.
-                if let Some(OpAction::SetFieldSunkWrite { site_idx, hash_slot }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::SetFieldSunkWrite {
+                    site_idx,
+                    hash_slot,
+                }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && virt_vars[site_idx as usize].is_some()
                 {
                     let array_cap = escape.sites[site_idx as usize].array_cap as usize;
@@ -5311,17 +5336,17 @@ pub fn try_compile_trace_with_options(
                 };
                 let val_raw = bcx.use_var(regs[ins.c() as usize]);
                 let tag_arg = bcx.ins().iconst(types::I64, val_tag as i64);
-                let func_ref =
-                    module.declare_func_in_func(set_field_id, bcx.func);
+                let func_ref = module.declare_func_in_func(set_field_id, bcx.func);
                 bcx.ins().call(func_ref, &[t, key_arg, val_raw, tag_arg]);
             }
             Op::GetField => {
                 // P12-S11-B-v1 — sunk path: use_var the virt slot
                 // for hash_slot, def_var R[A], propagate kind.
-                if let Some(OpAction::GetFieldSunkRead { site_idx, hash_slot }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::GetFieldSunkRead {
+                    site_idx,
+                    hash_slot,
+                }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && let Some(vars) = virt_vars[site_idx as usize].as_ref()
                 {
                     let array_cap = escape.sites[site_idx as usize].array_cap as usize;
@@ -5342,8 +5367,7 @@ pub fn try_compile_trace_with_options(
                 };
                 let key_ptr = key_v.as_ptr() as i64;
                 let key_arg = bcx.ins().iconst(types::I64, key_ptr);
-                let func_ref =
-                    module.declare_func_in_func(get_field_id, bcx.func);
+                let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[t, key_arg]);
                 let v = bcx.inst_results(call)[0];
                 bcx.def_var(regs[ins.a() as usize], v);
@@ -5358,7 +5382,8 @@ pub fn try_compile_trace_with_options(
                     Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
                     _ => {
                         dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("GetField:inference-fail"));
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetField:inference-fail"));
                     }
                 }
             }
@@ -5368,10 +5393,8 @@ pub fn try_compile_trace_with_options(
                 // the matching virt slot Variable + propagate the
                 // source RegKind into virt_kinds so the next
                 // GetIRead restores the right kind into current_kinds.
-                if let Some(OpAction::SetISunkWrite { site_idx, key }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::SetISunkWrite { site_idx, key }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && virt_vars[site_idx as usize].is_some()
                 {
                     let slot = (key as usize) - 1;
@@ -5393,8 +5416,15 @@ pub fn try_compile_trace_with_options(
                 let k_imm = bcx.ins().iconst(types::I64, ins.b() as i64);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
                 emit_table_set(
-                    &mut bcx, &mut module, set_int_id, set_nil_id, set_raw_id,
-                    t, k_imm, val_kind, regs[ins.c() as usize],
+                    &mut bcx,
+                    &mut module,
+                    set_int_id,
+                    set_nil_id,
+                    set_raw_id,
+                    t,
+                    k_imm,
+                    val_kind,
+                    regs[ins.c() as usize],
                 );
             }
             Op::SetTable => {
@@ -5402,10 +5432,8 @@ pub fn try_compile_trace_with_options(
                 // SetTableSunkWrite when the key reg was const-folded
                 // to a 1..=cap literal. Emit shape mirrors SetI sunk
                 // (def_var virt slot + propagate kind into virt_kinds).
-                if let Some(OpAction::SetTableSunkWrite { site_idx, key }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::SetTableSunkWrite { site_idx, key }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && virt_vars[site_idx as usize].is_some()
                 {
                     let slot = (key as usize) - 1;
@@ -5427,8 +5455,15 @@ pub fn try_compile_trace_with_options(
                 let key = bcx.use_var(regs[ins.b() as usize]);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
                 emit_table_set(
-                    &mut bcx, &mut module, set_int_id, set_nil_id, set_raw_id,
-                    t, key, val_kind, regs[ins.c() as usize],
+                    &mut bcx,
+                    &mut module,
+                    set_int_id,
+                    set_nil_id,
+                    set_raw_id,
+                    t,
+                    key,
+                    val_kind,
+                    regs[ins.c() as usize],
                 );
             }
             Op::SetList => {
@@ -5449,10 +5484,8 @@ pub fn try_compile_trace_with_options(
                 } else {
                     b_bytecode
                 };
-                if let Some(OpAction::SetListWrite { site_idx }) =
-                    escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state
-                        == EscapeState::Sinkable
+                if let Some(OpAction::SetListWrite { site_idx }) = escape.op_actions[i]
+                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
                     && virt_vars[site_idx as usize].is_some()
                 {
                     let a = ins.a() as usize;
@@ -5484,8 +5517,15 @@ pub fn try_compile_trace_with_options(
                     let key = bcx.ins().iconst(types::I64, c_off + ii as i64);
                     let src_kind = k_op(&current_kinds, (off + a + ii) as u32);
                     emit_table_set(
-                        &mut bcx, &mut module, set_int_id, set_nil_id, set_raw_id,
-                        t, key, src_kind, regs[a + ii],
+                        &mut bcx,
+                        &mut module,
+                        set_int_id,
+                        set_nil_id,
+                        set_raw_id,
+                        t,
+                        key,
+                        src_kind,
+                        regs[a + ii],
                     );
                 }
             }
@@ -5509,8 +5549,7 @@ pub fn try_compile_trace_with_options(
                 // bounds. RegKind::Unset src → bail (no known tag).
                 let bx = ins.bx() as usize;
                 let inner = head_proto.protos[bx];
-                let spill_ref =
-                    module.declare_func_in_func(spill_id, bcx.func);
+                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
                 for d in inner.upvals.iter() {
                     if !d.in_stack {
                         continue;
@@ -5532,18 +5571,13 @@ pub fn try_compile_trace_with_options(
                             return None;
                         }
                     };
-                    let slot_arg = bcx
-                        .ins()
-                        .iconst(types::I64, d.index as i64);
-                    let tag_arg =
-                        bcx.ins().iconst(types::I64, tag_byte as i64);
+                    let slot_arg = bcx.ins().iconst(types::I64, d.index as i64);
+                    let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
                     let raw_arg = bcx.use_var(regs[src_idx]);
-                    bcx.ins()
-                        .call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+                    bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                 }
                 let bx_arg = bcx.ins().iconst(types::I64, ins.bx() as i64);
-                let func_ref =
-                    module.declare_func_in_func(op_closure_id, bcx.func);
+                let func_ref = module.declare_func_in_func(op_closure_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[bx_arg]);
                 let v = bcx.inst_results(call)[0];
                 bcx.def_var(regs[ins.a() as usize], v);
@@ -5570,8 +5604,7 @@ pub fn try_compile_trace_with_options(
                 // first call), so a deopt that re-fires interp's
                 // Op::Close → begin_close → close_from sees no work.
                 let a_us = ins.a() as usize;
-                let spill_ref =
-                    module.declare_func_in_func(spill_id, bcx.func);
+                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
                 for slot in a_us..max_stack {
                     let k = current_kinds[off + slot];
                     let tag_byte = match k {
@@ -5583,17 +5616,13 @@ pub fn try_compile_trace_with_options(
                         RegKind::Nil => luna_core::runtime::value::raw::NIL,
                         RegKind::Unset => continue,
                     };
-                    let slot_arg =
-                        bcx.ins().iconst(types::I64, slot as i64);
-                    let tag_arg =
-                        bcx.ins().iconst(types::I64, tag_byte as i64);
+                    let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
+                    let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
                     let raw_arg = bcx.use_var(regs[slot]);
-                    bcx.ins()
-                        .call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+                    bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                 }
                 let a_arg = bcx.ins().iconst(types::I64, ins.a() as i64);
-                let func_ref =
-                    module.declare_func_in_func(op_close_id, bcx.func);
+                let func_ref = module.declare_func_in_func(op_close_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[a_arg]);
                 let status = bcx.inst_results(call)[0];
                 let continue_blk = bcx.create_block();
@@ -5660,7 +5689,8 @@ pub fn try_compile_trace_with_options(
                     _ => {
                         current_kinds[off + ins.a() as usize] = RegKind::Unset;
                         dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("GetUpval:not-Closure-use"));
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetUpval:not-Closure-use"));
                     }
                 }
             }
@@ -5689,8 +5719,10 @@ pub fn try_compile_trace_with_options(
                 // Next op is at depth+1 (recorder invariant for
                 // self-recursive entry); its op_offsets entry is the
                 // callee's base_offset.
-                debug_assert!(i + 1 < effective_end,
-                    "self-rec Call must be followed by callee op in effective_end");
+                debug_assert!(
+                    i + 1 < effective_end,
+                    "self-rec Call must be followed by callee op in effective_end"
+                );
                 let callee_base = op_offsets[i + 1];
                 call_chain.push(FrameMaterializeInfo {
                     base_offset: callee_base,
@@ -5706,8 +5738,10 @@ pub fn try_compile_trace_with_options(
             // a single concrete trip so trust the recorded trace).
             // P12-S4-step4b-C-2 — pop the matching call_chain frame.
             Op::Return0 => {
-                debug_assert!(!call_chain.is_empty(),
-                    "Return0 at depth>0 has a matching frame");
+                debug_assert!(
+                    !call_chain.is_empty(),
+                    "Return0 at depth>0 has a matching frame"
+                );
                 call_chain.pop();
             }
             // P12-S4-step3b — inline Return1: copy callee's R[A]
@@ -5731,11 +5765,12 @@ pub fn try_compile_trace_with_options(
                 bcx.def_var(dst_var, v);
                 // Propagate the kind so the caller's continuation
                 // sees the right type.
-                current_kinds[caller_off + call_a] =
-                    current_kinds[off + a_callee];
+                current_kinds[caller_off + call_a] = current_kinds[off + a_callee];
                 // P12-S4-step4b-C-2 — pop matching call_chain frame.
-                debug_assert!(!call_chain.is_empty(),
-                    "Return1 at depth>0 has a matching frame");
+                debug_assert!(
+                    !call_chain.is_empty(),
+                    "Return1 at depth>0 has a matching frame"
+                );
                 call_chain.pop();
             }
             // P12-S12-B-v2 — generic-for body tail. Sequence:
@@ -5764,8 +5799,7 @@ pub fn try_compile_trace_with_options(
                 let ipairs_addr = luna_core::vm::builtins::ipairs_iter
                     as luna_core::runtime::value::NativeFn
                     as usize;
-                let is_ipairs_trace =
-                    record.tfor_iter_ptr == Some(ipairs_addr);
+                let is_ipairs_trace = record.tfor_iter_ptr == Some(ipairs_addr);
 
                 // P12-S12-B-v5 — spill discipline:
                 // - non-ipairs case: spill R[A..=A+2] upfront (helper
@@ -5776,10 +5810,8 @@ pub fn try_compile_trace_with_options(
                 //   is what the slow_blk helper reads). R[A+2] is
                 //   spilled INSIDE slow_blk only, so fast iters pay
                 //   nothing.
-                let spill_ref =
-                    module.declare_func_in_func(spill_id, bcx.func);
-                let spill_slot = |bcx: &mut FunctionBuilder<'_>,
-                                  slot: usize| {
+                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
+                let spill_slot = |bcx: &mut FunctionBuilder<'_>, slot: usize| {
                     let k = current_kinds[off + slot];
                     let tag_byte = match k {
                         RegKind::Int => luna_core::runtime::value::raw::INT,
@@ -5790,13 +5822,10 @@ pub fn try_compile_trace_with_options(
                         RegKind::Nil => luna_core::runtime::value::raw::NIL,
                         RegKind::Unset => return,
                     };
-                    let slot_arg =
-                        bcx.ins().iconst(types::I64, slot as i64);
-                    let tag_arg =
-                        bcx.ins().iconst(types::I64, tag_byte as i64);
+                    let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
+                    let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
                     let raw_arg = bcx.use_var(regs[slot]);
-                    bcx.ins()
-                        .call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+                    bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                 };
                 if !is_ipairs_trace {
                     for slot in a_us..=(a_us + 2) {
@@ -5809,68 +5838,53 @@ pub fn try_compile_trace_with_options(
                 // Allocates the 3-slot buffer, calls the helper,
                 // brif-checks the result, def_vars regs + tag from
                 // the buffer.
-                let emit_helper_call = |bcx: &mut FunctionBuilder<'_>,
-                                         module: &mut JITModule|
-                 -> () {
-                    let out_ss = bcx.create_sized_stack_slot(
-                        cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            24,
-                            3,
-                        ),
-                    );
-                    let ctrl_addr =
-                        bcx.ins().stack_addr(types::I64, out_ss, 0);
-                    let key_addr =
-                        bcx.ins().stack_addr(types::I64, out_ss, 8);
-                    let val_addr =
-                        bcx.ins().stack_addr(types::I64, out_ss, 16);
-                    let a_arg =
-                        bcx.ins().iconst(types::I64, a_us as i64);
-                    let nvars_arg =
-                        bcx.ins().iconst(types::I64, nvars);
-                    let func_ref = module
-                        .declare_func_in_func(op_tforcall_id, bcx.func);
-                    let call_inst = bcx.ins().call(
-                        func_ref,
-                        &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr],
-                    );
-                    let status_or_tag = bcx.inst_results(call_inst)[0];
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let is_err = bcx
-                        .ins()
-                        .icmp(IntCC::SignedLessThan, status_or_tag, zero);
-                    let cont_blk = bcx.create_block();
-                    let deopt_blk = bcx.create_block();
-                    bcx.ins()
-                        .brif(is_err, deopt_blk, &[], cont_blk, &[]);
-                    bcx.switch_to_block(deopt_blk);
-                    bcx.seal_block(deopt_blk);
-                    emit_store_back_and_return_pc(
-                        bcx,
-                        &regs_full[..max_stack],
-                        reg_state,
-                        rop.pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                    );
-                    bcx.switch_to_block(cont_blk);
-                    bcx.seal_block(cont_blk);
-                    bcx.def_var(tforcall_tag_var, status_or_tag);
-                    let ctrl_raw =
-                        bcx.ins().stack_load(types::I64, out_ss, 0);
-                    let key_raw =
-                        bcx.ins().stack_load(types::I64, out_ss, 8);
-                    let val_raw =
-                        bcx.ins().stack_load(types::I64, out_ss, 16);
-                    bcx.def_var(regs[a_us + 2], ctrl_raw);
-                    bcx.def_var(regs[a_us + 4], key_raw);
-                    if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                        bcx.def_var(regs[a_us + 5], val_raw);
-                    }
-                };
+                let emit_helper_call =
+                    |bcx: &mut FunctionBuilder<'_>, module: &mut JITModule| -> () {
+                        let out_ss =
+                            bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                24,
+                                3,
+                            ));
+                        let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+                        let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
+                        let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
+                        let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
+                        let nvars_arg = bcx.ins().iconst(types::I64, nvars);
+                        let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
+                        let call_inst = bcx
+                            .ins()
+                            .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
+                        let status_or_tag = bcx.inst_results(call_inst)[0];
+                        let zero = bcx.ins().iconst(types::I64, 0);
+                        let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status_or_tag, zero);
+                        let cont_blk = bcx.create_block();
+                        let deopt_blk = bcx.create_block();
+                        bcx.ins().brif(is_err, deopt_blk, &[], cont_blk, &[]);
+                        bcx.switch_to_block(deopt_blk);
+                        bcx.seal_block(deopt_blk);
+                        emit_store_back_and_return_pc(
+                            bcx,
+                            &regs_full[..max_stack],
+                            reg_state,
+                            rop.pc,
+                            flush_ctx.as_ref(),
+                            0i64,
+                            trace_fn_sig_ref,
+                            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+                        );
+                        bcx.switch_to_block(cont_blk);
+                        bcx.seal_block(cont_blk);
+                        bcx.def_var(tforcall_tag_var, status_or_tag);
+                        let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
+                        let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
+                        let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
+                        bcx.def_var(regs[a_us + 2], ctrl_raw);
+                        bcx.def_var(regs[a_us + 4], key_raw);
+                        if (nvars as usize) >= 2 && a_us + 5 < max_stack {
+                            bcx.def_var(regs[a_us + 5], val_raw);
+                        }
+                    };
 
                 if is_ipairs_trace {
                     // Inline aget fast path. The recorder confirmed
@@ -5892,9 +5906,7 @@ pub fn try_compile_trace_with_options(
                         t_raw,
                         super::TABLE_ASIZE_OFFSET as i32,
                     );
-                    let in_range = bcx
-                        .ins()
-                        .icmp(IntCC::UnsignedLessThan, key_m1, asize);
+                    let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, asize);
                     let metatable = bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlags::trusted(),
@@ -5902,8 +5914,7 @@ pub fn try_compile_trace_with_options(
                         super::TABLE_METATABLE_OFFSET as i32,
                     );
                     let zero = bcx.ins().iconst(types::I64, 0);
-                    let no_meta =
-                        bcx.ins().icmp(IntCC::Equal, metatable, zero);
+                    let no_meta = bcx.ins().icmp(IntCC::Equal, metatable, zero);
                     let fast_ok = bcx.ins().band(in_range, no_meta);
 
                     let fast_blk = bcx.create_block();
@@ -5938,18 +5949,14 @@ pub fn try_compile_trace_with_options(
                         tag_addr,
                         0,
                     );
-                    let val_tag =
-                        bcx.ins().uextend(types::I64, val_tag_i8);
-                    let nil_const = bcx.ins().iconst(
-                        types::I64,
-                        luna_core::runtime::value::raw::NIL as i64,
-                    );
-                    let int_const = bcx.ins().iconst(
-                        types::I64,
-                        luna_core::runtime::value::raw::INT as i64,
-                    );
-                    let is_nil =
-                        bcx.ins().icmp(IntCC::Equal, val_tag, nil_const);
+                    let val_tag = bcx.ins().uextend(types::I64, val_tag_i8);
+                    let nil_const = bcx
+                        .ins()
+                        .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
+                    let int_const = bcx
+                        .ins()
+                        .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
+                    let is_nil = bcx.ins().icmp(IntCC::Equal, val_tag, nil_const);
                     // P12-S12-C v3 — runtime val_tag guard. Snapshot
                     // at recorder fire (R[A+5]'s tag) is the
                     // *expected* iter val tag. The trace's
@@ -5966,23 +5973,12 @@ pub fn try_compile_trace_with_options(
                     if let Some(expected_tag) = record.tfor_val_tag
                         && expected_tag != luna_core::runtime::value::raw::NIL
                     {
-                        let exp_const = bcx.ins().iconst(
-                            types::I64,
-                            expected_tag as i64,
-                        );
-                        let is_exp = bcx
-                            .ins()
-                            .icmp(IntCC::Equal, val_tag, exp_const);
+                        let exp_const = bcx.ins().iconst(types::I64, expected_tag as i64);
+                        let is_exp = bcx.ins().icmp(IntCC::Equal, val_tag, exp_const);
                         let ok = bcx.ins().bor(is_nil, is_exp);
                         let guard_continue = bcx.create_block();
                         let guard_deopt = bcx.create_block();
-                        bcx.ins().brif(
-                            ok,
-                            guard_continue,
-                            &[],
-                            guard_deopt,
-                            &[],
-                        );
+                        bcx.ins().brif(ok, guard_continue, &[], guard_deopt, &[]);
                         bcx.switch_to_block(guard_deopt);
                         bcx.seal_block(guard_deopt);
                         emit_store_back_and_return_pc(
@@ -6000,10 +5996,8 @@ pub fn try_compile_trace_with_options(
                     }
                     let zero_raw = bcx.ins().iconst(types::I64, 0);
                     // R[A+4] = is_nil ? Nil(raw=0) : Int(raw=next_i)
-                    let r4_raw =
-                        bcx.ins().select(is_nil, zero_raw, next_i);
-                    let r4_tag =
-                        bcx.ins().select(is_nil, nil_const, int_const);
+                    let r4_raw = bcx.ins().select(is_nil, zero_raw, next_i);
+                    let r4_tag = bcx.ins().select(is_nil, nil_const, int_const);
                     bcx.def_var(regs[a_us + 2], next_i);
                     bcx.def_var(regs[a_us + 4], r4_raw);
                     if a_us + 5 < max_stack {
@@ -6018,9 +6012,7 @@ pub fn try_compile_trace_with_options(
                         // Nil branch so the trace exit restore
                         // sees a real GC pointer.
                         let prev_v5 = bcx.use_var(regs[a_us + 5]);
-                        let chosen_v5 = bcx
-                            .ins()
-                            .select(is_nil, prev_v5, val_raw_fast);
+                        let chosen_v5 = bcx.ins().select(is_nil, prev_v5, val_raw_fast);
                         bcx.def_var(regs[a_us + 5], chosen_v5);
                     }
                     bcx.def_var(tforcall_tag_var, r4_tag);
@@ -6060,14 +6052,11 @@ pub fn try_compile_trace_with_options(
                 // kinds (e.g. Str — RegKind doesn't carry Str)
                 // call stack_update_raw which preserves the
                 // existing tag and only refreshes the raw bits.
-                let spill_ref =
-                    module.declare_func_in_func(spill_id, bcx.func);
-                let update_raw_ref =
-                    module.declare_func_in_func(update_raw_id, bcx.func);
+                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
+                let update_raw_ref = module.declare_func_in_func(update_raw_id, bcx.func);
                 for slot in a_us..(a_us + n_operands) {
                     let k = current_kinds[off + slot];
-                    let slot_arg =
-                        bcx.ins().iconst(types::I64, slot as i64);
+                    let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
                     let raw_arg = bcx.use_var(regs[slot]);
                     let tag_byte_opt = match k {
                         RegKind::Int => Some(luna_core::runtime::value::raw::INT),
@@ -6079,37 +6068,23 @@ pub fn try_compile_trace_with_options(
                         RegKind::Unset => None,
                     };
                     if let Some(tag_byte) = tag_byte_opt {
-                        let tag_arg = bcx
-                            .ins()
-                            .iconst(types::I64, tag_byte as i64);
-                        bcx.ins().call(
-                            spill_ref,
-                            &[slot_arg, tag_arg, raw_arg],
-                        );
+                        let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
+                        bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                     } else {
-                        bcx.ins().call(
-                            update_raw_ref,
-                            &[slot_arg, raw_arg],
-                        );
+                        bcx.ins().call(update_raw_ref, &[slot_arg, raw_arg]);
                     }
                 }
                 // Call helper.
                 let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
-                let n_arg =
-                    bcx.ins().iconst(types::I64, n_operands as i64);
-                let func_ref =
-                    module.declare_func_in_func(op_concat_id, bcx.func);
-                let call_inst =
-                    bcx.ins().call(func_ref, &[a_arg, n_arg]);
+                let n_arg = bcx.ins().iconst(types::I64, n_operands as i64);
+                let func_ref = module.declare_func_in_func(op_concat_id, bcx.func);
+                let call_inst = bcx.ins().call(func_ref, &[a_arg, n_arg]);
                 let status = bcx.inst_results(call_inst)[0];
                 let zero = bcx.ins().iconst(types::I64, 0);
-                let is_err = bcx
-                    .ins()
-                    .icmp(IntCC::SignedLessThan, status, zero);
+                let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status, zero);
                 let continue_blk = bcx.create_block();
                 let deopt_blk = bcx.create_block();
-                bcx.ins()
-                    .brif(is_err, deopt_blk, &[], continue_blk, &[]);
+                bcx.ins().brif(is_err, deopt_blk, &[], continue_blk, &[]);
                 bcx.switch_to_block(deopt_blk);
                 bcx.seal_block(deopt_blk);
                 emit_store_back_and_return_pc(
@@ -6128,12 +6103,9 @@ pub fn try_compile_trace_with_options(
                 // luna_jit_stack_load helper. current_kinds = Unset
                 // since RegKind doesn't carry Str (string raw bits
                 // round-trip via the dispatcher's per-slot tag path).
-                let stack_load_ref =
-                    module.declare_func_in_func(stack_load_id, bcx.func);
-                let a_arg_reload =
-                    bcx.ins().iconst(types::I64, a_us as i64);
-                let reload_inst =
-                    bcx.ins().call(stack_load_ref, &[a_arg_reload]);
+                let stack_load_ref = module.declare_func_in_func(stack_load_id, bcx.func);
+                let a_arg_reload = bcx.ins().iconst(types::I64, a_us as i64);
+                let reload_inst = bcx.ins().call(stack_load_ref, &[a_arg_reload]);
                 let result_raw = bcx.inst_results(reload_inst)[0];
                 bcx.def_var(regs[a_us], result_raw);
                 current_kinds[off + a_us] = RegKind::Unset;
@@ -6142,14 +6114,10 @@ pub fn try_compile_trace_with_options(
             // before body_top. Recorder enters at body_top, so this
             // arm is defensive only — pre-emit pass bails before we
             // reach it.
-            Op::TForPrep => unreachable!(
-                "Op::TForPrep bailed in pre-emit pass"
-            ),
+            Op::TForPrep => unreachable!("Op::TForPrep bailed in pre-emit pass"),
             // P12-S12-B-v2 — TForLoop is the trace's terminator; tail
             // emit handles the side-exit + back-edge.
-            Op::TForLoop => unreachable!(
-                "Op::TForLoop only appears at effective_end"
-            ),
+            Op::TForLoop => unreachable!("Op::TForLoop only appears at effective_end"),
             _ => unreachable!("non-whitelisted op rejected in pre-emit pass"),
         }
     }
@@ -6366,11 +6334,16 @@ pub fn try_compile_trace_with_options(
                 // exit branch: side-exit at forloop.pc + 1.
                 bcx.switch_to_block(exit_blk);
                 bcx.seal_block(exit_blk);
-                emit_store_back_and_return_pc(&mut bcx, caller_regs, reg_state, rop.pc + 1, flush_ctx.as_ref(),
-0i64,
-trace_fn_sig_ref,
-encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-);
+                emit_store_back_and_return_pc(
+                    &mut bcx,
+                    caller_regs,
+                    reg_state,
+                    rop.pc + 1,
+                    flush_ctx.as_ref(),
+                    0i64,
+                    trace_fn_sig_ref,
+                    encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+                );
 
                 // continue branch: do the increment + decrement + back-edge.
                 bcx.switch_to_block(continue_blk);
@@ -6401,11 +6374,16 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
                     // See docs/known-bugs/trace-jit-nested-loop-
                     // wrong-result.md §5-§7 for the diagnosis.
                     let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
-                    emit_store_back_and_return_pc(&mut bcx, caller_regs, reg_state, body_pc, flush_ctx.as_ref(),
-0i64,
-trace_fn_sig_ref,
-encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-);
+                    emit_store_back_and_return_pc(
+                        &mut bcx,
+                        caller_regs,
+                        reg_state,
+                        body_pc,
+                        flush_ctx.as_ref(),
+                        0i64,
+                        trace_fn_sig_ref,
+                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+                    );
                 }
             }
             Op::TForLoop => {
@@ -6426,14 +6404,12 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
                 // — wrong for Nil).
                 let tag = bcx.use_var(tforcall_tag_var);
 
-                let nil_const = bcx.ins().iconst(
-                    types::I64,
-                    luna_core::runtime::value::raw::NIL as i64,
-                );
-                let int_const = bcx.ins().iconst(
-                    types::I64,
-                    luna_core::runtime::value::raw::INT as i64,
-                );
+                let nil_const = bcx
+                    .ins()
+                    .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
+                let int_const = bcx
+                    .ins()
+                    .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
                 let is_nil = bcx.ins().icmp(IntCC::Equal, tag, nil_const);
                 let nil_exit_blk = bcx.create_block();
                 let not_nil_blk = bcx.create_block();
@@ -6443,8 +6419,7 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
                 // = Nil, then store back + return tforloop.pc + 1.
                 bcx.switch_to_block(nil_exit_blk);
                 bcx.seal_block(nil_exit_blk);
-                let mut nil_snapshot: Vec<RegKind> =
-                    current_kinds[..max_stack].to_vec();
+                let mut nil_snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
                 if a + 4 < nil_snapshot.len() {
                     nil_snapshot[a + 4] = RegKind::Nil;
                 }
@@ -6511,18 +6486,21 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
                     );
                 }
             }
-            _ => unreachable!(
-                "for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"
-            ),
+            _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
         }
     } else if do_internal_loop {
         bcx.ins().jump(body_loop, &[]);
     } else {
-        emit_store_back_and_return_pc(&mut bcx, caller_regs, reg_state, record.head_pc, flush_ctx.as_ref(),
-0i64,
-trace_fn_sig_ref,
-encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-);
+        emit_store_back_and_return_pc(
+            &mut bcx,
+            caller_regs,
+            reg_state,
+            record.head_pc,
+            flush_ctx.as_ref(),
+            0i64,
+            trace_fn_sig_ref,
+            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+        );
     }
     // Seal the loop head now that both predecessors are emitted
     // (entry → body_loop in the prelude; tail → body_loop from
@@ -6534,7 +6512,10 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     // Path C — `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction
     // tool for layer-6 attribution (per-call IR op count is the gap).
-    if std::env::var("LUNA_TRACE_IR_DUMP").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("LUNA_TRACE_IR_DUMP")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         eprintln!(
             "=== TRACE IR DUMP head_pc={} n_recorded_ops={} ===\n{}\n=== END ===",
             record.head_pc,
@@ -6620,10 +6601,8 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         .map(|r| r.inline_depth as usize)
         .max()
         .unwrap_or(0);
-    let adaptive =
-        MIN_DISPATCHABLE_TRUNC_BODY_BASE.saturating_sub(max_depth_used * 2);
-    let min_dispatchable_trunc_body =
-        adaptive.max(MIN_DISPATCHABLE_TRUNC_BODY_FLOOR);
+    let adaptive = MIN_DISPATCHABLE_TRUNC_BODY_BASE.saturating_sub(max_depth_used * 2);
+    let min_dispatchable_trunc_body = adaptive.max(MIN_DISPATCHABLE_TRUNC_BODY_FLOOR);
     // P12-S4-step4b-C-2 — inline traces (per_exit_metas non-empty)
     // skip the length-gate. Each dispatch tears through multiple
     // inlined frames so body-length isn't a useful proxy for the
@@ -6712,13 +6691,15 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         tags_side_boxes.into();
     let per_exit_inline: std::rc::Rc<[InlineSideExit]> = per_exit_inline_vec
         .into_iter()
-        .map(|(cont_pc, head_resume_pc, kinds, chain, side_trace_ptr)| InlineSideExit {
-            cont_pc,
-            head_resume_pc,
-            exit_tags: kinds_to_exit_tags(&kinds).into(),
-            chain,
-            side_trace_ptr,
-        })
+        .map(
+            |(cont_pc, head_resume_pc, kinds, chain, side_trace_ptr)| InlineSideExit {
+                cont_pc,
+                head_resume_pc,
+                exit_tags: kinds_to_exit_tags(&kinds).into(),
+                chain,
+                side_trace_ptr,
+            },
+        )
         .collect::<Vec<_>>()
         .into();
 
@@ -6726,18 +6707,15 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     // P15-prep — pre-compute exit_hit_counts before the struct
     // init so per_exit_tags's len is still accessible.
     let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
-        let total =
-            per_exit_inline.len() + per_exit_tags.len() + 1;
-        let v: Vec<std::cell::Cell<u32>> =
-            (0..total).map(|_| std::cell::Cell::new(0)).collect();
+        let total = per_exit_inline.len() + per_exit_tags.len() + 1;
+        let v: Vec<std::cell::Cell<u32>> = (0..total).map(|_| std::cell::Cell::new(0)).collect();
         v.into()
     };
     // P15-A v2-A — parallel per-exit raw fn-ptr slots, all null
     // until a child side trace compiles for the slot. Same length
     // as exit_hit_counts; v2-B/C will read these from IR.
     let exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]> = {
-        let total =
-            per_exit_inline.len() + per_exit_tags.len() + 1;
+        let total = per_exit_inline.len() + per_exit_tags.len() + 1;
         let v: Vec<std::cell::Cell<*const u8>> = (0..total)
             .map(|_| std::cell::Cell::new(std::ptr::null()))
             .collect();
@@ -6754,7 +6732,11 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         exit_tags,
         global_tag_res_kind,
         is_inline_abort_close: inline_abort_idx_opt.is_some(),
-        dispatch_off_reason: if dispatchable { None } else { dispatch_off_reason },
+        dispatch_off_reason: if dispatchable {
+            None
+        } else {
+            dispatch_off_reason
+        },
         entry_tags: record.entry_tags.clone().into(),
         per_exit_tags,
         // P12-S4-step4b-C-2 — populated by the cmp@d>0 emit sites
@@ -6774,9 +6756,7 @@ encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         // P15-A v2-C-A1 — empty at compile; close handler fills
         // it as child side traces compile for this trace's hot
         // exits.
-        side_trace_cache: std::cell::RefCell::new(
-            std::collections::HashMap::new(),
-        ),
+        side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         has_any_side_wired: std::cell::Cell::new(false),
         per_exit_inline,
         // P12-S5-A — diagnostic only; counts Sinkable sites from the
@@ -6985,7 +6965,7 @@ mod s2b_arith {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
             assert!(pushed, "test trace must fit MAX_TRACE_LEN");
         }
@@ -7232,12 +7212,7 @@ mod s2b_cmp {
     /// rule. The trace's `head_pc` is supplied separately — it
     /// controls the clean-close return value and is independent of
     /// the cmp's PC.
-    fn cmp_jmp_record(
-        proto: Gc<Proto>,
-        head_pc: u32,
-        cmp_pc: u32,
-        cmp: Inst,
-    ) -> TraceRecord {
+    fn cmp_jmp_record(proto: Gc<Proto>, head_pc: u32, cmp_pc: u32, cmp: Inst) -> TraceRecord {
         let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
         rec.push(RecordedOp {
             proto,
@@ -7376,7 +7351,7 @@ mod s2b_cmp {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
         }
         rec.closed = true;
@@ -7435,7 +7410,7 @@ mod s2b_cmp {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
         }
         rec.closed = true;
@@ -7485,7 +7460,7 @@ mod s2b_cmp {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
         }
         rec.closed = true;
@@ -7511,7 +7486,7 @@ mod s2b_cmp {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
         }
         rec.closed = true;
@@ -7567,7 +7542,7 @@ mod s2b_table_ops {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
             assert!(pushed);
         }
@@ -7600,7 +7575,10 @@ mod s2b_table_ops {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = run_trace(&mut vm, &ct, &mut state);
         assert_eq!(r, 0);
-        assert!(state[0] != 0, "NewTable must return a non-null Gc<Table> ptr");
+        assert!(
+            state[0] != 0,
+            "NewTable must return a non-null Gc<Table> ptr"
+        );
         assert!(vm.jit.pending_err.is_none(), "no deopt expected");
     }
 
@@ -7611,11 +7589,15 @@ mod s2b_table_ops {
         // R[0] = {}
         // R[0][1] = R[2]      (SetI with B=1 immediate key)
         // R[3] = R[0][1]       (GetI with C=1 immediate key)
-        let rec = closed_record(p, 0, &[
-            Inst::iabc(Op::NewTable, 0, 0, 0, false),
-            Inst::iabc(Op::SetI, 0, 1, 2, false),
-            Inst::iabc(Op::GetI, 3, 0, 1, false),
-        ]);
+        let rec = closed_record(
+            p,
+            0,
+            &[
+                Inst::iabc(Op::NewTable, 0, 0, 0, false),
+                Inst::iabc(Op::SetI, 0, 1, 2, false),
+                Inst::iabc(Op::GetI, 3, 0, 1, false),
+            ],
+        );
         let ct = try_compile_trace(&rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -7635,13 +7617,17 @@ mod s2b_table_ops {
         // R[0][2] = R[1]
         // R[0][3] = R[1]
         // R[2] = #R[0]
-        let rec = closed_record(p, 0, &[
-            Inst::iabc(Op::NewTable, 0, 0, 0, false),
-            Inst::iabc(Op::SetI, 0, 1, 1, false),
-            Inst::iabc(Op::SetI, 0, 2, 1, false),
-            Inst::iabc(Op::SetI, 0, 3, 1, false),
-            Inst::iabc(Op::Len, 2, 0, 0, false),
-        ]);
+        let rec = closed_record(
+            p,
+            0,
+            &[
+                Inst::iabc(Op::NewTable, 0, 0, 0, false),
+                Inst::iabc(Op::SetI, 0, 1, 1, false),
+                Inst::iabc(Op::SetI, 0, 2, 1, false),
+                Inst::iabc(Op::SetI, 0, 3, 1, false),
+                Inst::iabc(Op::Len, 2, 0, 0, false),
+            ],
+        );
         let ct = try_compile_trace(&rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -7731,11 +7717,15 @@ mod s2b_table_ops {
 
         // SetI (parks err) → SetI (short-circuit) → GetI
         // (short-circuit, returns 0 sentinel).
-        let rec = closed_record(p, 0, &[
-            Inst::iabc(Op::SetI, 0, 1, 1, false),
-            Inst::iabc(Op::SetI, 0, 2, 1, false),
-            Inst::iabc(Op::GetI, 2, 0, 1, false),
-        ]);
+        let rec = closed_record(
+            p,
+            0,
+            &[
+                Inst::iabc(Op::SetI, 0, 1, 1, false),
+                Inst::iabc(Op::SetI, 0, 2, 1, false),
+                Inst::iabc(Op::GetI, 2, 0, 1, false),
+            ],
+        );
         let ct = try_compile_trace(&rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -7806,7 +7796,7 @@ mod s2b_call_truncation {
                 pc: i as u32,
                 inst,
                 inline_depth: 0,
-            var_count: None,
+                var_count: None,
             });
             assert!(pushed);
         }
@@ -7957,7 +7947,7 @@ mod s2b_call_truncation {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let prog = [
-            Inst::iabc(Op::Add, 0, 0, 3, false), // R[0] += R[3]
+            Inst::iabc(Op::Add, 0, 0, 3, false),     // R[0] += R[3]
             Inst::iabc(Op::ForLoop, 1, 0, 0, false), // ForLoop on R[1..R[1+3]]
         ];
         let rec = closed_record(p, 0, &prog);
@@ -7998,8 +7988,7 @@ mod s2b_call_truncation {
         // ForLoop only — empty body, single iter dispatch.
         let prog = [Inst::iabc(Op::ForLoop, 0, 0, 0, false)];
         let rec = closed_record(p, 9, &prog);
-        let ct =
-            try_compile_trace(&rec).expect("compile one-shot ForLoop trace");
+        let ct = try_compile_trace(&rec).expect("compile one-shot ForLoop trace");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 10;
@@ -8095,7 +8084,7 @@ mod s4_step3a_op_offsets {
                 pc: i as u32,
                 inst,
                 inline_depth: depth,
-            var_count: None,
+                var_count: None,
             });
             assert!(pushed, "rec.push should not overflow");
         }
@@ -8130,10 +8119,10 @@ mod s4_step3a_op_offsets {
             p,
             vec![
                 (Inst::iabc(Op::Move, 0, 0, 0, false), 0),
-                (Inst::iabc(Op::Call, 3, 2, 2, false), 0),   // A=3
+                (Inst::iabc(Op::Call, 3, 2, 2, false), 0), // A=3
                 (Inst::iabc(Op::LoadI, 0, 0, 128, false), 1), // callee R[0]
                 (Inst::iabc(Op::Return1, 0, 0, 0, false), 1),
-                (Inst::iabc(Op::Move, 4, 3, 0, false), 0),   // back to depth 0
+                (Inst::iabc(Op::Move, 4, 3, 0, false), 0), // back to depth 0
             ],
         );
         let (offsets, enclosing) = compute_op_offsets(&rec);
@@ -8211,10 +8200,7 @@ mod s4_step3b_inline_emit {
         // Find a non-vararg inner proto: `local function f(a,b)
         // return a+b end` keeps the inner Proto non-vararg.
         let cl = vm
-            .load(
-                b"local function f(a,b) return a+b end return f",
-                b"=t",
-            )
+            .load(b"local function f(a,b) return a+b end return f", b"=t")
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg, "fixture must be non-vararg");
@@ -8248,8 +8234,7 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec)
-            .expect("cmp@d>0 now compiles via inline-cmp emit");
+        let ct = try_compile_trace(&rec).expect("cmp@d>0 now compiles via inline-cmp emit");
         // One cmp@d>0 site → one per-exit-metas entry.
         assert_eq!(ct.per_exit_inline.len(), 1);
         // Window covers caller + inlined frame's slots.
@@ -8369,14 +8354,9 @@ mod s4_step4b_skeleton {
         let metas: [FrameMaterializeInfo; 0] = [];
         let r = {
             let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
-            unsafe {
-                super::super::luna_jit_trace_materialize_frames(0, metas.as_ptr())
-            }
+            unsafe { super::super::luna_jit_trace_materialize_frames(0, metas.as_ptr()) }
         };
-        assert_eq!(
-            r, -1,
-            "no live Lua frame → helper returns deopt sentinel"
-        );
+        assert_eq!(r, -1, "no live Lua frame → helper returns deopt sentinel");
     }
 
     /// step4b-B: helper with a live trace-head frame pushes N inlined
@@ -8418,19 +8398,12 @@ mod s4_step4b_skeleton {
         }];
         let r = {
             let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
-            unsafe {
-                super::super::luna_jit_trace_materialize_frames(
-                    1,
-                    metas.as_ptr(),
-                )
-            }
+            unsafe { super::super::luna_jit_trace_materialize_frames(1, metas.as_ptr()) }
         };
         assert_eq!(r, 0, "successful push returns 0");
         // The just-pushed frame has base = head.base + 5 = 1 + 5 = 6,
         // pc = 11, nresults = 1, func_slot = base - 1 = 5.
-        let pushed = vm
-            .jit_last_lua_frame()
-            .expect("frame was pushed");
+        let pushed = vm.jit_last_lua_frame().expect("frame was pushed");
         assert_eq!(pushed.base, 6);
         assert_eq!(pushed.pc, 11);
         assert_eq!(pushed.func_slot, 5);
@@ -8449,10 +8422,7 @@ mod s4_step4b_skeleton {
         // Non-vararg inner proto needed — step4b-C-2's vararg bail
         // refuses the self-rec inline path on a vararg head.
         let cl = vm
-            .load(
-                b"local function f(a,b) return a+b end return f",
-                b"=t",
-            )
+            .load(b"local function f(a,b) return a+b end return f", b"=t")
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg);
@@ -8543,18 +8513,25 @@ mod s4_step4b_skeleton {
         vm.jit_ensure_stack(64);
         vm.jit_push_inlined_frame(cl, 1, 0, 1);
         let metas = [
-            FrameMaterializeInfo { base_offset: 3, pc: 7, nresults: 1 },
-            FrameMaterializeInfo { base_offset: 8, pc: 7, nresults: 1 },
-            FrameMaterializeInfo { base_offset: 13, pc: 9, nresults: 1 },
+            FrameMaterializeInfo {
+                base_offset: 3,
+                pc: 7,
+                nresults: 1,
+            },
+            FrameMaterializeInfo {
+                base_offset: 8,
+                pc: 7,
+                nresults: 1,
+            },
+            FrameMaterializeInfo {
+                base_offset: 13,
+                pc: 9,
+                nresults: 1,
+            },
         ];
         let r = {
             let _g = crate::jit_backend::enter_jit(&mut vm, Some(cl));
-            unsafe {
-                super::super::luna_jit_trace_materialize_frames(
-                    3,
-                    metas.as_ptr(),
-                )
-            }
+            unsafe { super::super::luna_jit_trace_materialize_frames(3, metas.as_ptr()) }
         };
         assert_eq!(r, 0);
         // Innermost frame should match metas[2].
@@ -8589,5 +8566,4 @@ mod s6_step_a1 {
         assert!(matches!(tags[3], ExitTag::Float));
         assert!(matches!(tags[4], ExitTag::Nil));
     }
-
 }

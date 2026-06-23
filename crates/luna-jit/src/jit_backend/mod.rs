@@ -14,20 +14,20 @@
 //! the cumulative whitelist; out-of-whitelist returns `None` and the
 //! interpreter handles the chunk unchanged.
 
-use luna_core::jit::{
-    CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
-    MAX_JIT_ARITY, TraceCompiler, noop_jit_guard,
-};
-use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
-use luna_core::runtime::Gc;
-use luna_core::runtime::Value as LuaValue;
-use luna_core::runtime::function::Proto;
-use luna_core::vm::isa::{Inst, Op};
 use cranelift::prelude::*;
 use cranelift_codegen::ir::{BlockArg, UserFuncName};
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
+use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
+use luna_core::jit::{
+    CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
+    MAX_JIT_ARITY, TraceCompiler, noop_jit_guard,
+};
+use luna_core::runtime::Gc;
+use luna_core::runtime::Value as LuaValue;
+use luna_core::runtime::function::Proto;
+use luna_core::vm::isa::{Inst, Op};
 
 /// P11-S3 — per-Lua-register type lattice. `Unset` is the bottom;
 /// `Int` and `Float` are incomparable monotypes. A register that's
@@ -379,15 +379,10 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
             let raw_bits = unsafe { *raws_ptr.add(i) };
             // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
             let kind = unsafe { *kinds_ptr.add(i) };
-            let raw =
-                luna_core::runtime::value::RawVal { zero: raw_bits };
+            let raw = luna_core::runtime::value::RawVal { zero: raw_bits };
             // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
             let v = unsafe { luna_core::runtime::Value::pack(kind, raw) };
-            let _ = table.set_int(
-                &mut vm.heap,
-                (i + 1) as i64,
-                v,
-            );
+            let _ = table.set_int(&mut vm.heap, (i + 1) as i64, v);
         }
     }
     // P12-S11-B-v2 — hash slots. Each entry is a
@@ -404,15 +399,10 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
             let kind = unsafe { *hash_kinds_ptr.add(i) };
             let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
                 luna_core::runtime::Gc::from_ptr(key_ptr_bits as *mut luna_core::runtime::LuaStr);
-            let raw =
-                luna_core::runtime::value::RawVal { zero: raw_bits };
+            let raw = luna_core::runtime::value::RawVal { zero: raw_bits };
             // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
             let v = unsafe { luna_core::runtime::Value::pack(kind, raw) };
-            let _ = table.set(
-                &mut vm.heap,
-                luna_core::runtime::Value::Str(key_gc),
-                v,
-            );
+            let _ = table.set(&mut vm.heap, luna_core::runtime::Value::Str(key_gc), v);
         }
     }
     g.as_ptr() as i64
@@ -459,12 +449,7 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_table_set_raw(
-    t: i64,
-    key: i64,
-    raw_bits: i64,
-    tag: i64,
-) {
+pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64, tag: i64) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
@@ -482,7 +467,9 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(
     let v = unsafe {
         luna_core::runtime::Value::pack(
             tag as u8,
-            luna_core::runtime::value::RawVal { zero: raw_bits as u64 },
+            luna_core::runtime::value::RawVal {
+                zero: raw_bits as u64,
+            },
         )
     };
     let _ = table.set_int(&mut vm.heap, key, v);
@@ -525,7 +512,9 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     let v = unsafe {
         luna_core::runtime::Value::pack(
             val_tag as u8,
-            luna_core::runtime::value::RawVal { zero: val_raw as u64 },
+            luna_core::runtime::value::RawVal {
+                zero: val_raw as u64,
+            },
         )
     };
     let _ = table.set(&mut vm.heap, key, v);
@@ -538,10 +527,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_table_get_field(
-    t: i64,
-    key_ptr: i64,
-) -> i64 {
+pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
@@ -854,10 +840,7 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_stack_update_raw(
-    slot_offset: i64,
-    raw_bits: i64,
-) {
+pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i64) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
@@ -880,10 +863,7 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_op_concat(
-    slot_offset: i64,
-    n: i64,
-) -> i64 {
+pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_op_concat(slot_offset as u32, n as i32)
@@ -921,10 +901,7 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
 ///
 /// Safety: `buf` from prior `acquire`; `str_ptr` from the piece slot.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_str_buf_extend(
-    buf: i64,
-    str_ptr: i64,
-) -> i64 {
+pub unsafe extern "C" fn luna_jit_str_buf_extend(buf: i64, str_ptr: i64) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     vm.jit_str_buf_extend(buf as *mut Vec<u8>, str_ptr)
@@ -974,13 +951,7 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
 ) -> i64 {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
-    vm.jit_op_tforcall(
-        abs_offset as u32,
-        nvars as i32,
-        ctrl_out,
-        key_out,
-        val_out,
-    )
+    vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl_out, key_out, val_out)
 }
 
 /// P12-S12-B-v2 — load the raw `i64` payload of `vm.stack[base + slot_offset]`
@@ -1030,11 +1001,7 @@ pub unsafe extern "C" fn luna_jit_stack_tag(slot_offset: i64) -> i64 {
 /// generated by the same emit path that proves the kind, so
 /// `Value::pack` round-trips correctly.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_spill_to_stack(
-    slot_offset: i64,
-    tag: i64,
-    raw_bits: i64,
-) {
+pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw_bits: i64) {
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
@@ -1069,7 +1036,7 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(
 /// references. `proto_idx` is in-bounds by the emit pre-check.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
-    use luna_core::runtime::function::{INLINE_UPVALS_N, Upvalue, UpvalState};
+    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_some() {
@@ -1087,15 +1054,14 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base as u32,
         None => {
-            vm.jit.pending_err =
-                Some(vm.rt_err("JIT op_closure: no Lua frame"));
+            vm.jit.pending_err = Some(vm.rt_err("JIT op_closure: no Lua frame"));
             return 0;
         }
     };
     // Build the upval slice — small (0..2 typical) so use a stack
     // array up to INLINE_UPVALS_N like the interp does, else heap.
-    let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>;
-        INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
+    let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>; INLINE_UPVALS_N] =
+        [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
     let mut heap_buf: Vec<luna_core::runtime::Gc<Upvalue>> = Vec::new();
     let use_inline = n_ups <= INLINE_UPVALS_N;
     if !use_inline {
@@ -1149,9 +1115,10 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
         // captured inside a hot loop).
         let cached = inner.cache.get().filter(|c| {
             c.upvals().len() == ups_slice.len()
-                && c.upvals().iter().zip(ups_slice.iter()).all(|(a, b)| {
-                    std::ptr::eq(a.as_ptr(), b.as_ptr())
-                })
+                && c.upvals()
+                    .iter()
+                    .zip(ups_slice.iter())
+                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
         });
         match cached {
             Some(c) => c,
@@ -1428,11 +1395,7 @@ struct MathFold {
 /// loop lowering bail; pass `false` (Lua 5.4 / 5.5) to enable the
 /// counted-loop emit. The dialect bit also participates in the
 /// thread-local cache key — see `proto_cache_key`.
-pub fn try_compile_int_chunk(
-    proto: Gc<Proto>,
-    pre53: bool,
-    float_only: bool,
-) -> Option<JitHandle> {
+pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) -> Option<JitHandle> {
     if proto.num_params > MAX_JIT_ARITY {
         return None;
     }
@@ -2198,13 +2161,7 @@ pub fn try_compile_int_chunk(
                         *slot = false;
                     }
                 }
-                Op::LoadI
-                | Op::LoadF
-                | Op::LoadK
-                | Op::Add
-                | Op::Sub
-                | Op::Mul
-                | Op::Div => {
+                Op::LoadI | Op::LoadF | Op::LoadK | Op::Add | Op::Sub | Op::Mul | Op::Div => {
                     if let Some(slot) = state.get_mut(ins.a() as usize) {
                         *slot = false;
                     }
@@ -2259,9 +2216,7 @@ pub fn try_compile_int_chunk(
     // (every register considered defined) and refine downward.
     // Starting at BOTTOM (false) would make the intersection at
     // any back-edge converge to false immediately.
-    let mut bb_entry: Vec<Vec<bool>> = (0..num_bbs)
-        .map(|i| vec![i != 0; max_stack])
-        .collect();
+    let mut bb_entry: Vec<Vec<bool>> = (0..num_bbs).map(|i| vec![i != 0; max_stack]).collect();
     let mut bb_exit: Vec<Vec<bool>> = vec![vec![true; max_stack]; num_bbs];
     // Entry BB starts with params marked as defined (caller guarantee
     // mirrors the linear walk's init above).
@@ -2344,13 +2299,7 @@ pub fn try_compile_int_chunk(
                             *slot = false;
                         }
                     }
-                    Op::LoadI
-                    | Op::LoadF
-                    | Op::LoadK
-                    | Op::Add
-                    | Op::Sub
-                    | Op::Mul
-                    | Op::Div => {
+                    Op::LoadI | Op::LoadF | Op::LoadK | Op::Add | Op::Sub | Op::Mul | Op::Div => {
                         if let Some(slot) = state.get_mut(prev.a() as usize) {
                             *slot = false;
                         }
@@ -2425,10 +2374,7 @@ pub fn try_compile_int_chunk(
             continue;
         }
         // R[A+1] = init = LoadI 1.
-        if !matches!(init.op(), Op::LoadI)
-            || init.a() as i64 != fp_base
-            || init.sbx() != 1
-        {
+        if !matches!(init.op(), Op::LoadI) || init.a() as i64 != fp_base || init.sbx() != 1 {
             continue;
         }
         // R[A+2] = limit = LoadI or LoadK Int. sbx fits in i32; we
@@ -2445,10 +2391,7 @@ pub fn try_compile_int_chunk(
             _ => continue,
         };
         // R[A+3] = step = LoadI 1.
-        if !matches!(step.op(), Op::LoadI)
-            || step.a() as i64 != fp_base + 2
-            || step.sbx() != 1
-        {
+        if !matches!(step.op(), Op::LoadI) || step.a() as i64 != fp_base + 2 || step.sbx() != 1 {
             continue;
         }
         if limit_val <= 0 || limit_val > (1 << 27) {
@@ -3095,7 +3038,11 @@ pub fn try_compile_int_chunk(
                     // `docs/known-bugs/fixed/jit-51-52-table-int-tag.md`
                     // and the 5.3 audit test
                     // `tests/jit_dialect_audit.rs::audit_gettable_computed_key`.
-                    let default_kind = if float_only { RegKind::Float } else { RegKind::Int };
+                    let default_kind = if float_only {
+                        RegKind::Float
+                    } else {
+                        RegKind::Int
+                    };
                     if matches!(reg_kinds[a], RegKind::Unset) {
                         reg_kinds[a] = default_kind;
                     }
@@ -3290,26 +3237,54 @@ pub fn try_compile_int_chunk(
                     );
                     match (pre53, is_float) {
                         (true, false) => {
-                            if let Some(s) = state.get_mut(a) { *s = RegKind::Int; }
-                            if let Some(s) = state.get_mut(a + 1) { *s = RegKind::Int; }
-                            if let Some(s) = state.get_mut(a + 2) { *s = RegKind::Int; }
+                            if let Some(s) = state.get_mut(a) {
+                                *s = RegKind::Int;
+                            }
+                            if let Some(s) = state.get_mut(a + 1) {
+                                *s = RegKind::Int;
+                            }
+                            if let Some(s) = state.get_mut(a + 2) {
+                                *s = RegKind::Int;
+                            }
                         }
                         (false, false) => {
-                            if let Some(s) = state.get_mut(a) { *s = RegKind::Int; }
-                            if let Some(s) = state.get_mut(a + 1) { *s = RegKind::Int; }
-                            if let Some(s) = state.get_mut(a + 2) { *s = RegKind::Int; }
-                            if let Some(s) = state.get_mut(a + 3) { *s = RegKind::Int; }
+                            if let Some(s) = state.get_mut(a) {
+                                *s = RegKind::Int;
+                            }
+                            if let Some(s) = state.get_mut(a + 1) {
+                                *s = RegKind::Int;
+                            }
+                            if let Some(s) = state.get_mut(a + 2) {
+                                *s = RegKind::Int;
+                            }
+                            if let Some(s) = state.get_mut(a + 3) {
+                                *s = RegKind::Int;
+                            }
                         }
                         (true, true) => {
-                            if let Some(s) = state.get_mut(a) { *s = RegKind::Float; }
-                            if let Some(s) = state.get_mut(a + 1) { *s = RegKind::Float; }
-                            if let Some(s) = state.get_mut(a + 2) { *s = RegKind::Int; }
+                            if let Some(s) = state.get_mut(a) {
+                                *s = RegKind::Float;
+                            }
+                            if let Some(s) = state.get_mut(a + 1) {
+                                *s = RegKind::Float;
+                            }
+                            if let Some(s) = state.get_mut(a + 2) {
+                                *s = RegKind::Int;
+                            }
                         }
                         (false, true) => {
-                            if let Some(s) = state.get_mut(a) { *s = RegKind::Float; }
-                            if let Some(s) = state.get_mut(a + 1) { *s = RegKind::Float; }
-                            if let Some(s) = state.get_mut(a + 2) { *s = RegKind::Int; }
-                            if let Some(s) = state.get_mut(a + 3) { *s = RegKind::Float; }
+                            if let Some(s) = state.get_mut(a) {
+                                *s = RegKind::Float;
+                            }
+                            if let Some(s) = state.get_mut(a + 1) {
+                                *s = RegKind::Float;
+                            }
+                            if let Some(s) = state.get_mut(a + 2) {
+                                *s = RegKind::Int;
+                            }
+                            if let Some(s) = state.get_mut(a + 3) {
+                                *s = RegKind::Float;
+                            }
                         }
                     }
                 }
@@ -3320,15 +3295,29 @@ pub fn try_compile_int_chunk(
                         RegKind::Float
                     );
                     if is_float {
-                        if let Some(s) = state.get_mut(a) { *s = RegKind::Float; }
-                        if let Some(s) = state.get_mut(a + 3) { *s = RegKind::Float; }
+                        if let Some(s) = state.get_mut(a) {
+                            *s = RegKind::Float;
+                        }
+                        if let Some(s) = state.get_mut(a + 3) {
+                            *s = RegKind::Float;
+                        }
                     } else if pre53 {
-                        if let Some(s) = state.get_mut(a) { *s = RegKind::Int; }
-                        if let Some(s) = state.get_mut(a + 3) { *s = RegKind::Int; }
+                        if let Some(s) = state.get_mut(a) {
+                            *s = RegKind::Int;
+                        }
+                        if let Some(s) = state.get_mut(a + 3) {
+                            *s = RegKind::Int;
+                        }
                     } else {
-                        if let Some(s) = state.get_mut(a) { *s = RegKind::Int; }
-                        if let Some(s) = state.get_mut(a + 1) { *s = RegKind::Int; }
-                        if let Some(s) = state.get_mut(a + 3) { *s = RegKind::Int; }
+                        if let Some(s) = state.get_mut(a) {
+                            *s = RegKind::Int;
+                        }
+                        if let Some(s) = state.get_mut(a + 1) {
+                            *s = RegKind::Int;
+                        }
+                        if let Some(s) = state.get_mut(a + 3) {
+                            *s = RegKind::Int;
+                        }
                     }
                 }
                 Op::NewTable => {
@@ -3389,8 +3378,9 @@ pub fn try_compile_int_chunk(
     let mut bb_entry_kinds: Vec<Vec<RegKind>> = (0..num_bbs)
         .map(|_| vec![RegKind::Unset; max_stack])
         .collect();
-    let mut bb_exit_kinds: Vec<Vec<RegKind>> =
-        (0..num_bbs).map(|_| vec![RegKind::Unset; max_stack]).collect();
+    let mut bb_exit_kinds: Vec<Vec<RegKind>> = (0..num_bbs)
+        .map(|_| vec![RegKind::Unset; max_stack])
+        .collect();
     for i in 0..max_stack {
         bb_entry_kinds[0][i] = init_kind_for_reg(i);
     }
@@ -3716,9 +3706,7 @@ pub fn try_compile_int_chunk(
                 let arg_var = bcx.use_var(regs[fold.arg_reg as usize]);
                 let arg_f64 = match arg_kind {
                     RegKind::Float => arg_var,
-                    RegKind::Int | RegKind::Unset => {
-                        bcx.ins().fcvt_from_sint(types::F64, arg_var)
-                    }
+                    RegKind::Int | RegKind::Unset => bcx.ins().fcvt_from_sint(types::F64, arg_var),
                     // The fold's `Move` source can only be a Lua
                     // numeric — the whitelist's `Op::Call B=2` gate
                     // implies a numeric arg. A Table-typed source
@@ -4047,25 +4035,24 @@ pub fn try_compile_int_chunk(
                 let rhs_kind = a_kind(&reg_kinds, ins.b());
                 // Operand kinds were unified by the scan; if either is
                 // Float they both are.
-                let cond = if matches!(lhs_kind, RegKind::Float)
-                    || matches!(rhs_kind, RegKind::Float)
-                {
-                    let fcc = match ins.op() {
-                        Op::Lt => FloatCC::LessThan,
-                        Op::Le => FloatCC::LessThanOrEqual,
-                        Op::Eq => FloatCC::Equal,
-                        _ => unreachable!(),
+                let cond =
+                    if matches!(lhs_kind, RegKind::Float) || matches!(rhs_kind, RegKind::Float) {
+                        let fcc = match ins.op() {
+                            Op::Lt => FloatCC::LessThan,
+                            Op::Le => FloatCC::LessThanOrEqual,
+                            Op::Eq => FloatCC::Equal,
+                            _ => unreachable!(),
+                        };
+                        bcx.ins().fcmp(fcc, lhs, rhs)
+                    } else {
+                        let icc = match ins.op() {
+                            Op::Lt => IntCC::SignedLessThan,
+                            Op::Le => IntCC::SignedLessThanOrEqual,
+                            Op::Eq => IntCC::Equal,
+                            _ => unreachable!(),
+                        };
+                        bcx.ins().icmp(icc, lhs, rhs)
                     };
-                    bcx.ins().fcmp(fcc, lhs, rhs)
-                } else {
-                    let icc = match ins.op() {
-                        Op::Lt => IntCC::SignedLessThan,
-                        Op::Le => IntCC::SignedLessThanOrEqual,
-                        Op::Eq => IntCC::Equal,
-                        _ => unreachable!(),
-                    };
-                    bcx.ins().icmp(icc, lhs, rhs)
-                };
                 // PUC `cond_skip`: bump_pc (skip the Jmp) if cond != k;
                 // otherwise execute the Jmp. So `cond == k` → take Jmp;
                 // `cond != k` → fall through past Jmp.
@@ -4100,23 +4087,16 @@ pub fn try_compile_int_chunk(
                 // follows fills exactly N entries). Either source —
                 // S5c.B window or NewTable.B — feeds the sized
                 // helper; the explicit window wins on overlap.
-                let presize = presize_for_newtable
-                    .get(&pc)
-                    .copied()
-                    .or_else(|| {
-                        let b = ins.b();
-                        if b > 0 { Some(b as i64) } else { None }
-                    });
+                let presize = presize_for_newtable.get(&pc).copied().or_else(|| {
+                    let b = ins.b();
+                    if b > 0 { Some(b as i64) } else { None }
+                });
                 let g = if let Some(n) = presize {
                     let mut sig = module.make_signature();
                     sig.params.push(AbiParam::new(types::I64));
                     sig.returns.push(AbiParam::new(types::I64));
                     let id = module
-                        .declare_function(
-                            "luna_jit_new_table_sized",
-                            Linkage::Import,
-                            &sig,
-                        )
+                        .declare_function("luna_jit_new_table_sized", Linkage::Import, &sig)
                         .ok()?;
                     let r = module.declare_func_in_func(id, bcx.func);
                     let n_v = bcx.ins().iconst(types::I64, n);
@@ -4191,8 +4171,7 @@ pub fn try_compile_int_chunk(
                     // `(key - 1) as u64 < asize` handles both
                     // `key >= 1` (else underflow → > any len) and
                     // `key <= asize` in one unsigned compare.
-                    let in_range =
-                        bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
+                    let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
 
                     let fast_blk = bcx.create_block();
                     let slow_blk = bcx.create_block();
@@ -4213,8 +4192,7 @@ pub fn try_compile_int_chunk(
                     let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
                     let tag_dst = bcx.ins().iadd(atags_ptr, key_minus_1);
                     let tag_byte = bcx.ins().iconst(types::I8, RAW_TAG_INT);
-                    bcx.ins()
-                        .store(MemFlags::trusted(), tag_byte, tag_dst, 0);
+                    bcx.ins().store(MemFlags::trusted(), tag_byte, tag_dst, 0);
                     let val_off = bcx.ins().ishl(key_minus_1, three); // *8
                     let val_dst = bcx.ins().iadd(avals_ptr, val_off);
                     bcx.ins().store(MemFlags::trusted(), val, val_dst, 0);
@@ -4227,11 +4205,7 @@ pub fn try_compile_int_chunk(
                     sig.params.push(AbiParam::new(types::I64));
                     sig.params.push(AbiParam::new(types::I64));
                     let id = module
-                        .declare_function(
-                            "luna_jit_table_set_int",
-                            Linkage::Import,
-                            &sig,
-                        )
+                        .declare_function("luna_jit_table_set_int", Linkage::Import, &sig)
                         .ok()?;
                     let r = module.declare_func_in_func(id, bcx.func);
                     let _ = bcx.ins().call(r, &[t, key, val]);
@@ -4253,11 +4227,7 @@ pub fn try_compile_int_chunk(
                     sig.params.push(AbiParam::new(types::I64));
                     sig.params.push(AbiParam::new(types::I64));
                     let id = module
-                        .declare_function(
-                            "luna_jit_table_set_float_float",
-                            Linkage::Import,
-                            &sig,
-                        )
+                        .declare_function("luna_jit_table_set_float_float", Linkage::Import, &sig)
                         .ok()?;
                     let r = module.declare_func_in_func(id, bcx.func);
                     let _ = bcx.ins().call(r, &[t, key_i, val_i]);
@@ -4325,10 +4295,7 @@ pub fn try_compile_int_chunk(
                     // not the global `reg_kinds`. R[A+i] may legitimately
                     // hold an Int at one SetList PC and a Table at
                     // another (the binary_trees `make` pattern).
-                    let kind = current_kinds
-                        .get(src)
-                        .copied()
-                        .unwrap_or(RegKind::Int);
+                    let kind = current_kinds.get(src).copied().unwrap_or(RegKind::Int);
                     // P11-S5d.D step 3+4 — collapse to I64 first
                     // (lossless when declared F64), then pick the
                     // tag. Handles all (declared × active) ∈ {F64,
@@ -4432,8 +4399,7 @@ pub fn try_compile_int_chunk(
                 let three = bcx.ins().iconst(types::I64, 3);
                 let val_off = bcx.ins().ishl(key_minus_1, three);
                 let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-                let fast_bits =
-                    bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
+                let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
                 bcx.ins().jump(merge_blk, &[BlockArg::Value(fast_bits)]);
 
                 bcx.switch_to_block(slow_blk);
@@ -4534,8 +4500,7 @@ pub fn try_compile_int_chunk(
                 let three = bcx.ins().iconst(types::I64, 3);
                 let val_off = bcx.ins().ishl(key_minus_1, three);
                 let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-                let fast_bits =
-                    bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
+                let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
                 bcx.ins().jump(merge_blk, &[BlockArg::Value(fast_bits)]);
 
                 bcx.switch_to_block(slow_blk);
@@ -4703,7 +4668,9 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
         return None;
     }
     let k_math = proto.consts.get(i0.c() as usize).copied()?;
-    let LuaValue::Str(s) = k_math else { return None };
+    let LuaValue::Str(s) = k_math else {
+        return None;
+    };
     if s.as_bytes() != b"math" {
         return None;
     }
@@ -4714,7 +4681,9 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
         return None;
     }
     let k_fn = proto.consts.get(i1.c() as usize).copied()?;
-    let LuaValue::Str(fname) = k_fn else { return None };
+    let LuaValue::Str(fname) = k_fn else {
+        return None;
+    };
     let fn_name = MATH_LIBM_FNS
         .iter()
         .find_map(|&(needle, name)| (needle == fname.as_bytes()).then_some(name))?;
@@ -5056,7 +5025,11 @@ mod s2 {
         let v2 = vm.call_value(Value::Closure(cl), &[]).unwrap();
         assert!(matches!(v1.first(), Some(Value::Int(12))));
         assert!(matches!(v2.first(), Some(Value::Int(12))));
-        assert_eq!(crate::jit_backend::cache_entry_count(), 1, "one compiled Proto");
+        assert_eq!(
+            crate::jit_backend::cache_entry_count(),
+            1,
+            "one compiled Proto"
+        );
     }
 
     #[test]
@@ -5093,8 +5066,8 @@ mod s2b {
     fn jit_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
-        let handle =
-            try_compile_int_chunk(cl.proto, false, false).expect("S2b lowerer should accept this chunk");
+        let handle = try_compile_int_chunk(cl.proto, false, false)
+            .expect("S2b lowerer should accept this chunk");
         handle.call()
     }
 
@@ -5206,24 +5179,21 @@ mod s2c_a {
 
     #[test]
     fn add1_compiles_and_runs() {
-        with_inner(
-            "local function f(n) return n + 1 end; return f",
-            |proto| {
-                let handle = try_compile_int_chunk(
-                    luna_core::runtime::Gc::from_ptr(proto as *const _ as *mut _),
-                    false,
-                    false,
-                )
-                .expect("S2c.A accepts num_params == 1");
-                assert_eq!(handle.num_args(), 1);
-                assert!(handle.returns_one());
-                let f: IntFn1 = unsafe { std::mem::transmute(handle.entry_raw()) };
-                assert_eq!(unsafe { f(41) }, 42);
-                assert_eq!(unsafe { f(0) }, 1);
-                assert_eq!(unsafe { f(-1) }, 0);
-                assert_eq!(handle.call_with(&[100]), 101);
-            },
-        );
+        with_inner("local function f(n) return n + 1 end; return f", |proto| {
+            let handle = try_compile_int_chunk(
+                luna_core::runtime::Gc::from_ptr(proto as *const _ as *mut _),
+                false,
+                false,
+            )
+            .expect("S2c.A accepts num_params == 1");
+            assert_eq!(handle.num_args(), 1);
+            assert!(handle.returns_one());
+            let f: IntFn1 = unsafe { std::mem::transmute(handle.entry_raw()) };
+            assert_eq!(unsafe { f(41) }, 42);
+            assert_eq!(unsafe { f(0) }, 1);
+            assert_eq!(unsafe { f(-1) }, 0);
+            assert_eq!(handle.call_with(&[100]), 101);
+        });
     }
 
     #[test]
@@ -5323,8 +5293,7 @@ mod s2c_b {
 
     #[test]
     fn calls_jit_inner_with_branch() {
-        let src =
-            "local function clip(n) if n < 0 then return 0 end; return n end; \
+        let src = "local function clip(n) if n < 0 then return 0 end; return n end; \
              return clip(-3) + clip(7)";
         assert_eq!(eval_int(src), 7);
     }
@@ -5343,7 +5312,11 @@ mod s2c_b {
             .unwrap();
         // 11 + 21 + 31 = 63
         assert!(matches!(v.first(), Some(Value::Int(63))));
-        assert_eq!(crate::jit_backend::cache_entry_count(), 1, "Proto compiled exactly once");
+        assert_eq!(
+            crate::jit_backend::cache_entry_count(),
+            1,
+            "Proto compiled exactly once"
+        );
     }
 
     #[test]
@@ -5388,7 +5361,10 @@ mod s2c_c {
                      return fib(n - 1) + fib(n - 2) \
                    end; return fib";
         assert_eq!(
-            eval_int(&format!("{fib} return fib(0)").replace("return fib return fib(0)", "; return fib(0)")),
+            eval_int(
+                &format!("{fib} return fib(0)")
+                    .replace("return fib return fib(0)", "; return fib(0)")
+            ),
             0,
         );
     }
@@ -5436,7 +5412,11 @@ mod s2c_c {
             )
             .unwrap();
         assert!(matches!(v.first(), Some(Value::Int(55))));
-        assert_eq!(crate::jit_backend::cache_entry_count(), 1, "fib's Proto compiled exactly once");
+        assert_eq!(
+            crate::jit_backend::cache_entry_count(),
+            1,
+            "fib's Proto compiled exactly once"
+        );
     }
 }
 
@@ -5489,7 +5469,11 @@ mod s3 {
 
     fn eval_with(version: LuaVersion, src: &str) -> Value {
         let mut vm = crate::jit_backend::test_vm_new(version);
-        vm.eval(src).expect("eval").into_iter().next().expect("one value")
+        vm.eval(src)
+            .expect("eval")
+            .into_iter()
+            .next()
+            .expect("one value")
     }
 
     /// `return 1.5` const-folds to LoadK(Float(1.5)) — exercises the
@@ -5752,13 +5736,19 @@ mod s5a {
         let mut vm55 = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl55 = vm55.load(src, b"=t").expect("compile");
         let r55 = vm55.call_value(Value::Closure(cl55), &[]).expect("run");
-        assert!(matches!(cl55.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl55.proto.jit.get(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r55.first(), Some(&Value::Int(5050))));
 
         let mut vm53 = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let cl53 = vm53.load(src, b"=t").expect("compile");
         let r53 = vm53.call_value(Value::Closure(cl53), &[]).expect("run");
-        assert!(matches!(cl53.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl53.proto.jit.get(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r53.first(), Some(&Value::Int(5050))));
 
         // Two cache slots, not one — same source, distinct dialect.
@@ -6121,7 +6111,8 @@ mod s5b {
     #[test]
     fn math_loop_100k_5_5_matches_libm() {
         crate::jit_backend::cache_clear();
-        let src = "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
+        let src =
+            "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=100_000)
             .map(|i| (i as f64).sin() * (i as f64).cos())
@@ -6141,14 +6132,13 @@ mod s5b {
     #[test]
     fn math_loop_100k_5_4_matches_libm() {
         crate::jit_backend::cache_clear();
-        let src = "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
+        let src =
+            "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua54, src);
         let r_ref: f64 = (1..=100_000)
             .map(|i| (i as f64).sin() * (i as f64).cos())
             .sum();
-        assert!(
-            (r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),
-        );
+        assert!((r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),);
     }
 
     /// 5.3 — pre53 Int loop + math fold. Cache-key `pre53` bit
@@ -6156,14 +6146,13 @@ mod s5b {
     #[test]
     fn math_loop_100k_5_3_matches_libm() {
         crate::jit_backend::cache_clear();
-        let src = "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
+        let src =
+            "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua53, src);
         let r_ref: f64 = (1..=100_000)
             .map(|i| (i as f64).sin() * (i as f64).cos())
             .sum();
-        assert!(
-            (r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),
-        );
+        assert!((r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),);
     }
 
     /// 5.2 — Float loop (`LoadF init / LoadK Float(N) limit`) + math
@@ -6172,14 +6161,13 @@ mod s5b {
     #[test]
     fn math_loop_100k_5_2_matches_libm() {
         crate::jit_backend::cache_clear();
-        let src = "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
+        let src =
+            "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua52, src);
         let r_ref: f64 = (1..=100_000)
             .map(|i| (i as f64).sin() * (i as f64).cos())
             .sum();
-        assert!(
-            (r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),
-        );
+        assert!((r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),);
     }
 
     /// 5.1 — same Float-loop path as 5.2. Both share the pre53 +
@@ -6187,14 +6175,13 @@ mod s5b {
     #[test]
     fn math_loop_100k_5_1_matches_libm() {
         crate::jit_backend::cache_clear();
-        let src = "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
+        let src =
+            "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua51, src);
         let r_ref: f64 = (1..=100_000)
             .map(|i| (i as f64).sin() * (i as f64).cos())
             .sum();
-        assert!(
-            (r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),
-        );
+        assert!((r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 1024.0).max(1e-6),);
     }
 
     /// Cache key uses string-byte content (not just discriminant) —
@@ -6228,9 +6215,7 @@ mod s5b {
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.sqrt(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=100).map(|i| (i as f64).sqrt()).sum();
-        assert!(
-            (r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 16.0).max(1e-12),
-        );
+        assert!((r_jit - r_ref).abs() <= (r_ref.abs() * f64::EPSILON * 16.0).max(1e-12),);
     }
 
     /// Unsupported math fn (`math.pi` access, no Call) bails. A bare
@@ -6635,7 +6620,10 @@ mod s5d_a {
             .call_value(Value::Closure(inner), &[tv])
             .expect("call f(t)");
         assert!(matches!(r2.first(), Some(&Value::Int(42))));
-        assert!(matches!(inner.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            inner.proto.jit.get(),
+            JitProtoState::Compiled { .. }
+        ));
     }
 
     /// `function f(t) return #t end` — same shape, Len op.
@@ -6687,9 +6675,7 @@ mod s5d_b {
             other => panic!("expected closure, got {other:?}"),
         };
         // First call populates / drives JIT.
-        let r2 = vm
-            .call_value(Value::Closure(inner), &[])
-            .expect("call f()");
+        let r2 = vm.call_value(Value::Closure(inner), &[]).expect("call f()");
         // f returns a Table; assert ret_is_table threaded through.
         let t = match r2.first() {
             Some(&Value::Table(t)) => t,
@@ -6697,7 +6683,10 @@ mod s5d_b {
         };
         assert_eq!(t.len(), 3);
         assert!(matches!(t.get_int(2), Value::Int(20)));
-        assert!(matches!(inner.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            inner.proto.jit.get(),
+            JitProtoState::Compiled { .. }
+        ));
     }
 
     /// Read a fixed-N table — exercises GetI through a Table param
@@ -6888,7 +6877,6 @@ mod s5d_b {
         );
     }
 
-
     /// binary_trees' `check` Proto JIT-compiles end-to-end: GetI
     /// through a Table param, Int Eq + branch, self-recursive
     /// Call returning Int, Int Add, Return1 of an Int. No Table
@@ -6932,14 +6920,13 @@ mod s5d_b {
         // table so the JIT path is reached. The cache lookup happens
         // on first call; subsequent calls run the cached entry.
         let table = vm.heap.new_table();
-        let _ = unsafe { table.as_mut() }.set_int(
-            &mut vm.heap,
-            1,
-            Value::Float(42.0),
-        );
+        let _ = unsafe { table.as_mut() }.set_int(&mut vm.heap, 1, Value::Float(42.0));
         for _ in 0..3 {
             let _ = vm
-                .call_value(Value::Closure(get_cl), &[Value::Table(table), Value::Float(1.0)])
+                .call_value(
+                    Value::Closure(get_cl),
+                    &[Value::Table(table), Value::Float(1.0)],
+                )
                 .expect("call get(t, 1.0)");
         }
         assert!(

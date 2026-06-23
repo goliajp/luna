@@ -42,9 +42,7 @@ fn sandbox_builder_instr_budget_trips() {
         .open_base()
         .with_instr_budget(500)
         .build();
-    let err = vm
-        .eval("while true do end")
-        .expect_err("budget must trip");
+    let err = vm.eval("while true do end").expect_err("budget must trip");
     let msg = vm.error_text(&err);
     assert!(msg.contains("instruction budget"), "got: {msg}");
 }

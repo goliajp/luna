@@ -1568,11 +1568,8 @@ mod tests {
         for ti in 0..50 {
             let t = heap.new_table();
             for k in 1..=200 {
-                let _ = unsafe { t.as_mut() }.set(
-                    &mut heap,
-                    Value::Int(k),
-                    Value::Int(ti * 1000 + k),
-                );
+                let _ =
+                    unsafe { t.as_mut() }.set(&mut heap, Value::Int(k), Value::Int(ti * 1000 + k));
             }
             for sk in 0..32 {
                 let key = Value::Str(heap.intern(format!("k{ti}-{sk}").as_bytes()));
@@ -1588,13 +1585,23 @@ mod tests {
         let half = roots.len() / 2;
         let freed = heap.collect(&roots[..half]);
         assert!(freed > 0, "some objects should have been freed");
-        assert!(heap.bytes() < bytes_peak, "bytes must drop after partial collect");
-        assert!(heap.live_objects() < live_peak, "live must drop after partial collect");
+        assert!(
+            heap.bytes() < bytes_peak,
+            "bytes must drop after partial collect"
+        );
+        assert!(
+            heap.live_objects() < live_peak,
+            "live must drop after partial collect"
+        );
         // Drop everything: counters must return to 0 exactly.
         drop(roots);
         let _ = heap.collect(&[]);
         assert_eq!(heap.live_objects(), 0, "live not zero after full collect");
-        assert_eq!(heap.bytes(), 0, "bytes not zero after full collect — asymmetric alloc/free");
+        assert_eq!(
+            heap.bytes(),
+            0,
+            "bytes not zero after full collect — asymmetric alloc/free"
+        );
     }
 
     #[test]

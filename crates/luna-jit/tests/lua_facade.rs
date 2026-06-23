@@ -1,8 +1,8 @@
 //! P2-D B12 smoke tests: Lua newtype + LuaFunction + LuaTable + LuaRoot.
 
+use luna_core::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::{Lua, LuaFunction, LuaTable};
-use luna_core::runtime::Value;
 
 #[test]
 fn lua_new_eval_basic() {

@@ -172,8 +172,12 @@ fn main() {
             .find_map(|bin| measure_external(bin, b.source, b.iters));
         let puc_s = puc_d.map(fmt_us).unwrap_or_else(|| "-".into());
         let ljit_s = ljit_d.map(fmt_us).unwrap_or_else(|| "-".into());
-        let puc_r = puc_d.map(|d| ratio(luna_d, d)).unwrap_or_else(|| "-".into());
-        let ljit_r = ljit_d.map(|d| ratio(luna_d, d)).unwrap_or_else(|| "-".into());
+        let puc_r = puc_d
+            .map(|d| ratio(luna_d, d))
+            .unwrap_or_else(|| "-".into());
+        let ljit_r = ljit_d
+            .map(|d| ratio(luna_d, d))
+            .unwrap_or_else(|| "-".into());
         println!(
             "{:<22} {:>5} {:>10} {:>10} {:>10} {:>8} {:>8}",
             b.name,

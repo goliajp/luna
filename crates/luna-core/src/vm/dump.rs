@@ -29,17 +29,9 @@ use crate::version::LuaVersion;
 /// 11. `8` (1)     — sizeof(lua_Number)
 /// 12. float `-370.5`      (8)  — sanity check (le)
 const HEADER_55: &[u8] = &[
-    0x1b, b'L', b'u', b'a',
-    0x55, 0x00,
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4,
-    0x88, 0xa9, 0xff, 0xff,
-    4,
-    0x78, 0x56, 0x34, 0x12,
-    8,
-    0x88, 0xa9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    8,
-    0, 0, 0, 0, 0, 0x28, 0x77, 0xc0,
+    0x1b, b'L', b'u', b'a', 0x55, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n', 4, 0x88, 0xa9, 0xff,
+    0xff, 4, 0x78, 0x56, 0x34, 0x12, 8, 0x88, 0xa9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 8, 0, 0, 0,
+    0, 0, 0x28, 0x77, 0xc0,
 ];
 
 /// PUC 5.4 binary-chunk header (31 bytes), per `ldump.c DumpHeader`:
@@ -48,14 +40,12 @@ const HEADER_55: &[u8] = &[
 /// LUAC_NUM (370.5). calls.lua :395 packs the first 15 bytes plus an
 /// `(jn)` unpack of the next 16 to lock these values in.
 const HEADER_54: &[u8] = &[
-    0x1b, b'L', b'u', b'a',
-    0x54, 0x00,
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4,                                              // sizeof(Instruction)
-    8,                                              // sizeof(lua_Integer)
-    8,                                              // sizeof(lua_Number)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0,                   // LUAC_INT = 0x5678
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40,                // LUAC_NUM = 370.5
+    0x1b, b'L', b'u', b'a', 0x54, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
+    4, // sizeof(Instruction)
+    8, // sizeof(lua_Integer)
+    8, // sizeof(lua_Number)
+    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT = 0x5678
+    0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
 /// PUC 5.3 binary-chunk header (33 bytes), per 5.3 `ldump.c DumpHeader`:
@@ -65,16 +55,14 @@ const HEADER_54: &[u8] = &[
 /// 25 bytes; the trailing 8-byte LUAC_NUM is not locked by an assertion
 /// but the loader still expects it.
 const HEADER_53: &[u8] = &[
-    0x1b, b'L', b'u', b'a',
-    0x53, 0x00,
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4,                                              // sizeof(int)
-    8,                                              // sizeof(size_t)
-    4,                                              // sizeof(Instruction)
-    8,                                              // sizeof(lua_Integer)
-    8,                                              // sizeof(lua_Number)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0,                   // LUAC_INT = 0x5678
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40,                // LUAC_NUM = 370.5
+    0x1b, b'L', b'u', b'a', 0x53, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
+    4, // sizeof(int)
+    8, // sizeof(size_t)
+    4, // sizeof(Instruction)
+    8, // sizeof(lua_Integer)
+    8, // sizeof(lua_Number)
+    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT = 0x5678
+    0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
 fn header_for(version: LuaVersion) -> &'static [u8] {

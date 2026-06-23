@@ -334,11 +334,7 @@ impl LuaTable {
     /// Read `t[k]`; decode as `V`. Returns `Err` if the key is
     /// missing OR the value's type doesn't match `V`. Use
     /// `t.raw_get(k)` (returning `Value`) for runtime branching.
-    pub fn get<K: IntoValue, V: FromLuaValue>(
-        self,
-        lua: &mut Lua,
-        k: K,
-    ) -> Result<V, LuaError> {
+    pub fn get<K: IntoValue, V: FromLuaValue>(self, lua: &mut Lua, k: K) -> Result<V, LuaError> {
         let v = self.raw_get(lua, k)?;
         V::from_lua_value(v)
     }

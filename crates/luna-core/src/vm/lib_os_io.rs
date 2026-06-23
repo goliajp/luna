@@ -17,7 +17,9 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, os, "time", os_time);
     set(vm, os, "clock", os_clock);
@@ -30,7 +32,8 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
     set(vm, os, "rename", os_rename);
     set(vm, os, "execute", os_execute);
     set(vm, os, "exit", os_exit);
-    vm.set_global("os", Value::Table(os)).expect("stdlib registration");
+    vm.set_global("os", Value::Table(os))
+        .expect("stdlib registration");
     vm.barrier_back_table(os);
 
     let io = vm.heap.new_table();
@@ -61,7 +64,9 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
         let put = |vm: &mut Vm, k: &[u8], v: Value| {
             let kk = Value::Str(vm.heap.intern(k));
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { file_mt.as_mut() }.set(&mut vm.heap, kk, v).expect("valid key");
+            unsafe { file_mt.as_mut() }
+                .set(&mut vm.heap, kk, v)
+                .expect("valid key");
         };
         let mname = Value::Str(vm.heap.intern(b"FILE*"));
         put(vm, b"__name", mname);
@@ -98,7 +103,8 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
             _ => {}
         }
     }
-    vm.set_global("io", Value::Table(io)).expect("stdlib registration");
+    vm.set_global("io", Value::Table(io))
+        .expect("stdlib registration");
     vm.barrier_back_table(io);
 
     let f = vm.native(nat_loadfile);
@@ -128,7 +134,11 @@ fn days_from_civil_impl(y: i64, m: u32, d: u32) -> i64 {
 /// Inverse of `days_from_civil`: epoch days → (year, month, day).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
-    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let era = if z >= 0 {
+        z / 146097
+    } else {
+        (z - 146096) / 146097
+    };
     let doe = (z - era * 146097) as u64; // [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe as i64 + era * 400;
@@ -258,26 +268,37 @@ fn compose_time(y: i64, m: i32, d: i32, h: i32, mi: i32, s: i32) -> Option<i64> 
     let year_carry = m_total.div_euclid(12);
     let month0 = m_total.rem_euclid(12) as u32; // 0..11
     let year = y.checked_add(year_carry)?;
-    let days = days_from_civil(year, month0 + 1, 1)?
-        .checked_add(d as i64 - 1)?;
+    let days = days_from_civil(year, month0 + 1, 1)?.checked_add(d as i64 - 1)?;
     days.checked_mul(86_400)?
         .checked_add(h as i64 * 3600)?
         .checked_add(mi as i64 * 60)?
         .checked_add(s as i64)
 }
 
-fn check_int_field(vm: &mut Vm, t: crate::runtime::Gc<crate::runtime::Table>, name: &str) -> Result<i64, LuaError> {
+fn check_int_field(
+    vm: &mut Vm,
+    t: crate::runtime::Gc<crate::runtime::Table>,
+    name: &str,
+) -> Result<i64, LuaError> {
     let k = Value::Str(vm.heap.intern(name.as_bytes()));
     let v = t.get(k);
     match v {
-        Value::Nil => Err(raise_str(vm, &format!("field '{name}' missing in date table"))),
+        Value::Nil => Err(raise_str(
+            vm,
+            &format!("field '{name}' missing in date table"),
+        )),
         Value::Int(i) => Ok(i),
         Value::Float(f) if f.fract() == 0.0 && f.is_finite() => Ok(f as i64),
         _ => Err(raise_str(vm, &format!("field '{name}' is not an integer"))),
     }
 }
 
-fn opt_int_field(vm: &mut Vm, t: crate::runtime::Gc<crate::runtime::Table>, name: &str, default: i64) -> Result<i64, LuaError> {
+fn opt_int_field(
+    vm: &mut Vm,
+    t: crate::runtime::Gc<crate::runtime::Table>,
+    name: &str,
+    default: i64,
+) -> Result<i64, LuaError> {
     let k = Value::Str(vm.heap.intern(name.as_bytes()));
     let v = t.get(k);
     match v {
@@ -417,23 +438,47 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 let names: [&[u8]; 7] = if c == b'a' {
                     [b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"]
                 } else {
-                    [b"Sunday", b"Monday", b"Tuesday", b"Wednesday", b"Thursday", b"Friday", b"Saturday"]
+                    [
+                        b"Sunday",
+                        b"Monday",
+                        b"Tuesday",
+                        b"Wednesday",
+                        b"Thursday",
+                        b"Friday",
+                        b"Saturday",
+                    ]
                 };
                 out.extend_from_slice(names[(bd.wday - 1) as usize]);
             }
             b'b' | b'B' => {
                 let names: [&[u8]; 12] = if c == b'b' {
-                    [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"]
+                    [
+                        b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep",
+                        b"Oct", b"Nov", b"Dec",
+                    ]
                 } else {
-                    [b"January", b"February", b"March", b"April", b"May", b"June", b"July", b"August", b"September", b"October", b"November", b"December"]
+                    [
+                        b"January",
+                        b"February",
+                        b"March",
+                        b"April",
+                        b"May",
+                        b"June",
+                        b"July",
+                        b"August",
+                        b"September",
+                        b"October",
+                        b"November",
+                        b"December",
+                    ]
                 };
                 out.extend_from_slice(names[(bd.month - 1) as usize]);
             }
             b'c' => {
                 let wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][(bd.wday - 1) as usize];
                 let mn = [
-                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                    "Dec",
                 ][(bd.month - 1) as usize];
                 out.extend_from_slice(
                     format!(
@@ -443,8 +488,18 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     .as_bytes(),
                 );
             }
-            b'x' => out.extend_from_slice(format!("{:02}/{:02}/{:02}", bd.month, bd.day, bd.year.rem_euclid(100)).as_bytes()),
-            b'X' => out.extend_from_slice(format!("{:02}:{:02}:{:02}", bd.hour, bd.min, bd.sec).as_bytes()),
+            b'x' => out.extend_from_slice(
+                format!(
+                    "{:02}/{:02}/{:02}",
+                    bd.month,
+                    bd.day,
+                    bd.year.rem_euclid(100)
+                )
+                .as_bytes(),
+            ),
+            b'X' => out.extend_from_slice(
+                format!("{:02}:{:02}:{:02}", bd.hour, bd.min, bd.sec).as_bytes(),
+            ),
             b'Z' => {} // local timezone abbreviation; unknown without libc
             _ => {
                 return Err(raise_str(
@@ -552,8 +607,7 @@ fn io_default_arg(
         Value::Userdata(u) => Ok(u),
         Value::Str(s) => {
             let path = String::from_utf8_lossy(s.as_bytes()).into_owned();
-            let (opts, writable) =
-                parse_mode(mode.as_bytes()).expect("static mode is valid");
+            let (opts, writable) = parse_mode(mode.as_bytes()).expect("static mode is valid");
             match opts.open(&path) {
                 Ok(file) => Ok(new_file(vm, FileHandle::File(file), writable)),
                 Err(e) => Err(raise_str(vm, &format!("{path}: {e}"))),
@@ -583,7 +637,12 @@ fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Userdata(u) => u,
             v => {
                 let tn = vm.obj_typename(v);
-                return Err(arg_error(vm, 1, "close", &format!("FILE* expected, got {tn}")));
+                return Err(arg_error(
+                    vm,
+                    1,
+                    "close",
+                    &format!("FILE* expected, got {tn}"),
+                ));
             }
         }
     } else {
@@ -639,10 +698,7 @@ fn close_file(vm: &mut Vm, fs: u32, u: Gc<Userdata>) -> Result<u32, LuaError> {
         }
         let kind_s = Value::Str(vm.heap.intern(kind.as_bytes()));
         let ok = matches!(kind, "exit") && code == 0;
-        return Ok(vm.nat_return(
-            fs,
-            &[Value::Bool(ok), kind_s, Value::Int(code as i64)],
-        ));
+        return Ok(vm.nat_return(fs, &[Value::Bool(ok), kind_s, Value::Int(code as i64)]));
     }
     match drain {
         Ok(()) => Ok(vm.nat_return(fs, &[Value::Bool(true)])),
@@ -1269,7 +1325,12 @@ fn read_format(vm: &mut Vm, u: Gc<Userdata>, fmt: Value) -> Result<Value, ReadFa
     // truncation (fractional part is rejected as it is in PUC's `lua_tointeger`).
     let n_opt: Option<i64> = match fmt {
         Value::Int(n) => Some(n),
-        Value::Float(f) if f.is_finite() && f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 => {
+        Value::Float(f)
+            if f.is_finite()
+                && f.fract() == 0.0
+                && f >= i64::MIN as f64
+                && f <= i64::MAX as f64 =>
+        {
             Some(f as i64)
         }
         _ => None,
@@ -1303,7 +1364,11 @@ fn read_format(vm: &mut Vm, u: Gc<Userdata>, fmt: Value) -> Result<Value, ReadFa
         Value::Str(s) => {
             let b = s.as_bytes();
             // strip a leading '*' (5.2 compatibility)
-            if b.first() == Some(&b'*') { b.get(1).copied() } else { b.first().copied() }
+            if b.first() == Some(&b'*') {
+                b.get(1).copied()
+            } else {
+                b.first().copied()
+            }
         }
         Value::Nil => Some(b'l'),
         _ => return Err(ReadFail::Lua(arg_error(vm, 1, "read", "invalid format"))),
@@ -1643,10 +1708,7 @@ fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let kind_s = Value::Str(vm.heap.intern(kind.as_bytes()));
     let ok = matches!(kind, "exit") && code == 0;
-    Ok(vm.nat_return(
-        fs,
-        &[Value::Bool(ok), kind_s, Value::Int(code as i64)],
-    ))
+    Ok(vm.nat_return(fs, &[Value::Bool(ok), kind_s, Value::Int(code as i64)]))
 }
 
 /// Decompose an `ExitStatus` into PUC's `("exit"|"signal", code)`. The signal
@@ -1794,7 +1856,16 @@ pub(crate) fn open_package(vm: &mut Vm) {
     // every stdlib so e.g. nextvar.lua's "clear globals" test (which keeps any
     // name present in package.loaded) does not delete `coroutine`.
     for name in [
-        "string", "math", "table", "os", "io", "utf8", "debug", "coroutine", "_G", "package",
+        "string",
+        "math",
+        "table",
+        "os",
+        "io",
+        "utf8",
+        "debug",
+        "coroutine",
+        "_G",
+        "package",
     ] {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         let v = if name == "package" {
@@ -1806,7 +1877,9 @@ pub(crate) fn open_package(vm: &mut Vm) {
             vm.globals().get(gk)
         };
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { loaded.as_mut() }.set(&mut vm.heap, k, v).expect("valid key");
+        unsafe { loaded.as_mut() }
+            .set(&mut vm.heap, k, v)
+            .expect("valid key");
     }
     let lk = Value::Str(vm.heap.intern(b"loaded"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -1824,19 +1897,25 @@ pub(crate) fn open_package(vm: &mut Vm) {
     let pk = Value::Str(vm.heap.intern(b"path"));
     let pv = Value::Str(vm.heap.intern(b"./?.lua;./?/init.lua"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }.set(&mut vm.heap, pk, pv).expect("valid key");
+    unsafe { pkg.as_mut() }
+        .set(&mut vm.heap, pk, pv)
+        .expect("valid key");
     // package.cpath: luna does not ship dynamic-library loading, so the
     // default is empty. attrib.lua's require-message test rewrites it.
     let ck = Value::Str(vm.heap.intern(b"cpath"));
     let cv = Value::Str(vm.heap.intern(b""));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }.set(&mut vm.heap, ck, cv).expect("valid key");
+    unsafe { pkg.as_mut() }
+        .set(&mut vm.heap, ck, cv)
+        .expect("valid key");
     // package.config: PUC's five-line POSIX layout — dir-sep "/", path-sep
     // ";", template mark "?", exec-mark "!", ignore-mark "-".
     let cfk = Value::Str(vm.heap.intern(b"config"));
     let cfv = Value::Str(vm.heap.intern(b"/\n;\n?\n!\n-\n"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }.set(&mut vm.heap, cfk, cfv).expect("valid key");
+    unsafe { pkg.as_mut() }
+        .set(&mut vm.heap, cfk, cfv)
+        .expect("valid key");
     // package.searchers: present as a table so attrib.lua's type checks pass.
     // luna's `require` does not dispatch through it (the searchers run in a
     // fixed order inside `nat_require`); this stays a leaf placeholder until
@@ -1852,8 +1931,11 @@ pub(crate) fn open_package(vm: &mut Vm) {
     let sp = vm.native(nat_searchpath);
     let spk = Value::Str(vm.heap.intern(b"searchpath"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }.set(&mut vm.heap, spk, sp).expect("valid key");
-    vm.set_global("package", Value::Table(pkg)).expect("stdlib registration");
+    unsafe { pkg.as_mut() }
+        .set(&mut vm.heap, spk, sp)
+        .expect("valid key");
+    vm.set_global("package", Value::Table(pkg))
+        .expect("stdlib registration");
     // require reads package.path/cpath from the live `package` table each call
     // — attrib.lua mutates them inside `do … end` blocks and require must see
     // the override. Stash no upvalues; fetch from globals on demand.
@@ -1867,7 +1949,11 @@ pub(crate) fn open_package(vm: &mut Vm) {
     //   [2] = `package.preload`.
     let req = vm.native_with(
         nat_require,
-        Box::new([Value::Table(pkg), Value::Table(loaded), Value::Table(preload)]),
+        Box::new([
+            Value::Table(pkg),
+            Value::Table(loaded),
+            Value::Table(preload),
+        ]),
     );
     vm.set_global("require", req).expect("stdlib registration");
     // PUC 5.1 `module(name, ...)` and `package.seeall` (retired in 5.2). The
@@ -1883,7 +1969,9 @@ pub(crate) fn open_package(vm: &mut Vm) {
         let s = vm.native(nat_package_seeall);
         let sk = Value::Str(vm.heap.intern(b"seeall"));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { pkg.as_mut() }.set(&mut vm.heap, sk, s).expect("valid key");
+        unsafe { pkg.as_mut() }
+            .set(&mut vm.heap, sk, s)
+            .expect("valid key");
     }
     // PUC's `package.loadlib` opens a shared library and returns the named
     // symbol. luna ships no dynamic linker — return the PUC failure shape so
@@ -1892,7 +1980,9 @@ pub(crate) fn open_package(vm: &mut Vm) {
     let ll = vm.native(nat_loadlib_stub);
     let llk = Value::Str(vm.heap.intern(b"loadlib"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }.set(&mut vm.heap, llk, ll).expect("valid key");
+    unsafe { pkg.as_mut() }
+        .set(&mut vm.heap, llk, ll)
+        .expect("valid key");
     // Once-per-table barriers for the four sub-tables built above —
     // covers the post-init `Vm::open_package` re-open path (mid-Propagate).
     vm.barrier_back_table(pkg);
@@ -1961,7 +2051,9 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // (carrying its `.c` subtable along) rather than overwritten.
             let t = resolve_or_create_dotted(vm, &name_bytes)?;
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { loaded.as_mut() }.set(&mut vm.heap, name_key, Value::Table(t)).expect("valid key");
+            unsafe { loaded.as_mut() }
+                .set(&mut vm.heap, name_key, Value::Table(t))
+                .expect("valid key");
             t
         }
     };
@@ -1977,11 +2069,17 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let m_k = Value::Str(vm.heap.intern(b"_M"));
     let p_k = Value::Str(vm.heap.intern(b"_PACKAGE"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { module_tab.as_mut() }.set(&mut vm.heap, name_k, name_val).expect("valid key");
+    unsafe { module_tab.as_mut() }
+        .set(&mut vm.heap, name_k, name_val)
+        .expect("valid key");
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { module_tab.as_mut() }.set(&mut vm.heap, m_k, Value::Table(module_tab)).expect("valid key");
+    unsafe { module_tab.as_mut() }
+        .set(&mut vm.heap, m_k, Value::Table(module_tab))
+        .expect("valid key");
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { module_tab.as_mut() }.set(&mut vm.heap, p_k, pkg_val).expect("valid key");
+    unsafe { module_tab.as_mut() }
+        .set(&mut vm.heap, p_k, pkg_val)
+        .expect("valid key");
     // 3. run option functions on the module table
     for i in 1..nargs {
         let f = vm.nat_arg(fs, nargs, i);
@@ -2004,9 +2102,7 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         let Some(env_idx) = env_idx else {
             return Err(raise_str(
                 vm,
-                &format!(
-                    "module '{name_str}' caller has no '_ENV' upvalue"
-                ),
+                &format!("module '{name_str}' caller has no '_ENV' upvalue"),
             ));
         };
         let uv = cl.upvals()[env_idx];
@@ -2048,7 +2144,9 @@ fn resolve_or_create_dotted(
             Value::Nil => {
                 let t = vm.heap.new_table();
                 // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { tab.as_mut() }.set(&mut vm.heap, k, Value::Table(t)).expect("valid key");
+                unsafe { tab.as_mut() }
+                    .set(&mut vm.heap, k, Value::Table(t))
+                    .expect("valid key");
                 t
             }
             _ => {
@@ -2076,7 +2174,9 @@ fn nat_package_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let k = Value::Str(vm.heap.intern(b"__index"));
     let g = Value::Table(vm.globals());
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { mt.as_mut() }.set(&mut vm.heap, k, g).expect("valid key");
+    unsafe { mt.as_mut() }
+        .set(&mut vm.heap, k, g)
+        .expect("valid key");
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     unsafe { t.as_mut() }.set_metatable(Some(mt));
     Ok(vm.nat_return(fs, &[]))
@@ -2353,8 +2453,5 @@ fn nat_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Ok(vm.nat_return(fs, &[final_v, pv]));
     }
 
-    Err(raise_str(
-        vm,
-        &format!("module '{name_s}' not found:{err}"),
-    ))
+    Err(raise_str(vm, &format!("module '{name_s}' not found:{err}")))
 }

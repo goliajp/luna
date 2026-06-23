@@ -5,7 +5,10 @@ use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
 fn vm() -> Vm {
-    Vm::sandbox(LuaVersion::Lua55).open_base().open_math().build()
+    Vm::sandbox(LuaVersion::Lua55)
+        .open_base()
+        .open_math()
+        .build()
 }
 
 #[test]
@@ -38,9 +41,7 @@ fn arity_2_add() {
 #[test]
 fn arity_3_string_concat_via_returns_string() {
     let mut vm = vm();
-    let f = vm.native_typed(|a: String, b: String, c: String| -> String {
-        format!("{a}-{b}-{c}")
-    });
+    let f = vm.native_typed(|a: String, b: String, c: String| -> String { format!("{a}-{b}-{c}") });
     vm.set_global("join3", f).unwrap();
     let r = vm.eval("return join3('a', 'b', 'c')").unwrap();
     assert_eq!(r[0].try_as_str(), Some("a-b-c"));
@@ -149,9 +150,9 @@ fn arity_5_sum() {
 #[test]
 fn arity_6_sum() {
     let mut vm = vm();
-    let f = vm.native_typed(
-        |a: i64, b: i64, c: i64, d: i64, e: i64, f: i64| -> i64 { a + b + c + d + e + f },
-    );
+    let f = vm.native_typed(|a: i64, b: i64, c: i64, d: i64, e: i64, f: i64| -> i64 {
+        a + b + c + d + e + f
+    });
     vm.set_global("sum6", f).unwrap();
     let r = vm.eval("return sum6(1, 2, 3, 4, 5, 6)").unwrap();
     assert!(matches!(r[0], Value::Int(21)));

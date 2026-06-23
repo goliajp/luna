@@ -32,11 +32,7 @@ thread_local! {
     static CAPTURE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-fn capture_print(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-) -> Result<u32, luna_core::vm::LuaError> {
+fn capture_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
     // Same format as PUC print: tab-separated, trailing newline.
     // Use the Lua-level global `tostring` so the output formatting
     // matches PUC's `print` byte-for-byte (including number-to-string
@@ -772,7 +768,12 @@ fn e2e_diff_for_dialect(version: LuaVersion, label: &str) {
         for f in &failures {
             writeln!(&mut s, "{}", f).unwrap();
         }
-        panic!("e2e dialect {}: {} divergences\n{}", label, failures.len(), s);
+        panic!(
+            "e2e dialect {}: {} divergences\n{}",
+            label,
+            failures.len(),
+            s
+        );
     }
 }
 

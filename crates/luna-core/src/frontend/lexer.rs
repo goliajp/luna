@@ -434,9 +434,7 @@ impl<'s> Lexer<'s> {
                     let what = if is_comment { "comment" } else { "string" };
                     return Err(self.err(
                         self.line,
-                        format!(
-                            "unfinished long {what} (starting at line {open_line}) near <eof>"
-                        ),
+                        format!("unfinished long {what} (starting at line {open_line}) near <eof>"),
                     ));
                 }
                 Some(b']') => {
@@ -631,12 +629,7 @@ impl<'s> Lexer<'s> {
                 } else {
                     0x0010_FFFF
                 } {
-                    return Err(self.str_err(
-                        self.line,
-                        "UTF-8 value too large",
-                        full_start,
-                        true,
-                    ));
+                    return Err(self.str_err(self.line, "UTF-8 value too large", full_start, true));
                 }
                 if self.cur() != Some(b'}') {
                     return Err(self.str_err(
@@ -710,8 +703,7 @@ impl<'s> Lexer<'s> {
         let text = &self.src[start..self.pos];
         let malformed = || SyntaxError {
             line,
-            msg: format!("malformed number near '{}'", String::from_utf8_lossy(text))
-                .into_bytes(),
+            msg: format!("malformed number near '{}'", String::from_utf8_lossy(text)).into_bytes(),
         };
         let int_ok = self.version.has_integers();
         let num = if hex {

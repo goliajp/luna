@@ -67,7 +67,11 @@ const MAX_REGS: u32 = 254;
 /// (limit is …) in function at line …" format (errors.lua 5.4 :765 /
 /// :775; 5.1 :238 walks 70 inner closures and expects to wall at line 3).
 fn max_upvals(version: LuaVersion) -> u32 {
-    if version <= LuaVersion::Lua51 { 60 } else { 255 }
+    if version <= LuaVersion::Lua51 {
+        60
+    } else {
+        255
+    }
 }
 /// PUC `MAXVARS`: the per-function active-locals cap.
 const MAX_LOCALS: u32 = 200;
@@ -1196,21 +1200,34 @@ impl<'a> Compiler<'a> {
         use ast::Stat::*;
         match self.ast.stat(s) {
             Do(b) => self.block_forces(b, name),
-            While { cond, body } => self.expr_forces(*cond, name, false) || self.block_forces(body, name),
-            Repeat { body, cond } => self.block_forces(body, name) || self.expr_forces(*cond, name, false),
+            While { cond, body } => {
+                self.expr_forces(*cond, name, false) || self.block_forces(body, name)
+            }
+            Repeat { body, cond } => {
+                self.block_forces(body, name) || self.expr_forces(*cond, name, false)
+            }
             If { arms, else_body } => {
                 arms.iter().any(|(c, _, b)| {
                     self.expr_forces(*c, name, false) || self.block_forces(b, name)
-                }) || else_body.as_ref().is_some_and(|b| self.block_forces(b, name))
+                }) || else_body
+                    .as_ref()
+                    .is_some_and(|b| self.block_forces(b, name))
             }
-            NumericFor { start, limit, step, body, .. } => {
+            NumericFor {
+                start,
+                limit,
+                step,
+                body,
+                ..
+            } => {
                 self.expr_forces(*start, name, false)
                     || self.expr_forces(*limit, name, false)
                     || step.is_some_and(|e| self.expr_forces(e, name, false))
                     || self.block_forces(body, name)
             }
             GenericFor { exprs, body, .. } => {
-                exprs.iter().any(|&e| self.expr_forces(e, name, false)) || self.block_forces(body, name)
+                exprs.iter().any(|&e| self.expr_forces(e, name, false))
+                    || self.block_forces(body, name)
             }
             Local { exprs, .. } | Global { exprs, .. } => {
                 exprs.iter().any(|&e| self.expr_forces(e, name, false))
@@ -1290,21 +1307,34 @@ impl<'a> Compiler<'a> {
         use ast::Stat::*;
         match self.ast.stat(s) {
             Do(b) => self.mentions_block(b, name),
-            While { cond, body } => self.mentions_expr(*cond, name) || self.mentions_block(body, name),
-            Repeat { body, cond } => self.mentions_block(body, name) || self.mentions_expr(*cond, name),
-            If { arms, else_body } => {
-                arms.iter().any(|(c, _, b)| {
-                    self.mentions_expr(*c, name) || self.mentions_block(b, name)
-                }) || else_body.as_ref().is_some_and(|b| self.mentions_block(b, name))
+            While { cond, body } => {
+                self.mentions_expr(*cond, name) || self.mentions_block(body, name)
             }
-            NumericFor { start, limit, step, body, .. } => {
+            Repeat { body, cond } => {
+                self.mentions_block(body, name) || self.mentions_expr(*cond, name)
+            }
+            If { arms, else_body } => {
+                arms.iter()
+                    .any(|(c, _, b)| self.mentions_expr(*c, name) || self.mentions_block(b, name))
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|b| self.mentions_block(b, name))
+            }
+            NumericFor {
+                start,
+                limit,
+                step,
+                body,
+                ..
+            } => {
                 self.mentions_expr(*start, name)
                     || self.mentions_expr(*limit, name)
                     || step.is_some_and(|e| self.mentions_expr(e, name))
                     || self.mentions_block(body, name)
             }
             GenericFor { exprs, body, .. } => {
-                exprs.iter().any(|&e| self.mentions_expr(e, name)) || self.mentions_block(body, name)
+                exprs.iter().any(|&e| self.mentions_expr(e, name))
+                    || self.mentions_block(body, name)
             }
             Local { exprs, .. } | Global { exprs, .. } | Return { exprs, .. } => {
                 exprs.iter().any(|&e| self.mentions_expr(e, name))
@@ -1332,7 +1362,9 @@ impl<'a> Compiler<'a> {
             MethodCall { obj, args, .. } => {
                 self.mentions_expr(*obj, name) || args.iter().any(|&a| self.mentions_expr(a, name))
             }
-            BinOp { lhs, rhs, .. } => self.mentions_expr(*lhs, name) || self.mentions_expr(*rhs, name),
+            BinOp { lhs, rhs, .. } => {
+                self.mentions_expr(*lhs, name) || self.mentions_expr(*rhs, name)
+            }
             UnOp { operand, .. } => self.mentions_expr(*operand, name),
             Paren(inner) => self.mentions_expr(*inner, name),
             Table { fields, .. } => fields.iter().any(|f| match f {
@@ -1361,8 +1393,8 @@ impl<'a> Compiler<'a> {
         // earlier had no such pseudo — db.lua across versions baselines on
         // the exact `getlocal` shift: 5.5 setlocal(2, 4) = "AAAA" vs
         // 5.4/5.3/5.2 setlocal(2, 3) = "AAAA".
-        level.has_vararg_table_pseudo = self.version >= LuaVersion::Lua55
-            && matches!(body.vararg, ast::Vararg::Anonymous);
+        level.has_vararg_table_pseudo =
+            self.version >= LuaVersion::Lua55 && matches!(body.vararg, ast::Vararg::Anonymous);
         // PUC 5.1 attached an `env` slot to *every* Lua function so
         // `setfenv` always had something to rewrite, even for bodies that
         // never touched a global. luna's `_ENV`-upvalue model only captures
@@ -1415,7 +1447,11 @@ impl<'a> Compiler<'a> {
             let virtual_ok = &*name != "_ENV" && !self.vararg_forced(&body.block, &name);
             if virtual_ok {
                 self.declare_local(&name, r, true)?;
-                self.l().locals.last_mut().expect("just declared").vararg_virtual = true;
+                self.l()
+                    .locals
+                    .last_mut()
+                    .expect("just declared")
+                    .vararg_virtual = true;
             } else {
                 self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
                 self.declare_local(&name, r, true)?;
@@ -1711,7 +1747,11 @@ impl<'a> Compiler<'a> {
             // (Lt + Jmp + LFalseSkip + LoadTrue) so X's short-circuit jump
             // can land on the matching pad slot.
             let (false_pad_pc, true_pad_pc) = match re {
-                Exp::Cmp { op: y_op, l: y_l, r: y_r } => {
+                Exp::Cmp {
+                    op: y_op,
+                    l: y_l,
+                    r: y_r,
+                } => {
                     self.emit(Inst::iabc(y_op, y_l, y_r, 0, true));
                     self.emit(Inst::isj(Op::Jmp, 1));
                     let fpad = self.here();
@@ -1772,7 +1812,12 @@ impl<'a> Compiler<'a> {
         let mut cur = rhs;
         loop {
             match self.ast.expr(cur) {
-                Expr::BinOp { op: BinOp::Concat, lhs: l, rhs: r, .. } => {
+                Expr::BinOp {
+                    op: BinOp::Concat,
+                    lhs: l,
+                    rhs: r,
+                    ..
+                } => {
                     operands.push(*l);
                     cur = *r;
                 }
@@ -1814,7 +1859,11 @@ impl<'a> Compiler<'a> {
     fn vararg_virtual_local(&self, name: &str) -> bool {
         let lvl = self.lr();
         // a more-recent `global name` marker shadows the local
-        if let Some(av) = lvl.avars.iter().rev().find(|a| a.name.as_deref() == Some(name))
+        if let Some(av) = lvl
+            .avars
+            .iter()
+            .rev()
+            .find(|a| a.name.as_deref() == Some(name))
             && av.reg.is_none()
         {
             return false;
@@ -2267,8 +2316,7 @@ impl<'a> Compiler<'a> {
             let base_text = name.base.text.clone();
             let be = self.name_expr(&base_text)?;
             let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<Box<str>> =
-                name.path.iter().map(|n| n.text.clone()).collect();
+            let mut fields: Vec<Box<str>> = name.path.iter().map(|n| n.text.clone()).collect();
             if let Some(m) = &name.method {
                 fields.push(m.text.clone());
             }
@@ -2370,8 +2418,7 @@ impl<'a> Compiler<'a> {
                 // line-trace tests rely on the suppression — expected line
                 // events skip the `local a` line of a chunk that opens with
                 // an uninitialized declaration.
-                let skip = self.version == LuaVersion::Lua51
-                    && self.lr().code.is_empty();
+                let skip = self.version == LuaVersion::Lua51 && self.lr().code.is_empty();
                 if !skip {
                     self.emit(Inst::iabc(Op::LoadNil, base, want - 1, 0, false));
                 }
@@ -2458,7 +2505,10 @@ impl<'a> Compiler<'a> {
                             SetKey::Reg(kr)
                         }
                     };
-                    plans.push(LhsPlan::Indexed { obj: o_pinned, key: key_kind });
+                    plans.push(LhsPlan::Indexed {
+                        obj: o_pinned,
+                        key: key_kind,
+                    });
                 }
                 _ => unreachable!("parser validates assignment targets"),
             }
@@ -2536,8 +2586,7 @@ impl<'a> Compiler<'a> {
                 Ok(())
             }
             VarKind::Global { .. } => {
-                let VarKind::Global { read_only } = self.resolve_global_kind(text, line)?
-                else {
+                let VarKind::Global { read_only } = self.resolve_global_kind(text, line)? else {
                     unreachable!()
                 };
                 if read_only {

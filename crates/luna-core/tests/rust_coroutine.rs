@@ -33,9 +33,7 @@ fn resume_coroutine_runs_body() {
 fn resume_coroutine_with_args_via_lua_body() {
     let mut vm = vm();
     // Compile a Lua function: function(a, b) return a + b end
-    let r = vm
-        .eval("return function(a, b) return a + b end")
-        .unwrap();
+    let r = vm.eval("return function(a, b) return a + b end").unwrap();
     let body = r.into_iter().next().unwrap();
     let co = vm.create_coroutine(body);
     let result = vm

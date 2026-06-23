@@ -15,7 +15,9 @@ pub(crate) fn open_bit32(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "band", b_band);
     set(vm, "bor", b_bor);
@@ -29,7 +31,8 @@ pub(crate) fn open_bit32(vm: &mut Vm) {
     set(vm, "rrotate", b_rrotate);
     set(vm, "extract", b_extract);
     set(vm, "replace", b_replace);
-    vm.set_global("bit32", Value::Table(t)).expect("stdlib registration");
+    vm.set_global("bit32", Value::Table(t))
+        .expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 
@@ -48,7 +51,12 @@ fn to_u32(vm: &mut Vm, v: Value, n: u32, who: &str) -> Result<u32, LuaError> {
         _ => return Err(arg_error(vm, n, who, "number expected")),
     };
     if !f.is_finite() || f.fract() != 0.0 {
-        return Err(arg_error(vm, n, who, "number has no integer representation"));
+        return Err(arg_error(
+            vm,
+            n,
+            who,
+            "number has no integer representation",
+        ));
     }
     // PUC `b_arg`: cast to `lua_Unsigned` (= unsigned long long) then truncate
     // mod 2^32. Floats outside i64 range fold via wrapping before the mask.
@@ -199,10 +207,20 @@ fn field_args(
         return Err(arg_error(vm, field_idx + 1, who, "field out of range"));
     }
     if !(1..=32).contains(&width) {
-        return Err(arg_error(vm, field_idx + 2, who, "trying to access non-existent bits"));
+        return Err(arg_error(
+            vm,
+            field_idx + 2,
+            who,
+            "trying to access non-existent bits",
+        ));
     }
     if field + width > 32 {
-        return Err(arg_error(vm, field_idx + 1, who, "trying to access non-existent bits"));
+        return Err(arg_error(
+            vm,
+            field_idx + 1,
+            who,
+            "trying to access non-existent bits",
+        ));
     }
     Ok((field as u32, width as u32))
 }
@@ -210,7 +228,11 @@ fn field_args(
 fn b_extract(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let n = to_u32(vm, vm.nat_arg(fs, nargs, 0), 1, "extract")?;
     let (f, w) = field_args(vm, fs, nargs, 1, "extract")?;
-    let mask = if w == 32 { 0xFFFF_FFFF } else { (1u32 << w) - 1 };
+    let mask = if w == 32 {
+        0xFFFF_FFFF
+    } else {
+        (1u32 << w) - 1
+    };
     let r = (n >> f) & mask;
     Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
 }
@@ -219,7 +241,11 @@ fn b_replace(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let n = to_u32(vm, vm.nat_arg(fs, nargs, 0), 1, "replace")?;
     let v = to_u32(vm, vm.nat_arg(fs, nargs, 1), 2, "replace")?;
     let (f, w) = field_args(vm, fs, nargs, 2, "replace")?;
-    let mask = if w == 32 { 0xFFFF_FFFF } else { (1u32 << w) - 1 };
+    let mask = if w == 32 {
+        0xFFFF_FFFF
+    } else {
+        (1u32 << w) - 1
+    };
     let r = (n & !(mask << f)) | ((v & mask) << f);
     Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
 }

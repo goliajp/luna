@@ -28,9 +28,7 @@ fn vm_for(version: LuaVersion) -> Vm {
 /// on any error. Convenience helper for the simple smoke shape.
 fn eval_first(vm: &mut Vm, src: &str) -> Value {
     let cl = vm.load(src.as_bytes(), b"=smoke").expect("load failed");
-    let ret = vm
-        .call_value(Value::Closure(cl), &[])
-        .expect("eval failed");
+    let ret = vm.call_value(Value::Closure(cl), &[]).expect("eval failed");
     ret.into_iter().next().unwrap_or(Value::Nil)
 }
 
@@ -298,10 +296,7 @@ fn smoke_string_match_all_dialects() {
         (LuaVersion::Lua55, "5.5"),
     ] {
         let mut vm = vm_for(version);
-        let r = eval_first(
-            &mut vm,
-            r#"return string.match("hello 42 world", "(%d+)")"#,
-        );
+        let r = eval_first(&mut vm, r#"return string.match("hello 42 world", "(%d+)")"#);
         let s = match r {
             Value::Str(s) => s.as_bytes().to_vec(),
             _ => panic!("pm[{}]: expected string capture, got {:?}", label, r),

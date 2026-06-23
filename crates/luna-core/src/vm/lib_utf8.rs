@@ -12,7 +12,9 @@ pub(crate) fn open_utf8(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "char", u_char);
     set(vm, "codepoint", u_codepoint);
@@ -22,8 +24,11 @@ pub(crate) fn open_utf8(vm: &mut Vm) {
     let k = Value::Str(vm.heap.intern(b"charpattern"));
     let v = Value::Str(vm.heap.intern(b"[\x00-\x7F\xC2-\xFD][\x80-\xBF]*"));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }.set(&mut vm.heap, k, v).expect("valid key");
-    vm.set_global("utf8", Value::Table(t)).expect("stdlib registration");
+    unsafe { t.as_mut() }
+        .set(&mut vm.heap, k, v)
+        .expect("valid key");
+    vm.set_global("utf8", Value::Table(t))
+        .expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 

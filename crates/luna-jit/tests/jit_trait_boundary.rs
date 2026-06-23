@@ -9,10 +9,10 @@
 //! The bodies are intentionally small; the point isn't perf or trace
 //! coverage but to prove the trait routing reaches both backends.
 
+use luna_jit::VmExt as _;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
-use luna_jit::VmExt as _;
 
 fn run_to_string(version: LuaVersion, src: &str, install_null: bool) -> String {
     let mut vm = luna_jit::new_with_jit(version);
@@ -22,9 +22,7 @@ fn run_to_string(version: LuaVersion, src: &str, install_null: bool) -> String {
         vm.install_default_jit();
     }
     let cl = vm.load(src.as_bytes(), b"=chunk").expect("load ok");
-    let rets = vm
-        .call_value(Value::Closure(cl), &[])
-        .expect("call ok");
+    let rets = vm.call_value(Value::Closure(cl), &[]).expect("call ok");
     rets.into_iter()
         .map(|v| match v {
             Value::Int(i) => i.to_string(),
@@ -75,12 +73,8 @@ fn install_default_jit_after_null_restores_routing() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.install_null_jit();
     vm.install_default_jit();
-    let cl = vm
-        .load(b"return 7 * 6", b"=chunk")
-        .expect("load ok");
-    let rets = vm
-        .call_value(Value::Closure(cl), &[])
-        .expect("call ok");
+    let cl = vm.load(b"return 7 * 6", b"=chunk").expect("load ok");
+    let rets = vm.call_value(Value::Closure(cl), &[]).expect("call ok");
     assert_eq!(rets.len(), 1);
     match rets[0] {
         Value::Int(42) => {}
@@ -108,9 +102,7 @@ fn null_jit_handles_function_call_path() {
             b"=chunk",
         )
         .expect("load ok");
-    let rets = vm
-        .call_value(Value::Closure(cl), &[])
-        .expect("call ok");
+    let rets = vm.call_value(Value::Closure(cl), &[]).expect("call ok");
     assert_eq!(rets.len(), 1);
     match rets[0] {
         Value::Int(55) => {}

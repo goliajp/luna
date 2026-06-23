@@ -254,12 +254,7 @@ fn audit_not_truthy() {
     for (_v, label) in DIALECTS {
         let mut vm = vm_default(*_v);
         let r = eval_one(&mut vm, "return not nil");
-        assert!(
-            matches!(r, Value::Bool(true)),
-            "not-nil/{}: {:?}",
-            label,
-            r
-        );
+        assert!(matches!(r, Value::Bool(true)), "not-nil/{}: {:?}", label, r);
         let r = eval_one(&mut vm, "return not 0");
         assert!(
             matches!(r, Value::Bool(false)),
@@ -538,10 +533,7 @@ fn audit_getfield_string_value() {
 fn audit_closure_return() {
     for (v, label) in DIALECTS {
         let mut vm = vm_default(*v);
-        let r = eval_one(
-            &mut vm,
-            "local f = function() return 99 end; return f()",
-        );
+        let r = eval_one(&mut vm, "local f = function() return 99 end; return f()");
         assert_strict_num(*v, r, 99, &format!("closure-ret/{}", label));
     }
 }
@@ -692,15 +684,30 @@ fn audit_eq_no_cross_type_coercion() {
         let mut vm = vm_default(*_v);
 
         let r = eval_one(&mut vm, "return 1 == '1'");
-        assert!(matches!(r, Value::Bool(false)), "{} int==str: {:?}", label, r);
+        assert!(
+            matches!(r, Value::Bool(false)),
+            "{} int==str: {:?}",
+            label,
+            r
+        );
 
         // But int == float with same numeric value IS true.
         let r = eval_one(&mut vm, "return 2 == 2.0");
-        assert!(matches!(r, Value::Bool(true)), "{} int==float: {:?}", label, r);
+        assert!(
+            matches!(r, Value::Bool(true)),
+            "{} int==float: {:?}",
+            label,
+            r
+        );
 
         // 1 == 1 is true.
         let r = eval_one(&mut vm, "return 1 == 1");
-        assert!(matches!(r, Value::Bool(true)), "{} int==int: {:?}", label, r);
+        assert!(
+            matches!(r, Value::Bool(true)),
+            "{} int==int: {:?}",
+            label,
+            r
+        );
     }
 }
 
@@ -743,7 +750,12 @@ fn audit_eq_nil_check() {
     for (_v, label) in DIALECTS {
         let mut vm = vm_default(*_v);
         let r = eval_one(&mut vm, "local x; return x == nil");
-        assert!(matches!(r, Value::Bool(true)), "{} nil==nil: {:?}", label, r);
+        assert!(
+            matches!(r, Value::Bool(true)),
+            "{} nil==nil: {:?}",
+            label,
+            r
+        );
         let r = eval_one(&mut vm, "return 0 == nil");
         assert!(matches!(r, Value::Bool(false)), "{} 0==nil: {:?}", label, r);
     }
@@ -779,10 +791,7 @@ fn audit_load_negative_int() {
 fn audit_settable_gettable_int() {
     for (v, label) in DIALECTS {
         let mut vm = vm_default(*v);
-        let r = eval_one(
-            &mut vm,
-            "local t = {}; t[1] = 42; local i = 1; return t[i]",
-        );
+        let r = eval_one(&mut vm, "local t = {}; t[1] = 42; local i = 1; return t[i]");
         assert_strict_num(*v, r, 42, &format!("set-get-int/{}", label));
     }
 }
@@ -842,10 +851,7 @@ fn audit_seti_immediate_key() {
         let mut vm = vm_default(*v);
         // PUC compiler likely emits SetI for an immediate integer key.
         // Verify the value survives the round trip.
-        let r = eval_one(
-            &mut vm,
-            "local t = {}; t[5] = 100; return t[5]",
-        );
+        let r = eval_one(&mut vm, "local t = {}; t[5] = 100; return t[5]");
         assert_strict_num(*v, r, 100, &format!("seti/{}", label));
     }
 }
@@ -870,10 +876,7 @@ fn audit_loop_settable_read() {
 fn audit_setfield_string_value() {
     for (_v, label) in DIALECTS {
         let mut vm = vm_default(*_v);
-        let r = eval_one(
-            &mut vm,
-            "local t = {}; t.name = 'bob'; return t.name",
-        );
+        let r = eval_one(&mut vm, "local t = {}; t.name = 'bob'; return t.name");
         match r {
             Value::Str(s) => assert_eq!(s.as_bytes(), b"bob", "{}", label),
             _ => panic!("setfield-str/{}: not a string: {:?}", label, r),

@@ -12,7 +12,9 @@ pub(crate) fn open_table(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "insert", t_insert);
     set(vm, "remove", t_remove);
@@ -31,7 +33,8 @@ pub(crate) fn open_table(vm: &mut Vm) {
         set(vm, "foreachi", t_foreachi);
         set(vm, "maxn", t_maxn);
     }
-    vm.set_global("table", Value::Table(t)).expect("stdlib registration");
+    vm.set_global("table", Value::Table(t))
+        .expect("stdlib registration");
     // once-per-table barrier so a post-init `Vm::open_table` call (P09 embed
     // API can re-open libraries mid-Propagate) demotes `t` back to gray —
     // no-op when phase != Propagate, where t was born current_white.
@@ -55,7 +58,10 @@ fn t_foreach(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let f = vm.nat_arg(fs, nargs, 1);
     let mut key = Value::Nil;
     loop {
-        match t.next(key).map_err(|_| raise_str(vm, "invalid key to 'next'"))? {
+        match t
+            .next(key)
+            .map_err(|_| raise_str(vm, "invalid key to 'next'"))?
+        {
             Some((k, v)) => {
                 let rs = vm.call_value(f, &[k, v])?;
                 if let Some(r) = rs.first().copied()
