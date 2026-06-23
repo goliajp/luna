@@ -24,9 +24,13 @@ impl Vm {
     /// Same as [`Vm::eval`] but with a user-supplied chunk name
     /// (appears in tracebacks for debugging).
     pub fn eval_chunk(&mut self, src: &str, name: &str) -> Result<Vec<Value>, LuaError> {
+        self.clear_error_metadata();
         let cl = match self.load(src.as_bytes(), name.as_bytes()) {
             Ok(c) => c,
             Err(syntax) => {
+                // B6: classify + record source position.
+                self.set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
+                self.set_error_source(name.to_string(), syntax.line);
                 // Surface SyntaxError as a LuaError carrying the
                 // formatted PUC-style message (`<line>: <msg>`).
                 let msg = format!("{}", syntax);
@@ -84,5 +88,51 @@ impl Vm {
     /// to keep the pool bounded.
     pub fn unpin_all(&mut self) {
         self.host_roots.clear();
+    }
+
+    // ─── B6 LuaError classification ──────────────────────────────
+    //
+    // The error value itself (`LuaError(pub Value)`) stays `Copy` so
+    // the 379 existing references / 34 construction sites compile
+    // unchanged. Richer context lives on the Vm; embedders read it
+    // via these accessors after observing a `Result::Err(LuaError)`.
+
+    /// Classification of the most recently raised error on this Vm.
+    /// Returns [`LuaErrorKind::Runtime`] before any error fires.
+    pub fn error_kind(&self) -> crate::vm::error::LuaErrorKind {
+        self.last_error_kind
+    }
+
+    /// `(source_name, line)` of the most recently raised error, or
+    /// `None` if the dispatcher could not locate one. Source names
+    /// match Lua's chunk-name convention (`"=eval"`, `"=stdin"`,
+    /// user-supplied via `Vm::load`).
+    pub fn error_source(&self) -> Option<(&str, u32)> {
+        self.last_error_source
+            .as_ref()
+            .map(|(s, l)| (s.as_str(), *l))
+    }
+
+    /// Set the classification for the next error to be raised — used
+    /// by the dispatcher at well-known sites. Embedders writing
+    /// native callbacks may call this before returning `Err(LuaError)`
+    /// to flag a specific kind (e.g. `LuaErrorKind::Type` for a bad
+    /// arg).
+    pub fn set_error_kind(&mut self, kind: crate::vm::error::LuaErrorKind) {
+        self.last_error_kind = kind;
+    }
+
+    /// Set the `(source_name, line)` for the next error to be raised.
+    /// The dispatcher uses this at the syntax-error / parser
+    /// boundary.
+    pub fn set_error_source(&mut self, name: String, line: u32) {
+        self.last_error_source = Some((name, line));
+    }
+
+    /// Clear error classification — called on a clean `call_value`
+    /// entry so old error metadata doesn't leak into the next call.
+    pub fn clear_error_metadata(&mut self) {
+        self.last_error_kind = crate::vm::error::LuaErrorKind::default();
+        self.last_error_source = None;
     }
 }

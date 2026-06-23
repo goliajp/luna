@@ -279,6 +279,17 @@ pub struct Vm {
     /// the trade-offs between `Drop` plumbing and append-only memory
     /// growth have a richer ergonomics envelope to live in.
     pub(crate) host_roots: Vec<Value>,
+
+    /// B6 — classification of the most recent error raised on this Vm.
+    /// Embedders read via [`Vm::error_kind`]; the dispatcher sets it
+    /// at well-known sites (syntax errors, instr-budget trips, native
+    /// callback errors, type errors).
+    pub(crate) last_error_kind: crate::vm::error::LuaErrorKind,
+
+    /// B6 — `(source_name, line)` of the most recent error. Set by the
+    /// dispatcher / lexer / parser; cleared when a new call_value
+    /// enters cleanly.
+    pub(crate) last_error_source: Option<(String, u32)>,
 }
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -766,6 +777,11 @@ impl Vm {
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // v1.1 B12 — host roots ticket pool for the `Lua` facade.
             host_roots: Vec::new(),
+            // v1.1 B6 — error classification metadata. Defaults to
+            // Runtime; set at known sites (syntax / budget trip /
+            // native error / type error).
+            last_error_kind: crate::vm::error::LuaErrorKind::default(),
+            last_error_source: None,
         };
         vm
     }
@@ -4854,6 +4870,12 @@ impl Vm {
                     *b -= 1;
                     if *b <= 0 {
                         self.instr_budget = None;
+                        // B6: classify the trip so embedders can
+                        // distinguish budget exhaustion from a
+                        // generic Runtime error and retry / give up
+                        // accordingly.
+                        self.last_error_kind =
+                            crate::vm::error::LuaErrorKind::InstrBudget;
                         let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
                         return Err(LuaError(s));
                     }
