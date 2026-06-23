@@ -24,10 +24,10 @@ path = "src/bin/luna.rs"
 workspace = true
 
 [dependencies]
-# v1.1 A1 — pure-interp + JIT trait surface lives here. `version = "= 1.1.0"`
+# v1.1 A1 — pure-interp + JIT trait surface lives here. `version = "= 1.2.0"`
 # pins the matching luna-core release for `cargo publish` lookups when the
 # `path` fallback isn't in play.
-luna-core = { path = "../luna-core", version = "= 1.1.0" }
+luna-core = { path = "../luna-core", version = "= 1.2.0" }
 
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,

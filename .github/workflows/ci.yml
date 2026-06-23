@@ -125,3 +125,37 @@ jobs:
             cargo tree -p luna-core --prefix none --no-default-features
             exit 1
           fi
+
+  # ─────────────────────────────────────────────────────────────────
+  # v1.2 G2: unsafe-usage drift detection.
+  #
+  # Counts `unsafe (\{|fn |impl |trait |extern )` sites across first-party
+  # src trees and fails CI if the count exceeds the recorded ceiling.
+  # Cheap (no cargo-geiger install) and catches the common case:
+  # someone adds an `unsafe { ... }` block to silence a borrow-check
+  # error rather than fix the root cause.
+  #
+  # Baseline: docs/unsafe-accounting.md §"v1.1 snapshot" recorded 461
+  # sites at v1.1.0 ship. v1.2 Track B (userdata_trait.rs trampolines
+  # + auto-install) brought the count up by ~15 → ceiling 490 leaves
+  # ~14 slots of headroom for the rest of v1.2 + early v1.3 work.
+  # Bump the ceiling explicitly when an unsafe addition is justified;
+  # never silence by widening to a round number.
+  # ─────────────────────────────────────────────────────────────────
+  unsafe-drift:
+    name: unsafe-usage drift detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: count first-party unsafe sites
+        run: |
+          count=$(grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
+                  crates/luna-core/src crates/luna-jit/src | wc -l | tr -d ' ')
+          ceiling=490
+          echo "first-party unsafe sites: $count (ceiling $ceiling)"
+          echo "v1.1 snapshot was 461 — see docs/unsafe-accounting.md"
+          if [ "$count" -gt "$ceiling" ]; then
+            echo "::error::unsafe count $count exceeds ceiling $ceiling"
+            echo "Either justify the new unsafe (and bump the ceiling in ci.yml) or refactor."
+            exit 1
+          fi
