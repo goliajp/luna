@@ -190,6 +190,71 @@ for sibling work.
 
 ---
 
+## Async embedder API (B10)
+
+`vm.eval_async(src)` and `lua.eval_async(src)` return `!Send` futures
+that drive the dispatcher with cooperative yields when the
+instruction budget exhausts. Embedders register async natives via
+`vm.set_async_native(name, fn_ptr)` (or `lua.set_async_native`),
+exposing host-side futures to Lua scripts:
+
+```rust
+use luna::Lua;
+use luna_core::runtime::Value;
+use luna_core::vm::LuaError;
+use std::future::Future;
+use std::pin::Pin;
+
+fn http_get(
+    vm: *mut luna_core::vm::Vm,
+    fs: u32,
+    _nargs: u32,
+) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>> {
+    Box::pin(async move {
+        // SAFETY: see AsyncNativeFn contract.
+        let vm = unsafe { &mut *vm };
+        let url = match vm.nat_arg(fs, 1, 0) {
+            Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            _ => return Err(LuaError(Value::Nil)),
+        };
+        // let body = reqwest::get(&url).await?.text().await?;
+        let body = format!("fake response from {url}");
+        let interned = vm.heap.intern(body.as_bytes());
+        Ok(vm.nat_return(fs, &[Value::Str(interned)]))
+    })
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut lua = Lua::new();
+    lua.open_base();
+    lua.set_async_native("http_get", http_get)?;
+    let body: String = lua.eval_async(r#"
+        return http_get("https://example.com")
+    "#).await?;
+    println!("got: {body}");
+    Ok(())
+}
+```
+
+For a runnable, dependency-free walkthrough, see
+[`examples/async_host.rs`](../crates/luna/examples/async_host.rs)
+(`cargo run --example async_host -p luna`). It uses a hand-rolled
+`block_on` so the example stands alone; production embedders
+substitute `#[tokio::main(flavor = "current_thread")]` or a
+`LocalSet` for multi-thread Tokio runtimes (see Pattern 2 above).
+
+### Async native limitations (v1.1)
+
+- Calling an async native from sync `vm.eval(...)` errors with a
+  typed `LuaError` — embedders must use `eval_async`.
+- Cancellation: dropping the future mid-await clears the
+  pending-async state but leaves Lua call frames in `vm.frames`.
+  Drop the entire Vm when an async eval is cancelled mid-flight.
+  See `.dev/rfcs/v1.1-rfc-b10-async-embedder.md` §"Risks".
+- Hook firing for async natives is deferred to Phase 4+; sync
+  natives + Lua hooks work normally.
+
 ## Forward-looking — `feature = "send"`
 
 A post-v1.1 sprint will introduce a `luna-core/Cargo.toml` feature:
