@@ -164,7 +164,7 @@ semantics; they're embedder-facing only.
 | B9 | `vm.create_coroutine` / `vm.resume_coroutine` | API |
 | B10 | `vm.eval_async` (Stage 1 shipped; Stages 2-3 in flight) | API |
 | B11 | `vm.set_rust_debug_hook` + `RustHookEvent` | API |
-| B12 | `luna::Lua` newtype facade (`Lua::new` / `Lua::sandbox` / `create_function` / etc.) | API |
+| B12 | `luna_jit::Lua` newtype facade (`Lua::new` / `Lua::sandbox` / `create_function` / etc.) | API |
 
 `luna-core` keeps the same dialect surface as `luna`; the only
 difference is which JIT backend installs by default

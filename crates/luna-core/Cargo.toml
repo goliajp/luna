@@ -1,6 +1,6 @@
 [package]
 name = "luna-core"
-description = "Pure-Rust Lua runtime (interpreter only, zero third-party dependencies). The JIT-equipped variant lives in the `luna` crate."
+description = "Pure-Rust Lua runtime (interpreter only, zero third-party dependencies). The JIT-equipped variant lives in the `luna-jit` crate."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/luna-core",
-    "crates/luna",
+    "crates/luna-jit",
 ]
 
 [workspace.package]
