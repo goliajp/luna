@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [master, develop]
   pull_request:
-    branches: [main]
+    branches: [master, develop]
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
@@ -65,11 +65,42 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   # ─────────────────────────────────────────────────────────────────
-  # cargo fmt + clippy gates intentionally NOT enabled in v1.1.
-  # luna v1.0 shipped without cargo fmt; running `cargo fmt --check`
-  # currently reports 606 drift sites (historic manual style). clippy
-  # reports ~9 lints (mostly `not_unsafe_ptr_arg_deref` on luna_jit_*
-  # extern "C" helpers — by design, JIT codegen passes raw pointers).
-  # Both are v1.2 ship-prep follow-ons; see .dev/known-bugs/
-  # historic-fmt-clippy-drift.md.
+  # v1.2 L4-L5: lint gates (fmt + clippy). The 606 fmt drift was cleared
+  # in v1.2 L1; the 12 historic clippy errors in L2; workspace-level
+  # `[lints.clippy]` policy in L6. From v1.2 forward, both gates fail
+  # the build on any new drift.
   # ─────────────────────────────────────────────────────────────────
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────────
+  # v1.1 F1 + v1.2 G: luna-core's 0 third-party dep contract.
+  # `cargo tree -p luna-core --prefix none` lists exactly one crate
+  # (luna-core itself); anything else is a regression. CI fails fast.
+  # ─────────────────────────────────────────────────────────────────
+  zero-dep:
+    name: luna-core zero-third-party-dep contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo tree -p luna-core
+        run: |
+          count=$(cargo tree -p luna-core --prefix none --no-default-features 2>/dev/null \
+                  | grep -cE ' v[0-9]')
+          echo "luna-core dep count = $count"
+          if [ "$count" != "1" ]; then
+            echo "::error::luna-core gained a third-party dependency (count=$count, expected 1)"
+            cargo tree -p luna-core --prefix none --no-default-features
+            exit 1
+          fi

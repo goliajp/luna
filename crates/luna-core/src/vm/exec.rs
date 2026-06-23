@@ -840,7 +840,7 @@ impl Vm {
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
         let globals = heap.new_table();
         let mm_names = MM_NAMES.iter().map(|n| heap.intern(n.as_bytes())).collect();
-        
+
         Vm {
             heap,
             stack: Vec::new(),
@@ -1285,11 +1285,11 @@ impl Vm {
         // Proto.
         if args.is_empty()
             && let Value::Closure(cl) = f
-                && let Some(vs) = self.try_jit_call(cl)
-            {
-                self.public_call_depth -= 1;
-                return Ok(vs);
-            }
+            && let Some(vs) = self.try_jit_call(cl)
+        {
+            self.public_call_depth -= 1;
+            return Ok(vs);
+        }
         let r = self.call_value_impl(f, args, true);
         self.public_call_depth -= 1;
         r
