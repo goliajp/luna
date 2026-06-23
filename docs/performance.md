@@ -118,6 +118,32 @@ Both are explicit project constraints. luna's 1.21× speedup over
 LuaJIT 2.1 on this single workload is therefore the design ceiling,
 not an optimization gap.
 
+## Redis-Lua shapes (D1)
+
+Cross-dialect runs above use academic shapes (`fib_28`, `loop_int_1m`,
+etc.). Real embedder workloads — Redis-Lua scripts, BullMQ
+token-bucket limiters, sliding-window guards, method dispatch
+through metatables — exercise a different mix of opcodes. The
+`redis_lua_shape` bench (`cargo bench --bench redis_lua_shape`)
+ships four representative shapes the v1.0 dogfood report flagged:
+
+| name | shape | luna median |
+|---|---|---:|
+| `token_bucket_1k` | Bucket struct + per-tick refill check; the canonical real-world rate limiter | **0.20 ms** |
+| `sliding_window_500` | Rolling-array horizon eviction; zset-without-zset | **0.60 ms** |
+| `method_dispatch_5k` | `cls.__index` method calls — every `obj:method(...)` chain in a Redis script | **1.46 ms** |
+| `string_ops_2k` | `string.format` + linear-scan parse of KEYS/ARGV-style keys | **4.95 ms** |
+
+These numbers are luna's interpreter+JIT-on baseline as of v1.1.
+D2 (criterion + CPU pin + n=1000+ infra upgrade) and D3 (per-cell
+decomposition vs PUC 5.1) refine the methodology; D7 wires the
+ratio comparison into the README headline.
+
+The `string_ops_2k` cell is the current outlier — `string.format` +
+`string.sub` linear-scan opcodes dominate, and the JIT doesn't
+specialise on string operations the way it does for numeric loops.
+This is a known target for v1.2+ trace JIT work.
+
 ## Test environment
 
 - macOS 25.5 / aarch64 (M-series, Apple Silicon)
