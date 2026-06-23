@@ -94,12 +94,69 @@ fn populate_arg(vm: &mut Vm, script_name: Option<&str>, extra: &[String]) {
         .expect("CLI arg setup");
 }
 
-/// Interactive REPL (C1 — single-line for v1.1; C2/C3 add multi-line,
-/// history, syntax highlighting in follow-on commits).
+/// Maximum entries persisted in `~/.luna_history`. Older entries get
+/// truncated on save. PUC `lua`'s readline-driven history typically
+/// keeps 500-1000; pick the higher end since each line is short.
+const HISTORY_MAX_ENTRIES: usize = 1000;
+
+fn history_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(std::path::PathBuf::from(home).join(".luna_history"))
+}
+
+fn load_history() -> Vec<String> {
+    let Some(p) = history_path() else {
+        return Vec::new();
+    };
+    match std::fs::read_to_string(&p) {
+        Ok(s) => s.lines().map(|l| l.to_string()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_history(entries: &[String]) {
+    let Some(p) = history_path() else {
+        return;
+    };
+    let body = entries
+        .iter()
+        .rev()
+        .take(HISTORY_MAX_ENTRIES)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(&p, body);
+}
+
+/// True if `msg` indicates the parser ran out of input mid-block
+/// (incomplete `if … then`, `do … end`, `function … end`, long string,
+/// etc.). Per R-A1 audit: luna's `SyntaxError::msg` carries "near
+/// <eof>" / "unfinished … near <eof>" markers exactly when more input
+/// would let the parser continue. The single counter-example is the
+/// explicit "'<eof>' expected" form, which means the parser saw EXTRA
+/// trailing input and is not asking for more.
+fn is_incomplete_syntax(msg: &str) -> bool {
+    if msg.contains("'<eof>' expected") {
+        return false;
+    }
+    msg.contains(" near <eof>")
+}
+
+/// Interactive REPL (C1 single-line + v1.2 C2 multi-line continuation +
+/// `~/.luna_history` persistence). C3 (tab completion + syntax
+/// highlight) is deferred to a `luna-jit` non-default cargo feature
+/// `repl-line-editor` per the R-A1 audit; it would link `rustyline`
+/// + dependencies that v1.2's default `cargo install luna-jit` keeps
+/// clean.
 ///
-/// Each line is first tried as an expression (`return <line>`); on
-/// syntax error it's retried as a statement so `x = 1` and
-/// `function f() ... end` work too. Ctrl-D / EOF exits cleanly.
+/// Each entered chunk is first tried as an expression (`return <chunk>`)
+/// to surface a value; on syntax error it's retried as a statement so
+/// `x = 1` and `function f() ... end` work too. Mid-block incomplete
+/// input (detected via `SyntaxError::msg.contains(" near <eof>")`)
+/// reprompts with `>>` instead of erroring. Ctrl-D / EOF exits cleanly
+/// and persists the history.
 fn repl(version: LuaVersion) {
     let mut vm = luna_jit::new_with_jit(version);
     eprintln!(
@@ -114,43 +171,67 @@ fn repl(version: LuaVersion) {
         }
     );
     let stdin = std::io::stdin();
-    let mut buf = String::new();
+    let mut history: Vec<String> = load_history();
+    let mut chunk = String::new();
+    let mut in_continuation = false;
     loop {
-        eprint!("> ");
+        eprint!("{}", if in_continuation { ">> " } else { "> " });
         let _ = std::io::stderr().flush();
-        buf.clear();
-        match stdin.read_line(&mut buf) {
+        let mut line = String::new();
+        match stdin.read_line(&mut line) {
             Ok(0) => {
+                if in_continuation {
+                    // Mid-block Ctrl-D — drop the partial chunk and exit.
+                    eprintln!();
+                }
                 eprintln!();
+                save_history(&history);
                 return;
             }
-            Ok(_) => {
-                let line = buf.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                // Expression-first: `return <line>` to surface a
-                // returned value. On syntax error (likely an
-                // assignment / def), retry as a statement.
-                let as_expr = format!("return {line}");
-                let result = match vm.eval(&as_expr) {
-                    Ok(vs) => Ok(vs),
-                    Err(_) => vm.eval(line),
-                };
-                match result {
-                    Ok(vs) => {
-                        for v in vs {
-                            println!("{}", render(v));
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("error: {}", vm.error_text(&e));
-                    }
-                }
-            }
+            Ok(_) => {}
             Err(e) => {
                 eprintln!("io error: {e}");
+                save_history(&history);
                 return;
+            }
+        }
+        if !in_continuation && line.trim().is_empty() {
+            continue;
+        }
+        if !chunk.is_empty() {
+            chunk.push('\n');
+        }
+        chunk.push_str(&line);
+        // Expression-first: `return <chunk>` to surface a returned
+        // value. If the expression parses but the statement form
+        // doesn't (e.g. assignments), the statement-form error is
+        // what we report to the user.
+        let as_expr = format!("return {chunk}");
+        let result = match vm.eval(&as_expr) {
+            Ok(vs) => Ok(vs),
+            Err(_) => vm.eval(chunk.as_str()),
+        };
+        match result {
+            Ok(vs) => {
+                for v in vs {
+                    println!("{}", render(v));
+                }
+                history.push(chunk.trim_end().to_string());
+                chunk.clear();
+                in_continuation = false;
+            }
+            Err(e) => {
+                let msg = vm.error_text(&e);
+                if is_incomplete_syntax(&msg) {
+                    // More input needed — keep `chunk` and reprompt
+                    // with `>>`.
+                    in_continuation = true;
+                } else {
+                    eprintln!("error: {}", msg);
+                    history.push(chunk.trim_end().to_string());
+                    chunk.clear();
+                    in_continuation = false;
+                }
             }
         }
     }
