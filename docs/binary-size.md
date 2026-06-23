@@ -35,9 +35,9 @@ returns 1, and the resulting `rlib` is roughly the 585 KiB
 | Share | Size | Function |
 |---:|---:|---|
 | 6.5% | 149 KiB | `cranelift_codegen::opts::...constructor_simplify` |
-| 2.5% | 57 KiB | `luna::jit_backend::trace::try_compile_trace_with_options` |
+| 2.5% | 57 KiB | `luna_jit::jit_backend::trace::try_compile_trace_with_options` |
 | 2.3% | 53 KiB | `cranelift_codegen::isa::aarch64::...constructor_lower` |
-| 2.0% | 45 KiB | `luna::jit_backend::try_compile_int_chunk` |
+| 2.0% | 45 KiB | `luna_jit::jit_backend::try_compile_int_chunk` |
 | 1.6% | 36 KiB | `AArch64Backend::compile_function` |
 | 1.5% | 33 KiB | `luna_core::vm::exec::Vm::run` (the interp dispatcher) |
 | 1.2% | 26 KiB | `luna_core::compiler::Compiler::stat_block_inner` |
