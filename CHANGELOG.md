@@ -19,6 +19,160 @@ optimization.
 
 ---
 
+## [1.2.0] — 2026-06-24
+
+Polish + ergonomics sprint on the v1.1 ship. Headline: **`LuaUserdata`
+trait sugar** for Lua-callable host types, REPL gets multi-line input
+plus history, lint debt cleared, perf attack discovers the real
+bottleneck (interp, not trace) and updates the methodology accordingly.
+
+### Track B — `LuaUserdata` trait (new embedder surface)
+
+- **`luna_core::vm::userdata_trait`** module exposes the
+  [`LuaUserdata`](https://docs.rs/luna-core/1.2/luna_core/vm/trait.LuaUserdata.html)
+  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.2/luna_core/vm/trait.UserdataMethods.html)
+  builder + [`MetaMethod`](https://docs.rs/luna-core/1.2/luna_core/vm/enum.MetaMethod.html)
+  enum. Embedders register methods (`add_method` / `add_method_mut`),
+  static fns (`add_function`), metamethods (`add_meta_method`), and
+  call-syntax field getters (`add_field_method_get`) via a typed
+  builder.
+- **Per-Vm metatable cache** keyed by `TypeId::of::<T>()`. First
+  `create_userdata::<T>` triggers `T::add_methods` once; subsequent
+  instances reuse the cached `Gc<Table>`. Pinned via `pin_host` so
+  GC keeps the metatable live.
+- **`Vm::create_userdata` / `Vm::set_userdata` bound tightened** from
+  `T: Any + 'static` to `T: LuaUserdata`. **BREAKING**: existing
+  B8 users upgrade with `impl LuaUserdata for MyType {}` (one line).
+- **Auto-install metatable + `__gc` finalizer wire** at userdata
+  allocation time (`check_finalizer_userdata` called from
+  `create_userdata`).
+- **`FromLuaArgs::from_lua_args_skip_self`** added — the
+  method-call shape where slot 0 is the receiver.
+- **`FromLuaArgs for Vec<Value>`** — variadic decoder for
+  dispatcher-style natives (e.g. `redis:call(cmd, ...)`).
+- Three new runnable examples:
+  `examples/userdata_demo.rs` (Counter), `userdata_vec3.rs`
+  (arithmetic metamethods), `userdata_redis_stub.rs` (dogfood §4.1
+  shape — state IS the payload, no `thread_local!`).
+- `docs/embedding.md` §7 rewritten with subsections covering trait
+  shape, static constructors, variadic dispatch, the v1.2 field-style
+  limitation (call-syntax only — true `obj.x` deferred to v1.3, see
+  Deferred section), GC ordering, and trait contract reminders.
+
+### Track R — REPL
+
+- **Multi-line continuation**: incomplete statements (detected via
+  `SyntaxError::msg.contains(" near <eof>")`) emit `>>` and accept
+  another line. `local x = function()` + `return 1` + `end` now
+  works at the REPL instead of erroring on line 1.
+- **`~/.luna_history` persistence**: 1000-entry capped history,
+  loaded on startup, saved on exit. No new dependency
+  (`std::env::var_os("HOME")` only).
+
+### Track L — Lint debt cleared
+
+- `cargo fmt --all` clean (cleared 606-site formatter drift from v1.0/v1.1).
+- `cargo clippy --workspace --all-targets -- -D warnings` clean
+  (12 historic errors fixed: 8 `not_unsafe_ptr_arg_deref` justified
+  with rationale, 2 `approx_constant` → `std::f64::consts::PI`,
+  1 ZST `uninit_assumed_init` constant-folded guard, 2 dialect-test
+  fixture allows).
+- `cargo fix` unused-imports sweep across 60+ files plus 5 hand-fixed
+  clippy issues (unnecessary unsafe, match→unwrap_or_default, etc.).
+- Workspace `[lints.clippy]` policy in `Cargo.toml` declares the
+  strict baseline and the few documented exemptions
+  (`missing_safety_doc` — `docs/unsafe-accounting.md` is SoT;
+  `incompatible_msrv`, `too_many_arguments`, etc.).
+
+### Track P — Perf attack (real bottleneck identified)
+
+- **D2 criterion infra** + Linux CI runner workflow_dispatch
+  perf-gate (manual trigger; `redis_lua_shape` baseline).
+- **D3 TA1 Path B lowerer**: `GetTabUp` admitted into the trace
+  recorder as a standalone helper (was: unconditional bail at
+  `trace.rs:3030`). Traces compile end-to-end on the token-bucket
+  shape; bail rate 0.
+- **D4 A1 GetField fast path**: `Table::get_str` + Op::GetField
+  interp arm skip `op_index` when the receiver is a known `Value::Str`
+  with no metatable (commit `a2c98ae`).
+- **`Vm::current_op`** API (ergo.rs) + `diag_opcode_breakdown.rs`
+  example — runtime opcode counter for `[perf-decomposition-vs-polish.md]`
+  §2 Phase A "actual workload validates the decomp" hard gate.
+- **Methodology lesson** (`docs/performance.md` + global
+  methodology doc updated): the v1.0 charter hypothesis "1.5×
+  gap vs PUC 5.1 on token_bucket" was 4× understated. PUC 5.5 is
+  ~4.1× faster than luna interp on the shape; LuaJIT 2.1 is ~196×.
+  **True attack surface = interp,  not trace.** Trace JIT does not
+  engage on the Redis-Lua-shape workload (`infer_getx_exit` returns
+  None on the `Call(Native math.min)` mid-body; length-gate kicks in
+  on short bodies). D4 A3/A4/A5 + Path B math-fold extend recorded
+  as Deferred-to-v1.3 (NOT silent — see Deferred).
+
+### Track S — `feature = "send"` framework reserved
+
+- `[features] send = []` declared in `crates/luna-core/Cargo.toml`.
+  Building with `--features send` triggers `compile_error!` pointing
+  to `v1.3-rfc-send-arc.md`. Embedders can feature-detect (`cargo
+  add luna-core --features send` fails loudly) without waiting for
+  the v1.3 implementation.
+- Phase 0 audit (`v1.2-audit-send-cost.md`): ARM M-series ~10%
+  overhead (within RFC 15% ceiling); x86_64 Linux ~20% (refines the
+  RFC ceiling, needs `SendVm` newtype fork in v1.3).
+
+### CI / release infra (Track G)
+
+- **Lint gate**: `cargo fmt --check` + `cargo clippy --workspace
+  --all-targets -- -D warnings` on every push.
+- **0-dep gate**: `cargo tree -p luna-core --prefix none` must show
+  exactly one line (luna-core itself). Catches accidental
+  dependency creep at PR time.
+- **Unsafe-drift gate** (new in v1.2): first-party unsafe site count
+  must stay under a recorded ceiling (490, baseline 461 from v1.1
+  + ~15 from Track B). Bump the ceiling explicitly when justified;
+  never widen to silence drift.
+- `branches: [main]` → `[master, develop]` to track git-flow setup.
+- `docs/release-checklist.md` (new) — version-agnostic checklist
+  template; sprint-specific audits stay under `.dev/`.
+- `.dev/discussions/luna-crate-name-history.md` — archives the
+  v1.1.0 ship-time rename story (`luna` → `luna-jit`).
+
+### Deferred to v1.3 (NOT silent)
+
+These items are scoped out of v1.2 explicitly:
+
+- **Path B math-fold extend** (`min` / `max` 2-arg) — required for
+  trace JIT to actually dispatch on token-bucket-style workloads.
+  Audit ~1-2d effort. Bundled with TA3 `trace_enabled` default flip
+  + Linux taskset bench (macOS local variance band is too wide).
+- **D4 A3 / A4 / A5** (newindex double-walk collapse / Move
+  elimination / dispatcher reshape) — audit revealed cost estimates
+  4-5× too high; marginal once A1 lands.
+- **`add_field_method_set` + true `obj.x` field-style access** —
+  v1.2 trait sugar ships call-syntax only (`obj:width()`). True
+  field-style needs `__index` as a function dispatcher.
+- **`#[derive(LuaUserdata)]` proc-macro** — hand impl is mlua's
+  surface; revisit if dogfood reports demand the derive.
+- **Track S `feature="send"` actual impl** — 1Q sprint scoped in
+  `v1.2-audit-send-cost.md`; needs `SendVm` newtype fork if Phase A
+  bench confirms x86_64 budget overrun.
+- **REPL C3 tab completion + syntax highlight** — gated on adding
+  `rustyline` as a non-default `repl-line-editor` cargo feature.
+- **PUC 5.4 luac body loading (Track E E1)** — Q1 conditional on
+  ship-time budget; if not v1.2, lands in a v1.3 quarter sprint
+  covering 5.1-5.5 binary formats together.
+
+### Internal — sprint methodology
+
+- `.dev/perf-baselines/2026-06-24-*.md` records the decomp work
+  that surfaced "interp not trace" as the true attack surface.
+- `~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
+  gained the v2-* polish-disaster anti-pattern catalog from the
+  v1.0 fib_28 misdirection.
+- Charter, plan-state, and audit docs live in `.dev/rfcs/v1.2-*.md`
+  (gitignored); `docs/` stays user-facing.
+
+---
+
 ## [1.1.0] — 2026-06-23
 
 ### Ship-time crate rename
