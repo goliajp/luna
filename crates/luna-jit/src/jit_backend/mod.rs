@@ -547,6 +547,52 @@ pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
+/// v1.2 D3 Path B — read `upvals[upval_idx][key_str]` and return raw
+/// payload bits. Mirrors `luna_jit_table_get_field` but resolves the
+/// table via the trace head closure's upvalue list first (the trace
+/// dispatcher's `enter_jit(vm, Some(cl))` pins `JIT_CL`).
+///
+/// Used by the trace JIT lowerer's `Op::GetTabUp` arm for upvalue-
+/// table accesses outside the recognised math-fold pattern. The
+/// canonical case is `math.min(a, b)` whose 2-arg shape doesn't
+/// match `try_match_trace_math_fold`'s single-arg libm catalog;
+/// without this helper the entire trace bails at the `cmp-dirs`
+/// pre-emit pass and the workload runs interp-only (P3a diag finding
+/// 2026-06-24: `bail:cmp-dirs-GetTabUp` × 200/200 on `token_bucket_1k`).
+///
+/// Deopt cases: upval isn't a Table (corrupted upval list) or has
+/// a metatable (`__index` could shadow the lookup — interp-only).
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_some() {
+        return 0;
+    }
+    // SAFETY: called only from Cranelift-emitted JIT code; `enter_jit(vm, Some(cl))` pinned JIT_CL for the dispatch window.
+    let cl = unsafe { current_jit_closure() };
+    let env = vm.upval_get(cl, upval_idx as u32);
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> = match env {
+        luna_core::runtime::Value::Table(t) => t,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: GetTabUp upval not Table"));
+            return 0;
+        }
+    };
+    if g.metatable().is_some() {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: GetTabUp env has metatable"));
+        return 0;
+    }
+    let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
+        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    let v = g.get(luna_core::runtime::Value::Str(key_gc));
+    let (_tag, raw) = v.unpack();
+    // SAFETY: pulled from `RawVal` of a freshly unpacked Value above.
+    unsafe { raw.zero as i64 }
+}
+
 /// P12-S6-A2 — write `Value::Nil` to `t[key]` (Int key). Used by
 /// trace JIT when a SetList/SetI/SetTable's source register is a
 /// `RegKind::Nil` (e.g. Lua's `local t = {nil, nil}` table
