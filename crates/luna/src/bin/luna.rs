@@ -279,10 +279,16 @@ fn main() {
 
     populate_arg(&mut vm, script_for_arg.as_deref(), &extra);
 
+    // C5 — pretty error rendering: ANSI color when stderr is a TTY
+    // and NO_COLOR isn't set. Embedders piping luna output to logs
+    // get plain text automatically.
+    let color =
+        std::env::var_os("NO_COLOR").is_none() && std::io::IsTerminal::is_terminal(&std::io::stderr());
+
     let cl = match vm.load(&src, chunkname.as_bytes()) {
         Ok(cl) => cl,
         Err(e) => {
-            eprintln!("compile error: {e}");
+            print_pretty_error(&mut vm, &format!("{e}"), &src, color, /*compile=*/ true);
             std::process::exit(1);
         }
     };
@@ -308,8 +314,61 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("runtime error: {}", vm.error_text(&e));
+            let msg = vm.error_text(&e);
+            print_pretty_error(&mut vm, &msg, &src, color, /*compile=*/ false);
             std::process::exit(1);
         }
     }
+}
+
+/// C5 — pretty error rendering with source name / line / context
+/// snippet / color. Uses `Vm::error_source` (B6) for the (chunk_name,
+/// line) pair and `Vm::take_error_traceback` for the Lua-side
+/// traceback. The `src` arg lets us print the offending source line
+/// directly when the line is known.
+fn print_pretty_error(vm: &mut Vm, msg: &str, src: &[u8], color: bool, compile_time: bool) {
+    let (red, dim, bold, reset) = if color {
+        ("\x1b[31m", "\x1b[2m", "\x1b[1m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
+
+    let kind_label = if compile_time {
+        "compile error"
+    } else {
+        "runtime error"
+    };
+    // For compile errors the bin caller used vm.load() directly so
+    // the Vm-side error_kind metadata wasn't populated (eval_chunk
+    // sets it but load() is one layer below). Synthesize "syntax"
+    // for the compile path; otherwise read from Vm.
+    let kind_str = if compile_time {
+        "syntax".to_string()
+    } else {
+        format!("{}", vm.error_kind())
+    };
+    eprintln!("{bold}{red}{kind_label}{reset} {dim}[{kind_str}]{reset}: {msg}");
+
+    if let Some((chunk, line)) = vm.error_source() {
+        eprintln!("  {dim}at {chunk}:{line}{reset}");
+        if let Some(snippet) = nth_line(src, line) {
+            eprintln!("  {dim}|{reset} {snippet}");
+        }
+    }
+    if let Some(tb) = vm.take_error_traceback() {
+        eprintln!("{dim}traceback:{reset}");
+        for line in tb.lines() {
+            eprintln!("  {line}");
+        }
+    }
+}
+
+/// Pull the `n`th 1-based line from a byte buffer (UTF-8 lossy
+/// rendering for the slice). Returns `None` for line 0 or beyond EOF.
+fn nth_line(src: &[u8], n: u32) -> Option<String> {
+    if n == 0 {
+        return None;
+    }
+    let s = String::from_utf8_lossy(src);
+    s.lines().nth((n - 1) as usize).map(|l| l.to_string())
 }
