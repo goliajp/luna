@@ -46,4 +46,43 @@ impl Vm {
     pub fn intern_str(&mut self, s: &str) -> Gc<LuaStr> {
         self.heap.intern(s.as_bytes())
     }
+
+    // ─── B12 host-root pool ───────────────────────────────────────
+    //
+    // The `luna::Lua` facade (in the `luna` crate) leans on these
+    // methods to keep `LuaFunction` / `LuaTable` / `LuaRoot` handles
+    // alive across calls. The pool is append-only in v1.1; slot
+    // recycling lands in Phase 3 alongside B8 LuaUserdata.
+
+    /// Pin `v` as a host root and return its slot index. The value
+    /// becomes an extra GC root until the index is reset via
+    /// [`unpin_all`](Self::unpin_all).
+    pub fn pin_host(&mut self, v: Value) -> usize {
+        self.host_roots.push(v);
+        self.host_roots.len() - 1
+    }
+
+    /// Read a previously pinned host root. Panics if `idx` was never
+    /// pinned (or if the pool was cleared by `unpin_all`).
+    pub fn host_root_at(&self, idx: usize) -> Value {
+        self.host_roots[idx]
+    }
+
+    /// Mutate a previously pinned host root (for the `Lua` facade's
+    /// `LuaTable::set` after an in-place rewrite). Panics on OOB.
+    pub fn host_root_set(&mut self, idx: usize, v: Value) {
+        self.host_roots[idx] = v;
+    }
+
+    /// Number of currently-pinned host roots.
+    pub fn host_root_count(&self) -> usize {
+        self.host_roots.len()
+    }
+
+    /// Drop every pinned host root. Embedders driving the `Lua`
+    /// facade in a request-per-script loop call this between requests
+    /// to keep the pool bounded.
+    pub fn unpin_all(&mut self) {
+        self.host_roots.clear();
+    }
 }
