@@ -1,96 +1,119 @@
 # luna
 
-A Lua runtime in pure Rust. Full support for **Lua 5.1 / 5.2 / 5.3 / 5.4
-/ 5.5** in a single binary (5.5 is the primary dialect). Zero non-build
-dependencies — cranelift is the JIT codegen.
+A Lua runtime in pure Rust. Full Lua **5.1 / 5.2 / 5.3 / 5.4 / 5.5**
+dialect support in a single binary, with a Cranelift-backed JIT
+that hits **2× faster than PUC** across the cross-dialect bench and
+**competitive with LuaJIT 2.1** on numeric workloads.
 
-Designed for embedding in script hosts. The top-level surface is a
-sandbox-friendly `Vm` with whitelisted libraries, per-call instruction
-and memory budgets, and host-registered native callbacks. The cranelift
-JIT is on by default for performance and can be disabled by embedders
-that need every dispatch turn to tick the budget.
+```rust
+use luna::Lua;
+
+let mut lua = Lua::new();
+lua.open_base();
+lua.open_math();
+let r: i64 = lua.eval("return 1 + 2")?;
+assert_eq!(r, 3);
+```
 
 ## Status
 
-**v1.0.0** released 2026-06-23. Stable embedding + C API per semver;
-internal modules (JIT codegen, dispatcher hot path internals) remain
-subject to optimization but the public surface (`Vm`, `Value`,
-`LuaVersion`, `capi`) is frozen for the 1.x line.
+- **v1.0.0** shipped 2026-06-23 (commit `ae7795c`).
+- **v1.1** sprint in progress: ergonomic embedder API
+  (`Lua::eval` / `set_global` / `native_typed` / `LuaTable` / etc.),
+  workspace split (`luna-core` is zero-dep), MSRV declaration,
+  structured `LuaError`, host userdata payloads, Rust-side
+  coroutine + debug hook APIs, and async embedder integration
+  (see [`CHANGELOG.md`](CHANGELOG.md) for the full unreleased
+  section).
 
 ### Correctness
 
-- **910 tests passing, 0 failures, 0 ignored**
-- Official PUC test suite: **123 / 123 expected-pass files** across
-  Lua 5.1 (23), 5.2 (26), 5.3 (27), 5.4 (32), 5.5 (15)
-- 40 end-to-end Lua programs × 5 dialects produce byte-identical
-  stdout vs the installed PUC reference binary
-- 64 method-JIT × dialect × `Value`-introspection audit tests
-- 28 trace-JIT audit tests covering hot loops, recursion, side
-  traces, pcall, etc.
+- **910 tests / 0 failures** across the v1.0 baseline (242 lib unit,
+  123 PUC official-suite files × 5 dialects, 40 e2e programs × 5
+  dialects byte-diff vs installed PUC, 64 method-JIT audit, 28
+  trace-JIT audit, 13 capi conformance, 10 sandbox embedding, etc.)
+- v1.1 adds **60+ new integration tests** for the embedder ergo
+  surface (`sandbox_builder`, `table_builder`, `native_typed`,
+  `lua_facade`, `userdata_host`, `rust_debug_hook`, `rust_coroutine`,
+  `lua_error_structured`).
 
 ### Performance
 
-Cross-dialect microbench on M-series (in-process; PUC + LuaJIT
-times include subprocess startup):
+Master gate is `vs.X ≤ 0.50` — luna at least 2× faster than the
+reference — on every cross-dialect cell:
 
-- vs PUC 5.1-5.5: **35 / 35 cells pass the ≥ 2× master gate**
-- vs LuaJIT 2.1: **6 / 7 cells pass** (binary_trees_n10 at 0.83×
-  — luna is 1.21× faster than LuaJIT but doesn't clear 2×; this is
-  the design ceiling under luna's no-NaN-boxing + PUC bytecode
-  compatibility constraints)
+| | cells | pass |
+|---|---:|---:|
+| vs PUC 5.1-5.5 (7 cells × 5 dialects) | 35 | **35** ✓ |
+| vs LuaJIT 2.1 (7 cells) | 7 | 6 ✓ (1 within 0.83×) |
 
-Full snapshot at `docs/performance.md`.
+See [`docs/performance.md`](docs/performance.md) for the full table
+and the Redis-Lua-shape (D1) corpus.
 
 ## Install
 
-Add to `Cargo.toml`:
+luna ships as a Cargo workspace with two publishable crates:
 
 ```toml
+# Most embedders — full interp + Cranelift JIT + capi.
 [dependencies]
-luna = "1.0"
+luna = "1.1"
 ```
 
-## Usage
-
-### Embedding (sandbox host)
-
-```rust
-use luna::version::LuaVersion;
-use luna::vm::Vm;
-use luna::runtime::Value;
-
-let mut vm = Vm::new_minimal(LuaVersion::Lua51);
-
-// Whitelist: no os/io/debug/package.
-vm.open_base();
-vm.open_math();
-vm.open_string();
-vm.open_table();
-vm.open_coroutine();
-
-// Sandbox gates (required when running untrusted scripts).
-vm.set_jit_enabled(false);
-vm.set_bytecode_loading(false);
-
-// Quotas.
-vm.set_instr_budget(Some(100_000));
-vm.set_memory_cap(Some(1 << 20));
-
-let cl = vm.load(b"return 1 + 2", b"=eval").expect("compile");
-let result = vm.call_value(Value::Closure(cl), &[]).expect("run");
-assert!(matches!(result.as_slice(), [Value::Int(3) | Value::Float(_)]));
+```toml
+# Minimum surface — pure interpreter, zero third-party deps,
+# wasm32-friendly.
+[dependencies]
+luna-core = "1.1"
 ```
 
-Run the included walkthrough:
+`cargo tree -p luna-core` shows exactly one crate. The full `luna`
+adds 6 Cranelift crates and their transitive deps for the JIT side.
+
+For the CLI binary:
 
 ```sh
-cargo run --release --example sandbox_demo
+cargo install luna   # `luna` REPL + script runner
 ```
 
-See `cargo doc --open` (top-level `src/lib.rs` rustdoc) for the full
-embedding contract and sandbox caveats.
+## Embedding (quick demo)
 
-### Threading model
+The sandbox builder + ergo APIs collapse the v1.0 dance into a
+handful of lines:
+
+```rust
+use luna::Lua;
+use luna::version::LuaVersion;
+
+let mut lua = Lua::sandbox(LuaVersion::Lua54)
+    .open_base()
+    .open_math()
+    .open_string()
+    .with_instr_budget(1_000_000)
+    .with_memory_cap(8 * 1024 * 1024)
+    .build();
+
+// Register a typed Rust function:
+let add = lua.create_function(|a: i64, b: i64| -> i64 { a + b });
+lua.set_global("add", add)?;
+
+// Build a table and expose it:
+let cfg = lua.create_table();
+cfg.set(&mut lua, "answer", 42_i64)?;
+cfg.set(&mut lua, "name", "luna")?;
+lua.set_global("cfg", cfg)?;
+
+// Run a script:
+let result: i64 = lua.eval("return add(cfg.answer, 8)")?;
+assert_eq!(result, 50);
+```
+
+Full walkthrough: [`docs/embedding.md`](docs/embedding.md) (12
+sections covering install, sandbox, set_global, tables, native
+functions, userdata, coroutines, debug hooks, errors, the `Lua`
+newtype facade, and threading).
+
+## Threading model
 
 `luna::Vm` is `!Send + !Sync` — pin one Vm per OS thread (or per
 single-thread Tokio worker). For async embedders, use Tokio's
@@ -99,7 +122,7 @@ See [`docs/threading.md`](docs/threading.md) for canonical patterns
 (single-thread Tokio, `LocalSet` on multi-thread, `Vm`-per-OS-thread
 + channels) and the post-v1.1 `feature = "send"` roadmap.
 
-### Standalone CLI
+## Standalone CLI
 
 ```sh
 cargo run --release --bin luna -- -e "print('hello, world')"
@@ -108,33 +131,61 @@ cargo run --release --bin luna -- path/to/script.lua
 
 `luna --version-of <51|52|53|54|55>` selects the dialect.
 
-### Linking from C
+## Linking from C
 
 `luna` ships a `cdylib` / `staticlib` exposing a `lua.h`-compatible
-subset under `src/capi.rs`. Existing C / C++ hosts that need a
-drop-in PUC replacement can link against it.
+subset under `crates/luna/src/capi.rs`. Existing C / C++ hosts that
+need a drop-in PUC replacement can link against it.
 
 ## Build
 
 ```sh
-cargo build --release
-cargo test --release               # full suite, ~30 s
-cargo bench --bench cross_dialect  # microbench (needs PUC + LuaJIT on PATH)
+cargo build --release --workspace
+cargo test --release --workspace      # full suite, ~30 s
+cargo bench --bench cross_dialect     # microbench vs PUC + LuaJIT
+cargo bench --bench redis_lua_shape   # Redis-Lua embedder shapes
 ```
+
+## Architecture in 30 seconds
+
+```
+crates/luna-core/        # 0 third-party deps; pure interp + types
+├── src/vm/              # dispatcher + sandbox + ergo (eval, native_typed, ...)
+├── src/runtime/         # heap (NonNull-based mark-sweep GC), value, table, userdata
+├── src/compiler/        # bytecode emit per dialect
+├── src/frontend/        # lexer + parser
+├── src/pattern.rs       # PUC pattern engine
+├── src/jit/             # IntChunkCompiler + TraceCompiler trait surface
+│                        # (NullJitBackend lives here; embedders compose
+│                        #  their own implementations against this contract)
+└── src/lib.rs           # module roots
+
+crates/luna/             # depends on luna-core + cranelift × 6
+├── src/jit_backend/     # Cranelift-backed CraneliftBackend implementations
+├── src/capi.rs          # lua.h-compatible C ABI
+├── src/lua_facade.rs    # `Lua` newtype mlua-shape facade
+├── src/bin/luna.rs      # CLI binary
+└── src/lib.rs           # pub use luna_core::*; + JIT + Vm::new_minimal_with_jit
+```
+
+See [`docs/architecture.md`](docs/architecture.md) for the full
+breakdown (crate boundary, source classification, JIT pipeline,
+sandbox surface).
 
 ## Documentation
 
-- `docs/compatibility.md` — embedder compatibility surface (dialect
-  feature matrix, stdlib coverage, C API surface, bytecode compat)
-- `docs/performance.md` — perf vs PUC 5.1-5.5 and LuaJIT 2.1
-- `CHANGELOG.md` — release notes
+- [`docs/embedding.md`](docs/embedding.md) — cookbook
+- [`docs/architecture.md`](docs/architecture.md) — crate layout +
+  JIT pipeline
+- [`docs/threading.md`](docs/threading.md) — async + multi-thread
+  patterns
+- [`docs/compatibility.md`](docs/compatibility.md) — per-dialect
+  feature matrix
+- [`docs/performance.md`](docs/performance.md) — bench numbers
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes
 - `cargo doc --open` — full API reference
 
 ## License
 
-Dual-licensed under either of:
-
-- MIT License (`LICENSE-MIT`)
-- Apache License, Version 2.0 (`LICENSE-APACHE`)
-
-at your option.
+Dual MIT / Apache-2.0 (see [`LICENSE-MIT`](LICENSE-MIT) and
+[`LICENSE-APACHE`](LICENSE-APACHE)).
