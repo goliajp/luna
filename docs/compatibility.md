@@ -142,6 +142,60 @@ rationale. Typical exclusions:
 
 These are scope choices for the test gate, not correctness gaps.
 
+## v1.1 luna-specific extensions
+
+These are luna API additions on top of the PUC dialect support
+above. None affect PUC bytecode compatibility or change Lua-side
+semantics; they're embedder-facing only.
+
+| Track | Item | Added |
+|---|---|---|
+| A1 | Workspace split (`luna-core` 0-dep / `luna` with JIT) | crate boundary |
+| A2 | `JitState` sidecar on Vm | layout |
+| A7 | `Vm: !Send` compile-time enforcement + `docs/threading.md` | doc + doctest |
+| B1 | `Vm::sandbox(version).build()` builder | API |
+| B2 | `vm.eval(src)` / `vm.eval_chunk(src, name)` returning `Result<Vec<Value>, LuaError>` | API |
+| B3 | `vm.new_table().with(k, v).build()` + `vm.table_of([...])` | API |
+| B4 | `IntoValue` trait + generic `vm.set_global<V: IntoValue>` | API |
+| B5 | `vm.native_typed` + `FromLuaArgs` / `IntoLuaReturn` / `FromLuaValue` (arities 0-6) | API |
+| B6 | `LuaErrorKind` enum + `Display`/`Error` impls + `vm.error_kind` / `vm.error_source` | API |
+| B7 | `vm.intern_str` / `Value::try_as_str` / `Value::as_bytes` | API |
+| B8 | `vm.create_userdata::<T>` / `set_userdata` / `userdata_borrow` for `T: 'static` host types | API |
+| B9 | `vm.create_coroutine` / `vm.resume_coroutine` | API |
+| B10 | `vm.eval_async` (Stage 1 shipped; Stages 2-3 in flight) | API |
+| B11 | `vm.set_rust_debug_hook` + `RustHookEvent` | API |
+| B12 | `luna::Lua` newtype facade (`Lua::new` / `Lua::sandbox` / `create_function` / etc.) | API |
+
+`luna-core` keeps the same dialect surface as `luna`; the only
+difference is which JIT backend installs by default
+(`NullJitBackend` vs `CraneliftBackend`). PUC `.luac` bytecode
+binary compat is identical between the two — no JIT means no
+codegen, but bytecode load/save behavior is interp-side.
+
+## CLI options (luna binary)
+
+| Flag | Behavior |
+|---|---|
+| `--lua=5.X` | Select dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5; default 5.5) |
+| `--sandbox` | SandboxBuilder shape: open base/math/string/table/coroutine only; reject bytecode loading |
+| `--budget=N` | `set_instr_budget(Some(N))` before running |
+| `--no-jit` | Install `NullJitBackend` (interpreter-only run) |
+| `--profile` | After the script finishes, print trace-JIT counters from the `JitState` sidecar |
+| `-e "<code>"` | Run inline code instead of a file |
+| `-` | Read source from stdin |
+| (no args) | Drop into interactive REPL — see "REPL behavior" below |
+
+### REPL behavior
+
+luna's no-arg path drops into an interactive prompt. Each line is
+first evaluated as an expression (prepended with `return`); on
+syntax error it's retried as a statement (so assignments and
+function definitions work too). Ctrl-D / EOF exits cleanly.
+
+The REPL respects `--lua=X` for dialect selection. v1.1 ships
+single-line; multi-line continuation and command history land in
+v1.2.
+
 ## Quick verification
 
 ```sh
