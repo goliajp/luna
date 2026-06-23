@@ -9,12 +9,14 @@ pub mod jit_state;
 pub mod lib_bit32;
 pub mod lib_coroutine;
 
+pub mod async_drive;
 pub mod ergo;
 pub mod into_value;
 pub mod sandbox;
 pub mod table_builder;
 pub mod typed_native;
 
+pub use async_drive::EvalFuture;
 pub use error::{LuaError, LuaErrorKind};
 pub use exec::{Error, Vm};
 pub use into_value::IntoValue;
