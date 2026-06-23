@@ -1346,7 +1346,7 @@ impl Vm {
         }
         // Any active debug hook means the interpreter has to run the
         // call so the hook gets the expected events.
-        if (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+        if self.hook.func.is_some() || self.hook.rust_func.is_some() {
             return false;
         }
         let proto = cl.proto;
@@ -6353,7 +6353,7 @@ impl Vm {
 
             // count + line hooks (PUC traceexec): before executing the
             // instruction. Skipped while the hook itself runs.
-            if (self.hook.func.is_some() || self.hook.rust_func.is_some()) && !self.in_hook {
+            if self.hook.func.is_some() || self.hook.rust_func.is_some() && !self.in_hook {
                 let lines = &cl.proto.lines;
                 let cur_line = if lines.is_empty() {
                     None

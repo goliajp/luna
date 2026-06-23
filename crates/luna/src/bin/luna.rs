@@ -12,6 +12,7 @@
 //! args, matching PUC behaviour. If the chunk returns values, they're
 //! printed after the script finishes.
 
+use luna::VmExt;  // brings install_default_jit / install_null_jit dotted-method form
 use luna::runtime::Value;
 use luna::version::LuaVersion;
 use luna::vm::Vm;
@@ -22,12 +23,21 @@ luna — a pure-Rust Lua runner
 
 Usage:
   luna                                      interactive REPL
-  luna [--lua=5.X] <script.lua> [args...]   run a file
-  luna [--lua=5.X] -e \"<code>\" [args...]    run inline code
-  luna [--lua=5.X] -                        read stdin to EOF
+  luna [opts] <script.lua> [args...]        run a file
+  luna [opts] -e \"<code>\" [args...]         run inline code
+  luna [opts] -                             read stdin to EOF
   luna -h | --help                          print this help
 
---lua=X selects the dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5; default 5.5).
+Options:
+  --lua=X        Select dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5; default 5.5)
+  --sandbox      Open only safe stdlib subset (base/math/string/table/coroutine);
+                 reject precompiled bytecode loading. Use for untrusted scripts.
+  --budget=N     Cap dispatcher to N instructions before raising
+                 \"instruction budget exceeded\".
+  --no-jit       Install NullJitBackend (interpreter-only).
+  --profile      On exit, print compiled-trace counters (trace_compiled_count,
+                 trace_dispatched_count, ...) for tuning runs.
+
 Extra positional args go into the `arg` global as PUC expects.
 
 In REPL mode each line is first evaluated as an expression (prefixed
@@ -150,6 +160,10 @@ fn main() {
     let mut source: Option<Source> = None;
     let mut extra: Vec<String> = Vec::new();
     let mut consumed_source = false;
+    let mut sandbox = false;
+    let mut budget: Option<i64> = None;
+    let mut no_jit = false;
+    let mut profile = false;
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if consumed_source {
@@ -165,6 +179,25 @@ fn main() {
                 eprintln!("error: unknown --lua={v} (use 5.1 / 5.2 / 5.3 / 5.4 / 5.5)");
                 std::process::exit(2);
             });
+            continue;
+        }
+        if a == "--sandbox" {
+            sandbox = true;
+            continue;
+        }
+        if let Some(n) = a.strip_prefix("--budget=") {
+            budget = Some(n.parse().unwrap_or_else(|_| {
+                eprintln!("error: --budget=N expects an integer");
+                std::process::exit(2);
+            }));
+            continue;
+        }
+        if a == "--no-jit" {
+            no_jit = true;
+            continue;
+        }
+        if a == "--profile" {
+            profile = true;
             continue;
         }
         if a == "-e" {
@@ -213,8 +246,37 @@ fn main() {
 
     // v1.1 A1 Session C — luna-core's `Vm::new` defaults to the no-op
     // JIT backend; the `luna` bin always wants Cranelift, so go
-    // through the wrapper.
-    let mut vm = luna::new_with_jit(version);
+    // through the wrapper. --no-jit then opts back out.
+    let mut vm = if sandbox {
+        // SandboxBuilder lives in luna-core and defaults to no JIT
+        // already, so --no-jit + --sandbox is automatic. If --sandbox
+        // without --no-jit, install Cranelift afterwards (so the
+        // builder's safe-stdlib whitelist still applies but the JIT
+        // is on).
+        let mut vm = luna::vm::Vm::sandbox(version)
+            .open_base()
+            .open_math()
+            .open_string()
+            .open_table()
+            .open_coroutine()
+            .build();
+        if !no_jit {
+            vm.install_default_jit();
+        }
+        vm
+    } else if no_jit {
+        // Full stdlib but no JIT.
+        let mut vm = luna::vm::Vm::new(version);
+        vm.install_null_jit();
+        vm
+    } else {
+        luna::new_with_jit(version)
+    };
+
+    if let Some(n) = budget {
+        vm.set_instr_budget(Some(n));
+    }
+
     populate_arg(&mut vm, script_for_arg.as_deref(), &extra);
 
     let cl = match vm.load(&src, chunkname.as_bytes()) {
@@ -224,7 +286,22 @@ fn main() {
             std::process::exit(1);
         }
     };
-    match vm.call_value(Value::Closure(cl), &[]) {
+    let result = vm.call_value(Value::Closure(cl), &[]);
+
+    if profile {
+        // Pull JIT counters from the JitState sidecar (A2).
+        eprintln!("---");
+        eprintln!("profile (trace JIT counters):");
+        eprintln!("  trace_closed_count: {}", vm.jit.counters.closed);
+        eprintln!("  trace_compiled_count: {}", vm.jit.counters.compiled);
+        eprintln!("  trace_compile_failed_count: {}", vm.jit.counters.compile_failed);
+        eprintln!("  trace_dispatched_count: {}", vm.jit.counters.dispatched);
+        eprintln!("  trace_deopt_count: {}", vm.jit.counters.deopt);
+        eprintln!("  trace_side_trace_started_count: {}", vm.jit.counters.side_trace_started);
+        eprintln!("  trace_side_trace_compiled_count: {}", vm.jit.counters.side_trace_compiled);
+    }
+
+    match result {
         Ok(vals) => {
             for v in vals {
                 println!("=> {}", render(v));
