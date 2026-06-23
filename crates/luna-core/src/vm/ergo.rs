@@ -212,6 +212,36 @@ impl Vm {
         }
     }
 
+    // ─── B9 Rust-side coroutine drive ────────────────────────────
+
+    /// Create a new coroutine carrying `body` (a Lua function or
+    /// any callable Value). Returns the `Value::Coro` handle ready
+    /// to be passed to [`Self::resume_coroutine`].
+    ///
+    /// Equivalent to `coroutine.create(body)` from a Rust embedder.
+    pub fn create_coroutine(&mut self, body: Value) -> Value {
+        let co = self.new_coro(body);
+        Value::Coro(co)
+    }
+
+    /// Resume a coroutine with the given arguments. Returns the
+    /// yielded values on `yield`, the return values on the body's
+    /// terminal `return`, or an error if the body raised.
+    ///
+    /// Equivalent to `coroutine.resume(co, args...)`. Returns
+    /// `Err(LuaError)` if `co` is not a `Value::Coro`.
+    pub fn resume_coroutine(
+        &mut self,
+        co: Value,
+        args: Vec<Value>,
+    ) -> Result<Vec<Value>, LuaError> {
+        let coro = match co {
+            Value::Coro(c) => c,
+            _ => return Err(LuaError(Value::Nil)),
+        };
+        self.resume_coro(coro, args)
+    }
+
     // ─── B11 Rust-side debug hook ────────────────────────────────
 
     /// Install a Rust-side debug hook (see [`RustDebugHook`]). The
