@@ -7,6 +7,9 @@
 use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::table::Table;
 
+/// A Lua userdata object — a GC-managed handle wrapping a host-side payload
+/// (an io file handle, a `newproxy` identity token, or an embedder-supplied
+/// Rust value) plus an optional metatable.
 #[repr(C)]
 pub struct Userdata {
     pub(crate) hdr: GcHeader,
@@ -59,7 +62,10 @@ pub enum UserdataPayload {
     /// B8 — embedder-supplied Rust value. `type_id` keys the downcast;
     /// `data` is the boxed payload.
     Host {
+        /// `TypeId` of the host value, used as the downcast key.
         type_id: std::any::TypeId,
+        /// Boxed host payload (the embedder owns the underlying data
+        /// semantically; luna treats it as opaque `Any`).
         data: Box<dyn std::any::Any + 'static>,
     },
 }
@@ -67,10 +73,18 @@ pub enum UserdataPayload {
 /// The OS resource behind a file userdata. Standard streams cannot be closed;
 /// an opened file carries its handle and becomes `Closed` after `:close()`.
 pub enum FileHandle {
+    /// Standard input (cannot be closed).
     Stdin,
+    /// Standard output (cannot be closed).
     Stdout,
+    /// Standard error (cannot be closed).
     Stderr,
-    File(std::fs::File),
+    /// An opened OS file.
+    File(
+        /// Underlying handle.
+        std::fs::File,
+    ),
+    /// A closed file (post-`:close()`); further operations error.
     Closed,
 }
 
@@ -100,10 +114,12 @@ impl Userdata {
         }
     }
 
+    /// This userdata's metatable, if one is attached.
     pub fn metatable(&self) -> Option<Gc<Table>> {
         self.metatable
     }
 
+    /// Install (or clear) this userdata's metatable.
     pub fn set_metatable(&mut self, mt: Option<Gc<Table>>) {
         self.metatable = mt;
     }
@@ -127,6 +143,7 @@ impl Userdata {
         }
     }
 
+    /// Mutable variant of [`Self::file`].
     pub fn file_mut(&mut self) -> &mut FileHandle {
         match &mut self.payload {
             UserdataPayload::File(fh) => fh,

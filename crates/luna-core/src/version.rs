@@ -4,12 +4,19 @@
 //! version comparisons at use sites, so further dialects can be added by
 //! extending this enum only.
 
+/// Lua dialect the VM emulates. Drives lexer, parser, and runtime feature
+/// gating. `Lua55` is the primary; the others are compat modes.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum LuaVersion {
+    /// Lua 5.1 — no integer subtype, `arg` table, no `goto`.
     Lua51,
+    /// Lua 5.2 — adds `goto` / `bit32` / `\xXX` escapes, retires `setfenv`.
     Lua52,
+    /// Lua 5.3 — adds native 64-bit integers, bitwise ops, `string.pack`.
     Lua53,
+    /// Lua 5.4 — adds `<const>` / `<close>` attributes and integer-for spec.
     Lua54,
+    /// Lua 5.5 — adds `global` declarations and named vararg parameters.
     Lua55,
 }
 

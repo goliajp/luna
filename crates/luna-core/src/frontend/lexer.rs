@@ -8,6 +8,9 @@ use crate::frontend::token::{Token, TokenInfo};
 use crate::numeric::{self, Num, hex_digit};
 use crate::version::LuaVersion;
 
+/// Streaming Lua lexer. Holds a borrowed reference to the source bytes and
+/// the current line counter; `next_token()` produces one [`TokenInfo`] at a
+/// time.
 pub struct Lexer<'s> {
     src: &'s [u8],
     pos: usize,
@@ -16,6 +19,7 @@ pub struct Lexer<'s> {
 }
 
 impl<'s> Lexer<'s> {
+    /// Build a lexer over `src` for the given Lua dialect.
     pub fn new(src: &'s [u8], version: LuaVersion) -> Lexer<'s> {
         Lexer {
             src,
@@ -25,6 +29,7 @@ impl<'s> Lexer<'s> {
         }
     }
 
+    /// Borrow the source bytes the lexer is iterating.
     pub fn src(&self) -> &'s [u8] {
         self.src
     }
@@ -146,6 +151,8 @@ impl<'s> Lexer<'s> {
         self.err(line, format!("{msg} near '{text}'"))
     }
 
+    /// Lex the next token. Returns `Token::Eof` (with the final source line)
+    /// at end-of-input; returns a [`SyntaxError`] on malformed input.
     pub fn next_token(&mut self) -> Result<TokenInfo, SyntaxError> {
         loop {
             let start = self.pos;

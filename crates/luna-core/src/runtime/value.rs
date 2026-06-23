@@ -46,21 +46,61 @@ use crate::runtime::function::NativeClosure;
 #[derive(Clone, Copy, Debug)]
 #[repr(C, u8)]
 pub enum Value {
+    /// Lua `nil`.
     Nil,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(Gc<LuaStr>),
-    Table(Gc<Table>),
-    Closure(Gc<LuaClosure>),
-    Native(Gc<NativeClosure>),
-    Coro(Gc<Coro>),
-    Userdata(Gc<Userdata>),
+    /// Lua `boolean`.
+    Bool(
+        /// Underlying boolean.
+        bool,
+    ),
+    /// Lua integer (5.3+; in 5.1 all numbers arrive as `Float`).
+    Int(
+        /// 64-bit signed value.
+        i64,
+    ),
+    /// Lua float.
+    Float(
+        /// IEEE-754 double.
+        f64,
+    ),
+    /// Lua `string` — GC-managed byte string.
+    Str(
+        /// String handle.
+        Gc<LuaStr>,
+    ),
+    /// Lua `table`.
+    Table(
+        /// Table handle.
+        Gc<Table>,
+    ),
+    /// Lua function backed by a [`LuaClosure`].
+    Closure(
+        /// Closure handle.
+        Gc<LuaClosure>,
+    ),
+    /// Lua function backed by a host [`NativeClosure`].
+    Native(
+        /// Native closure handle.
+        Gc<NativeClosure>,
+    ),
+    /// Lua `thread` (coroutine).
+    Coro(
+        /// Coroutine handle.
+        Gc<Coro>,
+    ),
+    /// Full userdata — GC-managed host-allocated payload with a metatable.
+    Userdata(
+        /// Userdata handle.
+        Gc<Userdata>,
+    ),
     /// PUC `LUA_TLIGHTUSERDATA`: an opaque host pointer that participates only
     /// as an identity token (raw equality on pointer bits, no metatable, not
     /// GC-managed). Currently produced exclusively by `debug.upvalueid` — it
     /// points at the upvalue cell's `Value` slot and stays distinct per cell.
-    LightUserdata(*const ()),
+    LightUserdata(
+        /// Opaque host pointer used as an identity token.
+        *const (),
+    ),
 }
 
 // SAFETY: `LightUserdata` holds a raw pointer (PUC `void*` identity token).
@@ -69,6 +109,9 @@ pub enum Value {
 // The raw `*const ()` doesn't change that contract.
 
 impl Value {
+    /// Lua-visible type name (`"nil"`, `"boolean"`, `"number"`,
+    /// `"string"`, `"table"`, `"function"`, `"thread"`, `"userdata"`)
+    /// matching `type()`.
     pub fn type_name(self) -> &'static str {
         match self {
             Value::Nil => "nil",
@@ -84,6 +127,7 @@ impl Value {
         }
     }
 
+    /// True when this is [`Value::Nil`].
     pub fn is_nil(self) -> bool {
         matches!(self, Value::Nil)
     }
@@ -101,7 +145,7 @@ impl Value {
     /// `Nil=0, Bool=1, Int=2, Float=3, Str=4, Table=5, Closure=6,
     ///  Native=7, Coro=8, Userdata=9, LightUserdata=10`.
     ///
-    /// Use [`tag::*`] constants instead of literal numbers at call
+    /// Use [`tag`] constants instead of literal numbers at call
     /// sites — see the module-level `tag` constants below.
     #[inline(always)]
     pub fn tag_byte(&self) -> u8 {
@@ -239,16 +283,32 @@ pub fn f2i_exact(f: f64) -> Option<i64> {
 /// `Value` enum discriminant — one tag per variant — used by
 /// LJ_FR2-style frame-metadata reads in Phase 3+.
 pub mod tag {
+    //! Discriminant byte constants for [`super::Value::tag_byte`].
+    //!
+    //! Match the variant order of [`super::Value`]; reordering the
+    //! enum requires updating these in lock-step.
+
+    /// Tag for `Value::Nil`.
     pub const NIL: u8 = 0;
+    /// Tag for `Value::Bool`.
     pub const BOOL: u8 = 1;
+    /// Tag for `Value::Int`.
     pub const INT: u8 = 2;
+    /// Tag for `Value::Float`.
     pub const FLOAT: u8 = 3;
+    /// Tag for `Value::Str`.
     pub const STR: u8 = 4;
+    /// Tag for `Value::Table`.
     pub const TABLE: u8 = 5;
+    /// Tag for `Value::Closure`.
     pub const CLOSURE: u8 = 6;
+    /// Tag for `Value::Native`.
     pub const NATIVE: u8 = 7;
+    /// Tag for `Value::Coro`.
     pub const CORO: u8 = 8;
+    /// Tag for `Value::Userdata`.
     pub const USERDATA: u8 = 9;
+    /// Tag for `Value::LightUserdata`.
     pub const LIGHTUSERDATA: u8 = 10;
 }
 

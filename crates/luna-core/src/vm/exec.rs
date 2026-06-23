@@ -44,6 +44,9 @@ use crate::vm::isa::{Inst, Op};
 /// opt-in `Arc<RwLock<T>>` mode with a hard ≤8% perf regression
 /// budget. See `.dev/rfcs/v1.1-rfc-vm-send-sync.md` for the design.
 pub struct Vm {
+    /// The GC heap owned by this VM. Embedders normally interact via the
+    /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
+    /// the heap directly.
     pub heap: Heap,
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
@@ -417,8 +420,11 @@ pub enum RustHookEvent {
 /// Mask flags for [`Vm::set_rust_debug_hook`]. OR these to subscribe
 /// to multiple event categories with a single hook installation.
 pub const HOOK_MASK_CALL: u32 = 1;
+/// Subscribe to function-return events.
 pub const HOOK_MASK_RETURN: u32 = 2;
+/// Subscribe to line-change events.
 pub const HOOK_MASK_LINE: u32 = 4;
+/// Subscribe to instruction-count events.
 pub const HOOK_MASK_COUNT: u32 = 8;
 
 /// A thread's swapped-out execution context (PUC per-thread stack state).
@@ -618,7 +624,9 @@ const PUC_MAXSTACK: i64 = 1_000_000;
 /// `@<word>` control is silently ignored, mirroring `lauxlib.c::checkcontrol`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WarnState {
+    /// `warn` calls are silently dropped (default after `warn("@off")`).
     Off,
+    /// `warn` calls are delivered to stderr (after `warn("@on")`).
     On,
 }
 
@@ -636,9 +644,13 @@ fn panic_payload_str(payload: &Box<dyn std::any::Any + Send>) -> String {
     "<non-string panic>".to_string()
 }
 
+/// Combined error type returned by [`Vm::eval`] and friends — either the
+/// chunk failed to parse / compile, or it raised at runtime.
 #[derive(Debug)]
 pub enum Error {
+    /// Parse or compile failure.
     Syntax(SyntaxError),
+    /// Runtime error raised during execution.
     Runtime(LuaError),
 }
 
@@ -934,8 +946,8 @@ impl Vm {
 
     /// v1.1 A1 Session C — install a caller-supplied JIT backend. The
     /// `luna` crate uses this to swap in its `CraneliftBackend`; tests
-    /// or third-party backends pass their own [`IntChunkCompiler`] /
-    /// [`TraceCompiler`] implementations. Re-installing on a Vm whose
+    /// or third-party backends pass their own [`crate::jit::IntChunkCompiler`] /
+    /// [`crate::jit::TraceCompiler`] implementations. Re-installing on a Vm whose
     /// closures already populated `Proto.jit: JitProtoState::Compiled`
     /// does NOT evict those cached entries — call right after
     /// construction for a clean swap.
@@ -1000,15 +1012,19 @@ impl Vm {
     pub fn open_base(&mut self) {
         crate::vm::builtins::open_base(self);
     }
+    /// Install the `math` standard library.
     pub fn open_math(&mut self) {
         crate::vm::lib_math::open_math(self);
     }
+    /// Install the `table` standard library.
     pub fn open_table(&mut self) {
         crate::vm::lib_table::open_table(self);
     }
+    /// Install the `string` standard library (and the shared string metatable).
     pub fn open_string(&mut self) {
         crate::vm::lib_string::open_string(self);
     }
+    /// Install the `utf8` standard library (5.3+).
     pub fn open_utf8(&mut self) {
         crate::vm::lib_utf8::open_utf8(self);
     }
@@ -1018,9 +1034,12 @@ impl Vm {
     pub fn open_os_io(&mut self) {
         crate::vm::lib_os_io::open_os_io(self);
     }
+    /// Install the `debug` standard library (introspection / hooks). Off by
+    /// default for sandbox embedders.
     pub fn open_debug(&mut self) {
         crate::vm::lib_debug::open_debug(self);
     }
+    /// Install the `coroutine` standard library.
     pub fn open_coroutine(&mut self) {
         crate::vm::lib_coroutine::open_coroutine(self);
     }
@@ -1093,6 +1112,7 @@ impl Vm {
         self.type_mt[3] = mt;
     }
 
+    /// The current globals table (`_G` / `_ENV` source for new chunks).
     pub fn globals(&self) -> Gc<Table> {
         self.globals
     }
@@ -1116,6 +1136,9 @@ impl Vm {
         self.globals = env;
     }
 
+    /// The Lua dialect this VM was constructed for (5.1 / 5.2 / 5.3 / 5.4 /
+    /// 5.5). Determines numeric semantics, available standard libraries, and
+    /// metamethod behavior.
     pub fn version(&self) -> LuaVersion {
         self.version
     }
@@ -2657,6 +2680,7 @@ impl Vm {
         self.jit.p16_self_link_enabled = enabled;
     }
 
+    /// Current state of the P16-A self-link cycle catch.
     pub fn p16_self_link_enabled(&self) -> bool {
         self.jit.p16_self_link_enabled
     }
@@ -2717,7 +2741,7 @@ impl Vm {
 
     /// P12-S2.C — number of closed traces the lowerer rejected
     /// (any of the bail conditions in
-    /// [`crate::jit::trace::try_compile_trace`]).
+    /// `crate::jit::trace::try_compile_trace`).
     pub fn trace_compile_failed_count(&self) -> u64 {
         self.jit.counters.compile_failed
     }
@@ -2775,7 +2799,7 @@ impl Vm {
     }
 
     /// P12-S5-A — sum of NewTable sites the pre-emit escape sweep
-    /// classified as [`crate::jit::trace::EscapeState::Sinkable`]
+    /// classified as `crate::jit::trace::EscapeState::Sinkable`
     /// across every successfully compiled trace on this Vm. The
     /// count is post-demotion: sites pre-emit drops back to Escaped
     /// for not meeting v1 sunk-emit criteria are NOT counted.

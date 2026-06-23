@@ -37,7 +37,7 @@ impl LuaError {
     /// Construct a `LuaError` carrying `Value::Nil` (the cheap default
     /// for trait conversions that don't have a `&mut Vm` to intern a
     /// rich message with). Callers with a Vm typically use
-    /// [`LuaError::message`].
+    /// `LuaError::message`.
     pub fn nil() -> LuaError {
         LuaError(Value::Nil)
     }

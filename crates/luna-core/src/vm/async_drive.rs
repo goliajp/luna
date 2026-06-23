@@ -3,8 +3,8 @@
 //! See `.dev/rfcs/v1.1-rfc-b10-async-embedder.md` (§D1, §D2, §D4, §D5,
 //! §D8) for the full design. This module implements the Stage 1 slice:
 //!
-//! - [`DispatchOutcome`] — terminal / cooperative-yield enum.
-//! - [`Vm::drive_one`] — runs the dispatcher until completion / error /
+//! - `DispatchOutcome` — terminal / cooperative-yield enum.
+//! - `Vm::drive_one` — runs the dispatcher until completion / error /
 //!   `BudgetExhausted`. Layers on `Vm::call_value` for the bootstrap
 //!   poll and on `Vm::exec_with_async` for resume polls.
 //! - [`EvalFuture`] — `!Send` `std::future::Future` that owns the

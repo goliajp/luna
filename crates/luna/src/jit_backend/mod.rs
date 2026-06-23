@@ -127,7 +127,7 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
 /// 5.5 vs 5.5 still share; same-source 5.5 vs 5.1 don't.
 ///
 /// S5d — adds `arg_table_mask` (per-arg `Gc<Table>` indicator) and
-/// `ret_is_table` (true ↔ Return1 yields a Gc<Table> ptr).
+/// `ret_is_table` (true ↔ Return1 yields a `Gc<Table>` ptr).
 pub fn cache_lookup_or_compile(
     proto: luna_core::runtime::Gc<Proto>,
     pre53: bool,

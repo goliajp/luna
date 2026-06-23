@@ -9,9 +9,12 @@
 use crate::runtime::heap::{Gc, GcHeader, Heap, Marker};
 use crate::runtime::value::{RawVal, Value, f2i_exact, raw};
 
+/// Errors that table mutation can raise back to the interpreter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableError {
+    /// `t[nil] = …` — `nil` is forbidden as a key.
     NilIndex,
+    /// `t[0/0] = …` — NaN floats are forbidden as keys.
     NanIndex,
     /// `next` called with a key not present in the table.
     InvalidNext,
@@ -66,6 +69,8 @@ pub(crate) const INLINE_ASIZE: u64 = 2;
 /// `INLINE_ASIZE = 2`: 2 avals + 1 atags = 3 u64s = 24 bytes.
 pub(crate) const INLINE_U64S: usize = INLINE_ASIZE as usize + INLINE_ASIZE.div_ceil(8) as usize;
 
+/// Lua table — hybrid array + hash storage, with optional metatable and
+/// weak-mode flags.
 #[repr(C)]
 pub struct Table {
     /// read through raw casts by the GC, not by field access
@@ -220,10 +225,13 @@ impl Table {
         vec![0u64; total].into_boxed_slice()
     }
 
+    /// This table's metatable, if any.
     pub fn metatable(&self) -> Option<Gc<Table>> {
         self.metatable
     }
 
+    /// Install (or clear) this table's metatable. Does not perform any
+    /// `__metatable` guarding; that belongs in the Vm-level `setmetatable`.
     pub fn set_metatable(&mut self, mt: Option<Gc<Table>>) {
         self.metatable = mt;
     }
@@ -278,6 +286,8 @@ impl Table {
 
     // ---- reads ----
 
+    /// Raw lookup (no `__index` metamethod). Returns `Value::Nil` when
+    /// the key is absent. `Value::Nil` and NaN floats return `nil` directly.
     pub fn get(&self, key: Value) -> Value {
         match key {
             Value::Int(i) => self.get_int(i),
@@ -296,6 +306,7 @@ impl Table {
         }
     }
 
+    /// Integer-keyed variant of [`Self::get`].
     pub fn get_int(&self, i: i64) -> Value {
         if i >= 1 && (i as u64) <= self.asize() as u64 {
             return self.aget(i as usize - 1);
@@ -346,6 +357,7 @@ impl Table {
         self.set_norm(heap, k, val)
     }
 
+    /// Integer-keyed variant of [`Self::set`].
     pub fn set_int(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError> {
         self.set_norm(heap, Value::Int(i), val)
     }
@@ -603,7 +615,7 @@ impl Table {
 
     // ---- length / iteration ----
 
-    /// A border: n where t[n] is non-nil and t[n+1] is nil (PUC luaH_getn).
+    /// A border: `n` where `t[n]` is non-nil and `t[n+1]` is nil (PUC `luaH_getn`).
     /// This is Lua `#` semantics, not a container size — an `is_empty`
     /// counterpart would be meaningless.
     #[allow(clippy::len_without_is_empty)]

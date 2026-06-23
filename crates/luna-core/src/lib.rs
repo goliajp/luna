@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! luna-core — pure-Rust Lua runtime (interpreter only).
 //!
 //! Zero third-party dependencies. The JIT-equipped variant lives in
@@ -9,7 +10,7 @@
 //!
 //! # Threading model
 //!
-//! [`Vm`] is **`!Send + !Sync`** — one Vm per OS thread. The GC uses
+//! [`vm::Vm`] is **`!Send + !Sync`** — one Vm per OS thread. The GC uses
 //! raw `NonNull<T>` over an intrusive mark-sweep heap (not
 //! reference-counted handles). Embedders wanting concurrency spawn
 //! one Vm per worker thread and exchange data via channels; async

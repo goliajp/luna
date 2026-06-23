@@ -11,8 +11,13 @@ use std::slice;
 
 use crate::runtime::heap::{GcHeader, ObjTag};
 
+/// Strings up to this byte length are interned in the heap's string table;
+/// longer strings are heap-individual and hashed lazily.
 pub const MAX_SHORT_LEN: usize = 40;
 
+/// Lua string object — header plus inline byte payload. Byte-clean (Lua
+/// strings are arbitrary byte sequences, not necessarily UTF-8). Access the
+/// bytes via `Gc<LuaStr>::as_bytes`.
 #[repr(C)]
 pub struct LuaStr {
     pub(crate) hdr: GcHeader,
@@ -27,10 +32,12 @@ pub struct LuaStr {
 }
 
 impl LuaStr {
+    /// Byte length of the string (not character count).
     pub fn len(&self) -> usize {
         self.len as usize
     }
 
+    /// True when the string is zero bytes long.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -45,11 +52,13 @@ impl LuaStr {
 /// the tail from it is UB (caught by miri). `Gc` stores the allocation
 /// pointer, hence these live on `Gc<LuaStr>`.
 impl crate::runtime::heap::Gc<LuaStr> {
+    /// Borrow the underlying bytes of this Lua string.
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe { bytes_of(self.as_ptr()) }
     }
 
+    /// Cached hash of the string (computed lazily for long strings).
     pub fn hash(&self) -> u32 {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe { hash_of(self.as_ptr()) }

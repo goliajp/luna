@@ -466,7 +466,7 @@ pub struct AllocSite {
     pub op_idx: usize,
     /// Bytecode PC of the NewTable (in the site's enclosing Proto).
     pub pc: u32,
-    /// Destination register R[A] = newly-allocated table.
+    /// Destination register `R[A]` = newly-allocated table.
     pub a: u32,
     /// Inline depth at the time of the NewTable (0 = trace head).
     pub inline_depth: u8,
@@ -480,6 +480,7 @@ pub struct AllocSite {
     /// hold the hash slots; SetFieldSunkWrite / GetFieldSunkRead
     /// look up the key's position in this vec to pick the slot.
     pub hash_keys: Vec<u32>,
+    /// Final escape-state classification after the sweep.
     pub state: EscapeState,
 }
 
@@ -495,32 +496,63 @@ pub struct AllocSite {
 pub enum OpAction {
     /// `Op::NewTable` allocating site_idx. Emit skips the
     /// `luna_jit_new_table` helper; the site lives as virtual slots.
-    NewTableSite { site_idx: u32 },
+    NewTableSite {
+        /// Allocation site index in [`EscapeAnalysis::sites`].
+        site_idx: u32,
+    },
     /// `Op::SetList` writing into a sunk site's array. Emit
     /// `def_var`s the source registers into virtual slots.
-    SetListWrite { site_idx: u32 },
+    SetListWrite {
+        /// Allocation site index.
+        site_idx: u32,
+    },
     /// `Op::GetI` reading from a sunk site at a 1-based key. Emit
     /// `def_var`s the corresponding virtual slot into the dst reg.
-    GetIRead { site_idx: u32, key: u32 },
+    GetIRead {
+        /// Allocation site index.
+        site_idx: u32,
+        /// 1-based array key being read.
+        key: u32,
+    },
     /// P12-S8-B — `Op::SetI` writing into a sunk site's slot at a
     /// 1-based key. Emit `def_var`s the value register into the
     /// matching virt slot Variable and updates `virt_kinds` so the
     /// next `GetI` reads the right RegKind. The value source is
     /// the runtime register `R[C]`.
-    SetISunkWrite { site_idx: u32, key: u32 },
+    SetISunkWrite {
+        /// Allocation site index.
+        site_idx: u32,
+        /// 1-based array key being written.
+        key: u32,
+    },
     /// P12-S8-C — `Op::SetTable` writing into a sunk site's slot
     /// at a 1-based key const-folded from a backward scan of the
     /// trace (LoadI → Move chain → key). Same emit shape as
     /// SetISunkWrite; the key field is the resolved int.
-    SetTableSunkWrite { site_idx: u32, key: u32 },
+    SetTableSunkWrite {
+        /// Allocation site index.
+        site_idx: u32,
+        /// Const-folded 1-based array key.
+        key: u32,
+    },
     /// P12-S11-B-v1 — `Op::SetField` writing into a sunk site's
     /// hash slot. `hash_slot` is the position of the key's const
     /// index in `AllocSite.hash_keys`. virt_vars index is
     /// `array_cap + hash_slot`.
-    SetFieldSunkWrite { site_idx: u32, hash_slot: u32 },
+    SetFieldSunkWrite {
+        /// Allocation site index.
+        site_idx: u32,
+        /// Position in [`AllocSite::hash_keys`] of the field key.
+        hash_slot: u32,
+    },
     /// P12-S11-B-v1 — `Op::GetField` reading from a sunk site's
     /// hash slot. Same indexing as SetFieldSunkWrite.
-    GetFieldSunkRead { site_idx: u32, hash_slot: u32 },
+    GetFieldSunkRead {
+        /// Allocation site index.
+        site_idx: u32,
+        /// Position in [`AllocSite::hash_keys`] of the field key.
+        hash_slot: u32,
+    },
 }
 
 /// P14-S14-B v0 — buffer state for a candidate `Op::Concat`
@@ -539,7 +571,7 @@ pub enum BufferState {
 }
 
 /// P14-S14-B v0 — one `Op::Concat A B=2` candidate found by
-/// [`detect_accumulators`] where `A` (the destination) is the same
+/// `detect_accumulators` where `A` (the destination) is the same
 /// register as the first operand AND survives across the trace's
 /// back-edge. v0 ships the struct + an empty detection pass (no
 /// candidates produced yet) so v1+ can extend without API churn.
@@ -567,6 +599,7 @@ pub struct AccumSite {
 /// side-exit emit point to materialise the right virt slots.
 #[derive(Debug, Default)]
 pub struct EscapeAnalysis {
+    /// One [`AllocSite`] per `Op::NewTable` in the trace.
     pub sites: Vec<AllocSite>,
     /// Per-op action, length = `effective_end`. Indexed by op index
     /// in `record.ops`. `None` for ops the sweep didn't tag.
@@ -579,7 +612,7 @@ pub struct EscapeAnalysis {
     /// still in the snapshot but emit gates on the final state.
     pub live_at_op: Vec<Vec<u32>>,
     /// P14-S14-B v0 — accumulator sites identified in this trace.
-    /// Empty in v0 ([`detect_accumulators`] is a stub); v1+ will
+    /// Empty in v0 (`detect_accumulators` is a stub); v1+ will
     /// populate.
     pub accum_sites: Vec<AccumSite>,
     /// P14-S14-B v0 — per-op snapshot of bound accumulator-site
@@ -1874,7 +1907,7 @@ pub fn compute_live_in_slots(
 }
 
 /// Owner of one compiled trace's mmap'd code. Drop releases the
-/// pages, so we stash these in a thread-local [`TRACE_JIT_HANDLES`]
+/// pages, so we stash these in a thread-local `TRACE_JIT_HANDLES`
 /// to keep entry fn pointers callable for the thread's lifetime.
 /// Mirrors the method JIT's `JitHandle` / `JIT_CACHE_HANDLES`
 /// pattern (`src/jit/mod.rs`).
@@ -2369,7 +2402,7 @@ fn emit_store_back_and_return_site(
 /// Returns `None` if:
 /// - the record is not closed yet (open traces can't be entered
 ///   safely — the loop edge is the only sound entry/exit),
-/// - any recorded op is outside [`is_whitelisted_step4`],
+/// - any recorded op is outside `is_whitelisted_step4`,
 /// - any recorded op comes from a Proto other than `head_proto`
 ///   (inlined sub-calls don't ship until S4),
 /// - any recorded op has `inline_depth > 0` (same reason),
@@ -2381,7 +2414,7 @@ fn emit_store_back_and_return_site(
 /// - cranelift codegen fails.
 ///
 /// On success, the underlying `JITModule` is stashed in
-/// [`TRACE_JIT_HANDLES`] so the returned `CompiledTrace.entry` stays
+/// `TRACE_JIT_HANDLES` so the returned `CompiledTrace.entry` stays
 /// callable for the thread's lifetime.
 ///
 /// **Caller contract for table ops** (step 4): before invoking the
@@ -2426,10 +2459,15 @@ fn set_last_op_id(id: u8) {
     LAST_OP_ID.with(|c| c.set(id));
 }
 
+/// Name of the lowerer checkpoint most recently reached on this thread.
+/// Diagnostic-only — used to bucket trace-compile failures by phase
+/// (`pre-lower`, `lower-loop`, `finalize`, …).
 pub fn last_compile_checkpoint() -> &'static str {
     LAST_COMPILE_CHECKPOINT.with(|c| c.get())
 }
 
+/// Opcode id (luna `Op` discriminant) of the last bytecode op the
+/// lowerer touched on this thread. Diagnostic-only.
 pub fn last_op_id() -> u8 {
     LAST_OP_ID.with(|c| c.get())
 }

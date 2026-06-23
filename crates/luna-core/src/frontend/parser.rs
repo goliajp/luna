@@ -75,6 +75,8 @@ fn un_op_of(tok: &Token) -> Option<UnOp> {
     })
 }
 
+/// Parse a Lua source chunk for the given dialect into an arena AST
+/// ([`Chunk`]).
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
     let mut lex = Lexer::new(src, version);
     let tok = lex.next_token()?;

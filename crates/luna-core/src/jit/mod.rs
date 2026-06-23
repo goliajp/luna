@@ -36,6 +36,9 @@ pub use abi::{
 // luna-core `trace` is just a namespace alias for `trace_types`; in
 // luna it's enriched with codegen-bearing items via a different
 // re-export.
+/// Trace-JIT types namespace. In `luna-core` this is a thin re-export of
+/// [`trace_types`]; the `luna` crate enriches it with the Cranelift-backed
+/// codegen entry points (`try_compile_trace`, etc.).
 pub mod trace {
     pub use super::trace_types::*;
 }

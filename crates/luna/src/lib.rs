@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! luna — a Lua runtime in pure Rust with a Cranelift-backed JIT.
 //!
 //! Primary dialect: Lua 5.5 (tracks official upstream).

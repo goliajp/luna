@@ -1,6 +1,6 @@
 //! mlua-style `Lua` facade (B12, Phase 2 P2-D).
 //!
-//! A thin wrapper around [`luna_core::Vm`] that exposes the same
+//! A thin wrapper around [`luna_core::vm::Vm`] that exposes the same
 //! API in a shape familiar to embedders coming from `rlua` / `mlua`:
 //!
 //! ```
@@ -207,38 +207,48 @@ pub struct LuaSandboxBuilder {
 }
 
 impl LuaSandboxBuilder {
+    /// Whitelist the `base` standard library.
     pub fn open_base(mut self) -> Self {
         self.inner = self.inner.open_base();
         self
     }
+    /// Whitelist the `math` standard library.
     pub fn open_math(mut self) -> Self {
         self.inner = self.inner.open_math();
         self
     }
+    /// Whitelist the `string` standard library.
     pub fn open_string(mut self) -> Self {
         self.inner = self.inner.open_string();
         self
     }
+    /// Whitelist the `table` standard library.
     pub fn open_table(mut self) -> Self {
         self.inner = self.inner.open_table();
         self
     }
+    /// Whitelist the `coroutine` standard library.
     pub fn open_coroutine(mut self) -> Self {
         self.inner = self.inner.open_coroutine();
         self
     }
+    /// Cap interpreter instruction count per call (fires once, then trips).
     pub fn with_instr_budget(mut self, n: i64) -> Self {
         self.inner = self.inner.with_instr_budget(n);
         self
     }
+    /// Cap heap memory (approximate; see [`crate::vm::Vm::set_memory_cap`]).
     pub fn with_memory_cap(mut self, n: usize) -> Self {
         self.inner = self.inner.with_memory_cap(n);
         self
     }
+    /// Re-enable precompiled-bytecode loading (off by default in sandbox
+    /// mode for safety).
     pub fn allow_bytecode_loading(mut self) -> Self {
         self.inner = self.inner.allow_bytecode_loading();
         self
     }
+    /// Finalize the builder and return a configured [`Lua`].
     pub fn build(self) -> Lua {
         Lua(self.inner.build())
     }
@@ -379,6 +389,8 @@ impl IntoValue for LuaRoot {
 /// [`Vm::call_value`] expects. Implemented for `()` + tuples of
 /// [`IntoValue`] up to arity 6.
 pub trait IntoLuaArgs {
+    /// Encode `self` (a tuple of [`IntoValue`] implementors) as a flat
+    /// argument list ready for [`LuaFunction::call`].
     fn into_lua_args(self, vm: &mut Vm) -> Vec<Value>;
 }
 
