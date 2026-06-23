@@ -21,6 +21,17 @@ crate-type = ["rlib"]
 [lints]
 workspace = true
 
+[features]
+# Default: no features. Vm stays !Send + !Sync (the v1.0/v1.1 default).
+default = []
+# v1.2 S framework: opt-in feature reserved for the v1.3 Send sprint.
+# Selecting it today raises a `compile_error!` (see lib.rs) — the actual
+# `Arc<RwLock<Heap>>` wiring lands in v1.3 with a measured perf gate
+# (ARM ~10%, x86_64 ~20%; full design in v1.3-rfc-send-arc.md per the
+# S-A1 audit). Embedders can already `cargo add luna-core --features
+# send` to compile-time-detect when the sprint ships.
+send = []
+
 [dependencies]
 # v1.1 F1 acceptance: this list must remain empty so
 # `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` == 1.
