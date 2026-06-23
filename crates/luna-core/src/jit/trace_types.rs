@@ -929,8 +929,7 @@ pub fn decode_exit_shape<'a>(
 }
 
 /// Compile-time options for the trace lowerer.
-#[derive(Clone, Copy, Debug)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CompileOptions {
     /// When `true`, the trace's clean-close path emits a back-edge
     /// jump to its own body-loop block instead of returning
@@ -959,4 +958,3 @@ pub struct CompileOptions {
     /// and stay on the interp side.
     pub pre53: bool,
 }
-

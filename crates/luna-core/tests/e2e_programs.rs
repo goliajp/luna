@@ -86,12 +86,18 @@ fn reference_bin_for(version: LuaVersion) -> Option<&'static str> {
         LuaVersion::Lua54 => &["lua-5.4"][..],
         LuaVersion::Lua55 => &["lua-5.5"][..],
     };
-    candidates.iter().find(|&&c| Command::new(c)
-            .arg("-v")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()).copied().map(|v| v as _)
+    candidates
+        .iter()
+        .find(|&&c| {
+            Command::new(c)
+                .arg("-v")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+        })
+        .copied()
+        .map(|v| v as _)
 }
 
 fn run_on_puc(bin: &str, src: &str) -> Vec<u8> {

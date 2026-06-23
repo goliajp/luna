@@ -2876,14 +2876,13 @@ pub fn try_compile_trace_with_options(
                     }
                     break;
                 }
-                Op::Return0 | Op::Return1
-                    if depth == 0 => {
-                        found = Some((i, TraceEnd::Return));
-                        break;
-                    }
-                    // depth>0 Returns are inline-path unwinds; the
-                    // step3b emit loop handles them (Return0 no-op,
-                    // Return1 copy-back). Don't terminate.
+                Op::Return0 | Op::Return1 if depth == 0 => {
+                    found = Some((i, TraceEnd::Return));
+                    break;
+                }
+                // depth>0 Returns are inline-path unwinds; the
+                // step3b emit loop handles them (Return0 no-op,
+                // Return1 copy-back). Don't terminate.
                 _ => {}
             }
         }

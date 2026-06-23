@@ -4922,7 +4922,6 @@ mod s1 {
     use super::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn jit_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -4988,7 +4987,6 @@ mod s1 {
 mod s2 {
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5057,7 +5055,6 @@ mod s2b {
     use super::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn jit_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5156,7 +5153,6 @@ mod s2c_a {
     use super::{IntFn1, IntFn2, try_compile_int_chunk};
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     /// Keep the `Vm` alive across the body so the GC doesn't reap the
     /// inner closure's Proto. Returning the `Gc<Proto>` past the Vm's
@@ -5260,7 +5256,6 @@ mod s2c_b {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5338,7 +5333,6 @@ mod s2c_c {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5420,7 +5414,6 @@ mod s2c_c_perf_check {
     //! Sanity check that fib_28's Proto actually flips to Compiled.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     #[test]
     fn fib28_bench_source_flips_proto_to_compiled() {
@@ -5451,7 +5444,6 @@ mod s3 {
     use super::try_compile_int_chunk;
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_float_55(src: &str) -> f64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5614,7 +5606,6 @@ mod s5a {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int_55(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5780,7 +5771,6 @@ mod s5a_b {
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int_53(src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
@@ -5868,7 +5858,6 @@ mod s5a_c {
     //! R[A+3] register.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_float_with(version: LuaVersion, src: &str) -> f64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6022,7 +6011,6 @@ mod s5b {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_float_with(version: LuaVersion, src: &str) -> f64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6263,7 +6251,6 @@ mod s5c {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int_with(version: LuaVersion, src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6435,7 +6422,6 @@ mod s5c_b {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    
 
     fn eval_int_with(version: LuaVersion, src: &str) -> i64 {
         let mut vm = crate::jit_backend::test_vm_new(version);
@@ -6583,7 +6569,6 @@ mod s5d_a {
     //! actually compile.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
-    
 
     /// `function f(t) return t[1] end` — Table param + Int return.
     /// JIT path: param marshalled as Gc ptr, GetI reads array slot,
@@ -6654,7 +6639,6 @@ mod s5d_b {
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
-    
 
     /// Simple SetList literal — `{1, 2, 3}` in a fn body. NewTable
     /// b=3 + LoadI×3 + SetList b=3 + Return1.

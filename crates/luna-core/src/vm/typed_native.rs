@@ -300,8 +300,11 @@ fn reconstruct<F: Copy + 'static>(vm: &Vm, fs: u32) -> F {
     if std::mem::size_of::<F>() == 0 {
         // SAFETY: F is a ZST. MaybeUninit::<F>::uninit().assume_init()
         // returns a valid F because there are no bytes to initialize.
-        #[allow(clippy::uninit_assumed_init)] // ZST-only branch guarded above; constant-folded at monomorphization.
-        unsafe { std::mem::MaybeUninit::<F>::uninit().assume_init() }
+        #[allow(clippy::uninit_assumed_init)]
+        // ZST-only branch guarded above; constant-folded at monomorphization.
+        unsafe {
+            std::mem::MaybeUninit::<F>::uninit().assume_init()
+        }
     } else {
         let upval = vm.nat_upval(fs, 0);
         match upval {
