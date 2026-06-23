@@ -13,12 +13,14 @@ pub mod ergo;
 pub mod into_value;
 pub mod sandbox;
 pub mod table_builder;
+pub mod typed_native;
 
 pub use error::LuaError;
 pub use exec::{Error, Vm};
 pub use into_value::IntoValue;
 pub use sandbox::SandboxBuilder;
 pub use table_builder::TableBuilder;
+pub use typed_native::{FromLuaArgs, FromLuaValue, IntoLuaReturn, NativeTypedSig};
 pub mod lib_debug;
 pub mod lib_math;
 pub mod lib_os_io;

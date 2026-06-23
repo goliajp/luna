@@ -7781,7 +7781,10 @@ match inst.op() {
     // ---- native helpers (used by builtins) ----
 
     /// A native function's own captured upvalue (self lives at func_slot).
-    pub(crate) fn nat_upval(&self, func_slot: u32, i: usize) -> Value {
+    ///
+    /// Public so `native_typed` trampolines and embedders authoring
+    /// stateful natives via `native_with(...)` can read their upvals.
+    pub fn nat_upval(&self, func_slot: u32, i: usize) -> Value {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("native frame without native closure");
         };
@@ -7822,6 +7825,7 @@ match inst.op() {
             Value::Nil
         }
     }
+
 
     /// Push the return values of a `NativeFn` and return their count
     /// (analogous to pushing N values then `return N` from a C function).
