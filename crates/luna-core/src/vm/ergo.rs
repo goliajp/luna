@@ -212,6 +212,45 @@ impl Vm {
         }
     }
 
+    // ─── B11 Rust-side debug hook ────────────────────────────────
+
+    /// Install a Rust-side debug hook (see [`RustDebugHook`]). The
+    /// `mask` is a bitwise OR of `HOOK_MASK_CALL` / `HOOK_MASK_RETURN`
+    /// / `HOOK_MASK_LINE` / `HOOK_MASK_COUNT` exported from
+    /// [`crate::vm::exec`]. The `count` arg sets the instruction
+    /// granularity for `Count` events (ignored unless `HOOK_MASK_COUNT`
+    /// is set).
+    ///
+    /// Passing `hook = None` clears the Rust hook; the Lua-side hook
+    /// installed via `debug.sethook` is unaffected.
+    pub fn set_rust_debug_hook(
+        &mut self,
+        hook: Option<crate::vm::exec::RustDebugHook>,
+        mask: u32,
+        count: i64,
+    ) {
+        self.hook.rust_func = hook;
+        // Update event mask flags. Other categories of the Lua hook
+        // stay as they were so a Lua-side debug.sethook + Rust hook
+        // can coexist with independent event subscriptions.
+        if hook.is_some() {
+            self.hook.call |= mask & crate::vm::exec::HOOK_MASK_CALL != 0;
+            self.hook.ret |= mask & crate::vm::exec::HOOK_MASK_RETURN != 0;
+            self.hook.line |= mask & crate::vm::exec::HOOK_MASK_LINE != 0;
+            if mask & crate::vm::exec::HOOK_MASK_COUNT != 0 {
+                self.hook.count = true;
+                self.hook.count_base = count;
+                self.hook.count_left = count;
+            }
+        }
+    }
+
+    /// Clear the Rust-side debug hook (sugar over
+    /// `set_rust_debug_hook(None, 0, 0)`).
+    pub fn clear_rust_debug_hook(&mut self) {
+        self.hook.rust_func = None;
+    }
+
     /// Mutable variant of [`Self::userdata_borrow`].
     pub fn userdata_borrow_mut<T: std::any::Any + 'static>(
         &mut self,

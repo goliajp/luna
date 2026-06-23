@@ -298,6 +298,10 @@ pub struct Vm {
 pub struct HookState {
     /// the hook function (`None` when no hook is installed)
     pub func: Option<Value>,
+    /// v1.1 B11 — Rust-side debug hook. Fires alongside the Lua hook
+    /// (Rust first); both can be installed simultaneously, but most
+    /// embedders pick one.
+    pub rust_func: Option<RustDebugHook>,
     /// LUA_MASKCALL — fire on function entry
     pub call: bool,
     /// LUA_MASKRET — fire on function return
@@ -311,6 +315,34 @@ pub struct HookState {
     /// instructions left until the next count event (PUC hookcount)
     pub count_left: i64,
 }
+
+/// Rust-side debug hook callback (B11). Receives the `Vm` plus a
+/// classified event. The callback runs synchronously in the
+/// dispatcher; the hook flag (`in_hook`) is set for its duration so
+/// hook recursion is suppressed.
+pub type RustDebugHook = fn(&mut Vm, RustHookEvent);
+
+/// Classified debug event delivered to a [`RustDebugHook`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustHookEvent {
+    /// Function entry (`hook_call` analogue).
+    Call,
+    /// Function return (`hook_return` analogue).
+    Return,
+    /// Tail call entry (PUC 5.2+ separates this from a plain Call).
+    TailCall,
+    /// Source-line change (the `u32` is the 1-based line number).
+    Line(u32),
+    /// Instruction count event (fires every `count_base` instructions).
+    Count,
+}
+
+/// Mask flags for [`Vm::set_rust_debug_hook`]. OR these to subscribe
+/// to multiple event categories with a single hook installation.
+pub const HOOK_MASK_CALL: u32 = 1;
+pub const HOOK_MASK_RETURN: u32 = 2;
+pub const HOOK_MASK_LINE: u32 = 4;
+pub const HOOK_MASK_COUNT: u32 = 8;
 
 /// A thread's swapped-out execution context (PUC per-thread stack state).
 struct SavedCtx {
@@ -1275,7 +1307,7 @@ impl Vm {
         }
         // Any active debug hook means the interpreter has to run the
         // call so the hook gets the expected events.
-        if self.hook.func.is_some() {
+        if (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
             return false;
         }
         let proto = cl.proto;
@@ -1927,6 +1959,25 @@ impl Vm {
         line: Option<i64>,
         from_native: bool,
     ) -> Result<(), LuaError> {
+        // v1.1 B11 — Rust hook fires first (no Vm reentrancy via call_value;
+        // synchronous fn pointer call). Both Rust and Lua hooks may be
+        // installed; both observe each event.
+        if let Some(rh) = self.hook.rust_func {
+            let evt = match event {
+                b"call" => Some(RustHookEvent::Call),
+                b"return" => Some(RustHookEvent::Return),
+                b"tail call" | b"tail return" => Some(RustHookEvent::TailCall),
+                b"line" => Some(RustHookEvent::Line(line.unwrap_or(0).max(0) as u32)),
+                b"count" => Some(RustHookEvent::Count),
+                _ => None,
+            };
+            if let Some(evt) = evt {
+                let was_in_hook = self.in_hook;
+                self.in_hook = true;
+                rh(self, evt);
+                self.in_hook = was_in_hook;
+            }
+        }
         let Some(hook) = self.hook.func else {
             return Ok(());
         };
@@ -1961,7 +2012,7 @@ impl Vm {
     /// `is_tail` selects the "tail call" event (PUC `LUA_HOOKTAILCALL`); a
     /// tail-call hook has no matching return hook (PUC luaD_pretailcall).
     fn hook_call_with(&mut self, from_native: bool, nargs: u32, is_tail: bool) -> Result<(), LuaError> {
-        if self.hook.call && !self.in_hook && self.hook.func.is_some() {
+        if self.hook.call && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
             self.hook_ftransfer = 1;
             self.hook_ntransfer = nargs.min(u16::MAX as u32) as u16;
             // PUC 5.1 didn't distinguish tail-call events — every call,
@@ -1989,7 +2040,7 @@ impl Vm {
         ftransfer: u32,
         nresults: u32,
     ) -> Result<(), LuaError> {
-        if self.hook.ret && !self.in_hook && self.hook.func.is_some() {
+        if self.hook.ret && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
             self.hook_ftransfer = ftransfer.min(u16::MAX as u32) as u16;
             self.hook_ntransfer = nresults.min(u16::MAX as u32) as u16;
             self.run_hook(b"return", None, from_native)?;
@@ -2001,7 +2052,7 @@ impl Vm {
     /// into the activation now returning, *after* its own "return" event.
     /// 5.1 hook mask `"r"` covers both `return` and `tail return`.
     fn hook_tail_return(&mut self) -> Result<(), LuaError> {
-        if self.hook.ret && !self.in_hook && self.hook.func.is_some() {
+        if self.hook.ret && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
             self.run_hook(b"tail return", None, false)?;
         }
         Ok(())
@@ -3659,7 +3710,7 @@ impl Vm {
                     // copying back for `finish_results`. db.lua :541 reads
                     // `getinfo("r").ftransfer` + `getlocal` to inspect a
                     // returning native's results this way.
-                    if self.hook.ret && !self.in_hook && self.hook.func.is_some() {
+                    if self.hook.ret && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
                         let res_dst = func_slot + nargs + 1;
                         let need = (res_dst + nret) as usize;
                         if self.stack.len() < need {
@@ -6217,7 +6268,7 @@ impl Vm {
 
             // count + line hooks (PUC traceexec): before executing the
             // instruction. Skipped while the hook itself runs.
-            if self.hook.func.is_some() && !self.in_hook {
+            if (self.hook.func.is_some() || self.hook.rust_func.is_some()) && !self.in_hook {
                 let lines = &cl.proto.lines;
                 let cur_line = if lines.is_empty() {
                     None
