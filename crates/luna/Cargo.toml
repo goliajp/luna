@@ -49,3 +49,7 @@ harness = false
 [[bench]]
 name = "run_only"
 harness = false
+
+[[bench]]
+name = "redis_lua_shape"
+harness = false
