@@ -127,3 +127,32 @@ fn typed_fn_item_works() {
     let r = vm.eval("return sq(11)").unwrap();
     assert!(matches!(r[0], Value::Int(121)));
 }
+
+#[test]
+fn arity_4_sum() {
+    let mut vm = vm();
+    let f = vm.native_typed(|a: i64, b: i64, c: i64, d: i64| -> i64 { a + b + c + d });
+    vm.set_global("sum4", f).unwrap();
+    let r = vm.eval("return sum4(1, 2, 3, 4)").unwrap();
+    assert!(matches!(r[0], Value::Int(10)));
+}
+
+#[test]
+fn arity_5_sum() {
+    let mut vm = vm();
+    let f = vm.native_typed(|a: i64, b: i64, c: i64, d: i64, e: i64| -> i64 { a + b + c + d + e });
+    vm.set_global("sum5", f).unwrap();
+    let r = vm.eval("return sum5(1, 2, 3, 4, 5)").unwrap();
+    assert!(matches!(r[0], Value::Int(15)));
+}
+
+#[test]
+fn arity_6_sum() {
+    let mut vm = vm();
+    let f = vm.native_typed(
+        |a: i64, b: i64, c: i64, d: i64, e: i64, f: i64| -> i64 { a + b + c + d + e + f },
+    );
+    vm.set_global("sum6", f).unwrap();
+    let r = vm.eval("return sum6(1, 2, 3, 4, 5, 6)").unwrap();
+    assert!(matches!(r[0], Value::Int(21)));
+}
