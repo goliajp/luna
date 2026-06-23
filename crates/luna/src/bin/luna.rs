@@ -1,6 +1,7 @@
 //! `luna` — small Lua runner CLI on top of the luna library.
 //!
 //! Usage:
+//!   luna                                      interactive REPL (C1)
 //!   luna [--lua=5.X] <script.lua> [args...]   run a file
 //!   luna [--lua=5.X] -e "<code>" [args...]    run inline code
 //!   luna [--lua=5.X] -                        read stdin to EOF
@@ -14,19 +15,24 @@
 use luna::runtime::Value;
 use luna::version::LuaVersion;
 use luna::vm::Vm;
-use std::io::Read;
+use std::io::{Read, Write};
 
 const HELP: &str = "\
 luna — a pure-Rust Lua runner
 
 Usage:
+  luna                                      interactive REPL
   luna [--lua=5.X] <script.lua> [args...]   run a file
   luna [--lua=5.X] -e \"<code>\" [args...]    run inline code
   luna [--lua=5.X] -                        read stdin to EOF
   luna -h | --help                          print this help
 
 --lua=X selects the dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5; default 5.5).
-Extra positional args go into the `arg` global as PUC expects.";
+Extra positional args go into the `arg` global as PUC expects.
+
+In REPL mode each line is first evaluated as an expression (prefixed
+with `return`); on syntax error the line is re-evaluated as a
+statement so assignments / function definitions work too.";
 
 fn parse_version(arg: &str) -> Option<LuaVersion> {
     match arg {
@@ -77,6 +83,68 @@ fn populate_arg(vm: &mut Vm, script_name: Option<&str>, extra: &[String]) {
     vm.set_global("arg", Value::Table(t)).expect("CLI arg setup");
 }
 
+/// Interactive REPL (C1 — single-line for v1.1; C2/C3 add multi-line,
+/// history, syntax highlighting in follow-on commits).
+///
+/// Each line is first tried as an expression (`return <line>`); on
+/// syntax error it's retried as a statement so `x = 1` and
+/// `function f() ... end` work too. Ctrl-D / EOF exits cleanly.
+fn repl(version: LuaVersion) {
+    let mut vm = luna::new_with_jit(version);
+    eprintln!(
+        "luna {} ({}) — interactive REPL. Ctrl-D to exit.",
+        env!("CARGO_PKG_VERSION"),
+        match version {
+            LuaVersion::Lua51 => "Lua 5.1",
+            LuaVersion::Lua52 => "Lua 5.2",
+            LuaVersion::Lua53 => "Lua 5.3",
+            LuaVersion::Lua54 => "Lua 5.4",
+            LuaVersion::Lua55 => "Lua 5.5",
+        }
+    );
+    let stdin = std::io::stdin();
+    let mut buf = String::new();
+    loop {
+        eprint!("> ");
+        let _ = std::io::stderr().flush();
+        buf.clear();
+        match stdin.read_line(&mut buf) {
+            Ok(0) => {
+                eprintln!();
+                return;
+            }
+            Ok(_) => {
+                let line = buf.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                // Expression-first: `return <line>` to surface a
+                // returned value. On syntax error (likely an
+                // assignment / def), retry as a statement.
+                let as_expr = format!("return {line}");
+                let result = match vm.eval(&as_expr) {
+                    Ok(vs) => Ok(vs),
+                    Err(_) => vm.eval(line),
+                };
+                match result {
+                    Ok(vs) => {
+                        for v in vs {
+                            println!("{}", render(v));
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error: {}", vm.error_text(&e));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("io error: {e}");
+                return;
+            }
+        }
+    }
+}
+
 fn main() {
     let mut version = LuaVersion::Lua55;
     let mut source: Option<Source> = None;
@@ -119,8 +187,9 @@ fn main() {
         consumed_source = true;
     }
     let Some(source) = source else {
-        eprintln!("{HELP}");
-        std::process::exit(2);
+        // C1 — no source means interactive REPL.
+        repl(version);
+        return;
     };
     let (src, chunkname, script_for_arg) = match source {
         Source::File(p) => {
