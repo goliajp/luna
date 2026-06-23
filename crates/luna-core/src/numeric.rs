@@ -4,13 +4,19 @@
 //! whitespace and sign). Versioning is expressed as capability flags so this
 //! module stays dialect-agnostic.
 
+/// Result of parsing a Lua numeric literal — either an integer or a float
+/// (Lua 5.1 collapses everything to float at this layer).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Num {
+    /// Integer-typed numeral.
     Int(i64),
+    /// Float-typed numeral.
     Float(f64),
 }
 
 impl Num {
+    /// Lossy conversion to `f64`. Integer-to-float follows Lua's coercion
+    /// (`Int` is cast as `i as f64`).
     pub fn as_f64(self) -> f64 {
         match self {
             Num::Int(i) => i as f64,
@@ -26,6 +32,8 @@ impl Num {
     }
 }
 
+/// Decode a single ASCII hex digit (`0-9`, `a-f`, `A-F`) into its numeric
+/// value, or return `None` for a non-hex byte.
 pub fn hex_digit(c: u8) -> Option<u32> {
     match c {
         b'0'..=b'9' => Some((c - b'0') as u32),

@@ -34,21 +34,33 @@ pub struct LuaState {
 
 /// PUC status codes that fit luna's surface.
 pub const LUA_OK: c_int = 0;
+/// PUC `LUA_ERRRUN` — runtime error while executing a chunk.
 pub const LUA_ERRRUN: c_int = 2;
+/// PUC `LUA_ERRSYNTAX` — parse / compile error in `luaL_loadbufferx`.
 pub const LUA_ERRSYNTAX: c_int = 3;
+/// PUC `LUA_ERRMEM` — memory-allocation failure.
 pub const LUA_ERRMEM: c_int = 4;
 
 /// PUC `lua_type` constants — match the values PUC uses so a C header
 /// shared with PUC code resolves to the same tags.
 pub const LUA_TNONE: c_int = -1;
+/// PUC `LUA_TNIL`.
 pub const LUA_TNIL: c_int = 0;
+/// PUC `LUA_TBOOLEAN`.
 pub const LUA_TBOOLEAN: c_int = 1;
+/// PUC `LUA_TLIGHTUSERDATA`.
 pub const LUA_TLIGHTUSERDATA: c_int = 2;
+/// PUC `LUA_TNUMBER`.
 pub const LUA_TNUMBER: c_int = 3;
+/// PUC `LUA_TSTRING`.
 pub const LUA_TSTRING: c_int = 4;
+/// PUC `LUA_TTABLE`.
 pub const LUA_TTABLE: c_int = 5;
+/// PUC `LUA_TFUNCTION`.
 pub const LUA_TFUNCTION: c_int = 6;
+/// PUC `LUA_TUSERDATA`.
 pub const LUA_TUSERDATA: c_int = 7;
+/// PUC `LUA_TTHREAD`.
 pub const LUA_TTHREAD: c_int = 8;
 
 /// C function ABI used by `lua_pushcfunction` / `lua_register`.
@@ -258,6 +270,7 @@ pub unsafe extern "C" fn lua_setglobal(L: *mut LuaState, name: *const c_char) {
 
 // ─── stack push ──────────────────────────────────────────────────────────
 
+/// PUC `lua_pushnil` — push `nil` onto the C API stack.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushnil(L: *mut LuaState) {
@@ -266,6 +279,7 @@ pub unsafe extern "C" fn lua_pushnil(L: *mut LuaState) {
     vm.capi_stack.push(Value::Nil);
 }
 
+/// PUC `lua_pushboolean` — push a boolean (`0` is false, anything else true).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushboolean(L: *mut LuaState, b: c_int) {
@@ -274,6 +288,7 @@ pub unsafe extern "C" fn lua_pushboolean(L: *mut LuaState, b: c_int) {
     vm.capi_stack.push(Value::Bool(b != 0));
 }
 
+/// PUC `lua_pushinteger` — push a 64-bit signed integer.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushinteger(L: *mut LuaState, n: i64) {
@@ -282,6 +297,7 @@ pub unsafe extern "C" fn lua_pushinteger(L: *mut LuaState, n: i64) {
     vm.capi_stack.push(Value::Int(n));
 }
 
+/// PUC `lua_pushnumber` — push an IEEE-754 double.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushnumber(L: *mut LuaState, n: f64) {
@@ -313,6 +329,9 @@ pub unsafe extern "C" fn lua_pushstring(L: *mut LuaState, str: *const c_char) ->
 
 // ─── stack read ──────────────────────────────────────────────────────────
 
+/// PUC `lua_tointeger` — convert the value at `idx` to `i64` (PUC's lossy
+/// coercion: floats truncate, booleans become 0/1, parsable strings parse,
+/// others return 0).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_tointeger(L: *mut LuaState, idx: c_int) -> i64 {
@@ -331,6 +350,8 @@ pub unsafe extern "C" fn lua_tointeger(L: *mut LuaState, idx: c_int) -> i64 {
     }
 }
 
+/// PUC `lua_tonumber` — convert the value at `idx` to `f64` with PUC's
+/// lossy coercion (see [`lua_tointeger`]).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_tonumber(L: *mut LuaState, idx: c_int) -> f64 {
@@ -349,6 +370,7 @@ pub unsafe extern "C" fn lua_tonumber(L: *mut LuaState, idx: c_int) -> f64 {
     }
 }
 
+/// PUC `lua_toboolean` — Lua truth at `idx` (`nil` / `false` → 0; else 1).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_toboolean(L: *mut LuaState, idx: c_int) -> c_int {
@@ -387,6 +409,8 @@ pub unsafe extern "C" fn lua_tostring(L: *mut LuaState, idx: c_int) -> *const c_
 
 // ─── type queries ────────────────────────────────────────────────────────
 
+/// PUC `lua_type` — discriminator tag at `idx` (`LUA_T*`); `LUA_TNONE`
+/// if `idx` is out of bounds.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_type(L: *mut LuaState, idx: c_int) -> c_int {
@@ -395,6 +419,7 @@ pub unsafe extern "C" fn lua_type(L: *mut LuaState, idx: c_int) -> c_int {
     get_at(vm, idx).map_or(LUA_TNONE, type_tag)
 }
 
+/// PUC `lua_isnil` — true iff the value at `idx` is `nil`.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isnil(L: *mut LuaState, idx: c_int) -> c_int {
@@ -402,6 +427,7 @@ pub unsafe extern "C" fn lua_isnil(L: *mut LuaState, idx: c_int) -> c_int {
     (unsafe { lua_type(L, idx) } == LUA_TNIL) as c_int
 }
 
+/// PUC `lua_isnumber` — true iff the value at `idx` is `Int` or `Float`.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isnumber(L: *mut LuaState, idx: c_int) -> c_int {
@@ -413,6 +439,7 @@ pub unsafe extern "C" fn lua_isnumber(L: *mut LuaState, idx: c_int) -> c_int {
     ) as c_int
 }
 
+/// PUC `lua_isinteger` (5.3+) — true iff the value at `idx` is exactly `Int`.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isinteger(L: *mut LuaState, idx: c_int) -> c_int {
@@ -421,6 +448,8 @@ pub unsafe extern "C" fn lua_isinteger(L: *mut LuaState, idx: c_int) -> c_int {
     matches!(get_at(vm, idx), Some(Value::Int(_))) as c_int
 }
 
+/// PUC `lua_isstring` — true iff the value at `idx` is a string or a
+/// number (numbers coerce to strings in PUC).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isstring(L: *mut LuaState, idx: c_int) -> c_int {
@@ -432,6 +461,7 @@ pub unsafe extern "C" fn lua_isstring(L: *mut LuaState, idx: c_int) -> c_int {
     ) as c_int
 }
 
+/// PUC `lua_isboolean` — true iff the value at `idx` is a boolean.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isboolean(L: *mut LuaState, idx: c_int) -> c_int {
@@ -440,6 +470,8 @@ pub unsafe extern "C" fn lua_isboolean(L: *mut LuaState, idx: c_int) -> c_int {
     matches!(get_at(vm, idx), Some(Value::Bool(_))) as c_int
 }
 
+/// PUC `lua_isfunction` — true iff the value at `idx` is a Lua closure
+/// or a native function.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_isfunction(L: *mut LuaState, idx: c_int) -> c_int {
@@ -453,6 +485,7 @@ pub unsafe extern "C" fn lua_isfunction(L: *mut LuaState, idx: c_int) -> c_int {
 
 // ─── stack manipulation ──────────────────────────────────────────────────
 
+/// PUC `lua_gettop` — current stack height (number of pushed values).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_gettop(L: *mut LuaState) -> c_int {
@@ -461,6 +494,8 @@ pub unsafe extern "C" fn lua_gettop(L: *mut LuaState) -> c_int {
     vm.capi_stack.len() as c_int
 }
 
+/// PUC `lua_settop` — set the stack height to `idx`, padding with `nil`
+/// or truncating as needed (negative indices count from the top).
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_settop(L: *mut LuaState, idx: c_int) {
@@ -478,6 +513,7 @@ pub unsafe extern "C" fn lua_settop(L: *mut LuaState, idx: c_int) {
     }
 }
 
+/// PUC `lua_pop` — drop the top `n` stack values.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pop(L: *mut LuaState, n: c_int) {
@@ -485,6 +521,7 @@ pub unsafe extern "C" fn lua_pop(L: *mut LuaState, n: c_int) {
     unsafe { lua_settop(L, -n - 1) };
 }
 
+/// PUC `lua_pushvalue` — duplicate the value at `idx` onto the top.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lua_pushvalue(L: *mut LuaState, idx: c_int) {

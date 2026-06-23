@@ -16,19 +16,31 @@ use crate::runtime::table::Table;
 use crate::runtime::userdata::{Userdata, UserdataPayload};
 use crate::runtime::value::Value;
 
+/// Discriminator the GC stores in every [`GcHeader`] so a raw header pointer
+/// can be cast back to the right object kind during tracing and sweeping.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ObjTag {
+    /// [`crate::runtime::string::LuaStr`].
     Str,
+    /// [`crate::runtime::table::Table`].
     Table,
+    /// [`crate::runtime::function::Proto`].
     Proto,
+    /// [`crate::runtime::function::LuaClosure`].
     Closure,
+    /// [`crate::runtime::function::Upvalue`].
     Upvalue,
+    /// [`crate::runtime::function::NativeClosure`].
     Native,
+    /// [`crate::runtime::coroutine::Coro`].
     Coro,
+    /// [`crate::runtime::userdata::Userdata`].
     Userdata,
 }
 
+/// Header prefix on every GC-managed object: intrusive next-link + type tag +
+/// mark bits. Always at offset 0 of the containing struct (`#[repr(C)]`).
 #[repr(C)]
 pub struct GcHeader {
     next: *mut GcHeader,
@@ -91,6 +103,9 @@ impl GcHeader {
     }
 }
 
+/// `Copy` handle to a heap-allocated GC-managed object. Layout is a single
+/// `NonNull<T>`; the GC walks reachability via root scanning and intrusive
+/// linkage on [`GcHeader`], not via reference counts.
 pub struct Gc<T> {
     ptr: NonNull<T>,
 }
@@ -110,10 +125,13 @@ impl<T> Gc<T> {
         }
     }
 
+    /// Raw pointer to the referent. Always non-null; valid for the lifetime
+    /// of the [`Heap`] that allocated it as long as the object is reachable.
     pub fn as_ptr(self) -> *mut T {
         self.ptr.as_ptr()
     }
 
+    /// Pointer-identity equality (PUC `rawequal` for reference types).
     pub fn ptr_eq(self, other: Gc<T>) -> bool {
         self.ptr == other.ptr
     }
@@ -175,6 +193,10 @@ struct PropagateState {
     no_ephemeron: bool,
 }
 
+/// luna's incremental mark-sweep GC heap. Owns every [`Gc<T>`] allocation
+/// (one per Vm); produces handles via the `new_*` constructors and traces
+/// reachability through registered roots. Holds the string-intern table and
+/// the auto-GC pacing state.
 pub struct Heap {
     all: *mut GcHeader,
     strings: StringTable,
@@ -250,6 +272,7 @@ pub struct Heap {
 const GC_MIN_THRESHOLD: usize = 1 << 20;
 
 impl Heap {
+    /// Build a fresh empty heap with default GC pacing and no memory cap.
     pub fn new() -> Heap {
         Heap {
             all: ptr::null_mut(),
@@ -308,6 +331,7 @@ impl Heap {
         Gc::from_ptr(p)
     }
 
+    /// Allocate and adopt a fresh empty [`Table`].
     pub fn new_table(&mut self) -> Gc<Table> {
         // P17-D v2 layer-15 attack — table_pool fast path. When btrees-
         // style alloc bursts have left freed Tables in the pool, pop a
@@ -439,6 +463,8 @@ impl Heap {
         g
     }
 
+    /// Allocate a [`NativeClosure`] wrapping host function `f` with the
+    /// given captured upvalues.
     pub fn new_native(
         &mut self,
         f: crate::runtime::value::NativeFn,
@@ -472,6 +498,7 @@ impl Heap {
         }))
     }
 
+    /// Allocate a fresh [`Upvalue`] cell in the given `state` (open / closed).
     pub fn new_upvalue(&mut self, state: UpvalState) -> Gc<Upvalue> {
         self.adopt(Box::new(Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
@@ -534,6 +561,8 @@ impl Heap {
         }
     }
 
+    /// Number of GC-managed objects currently linked into the heap (live + not
+    /// yet swept). Useful for `collectgarbage("count")`-style introspection.
     pub fn live_objects(&self) -> usize {
         self.live
     }

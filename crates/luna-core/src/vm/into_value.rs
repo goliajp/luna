@@ -33,6 +33,8 @@ use crate::vm::exec::Vm;
 /// Convert `self` into a Lua `Value`, possibly interning through
 /// the `Vm`'s heap (for string-shaped types).
 pub trait IntoValue {
+    /// Convert `self` to a Lua [`Value`], interning strings or allocating
+    /// other GC-managed types via `vm.heap` as needed.
     fn into_value(self, vm: &mut Vm) -> Value;
 }
 

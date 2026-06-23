@@ -98,7 +98,7 @@ impl Vm {
     // via these accessors after observing a `Result::Err(LuaError)`.
 
     /// Classification of the most recently raised error on this Vm.
-    /// Returns [`LuaErrorKind::Runtime`] before any error fires.
+    /// Returns [`crate::vm::error::LuaErrorKind::Runtime`] before any error fires.
     pub fn error_kind(&self) -> crate::vm::error::LuaErrorKind {
         self.last_error_kind
     }
@@ -244,7 +244,7 @@ impl Vm {
 
     // ─── B11 Rust-side debug hook ────────────────────────────────
 
-    /// Install a Rust-side debug hook (see [`RustDebugHook`]). The
+    /// Install a Rust-side debug hook (see [`crate::vm::exec::RustDebugHook`]). The
     /// `mask` is a bitwise OR of `HOOK_MASK_CALL` / `HOOK_MASK_RETURN`
     /// / `HOOK_MASK_LINE` / `HOOK_MASK_COUNT` exported from
     /// [`crate::vm::exec`]. The `count` arg sets the instruction

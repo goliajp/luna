@@ -1,71 +1,147 @@
+//! Lexical tokens produced by the lexer.
+
 use crate::frontend::span::Span;
 use crate::version::LuaVersion;
 
+/// One lexical token produced by the lexer.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Token {
     // keywords
+    /// `and` keyword.
     And,
+    /// `break` keyword.
     Break,
+    /// `do` keyword.
     Do,
+    /// `else` keyword.
     Else,
+    /// `elseif` keyword.
     Elseif,
+    /// `end` keyword.
     End,
+    /// `false` keyword.
     False,
+    /// `for` keyword.
     For,
+    /// `function` keyword.
     Function,
+    /// 5.5 `global` keyword.
     Global,
+    /// `goto` keyword.
     Goto,
+    /// `if` keyword.
     If,
+    /// `in` keyword.
     In,
+    /// `local` keyword.
     Local,
+    /// `nil` keyword.
     Nil,
+    /// `not` keyword.
     Not,
+    /// `or` keyword.
     Or,
+    /// `repeat` keyword.
     Repeat,
+    /// `return` keyword.
     Return,
+    /// `then` keyword.
     Then,
+    /// `true` keyword.
     True,
+    /// `until` keyword.
     Until,
+    /// `while` keyword.
     While,
     // symbols
+    /// `+` symbol.
     Plus,
+    /// `-` symbol.
     Minus,
+    /// `*` symbol.
     Star,
+    /// `/` symbol.
     Slash,
+    /// `//` symbol (floor division).
     DSlash,
+    /// `%` symbol.
     Percent,
+    /// `^` symbol.
     Caret,
+    /// `#` symbol.
     Hash,
+    /// `&` symbol.
     Amp,
+    /// `~` symbol (bitwise xor / unary bnot).
     Tilde,
+    /// `|` symbol.
     Pipe,
+    /// `<<` symbol.
     Shl,
+    /// `>>` symbol.
     Shr,
+    /// `==` symbol.
     Eq,
+    /// `~=` symbol.
     Ne,
+    /// `<=` symbol.
     Le,
+    /// `>=` symbol.
     Ge,
+    /// `<` symbol.
     Lt,
+    /// `>` symbol.
     Gt,
+    /// `=` symbol (assignment).
     Assign,
+    /// `(` symbol.
     LParen,
+    /// `)` symbol.
     RParen,
+    /// `{` symbol.
     LBrace,
+    /// `}` symbol.
     RBrace,
+    /// `[` symbol.
     LBracket,
+    /// `]` symbol.
     RBracket,
+    /// `::` symbol (label delimiter).
     DColon,
+    /// `;` symbol.
     Semi,
+    /// `:` symbol.
     Colon,
+    /// `,` symbol.
     Comma,
+    /// `.` symbol.
     Dot,
+    /// `..` symbol (concatenation).
     Concat,
+    /// `...` symbol (vararg).
     Ellipsis,
     // literals
-    Int(i64),
-    Float(f64),
-    Str(Vec<u8>),
-    Name(Box<str>),
+    /// Integer literal.
+    Int(
+        /// Decoded 64-bit signed value.
+        i64,
+    ),
+    /// Floating-point literal.
+    Float(
+        /// Decoded IEEE-754 double value.
+        f64,
+    ),
+    /// String literal (raw bytes; Lua strings are 8-bit clean).
+    Str(
+        /// Decoded byte contents.
+        Vec<u8>,
+    ),
+    /// Identifier.
+    Name(
+        /// Source text of the identifier.
+        Box<str>,
+    ),
+    /// End-of-file marker.
     Eof,
 }
 
@@ -92,7 +168,10 @@ impl Token {
 /// A token plus where it came from.
 #[derive(Clone, Debug)]
 pub struct TokenInfo {
+    /// The lexical token.
     pub tok: Token,
+    /// Byte range in source.
     pub span: Span,
+    /// 1-based source line where the token starts.
     pub line: u32,
 }

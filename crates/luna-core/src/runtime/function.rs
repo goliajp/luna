@@ -10,9 +10,11 @@ use crate::vm::isa::Inst;
 /// coroutine's frames.
 #[derive(Clone, Copy)]
 pub struct Frame {
+    /// Currently executing closure.
     pub closure: Gc<LuaClosure>,
     /// stack index of register 0
     pub base: u32,
+    /// Program counter (index into `closure.proto.code`).
     pub pc: u32,
     /// stack slot of the function (results land here)
     pub func_slot: u32,
@@ -57,11 +59,21 @@ pub struct Frame {
 /// preserved and restored automatically with the thread's saved context.
 #[derive(Clone, Copy)]
 pub enum CallFrame {
-    Lua(Frame),
-    Cont(NativeCont),
+    /// A Lua activation record.
+    Lua(
+        /// The activation record.
+        Frame,
+    ),
+    /// A continuation guarding a yieldable native call (pcall / xpcall /
+    /// metamethod / `__close` / `__pairs`).
+    Cont(
+        /// The continuation record.
+        NativeCont,
+    ),
 }
 
 impl CallFrame {
+    /// Borrow the inner Lua frame if this is a `Lua` variant.
     #[inline]
     pub fn lua(&self) -> Option<&Frame> {
         match self {
@@ -70,6 +82,7 @@ impl CallFrame {
         }
     }
 
+    /// Mutably borrow the inner Lua frame if this is a `Lua` variant.
     #[inline]
     pub fn lua_mut(&mut self) -> Option<&mut Frame> {
         match self {
@@ -84,6 +97,7 @@ impl CallFrame {
 /// [`CallFrame`]).
 #[derive(Clone, Copy)]
 pub struct NativeCont {
+    /// What kind of protection this continuation represents.
     pub kind: ContKind,
     /// the protecting native's own stack slot — the wrapped status + values
     /// (`true, …` / `false, msg`) land here
@@ -92,16 +106,24 @@ pub struct NativeCont {
     pub nresults: i32,
 }
 
+/// Continuation kind for yieldable native dispatch.
 #[derive(Clone, Copy)]
 pub enum ContKind {
+    /// `pcall(f, ...)` — wraps the result as `(true, ...)` / `(false, msg)`.
     Pcall,
     /// xpcall: the message handler to run if the protected call errors
-    Xpcall { handler: Value },
+    Xpcall {
+        /// Message handler function invoked on error.
+        handler: Value,
+    },
     /// a yieldable metamethod call triggered by a VM instruction (PUC's
     /// `luaV_finishOp`): on the metamethod's return the interrupted instruction
     /// is completed per `MetaCont`. A `coroutine.yield` inside the metamethod is
     /// preserved on the thread's frame stack like any other call.
-    Meta(MetaCont),
+    Meta(
+        /// Continuation describing how to finish the interrupted op.
+        MetaCont,
+    ),
     /// a yieldable `__pairs` metamethod call from `pairs()` (PUC luaB_pairs uses
     /// lua_callk): on return, its (≤4, nil-padded) results are `pairs`'s own
     /// results. A `coroutine.yield` inside `__pairs` is preserved like pcall's.
@@ -111,7 +133,10 @@ pub enum ContKind {
     /// error, the close iteration resumes from `CloseCont`'s state and either
     /// invokes the next handler (pushing a fresh Cont::Close) or executes the
     /// recorded `AfterClose` action.
-    Close(CloseCont),
+    Close(
+        /// Per-iteration close state.
+        CloseCont,
+    ),
 }
 
 /// Per-iteration state for a chain of `__close` handlers driven through the
@@ -137,29 +162,42 @@ pub enum AfterClose {
     /// and deliver `nret` results from `[abs_a, abs_a + nret)` to the frame's
     /// `func_slot`. `from_native` mirrors the original op's hook flag.
     Return {
+        /// Absolute stack index of the first return value.
         abs_a: u32,
+        /// Number of return values.
         nret: u32,
+        /// Mirrors the original op's hook-fired flag.
         from_native: bool,
     },
     /// Error unwind: the close runs while unwinding a Lua frame. When every
     /// handler is done, pop the deferred Lua frame, truncate to `func_slot`,
     /// and re-raise — preferring a handler-raised error over `err` (PUC
     /// luaF_close).
-    ResumeUnwind { func_slot: u32, err: Value },
+    ResumeUnwind {
+        /// Slot to truncate the value stack to before re-raising.
+        func_slot: u32,
+        /// Original error value to re-raise (or replaced by a handler raise).
+        err: Value,
+    },
 }
 
 /// How to complete a VM instruction once its metamethod returns.
 #[derive(Clone, Copy)]
 pub struct MetaCont {
+    /// What to do with the metamethod's return value.
     pub action: MetaAction,
     /// the interrupted frame's `top` to restore after the metamethod returns
     pub saved_top: u32,
 }
 
+/// Per-op finishing action for a yielded metamethod call.
 #[derive(Clone, Copy)]
 pub enum MetaAction {
     /// arithmetic / index / unary / length: store the single result at `dst`
-    Store { dst: u32 },
+    Store {
+        /// Destination register receiving the metamethod's first result.
+        dst: u32,
+    },
     /// `__newindex`: the metamethod has no result to keep
     Discard,
     /// comparison (`__eq`/`__lt`/`__le`): the truthiness of the result feeds the
@@ -167,10 +205,20 @@ pub enum MetaAction {
     /// `negate=true` flips the truthiness first, for the ≤5.3 `__le` →
     /// `not __lt(b, a)` synthesis path where the metamethod is `__lt` but
     /// the operator was `<=`.
-    Compare { k: bool, negate: bool },
+    Compare {
+        /// Sense of the conditional skip the comparison op was emitted for.
+        k: bool,
+        /// True when the 5.3 `__le → not __lt(b,a)` synthesis is in effect.
+        negate: bool,
+    },
     /// `__concat`: store the result at `dst`, set `top = dst + 1`, then continue
     /// folding the operands still at `[base_a .. top)` (PUC finishOp re-runs).
-    Concat { dst: u32, base_a: u32 },
+    Concat {
+        /// Destination register for the metamethod's result.
+        dst: u32,
+        /// First operand register of the original concat span.
+        base_a: u32,
+    },
 }
 
 /// Where a closure's upvalue is captured from, relative to the *enclosing*
@@ -180,6 +228,8 @@ pub struct UpvalDesc {
     /// captured from the enclosing frame's registers (true) or from the
     /// enclosing closure's own upvalues (false)
     pub in_stack: bool,
+    /// Index in the enclosing frame's register file (when `in_stack`) or
+    /// in the enclosing closure's upvalue array (otherwise).
     pub index: u8,
     /// variable name, for error messages and debug info
     pub name: Box<str>,
@@ -193,9 +243,13 @@ pub struct UpvalDesc {
 /// debug.getinfo (PUC LocVar).
 #[derive(Clone, Debug)]
 pub struct LocVar {
+    /// Local-variable name.
     pub name: Box<str>,
+    /// Register holding the variable while in scope.
     pub reg: u32,
+    /// First pc where the variable is live.
     pub start_pc: u32,
+    /// Pc one past the last where the variable is live.
     pub end_pc: u32,
 }
 
@@ -203,11 +257,17 @@ pub struct LocVar {
 #[repr(C)]
 pub struct Proto {
     pub(crate) hdr: GcHeader,
+    /// Bytecode instructions, in execution order.
     pub code: Box<[Inst]>,
+    /// Constant table referenced by `LoadK` / `*K` opcodes.
     pub consts: Box<[Value]>,
+    /// Nested prototypes referenced by `Closure`.
     pub protos: Box<[Gc<Proto>]>,
+    /// Upvalue descriptors (one per upvalue this function captures).
     pub upvals: Box<[UpvalDesc]>,
+    /// Fixed parameter count.
     pub num_params: u8,
+    /// Whether the function accepts `...`.
     pub is_vararg: bool,
     /// PUC `lparser.c` emits a hidden `(vararg table)` locvar for a function
     /// declared with an explicit anonymous `(...)` (and NOT for a main chunk's
@@ -226,6 +286,7 @@ pub struct Proto {
     pub lines: Box<[u32]>,
     /// chunk name, for error messages
     pub source: Gc<LuaStr>,
+    /// Source line where the function was defined.
     pub line_defined: u32,
     /// line of the function's closing `end` (PUC `lastlinedefined`); 0 for the
     /// main chunk
@@ -313,8 +374,12 @@ pub struct Proto {
 /// fn pointer's mmap is kept alive by `Vm.jit_handles`.
 #[derive(Clone, Copy, Debug)]
 pub enum JitProtoState {
+    /// Compilation hasn't been attempted yet.
     Untried,
+    /// Compilation was attempted and the body fell outside the whitelist;
+    /// subsequent calls skip the attempt.
     Failed,
+    /// Native code is installed and callable through the recorded entry.
     Compiled {
         /// Raw mmap'd code address. Transmute to the
         /// `unsafe extern "C" fn(i64, …) -> i64` shape matching
@@ -391,11 +456,13 @@ impl Proto {
 /// closures per iter; eliminating the 24-byte Vec alloc shaves ~300µs.
 pub const INLINE_UPVALS_N: usize = 2;
 
+/// A Lua closure: a `Proto` paired with its captured upvalues.
 #[repr(C)]
 pub struct LuaClosure {
     /// read through raw casts by the GC, not by field access
     #[allow(dead_code)]
     pub(crate) hdr: GcHeader,
+    /// The compiled function body this closure binds.
     pub proto: Gc<Proto>,
     /// Single source of truth for "where are the upvals?". Points to
     /// either `inline_storage` (when `upvals_len <= INLINE_UPVALS_N`)
@@ -462,7 +529,9 @@ pub struct NativeClosure {
     /// read through raw casts by the GC, not by field access
     #[allow(dead_code)]
     pub(crate) hdr: GcHeader,
+    /// The host function pointer this closure dispatches to.
     pub f: crate::runtime::value::NativeFn,
+    /// Captured upvalues, visible inside `f` via the Vm's call API.
     pub upvals: Box<[Value]>,
     /// v1.1 B10 Stage 2 — marker bit for async natives. When `true`,
     /// `f` is actually an `crate::vm::async_drive::AsyncNativeFn`
@@ -492,19 +561,27 @@ pub struct Upvalue {
     pub(crate) state: UpvalState,
 }
 
+/// Open / closed state of an upvalue cell.
 #[derive(Clone, Copy)]
 pub enum UpvalState {
     /// references slot `slot` of `thread`'s value stack (`None` = the main
     /// thread). The owning thread is tracked so the cell still resolves to the
     /// right stack after a coroutine swap (P05).
     Open {
+        /// Stack slot of the captured local on the owning thread.
         slot: u32,
+        /// Owning thread, or `None` for the main thread.
         thread: Option<Gc<crate::runtime::coroutine::Coro>>,
     },
-    Closed(Value),
+    /// Captured value has been hoisted into the cell.
+    Closed(
+        /// The closed-over value.
+        Value,
+    ),
 }
 
 impl Upvalue {
+    /// Return the upvalue's current state (open / closed).
     pub fn state(&self) -> UpvalState {
         self.state
     }

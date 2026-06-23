@@ -4,6 +4,7 @@
 const MAX_CAPTURES: usize = 32;
 const MAX_DEPTH: u32 = 220;
 
+/// One capture produced by a successful pattern match.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cap {
     /// captured span [start, end) in source bytes
@@ -12,13 +13,21 @@ pub enum Cap {
     Pos(usize),
 }
 
+/// Error returned by the pattern matcher (malformed pattern, runaway depth,
+/// invalid `%f` frontier, etc.).
 #[derive(Debug)]
-pub struct PatError(pub String);
+pub struct PatError(
+    /// Human-readable message describing the malformation.
+    pub String,
+);
 
+/// A successful match against a Lua pattern, with the captures it produced.
 pub struct Match {
     /// whole-match span [start, end)
     pub start: usize,
+    /// End offset of the whole match (exclusive).
     pub end: usize,
+    /// Captured spans / positions, in pattern order.
     pub caps: Vec<Cap>,
 }
 

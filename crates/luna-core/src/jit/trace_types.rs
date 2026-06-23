@@ -53,7 +53,9 @@ pub const RECUNROLL_THRESHOLD: usize = 2;
 /// support, but the variant is kept symmetric with LJ's enum).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfRecKind {
+    /// Tail-recursive self-link (LuaJIT `LJ_TRLINK_TAILREC`).
     TailRec,
+    /// Up-recursive self-link (LuaJIT `LJ_TRLINK_UPREC`).
     UpRec,
 }
 
@@ -65,6 +67,7 @@ pub struct RecordedOp {
     /// Original Proto + PC that produced this op. Multiple
     /// `RecordedOp`s with different `proto` come from inlined calls.
     pub proto: Gc<Proto>,
+    /// Pc within `proto` at which this op was recorded.
     pub pc: u32,
     /// The bytecode instruction itself (copy — Proto.code is
     /// already immutable post-compile).
@@ -92,6 +95,7 @@ pub struct RecordedOp {
 pub struct TraceRecord {
     /// The PC the trace starts at (back-edge target).
     pub head_proto: Gc<Proto>,
+    /// Pc within `head_proto` where the trace begins (the back-edge target).
     pub head_pc: u32,
     /// Per-register `Value` tag (from `runtime::value::raw`) at
     /// the moment recording started. Lengths matches the
@@ -347,7 +351,10 @@ pub enum TagResKind {
 /// kept alive by the `Vm.jit_handles` Vec for the Vm's lifetime,
 /// just like the method JIT's compiled functions.
 pub struct CompiledTrace {
+    /// Pc the trace dispatches at (matches the recorder's `head_pc`).
     pub head_pc: u32,
+    /// Native entry function (mmap'd machine code, valid for the Vm's
+    /// lifetime as long as the backing handle is kept).
     pub entry: TraceFn,
     /// Number of ops in the source `TraceRecord`. Diagnostic only;
     /// tuning will gate re-record vs. recompile based on this.
@@ -371,7 +378,7 @@ pub struct CompiledTrace {
     /// — depth>0 slots start initialized to zero, and the trace's
     /// own GetUpval / arith fills them as it runs.
     pub window_size: u32,
-    /// Per-register exit tag of length [`window_size`]. Indexed by
+    /// Per-register exit tag of length `window_size`. Indexed by
     /// position within the trace's reg_state_buf. The dispatcher
     /// consults this to pack `reg_state[i]` back into a `Value`
     /// after the trace returns at the **clean tail** (head_pc or
@@ -403,7 +410,7 @@ pub struct CompiledTrace {
     /// P12-S4-step2c — per side-exit `exit_tags`. Each entry is
     /// `(continuation_pc, exit_tags)`; when the trace returns a PC
     /// matching an entry, the dispatcher uses that vector instead of
-    /// the clean-tail [`exit_tags`]. This makes side-exits that fire
+    /// the clean-tail `exit_tags`. This makes side-exits that fire
     /// **before** later writers (`GetUpval` is the today motivator)
     /// restore the affected slot as `Untouched` (carry entry tag)
     /// rather than pack with a tag the slot hasn't actually become.
@@ -616,7 +623,7 @@ pub struct InlineSideExit {
 }
 
 /// P15-A v0 — hot side-exit detection threshold. Exits whose hit
-/// count crosses this value are reported by [`Vm::hot_exit_iter`] as
+/// count crosses this value are reported by `Vm::hot_exit_iter` as
 /// side-trace candidates. LuaJIT 2.1's default is 10, but short
 /// workloads (binary_trees_d4_x200 = 200 outer iters, each calling
 /// make/itemcheck a small handful of times) don't reach 10 hot
@@ -635,7 +642,9 @@ pub const HOTEXIT_THRESHOLD: u32 = 2;
 /// the right cell write); `local` disambiguates among multiple wired
 /// cells of the same kind (e.g. several inline cmp@d>0 sites).
 pub const SIDE_SENT_KIND_INLINE: u8 = 1;
+/// Sentinel kind for tag-cell side-traces (typed-register exits).
 pub const SIDE_SENT_KIND_TAG: u8 = 2;
+/// Sentinel kind for global-cell side-traces (env-table exits).
 pub const SIDE_SENT_KIND_GLOBAL: u8 = 3;
 
 /// P15-A v2-C-A2 — encode a `(kind, local)` pair into a 7-bit
@@ -661,6 +670,9 @@ pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
 /// when the OnceLock resolves to `false`.
 static V2C_PROBE_ON: std::sync::OnceLock<bool> =
     std::sync::OnceLock::new();
+/// True iff the side-trace dispatch probes are enabled via
+/// `LUNA_V2C_PROBE=1`. Diagnostic-only; production builds keep this
+/// off so the IR-emitted probe call short-circuits cheaply.
 pub fn v2c_probe_enabled() -> bool {
     *V2C_PROBE_ON.get_or_init(|| {
         std::env::var("LUNA_V2C_PROBE")
@@ -671,7 +683,7 @@ pub fn v2c_probe_enabled() -> bool {
 }
 
 /// P15-A v0 — one hot side-exit candidate surfaced by
-/// [`Vm::hot_exit_iter`]. The walker fills this from one
+/// `Vm::hot_exit_iter`. The walker fills this from one
 /// [`CompiledTrace`]'s `exit_hit_counts` slot whose value passed
 /// [`HOTEXIT_THRESHOLD`].
 ///
@@ -715,7 +727,7 @@ pub struct HotExitInfo {
 
 /// P12-S4-step4b — one Lua frame to push when a depth>0 side-exit
 /// fires. Constructed at trace compile time from the recorded
-/// `Op::Call` chain's `A` field (caller's R[A] = function slot) and
+/// `Op::Call` chain's `A` field (caller's `R[A]` = function slot) and
 /// the inlined callee's `c` field (`nresults`). `pc` is the address
 /// the helper writes onto the freshly-pushed frame so the interp
 /// resumes at the right offset inside the callee body.
@@ -838,10 +850,16 @@ pub fn exit_tags_match_entry_tags(
 /// Rc clones from the per-dispatch lookup keep them alive for
 /// the dispatch.
 pub struct DecodedExit<'a> {
+    /// Pc the interpreter should resume at after the trace exit.
     pub cont_pc: u32,
+    /// Stable id of the exit site (used to key per-site counters / caches).
     pub site_id: u32,
+    /// Index into `exit_hit_counts` for the side-trace trigger counter.
     pub exit_hit_idx: usize,
+    /// Per-slot exit-tag array describing how to interpret saved register
+    /// state for this exit.
     pub exit_tags_for_pc: &'a [ExitTag],
+    /// True when the global classified-restore fast path applies.
     pub using_global_exit_tags: bool,
 }
 

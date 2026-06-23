@@ -31,7 +31,7 @@
 /// `Lua` corresponds to a Lua-level function activation; its PC field
 /// holds the next bytecode index to execute on resume.
 /// `Cont` corresponds to a native continuation frame (luna's `Cont`
-/// variant of [`CallFrame`]). luna doesn't currently emit separate
+/// variant of `CallFrame`). luna doesn't currently emit separate
 /// FRAME_C / FRAME_VARG markers — those PUC distinctions are encoded
 /// elsewhere (e.g., `Frame.from_c`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

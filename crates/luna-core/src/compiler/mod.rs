@@ -21,6 +21,9 @@ use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, MAX_BX, MAX_SJ, Op};
 
+/// Lower an [`Chunk`] into a [`Proto`] (luna bytecode) for the
+/// given dialect. The interned source name is attached to the proto for
+/// error messages and `debug.getinfo`.
 pub fn compile_chunk(
     ast: &Chunk,
     version: LuaVersion,

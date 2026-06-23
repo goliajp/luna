@@ -45,6 +45,8 @@ use crate::vm::into_value::IntoValue;
 /// coercions beyond what Lua itself does (an exactly-integral float
 /// can stand in for an integer).
 pub trait FromLuaValue: Sized {
+    /// Decode a single Lua [`Value`] into `Self`. Returns a
+    /// `LuaError("type mismatch …")` if the value's type does not match.
     fn from_lua_value(v: Value) -> Result<Self, LuaError>;
 }
 
@@ -126,7 +128,10 @@ impl<T: FromLuaValue> FromLuaValue for Option<T> {
 // FromLuaArgs — tuple-shaped argument decoder
 // ─────────────────────────────────────────────────────────────────────
 
+/// Decode a tuple of typed Rust values from the VM's stack arguments
+/// (B5 — typed Rust native function trampoline).
 pub trait FromLuaArgs: Sized {
+    /// Decode `nargs` consecutive arguments starting at `fs+1` into `Self`.
     fn from_lua_args(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError>;
 }
 
@@ -166,7 +171,10 @@ impl_from_lua_args_tuple! {
 // IntoLuaReturn — tuple-shaped return encoder
 // ─────────────────────────────────────────────────────────────────────
 
+/// Push a typed Rust value (or tuple of values) onto the VM's stack as a
+/// native function's return values (B5).
 pub trait IntoLuaReturn {
+    /// Push the encoded values starting at `fs` and return the result count.
     fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError>;
 }
 
@@ -254,11 +262,17 @@ impl_into_lua_return_tuple! {
 /// from the compiler's coherence perspective. Embedders never name
 /// these — the compiler infers from the closure signature.
 pub struct Arity0;
+/// Marker for a 1-argument callable.
 pub struct Arity1<In0>(std::marker::PhantomData<In0>);
+/// Marker for a 2-argument callable.
 pub struct Arity2<In0, In1>(std::marker::PhantomData<(In0, In1)>);
+/// Marker for a 3-argument callable.
 pub struct Arity3<In0, In1, In2>(std::marker::PhantomData<(In0, In1, In2)>);
+/// Marker for a 4-argument callable.
 pub struct Arity4<In0, In1, In2, In3>(std::marker::PhantomData<(In0, In1, In2, In3)>);
+/// Marker for a 5-argument callable.
 pub struct Arity5<In0, In1, In2, In3, In4>(std::marker::PhantomData<(In0, In1, In2, In3, In4)>);
+/// Marker for a 6-argument callable.
 pub struct Arity6<In0, In1, In2, In3, In4, In5>(
     std::marker::PhantomData<(In0, In1, In2, In3, In4, In5)>,
 );
@@ -272,10 +286,12 @@ pub struct Arity6<In0, In1, In2, In3, In4, In5>(
 /// - If `F` is zero-sized (ZST closure, fn item): upvals empty;
 ///   trampoline reconstructs `F` via `MaybeUninit::uninit().assume_init()`.
 /// - If `F` is pointer-sized (`fn` pointer): stored as
-///   `Value::LightUserdata` in upvals[0]; trampoline transmutes back.
+///   `Value::LightUserdata` in `upvals[0]`; trampoline transmutes back.
 /// - Other sizes (capturing closures): runtime panic via `assert!` in
 ///   `pack` — embedder must use `vm.native_with(...)` directly.
 pub trait NativeTypedSig<Marker> {
+    /// Convert the callable into the `(NativeFn, upvals)` pair the
+    /// dispatcher consumes.
     fn into_native(self) -> (NativeFn, Box<[Value]>);
 }
 

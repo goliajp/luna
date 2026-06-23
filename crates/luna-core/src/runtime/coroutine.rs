@@ -22,9 +22,12 @@ pub enum CoroStatus {
     Dead,
 }
 
+/// A Lua coroutine (`thread`) — one independent execution context plus its
+/// saved value/frame stacks and resume linkage.
 #[repr(C)]
 pub struct Coro {
     pub(crate) hdr: GcHeader,
+    /// Resume state (suspended / running / normal / dead).
     pub status: CoroStatus,
     /// the body function, kept for the first resume (and as a GC root)
     pub body: Value,
@@ -45,10 +48,15 @@ pub struct Coro {
     /// `luaG_errormsg` flow plus a per-thread `errfunc` snapshot).
     pub error_traceback: Option<Vec<u8>>,
     // ---- saved execution context (valid while suspended/normal) ----
+    /// Saved value stack.
     pub stack: Vec<Value>,
+    /// Saved frame stack (Lua frames + native continuations).
     pub frames: Vec<CallFrame>,
+    /// Open-upvalue list — `(stack slot, upvalue cell)` pairs.
     pub open_upvals: Vec<(u32, Gc<Upvalue>)>,
+    /// Stack indices of registered `<close>` slots (5.4+).
     pub tbc: Vec<u32>,
+    /// Saved stack top.
     pub top: u32,
     /// live pcall/xpcall continuation count (PUC nCcalls portion); see Vm
     pub pcall_depth: u32,

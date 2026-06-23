@@ -58,12 +58,22 @@ pub enum CompileResult {
     /// The proto was lowered (or served from cache); the fields mirror
     /// the legacy 7-tuple returned by `cache_lookup_or_compile`.
     Compiled {
+        /// Mmap'd entry address; transmute to the matching `unsafe extern
+        /// "C" fn` shape at the call site.
         entry: *const u8,
+        /// Argument count (0..=`MAX_JIT_ARITY`).
         num_args: u8,
+        /// True when the compiled chunk produces a single observable
+        /// result (`Op::Return1`); false when it only side-effects.
         returns_one: bool,
+        /// Bit `i` set ↔ argument slot `i` is `Value::Float`.
         arg_float_mask: u8,
+        /// Bit `i` set ↔ argument slot `i` is `Value::Table`.
         arg_table_mask: u8,
+        /// True when the chunk's return value is float (only meaningful
+        /// when `returns_one` is true).
         ret_is_float: bool,
+        /// True when the chunk's return value is `Value::Table`.
         ret_is_table: bool,
     },
     /// The proto fell outside the whitelist or its compile pass bailed.
@@ -84,6 +94,9 @@ pub enum CompileResult {
 /// and lets the dispatcher pass `self as *mut Vm` without holding a
 /// mutable borrow on `self` while reading `self.chunk_compiler`.
 pub trait IntChunkCompiler {
+    /// Attempt to compile `proto`. Returns [`CompileResult::Compiled`] on
+    /// a whitelist hit or [`CompileResult::Skipped`] when the body is
+    /// outside the JIT's supported shape.
     fn try_compile(&self, proto: Gc<Proto>, pre53: bool, float_only: bool) -> CompileResult;
 
     /// Install the active `Vm` + closure pointer into the JIT
@@ -102,12 +115,16 @@ pub trait IntChunkCompiler {
 /// the lowerer's per-thread last-phase marker used by
 /// `Vm.trace_compile_failed_reasons`.
 pub trait TraceCompiler {
+    /// Attempt to lower `record` into native code under `opts`. Returns
+    /// `None` if the lowerer bailed at any checkpoint.
     fn try_compile_trace(
         &self,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace>;
 
+    /// Name of the lowerer's last-reached checkpoint (diagnostic; lets
+    /// the recorder bucket failures by phase).
     fn last_compile_checkpoint(&self) -> &'static str;
 }
 
