@@ -36,6 +36,10 @@ pub use luna_core::*;
 
 pub mod capi;
 pub mod jit_backend;
+pub mod lua_facade;
+
+pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, LuaTable};
+
 
 /// Unified `jit` namespace — combines luna-core's trait surface +
 /// pure types with luna's Cranelift-backed implementations. Existing

@@ -268,6 +268,17 @@ pub struct Vm {
     /// field). Not part of the embedder-facing API surface.
     #[doc(hidden)]
     pub jit: crate::vm::jit_state::JitState,
+
+    /// B12 host roots — append-only `Vec<Value>` traced as an extra
+    /// GC root set. `Lua` facade handles (`LuaFunction`, `LuaTable`,
+    /// `LuaRoot`) hold indices into this vector so the underlying
+    /// `Gc<T>` stays alive across `eval` calls / yield boundaries.
+    ///
+    /// v1.1 strategy: append-only with explicit `unpin_all` / new Vm.
+    /// Slot recycling lands in Phase 3 alongside B8 LuaUserdata, when
+    /// the trade-offs between `Drop` plumbing and append-only memory
+    /// growth have a richer ergonomics envelope to live in.
+    pub(crate) host_roots: Vec<Value>,
 }
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -753,6 +764,8 @@ impl Vm {
             // `install_jit_backend` / `luaL_newstate` swap in
             // `CraneliftBackend` for callers that want JIT acceleration.
             jit: crate::vm::jit_state::JitState::with_null_backend(),
+            // v1.1 B12 — host roots ticket pool for the `Lua` facade.
+            host_roots: Vec::new(),
         };
         vm
     }
@@ -2299,6 +2312,11 @@ impl Vm {
         if let Some(e) = self.closing_err {
             roots.push(e);
         }
+        // B12 host roots — Lua-facade handles keep their referenced
+        // values alive across calls/yields. Trace the whole vector;
+        // unused slots (post-`unpin_all`) carry Value::Nil which the
+        // GC ignores.
+        roots.extend_from_slice(&self.host_roots);
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
         if let Some(h) = self.hook.func {
