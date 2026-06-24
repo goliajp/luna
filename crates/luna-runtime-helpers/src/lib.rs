@@ -177,6 +177,27 @@ fn run_inner(bytecode: &[u8]) -> i32 {
     // and survives any default change.
     vm.set_bytecode_loading(true);
 
+    // v1.3 Phase AOT Stage 7 sub-piece 3 — interned-string slot
+    // resolver. Runs BEFORE `vm.load` so the resulting closure's
+    // first dispatch into AOT mcode sees populated slots. Idempotent
+    // and tolerates the empty-section case (binary linked zero AOT
+    // traces): both bracket symbols collapse to the same address, the
+    // walk terminates immediately.
+    //
+    // `vm.load` interns its own strings into `vm.heap`'s string table,
+    // which the resolver also populates here; intern is idempotent, so
+    // an AOT-time and load-time intern of the same UTF-8 bytes
+    // resolve to the same `Gc<LuaStr>` pointer — the load-bearing
+    // invariant that lets trace mcode pass interned-key pointers to
+    // the `luna_jit_*_field` helpers.
+    #[cfg(feature = "jit-helpers")]
+    {
+        let resolved = aot_strkey_resolver::resolve_all(&mut vm);
+        if std::env::var_os("LUNA_AOT_PROBE").is_some() {
+            eprintln!("luna-runtime-helpers: aot_strkey_resolved = {resolved}");
+        }
+    }
+
     let closure = match vm.load(bytecode, b"=embedded") {
         Ok(c) => c,
         Err(e) => {
@@ -482,4 +503,190 @@ pub fn force_link_jit_helpers() -> usize {
 /// type setup gives us both for free.
 pub const fn force_link_aot_entry() -> unsafe extern "C" fn(*const u8, usize) -> i32 {
     luna_aot_run
+}
+
+/// v1.3 Phase AOT Stage 7 sub-piece 3 — deploy-side interned-string
+/// slot resolver.
+///
+/// AOT trace mcode emitted by [`luna_jit::jit_backend::trace::
+/// lower_trace_into`] with `CompileOptions { aot: true }` reads
+/// interned-string-key pointers indirectly through writable 8-byte
+/// slots (`__luna_aot_strkey_slot_<hex>`). Each unique key
+/// contributes a 16-byte `[bytes_addr, slot_addr]` entry to a
+/// dedicated `luna_strkey_idx` section. The deploy binary's static
+/// linker auto-brackets that section via
+/// `__start_luna_strkey_idx` / `__stop_luna_strkey_idx` (ELF) or
+/// `section$start$__DATA$luna_strkey_idx` /
+/// `section$end$__DATA$luna_strkey_idx` (Mach-O), and this resolver
+/// walks the bracketed range to: (a) intern each bytes block into
+/// the deploy `Vm`'s heap, and (b) write the resulting
+/// `Gc<LuaStr>::as_ptr()` into the matching slot.
+///
+/// # Safety contract (called from `run_inner` only)
+///
+/// - Must run **once**, BEFORE the deploy `Vm` dispatches into any
+///   AOT mcode. `run_inner` calls it after `Vm::new` /
+///   `set_bytecode_loading` and before `vm.load`.
+/// - Idempotent under second-call: the slots already hold valid
+///   `Gc<LuaStr>` pointers, the section walk re-interns the bytes
+///   (cheap — string-table dedup), and re-writes the slot with the
+///   same pointer.
+/// - Empty-section tolerant: a deploy binary that linked zero AOT
+///   trace `.o`s has both bracket symbols collapsing to the same
+///   address; the walk loop terminates with zero entries.
+///
+/// # Why feature-gated on `jit-helpers`
+///
+/// The whole AOT-trace path is jit-helper-gated. With
+/// `default-features = false` the staticlib excludes
+/// `luna-jit` and the resolver becomes a no-op — interp-only AOT
+/// binaries pay zero scan cost and the bracket-symbol references are
+/// elided.
+#[cfg(feature = "jit-helpers")]
+pub mod aot_strkey_resolver {
+    use luna_core::vm::Vm;
+
+    /// Index entry layout — must match the cranelift-emit shape in
+    /// `crates/luna-jit/src/jit_backend/trace.rs::emit_str_key_arg`:
+    /// two pointer-sized fields, `bytes_ptr` and `slot_ptr`, both
+    /// resolved by the static linker before process load completes.
+    #[repr(C)]
+    struct IndexEntry {
+        /// Address of the `__luna_aot_strkey_bytes_<hex>` symbol:
+        /// `[u64 len | utf8...]` payload, read-only.
+        bytes_ptr: *const u8,
+        /// Address of the `__luna_aot_strkey_slot_<hex>` symbol:
+        /// writable 8-byte slot, zero-initialised at link time, this
+        /// resolver writes the interned `Gc<LuaStr>` pointer in.
+        slot_ptr: *mut *const u8,
+    }
+
+    // ELF / lld auto-creates `__start_<name>` / `__stop_<name>` for
+    // sections whose name is a valid C identifier. Our section is
+    // `luna_strkey_idx` (set via cranelift's `set_segment_section`).
+    //
+    // Mach-O uses a different convention: `section$start$<seg>$<sect>`
+    // / `section$end$<seg>$<sect>`, synthesized by Apple `ld`. We
+    // declare per-platform externs and the dead-strip pass discards
+    // whichever doesn't match.
+    //
+    // Windows / COFF has no bracket-symbol convention; an AOT trace
+    // running on Windows would need a per-`.o` registry table
+    // approach (audit § Stage 6 Windows MSVC arm is also unimplemented).
+    // For now Windows AOT-with-traces is a known gap — the resolver
+    // returns 0 there.
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    unsafe extern "C" {
+        #[link_name = "__start_luna_strkey_idx"]
+        static mut LUNA_STRKEY_IDX_START: u8;
+        #[link_name = "__stop_luna_strkey_idx"]
+        static mut LUNA_STRKEY_IDX_END: u8;
+    }
+
+    #[cfg(target_vendor = "apple")]
+    unsafe extern "C" {
+        #[link_name = "\u{1}section$start$__DATA$luna_strkey_idx"]
+        static mut LUNA_STRKEY_IDX_START: u8;
+        #[link_name = "\u{1}section$end$__DATA$luna_strkey_idx"]
+        static mut LUNA_STRKEY_IDX_END: u8;
+    }
+
+    /// Walk the bracketed `luna_strkey_idx` section, intern each
+    /// bytes block into `vm.heap`, write the resulting pointer into
+    /// the matching slot. Returns the number of slots populated
+    /// (zero on platforms without bracket-symbol support, or on a
+    /// binary that linked zero AOT trace `.o`s).
+    pub fn resolve_all(vm: &mut Vm) -> usize {
+        // Windows COFF + any platform we don't have bracket externs
+        // for: no-op. Future Windows AOT work needs a registry table.
+        #[cfg(not(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple")))]
+        {
+            let _ = vm;
+            return 0;
+        }
+
+        #[cfg(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple"))]
+        unsafe {
+            let start = &raw mut LUNA_STRKEY_IDX_START as *mut IndexEntry;
+            let end = &raw mut LUNA_STRKEY_IDX_END as *mut IndexEntry;
+            // start == end on a binary with zero AOT traces. Section
+            // length = end - start in bytes; divide by entry size to
+            // get the count. The byte-cast happens via
+            // `byte_offset_from` (stable, no UB on equal pointers).
+            let len_bytes = (end as isize) - (start as isize);
+            if len_bytes <= 0 {
+                return 0;
+            }
+            let n_entries = (len_bytes as usize) / core::mem::size_of::<IndexEntry>();
+            let mut populated = 0usize;
+            for i in 0..n_entries {
+                let entry = &*start.add(i);
+                if entry.bytes_ptr.is_null() || entry.slot_ptr.is_null() {
+                    continue;
+                }
+                // Read the bytes header — u64 LE length, then payload.
+                let len = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
+                let payload = entry.bytes_ptr.add(8);
+                let bytes = core::slice::from_raw_parts(payload, len);
+                let interned = vm.heap.intern(bytes);
+                // Write the `Gc<LuaStr>::as_ptr()` into the slot as a
+                // raw pointer. The trace IR loads through this slot
+                // via cranelift's `bcx.ins().load(I64, ...)`, so a
+                // bit-compatible store is sufficient.
+                core::ptr::write(entry.slot_ptr, interned.as_ptr() as *const u8);
+                populated += 1;
+            }
+            populated
+        }
+    }
+}
+
+/// v1.3 Phase AOT Stage 7 sub-piece 4 — trace dispatch registry.
+///
+/// **STATUS**: design landed; runtime wiring deferred to a follow-up
+/// session.
+///
+/// # What sub-piece 4 needs
+///
+/// At AOT compile time, the build pipeline must identify which
+/// `(Proto, pc)` sites are hot enough to be worth lowering as trace
+/// mcode. The simplest approach (per RFC § Open question 1):
+///
+/// 1. **Warmup-trigger recording** — `luna-aot::embed::compile_and_link`
+///    runs the dump bytes through a `Vm` with `trace_enabled = true`
+///    and a low hot-count threshold; closes the first M traces seen.
+/// 2. **Per-trace mcode emit** — for each closed trace, call
+///    `lower_trace_into(&mut object_module, &trace_record,
+///    CompileOptions { aot: true, ... })` and capture the resulting
+///    `FuncId`. The trace mcode object is added to the link line.
+/// 3. **Dispatch registry** — emit a third section
+///    `luna_trace_idx` holding
+///    `[(proto_sha256, entry_pc, fn_ptr) ; N]` triples. The deploy
+///    resolver walks this section after `vm.load` (so undumped
+///    `Proto`s are available) and patches each matched proto's
+///    `Proto.jit` field with `JitProtoState::Compiled` carrying the
+///    AOT-provided entry pointer.
+/// 4. **Smoke test** — `luna-aot compile fib28.lua --out fib28` →
+///    run with `LUNA_AOT_PROBE=1` → assert stderr contains a
+///    "aot_trace_dispatched" probe and stdout matches interp output.
+///
+/// # Why not landed this session
+///
+/// Steps 1-3 each touch a load-bearing subsystem (trace recorder
+/// public surface, per-`Proto` SHA-256 stability across
+/// `dump`/`undump`, `Proto.jit` mutator API). The combined risk
+/// envelope is multi-day, exceeding this session's budget. The
+/// resolver in [`aot_strkey_resolver`] (sub-piece 3) is the
+/// load-bearing dependency for any sub-piece-4 work — it shipped
+/// here, so a follow-up session can pick up at "emit trace mcode +
+/// register entries" without redoing strkey plumbing.
+///
+/// The `LUNA_AOT_PROBE` env-var convention is reserved: when set,
+/// both sub-pieces 3 and 4 print one diagnostic line each to stderr.
+/// Sub-piece 4 will print `aot_trace_dispatched: id=<N>` on each
+/// trace fire.
+#[cfg(feature = "jit-helpers")]
+pub mod aot_trace_registry {
+    // Intentionally empty for sub-piece 3 ship — see the module-level
+    // doc above for the sub-piece 4 plan.
 }
