@@ -33,11 +33,43 @@
 //!   `per_exit_tags` array (`(cont_pc, [ExitTag])` per entry) so
 //!   traces with typed-register side-exit guards (GetUpval-heavy
 //!   closures, type-specialized GetField loops) are AOT-installable.
-//!   Inline cmp@d>0 side-exits (`per_exit_inline`) still require
-//!   runtime `FrameMaterializeInfo` chains — they remain JIT-only
-//!   this cut. v2 readers MUST accept v1 blobs as if `per_exit_tags`
+//!   v2 readers MUST accept v1 blobs as if `per_exit_tags`
 //!   were empty (the trailing block becomes optional via the
 //!   `total_payload < bytes.len()` predicate at decode time).
+//! - **v3** — Inline cmp@d>0 side-exit scaffolding. Appends a second
+//!   trailing block after `per_exit_tags`: a list of
+//!   [`PerExitInlineEntry`] records carrying the `cont_pc`,
+//!   `head_resume_pc`, the per-slot exit-tag snapshot covering the
+//!   trace's full `window_size`, and the `FrameMaterializeInfo`
+//!   chain bytes. v3 readers accept v1 and v2 blobs as if the
+//!   inline block were empty.
+//!
+//!   **Important — install-time invariant**: emitting the v3 inline
+//!   block into a meta blob is necessary but **not sufficient** to
+//!   safely AOT-install a trace whose `per_exit_inline` is non-
+//!   empty. The trace mcode itself today bakes a raw
+//!   `Rc::as_ptr(&chain_rc)` value as an `iconst` immediate at lower
+//!   time (see `luna-jit/src/jit_backend/trace.rs` near the cmp@d>0
+//!   side-exit emit sites). Under JIT the immediate is a live heap
+//!   pointer; under AOT it would be the warmup VM's heap address,
+//!   invalid in the deploy binary. To actually unlock the install
+//!   path the lowerer must:
+//!     1. Emit a writable per-site slot (`__luna_aot_inline_chain_
+//!        slot_<key>`) and load through it instead of the raw
+//!        `iconst`.
+//!     2. Register a new `luna_inline_chain_idx` bracketed section
+//!        analogous to `luna_strkey_idx` so the deploy resolver can
+//!        match installed entries to slot addresses.
+//!     3. The deploy walker (after rebuilding `Rc<[FrameMaterializeInfo
+//!        ]>` from v3 blob bytes) writes the live address of the
+//!        rebuilt chain into each slot before the first dispatch.
+//!
+//!   Until those three pieces land, the AOT harvester
+//!   (`luna-aot::embed`) MUST keep its
+//!   `per_exit_inline.is_empty()` filter so non-empty-inline
+//!   traces never produce a v3 blob with inline data — they stay
+//!   JIT-only. The wire format below is forward-ready so the
+//!   lowerer / resolver work doesn't need a fresh version bump.
 //!
 //! # Field summary
 //!
@@ -55,15 +87,16 @@
 //! - `per_exit_tags` *(v2+)* — per-cont_pc slot-shape entries the
 //!   dispatcher uses to restore vm.stack on a typed-register
 //!   side-exit
+//! - `per_exit_inline` *(v3+)* — per-site inline cmp@d>0 side-exit
+//!   records: cont_pc + head_resume_pc + per-slot exit_tags + the
+//!   `FrameMaterializeInfo` chain bytes. Forward-compat scaffold;
+//!   the harvester does not yet emit non-empty entries because the
+//!   trace mcode side needs a relocatable chain-slot scheme first
+//!   (see the v3 paragraph above).
 //!
-//! `per_exit_inline`, `body_writes`, side-trace ptrs etc. default to
-//! empty / null. Traces whose runtime shape requires non-empty
-//! `per_exit_inline` (depth>0 inlined cmp side-exits with frame
-//! materialization) **are intentionally not installable** through
-//! this format — the AOT-side recorder filters to traces whose
-//! `per_exit_inline.is_empty()` before serializing.
+//! `body_writes`, side-trace ptrs etc. default to empty / null.
 
-use crate::jit::trace_types::{ExitTag, TagResKind};
+use crate::jit::trace_types::{ExitTag, FrameMaterializeInfo, TagResKind};
 
 /// Magic bytes at the start of every AOT meta blob. The deploy walker
 /// checks this against `read::<u32>` before parsing the rest;
@@ -73,17 +106,24 @@ pub const AOT_META_MAGIC: u32 = 0xAA77_0001;
 
 /// Wire-format version. v1 = minimal cut (sub-piece 4). v2 = appends
 /// trailing `per_exit_tags` block so typed-register side-exits
-/// (GetUpval-heavy traces) install at deploy time.
+/// (GetUpval-heavy traces) install at deploy time. v3 = appends a
+/// second trailing block carrying `per_exit_inline` data so
+/// depth>0 inlined cmp side-exits can be rebuilt at install time
+/// (the trace mcode side still needs a relocatable-slot scheme
+/// before non-empty inline entries can actually be emitted —
+/// module docs go into the staging plan).
 ///
-/// **Forward compatibility contract**: a v2 writer emits the same
-/// fixed-prefix header layout as v1 plus the v2 tail. A v2 reader
-/// MUST accept v1 blobs (= header + tags only, no v2 tail) as if
-/// `per_exit_tags` were empty — implementation lives in
-/// [`decode_meta_blob`]'s `bytes.len() > total_payload` predicate.
-/// A v1 reader on a v2 blob would mis-parse the trailing block as
-/// garbage; we bump `AOT_META_VERSION` so v1 readers hard-reject
-/// instead of silently mis-installing.
-pub const AOT_META_VERSION: u32 = 2;
+/// **Forward compatibility contract**: a v3 writer emits the same
+/// fixed-prefix header layout as v1/v2 plus the v2 tail (always
+/// present, count=0 if empty) plus the v3 tail (count=0 if empty).
+/// A v3 reader MUST accept v1 blobs (= header + tags only, no v2
+/// tail) and v2 blobs (= header + tags + v2 tail only, no v3 tail)
+/// as if the missing tails were empty — implementation lives in
+/// [`decode_meta_blob`]'s `bytes.len() > cur` predicate at each
+/// tail boundary. v2 readers on a v3 blob would mis-parse the v3
+/// tail as garbage; we bump `AOT_META_VERSION` so older readers
+/// hard-reject instead of silently mis-installing.
+pub const AOT_META_VERSION: u32 = 3;
 
 /// Fixed-size header at the top of every meta blob. All ints are
 /// little-endian.
@@ -188,10 +228,115 @@ pub struct PerExitTagsEntry {
     pub tags_packed: Vec<u8>,
 }
 
+/// One per-site inline cmp@d>0 side-exit entry serialized into the v3
+/// tail of a meta blob. Mirrors `CompiledTrace::per_exit_inline`'s
+/// [`crate::jit::trace_types::InlineSideExit`] shape minus the
+/// runtime-only `side_trace_ptr` cell (always defaults null on AOT
+/// install). The `chain` field carries [`FrameMaterializeInfo`]
+/// records as raw bytes — `FrameMaterializeInfo` is `repr(C)` with
+/// three 32-bit fields = exactly 12 bytes per entry on every
+/// supported target, so the wire layout is stable.
+#[derive(Clone, Debug)]
+pub struct PerExitInlineEntry {
+    /// Pc the interpreter resumes at after the inline side-exit
+    /// fires. Mirrors `InlineSideExit::cont_pc`.
+    pub cont_pc: u32,
+    /// Pc to write on the trace head frame when the side-exit fires
+    /// (the outermost self-rec Call's `pc + 1`). Mirrors
+    /// `InlineSideExit::head_resume_pc`.
+    pub head_resume_pc: u32,
+    /// Per-slot `ExitTag` snapshot at the side-exit moment, packed
+    /// via [`pack_exit_tag`]. Length equals the trace's full
+    /// `window_size` (caller + every inlined frame's register
+    /// window) — `per_exit_tags`'s arrays cover only `max_stack`,
+    /// inline arrays cover the full window.
+    pub tags_packed: Vec<u8>,
+    /// `FrameMaterializeInfo` records as raw bytes (count * 12).
+    /// Outermost = depth 1 first, innermost = depth N last; the
+    /// innermost frame's `pc` is already overwritten to the side-
+    /// exit PC at AOT-compile time (matches the JIT-side
+    /// snapshot.last_mut().pc = side_exit_pc step). Length divisible
+    /// by 12 is a wire-format invariant; the decoder rejects otherwise.
+    pub chain_bytes: Vec<u8>,
+}
+
+impl PerExitInlineEntry {
+    /// Byte size of one `FrameMaterializeInfo` on the wire. Asserted
+    /// at compile time via [`FRAME_MATERIALIZE_INFO_WIRE_SIZE_CHECK`]
+    /// against the live struct so layout drift fails the build.
+    pub const FRAME_MATERIALIZE_INFO_SIZE: usize = 12;
+
+    /// Construct a `PerExitInlineEntry` from a live
+    /// [`crate::jit::trace_types::InlineSideExit`]. The chain is
+    /// serialized via a raw-byte copy — `FrameMaterializeInfo` is
+    /// `repr(C)` + all-`Copy` fields with no padding, so the byte
+    /// pattern matches the on-disk wire layout verbatim.
+    ///
+    /// # Safety
+    ///
+    /// `FrameMaterializeInfo` is `#[repr(C)]` with three 32-bit
+    /// fields and no padding; the byte-level transmute below is
+    /// sound per the wire-size assertion at module top.
+    pub fn from_inline_side_exit(src: &crate::jit::trace_types::InlineSideExit) -> Self {
+        let tags_packed: Vec<u8> = src.exit_tags.iter().copied().map(pack_exit_tag).collect();
+        let n = src.chain.len();
+        let mut chain_bytes = Vec::with_capacity(n * Self::FRAME_MATERIALIZE_INFO_SIZE);
+        for fm in src.chain.iter() {
+            chain_bytes.extend_from_slice(&fm.base_offset.to_le_bytes());
+            chain_bytes.extend_from_slice(&fm.pc.to_le_bytes());
+            chain_bytes.extend_from_slice(&fm.nresults.to_le_bytes());
+        }
+        PerExitInlineEntry {
+            cont_pc: src.cont_pc,
+            head_resume_pc: src.head_resume_pc,
+            tags_packed,
+            chain_bytes,
+        }
+    }
+
+    /// Reconstruct a `Vec<FrameMaterializeInfo>` from this entry's
+    /// `chain_bytes`. Returns `None` if `chain_bytes.len()` is not a
+    /// multiple of [`Self::FRAME_MATERIALIZE_INFO_SIZE`] (corruption
+    /// signal — the deploy walker should skip the entry).
+    pub fn rebuild_chain(&self) -> Option<Vec<FrameMaterializeInfo>> {
+        let unit = Self::FRAME_MATERIALIZE_INFO_SIZE;
+        if !self.chain_bytes.len().is_multiple_of(unit) {
+            return None;
+        }
+        let n = self.chain_bytes.len() / unit;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let off = i * unit;
+            let base_offset =
+                u32::from_le_bytes(self.chain_bytes[off..off + 4].try_into().unwrap());
+            let pc = u32::from_le_bytes(self.chain_bytes[off + 4..off + 8].try_into().unwrap());
+            let nresults =
+                i32::from_le_bytes(self.chain_bytes[off + 8..off + 12].try_into().unwrap());
+            out.push(FrameMaterializeInfo {
+                base_offset,
+                pc,
+                nresults,
+            });
+        }
+        Some(out)
+    }
+}
+
+/// Static assertion that [`FrameMaterializeInfo`]'s in-memory size
+/// matches the wire-format constant. A regression here (a fourth
+/// field, a different layout attribute) silently misaligns the
+/// `chain_bytes` (re)serialization; the build break makes the drift
+/// loud at the source instead of mysterious at deploy time.
+pub const FRAME_MATERIALIZE_INFO_WIRE_SIZE_CHECK: () = assert!(
+    core::mem::size_of::<FrameMaterializeInfo>() == PerExitInlineEntry::FRAME_MATERIALIZE_INFO_SIZE,
+    "FrameMaterializeInfo wire size drifted — update PerExitInlineEntry::FRAME_MATERIALIZE_INFO_SIZE \
+     and any deploy-side rebuilders together"
+);
+
 /// Serialize a header + the two tag arrays + the v2 `per_exit_tags`
-/// tail into a fresh `Vec<u8>`. Pass an empty `per_exit_tags` slice
-/// to emit a "simple" trace (the tail then carries a single
-/// `count = 0` u32 — still v2 layout, just empty).
+/// tail + the v3 `per_exit_inline` tail into a fresh `Vec<u8>`. Pass
+/// empty slices to emit a "simple" trace (each tail then carries a
+/// single `count = 0` u32 — still v3 layout, just empty).
 ///
 /// The produced bytes are what `luna-aot` embeds into the
 /// `luna_trace_blob` section per-trace; the deploy walker reads from
@@ -201,16 +346,25 @@ pub fn encode_meta_blob(
     entry_tags: &[u8],
     exit_tags_packed: &[u8],
     per_exit_tags: &[PerExitTagsEntry],
+    per_exit_inline: &[PerExitInlineEntry],
 ) -> Vec<u8> {
     assert_eq!(entry_tags.len(), header.entry_tags_len as usize);
     assert_eq!(exit_tags_packed.len(), header.exit_tags_len as usize);
     assert_eq!(header.version, AOT_META_VERSION);
-    let tail_bytes: usize = 4 + per_exit_tags
+    let v2_tail_bytes: usize = 4 + per_exit_tags
         .iter()
         .map(|e| 4 + 4 + e.tags_packed.len())
         .sum::<usize>();
+    let v3_tail_bytes: usize = 4 + per_exit_inline
+        .iter()
+        .map(|e| 4 + 4 + 4 + e.tags_packed.len() + 4 + e.chain_bytes.len())
+        .sum::<usize>();
     let mut out = Vec::with_capacity(
-        AotTraceMetaHeader::SIZE + entry_tags.len() + exit_tags_packed.len() + tail_bytes,
+        AotTraceMetaHeader::SIZE
+            + entry_tags.len()
+            + exit_tags_packed.len()
+            + v2_tail_bytes
+            + v3_tail_bytes,
     );
     out.extend_from_slice(&header.magic.to_le_bytes());
     out.extend_from_slice(&header.version.to_le_bytes());
@@ -230,6 +384,20 @@ pub fn encode_meta_blob(
         out.extend_from_slice(&(ent.tags_packed.len() as u32).to_le_bytes());
         out.extend_from_slice(&ent.tags_packed);
     }
+    // v3 tail: u32 count, then per entry
+    //   [cont_pc:u32, head_resume_pc:u32, tags_len:u32, tags:[u8; tags_len],
+    //    chain_bytes_len:u32, chain_bytes:[u8; chain_bytes_len]].
+    // chain_bytes_len is always a multiple of 12 (FrameMaterializeInfo
+    // wire size); the decoder rejects otherwise as a corruption signal.
+    out.extend_from_slice(&(per_exit_inline.len() as u32).to_le_bytes());
+    for ent in per_exit_inline {
+        out.extend_from_slice(&ent.cont_pc.to_le_bytes());
+        out.extend_from_slice(&ent.head_resume_pc.to_le_bytes());
+        out.extend_from_slice(&(ent.tags_packed.len() as u32).to_le_bytes());
+        out.extend_from_slice(&ent.tags_packed);
+        out.extend_from_slice(&(ent.chain_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&ent.chain_bytes);
+    }
     out
 }
 
@@ -244,8 +412,15 @@ pub struct DecodedMeta {
     /// packed `u8` form. Caller maps each through [`unpack_exit_tag`].
     pub exit_tags: Vec<u8>,
     /// v2 tail — per-cont_pc tag arrays. Empty for v1 blobs and for
-    /// v2 traces with no typed-register side-exits.
+    /// v2+ traces with no typed-register side-exits.
     pub per_exit_tags: Vec<PerExitTagsEntry>,
+    /// v3 tail — per-site inline cmp@d>0 side-exit metadata.
+    /// Empty for v1 / v2 blobs and for v3 traces with no inlined
+    /// side-exits. Today the AOT harvester filters out traces with
+    /// non-empty `per_exit_inline` regardless (see module docs);
+    /// the field exists so the wire format is forward-ready for the
+    /// relocatable-chain-slot lowerer work that flips the filter.
+    pub per_exit_inline: Vec<PerExitInlineEntry>,
 }
 
 /// Deserialize a blob produced by [`encode_meta_blob`]. Returns
@@ -292,12 +467,12 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
     let entry_tags = bytes[entry_start..entry_end].to_vec();
     let exit_tags = bytes[entry_end..exit_end].to_vec();
     // v2 tail: optional per_exit_tags block. Absent (= empty) when
-    // the blob ends exactly at `exit_end` — covers both v1 producers
-    // (which never wrote a tail) AND v2 producers serializing a
-    // trace with zero typed-register side-exits.
+    // the blob ends exactly at `exit_end` — covers v1-shaped
+    // producers (which never wrote a tail) and v2+ producers
+    // serializing a trace with zero typed-register side-exits.
     let mut per_exit_tags: Vec<PerExitTagsEntry> = Vec::new();
-    if bytes.len() > exit_end {
-        let mut cur = exit_end;
+    let mut cur = exit_end;
+    if bytes.len() > cur {
         if bytes.len() < cur + 4 {
             return Err("v2 tail truncated at count");
         }
@@ -323,11 +498,67 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
             });
         }
     }
+    // v3 tail: optional per_exit_inline block. Absent when the blob
+    // ends at the v2 tail boundary — covers v1 / v2 producers and
+    // v3 producers serializing a trace with zero inline cmp@d>0
+    // side-exits. Tail layout per entry:
+    //   cont_pc:u32, head_resume_pc:u32,
+    //   tags_len:u32, tags:[u8; tags_len],
+    //   chain_bytes_len:u32, chain_bytes:[u8; chain_bytes_len]
+    // chain_bytes_len validated as a multiple of 12
+    // (FrameMaterializeInfo wire size) — non-multiple = corruption,
+    // we Err so the deploy walker skips the entry cleanly.
+    let mut per_exit_inline: Vec<PerExitInlineEntry> = Vec::new();
+    if bytes.len() > cur {
+        if bytes.len() < cur + 4 {
+            return Err("v3 tail truncated at count");
+        }
+        let count = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
+        cur += 4;
+        per_exit_inline.reserve(count);
+        for _ in 0..count {
+            if bytes.len() < cur + 12 {
+                return Err("v3 tail truncated at entry header");
+            }
+            let cont_pc = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap());
+            cur += 4;
+            let head_resume_pc = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap());
+            cur += 4;
+            let tags_len = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
+            cur += 4;
+            if bytes.len() < cur + tags_len {
+                return Err("v3 tail truncated at entry tags");
+            }
+            let tags_packed = bytes[cur..cur + tags_len].to_vec();
+            cur += tags_len;
+            if bytes.len() < cur + 4 {
+                return Err("v3 tail truncated at chain header");
+            }
+            let chain_bytes_len =
+                u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
+            cur += 4;
+            if bytes.len() < cur + chain_bytes_len {
+                return Err("v3 tail truncated at chain bytes");
+            }
+            if !chain_bytes_len.is_multiple_of(PerExitInlineEntry::FRAME_MATERIALIZE_INFO_SIZE) {
+                return Err("v3 tail chain_bytes_len not a multiple of FrameMaterializeInfo size");
+            }
+            let chain_bytes = bytes[cur..cur + chain_bytes_len].to_vec();
+            cur += chain_bytes_len;
+            per_exit_inline.push(PerExitInlineEntry {
+                cont_pc,
+                head_resume_pc,
+                tags_packed,
+                chain_bytes,
+            });
+        }
+    }
     Ok(DecodedMeta {
         header,
         entry_tags,
         exit_tags,
         per_exit_tags,
+        per_exit_inline,
     })
 }
 
@@ -410,11 +641,12 @@ mod tests {
             pack_exit_tag(ExitTag::Untouched),
             pack_exit_tag(ExitTag::Float),
         ];
-        let blob = encode_meta_blob(&header, &entry_tags, &exit_tags, &[]);
-        // SIZE + entry_tags + exit_tags + v2-tail-count(4)
-        assert_eq!(blob.len(), AotTraceMetaHeader::SIZE + 2 + 3 + 4);
+        let blob = encode_meta_blob(&header, &entry_tags, &exit_tags, &[], &[]);
+        // SIZE + entry_tags + exit_tags + v2-tail-count(4) + v3-tail-count(4)
+        assert_eq!(blob.len(), AotTraceMetaHeader::SIZE + 2 + 3 + 4 + 4);
         let decoded = decode_meta_blob(&blob).expect("decode");
         assert!(decoded.per_exit_tags.is_empty());
+        assert!(decoded.per_exit_inline.is_empty());
         assert_eq!(decoded.header.head_pc, 42);
         assert_eq!(decoded.header.window_size, 4);
         assert_eq!(decoded.header.dispatchable, 1);
@@ -478,20 +710,190 @@ mod tests {
                 ],
             },
         ];
-        let blob = encode_meta_blob(&header, &[], &[], &entries);
+        let blob = encode_meta_blob(&header, &[], &[], &entries, &[]);
         let decoded = decode_meta_blob(&blob).expect("decode v2");
         assert_eq!(decoded.per_exit_tags.len(), 2);
         assert_eq!(decoded.per_exit_tags[0].cont_pc, 3);
         assert_eq!(decoded.per_exit_tags[0].tags_packed.len(), 2);
         assert_eq!(decoded.per_exit_tags[1].cont_pc, 11);
         assert_eq!(decoded.per_exit_tags[1].tags_packed.len(), 3);
+        assert!(decoded.per_exit_inline.is_empty());
+    }
+
+    #[test]
+    fn v3_per_exit_inline_round_trip() {
+        // Two inline-side-exit entries with different chain depths so
+        // the tail walker exercises variable-length per-entry parsing.
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 0,
+            n_ops: 0,
+            window_size: 8,
+            dispatchable: 1,
+            tag_res_kind: pack_tag_res_kind(TagResKind::Mixed),
+            entry_tags_len: 0,
+            exit_tags_len: 0,
+        };
+        // Hand-roll the inline entries (the live-CompiledTrace
+        // converter is exercised by the round-trip-from-live test
+        // below).
+        let inline = vec![
+            PerExitInlineEntry {
+                cont_pc: 5,
+                head_resume_pc: 9,
+                tags_packed: vec![pack_exit_tag(ExitTag::Int), pack_exit_tag(ExitTag::Int)],
+                // 1 FrameMaterializeInfo = 12 bytes:
+                //   base_offset = 3, pc = 4, nresults = 1
+                chain_bytes: {
+                    let mut v = Vec::new();
+                    v.extend_from_slice(&3u32.to_le_bytes());
+                    v.extend_from_slice(&4u32.to_le_bytes());
+                    v.extend_from_slice(&1i32.to_le_bytes());
+                    v
+                },
+            },
+            PerExitInlineEntry {
+                cont_pc: 17,
+                head_resume_pc: 21,
+                tags_packed: vec![
+                    pack_exit_tag(ExitTag::Closure),
+                    pack_exit_tag(ExitTag::Untouched),
+                    pack_exit_tag(ExitTag::Float),
+                ],
+                // 2 frames = 24 bytes.
+                chain_bytes: {
+                    let mut v = Vec::new();
+                    for (off, pc, nr) in [(2u32, 7u32, 1i32), (5u32, 11u32, 2i32)] {
+                        v.extend_from_slice(&off.to_le_bytes());
+                        v.extend_from_slice(&pc.to_le_bytes());
+                        v.extend_from_slice(&nr.to_le_bytes());
+                    }
+                    v
+                },
+            },
+        ];
+        let blob = encode_meta_blob(&header, &[], &[], &[], &inline);
+        let decoded = decode_meta_blob(&blob).expect("decode v3");
+        assert_eq!(decoded.per_exit_inline.len(), 2);
+        assert_eq!(decoded.per_exit_inline[0].cont_pc, 5);
+        assert_eq!(decoded.per_exit_inline[0].head_resume_pc, 9);
+        assert_eq!(decoded.per_exit_inline[0].tags_packed.len(), 2);
+        let chain0 = decoded.per_exit_inline[0]
+            .rebuild_chain()
+            .expect("rebuild chain[0]");
+        assert_eq!(chain0.len(), 1);
+        assert_eq!(chain0[0].base_offset, 3);
+        assert_eq!(chain0[0].pc, 4);
+        assert_eq!(chain0[0].nresults, 1);
+        let chain1 = decoded.per_exit_inline[1]
+            .rebuild_chain()
+            .expect("rebuild chain[1]");
+        assert_eq!(chain1.len(), 2);
+        assert_eq!(chain1[0].base_offset, 2);
+        assert_eq!(chain1[1].pc, 11);
+        assert_eq!(chain1[1].nresults, 2);
+    }
+
+    #[test]
+    fn v3_per_exit_inline_round_trip_from_live() {
+        // Exercise PerExitInlineEntry::from_inline_side_exit against
+        // a hand-built InlineSideExit, then encode + decode +
+        // rebuild and check field equality. Catches drift if either
+        // the live-struct shape or the wire layout changes without
+        // updating the other.
+        use crate::jit::trace_types::{ExitTag, FrameMaterializeInfo, InlineSideExit};
+        let chain = vec![FrameMaterializeInfo {
+            base_offset: 1,
+            pc: 2,
+            nresults: 3,
+        }];
+        let live = InlineSideExit {
+            cont_pc: 42,
+            head_resume_pc: 50,
+            exit_tags: std::rc::Rc::from(
+                vec![ExitTag::Int, ExitTag::Float, ExitTag::Untouched].into_boxed_slice(),
+            ),
+            chain: std::rc::Rc::from(chain.into_boxed_slice()),
+            side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
+        };
+        let entry = PerExitInlineEntry::from_inline_side_exit(&live);
+        assert_eq!(entry.cont_pc, 42);
+        assert_eq!(entry.head_resume_pc, 50);
+        assert_eq!(entry.tags_packed.len(), 3);
+        assert_eq!(
+            entry.chain_bytes.len(),
+            PerExitInlineEntry::FRAME_MATERIALIZE_INFO_SIZE
+        );
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 0,
+            n_ops: 0,
+            window_size: 4,
+            dispatchable: 1,
+            tag_res_kind: pack_tag_res_kind(TagResKind::Mixed),
+            entry_tags_len: 0,
+            exit_tags_len: 0,
+        };
+        let blob = encode_meta_blob(&header, &[], &[], &[], &[entry]);
+        let decoded = decode_meta_blob(&blob).expect("decode v3 from live");
+        assert_eq!(decoded.per_exit_inline.len(), 1);
+        let rebuilt = decoded.per_exit_inline[0].rebuild_chain().expect("rebuild");
+        assert_eq!(rebuilt.len(), 1);
+        assert_eq!(rebuilt[0].base_offset, 1);
+        assert_eq!(rebuilt[0].pc, 2);
+        assert_eq!(rebuilt[0].nresults, 3);
+    }
+
+    #[test]
+    fn decode_rejects_v3_chain_bytes_misaligned() {
+        // Hand-emit a v3 blob whose chain_bytes_len is not a multiple
+        // of 12 — the decoder MUST refuse (returning Err) instead of
+        // silently truncating, so the deploy walker has a clean skip
+        // signal.
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 0,
+            n_ops: 0,
+            window_size: 0,
+            dispatchable: 0,
+            tag_res_kind: 0,
+            entry_tags_len: 0,
+            exit_tags_len: 0,
+        };
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&header.magic.to_le_bytes());
+        blob.extend_from_slice(&header.version.to_le_bytes());
+        blob.extend_from_slice(&header.head_pc.to_le_bytes());
+        blob.extend_from_slice(&header.n_ops.to_le_bytes());
+        blob.extend_from_slice(&header.window_size.to_le_bytes());
+        blob.push(header.dispatchable);
+        blob.push(header.tag_res_kind);
+        blob.extend_from_slice(&header.entry_tags_len.to_le_bytes());
+        blob.extend_from_slice(&header.exit_tags_len.to_le_bytes());
+        // v2 tail: count=0.
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        // v3 tail: count=1, cont_pc=0, head_resume_pc=0, tags_len=0,
+        // chain_bytes_len=7 (not a multiple of 12), chain_bytes=7 zeros.
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&7u32.to_le_bytes());
+        blob.extend(std::iter::repeat_n(0u8, 7));
+        let err = decode_meta_blob(&blob).unwrap_err();
+        assert!(
+            err.contains("FrameMaterializeInfo"),
+            "expected misalignment err, got {err:?}"
+        );
     }
 
     #[test]
     fn decode_tolerates_v1_blob_shape() {
-        // Emulate a v1-shaped blob: header + tags, NO trailing v2
-        // count u32. The v2 decoder should accept it as an empty
-        // per_exit_tags.
+        // Emulate a v1-shaped blob: header + tags, NO trailing v2/v3
+        // tails. The v3 decoder should accept as empty everywhere.
         let header = AotTraceMetaHeader {
             magic: AOT_META_MAGIC,
             version: AOT_META_VERSION,
@@ -514,9 +916,47 @@ mod tests {
         blob.extend_from_slice(&header.entry_tags_len.to_le_bytes());
         blob.extend_from_slice(&header.exit_tags_len.to_le_bytes());
         blob.push(0); // entry_tags[0]
-        // No v2 tail.
+        // No v2/v3 tails.
         let decoded = decode_meta_blob(&blob).expect("decode v1-shaped");
         assert!(decoded.per_exit_tags.is_empty());
+        assert!(decoded.per_exit_inline.is_empty());
+    }
+
+    #[test]
+    fn decode_tolerates_v2_blob_shape() {
+        // Emulate a v2-shaped blob: header + tags + v2 tail only,
+        // NO trailing v3 count u32. The v3 decoder should accept it
+        // as an empty per_exit_inline.
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 0,
+            n_ops: 0,
+            window_size: 0,
+            dispatchable: 0,
+            tag_res_kind: 0,
+            entry_tags_len: 0,
+            exit_tags_len: 0,
+        };
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&header.magic.to_le_bytes());
+        blob.extend_from_slice(&header.version.to_le_bytes());
+        blob.extend_from_slice(&header.head_pc.to_le_bytes());
+        blob.extend_from_slice(&header.n_ops.to_le_bytes());
+        blob.extend_from_slice(&header.window_size.to_le_bytes());
+        blob.push(header.dispatchable);
+        blob.push(header.tag_res_kind);
+        blob.extend_from_slice(&header.entry_tags_len.to_le_bytes());
+        blob.extend_from_slice(&header.exit_tags_len.to_le_bytes());
+        // v2 tail: count=1, one entry (cont_pc=3, tags_len=1, tags=[Int])
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.extend_from_slice(&3u32.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.push(pack_exit_tag(ExitTag::Int));
+        // No v3 tail.
+        let decoded = decode_meta_blob(&blob).expect("decode v2-shaped");
+        assert_eq!(decoded.per_exit_tags.len(), 1);
+        assert!(decoded.per_exit_inline.is_empty());
     }
 
     #[test]

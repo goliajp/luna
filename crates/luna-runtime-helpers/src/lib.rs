@@ -897,6 +897,39 @@ pub mod aot_trace_registry {
                     }
                     continue;
                 }
+                // v3 per_exit_inline decode + safety gate. The wire
+                // format carries the cont_pc / head_resume_pc / per-
+                // slot tags / FrameMaterializeInfo chain bytes, and
+                // `PerExitInlineEntry::rebuild_chain` validates the
+                // chain length is a multiple of 12. Today the AOT
+                // harvester always emits an empty inline block (the
+                // mcode side bakes raw chain pointers via iconst,
+                // which would be invalid in the deploy binary — see
+                // `luna-core::jit::aot_meta` v3 module docs); a non-
+                // empty inline block here means either (a) a future
+                // commit landed the lowerer + chain-slot resolver
+                // pieces and forgot to wire deploy install through
+                // them, or (b) the blob is corrupt. Either way: skip
+                // the install so we don't dispatch into a trace whose
+                // inline side-exit would deref a stale address.
+                if !decoded.per_exit_inline.is_empty() {
+                    let mut chains_ok = true;
+                    for ent in &decoded.per_exit_inline {
+                        if ent.rebuild_chain().is_none() {
+                            chains_ok = false;
+                            break;
+                        }
+                    }
+                    if probe_on {
+                        eprintln!(
+                            "luna-runtime-helpers: aot_trace skip head_pc={} reason=per_exit_inline_unimplemented \
+                             (count={}, chains_ok={chains_ok})",
+                            entry.head_pc,
+                            decoded.per_exit_inline.len(),
+                        );
+                    }
+                    continue;
+                }
                 // Transmute the C-ABI fn ptr from u64 (wire-width-
                 // stable) to `TraceFn`. Safe because the trace .o was
                 // emitted by `lower_trace_into_named` with sig

@@ -53,7 +53,8 @@ use object::{Architecture, BinaryFormat, Endianness, SectionKind, SymbolKind, Sy
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::aot_meta::{
-    AotTraceMetaHeader, PerExitTagsEntry, encode_meta_blob, pack_exit_tag, pack_tag_res_kind,
+    AotTraceMetaHeader, PerExitInlineEntry, PerExitTagsEntry, encode_meta_blob, pack_exit_tag,
+    pack_tag_res_kind,
 };
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::runtime::Heap;
@@ -1450,12 +1451,23 @@ fn harvest_and_emit_aot_traces(
     //
     // Filter to AOT-installable shapes. Wire format v2 carries
     // `per_exit_tags` (typed-register side-exit guards — GetUpval-
-    // heavy traces); only `per_exit_inline` (depth>0 inlined cmp
-    // side-exits with `FrameMaterializeInfo` chains) is still
-    // unsupported because the chain carries runtime pointers we
-    // can't relocate. The wire format also doesn't ship sunk-alloc
-    // materialize sites yet; `materialize_emit_count > 0` traces
-    // need the chain too — JIT-only.
+    // heavy traces). Wire format v3 *scaffolds* `per_exit_inline`
+    // (depth>0 inlined cmp side-exits) but the harvester still
+    // bails on non-empty inline today: the trace mcode side bakes
+    // the `Rc<[FrameMaterializeInfo]>` chain pointer as a raw
+    // `iconst` immediate at lower time (see `luna-jit/src/jit_
+    // backend/trace.rs` near `chain_ptr =
+    // std::rc::Rc::as_ptr(&chain_rc)`). Under AOT that immediate
+    // would be the warmup VM's heap address, invalid in the deploy
+    // binary; the trace would crash on the inline side-exit path.
+    // Unlocking requires a per-site relocatable chain-slot scheme
+    // analogous to the strkey slot pattern — module docs on
+    // `luna-core::jit::aot_meta` v3 lay out the three pieces.
+    // Until that lands the filter stays in place.
+    //
+    // The wire format also doesn't ship sunk-alloc materialize
+    // sites yet; `materialize_emit_count > 0` traces need that
+    // path too — JIT-only.
     let mut installable: Vec<(
         usize,
         [u8; 16],
@@ -1588,11 +1600,24 @@ fn harvest_and_emit_aot_traces(
             entry_tags_len: entry_tags_vec.len() as u16,
             exit_tags_len: exit_tags_vec.len() as u32,
         };
+        // v3 wire format requires a `per_exit_inline` argument; we
+        // pass an empty slice deliberately. The filter above
+        // guarantees `ct.per_exit_inline.is_empty()` (the
+        // serializing path above this commit only accepts traces
+        // whose inline vector is already empty), so building the
+        // entries from the live ct would be a no-op. When the
+        // lowerer + deploy resolver land the relocatable chain-
+        // slot scheme described in `luna-core::jit::aot_meta` v3
+        // docs, this slice becomes
+        // `ct.per_exit_inline.iter().map(PerExitInlineEntry::from_inline_side_exit).collect()`
+        // and the filter relaxes — wire format is forward-ready.
+        let per_exit_inline_entries: Vec<PerExitInlineEntry> = Vec::new();
         let blob = encode_meta_blob(
             &header,
             &entry_tags_vec,
             &exit_tags_vec,
             &per_exit_tags_entries,
+            &per_exit_inline_entries,
         );
         let blob_offset = blob_payload.len() as u32;
         let blob_len = blob.len() as u32;
