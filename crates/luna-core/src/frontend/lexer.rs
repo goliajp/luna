@@ -322,7 +322,14 @@ impl<'s> Lexer<'s> {
             }
             b'}' => {
                 self.bump();
-                Ok(Token::RBrace)
+                // MacroLua: `}@` closes a `@{ ... }@` explicit quote block.
+                // PUC 5.1-5.5 always reads a plain `}` here.
+                if self.version.is_macro_lua() && self.cur() == Some(b'@') {
+                    self.bump();
+                    Ok(Token::MacroBraceClose)
+                } else {
+                    Ok(Token::RBrace)
+                }
             }
             b']' => {
                 self.bump();
@@ -361,6 +368,19 @@ impl<'s> Lexer<'s> {
                     Ok(Token::Dot)
                 }
             },
+            // MacroLua (v1.3 Phase ML): `@` introduces a macro invocation
+            // (`@name(args)` / `@quote{...}`) or an explicit quote-block
+            // opener `@{`. PUC 5.1-5.5 falls through to the catch-all and
+            // errors `unexpected symbol near '@'` exactly as before.
+            b'@' if self.version.is_macro_lua() => {
+                self.bump();
+                if self.cur() == Some(b'{') {
+                    self.bump();
+                    Ok(Token::MacroBraceOpen)
+                } else {
+                    Ok(Token::At)
+                }
+            }
             _ => {
                 self.bump();
                 Err(self.err_near(line, "unexpected symbol", start))

@@ -294,6 +294,14 @@ pub struct Vm {
     /// overflow at `u32::MAX` retires the slot (NOT pushed here).
     pub(crate) host_roots_free: Vec<u32>,
 
+    /// v1.3 Phase ML — MacroLua compile-time macro registry.
+    /// Pre-populated with built-in macros (`@quote` / `@unquote` /
+    /// `@if` / `@gensym`) at construction time when `version ==
+    /// LuaVersion::MacroLua`; embedders register custom macros via
+    /// [`Vm::define_macro`]. The expander runs once per `load()` call
+    /// between lexing and parsing (only when `is_macro_lua()`).
+    pub(crate) macro_registry: crate::frontend::macro_expander::MacroRegistry,
+
     /// v1.2 Track B — per-Vm cache of `Gc<Table>` metatables keyed
     /// by `TypeId::of::<T>()` for embedder types implementing
     /// [`crate::vm::userdata_trait::LuaUserdata`]. Populated lazily by
@@ -924,6 +932,14 @@ impl Vm {
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // v1.1 B12 — host roots ticket pool for the `Lua` facade.
             host_roots: Vec::new(),
+            // v1.3 Phase ML — MacroLua registry. Pre-populated with
+            // built-ins (`@quote` / `@unquote` / `@if` / `@gensym`)
+            // when this Vm is constructed under `LuaVersion::MacroLua`.
+            macro_registry: if version == LuaVersion::MacroLua {
+                crate::frontend::macro_expander::MacroRegistry::with_builtins()
+            } else {
+                crate::frontend::macro_expander::MacroRegistry::new()
+            },
             host_roots_free: Vec::new(),
             // v1.2 Track B — LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
@@ -1221,6 +1237,23 @@ impl Vm {
             .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, child);
     }
 
+    /// v1.3 Phase ML — register a MacroLua macro under `name`. Inert
+    /// under non-MacroLua dialects (the macro is stored but the load
+    /// path only consults the registry when
+    /// `self.version == LuaVersion::MacroLua`).
+    ///
+    /// `name` is stored without the leading `@` — source code writes
+    /// `@double(x)` to invoke a macro registered as `"double"`.
+    pub fn define_macro(&mut self, name: &str, m: Box<dyn crate::frontend::macro_expander::Macro>) {
+        self.macro_registry.register(name, m);
+    }
+
+    /// v1.3 Phase ML — drop all MacroLua macros (built-in + custom).
+    /// Mostly useful for tests / dogfood resets.
+    pub fn clear_macros(&mut self) {
+        self.macro_registry.clear();
+    }
+
     /// Parse + compile a chunk and close it over the globals table.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
         // a precompiled (binary) chunk is undumped; source is parsed + compiled
@@ -1239,6 +1272,28 @@ impl Vm {
                     msg: msg.into_bytes(),
                 },
             )?
+        } else if self.version.is_macro_lua() {
+            // v1.3 Phase ML — MacroLua dialect: drain the lexer into a
+            // token vec, run the macro expander pre-pass against the
+            // per-Vm registry, then hand the rewritten stream to
+            // `parse_tokens`. The AST + compiler are dialect-agnostic
+            // because by this point all `@`/quote tokens are gone.
+            let mut lexer = crate::frontend::lexer::Lexer::new(src, self.version);
+            let mut raw: Vec<crate::frontend::token::TokenInfo> = Vec::new();
+            loop {
+                let t = lexer.next_token()?;
+                let eof = matches!(t.tok, crate::frontend::token::Token::Eof);
+                raw.push(t);
+                if eof {
+                    break;
+                }
+            }
+            // Drop the trailing Eof — expander operates on the body and
+            // `parse_tokens` reinserts Eof when it runs out of tokens.
+            raw.pop();
+            let expanded = self.macro_registry.expand(raw)?;
+            let ast = crate::frontend::parse_tokens(expanded, src, self.version)?;
+            compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
         } else {
             let ast = parse(src, self.version)?;
             compile_chunk(&ast, self.version, chunkname, &mut self.heap)?

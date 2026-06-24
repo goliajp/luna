@@ -4,9 +4,10 @@
 pub mod ast;
 pub mod error;
 pub mod lexer;
+pub mod macro_expander;
 pub mod parser;
 pub mod span;
 pub mod token;
 
 pub use error::SyntaxError;
-pub use parser::parse;
+pub use parser::{parse, parse_tokens};

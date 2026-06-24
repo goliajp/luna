@@ -179,6 +179,7 @@ fn repl_plain(version: LuaVersion) {
             LuaVersion::Lua52 => "Lua 5.2",
             LuaVersion::Lua53 => "Lua 5.3",
             LuaVersion::Lua54 => "Lua 5.4",
+            LuaVersion::MacroLua => "MacroLua (5.4 + @macros)",
             LuaVersion::Lua55 => "Lua 5.5",
         }
     );
@@ -368,6 +369,7 @@ fn repl_rustyline(version: LuaVersion) {
             LuaVersion::Lua52 => "Lua 5.2",
             LuaVersion::Lua53 => "Lua 5.3",
             LuaVersion::Lua54 => "Lua 5.4",
+            LuaVersion::MacroLua => "MacroLua (5.4 + @macros)",
             LuaVersion::Lua55 => "Lua 5.5",
         }
     );
