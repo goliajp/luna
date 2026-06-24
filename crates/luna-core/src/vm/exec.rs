@@ -5737,6 +5737,7 @@ impl Vm {
                             let opts = crate::jit::trace::CompileOptions {
                                 internal_loop: closed_record.side_trace_parent.is_none(),
                                 pre53: self.version() <= LuaVersion::Lua53,
+                                aot: false,
                             };
                             // v1.1 A1 Session A — route through trace_compiler.
                             match self

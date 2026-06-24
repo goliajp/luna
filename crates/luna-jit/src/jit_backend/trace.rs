@@ -43,7 +43,98 @@ use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::settings;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+
+/// v1.3 Phase AOT Stage 7 sub-piece 2 — produce a `Value` of type
+/// `I64` whose runtime contents are the live `Gc<LuaStr>` pointer for
+/// `key_v`. Used by the four `iconst(I64, key.as_ptr() as i64)` sites
+/// that feed `luna_jit_*_field` / `luna_jit_get_tab_up` helpers.
+///
+/// JIT path (`opts.aot == false`): emits `iconst(I64, key.as_ptr())`,
+/// byte-for-byte identical to what the lowerer used to emit inline.
+///
+/// AOT path (`opts.aot == true`): declares two stably-named data
+/// objects (deduped across calls via Cranelift's
+/// `Module::declare_data` name interning):
+///
+/// - `__luna_aot_strkey_slot_<hex>` — 8-byte writable slot, defined
+///   if not already defined this lower call, zero-initialised. Holds
+///   the resolved `Gc<LuaStr>::as_ptr()` after the deploy-side
+///   startup hook runs.
+/// - `__luna_aot_strkey_bytes_<hex>` — read-only data carrying the
+///   UTF-8 bytes the deploy `Vm` must intern.
+///
+/// `<hex>` is a 16-char SHA-256 prefix over the bytes (collision
+/// risk: ~1 in 2^64 across the unique-string-key population of any
+/// realistic Lua program). The bytes object is what the deploy-side
+/// resolver walks; the slot is what the IR loads through.
+///
+/// Returns a `Value` holding the loaded `Gc<LuaStr>` pointer, suitable
+/// for passing as the `key_arg` parameter to `luna_jit_set_field` /
+/// `_get_field` / `_get_tab_up`.
+fn emit_str_key_arg<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    key_v: luna_core::runtime::Gc<luna_core::runtime::LuaStr>,
+    aot: bool,
+    defined_aot_data: &mut std::collections::HashSet<DataId>,
+) -> Value {
+    if !aot {
+        return bcx.ins().iconst(types::I64, key_v.as_ptr() as i64);
+    }
+    let bytes = key_v.as_bytes();
+    let hex = strkey_hex_label(bytes);
+
+    // 8-byte writable slot — IR loads through it.
+    let slot_name = format!("__luna_aot_strkey_slot_{hex}");
+    let slot_id = module
+        .declare_data(&slot_name, Linkage::Export, true, false)
+        .expect("declare_data slot");
+    if defined_aot_data.insert(slot_id) {
+        let mut desc = DataDescription::new();
+        desc.define(Box::new([0u8; 8]));
+        // `define_data` errors on redefinition — `insert` guards us.
+        // Best-effort: ignore the error path (the only way `define`
+        // fails here is duplicate-define, which our HashSet prevents).
+        let _ = module.define_data(slot_id, &desc);
+    }
+
+    // Bytes manifest — deploy-side resolver walks this symbol family.
+    // Layout: little-endian u64 length, then the raw bytes (no NUL).
+    // Read-only, non-TLS.
+    let bytes_name = format!("__luna_aot_strkey_bytes_{hex}");
+    let bytes_id = module
+        .declare_data(&bytes_name, Linkage::Export, false, false)
+        .expect("declare_data bytes");
+    if defined_aot_data.insert(bytes_id) {
+        let mut payload = Vec::with_capacity(8 + bytes.len());
+        payload.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        payload.extend_from_slice(bytes);
+        let mut desc = DataDescription::new();
+        desc.define(payload.into_boxed_slice());
+        let _ = module.define_data(bytes_id, &desc);
+    }
+
+    // Emit the load through the slot.
+    let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
+    let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
+    bcx.ins()
+        .load(types::I64, MemFlags::trusted(), slot_addr, 0)
+}
+
+/// Stable 16-hex-char label for a string key. Pure FNV-1a 64-bit so we
+/// don't pull `sha2` (luna-core 0-third-party-dep contract — this code
+/// is in luna-jit, but the encoding stability matters for the
+/// deploy-side resolver and a 64-bit FNV is collision-safe enough at
+/// the trace-key scale).
+fn strkey_hex_label(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
 
 /// Recognised single-arg libm math functions. Each entry maps the
 /// Lua-side const-pool name (bytes) to the libm symbol cranelift
@@ -905,6 +996,14 @@ fn emit_materialize_live_sunk<M: Module>(
     cmp_op_idx: usize,
     kinds_snapshot: &mut [RegKind],
     head_proto: Gc<Proto>,
+    // v1.3 Phase AOT Stage 7 sub-piece 2 — relocation context. `aot
+    // == false` keeps the original JIT-time iconst behaviour;
+    // `aot == true` routes interned-key pointers through the
+    // `__luna_aot_strkey_slot_<hex>` data section. `defined_aot_data`
+    // is per-lower-call dedup memory for `define_data` (only the
+    // first occurrence of a given DataId may define its bytes).
+    aot: bool,
+    defined_aot_data: &mut std::collections::HashSet<DataId>,
 ) -> u32 {
     let mut count: u32 = 0;
     let empty: &[u32] = &[];
@@ -1014,7 +1113,7 @@ fn emit_materialize_live_sunk<M: Module>(
                         "hash_keys must point at Str consts (validated by escape sweep)"
                     ),
                 };
-                let key_ptr_v = bcx.ins().iconst(types::I64, key_str.as_ptr() as i64);
+                let key_ptr_v = emit_str_key_arg(module, bcx, key_str, aot, defined_aot_data);
                 bcx.ins()
                     .stack_store(key_ptr_v, hash_keys_ss, (vi * 8) as i32);
             }
@@ -2931,6 +3030,14 @@ pub fn lower_trace_into<M: Module>(
         return None;
     }
     checkpoint("post:closed-check");
+
+    // v1.3 Phase AOT Stage 7 sub-piece 2 — track which AOT data slots
+    // we've already `define_data`'d this lower call. `declare_data`
+    // returns the same `DataId` for the same name (Cranelift name
+    // interning), but `define_data` rejects redefinition with
+    // `ModuleError::DuplicateDefinition` — so the dedupe guard sits
+    // around `define_data`, not `declare_data`.
+    let mut defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
 
     let head_proto = record.head_proto;
     let max_stack = head_proto.max_stack as usize;
@@ -5292,6 +5399,8 @@ pub fn lower_trace_into<M: Module>(
                         i,
                         &mut kinds_snapshot,
                         head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
                     let inline_side_box_0: Box<std::cell::Cell<*const u8>> =
@@ -5339,6 +5448,8 @@ pub fn lower_trace_into<M: Module>(
                         i,
                         &mut snapshot,
                         head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
                     let tag_side_box_0: Box<std::cell::Cell<*const u8>> =
@@ -5603,6 +5714,8 @@ pub fn lower_trace_into<M: Module>(
                         i,
                         &mut kinds_snapshot,
                         head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
                     let inline_side_box_1: Box<std::cell::Cell<*const u8>> =
@@ -5646,6 +5759,8 @@ pub fn lower_trace_into<M: Module>(
                         i,
                         &mut snapshot,
                         head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
                     let tag_side_box_1: Box<std::cell::Cell<*const u8>> =
@@ -5784,8 +5899,8 @@ pub fn lower_trace_into<M: Module>(
                     luna_core::runtime::Value::Str(s) => s,
                     _ => unreachable!("pre-emit gates Str const at K[B]"),
                 };
-                let key_ptr = key_v.as_ptr() as i64;
-                let key_arg = bcx.ins().iconst(types::I64, key_ptr);
+                let key_arg =
+                    emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
                 let val_tag = match val_kind {
                     RegKind::Int => luna_core::runtime::value::raw::INT,
@@ -5827,8 +5942,8 @@ pub fn lower_trace_into<M: Module>(
                     luna_core::runtime::Value::Str(s) => s,
                     _ => unreachable!("pre-emit gates Str const at K[C]"),
                 };
-                let key_ptr = key_v.as_ptr() as i64;
-                let key_arg = bcx.ins().iconst(types::I64, key_ptr);
+                let key_arg =
+                    emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
                 let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[t, key_arg]);
                 let v = bcx.inst_results(call)[0];
@@ -5861,8 +5976,8 @@ pub fn lower_trace_into<M: Module>(
                     luna_core::runtime::Value::Str(s) => s,
                     _ => unreachable!("pre-emit gates Str const at K[C]"),
                 };
-                let key_ptr = key_v.as_ptr() as i64;
-                let key_arg = bcx.ins().iconst(types::I64, key_ptr);
+                let key_arg =
+                    emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
                 let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
                 let v = bcx.inst_results(call)[0];
@@ -8446,6 +8561,7 @@ mod s2b_call_truncation {
         let opts = CompileOptions {
             internal_loop: true,
             pre53: false,
+            aot: false,
         };
         let ct = try_compile_trace_with_options(&rec, opts).expect("compile");
 
@@ -8515,6 +8631,7 @@ mod s2b_call_truncation {
         let opts = CompileOptions {
             internal_loop: false,
             pre53: true,
+            aot: false,
         };
         assert!(try_compile_trace_with_options(&rec, opts).is_none());
     }

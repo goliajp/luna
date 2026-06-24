@@ -105,6 +105,40 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
         std::hint::black_box(n);
     }
 
+    // v1.3 Phase AOT Stage 7 sub-piece 3 (PENDING) — interned-string
+    // slot resolver.
+    //
+    // Sub-piece 2 (commits adding `CompileOptions { aot: true }`)
+    // changed the trace lowerer to emit data symbols of the form
+    // `__luna_aot_strkey_slot_<hex>` (writable, 8-byte) and
+    // `__luna_aot_strkey_bytes_<hex>` (read-only, `[u64 len ||
+    // utf8...]`). The IR loads through the slot to get a
+    // `Gc<LuaStr>::as_ptr()`. Slots are zero-initialised at link
+    // time; reading through one without a resolver write would
+    // dereference NULL on the first trace dispatch.
+    //
+    // Sub-piece 3 must, BEFORE `run_inner` reaches any AOT trace
+    // dispatch:
+    //
+    // 1. Walk every `__luna_aot_strkey_bytes_*` symbol present in
+    //    the link image. Two options for enumeration:
+    //    a) Bracket the bytes section with linker-provided start/end
+    //       symbols (`__start___luna_aot_strkey_bytes` /
+    //       `__stop___luna_aot_strkey_bytes`, available on
+    //       gnu-ld / lld / Mach-O via `__section$start$...`).
+    //    b) Use cranelift's `Module::declare_data` to ALSO emit a
+    //       small registry section listing `(slot_id, bytes_id)`
+    //       pairs and walk that — strip-friendly across all targets.
+    // 2. For each entry: read len from `[0..8]`, bytes from `[8..]`,
+    //    call `vm.heap.intern(bytes)`, write the resulting
+    //    `Gc<LuaStr>::as_ptr()` (as `i64`) into the matching slot.
+    // 3. The resolver runs once, idempotent. Slots staying NULL
+    //    after resolve = bug (most likely missing `_bytes_*` for a
+    //    given `_slot_*`).
+    //
+    // Effort: 1-2 dev-days. Blocker: sub-piece 4 (trace registry +
+    // dispatch install).
+
     // SAFETY: caller contract — `bytecode` points at `len` valid bytes
     // for the duration of this call. In the AOT-binary deploy shape
     // these bytes live in the binary's `.rodata` and are immutable
