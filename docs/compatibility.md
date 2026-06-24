@@ -139,7 +139,7 @@ source dialect. Per-dialect status:
 | 5.1 | ✓ partial (Wave 2 — generic `for k,v in pairs(…)` and a few rare encodings still error; see `vm/dump/puc/puc_51.rs`) |
 | 5.2 | ✓ partial (Wave 2 — baseline straight-line code, arith, calls, returns, numeric `for`, string/number constants, native `_ENV` upvalue, `LOADBOOL`/`LFalseSkip`, `CONCAT`, `SETLIST`, nested `CLOSURE`; `LOADBOOL true+skip`, RK-on-B operands for arith / comparisons / `GETTABUP` register key still error; see `vm/dump/puc/puc_52.rs`) |
 | 5.3 | ✓ partial (Wave 2 — baseline straight-line code, arith, calls, returns, numeric `for`; `LOADBOOL true+skip`, `OP_JMP` close-upvalues, generic `for` (`TFORCALL`/`TFORLOOP`) and RK-on-B operands still error; see `vm/dump/puc/puc_53.rs`) |
-| 5.4 | ✓ partial (Wave 2 — see `vm/dump/puc/puc_54.rs`) |
+| 5.4 | ✓ (Wave 2 — 7-bit op layout matches luna byte-for-byte; covers iABC/iABx/iAsBx/iAx/isJ, PUC-5.4-specific MSB-first varint with terminator-bit-set semantics (distinct from 5.5), RLE lineinfo with ABSLINEINFO sentinel, K-imm arith via luna's k-bit, I-imm arith / comparisons lowered via `LoadI tmp; <op> a b tmp` with `max_stack` post-pass bump; drops MMBIN / MMBINI / MMBINK / VARARGPREP as no-op slots with jump-target PC remap. See `vm/dump/puc/puc_54.rs`.) |
 | 5.5 | ✓ partial (Wave 2 — 7-bit op layout matches luna byte-for-byte; covers iABC/iABx/iAsBx/iAx/isJ, MSB-first varint header, RLE lineinfo, K-imm arith via luna's k-bit; drops MMBIN family / `OP_VARARGPREP` as no-op slots; rejects I-imm comparisons / `ADDI`/`SHLI`/`SHRI` with a diagnostic pointing at Phase LB-9. See `vm/dump/puc/puc_55.rs`.) |
 
 PUC bytecode loading is **off by default** (`puc_bytecode_loading`
