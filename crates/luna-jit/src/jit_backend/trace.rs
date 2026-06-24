@@ -225,6 +225,135 @@ fn strkey_hex_label(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
+/// v1.3 Phase AOT Stage 7 polish 6 — produce a `Value` of type `I64`
+/// whose runtime contents are a pointer to the first
+/// `FrameMaterializeInfo` of an inline cmp@d>0 side-exit's frame chain.
+/// Used by the two `iconst(I64, Rc::as_ptr(&chain_rc) as ...)` sites
+/// that feed `luna_jit_trace_materialize_frames(n, ptr)`.
+///
+/// JIT path (`opts.aot == false`): emits `iconst(I64, chain_first_ptr)`,
+/// byte-for-byte identical to what the lowerer used to emit inline. The
+/// caller still holds `chain_rc` alive via `per_exit_inline_vec`, so
+/// the baked address is valid for the trace's mmap lifetime.
+///
+/// AOT path (`opts.aot == true`): declares three stably-named data
+/// symbols (deduped by FNV-1a-64 of the packed chain bytes):
+///
+/// - `__luna_aot_inline_chain_slot_<hex>` — 8-byte writable u64,
+///   zero-initialised. Deploy-side resolver writes the reconstructed
+///   chain's first-element pointer here BEFORE any AOT trace dispatches.
+/// - `__luna_aot_inline_chain_bytes_<hex>` — read-only, packed
+///   `FrameMaterializeInfo` records: `[u64 count, (base_offset u32, pc
+///   u32, nresults i32) * count]`. Same packing as the v3 wire-format
+///   [`PerExitInlineEntry::chain_bytes`] field plus an 8-byte count
+///   prefix so the resolver can size its reconstruction.
+/// - `__luna_aot_inline_chain_idx_<hex>` — 16-byte `[bytes_ptr,
+///   slot_ptr]` resolved by the static linker into the
+///   `luna_inline_chain_idx` section so the deploy-side resolver can
+///   walk every entry without per-binary enumeration.
+///
+/// IR emits `symbol_value(slot) + load(I64)`. The deploy resolver
+/// (`luna-runtime-helpers::aot_inline_chain_resolver`) walks the idx
+/// section, rebuilds a `Vec<FrameMaterializeInfo>` from the bytes
+/// payload, materialises it as an `Rc<[...]>` whose ownership is
+/// leaked into a process-lifetime store, then writes
+/// `Rc::as_ptr() as *const FrameMaterializeInfo` into the slot. The
+/// resolver runs BEFORE `aot_trace_registry::install_all` so the slot
+/// is populated by the time `luna_jit_trace_materialize_frames` is
+/// called from AOT mcode.
+///
+/// `<hex>` is FNV-1a-64 over the packed bytes (no count prefix in the
+/// hash input — only the records). Collision risk: ~1 in 2^64 over
+/// realistic trace populations.
+fn emit_chain_ptr_arg<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    chain: &[FrameMaterializeInfo],
+    chain_rc_first_ptr: i64,
+    aot: bool,
+    defined_aot_data: &mut std::collections::HashSet<DataId>,
+) -> Value {
+    if !aot {
+        return bcx.ins().iconst(types::I64, chain_rc_first_ptr);
+    }
+    // Pack the chain identically to the v3 wire format's chain_bytes:
+    // three little-endian 32-bit fields per record. Drives both the
+    // FNV hash (so identical chains share symbols across traces) and
+    // the read-only bytes payload the resolver consumes.
+    let mut packed: Vec<u8> = Vec::with_capacity(chain.len() * 12);
+    for fm in chain {
+        packed.extend_from_slice(&fm.base_offset.to_le_bytes());
+        packed.extend_from_slice(&fm.pc.to_le_bytes());
+        packed.extend_from_slice(&fm.nresults.to_le_bytes());
+    }
+    let hex = strkey_hex_label(&packed);
+
+    // Writable 8-byte slot — IR loads through it. Zero at link time;
+    // the deploy resolver populates with the rebuilt chain's pointer.
+    let slot_name = format!("__luna_aot_inline_chain_slot_{hex}");
+    let slot_id = module
+        .declare_data(&slot_name, Linkage::Export, true, false)
+        .expect("declare_data inline chain slot");
+    if defined_aot_data.insert(slot_id) {
+        let mut desc = DataDescription::new();
+        desc.define(Box::new([0u8; 8]));
+        let _ = module.define_data(slot_id, &desc);
+    }
+
+    // Bytes payload — `[u64 count, packed records]`, read-only. Count
+    // prefix lets the resolver size its reconstruction without holding
+    // an out-of-band length table.
+    let bytes_name = format!("__luna_aot_inline_chain_bytes_{hex}");
+    let bytes_id = module
+        .declare_data(&bytes_name, Linkage::Export, false, false)
+        .expect("declare_data inline chain bytes");
+    if defined_aot_data.insert(bytes_id) {
+        let mut payload = Vec::with_capacity(8 + packed.len());
+        payload.extend_from_slice(&(chain.len() as u64).to_le_bytes());
+        payload.extend_from_slice(&packed);
+        let mut desc = DataDescription::new();
+        desc.define(payload.into_boxed_slice());
+        let _ = module.define_data(bytes_id, &desc);
+    }
+
+    // Index entry — one per unique chain, 16 bytes of
+    // `[bytes_addr, slot_addr]` resolved by the static linker. Lives in
+    // a dedicated `luna_inline_chain_idx` (Mach-O/ELF) / `.lt_chai`
+    // (Windows COFF, 8-byte short-name limit) section so the deploy
+    // resolver brackets the whole-program range.
+    let idx_name = format!("__luna_aot_inline_chain_idx_{hex}");
+    let idx_id = module
+        .declare_data(&idx_name, Linkage::Local, false, false)
+        .expect("declare_data inline chain idx");
+    if defined_aot_data.insert(idx_id) {
+        let mut desc = DataDescription::new();
+        desc.define(Box::new([0u8; 16]));
+        // Mach-O sectname max is 16 chars; `luna_inline_chain_idx`
+        // is 21 — too long. Use the same 15-char `luna_inline_chnx`
+        // shape (under the cap). Windows COFF short name 8-char cap →
+        // `.lt_chai`. Both names must match the deploy resolver's
+        // bracket / section-walker needles.
+        let (idx_seg, idx_sect) = if cfg!(target_os = "windows") {
+            ("", ".lt_chai")
+        } else {
+            ("__DATA", "luna_inline_chnx")
+        };
+        desc.set_segment_section(idx_seg, idx_sect);
+        desc.set_align(8);
+        let bytes_gv = module.declare_data_in_data(bytes_id, &mut desc);
+        let slot_gv = module.declare_data_in_data(slot_id, &mut desc);
+        desc.write_data_addr(0, bytes_gv, 0);
+        desc.write_data_addr(8, slot_gv, 0);
+        let _ = module.define_data(idx_id, &desc);
+    }
+
+    // Emit the load through the slot.
+    let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
+    let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
+    bcx.ins()
+        .load(types::I64, MemFlags::trusted(), slot_addr, 0)
+}
+
 /// Recognised single-arg libm math functions. Each entry maps the
 /// Lua-side const-pool name (bytes) to the libm symbol cranelift
 /// imports. Signature is uniform across the table: `(f64) -> f64`.
@@ -5526,6 +5655,7 @@ pub fn lower_trace_into_named<M: Module>(
                         Box::new(std::cell::Cell::new(std::ptr::null()));
                     let _inline_side_cell_addr_0 =
                         (&*inline_side_box_0) as *const std::cell::Cell<*const u8> as i64;
+                    let chain_for_helper = chain_rc.clone();
                     per_exit_inline_vec.push((
                         side_exit_pc,
                         head_resume_pc,
@@ -5534,7 +5664,14 @@ pub fn lower_trace_into_named<M: Module>(
                         inline_side_box_0,
                     ));
                     let n_arg = bcx.ins().iconst(types::I64, chain_len);
-                    let ptr_arg = bcx.ins().iconst(types::I64, chain_ptr);
+                    let ptr_arg = emit_chain_ptr_arg(
+                        &mut module,
+                        &mut bcx,
+                        &chain_for_helper,
+                        chain_ptr,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
                     let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
                     let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
                     emit_store_back_and_return_site(
@@ -5841,6 +5978,7 @@ pub fn lower_trace_into_named<M: Module>(
                         Box::new(std::cell::Cell::new(std::ptr::null()));
                     let _inline_side_cell_addr_1 =
                         (&*inline_side_box_1) as *const std::cell::Cell<*const u8> as i64;
+                    let chain_for_helper = chain_rc.clone();
                     per_exit_inline_vec.push((
                         side_exit_pc,
                         head_resume_pc,
@@ -5849,7 +5987,14 @@ pub fn lower_trace_into_named<M: Module>(
                         inline_side_box_1,
                     ));
                     let n_arg = bcx.ins().iconst(types::I64, chain_len);
-                    let ptr_arg = bcx.ins().iconst(types::I64, chain_ptr);
+                    let ptr_arg = emit_chain_ptr_arg(
+                        &mut module,
+                        &mut bcx,
+                        &chain_for_helper,
+                        chain_ptr,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
                     let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
                     let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
                     emit_store_back_and_return_site(

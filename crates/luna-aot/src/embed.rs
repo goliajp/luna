@@ -1251,18 +1251,36 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // is exactly N+1 entries for N real traces; the placeholder's
     // zero-valued `bytes_ptr` short-circuits via the resolver's
     // `entry.bytes_ptr.is_null()` guard.
+    // v1.3 Phase AOT Stage 7 polish 6 — also guarantee the
+    // `luna_inline_chnx` section exists when the binary linked zero
+    // depth>0-inlined-cmp trace `.o`s. Same shape as the strkey idx
+    // placeholder (16 bytes = one IndexEntry-sized slot) so the deploy
+    // resolver's `start + N * sizeof::<IndexEntry>` walk lines up with
+    // any real trace-emitted entries. Zero `bytes_ptr` field short-
+    // circuits via the resolver's null guard.
+    //
+    // Mach-O sectname max is 16 chars; `luna_inline_chnx` is 15
+    // (matches `luna_strkey_idx` sizing). Windows COFF short name cap
+    // is 8 — `.lt_chai` mirrors `.lt_skix` / `.lt_meta`. Both names
+    // must match the lowerer's `set_segment_section` choice in
+    // `emit_chain_ptr_arg` and the deploy resolver's bracket /
+    // section-walker needles.
     let placeholder = match target.os {
         TargetOs::MacOs => {
             "__attribute__((used, section(\"__DATA,luna_strkey_idx\"), aligned(8)))\n\
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
              __attribute__((used, section(\"__DATA,luna_trace_meta\"), aligned(8)))\n\
-             static const char luna_trace_meta_placeholder[48] = {0};\n"
+             static const char luna_trace_meta_placeholder[48] = {0};\n\
+             __attribute__((used, section(\"__DATA,luna_inline_chnx\"), aligned(8)))\n\
+             static const char luna_inline_chnx_placeholder[16] = {0};\n"
         }
         TargetOs::Linux => {
             "__attribute__((used, section(\"luna_strkey_idx\"), aligned(8)))\n\
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
              __attribute__((used, section(\"luna_trace_meta\"), aligned(8)))\n\
-             static const char luna_trace_meta_placeholder[48] = {0};\n"
+             static const char luna_trace_meta_placeholder[48] = {0};\n\
+             __attribute__((used, section(\"luna_inline_chnx\"), aligned(8)))\n\
+             static const char luna_inline_chnx_placeholder[16] = {0};\n"
         }
         // v1.3 Phase AOT Stage 7 polish 3 — Windows COFF.
         //
@@ -1308,13 +1326,18 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
              #pragma section(\".lt_meta\", read)\n\
              __declspec(allocate(\".lt_meta\")) __declspec(align(8))\n\
-             static const char luna_trace_meta_placeholder[48] = {0};\n"
+             static const char luna_trace_meta_placeholder[48] = {0};\n\
+             #pragma section(\".lt_chai\", read)\n\
+             __declspec(allocate(\".lt_chai\")) __declspec(align(8))\n\
+             static const char luna_inline_chnx_placeholder[16] = {0};\n"
         }
         TargetOs::Windows => {
             "__attribute__((used, section(\".lt_skix\"), aligned(8)))\n\
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
              __attribute__((used, section(\".lt_meta\"), aligned(8)))\n\
-             static const char luna_trace_meta_placeholder[48] = {0};\n"
+             static const char luna_trace_meta_placeholder[48] = {0};\n\
+             __attribute__((used, section(\".lt_chai\"), aligned(8)))\n\
+             static const char luna_inline_chnx_placeholder[16] = {0};\n"
         }
     };
 
@@ -1817,11 +1840,18 @@ fn harvest_and_emit_aot_traces(
             continue;
         }
         if !ct.per_exit_inline.is_empty() {
-            // depth>0 inlined cmp side-exits ship a chain of
-            // FrameMaterializeInfo pointers — out of scope for the
-            // wire format this cut.
+            // v1.3 Phase AOT Stage 7 polish 6 — depth>0 inlined cmp
+            // side-exits are NOW supported. The lowerer's
+            // `emit_chain_ptr_arg` routes the `FrameMaterializeInfo`
+            // chain pointer through a relocatable data slot the
+            // deploy-side `aot_inline_chain_resolver` populates at
+            // startup; the v3 wire format's `per_exit_inline` tail
+            // (cont_pc / head_resume_pc / packed exit_tags / packed
+            // chain bytes) round-trips into a fresh
+            // `Rc<[InlineSideExit]>` on the install side. Stat counter
+            // retained for diagnostics: how many of the captured
+            // traces went through the v3 inline path.
             filter_stats.2 += 1;
-            continue;
         }
         // per_exit_tags is NOW supported by wire format v2 — accept.
         // (Counter retained for diagnostics: how many of the captured
@@ -1834,7 +1864,7 @@ fn harvest_and_emit_aot_traces(
 
     if probe_on {
         eprintln!(
-            "luna-aot harvest: installable={}, filtered: no_ct={}, undispatchable={}, has_inline={}, accepted_with_per_exit_tags={}",
+            "luna-aot harvest: installable={}, filtered: no_ct={}, undispatchable={}, accepted_with_per_exit_inline={}, accepted_with_per_exit_tags={}",
             installable.len(),
             filter_stats.0,
             filter_stats.1,
@@ -1941,18 +1971,23 @@ fn harvest_and_emit_aot_traces(
             entry_tags_len: entry_tags_vec.len() as u16,
             exit_tags_len: exit_tags_vec.len() as u32,
         };
-        // v3 wire format requires a `per_exit_inline` argument; we
-        // pass an empty slice deliberately. The filter above
-        // guarantees `ct.per_exit_inline.is_empty()` (the
-        // serializing path above this commit only accepts traces
-        // whose inline vector is already empty), so building the
-        // entries from the live ct would be a no-op. When the
-        // lowerer + deploy resolver land the relocatable chain-
-        // slot scheme described in `luna-core::jit::aot_meta` v3
-        // docs, this slice becomes
-        // `ct.per_exit_inline.iter().map(PerExitInlineEntry::from_inline_side_exit).collect()`
-        // and the filter relaxes — wire format is forward-ready.
-        let per_exit_inline_entries: Vec<PerExitInlineEntry> = Vec::new();
+        // v1.3 Phase AOT Stage 7 polish 6 — populate the v3 inline
+        // tail from the live trace's `per_exit_inline`. Each
+        // `InlineSideExit` round-trips into a `PerExitInlineEntry`
+        // via the byte-stable converter: tags pack through
+        // `pack_exit_tag` and the chain serialises as raw `repr(C)`
+        // bytes (12 per record). The deploy install path decodes
+        // the entries back into fresh `Rc<[FrameMaterializeInfo]>` /
+        // `Rc<[ExitTag]>` allocations whose contents match what the
+        // JIT-time recorder produced; the IR's chain pointer is fed
+        // from a separate `aot_inline_chain_resolver`-populated
+        // slot (no shared ownership with the dispatcher field —
+        // neither side compares pointers).
+        let per_exit_inline_entries: Vec<PerExitInlineEntry> = ct
+            .per_exit_inline
+            .iter()
+            .map(PerExitInlineEntry::from_inline_side_exit)
+            .collect();
         let blob = encode_meta_blob(
             &header,
             &entry_tags_vec,
