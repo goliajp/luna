@@ -65,6 +65,14 @@ rustyline = { version = "14", optional = true }
 # `repl-line-editor` job) so the default-feature surface keeps verifying.
 repl-line-editor = ["dep:rustyline"]
 
+# v1.3 Phase SS-B — forward the `send` feature to luna-core so embedders
+# pulling `luna-jit --features send` automatically get
+# `luna_jit::vm::SendVm` (re-exported via the crate's `pub use luna_core::*`
+# tree). The luna-jit crate itself adds no extra Send-specific code; the
+# JIT backend stays bound to bare `Vm` because v1.3 ships `SendVm`
+# interp-only.
+send = ["luna-core/send"]
+
 # v1.2 D2 (P-A1 audit): criterion as luna-jit-only dev-dep. The luna-core
 # 0-third-party-dep contract is unaffected (CI `zero-dep` job verifies).
 # `harness = false` on bench targets stays — criterion ships its own
@@ -87,4 +95,8 @@ harness = false
 
 [[bench]]
 name = "redis_lua_shape"
+harness = false
+
+[[bench]]
+name = "bench_send_overhead"
 harness = false

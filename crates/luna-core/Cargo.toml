@@ -24,12 +24,14 @@ workspace = true
 [features]
 # Default: no features. Vm stays !Send + !Sync (the v1.0/v1.1 default).
 default = []
-# v1.2 S framework: opt-in feature reserved for the v1.3 Send sprint.
-# Selecting it today raises a `compile_error!` (see lib.rs) — the actual
-# `Arc<RwLock<Heap>>` wiring lands in v1.3 with a measured perf gate
-# (ARM ~10%, x86_64 ~20%; full design in v1.3-rfc-send-arc.md per the
-# S-A1 audit). Embedders can already `cargo add luna-core --features
-# send` to compile-time-detect when the sprint ships.
+# v1.3 Phase SS-B: opt-in cross-thread `SendVm` wrapper. Lights up
+# `luna_core::vm::SendVm`, an `Arc<UnsafeCell<Vm>> + Arc<RwLock<()>>`
+# newtype that is `Send` at the type level and serializes access at
+# runtime. Interp-only at v1.3 ship (JIT-aware SendVm is a post-v1.3
+# polish item — see `.dev/rfcs/v1.3-rfc-send-arc.md`). Default-feature
+# builds (no feature) keep `Vm` `!Send + !Sync` and bit-identical with
+# the v1.2 baseline. luna-core 0-dep contract preserved (Arc, UnsafeCell,
+# RwLock are all stdlib).
 send = []
 
 [dependencies]

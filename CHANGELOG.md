@@ -199,9 +199,68 @@ scope** for v1.3 (no longer deferred). Tracked in
   reports 1 row. Embedders writing `use luna_jit::LuaUserdata;` get
   both the trait (via the `pub use luna_core::*;` re-export) and the
   derive (`pub use luna_jit_derive::LuaUserdata;`).
-- **`feature = "send"` real implementation** — `SendVm` newtype
-  fork (UnsafeCell fast path + RwLock slow path) per the audit;
-  tokio embed pattern documented.
+- **`feature = "send"` real implementation** *(Phase SS-B landed)*
+  — new opt-in cargo feature on luna-core (`send = []`) and
+  luna-jit (`send = ["luna-core/send"]`) surfaces a second public
+  type `luna_core::vm::SendVm` for cross-thread embedding. Shape:
+  `SendVm { inner: Arc<UnsafeCell<Vm>>, lock: Arc<RwLock<()>> }`
+  with `unsafe impl Send for SendVm` (justified by a runtime
+  single-mutator invariant the lock re-establishes). Default-feature
+  builds are bit-identical with the pre-SS-B baseline — bare `Vm`
+  stays `!Send + !Sync` and pays no overhead. luna-core 0-dep
+  contract preserved (`Arc`, `UnsafeCell`, `RwLock` are all
+  stdlib).
+  - **API surface mirror**: `eval`, `call_value`, `set_global`,
+    `set_userdata`, `intern_str`, `open_base / open_math /
+    open_string / open_table / open_coroutine`, the Phase SR
+    `pin_host / read_host / unpin` host-roots methods, plus
+    `Clone` (cheap — two `Arc::clone`), `Debug`, and one new
+    method `get_global(name) -> Value` that isn't present on bare
+    `Vm` (introduced because the bare `globals()` + raw `Gc<Table>`
+    deref is awkward across the lock boundary).
+  - **Interp-only constraint**: `SendVm::new` calls
+    `Vm::new_minimal` which leaves `JitState` at `NullJitBackend`.
+    The trace JIT does not run on a SendVm in v1.3. JIT-aware
+    SendVm is a documented post-v1.3 polish item (the
+    `Proto::traces: RefCell<Vec<Rc<CompiledTrace>>>` field
+    intersects with `Send` and would need an `Rc → Arc` migration;
+    audit projects ~6 % additional JIT-engaged cost). Not a
+    defer — the v1.3 charter explicitly scopes interp-only as the
+    SS-B deliverable.
+  - **Cost** (macOS M-series, SS-B bench): SendVm pays ~+1.86 %
+    token-bucket regression vs interp-only baseline `Vm` (175.46
+    µs vs 172.26 µs). Better than the audit's projected ~3 % ARM.
+    Linux x86_64 numbers land via the `perf-gate` CI matrix
+    (audit projects ~6 %).
+  - **8 smoke tests** in `crates/luna-core/tests/send_vm.rs`
+    (gated `#[cfg(feature = "send")]`): compile-time `Send`
+    assertion, basic eval, `thread::spawn` move, 100-thread
+    concurrent contention (verifies serialized counter = 4950),
+    userdata round-trip, HostRootTicket round-trip across the
+    lock, pin-across-clones, and interp-only loop sum.
+  - **Bench update** (`crates/luna-jit/benches/bench_send_overhead.rs`):
+    feature-gated `send_vm_eval` and `send_vm_token_bucket` pairs
+    added alongside the SS-A `wrapped_vm_*` NoOpWrapper baseline;
+    apples-to-apples interp-bare counterparts (`bare_vm_interp_*`)
+    added for the SendVm comparison.
+  - **Documentation**: `docs/threading.md` gains a `SendVm`
+    section covering when to use vs not, the shape + soundness
+    story, the interp-only constraint, and a tokio multi_thread
+    embed example (without depending on tokio in luna-core).
+  - **Design RFC**: `.dev/rfcs/v1.3-rfc-send-arc.md` documents
+    the as-shipped wrapper choice + the decision to defer the
+    audit's per-field `SendGc<T>` fork to v1.4+.
+  - **Unsafe drift**: +5 first-party `unsafe` sites (480 → 485,
+    ceiling 490 — 5 slots free). New sites: `unsafe impl Send for
+    SendVm` (one), `&mut *UnsafeCell::get()` inside
+    `with_vm_mut` (one), `(*globals.as_ptr()).get(key)` in
+    `get_global` (one), two doc-comment occurrences caught by the
+    grep regex.
+  - **BREAKING vs v1.2 stub**: the v1.2 `[features] send = []`
+    that raised a `compile_error!` when selected now compiles
+    cleanly and surfaces `SendVm`. Embedders who were guarding
+    against the compile_error with `cfg(not(feature = "send"))`
+    no longer need that guard.
 - **REPL C3 tab completion + syntax highlight** — `[features]
   repl-line-editor` (rustyline) non-default cargo feature.
 - **PUC luac body 5.1-5.5** — full binary compat across all

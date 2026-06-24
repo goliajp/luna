@@ -76,20 +76,15 @@
 //!   embedding; flag if the threat model includes side-channel
 //!   probing.
 
-// v1.2 S framework — opt-in Send sprint reserve. The `send` feature
-// compiles to a hard error today; the actual `Arc<RwLock<Heap>>`
-// switchover lands in v1.3 with a measured perf gate (ARM ~10%,
-// x86_64 ~20% per the S-A1 audit). The flag is in place now so
-// embedders can `cargo add luna-core --features send` and
-// feature-detect when v1.3 ships, without a downstream Cargo.toml edit.
-#[cfg(feature = "send")]
-compile_error!(
-    "luna-core: feature \"send\" is reserved for the v1.3 Send sprint; \
-     see .dev/rfcs/v1.3-rfc-send-arc.md (preview) and the v1.2 S-A1 \
-     audit. Vm stays !Send + !Sync in v1.2. Default-feature builds \
-     are unaffected; the v1.3 release will enable this feature with \
-     the matching Arc<RwLock<_>> implementation."
-);
+// v1.3 Phase SS-B — `send` feature gate lit. Embedders opt in via
+// `cargo add luna-core --features send`; this surfaces the
+// `vm::SendVm` newtype (`Arc<UnsafeCell<Vm>>` + `Arc<RwLock<()>>`
+// behind the scenes) for cross-thread embedding. v1.3 ships
+// `SendVm` interp-only (`NullJitBackend`); JIT-aware `SendVm` is a
+// post-v1.3 polish item. Default-feature builds are unchanged —
+// `Vm` stays `!Send + !Sync` and bit-identical with v1.2. See
+// `.dev/rfcs/v1.3-rfc-send-arc.md` for the design, and
+// `docs/threading.md` for the embedder-facing usage patterns.
 
 pub mod compiler;
 pub mod frontend;

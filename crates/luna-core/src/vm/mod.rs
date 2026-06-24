@@ -18,6 +18,14 @@ pub mod table_builder;
 pub mod typed_native;
 pub mod userdata_trait;
 
+/// v1.3 Phase SS-B — cross-thread `SendVm` wrapper. Gated behind
+/// the `send` cargo feature; embedders not opting in pay no cost.
+/// See [`send_vm::SendVm`] for the design.
+#[cfg(feature = "send")]
+pub mod send_vm;
+#[cfg(feature = "send")]
+pub use send_vm::SendVm;
+
 pub use async_drive::{AsyncNativeFn, EvalFuture};
 pub use error::{LuaError, LuaErrorKind};
 pub use exec::{Error, Vm};
