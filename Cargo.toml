@@ -10,6 +10,12 @@ members = [
     # luna-core. The derive emits fully-qualified `::luna_core::vm::*`
     # paths so it's reachable from pure-luna-core embedders too.
     "crates/luna-jit-derive",
+    # v1.3 Phase AOT — `luna-aot` native-binary compile crate.
+    # Sibling of luna-core + luna-jit. Pulls third-party deps
+    # (`object`, `clap`) but **not into luna-core's tree** — the
+    # 0-third-party-dep contract on luna-core is unaffected.
+    # See `.dev/rfcs/v1.3-audit-luna-aot.md`.
+    "crates/luna-aot",
 ]
 
 [workspace.package]
