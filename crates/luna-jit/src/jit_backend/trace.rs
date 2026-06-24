@@ -3074,8 +3074,8 @@ pub fn try_compile_trace_with_options(
 /// Returns `None` on the same bail conditions as
 /// [`try_compile_trace`] (see its docstring). On success returns the
 /// declared [`FuncId`] for the lowered trace alongside a
-/// [`CompiledTrace`] whose `entry` field holds a
-/// [`placeholder_trace_fn`]; backend-specific finalize must patch the
+/// [`CompiledTrace`] whose `entry` field holds a private
+/// `placeholder_trace_fn`; backend-specific finalize must patch the
 /// real entry pointer before dispatch (the JIT wrapper does this; the
 /// AOT pipeline resolves the symbol at link time and never invokes
 /// `entry` directly).

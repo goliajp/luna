@@ -256,15 +256,20 @@ pub struct AotTraceIndexEntry {
     /// Trace's `head_pc`. Used together with `proto_hash` to detect
     /// duplicate installs and to log which trace fired.
     pub head_pc: u32,
-    /// Padding so the following pointer aligns at 8 bytes on every
-    /// supported target.
+    /// Padding so the following 64-bit address fields align at 8 bytes.
     pub _pad: u32,
-    /// Address of the AOT-emitted trace fn (`extern "C" fn(*mut i64) -> i64`).
-    /// Linker-resolved relocation against the `luna_aot_trace_<idx>`
-    /// symbol the lowerer exports.
-    pub fn_ptr: *const u8,
-    /// Address of the matching meta blob in `luna_trace_blob`.
-    pub meta_ptr: *const u8,
+    /// Address of the AOT-emitted trace fn
+    /// (`extern "C" fn(*mut i64) -> i64`). Stored as `u64` so the
+    /// wire layout is identical across 32/64-bit targets — wasm32 +
+    /// other 32-bit targets cast through this field. AOT-binary
+    /// deploy is always 64-bit (cross-compile to 32-bit targets
+    /// disabled at the linker step), so the upper 32 bits are zero
+    /// in practice. Linker-resolved relocation against the
+    /// `luna_aot_trace_<idx>` symbol the lowerer exports.
+    pub fn_ptr: u64,
+    /// Address of the matching meta blob in `luna_trace_blob`. Same
+    /// width-stable rationale as `fn_ptr`.
+    pub meta_ptr: u64,
     /// Length of the meta blob (the deploy walker hard-rejects entries
     /// whose declared payload exceeds this).
     pub meta_len: u32,

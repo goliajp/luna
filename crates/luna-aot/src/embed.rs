@@ -777,8 +777,9 @@ fn host_triple() -> &'static str {
 #[derive(Debug, Clone)]
 pub struct TargetSpec {
     /// The rustc triple string (e.g. "aarch64-apple-darwin"). For the
-    /// host build this matches [`host_triple`]; for cross builds it's
-    /// whatever the caller passed via `--target`.
+    /// host build this matches the value returned by the private
+    /// `host_triple` helper; for cross builds it's whatever the caller
+    /// passed via `--target`.
     pub triple: String,
     /// `true` when the triple matches the build host's rust triple. The
     /// staticlib-build step shortcuts the `--target` flag in this case,
