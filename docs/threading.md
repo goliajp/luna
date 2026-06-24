@@ -1,12 +1,15 @@
 # Threading
 
-How to use luna in async and multi-threaded host programs. Snapshot
-at v1.1.
+How to use luna in async and multi-threaded host programs.
+Snapshot at v1.3.
 
-luna's `Vm` is **`!Send + !Sync`** — a `Vm` (and any handle into its
-GC heap) lives on the OS thread that created it. This page covers
-the canonical embedding patterns and the reasoning behind the
-constraint.
+luna's default `Vm` is **`!Send + !Sync`** — a `Vm` (and any handle
+into its GC heap) lives on the OS thread that created it. v1.3 adds
+an opt-in `SendVm` newtype (gated behind `feature = "send"`) for
+cross-thread embedding; see the
+[SendVm section](#feature--send--sendvm-v13) below. This page
+covers both shapes plus the canonical async embedding patterns and
+the reasoning behind the default `!Send` stance.
 
 ---
 
@@ -255,36 +258,183 @@ substitute `#[tokio::main(flavor = "current_thread")]` or a
 - Hook firing for async natives is deferred to Phase 4+; sync
   natives + Lua hooks work normally.
 
-## Forward-looking — `feature = "send"`
+## `feature = "send"` — `SendVm` (v1.3+)
 
-A post-v1.1 sprint will introduce a `luna-core/Cargo.toml` feature:
+v1.3 ships the `send` opt-in feature on luna-core and luna-jit. It
+lights up a second public type — [`vm::SendVm`] — that is `Send` at
+the type level (clones can move into other OS threads / tokio tasks
+and survive across `.await` on a `multi_thread` runtime).
 
 ```toml
-[features]
-default = []
-send = []  # opt-in: Vm: Send (cost: ~5-15% perf)
+[dependencies]
+luna-core = { version = "1.3", features = ["send"] }
+# or
+luna-jit  = { version = "1.3", features = ["send"] }
 ```
 
-When enabled, `Gc<T>` flips from `NonNull<T>` to `Arc<RwLock<T>>`,
-the trace-JIT `Rc<CompiledTrace>` side-table becomes `Arc<...>`,
-and the heap mark-sweep walk becomes locking. `Vm` would then be
-`Send` (still not `Sync` — one mutable Vm per thread is still the
-contract).
+```rust
+use luna_core::version::LuaVersion;
+use luna_core::vm::SendVm;
 
-Hard gates on the future sprint:
-- ≤ 8% regression on `cross_dialect` + `lua_microbench` + Redis-Lua-shape
-- Full test suite green under `--features send`
-- JIT trace path re-validated on aarch64 + x86-64
-- capi remains single-threaded (the C ABI side doesn't change)
+let vm = SendVm::new(LuaVersion::Lua55);
+vm.open_base();
+vm.open_math();
 
-If the perf budget isn't reachable, the sprint produces a refined
-RFC rather than a partial merge. Partial Send-mode is a perf-disaster
-trap.
+// Move into another thread.
+std::thread::spawn(move || {
+    vm.set_global("x", 41_i64).unwrap();
+    let r = vm.eval("return x + 1").unwrap();
+    // r[0] == Value::Int(42)
+}).join().unwrap();
+```
 
-The doc-level enforcement (rustdoc `!Send` note, `compile_fail`
-doctest) on `Vm` will continue to track whichever default the crate
-ships with at the time. Embedders pinning to `default-features = false`
-get today's behavior indefinitely.
+### When to use
+
+- ✅ tokio `multi_thread` runtime, holding the Vm across `.await`
+- ✅ Request-per-script web server, where the executor may park the
+  task on a different worker after a yield
+- ✅ Worker-pool embedding where a queue of Lua jobs dispatches to
+  any thread
+- ✅ Long-running background script in its own thread spawned from
+  a thread that doesn't own the Vm
+
+### When NOT to use
+
+- ❌ Single-thread scripting (game engine main thread, CLI tool,
+  REPL) — use plain [`vm::Vm`] for the JIT and zero lock cost
+- ❌ Parallel-script throughput — two `SendVm` clones contending
+  for the same lock serialize, they don't parallelize. For real
+  parallelism, construct one `SendVm` (or one bare `Vm`) per
+  worker thread.
+
+### Shape
+
+```rust,ignore
+pub struct SendVm {
+    inner: Arc<UnsafeCell<Vm>>,
+    lock:  Arc<RwLock<()>>,
+}
+
+unsafe impl Send for SendVm {}
+// Not Sync — cross-thread &SendVm is forbidden; move/clone-and-move only.
+```
+
+Every public method takes the lock's write guard before reaching
+the inner Vm. The lock is uncontended on the single-worker case
+(~10-30 ns per call) and serializes cleanly under contention. Clone
+the handle (`SendVm::clone()` is cheap — two `Arc::clone` calls)
+and move clones into threads; both clones see the same underlying
+Vm.
+
+### Cost
+
+Per the SS-B sign-test bench (macOS M-series, 2026-06-24):
+
+| Workload | Bare interp `Vm` | `SendVm` | Delta |
+|---|---|---|---|
+| `eval("return 1+2")` | 3.34 µs | 3.27 µs | within noise |
+| Token bucket 1k ops | 172.26 µs | 175.46 µs | **+1.86 %** |
+
+Audit-time projection was ~3 % on ARM; we landed at ~2 %. Linux
+x86_64 numbers will land via the `gh workflow run perf-gate`
+matrix; audit projected ~6 % there.
+
+### Interp-only constraint (v1.3)
+
+`SendVm::new` calls `Vm::new_minimal` internally, which leaves
+`JitState` at `NullJitBackend`. **The trace JIT does not run on a
+SendVm in v1.3.** This is a documented contract: the Proto-side
+trace cache (`Proto::traces: RefCell<Vec<Rc<CompiledTrace>>>`)
+intersects with `Send` and migrating it to `Arc<Mutex<Vec<Arc<...>>>>`
+is a post-v1.3 polish item (~6 % additional JIT-engaged cost per
+audit). Embedders who need both Send semantics and JIT today should
+run one bare `Vm` per OS thread and exchange data via channels
+(Pattern 3 above).
+
+### Tokio embed pattern (without depending on tokio in luna-core)
+
+luna-core itself doesn't pull tokio (0-dep contract). The shape
+embedders ship is:
+
+```rust,ignore
+use luna_core::version::LuaVersion;
+use luna_core::vm::SendVm;
+use std::sync::Arc;
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    let vm = Arc::new(SendVm::new(LuaVersion::Lua55));
+    vm.open_base();
+
+    let mut joins = Vec::new();
+    for i in 0..100 {
+        let vm = vm.clone();
+        joins.push(tokio::spawn(async move {
+            // SendVm is Send; .await between calls is fine.
+            tokio::task::yield_now().await;
+            let r = vm.eval(&format!("return {} + 1", i)).unwrap();
+            r
+        }));
+    }
+    for j in joins {
+        let _ = j.await.unwrap();
+    }
+}
+```
+
+The lock serializes the 100 tasks; the value is that you can hold
+the SendVm across `.await` on the multi_thread runtime (which may
+re-park the task on a different worker), not that the tasks run in
+parallel.
+
+### API surface
+
+The wrapper mirrors the common embedder ops on [`Vm`]:
+
+- `SendVm::new(version) -> Self`
+- `open_base / open_math / open_string / open_table / open_coroutine`
+- `eval(src) -> Result<Vec<Value>, LuaError>`
+- `call_value(f, args) -> Result<Vec<Value>, LuaError>`
+- `set_global<V: IntoValue>(name, v) -> Result<(), LuaError>`
+- `get_global(name) -> Value` (new — present only on SendVm)
+- `intern_str(s) -> Gc<LuaStr>`
+- `set_userdata<T: LuaUserdata>(name, value) -> Result<(), LuaError>`
+- `pin_host / read_host / unpin` (Phase SR host roots)
+- `Clone` (cheap, shares the underlying Vm via Arc)
+
+Not on `SendVm` (intentionally — these would require additional
+Send retrofits across `runtime/`): `register_native_typed` with
+non-`Send` closures, `install_jit_backend` (interp-only), the
+`debug` library hooks (`set_rust_debug_hook`'s callback is `fn`
+which *is* `Send` but the surface isn't mirrored in v1.3 — open
+the wrapped Vm via the bare API for now).
+
+For a full design + the soundness story, see
+`.dev/rfcs/v1.3-rfc-send-arc.md`.
+
+[`vm::Vm`]: ../crates/luna-core/src/vm/exec.rs
+[`vm::SendVm`]: ../crates/luna-core/src/vm/send_vm.rs
+
+---
+
+## Forward-looking — v1.4+ post-ship polish
+
+`SendVm` has two follow-up axes in the pipeline:
+
+1. **JIT-aware `SendVm`** — lift the interp-only restriction. Cost
+   sketch in `.dev/rfcs/v1.3-audit-send-vm-design.md` §3.3 + §7.3;
+   needs `Proto::traces` `Rc → Arc` migration and a JIT TLS
+   redesign. Audit projects ~6 % additional JIT-engaged cost
+   beyond the current ~2 % interp-only.
+2. **Per-field `SendGc<T>` fork** — replace the wrapper-with-lock
+   with a parallel `SendVm` type whose `Gc<T>` is `Arc<UnsafeCell<T>>`
+   per-field. Eliminates the per-call lock acquire. Audit §3.2
+   B2 estimates ~3 % ARM; SS-B already lands at ~2 % via the
+   wrapper, so this is only worth doing if a real embedder hits
+   the lock-contention ceiling.
+
+Both are post-v1.3 polish items, not defers — the v1.3 charter is
+explicit that the wrapper-shape SendVm is the v1.3 deliverable.
 
 ---
 
@@ -293,4 +443,6 @@ get today's behavior indefinitely.
 - [`architecture.md`](architecture.md) — Crate layout, JIT pipeline, threading model overview
 - [`compatibility.md`](compatibility.md) — Per-dialect feature support
 - [`performance.md`](performance.md) — Cross-dialect bench numbers
-- `.dev/rfcs/v1.1-rfc-vm-send-sync.md` — Full design rationale for the v1.1 `!Send` stance and the post-v1.1 Send sprint
+- `.dev/rfcs/v1.1-rfc-vm-send-sync.md` — Full design rationale for the v1.1 `!Send` stance
+- `.dev/rfcs/v1.3-audit-send-vm-design.md` — v1.3 SS audit (per-field fork vs wrapper)
+- `.dev/rfcs/v1.3-rfc-send-arc.md` — v1.3 SS-B as-shipped RFC (wrapper design + soundness)

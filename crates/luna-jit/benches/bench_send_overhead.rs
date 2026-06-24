@@ -51,6 +51,22 @@
 //! Run:
 //!   `cargo bench --bench bench_send_overhead`
 //!   `cargo bench --bench bench_send_overhead -- wrapped_vm_token_bucket`
+//!
+//! ## SS-B addition: real `SendVm` cases
+//!
+//! With `--features send` the bench additionally measures the
+//! production `luna_core::vm::SendVm` (real `Arc<UnsafeCell<Vm>>` +
+//! `Arc<RwLock<()>>` lock acquire per call). Two new pairs:
+//!
+//! - `bare_vm_interp_eval` vs `send_vm_eval` — interp-only baseline
+//!   (the SendVm is interp-only by design; comparing against an
+//!   interp-only bare Vm is the apples-to-apples ratio that defines
+//!   "what does the lock cost").
+//! - `bare_vm_interp_token_bucket` vs `send_vm_token_bucket` — real
+//!   workload shape, interp-only baseline.
+//!
+//! Run:
+//!   `cargo bench --features send --bench bench_send_overhead`
 
 use std::cell::UnsafeCell;
 use std::sync::Arc;
@@ -148,6 +164,30 @@ fn fresh_vm() -> Vm {
     vm
 }
 
+#[cfg(feature = "send")]
+fn fresh_vm_interp() -> Vm {
+    // Interp-only counterpart of `fresh_vm`: same library set, no
+    // JIT installed. The SendVm comparison is apples-to-apples
+    // against this shape since the v1.3 SendVm is interp-only.
+    let mut vm = Vm::new_minimal(LuaVersion::Lua54);
+    vm.open_base();
+    vm.open_math();
+    vm.open_string();
+    vm.open_table();
+    vm
+}
+
+#[cfg(feature = "send")]
+fn fresh_send_vm() -> luna_jit::vm::SendVm {
+    use luna_jit::vm::SendVm;
+    let vm = SendVm::new(LuaVersion::Lua54);
+    vm.open_base();
+    vm.open_math();
+    vm.open_string();
+    vm.open_table();
+    vm
+}
+
 // ── Bench ──────────────────────────────────────────────────────────────
 
 fn bench_send_overhead(c: &mut Criterion) {
@@ -202,6 +242,61 @@ fn bench_send_overhead(c: &mut Criterion) {
             BatchSize::SmallInput,
         );
     });
+
+    // ── SS-B: real SendVm pairs (feature-gated) ─────────────────────
+    //
+    // The numbers above measure the *shape*-only `NoOpSendWrapper`
+    // (an `Arc<UnsafeCell<Vm>>` with no actual lock). The pairs below
+    // measure the production `luna_core::vm::SendVm` which adds a
+    // real `RwLock<()>` write-acquire per method call. The delta
+    // between `wrapped_vm_*` (SS-A wrapper) and `send_vm_*` (SS-B
+    // real) is the *lock acquire cost* in isolation.
+    //
+    // Comparison anchor is `bare_vm_interp_*` (no JIT installed) so
+    // the ratio is apples-to-apples — SendVm is interp-only by
+    // design in v1.3 (see `vm/send_vm.rs` module docs).
+    #[cfg(feature = "send")]
+    {
+        group.bench_function("bare_vm_interp_eval", |bencher| {
+            bencher.iter_batched(
+                fresh_vm_interp,
+                |mut vm| {
+                    black_box(vm.eval(MINIMAL_EVAL).expect("bench script must run"));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_function("send_vm_eval", |bencher| {
+            bencher.iter_batched(
+                fresh_send_vm,
+                |vm| {
+                    black_box(vm.eval(MINIMAL_EVAL).expect("bench script must run"));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_function("bare_vm_interp_token_bucket", |bencher| {
+            bencher.iter_batched(
+                fresh_vm_interp,
+                |mut vm| {
+                    black_box(vm.eval(TOKEN_BUCKET_1K).expect("bench script must run"));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_function("send_vm_token_bucket", |bencher| {
+            bencher.iter_batched(
+                fresh_send_vm,
+                |vm| {
+                    black_box(vm.eval(TOKEN_BUCKET_1K).expect("bench script must run"));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
 
     group.finish();
 }
