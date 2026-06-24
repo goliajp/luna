@@ -255,8 +255,62 @@ substitute `#[tokio::main(flavor = "current_thread")]` or a
   pending-async state but leaves Lua call frames in `vm.frames`.
   Drop the entire Vm when an async eval is cancelled mid-flight.
   See `.dev/rfcs/v1.1-rfc-b10-async-embedder.md` §"Risks".
-- Hook firing for async natives is deferred to Phase 4+; sync
-  natives + Lua hooks work normally.
+
+### Async natives + debug hooks (v1.3 Phase AS)
+
+The v1.1 `[B11]` Rust-side debug hook (`vm.set_rust_debug_hook(...)`)
+composes with async natives as of v1.3 Phase AS — embedders see the
+same `Call` / `Return` event pair for an async native as for a sync
+native or a Lua function. The dispatcher's `Count` and `Line` hook
+sites are opcode-driven and have always worked under `async_mode = true`;
+the v1.3 fix was the **async-native call boundary itself**:
+
+1. `Call` event fires on the async branch in `vm::exec` **before** the
+   future is built (after the result-window pin so a hook body that
+   triggers GC observes the correct pin).
+2. `Return` event fires from `Vm::commit_async_native_result` after the
+   future resolves and results land in the call window.
+
+`Count` hooks carry across slice boundaries — the dispatcher's
+`hook.count_left` is a persistent `Vm` field, so a 1000-instruction
+count budget survives any number of `Poll::Pending` returns to the
+executor. `Line` hooks dedupe across slice boundaries via the same
+persistent `hook_lastline` field; a slice ending mid-line and resuming
+on the same line will not double-fire.
+
+Worked example — async native bracketed by a Rust hook:
+
+```rust,ignore
+use luna_core::vm::Vm;
+use luna_core::vm::exec::{HOOK_MASK_CALL, HOOK_MASK_RETURN, RustHookEvent};
+
+fn record(_vm: &mut Vm, evt: RustHookEvent) {
+    eprintln!("hook: {evt:?}");
+}
+
+vm.set_rust_debug_hook(Some(record), HOOK_MASK_CALL | HOOK_MASK_RETURN, 0);
+vm.set_async_native("http_get", http_get)?;
+let body = vm.eval_async(r#"return http_get("/")"#).await?;
+// stderr shows:  hook: Call  (chunk entry)
+//                hook: Call  (http_get entry — fires before .await)
+//                hook: Return (http_get exit — fires after .await resolves)
+//                hook: Return (chunk exit)
+```
+
+Hook events fire only on **completed** semantic boundaries; the
+cooperative yield mid-native (the `.await`) does not fire any hook
+event — this matches PUC's `LUA_HOOKRET` semantics for
+`coroutine.yield` (which also defers the return event until resume).
+
+Re-entrancy contract: hook bodies under async mode may call sync
+`vm.eval(...)` but **must not** invoke async natives — the inner call
+runs in sync context and hits the existing
+`"async native called in sync context"` rejection. The hook callback
+type `RustDebugHook = fn(&mut Vm, RustHookEvent)` is a bare function
+pointer, so it is unconditionally `Send + Sync` and composes with
+SendVm forks (see the `SendVm` section below) without extra trait
+bounds. A compile-time `assert_send::<RustDebugHook>()` test pins
+this in `crates/luna-core/tests/async_hook_composition.rs`.
 
 ## `feature = "send"` — `SendVm` (v1.3+)
 

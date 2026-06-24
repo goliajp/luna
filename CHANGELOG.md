@@ -278,9 +278,68 @@ scope** for v1.3 (no longer deferred). Tracked in
 - **`official_run` flakiness fix** — compiler short-circuit AND
   `debug_assert_eq!(reg, base)` + sweep misaligned-pointer cascade
   root cause + fix.
-- **Async natives in dispatcher** (B11 hook firing) — close the
-  B10 stage 2 deferred path so async-marked natives compose with
-  Rust-side debug hooks.
+- **Async natives in dispatcher** (B11 hook firing) *(Phase AS
+  landed)* — close the v1.1 B10 Stage 2 deferred path so async-marked
+  natives compose with Rust-side `[B11]` debug hooks. Audit
+  (`.dev/rfcs/v1.3-audit-async-natives.md`) showed the gap was
+  narrower than the v1.1 charter assumed: the dispatcher hot loop's
+  `Count` / `Line` / Lua-`Call` / Lua-`Return` sites are opcode-driven
+  and already fire correctly under `async_mode = true`; only the
+  async-native call boundary itself was missing. Phase AS adds:
+  - `Call` event on the async-native branch in
+    `crates/luna-core/src/vm/exec.rs`, fired after the
+    `native_nresults` / `gc_top` pin and before the future is built —
+    same placement-relative-to-pin as the sync native path's
+    `hook_call(true, nargs)` site (audit §A.1 / Q6).
+  - `Return` event in `Vm::commit_async_native_result`
+    (`crates/luna-core/src/vm/async_drive.rs`), fired after
+    `finish_results` lands the resolved nret into the call window and
+    before the post-call GC checkpoint. Mirrors the sync native's
+    `hook_return(true, nargs + 1, nret)` placement. The method is
+    now fallible — `EvalFuture::poll`'s `Poll::Ready(Ok(nret))` arm
+    propagates the hook error through the same JIT-restore + cleanup
+    path the `Poll::Ready(Err)` arm already runs.
+  - **Count + Line carryover** — no code change; the dispatcher's
+    persistent `hook.count_left` and `hook_lastline` `Vm` fields
+    already carry across `Poll::Pending` returns to the executor, so
+    a 1000-instruction count budget walks down naturally across
+    arbitrarily many slice boundaries and a line event won't
+    double-fire on resume mid-line. New tests pin both as regression
+    guards.
+  - **6 smoke tests** in
+    `crates/luna-core/tests/async_hook_composition.rs`: `Call`/`Return`
+    around an immediate-Ready async native, `Call`/`Return` bracketing
+    a yield-once async native (proves the Return fires after `.await`
+    resolves), count-hook carryover across an aggressive 50-op slice,
+    line-hook dedupe across a 3-op slice, compile-time
+    `assert_send::<RustDebugHook>()` + `assert_sync::<RustDebugHook>()`
+    pinning the function-pointer Send-safety property, and a
+    composition smoke confirming the hook body observes the
+    async-native Call event end-to-end. No tokio dep — same
+    hand-rolled `block_on` + `YieldOnce` harness as the existing
+    `tests/async_native.rs` (luna-core 0-third-party-dep contract
+    preserved).
+  - **`Send` composition with SS-B** — `RustDebugHook = fn(&mut Vm,
+    RustHookEvent)` is a bare function pointer and unconditionally
+    `Send + Sync`, so the v1.3 Phase SS-B `SendVm` newtype composes
+    cleanly with async hooks without any new trait bound. The
+    compile-time `assert_send` test is the regression guard for any
+    future evolution of the hook signature toward closure state.
+  - **Re-entrancy contract**: hook bodies under async mode may call
+    sync `vm.eval(...)` but must NOT invoke async natives — the
+    inner sync `eval` lacks an executor to drive a nested
+    `EvalFuture`, and the existing rejection
+    (`"async native called in sync context"`) catches the attempt
+    cleanly. Documented in `docs/threading.md` §"Async natives +
+    debug hooks".
+  - **Q5 followup** (audit §"Open questions"): `EvalFuture::Drop`
+    already clears `pending_async_native_fut` /
+    `pending_async_native_ctx` (`async_drive.rs:553-554` in the
+    pre-AS code), so the stale-ctx hardening the audit flagged is
+    already in place — no additional cleanup required in Phase AS.
+  - **Unsafe drift**: 0 new sites. Hook visibility bump from `fn`
+    to `pub(crate) fn` on `Vm::hook_call` and `Vm::hook_return` is
+    safe-Rust-only.
 - **Userdata `Trace`-bearing host payloads** — `T` may hold
   `Gc<...>` fields; collector recurses into the payload (userdata
   GC ripple).

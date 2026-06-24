@@ -283,16 +283,31 @@ impl Vm {
     ///
     /// Called by [`EvalFuture::poll`] after the awaited future
     /// resolves to `Poll::Ready(Ok(nret))`.
-    pub(crate) fn commit_async_native_result(&mut self, nret: u32) {
+    pub(crate) fn commit_async_native_result(&mut self, nret: u32) -> Result<(), LuaError> {
         let ctx = self
             .pending_async_native_ctx
             .take()
             .expect("commit_async_native_result without a pending ctx");
         self.finish_results(ctx.func_slot, nret, ctx.nresults);
+        // v1.3 Phase AS — fire the matching "return" hook for the
+        // async native, after results land in the call window and
+        // before the post-call GC checkpoint. Mirrors the sync
+        // native's `hook_return(true, nargs + 1, nret)` placement in
+        // `exec.rs`. The sync path widens its C-frame argument window
+        // around the hook so `debug.getlocal(2, ftransfer..)` reads
+        // the results; the async path doesn't push to
+        // `running_natives` (the future owned the borrow window
+        // across `.await`), so there's no `running_native_slots` to
+        // widen — `hook_ftransfer` / `hook_ntransfer` set by
+        // `hook_return` carry the same information for Rust hooks
+        // and for Lua hooks reading `debug.getinfo(.).ftransfer`.
+        let ftransfer = ctx.nargs + 1;
+        self.hook_return(true, ftransfer, nret)?;
         // Same post-call GC checkpoint the sync path runs: the native
         // may have allocated, and the live boundary is now the result
         // window.
         self.maybe_collect_garbage(self.top);
+        Ok(())
     }
 }
 
@@ -497,7 +512,20 @@ impl<'vm> Future for EvalFuture<'vm> {
                     match fut.as_mut().poll(cx) {
                         Poll::Ready(Ok(nret)) => {
                             let ed = *entry_depth;
-                            this.vm.commit_async_native_result(nret);
+                            // v1.3 Phase AS — commit may fire the
+                            // async-native "return" hook, which can
+                            // error (hook propagates `LuaError`). On
+                            // error, run the same cleanup the
+                            // `Poll::Ready(Err)` arm runs below.
+                            if let Err(e) = this.vm.commit_async_native_result(nret) {
+                                if let Some(prev) = this.saved_jit_enabled.take() {
+                                    this.vm.set_jit_enabled(prev);
+                                }
+                                this.vm.async_mode = false;
+                                this.vm.async_waker = None;
+                                this.state = EvalState::Done;
+                                return Poll::Ready(Err(e));
+                            }
                             this.state = EvalState::Running {
                                 entry_depth: ed,
                                 first_slice: false,
