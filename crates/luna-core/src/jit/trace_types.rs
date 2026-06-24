@@ -957,4 +957,28 @@ pub struct CompileOptions {
     /// only lowers the 5.4+ Int count form; pre-5.3 traces bail
     /// and stay on the interp side.
     pub pre53: bool,
+    /// v1.3 Phase AOT Stage 7 sub-piece 2 — emit AOT-relocatable IR.
+    ///
+    /// When `false` (the JIT default), interned-string-key arguments
+    /// to `luna_jit_*_field` helpers are baked as
+    /// `iconst(I64, key_str.as_ptr() as i64)` — the live runtime
+    /// pointer, valid because the lowered mcode runs in the same
+    /// process / `Vm` / `StringTable` as the recorder.
+    ///
+    /// When `true` (the AOT path), the lowerer instead routes each
+    /// key through a writable data slot named
+    /// `__luna_aot_strkey_slot_<hex>` (8 bytes, zero-initialised at
+    /// link time) and emits a load through that symbol. A sibling
+    /// read-only object `__luna_aot_strkey_bytes_<hex>` carries the
+    /// UTF-8 bytes; the deploy-side startup hook walks every
+    /// `_bytes_<hex>` symbol, interns the bytes into the deploy
+    /// `Vm`'s `StringTable`, and writes the resulting
+    /// `Gc<LuaStr>::as_ptr()` into the matching `_slot_<hex>` before
+    /// any AOT trace dispatches. JIT path is unaffected — same
+    /// `iconst` it always emitted.
+    ///
+    /// See `.dev/rfcs/v1.3-rfc-trace-aot-relocation.md` for the full
+    /// scheme; sub-piece 2 (this flag) lands the codegen half — the
+    /// deploy-side resolver is sub-piece 3.
+    pub aot: bool,
 }
