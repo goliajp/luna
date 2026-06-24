@@ -965,6 +965,59 @@ impl TargetSpec {
         }
     }
 
+    /// `true` when this target uses the MSVC toolchain (Windows + the
+    /// default Microsoft libc). Routes `write_aot_cmain_object_for` to
+    /// the `clang-cl` / `cl.exe` driver shape and `link_aot_binary_for`
+    /// to the `lld-link` / `link.exe` driver shape (vs the gcc-style
+    /// `cc -o foo foo.o ...` shape used for every other target).
+    pub fn is_msvc(&self) -> bool {
+        self.os == TargetOs::Windows && self.libc == TargetLibc::Default
+    }
+
+    /// v1.3 Phase AOT Stage 7 polish 5 — pick the MSVC-style C compiler
+    /// driver. Returns `None` when none is on PATH (caller skips with a
+    /// clear error message). Resolution:
+    ///
+    /// 1. `$CC` env var wins (consistent with `cc_command`).
+    /// 2. `clang-cl` — cross-platform: macOS/Linux hosts get it via
+    ///    `brew install llvm` / `apt install clang`, accepts the same
+    ///    `__attribute__((section(...)))` syntax we emit for MinGW.
+    /// 3. `cl.exe` — Microsoft Build Tools, Windows-host only. Requires
+    ///    `vcvarsall.bat` to have set up INCLUDE / LIB env vars.
+    fn msvc_cc_command(&self) -> Option<Command> {
+        if let Ok(cc) = std::env::var("CC") {
+            return Some(Command::new(cc));
+        }
+        for candidate in &["clang-cl", "cl.exe", "cl"] {
+            if which_on_path(candidate) {
+                return Some(Command::new(candidate));
+            }
+        }
+        None
+    }
+
+    /// v1.3 Phase AOT Stage 7 polish 5 — pick the MSVC-style PE/COFF
+    /// linker driver. Returns `None` when none is on PATH. Resolution:
+    ///
+    /// 1. `$LD` env var wins (advanced override for embedders shipping a
+    ///    pinned linker).
+    /// 2. `lld-link` — LLVM's PE/COFF linker. Cross-platform: macOS gets
+    ///    it via `brew install llvm`, Linux via `apt install lld`. Works
+    ///    without a Windows host or vcvarsall setup.
+    /// 3. `link.exe` — Microsoft's linker. Windows-only; requires
+    ///    Developer Command Prompt (sets PATH + LIB env vars).
+    fn msvc_link_command(&self) -> Option<Command> {
+        if let Ok(ld) = std::env::var("LD") {
+            return Some(Command::new(ld));
+        }
+        for candidate in &["lld-link", "link.exe", "link"] {
+            if which_on_path(candidate) {
+                return Some(Command::new(candidate));
+            }
+        }
+        None
+    }
+
     /// Pick the `cc` driver invocation for this target. Returns the
     /// command (already constructed with the driver name and any
     /// `-target` / `--target` flags) ready for the caller to add
@@ -1233,9 +1286,30 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
         //
         // MinGW's gcc accepts the `__attribute__((section(...)))`
         // syntax verbatim with the section name as-is (no leading
-        // `__DATA,` prefix — that's Mach-O specific). MSVC's
-        // `cl.exe` would use `#pragma section`; the MSVC path is
-        // not wired (see `link_aot_binary_for` Windows arm).
+        // `__DATA,` prefix — that's Mach-O specific). For MSVC we
+        // emit the equivalent `#pragma section` + `__declspec(allocate(...))`
+        // form so the same placeholder data lands in the same
+        // `.lt_skix` / `.lt_meta` sections regardless of toolchain;
+        // the deploy walker (`luna-runtime-helpers::windows_section`)
+        // looks up by section name and is toolchain-agnostic.
+        //
+        // clang-cl accepts both syntaxes (`__attribute__((section()))`
+        // and the MSVC `__declspec(allocate())` form), but `cl.exe`
+        // only accepts the MSVC form — so we emit the MSVC form for
+        // both, which keeps a single source path covering both drivers.
+        TargetOs::Windows if target.is_msvc() => {
+            // `#pragma section` declares the section + its
+            // characteristics (R = readable). The 8-byte alignment
+            // matches the MinGW arm so the deploy walker's pointer
+            // arithmetic over the section is identical across
+            // toolchains.
+            "#pragma section(\".lt_skix\", read)\n\
+             __declspec(allocate(\".lt_skix\")) __declspec(align(8))\n\
+             static const char luna_strkey_idx_placeholder[16] = {0};\n\
+             #pragma section(\".lt_meta\", read)\n\
+             __declspec(allocate(\".lt_meta\")) __declspec(align(8))\n\
+             static const char luna_trace_meta_placeholder[48] = {0};\n"
+        }
         TargetOs::Windows => {
             "__attribute__((used, section(\".lt_skix\"), aligned(8)))\n\
              static const char luna_strkey_idx_placeholder[16] = {0};\n\
@@ -1266,8 +1340,48 @@ int main(int argc, char **argv) {{
     c_path.set_extension("c");
     fs::write(&c_path, c_src)?;
 
-    let mut cmd = target.cc_command();
-    cmd.arg("-c").arg(&c_path).arg("-o").arg(out);
+    // v1.3 Phase AOT Stage 7 polish 5 — MSVC needs `clang-cl` / `cl.exe`
+    // (different flag shape: `/c` + `/Fo:` vs gcc-style `-c` + `-o`).
+    // All other targets keep the existing gcc-style cc driver path.
+    let mut cmd = if target.is_msvc() {
+        let Some(mut cl) = target.msvc_cc_command() else {
+            return Err(AotError::Link(format!(
+                "MSVC C compiler not on PATH for target {} — install one of: \
+                 (a) `clang-cl` via LLVM (`brew install llvm` on macOS; \
+                 `apt install clang` on Linux), or (b) Visual Studio Build \
+                 Tools 2022 (`cl.exe`, Windows host only — invoke luna-aot \
+                 from a Developer Command Prompt). Override with `CC=...` \
+                 to point at a custom driver.",
+                target.triple
+            )));
+        };
+        // `clang-cl` / `cl.exe`: `/c` compile-only, `/Fo:<obj>` output.
+        // Some Linux distros' clang-cl wrappers also accept gcc-style
+        // flags, but the MSVC shape works on every supported driver.
+        cl.arg("/c");
+        cl.arg(&c_path);
+        // `/Fo:` and the output path are a single token when no space —
+        // we use the safe two-arg form via `arg(format!("/Fo:{}", ..))`
+        // which avoids whitespace-in-path issues.
+        cl.arg(format!("/Fo:{}", out.display()));
+        // Suppress the cl.exe banner (clang-cl no-ops on this flag).
+        cl.arg("/nologo");
+        // Cross-compile target: clang-cl accepts `--target=<triple>` to
+        // override the default host. cl.exe rejects this; we only set it
+        // for clang-cl by detecting the program name (heuristic — first
+        // arg defaulted via `Command::new`). The simplest robust path
+        // is to always set it when not on a Windows host, since cl.exe
+        // can't realistically run there anyway. Skipping for now: cmd
+        // here is `clang-cl` only when reachable on a Unix host.
+        if !cfg!(target_os = "windows") {
+            cl.arg(format!("--target={}", target.triple));
+        }
+        cl
+    } else {
+        let mut cmd = target.cc_command();
+        cmd.arg("-c").arg(&c_path).arg("-o").arg(out);
+        cmd
+    };
     let status = cmd
         .output()
         .map_err(|e| AotError::Link(format!("spawn cc for target {}: {e}", target.triple)))?;
@@ -1299,24 +1413,20 @@ fn link_aot_binary_for(
     out_path: &Path,
     target: &TargetSpec,
 ) -> Result<(), AotError> {
-    // Windows MSVC requires link.exe and a totally different invocation
-    // surface (`/OUT:`, `/SUBSYSTEM:CONSOLE`, msvcrt libs). We don't
-    // attempt to drive link.exe directly — instead the MSVC arm
-    // returns a clear `AotError::Link` directing the user to either
-    // (a) build from a Windows host where the staticlib's
-    // `--print native-static-libs` output is reliable, or
-    // (b) target `x86_64-pc-windows-gnu` (MinGW) which uses a gcc-
-    //     style driver we *can* shell out to.
-    if target.os == TargetOs::Windows && target.libc == TargetLibc::Default {
-        return Err(AotError::Link(format!(
-            "MSVC link path (triple {}) is not implemented — luna-aot only \
-             drives gcc/clang-style cc drivers. Workarounds: (1) target \
-             x86_64-pc-windows-gnu instead (MinGW; works on linux/mac hosts \
-             with the matching cross-gcc installed), or (2) run luna-aot \
-             with `--scaffold-only` to emit the bytecode object + run \
-             `link.exe` by hand.",
-            target.triple
-        )));
+    // v1.3 Phase AOT Stage 7 polish 5 — MSVC has a completely different
+    // linker surface (`link.exe` / `lld-link.exe`: `/OUT:foo.exe`,
+    // `/SUBSYSTEM:CONSOLE`, `.lib` system libs, no `-l` flag). Route
+    // through a dedicated path; everything else (Mach-O, ELF, MinGW
+    // PE-COFF) shares the gcc-style cc-driver path below.
+    if target.is_msvc() {
+        return link_aot_binary_msvc(
+            bytecode_obj,
+            cmain_obj,
+            traces_obj,
+            staticlib,
+            out_path,
+            target,
+        );
     }
 
     let mut cmd = target.cc_command();
@@ -1386,6 +1496,138 @@ fn link_aot_binary_for(
             target.triple,
             output.status.code(),
             cmd,
+            String::from_utf8_lossy(&output.stderr),
+        )));
+    }
+    Ok(())
+}
+
+/// v1.3 Phase AOT Stage 7 polish 5 — MSVC link path. Drives
+/// `lld-link` (cross-platform) or `link.exe` (Windows Build Tools)
+/// directly rather than going through a gcc-style cc driver.
+///
+/// Linker invocation shape:
+///
+/// ```text
+/// lld-link /NOLOGO /SUBSYSTEM:CONSOLE /OUT:foo.exe \
+///          foo.luna_cmain.o foo.luna_bytecode.o [foo.luna_traces.o] \
+///          luna_runtime_helpers.lib \
+///          bcrypt.lib userenv.lib ws2_32.lib advapi32.lib \
+///          ntdll.lib kernel32.lib legacy_stdio_definitions.lib
+/// ```
+///
+/// The system lib set mirrors what `rustc --print native-static-libs
+/// --target=x86_64-pc-windows-msvc` reports for a `crate-type =
+/// ["staticlib"]` that pulls `std`. `legacy_stdio_definitions.lib` is
+/// MSVC-specific (resolves the inline-defined stdio symbols
+/// `__imp___stdio_common_vsprintf` etc. that the UCRT headers emit when
+/// the host C runtime is the Universal CRT 14.0+).
+///
+/// `link.exe` resolves system libs via the `LIB` environment variable
+/// (set by `vcvarsall.bat`). `lld-link` accepts `/LIBPATH:` flags;
+/// when neither LIB nor an explicit path is set, it falls back to
+/// system defaults which work on Windows hosts but fail on Unix
+/// hosts. This is fine because the staticlib build itself only
+/// succeeds when a Windows host or a complete cross-toolchain is
+/// present (otherwise we fail earlier in
+/// `build_runtime_helpers_staticlib`).
+fn link_aot_binary_msvc(
+    bytecode_obj: &Path,
+    cmain_obj: &Path,
+    traces_obj: Option<&Path>,
+    staticlib: &Path,
+    out_path: &Path,
+    target: &TargetSpec,
+) -> Result<(), AotError> {
+    let Some(mut cmd) = target.msvc_link_command() else {
+        return Err(AotError::Link(format!(
+            "MSVC linker (lld-link / link.exe) not on PATH for target {} — \
+             install one of: (a) LLVM (`brew install llvm` on macOS; \
+             `apt install lld` on Linux) which ships `lld-link`, or \
+             (b) Visual Studio Build Tools 2022 (`link.exe`, Windows host \
+             only — invoke luna-aot from a Developer Command Prompt so \
+             `PATH` + `LIB` are set). Override with `LD=...` to point at \
+             a custom linker.",
+            target.triple
+        )));
+    };
+
+    // Quiet the banner (lld-link and link.exe both accept /NOLOGO).
+    cmd.arg("/NOLOGO");
+    // Console subsystem — luna-aot binaries are CLI programs.
+    cmd.arg("/SUBSYSTEM:CONSOLE");
+    // Tell lld-link which PE machine type to emit. link.exe infers from
+    // the input objects; lld-link tolerates the flag on both, so we
+    // always emit it. Maps from rustc arch component to the PE machine
+    // string MSVC link expects.
+    let machine = match target.arch {
+        Architecture::X86_64 => "X64",
+        Architecture::I386 => "X86",
+        Architecture::Aarch64 => "ARM64",
+        _ => {
+            return Err(AotError::Link(format!(
+                "MSVC link: unsupported arch {:?} for target {} (supported: \
+                 x86_64, i686, aarch64)",
+                target.arch, target.triple
+            )));
+        }
+    };
+    cmd.arg(format!("/MACHINE:{machine}"));
+    cmd.arg(format!("/OUT:{}", out_path.display()));
+
+    // Object files first, then the staticlib. The MSVC linker is
+    // section-driven (not order-sensitive like Unix ld), but we keep
+    // the canonical order for readability with the MinGW arm above.
+    cmd.arg(cmain_obj).arg(bytecode_obj);
+    if let Some(traces) = traces_obj {
+        cmd.arg(traces);
+    }
+    cmd.arg(staticlib);
+
+    // System libs the rust stdlib + UCRT pull in. Matches
+    // `rustc --print native-static-libs --target=x86_64-pc-windows-msvc`
+    // for a staticlib that uses std. MSVC needs the `.lib` suffix
+    // (vs MinGW's `-lfoo` short form).
+    for lib in &[
+        "bcrypt.lib",
+        "userenv.lib",
+        "ws2_32.lib",
+        "advapi32.lib",
+        "ntdll.lib",
+        "kernel32.lib",
+        // Resolves the inline-defined UCRT stdio entry points
+        // (`__stdio_common_vsprintf` family). Without this, link
+        // fails with `unresolved external symbol __imp___stdio_*`
+        // when the staticlib indirectly references printf-family
+        // functions.
+        "legacy_stdio_definitions.lib",
+        // ucrt: the Universal CRT (modern Windows C runtime).
+        "ucrt.lib",
+        // vcruntime: MSVC's C++ runtime stub (referenced via std even
+        // for pure-Rust staticlibs because Rust's panic machinery
+        // unwinds through the SEH path).
+        "vcruntime.lib",
+        // msvcrt: legacy MSVC C runtime. Some std symbols still route
+        // here on older UCRT versions; harmless overlap.
+        "msvcrt.lib",
+    ] {
+        cmd.arg(lib);
+    }
+
+    let output = cmd.output().map_err(|e| {
+        AotError::Link(format!(
+            "spawn MSVC linker for target {}: {e}",
+            target.triple
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(AotError::Link(format!(
+            "MSVC link failed (target {}, exit {:?}):\ncommand: {:?}\n\
+             stdout:\n{}\nstderr:\n{}",
+            target.triple,
+            output.status.code(),
+            cmd,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         )));
     }

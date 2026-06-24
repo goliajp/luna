@@ -50,10 +50,17 @@ luna-aot compile foo.lua --out foo.x86_64 --target x86_64-apple-darwin
 sudo apt install gcc-aarch64-linux-gnu                            # debian/ubuntu
 luna-aot compile foo.lua --out foo.arm64 --target aarch64-unknown-linux-gnu
 
-# windows x86_64 from any unix host (needs mingw-w64):
+# windows x86_64 / MinGW from any unix host (needs mingw-w64):
 sudo apt install gcc-mingw-w64-x86-64                             # debian/ubuntu
 brew install mingw-w64                                            # macOS
 luna-aot compile foo.lua --out foo.exe --target x86_64-pc-windows-gnu
+
+# windows x86_64 / MSVC, native on Windows (Developer Command Prompt for VS 2022):
+luna-aot compile foo.lua --out foo.exe --target x86_64-pc-windows-msvc
+# or from a Unix host with the LLVM toolchain + Windows SDK mirror
+# (clang-cl + lld-link via `brew install llvm` / `apt install clang lld`;
+# Windows SDK + UCRT libs via an `xwin`-style setup):
+luna-aot compile foo.lua --out foo.exe --target x86_64-pc-windows-msvc
 
 # Alpine / musl deploy (single binary that runs on any musl distro):
 brew install FiloSottile/musl-cross/musl-cross                    # macOS
@@ -71,7 +78,7 @@ luna-aot compile foo.lua --out foo.musl --target x86_64-unknown-linux-musl
 | `x86_64-unknown-linux-gnu` | rustup add | `x86_64-linux-gnu-gcc` | `brew install x86_64-elf-gcc` | (host gcc) |
 | `x86_64-unknown-linux-musl` | rustup add | `x86_64-linux-musl-gcc` | `brew install FiloSottile/musl-cross/musl-cross` | `apt install musl-tools` |
 | `x86_64-pc-windows-gnu` | rustup add | `x86_64-w64-mingw32-gcc` | `brew install mingw-w64` | `apt install gcc-mingw-w64-x86-64` |
-| `x86_64-pc-windows-msvc` | rustup add | **link.exe (MSVC)** — not driven by luna-aot; use `--target x86_64-pc-windows-gnu` instead | n/a | n/a |
+| `x86_64-pc-windows-msvc` | rustup add | `clang-cl` + `lld-link` (LLVM) **or** `cl.exe` + `link.exe` (Visual Studio Build Tools 2022) | `brew install llvm` (provides both) | `apt install clang lld` (provides both) |
 
 Anything missing surfaces as a concrete error message naming the
 package; nothing is silently degraded.
@@ -145,11 +152,16 @@ See `.dev/rfcs/v1.3-audit-luna-aot.md` for the full audit.
   interpreter, no AOT codegen at runtime. Embedders that need
   runtime-`loadstring`-of-untrusted-source to be JIT-fast should use
   `luna-jit` instead.
-- **MSVC link path is not driven** — Windows builds go through MinGW
-  (`x86_64-pc-windows-gnu`). luna-aot doesn't shell out to `link.exe`
-  directly; the MSVC arm of `link_aot_binary_for` returns a clear
-  error directing users to either build from a Windows host or
-  target windows-gnu.
+- **MSVC link path requires Windows SDK libs on Unix hosts.** The
+  `x86_64-pc-windows-msvc` target is fully driven (`clang-cl` /
+  `cl.exe` for the C entry object, `lld-link` / `link.exe` for the
+  final PE), but the final link needs Windows SDK + UCRT `.lib`
+  files which are not installed by `brew install llvm` /
+  `apt install lld` alone. On a Windows host (Developer Command
+  Prompt for VS 2022) the toolchain is complete. On Unix hosts a
+  `xwin`-style SDK mirror is required to make `lld-link` find
+  `ucrt.lib` et al.; otherwise use `--target x86_64-pc-windows-gnu`
+  (MinGW), which carries its own runtime via mingw-w64.
 
 ## CLI surface
 
@@ -159,8 +171,8 @@ luna-aot compile <input.lua> [--out <path>] [--target <triple>] [--dialect <5.X>
 
 `--target` accepts any triple `TargetSpec::from_triple` parses
 (tier 1: host + `*-apple-darwin`; tier 2: `*-unknown-linux-{gnu,musl}`,
-`x86_64-pc-windows-gnu`). Unsupported arch / OS strings surface as a
-clean error naming the supported set.
+`x86_64-pc-windows-{gnu,msvc}`). Unsupported arch / OS strings
+surface as a clean error naming the supported set.
 
 `--dialect` accepts `5.1` / `5.2` / `5.3` / `5.4` / `5.5` / `macrolua`;
 default is `5.5`.
