@@ -1,0 +1,29 @@
+[package]
+name = "luna-runtime-helpers"
+description = "Static-link runtime entry for AOT-produced binaries. Exposes a single C-ABI symbol `luna_aot_run(bytecode, len) -> i32` that constructs a luna `Vm`, `undump`s the embedded bytecode, calls the root chunk, and returns a process exit code. Built as a `staticlib` so `luna-aot`'s `cc` link step can statically pull it (plus rust stdlib) into the produced native binary. Also built as `rlib` so `luna-aot`'s integration tests can drive it via the Rust runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+# `staticlib` is what makes this useful at all — `cc` links the
+# resulting `.a` into the AOT binary alongside the bytecode `.o` and
+# the C `main` stub. `rlib` is kept so cargo's regular build graph
+# (tests, examples) can also reach the `luna_aot_run` symbol via
+# normal Rust imports (Rust integration tests can't link a staticlib
+# directly without going through `cc`).
+crate-type = ["staticlib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# The whole point of this crate: re-export a thin C-ABI entry that
+# drives a luna-core Vm. luna-core stays 0-third-party-dep; the
+# staticlib's transitive footprint is rust stdlib + luna-core only.
+luna-core = { path = "../luna-core", version = "= 1.3.0" }

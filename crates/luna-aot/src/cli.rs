@@ -17,7 +17,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use luna_core::version::LuaVersion;
 
-use crate::embed::{AotError, embed_bytecode};
+use crate::embed::{AotError, compile_and_link, embed_bytecode};
 
 /// `luna-aot` — Lua source → native binary compiler.
 #[derive(Parser, Debug)]
@@ -60,6 +60,16 @@ pub struct CompileArgs {
     /// `crates/luna-jit/src/bin/luna.rs`).
     #[arg(long = "dialect", default_value = "lua55")]
     pub dialect: DialectArg,
+
+    /// **v1.3 Stage 4 escape hatch**: when set, fall back to the
+    /// pre-Stage-4 scaffold path that emits a C entry which only
+    /// prints the embedded section length to stderr (no `Vm`, no
+    /// luna-runtime-helpers link). Useful for benchmarking the
+    /// link step in isolation or when the runtime staticlib is
+    /// known-broken on the host. Default (off) uses the real
+    /// interp-runtime link via [`compile_and_link`].
+    #[arg(long = "scaffold-only", default_value_t = false)]
+    pub scaffold_only: bool,
 }
 
 /// Dialect choice surface for the CLI. Mirrors
@@ -119,7 +129,11 @@ pub fn run() -> ExitCode {
 fn do_compile(args: CompileArgs) -> Result<(), AotError> {
     let out = args.out.unwrap_or_else(|| default_out_for(&args.input));
     let version = args.dialect.into();
-    embed_bytecode(&args.input, &out, args.target.as_deref(), version)
+    if args.scaffold_only {
+        embed_bytecode(&args.input, &out, args.target.as_deref(), version)
+    } else {
+        compile_and_link(&args.input, &out, args.target.as_deref(), version)
+    }
 }
 
 fn default_out_for(input: &std::path::Path) -> PathBuf {

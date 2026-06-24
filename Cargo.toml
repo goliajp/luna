@@ -16,6 +16,12 @@ members = [
     # 0-third-party-dep contract on luna-core is unaffected.
     # See `.dev/rfcs/v1.3-audit-luna-aot.md`.
     "crates/luna-aot",
+    # v1.3 Phase AOT Stage 4 — `luna-runtime-helpers` staticlib that
+    # `luna-aot`-produced binaries statically link against. Exposes
+    # a single C-ABI entry `luna_aot_run(bytecode_ptr, len) -> i32`
+    # driving a `luna-core` `Vm`. Depends only on `luna-core`; the
+    # 0-third-party-dep contract on `luna-core` is unaffected.
+    "crates/luna-runtime-helpers",
 ]
 
 [workspace.package]
