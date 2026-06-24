@@ -5,15 +5,17 @@ use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
 #[test]
-fn trace_recording_inactive_by_default() {
+fn trace_recording_inactive_when_disabled() {
+    // v1.3 TA3 flipped trace_enabled default to `true` (commit
+    // `7274887`). This test asserts the *disabled* path still works
+    // — explicitly turn off, then verify a loop runs to completion
+    // and a fresh eval still returns the correct value (the gate is
+    // genuinely closed, no stale trace state interferes).
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(false);
     assert!(!vm.trace_jit_enabled());
-    // Run a loop with plenty of back-edges; counter should not advance
-    // while the gate is closed, and no trace should be live afterwards.
     vm.eval("local s = 0 for i = 1, 1000 do s = s + i end return s")
         .unwrap();
-    // `active_trace` is `pub(crate)` so we infer "inactive" via
-    // continued correct behavior of a subsequent eval.
     let r = vm.eval("return 1 + 2").unwrap();
     assert!(matches!(r.first(), Some(Value::Int(3))));
 }
@@ -66,7 +68,11 @@ fn trace_recording_closes_on_simple_loop() {
 
 #[test]
 fn trace_jit_toggle_round_trip() {
+    // v1.3 TA3 default is `true`; explicitly toggle through false →
+    // true → false so the test exercises every transition regardless
+    // of the ship default.
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(false);
     assert!(!vm.trace_jit_enabled());
     vm.set_trace_jit_enabled(true);
     assert!(vm.trace_jit_enabled());
