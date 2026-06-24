@@ -107,7 +107,11 @@ fn depth_zero_gate_holds_for_loop_triggered_traces() {
 fn gate_off_keeps_all_trace_counters_zero() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
-    // trace_jit_enabled defaults to false; do not flip it.
+    // v1.3 TA3 flipped trace_enabled ship default to `true` (commit
+    // `7274887`); explicitly disable so this regression guard for the
+    // "trace-on-call branch even when gated" mistake still tests the
+    // gated-off path regardless of ship default.
+    vm.set_trace_jit_enabled(false);
 
     let r = vm
         .eval(
