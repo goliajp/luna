@@ -437,27 +437,31 @@ pub fn compile_and_link(
     // ABI / object-format magic.
     write_aot_cmain_object_for(&cmain_obj_path, &target)?;
 
-    // v1.3 Phase AOT Stage 7 sub-piece 4 — offline trace recorder +
-    // AOT trace mcode emission. Host-only: cross-compile of trace
-    // mcode requires a host-different cranelift `TargetIsa`, which is
-    // a much larger surface than the .o emit code below — deferred.
+    // v1.3 Phase AOT Stage 7 sub-piece 4 (closed) + polish 4
+    // (cross-compile traces): offline trace recorder + AOT trace
+    // mcode emission. The warmup `Vm` always runs on the **host**
+    // (we can't dispatch target mcode at warmup time), but the
+    // trace-mcode `.o` we emit is keyed off `TargetSpec`:
     //
-    // Returns Ok(None) when no traces close (small / non-loopy source),
-    // Ok(Some(path)) when at least one trace was emitted into a fresh
-    // `.luna_traces.o`. The smoke test below picks up either shape.
-    let traces_obj_path = if target.is_host {
+    //   - `TargetSpec::cranelift_isa_builder()` resolves the right
+    //     Cranelift `TargetIsa` (`x86_64`, `aarch64`, etc.) so the
+    //     `ObjectModule` codegens for the deploy ABI, not the host's.
+    //   - The recorded `TraceRecord`s are luna-IR-level (op + guard +
+    //     reg moves); pointer-width / endianness are encoded as IR
+    //     types (`I64` / little-endian) which are stable across every
+    //     target in our tier set. So the same `TraceRecord` re-lowers
+    //     correctly for any cross target.
+    //
+    // Returns Ok(None) when no traces close (small / non-loopy source)
+    // or the target Cranelift backend isn't compiled in (resolved by
+    // the `cranelift-codegen = { features = ["all-arch"] }` dep, but
+    // we self-skip rather than panic if it ever shrinks).
+    let traces_obj_path = {
         let path = workdir.join(format!("{stem}.luna_traces.o"));
-        match harvest_and_emit_aot_traces(&dump_bytes, version, &path)? {
+        match harvest_and_emit_aot_traces(&dump_bytes, version, &path, &target)? {
             HarvestedTraces::None => None,
             HarvestedTraces::Some => Some(path),
         }
-    } else {
-        // Cross AOT-mcode emission is out of scope this commit. The
-        // produced binary still runs the embedded chunk through the
-        // interp + JIT fallback (the staticlib carries luna-jit), so
-        // correctness is unchanged — only the AOT-trace fast path is
-        // missing on cross builds.
-        None
     };
 
     // Stage 6b: ensure the runtime staticlib exists for `target`.
@@ -1029,6 +1033,57 @@ impl TargetSpec {
         cmd.arg("-target").arg(&self.triple);
         cmd
     }
+
+    /// v1.3 Phase AOT Stage 7 polish 4 — resolve the Cranelift
+    /// `TargetIsa` builder for this target. Used by
+    /// [`harvest_and_emit_aot_traces`] so the offline trace lowerer
+    /// codegens for the deploy ABI rather than the build host's.
+    ///
+    /// Two layers:
+    ///
+    /// 1. Parse `self.triple` with `target_lexicon::Triple::from_str`.
+    ///    Both Cranelift's `isa::lookup_by_name` and `isa::lookup` go
+    ///    through the same path; the explicit `from_str` here surfaces
+    ///    a clean `AotError::Object` on malformed triples rather than
+    ///    Cranelift's internal `expect` panic.
+    /// 2. `cranelift_codegen::isa::lookup(triple)` returns an `isa::
+    ///    Builder` configured for the requested arch — provided the
+    ///    Cranelift feature for that arch (`x86`, `arm64`, etc.) is
+    ///    enabled at compile time. We turn `all-arch` on in
+    ///    `Cargo.toml` so any tier-1/2 target resolves. If somebody
+    ///    later shrinks the feature set, the `SupportDisabled` arm
+    ///    surfaces a clear error.
+    ///
+    /// On the host triple we still go through `cranelift_native::
+    /// builder()` (rather than the per-triple path) so we inherit the
+    /// CPU-feature autodetection (`SSE4.1`, `AVX2`, …). Host warmup +
+    /// host deploy ⇒ identical mcode, matching the pre-polish-4
+    /// behaviour byte-for-byte.
+    pub fn cranelift_isa_builder(&self) -> Result<cranelift_codegen::isa::Builder, AotError> {
+        use std::str::FromStr;
+        if self.is_host {
+            return cranelift_native::builder().map_err(|e| {
+                AotError::Object(format!(
+                    "cranelift_native::builder for host triple {}: {e}",
+                    self.triple
+                ))
+            });
+        }
+        let triple = target_lexicon::Triple::from_str(&self.triple).map_err(|e| {
+            AotError::Object(format!(
+                "target_lexicon could not parse triple {:?}: {e}",
+                self.triple
+            ))
+        })?;
+        cranelift_codegen::isa::lookup(triple).map_err(|e| {
+            AotError::Object(format!(
+                "cranelift_codegen::isa::lookup for triple {}: {e:?} \
+                 (re-build luna-aot with `cranelift-codegen` feature \
+                 `all-arch` or the per-arch feature for {})",
+                self.triple, self.triple,
+            ))
+        })
+    }
 }
 
 /// Check whether `binary` resolves on `PATH`. Used by
@@ -1389,6 +1444,7 @@ fn harvest_and_emit_aot_traces(
     dump_bytes: &[u8],
     version: LuaVersion,
     out: &Path,
+    target: &TargetSpec,
 ) -> Result<HarvestedTraces, AotError> {
     use cranelift_codegen::settings::{self, Configurable};
     use cranelift_module::{DataDescription, Linkage, Module, default_libcall_names};
@@ -1520,6 +1576,14 @@ fn harvest_and_emit_aot_traces(
 
     // Build the ObjectModule for the trace .o. PIC required for ELF/
     // Mach-O linker relocations.
+    //
+    // v1.3 Phase AOT Stage 7 polish 4: `cranelift_isa_builder()` resolves
+    // the per-target ISA (host = `cranelift_native` for CPU-feature
+    // detection; cross = `isa::lookup` over the parsed triple). When
+    // target == host the ISA, flags, and resulting mcode are
+    // byte-for-byte identical to the pre-polish path; for cross targets
+    // we get a `TargetIsa` whose codegen matches the deploy ABI rather
+    // than the build host's.
     let isa = {
         let mut flag_builder = settings::builder();
         flag_builder
@@ -1527,10 +1591,15 @@ fn harvest_and_emit_aot_traces(
             .expect("flag");
         flag_builder.set("is_pic", "true").expect("flag");
         flag_builder.set("opt_level", "speed").expect("flag");
-        cranelift_native::builder()
-            .map_err(|e| AotError::Object(format!("cranelift_native::builder: {e}")))?
+        target
+            .cranelift_isa_builder()?
             .finish(settings::Flags::new(flag_builder))
-            .map_err(|e| AotError::Object(format!("ISA finish: {e}")))?
+            .map_err(|e| {
+                AotError::Object(format!(
+                    "Cranelift ISA finish for target {}: {e}",
+                    target.triple
+                ))
+            })?
     };
     let object_builder = ObjectBuilder::new(isa, "luna_aot_traces", default_libcall_names())
         .map_err(|e| AotError::Object(format!("ObjectBuilder: {e}")))?;
