@@ -49,6 +49,16 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
+// v1.3 Phase AOT Stage 7 polish 3 — Windows PE/COFF section walker.
+// Used by `aot_strkey_resolver` and `aot_trace_registry` to enumerate
+// the deploy-side `lt_meta` / `lt_skix` sections on Windows, where
+// the Unix-style `__start_/__stop_` bracket symbol convention isn't
+// synthesized by `link.exe` / `lld-link`. Hand-rolled winapi externs
+// keep the dep story unchanged (no `windows-sys` / `winapi` crate
+// added). See module docs for the design rationale.
+#[cfg(all(target_os = "windows", feature = "jit-helpers"))]
+mod windows_section;
+
 /// AOT-binary C-ABI entry. The auto-generated C `main` calls this
 /// once with a pointer + length pair derived from the bracket
 /// symbols `__luna_bytecode_start` / `__luna_bytecode_end` that
@@ -629,11 +639,16 @@ pub mod aot_strkey_resolver {
     // declare per-platform externs and the dead-strip pass discards
     // whichever doesn't match.
     //
-    // Windows / COFF has no bracket-symbol convention; an AOT trace
-    // running on Windows would need a per-`.o` registry table
-    // approach (audit § Stage 6 Windows MSVC arm is also unimplemented).
-    // For now Windows AOT-with-traces is a known gap — the resolver
-    // returns 0 there.
+    // Windows / COFF has no bracket-symbol convention (Stage 7 polish
+    // 3): `link.exe` / `lld-link` don't synthesize `__start_` / `__stop_`
+    // externs. Instead the deploy walker calls into the parent crate's
+    // [`crate::windows_section::find_section`] which does a runtime
+    // PE-header parse via `GetModuleHandleW(NULL)`. The Windows path
+    // uses the short section name `.lt_skix` (8 bytes, COFF
+    // section-name max) — see `crates/luna-aot/src/embed.rs` for the
+    // emit-side choice. Empty-section (no AOT traces linked in) is
+    // handled by `find_section` returning `None` and `resolve_all`
+    // short-circuiting to 0.
     #[cfg(all(unix, not(target_vendor = "apple")))]
     unsafe extern "C" {
         #[link_name = "__start_luna_strkey_idx"]
@@ -650,53 +665,106 @@ pub mod aot_strkey_resolver {
         static mut LUNA_STRKEY_IDX_END: u8;
     }
 
-    /// Walk the bracketed `luna_strkey_idx` section, intern each
+    /// Walk the bracketed `luna_strkey_idx` section (Unix / Mach-O) or
+    /// the PE-header-located `.lt_skix` section (Windows), intern each
     /// bytes block into `vm.heap`, write the resulting pointer into
     /// the matching slot. Returns the number of slots populated
-    /// (zero on platforms without bracket-symbol support, or on a
-    /// binary that linked zero AOT trace `.o`s).
+    /// (zero on a binary that linked zero AOT trace `.o`s).
     pub fn resolve_all(vm: &mut Vm) -> usize {
-        // Windows COFF + any platform we don't have bracket externs
-        // for: no-op. Future Windows AOT work needs a registry table.
-        #[cfg(not(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple")))]
-        {
-            let _ = vm;
-            return 0;
-        }
-
-        #[cfg(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple"))]
-        unsafe {
-            let start = &raw mut LUNA_STRKEY_IDX_START as *mut IndexEntry;
-            let end = &raw mut LUNA_STRKEY_IDX_END as *mut IndexEntry;
-            // start == end on a binary with zero AOT traces. Section
-            // length = end - start in bytes; divide by entry size to
-            // get the count. The byte-cast happens via
-            // `byte_offset_from` (stable, no UB on equal pointers).
-            let len_bytes = (end as isize) - (start as isize);
-            if len_bytes <= 0 {
+        // Locate the strkey-idx section + length, dispatching on
+        // target platform. Windows: runtime PE header walk via
+        // [`crate::windows_section::find_section`] for the short name
+        // `.lt_skix` (mirrors the emit-side choice in
+        // `crates/luna-aot/src/embed.rs::write_aot_cmain_object_for`
+        // Windows arm + the harvester's `set_segment_section`).
+        // Unix/Mach-O: bracket symbols supplied by the linker. Either
+        // dispatch path can produce a zero-length section (binary
+        // linked no AOT traces) — `walk_index_bytes` short-circuits.
+        let (base, len_bytes): (*const u8, usize) = {
+            #[cfg(target_os = "windows")]
+            {
+                match crate::windows_section::find_section(b".lt_skix") {
+                    Some((b, l)) => (b, l),
+                    None => return 0,
+                }
+            }
+            #[cfg(all(not(target_os = "windows"), unix, not(target_vendor = "apple")))]
+            {
+                let start = &raw mut LUNA_STRKEY_IDX_START as *mut IndexEntry;
+                let end = &raw mut LUNA_STRKEY_IDX_END as *mut IndexEntry;
+                // start == end on a binary with zero AOT traces. Section
+                // length = end - start in bytes; divide by entry size
+                // gives the count.
+                let len = (end as isize) - (start as isize);
+                if len <= 0 {
+                    return 0;
+                }
+                (start as *const u8, len as usize)
+            }
+            #[cfg(all(not(target_os = "windows"), target_vendor = "apple"))]
+            {
+                let start = &raw mut LUNA_STRKEY_IDX_START as *mut IndexEntry;
+                let end = &raw mut LUNA_STRKEY_IDX_END as *mut IndexEntry;
+                let len = (end as isize) - (start as isize);
+                if len <= 0 {
+                    return 0;
+                }
+                (start as *const u8, len as usize)
+            }
+            // Platforms without a section enumeration path (e.g.
+            // wasm32) — no AOT install possible, return 0.
+            #[cfg(not(any(
+                target_os = "windows",
+                all(unix, not(target_vendor = "apple")),
+                target_vendor = "apple"
+            )))]
+            {
+                let _ = vm;
                 return 0;
             }
-            let n_entries = (len_bytes as usize) / core::mem::size_of::<IndexEntry>();
-            let mut populated = 0usize;
+        };
+        walk_index_bytes(vm, base, len_bytes)
+    }
+
+    /// Common per-entry walk shared by the Unix/Mach-O bracket-symbol
+    /// path and the Windows PE-header-located section path. Takes the
+    /// section base + length in bytes (as the two enumeration paths
+    /// produce different types — a pair of bracket symbol addresses on
+    /// Unix, a `(*const u8, usize)` tuple from [`crate::windows_section
+    /// ::find_section`] on Windows) and walks `len / sizeof(IndexEntry)`
+    /// entries.
+    ///
+    /// Tolerant of trailing-zero placeholder entries (the cmain shim
+    /// emits one zero-filled IndexEntry to guarantee the section exists
+    /// even when no real traces are linked in) via the
+    /// `entry.bytes_ptr.is_null() || entry.slot_ptr.is_null()` skip.
+    fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> usize {
+        if base.is_null() || len_bytes == 0 {
+            return 0;
+        }
+        let n_entries = len_bytes / core::mem::size_of::<IndexEntry>();
+        let start = base as *const IndexEntry;
+        let mut populated = 0usize;
+        // SAFETY: caller guarantees `[base, base + len_bytes)` is
+        // mapped readable memory owned by a linker-defined section.
+        // Each IndexEntry read is bounded by n_entries. Slot writes
+        // target the `slot_ptr` field which the lowerer guarantees
+        // points at a writable 8-byte slot in the same image.
+        unsafe {
             for i in 0..n_entries {
                 let entry = &*start.add(i);
                 if entry.bytes_ptr.is_null() || entry.slot_ptr.is_null() {
                     continue;
                 }
-                // Read the bytes header — u64 LE length, then payload.
                 let len = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
                 let payload = entry.bytes_ptr.add(8);
                 let bytes = core::slice::from_raw_parts(payload, len);
                 let interned = vm.heap.intern(bytes);
-                // Write the `Gc<LuaStr>::as_ptr()` into the slot as a
-                // raw pointer. The trace IR loads through this slot
-                // via cranelift's `bcx.ins().load(I64, ...)`, so a
-                // bit-compatible store is sufficient.
                 core::ptr::write(entry.slot_ptr, interned.as_ptr() as *const u8);
                 populated += 1;
             }
-            populated
         }
+        populated
     }
 }
 
@@ -736,8 +804,10 @@ pub mod aot_trace_registry {
     // for sections whose name is a valid C identifier; Mach-O uses
     // `section$start$<seg>$<sect>` / `section$end$<seg>$<sect>`.
     //
-    // Windows COFF has no bracket-symbol convention; AOT trace install
-    // is a known gap there (`install_all` returns `Ok(0)`).
+    // Windows COFF has no bracket-symbol convention (Stage 7 polish 3):
+    // the Windows path uses a runtime PE-header walk via
+    // [`crate::windows_section::find_section`] for the short-name
+    // section `.lt_meta` instead. See `windows_section` module docs.
     #[cfg(all(unix, not(target_vendor = "apple")))]
     unsafe extern "C" {
         #[link_name = "__start_luna_trace_meta"]
@@ -772,27 +842,90 @@ pub mod aot_trace_registry {
         vm: &mut Vm,
         root: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
     ) -> usize {
-        // Windows + any platform we don't have bracket externs for: no-op.
-        #[cfg(not(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple")))]
-        {
-            let _ = (vm, root);
-            return 0;
-        }
-
-        #[cfg(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple"))]
-        unsafe {
-            let start = &raw mut LUNA_TRACE_META_START as *mut AotTraceIndexEntry;
-            let end = &raw mut LUNA_TRACE_META_END as *mut AotTraceIndexEntry;
-            let len_bytes = (end as isize) - (start as isize);
-            if len_bytes <= 0 {
+        // Locate the trace-meta section + length, dispatching on
+        // target platform. Unix/Mach-O: linker-synthesised bracket
+        // symbols. Windows: runtime PE-header walk via
+        // [`crate::windows_section::find_section`] (Stage 7 polish 3)
+        // for the short name `.lt_meta`. Either path can produce a
+        // zero-length section (binary linked no AOT traces) —
+        // `walk_meta_section` short-circuits.
+        let (base, len_bytes): (*const u8, usize) = {
+            #[cfg(target_os = "windows")]
+            {
+                match crate::windows_section::find_section(b".lt_meta") {
+                    Some((b, l)) => (b, l),
+                    None => return 0,
+                }
+            }
+            #[cfg(all(not(target_os = "windows"), unix, not(target_vendor = "apple")))]
+            {
+                let start = &raw mut LUNA_TRACE_META_START as *mut AotTraceIndexEntry;
+                let end = &raw mut LUNA_TRACE_META_END as *mut AotTraceIndexEntry;
+                let len = (end as isize) - (start as isize);
+                if len <= 0 {
+                    return 0;
+                }
+                (start as *const u8, len as usize)
+            }
+            #[cfg(all(not(target_os = "windows"), target_vendor = "apple"))]
+            {
+                let start = &raw mut LUNA_TRACE_META_START as *mut AotTraceIndexEntry;
+                let end = &raw mut LUNA_TRACE_META_END as *mut AotTraceIndexEntry;
+                let len = (end as isize) - (start as isize);
+                if len <= 0 {
+                    return 0;
+                }
+                (start as *const u8, len as usize)
+            }
+            #[cfg(not(any(
+                target_os = "windows",
+                all(unix, not(target_vendor = "apple")),
+                target_vendor = "apple"
+            )))]
+            {
+                let _ = (vm, root);
                 return 0;
             }
-            let n_entries = (len_bytes as usize) / core::mem::size_of::<AotTraceIndexEntry>();
-            // Build the hash → Gc<Proto> lookup once. BFS over the
-            // root's proto tree.
-            let proto_hashes = vm.collect_proto_hashes(root);
-            let probe_on = std::env::var_os("LUNA_AOT_PROBE").is_some();
-            let mut installed = 0usize;
+        };
+        // SAFETY: `(base, len_bytes)` was produced either by a linker-
+        // synthesised bracket symbol pair bounding a contiguous run of
+        // `AotTraceIndexEntry`, or by [`windows_section::find_section`]
+        // which returns the section's run-time base + virtual_size for
+        // a PE section we ourselves emit via cranelift_object. Both
+        // shapes satisfy `walk_meta_section`'s unsafe contract.
+        unsafe { walk_meta_section(vm, root, base as *const AotTraceIndexEntry, len_bytes) }
+    }
+
+    /// Common walk shared by the Unix/Mach-O bracket-symbol path and
+    /// the Windows PE-header-located section path. Iterates one
+    /// [`AotTraceIndexEntry`] at a time, decoding the meta blob and
+    /// installing on the matched proto.
+    ///
+    /// # Safety
+    ///
+    /// `start` must point at the first byte of a `len_bytes`-long
+    /// run of `AotTraceIndexEntry` instances, all in readable memory
+    /// (linker-defined section or PE-mapped section data). Per-entry
+    /// `meta_ptr` / `fn_ptr` are validated by the per-entry null
+    /// checks; meta blob bytes are bounded by the entry's `meta_len`.
+    unsafe fn walk_meta_section(
+        vm: &mut Vm,
+        root: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
+        start: *const AotTraceIndexEntry,
+        len_bytes: usize,
+    ) -> usize {
+        if start.is_null() || len_bytes < core::mem::size_of::<AotTraceIndexEntry>() {
+            return 0;
+        }
+        let n_entries = len_bytes / core::mem::size_of::<AotTraceIndexEntry>();
+        let proto_hashes = vm.collect_proto_hashes(root);
+        let probe_on = std::env::var_os("LUNA_AOT_PROBE").is_some();
+        let mut installed = 0usize;
+        // SAFETY: caller invariant — [start, start+n_entries) is
+        // mapped readable memory containing valid AotTraceIndexEntry
+        // instances or zero-fill placeholder bytes (skipped via the
+        // fn_ptr == 0 guard).
+        unsafe {
             for i in 0..n_entries {
                 let entry = &*start.add(i);
                 // The placeholder entry in `luna_trace_meta` is a single
@@ -958,7 +1091,7 @@ pub mod aot_trace_registry {
                     );
                 }
             }
-            installed
         }
+        installed
     }
 }

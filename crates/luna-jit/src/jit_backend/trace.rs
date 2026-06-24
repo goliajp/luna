@@ -174,7 +174,20 @@ fn emit_str_key_arg<M: Module>(
         // bytes (verified via `otool -lv` of an AOT binary). ELF / PE
         // ignore the segment arg (segment is Mach-O specific) so the
         // change is a no-op there.
-        desc.set_segment_section("__DATA", "luna_strkey_idx");
+        //
+        // v1.3 Stage 7 polish 3 — Windows COFF host: PE section
+        // headers are fixed 8 bytes, and `link.exe` / `lld-link` drop
+        // the COFF long-name string table when producing the final PE.
+        // Use the short name `.lt_skix` (8 bytes, matches the C
+        // placeholder in `luna-aot::embed::write_aot_cmain_object_for`
+        // Windows arm and the deploy-side
+        // `windows_section::find_section` needle).
+        let (idx_seg, idx_sect) = if cfg!(target_os = "windows") {
+            ("", ".lt_skix")
+        } else {
+            ("__DATA", "luna_strkey_idx")
+        };
+        desc.set_segment_section(idx_seg, idx_sect);
         // 8-byte alignment for the two pointer relocations at offsets
         // 0 and 8. Mach-O `ld` hard-rejects unaligned pointer slots
         // ("pointer not aligned in `___luna_aot_strkey_idx_…`+0x8"),

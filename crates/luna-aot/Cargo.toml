@@ -70,8 +70,11 @@ target-lexicon = "0.13"
 
 [dev-dependencies]
 tempfile = "3"
-# Read-side `object` features for tests that parse the produced binary
-# (e.g. `stage7_aot_cross_compile_traces` walks `luna_trace_meta` to
-# count AOT trace entries). Production code only writes; keeping `read`
-# out of the runtime deps trims luna-aot's downstream surface.
-object = { version = "0.36", features = ["read"] }
+# Read-side `object` features for tests that parse the produced binary:
+# - cross-compile test (`stage7_aot_cross_compile_traces`) walks
+#   `luna_trace_meta` to count AOT trace entries
+# - Windows COFF test (`stage7_windows_aot`) parses the produced .exe's
+#   PE section table to verify `.lt_meta` / `.lt_skix` landed correctly
+# Production code only writes; keeping `read` out of the runtime deps
+# trims luna-aot's downstream surface.
+object = { version = "0.36", features = ["read", "pe"] }
