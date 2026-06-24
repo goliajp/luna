@@ -150,6 +150,19 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
 
     match compile_and_link(&src_path, &out_path, Some(triple), LuaVersion::Lua55) {
         Ok(()) => {
+            // MinGW gcc auto-appends `.exe` to the output filename when
+            // targeting `*-windows-gnu`, regardless of what `-o` says.
+            // The pre-Stage 7 polish 3 test self-skipped on machines
+            // without MinGW, masking this; with MinGW installed the
+            // produced file lands at `<out_path>.exe`. Look for both.
+            let out_path = if target.os == luna_aot::embed::TargetOs::Windows
+                && !out_path.exists()
+                && out_path.with_extension("exe").exists()
+            {
+                out_path.with_extension("exe")
+            } else {
+                out_path
+            };
             assert_binary_magic(&out_path, &target);
             let meta = std::fs::metadata(&out_path).expect("output binary exists");
             assert!(

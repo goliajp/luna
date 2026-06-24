@@ -1211,7 +1211,37 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
              __attribute__((used, section(\"luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n"
         }
-        TargetOs::Windows => "",
+        // v1.3 Phase AOT Stage 7 polish 3 — Windows COFF.
+        //
+        // PE/COFF section name headers are fixed 8 bytes
+        // (`IMAGE_SECTION_HEADER::Name`), so we use deliberately
+        // short names: `.lt_skix` for the strkey index (mirrors
+        // `luna_strkey_idx`), `.lt_meta` for trace meta. Each is
+        // exactly 8 bytes including the leading `.`, matching the
+        // 8-byte PE section name field byte-for-byte without truncation
+        // or string-table fallback (the COFF string-table mechanism
+        // for long names is an object-file feature only — `link.exe`
+        // / `lld-link` drop the long-name table when producing the
+        // final PE image).
+        //
+        // Mirror placeholders so the sections exist even when the
+        // binary linked zero AOT trace `.o`s — same shape as the
+        // Mach-O / ELF placeholders above. The deploy walker
+        // (`luna-runtime-helpers::windows_section::find_section`)
+        // sees the placeholder bytes via the runtime PE-header
+        // parse and short-circuits on the all-zero entry.
+        //
+        // MinGW's gcc accepts the `__attribute__((section(...)))`
+        // syntax verbatim with the section name as-is (no leading
+        // `__DATA,` prefix — that's Mach-O specific). MSVC's
+        // `cl.exe` would use `#pragma section`; the MSVC path is
+        // not wired (see `link_aot_binary_for` Windows arm).
+        TargetOs::Windows => {
+            "__attribute__((used, section(\".lt_skix\"), aligned(8)))\n\
+             static const char luna_strkey_idx_placeholder[16] = {0};\n\
+             __attribute__((used, section(\".lt_meta\"), aligned(8)))\n\
+             static const char luna_trace_meta_placeholder[48] = {0};\n"
+        }
     };
 
     let c_src = format!(
@@ -1716,7 +1746,20 @@ fn harvest_and_emit_aot_traces(
         // pointer relocation), but keeping it next to `luna_trace_
         // meta` in `__DATA` is the path of least surprise for ld /
         // strip.
-        desc.set_segment_section("__DATA", "luna_trace_blob");
+        //
+        // Windows COFF host (Stage 7 polish 3): PE section names are
+        // capped at 8 bytes in the final image; use `.lt_blob` (7 chars
+        // + leading `.`) so the post-link PE preserves the name
+        // byte-for-byte. The deploy walker doesn't bracket-look this
+        // section (it's only referenced via pointer relocations from
+        // `.lt_meta` entries), so the name choice is mostly for
+        // consistency / debuggability.
+        let (blob_seg, blob_sect) = if cfg!(target_os = "windows") {
+            ("", ".lt_blob")
+        } else {
+            ("__DATA", "luna_trace_blob")
+        };
+        desc.set_segment_section(blob_seg, blob_sect);
         module
             .define_data(blob_data_id, &desc)
             .map_err(|e| AotError::Object(format!("define_data blob: {e}")))?;
@@ -1757,7 +1800,20 @@ fn harvest_and_emit_aot_traces(
         // see the placeholder. ELF / PE ignore the segment arg
         // (segment concept is Mach-O specific) so passing `__DATA`
         // is a no-op there.
-        desc.set_segment_section("__DATA", "luna_trace_meta");
+        //
+        // Windows COFF host (Stage 7 polish 3): short name `.lt_meta`
+        // matches the cmain shim's placeholder section, and the
+        // deploy walker's [`windows_section::find_section`] needle.
+        // PE section names are capped at 8 bytes in the final linked
+        // image — `luna_trace_meta` (15 chars) would either truncate
+        // unpredictably or land in the COFF string table that the
+        // linker drops.
+        let (meta_seg, meta_sect) = if cfg!(target_os = "windows") {
+            ("", ".lt_meta")
+        } else {
+            ("__DATA", "luna_trace_meta")
+        };
+        desc.set_segment_section(meta_seg, meta_sect);
         // 8-byte alignment for the fn_ptr / meta_ptr relocations at
         // offsets 24 and 32. Without explicit `set_align(8)` the
         // entries can land at odd offsets in the .o, and Mach-O's
