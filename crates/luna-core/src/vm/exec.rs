@@ -2262,14 +2262,14 @@ impl Vm {
         Ok(())
     }
 
-    fn hook_call(&mut self, from_native: bool, nargs: u32) -> Result<(), LuaError> {
+    pub(crate) fn hook_call(&mut self, from_native: bool, nargs: u32) -> Result<(), LuaError> {
         self.hook_call_with(from_native, nargs, false)
     }
 
     /// Fire the "return" hook on exit from a function, if armed. ftransfer is
     /// the first result slot relative to the activation's func slot, ntransfer
     /// the number of results.
-    fn hook_return(
+    pub(crate) fn hook_return(
         &mut self,
         from_native: bool,
         ftransfer: u32,
@@ -3878,6 +3878,25 @@ impl Vm {
                         // keeps the arg window live.
                         self.native_nresults = nresults;
                         self.gc_top = func_slot + nargs + 1;
+                        // v1.3 Phase AS — fire the "call" hook BEFORE
+                        // building the future. Mirrors the sync native
+                        // path's `hook_call(true, nargs)` site
+                        // (`exec.rs` further down) so embedders with a
+                        // Rust debug hook installed see a Call event
+                        // for async natives identical to the sync
+                        // path. The matching "return" hook fires from
+                        // `commit_async_native_result` in
+                        // `async_drive.rs` after the future resolves.
+                        // Placement follows audit §"Open questions"
+                        // Q6: after the `native_nresults` / `gc_top`
+                        // pin, before the future is constructed, so a
+                        // hook body that triggers GC observes the
+                        // correct pinned window. On hook error the
+                        // sentinel never returns and
+                        // `pending_async_native_*` remain `None` —
+                        // the executor sees `DispatchOutcome::Error`
+                        // (audit §A.1 edge cases).
+                        self.hook_call(true, nargs)?;
                         // Transmute the stored NativeFn back to its
                         // real AsyncNativeFn shape. Sound because
                         // `set_async_native` / `create_async_native`
