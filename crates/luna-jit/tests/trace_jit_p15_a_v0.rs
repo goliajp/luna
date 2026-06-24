@@ -15,7 +15,6 @@
 
 use luna_jit::jit::trace::HOTEXIT_THRESHOLD;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(28) — the trace's hottest side-exit (idx 8) crosses
 /// threshold many times over. `hot_exit_iter` must surface at least
@@ -151,8 +150,6 @@ fn concat_str_for_10k_no_hot_exit() {
          (single-dispatch trace, no exit reaches threshold); got {} \
          entries: {:?}",
         hot.len(),
-        hot.iter()
-            .map(|h| (h.exit_idx, h.hits))
-            .collect::<Vec<_>>()
+        hot.iter().map(|h| (h.exit_idx, h.hits)).collect::<Vec<_>>()
     );
 }

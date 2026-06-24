@@ -5,6 +5,7 @@
 use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
 use crate::frontend::lexer::Lexer;
+use crate::frontend::span::Span;
 use crate::frontend::token::{Token, TokenInfo};
 use crate::version::LuaVersion;
 
@@ -75,10 +76,94 @@ fn un_op_of(tok: &Token) -> Option<UnOp> {
     })
 }
 
+/// Token feed for the recursive-descent parser. Either a live [`Lexer`]
+/// (the default `parse(src, version)` path) or a pre-materialized token
+/// vector (the [`parse_tokens`] entry point used by the MacroLua expander
+/// pre-pass — see `frontend::macro_expander`). Both arms support
+/// `next_token` and `src()`.
+pub(crate) enum TokenSource<'s> {
+    /// Streaming lexer over raw source bytes.
+    Lexer(Lexer<'s>),
+    /// Pre-materialized token stream + a back-pointer to the original
+    /// source bytes so `Token::describe` can still slice spans for
+    /// `... near 'tok'` error reporting.
+    PreExpanded {
+        tokens: Vec<TokenInfo>,
+        cursor: usize,
+        src: &'s [u8],
+    },
+}
+
+impl<'s> TokenSource<'s> {
+    fn next_token(&mut self) -> Result<TokenInfo, SyntaxError> {
+        match self {
+            TokenSource::Lexer(l) => l.next_token(),
+            TokenSource::PreExpanded {
+                tokens,
+                cursor,
+                src,
+            } => {
+                if *cursor >= tokens.len() {
+                    let line = tokens.last().map(|t| t.line).unwrap_or(1);
+                    let _ = src;
+                    Ok(TokenInfo {
+                        tok: Token::Eof,
+                        span: Span::new(0, 0),
+                        line,
+                    })
+                } else {
+                    let t = tokens[*cursor].clone();
+                    *cursor += 1;
+                    Ok(t)
+                }
+            }
+        }
+    }
+
+    fn src(&self) -> &'s [u8] {
+        match self {
+            TokenSource::Lexer(l) => l.src(),
+            TokenSource::PreExpanded { src, .. } => src,
+        }
+    }
+}
+
 /// Parse a Lua source chunk for the given dialect into an arena AST
 /// ([`Chunk`]).
+///
+/// `LuaVersion::MacroLua` sources are **not** routed through the macro
+/// expander here — this entry point is dialect-agnostic and only sees
+/// the raw token stream. The Vm's `eval` path runs the expander
+/// transparently for MacroLua; direct callers feed expanded tokens via
+/// [`parse_tokens`].
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
-    let mut lex = Lexer::new(src, version);
+    let lex = Lexer::new(src, version);
+    parse_from_source(TokenSource::Lexer(lex), version)
+}
+
+/// Parse a **pre-materialized** token stream. Used by the MacroLua
+/// expander pre-pass — it walks the lexer output once, expands
+/// `@name(...)` invocations against the per-Vm macro registry, and
+/// feeds the resulting `Vec<TokenInfo>` here.
+pub fn parse_tokens(
+    tokens: Vec<TokenInfo>,
+    src: &[u8],
+    version: LuaVersion,
+) -> Result<Chunk, SyntaxError> {
+    parse_from_source(
+        TokenSource::PreExpanded {
+            tokens,
+            cursor: 0,
+            src,
+        },
+        version,
+    )
+}
+
+fn parse_from_source<'s>(
+    mut lex: TokenSource<'s>,
+    version: LuaVersion,
+) -> Result<Chunk, SyntaxError> {
     let tok = lex.next_token()?;
     let mut p = Parser {
         lex,
@@ -105,8 +190,6 @@ pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
     if p.tok.tok != Token::Eof {
         return Err(p.error("'<eof>' expected"));
     }
-    // PUC attributes the main chunk's final return to the last real token's line
-    // (its `lastline`), not the <eof> line that may sit on a trailing blank line.
     let end_line = p.prev_line;
     Ok(Chunk {
         exprs: p.exprs,
@@ -118,7 +201,7 @@ pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
 }
 
 struct Parser<'s> {
-    lex: Lexer<'s>,
+    lex: TokenSource<'s>,
     tok: TokenInfo,
     peeked: Option<TokenInfo>,
     /// line of the previously consumed token (for the 5.1 ambiguity check)
@@ -176,7 +259,9 @@ impl<'s> Parser<'s> {
     }
 
     fn near(&self) -> String {
-        self.tok.tok.describe(self.lex.src(), self.tok.span, self.version)
+        self.tok
+            .tok
+            .describe(self.lex.src(), self.tok.span, self.version)
     }
 
     fn error(&self, msg: impl AsRef<str>) -> SyntaxError {
@@ -1051,10 +1136,7 @@ impl<'s> Parser<'s> {
     fn bump_locals(&mut self, n: u32) -> Result<(), SyntaxError> {
         const MAXVARS: u32 = 200;
         let depth = self.func_local_count.len();
-        let &(cur, line_defined) = self
-            .func_local_count
-            .last()
-            .expect("func ctx pushed");
+        let &(cur, line_defined) = self.func_local_count.last().expect("func ctx pushed");
         let new = cur.saturating_add(n);
         if new > MAXVARS {
             let where_ = if depth == 1 {

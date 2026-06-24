@@ -8,8 +8,8 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::error::LuaError;
 use luna_jit::vm::Vm;
+use luna_jit::vm::error::LuaError;
 
 fn sandbox_51() -> Vm {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua51);
@@ -31,9 +31,12 @@ fn sandbox_excludes_os_io_debug_package() {
     let mut vm = sandbox_51();
     // Whitelisted libs DO load.
     assert!(matches!(
-        run(&mut vm, b"return type(math), type(string), type(table), type(coroutine)")
-            .unwrap()
-            .as_slice(),
+        run(
+            &mut vm,
+            b"return type(math), type(string), type(table), type(coroutine)"
+        )
+        .unwrap()
+        .as_slice(),
         [Value::Str(_), Value::Str(_), Value::Str(_), Value::Str(_)]
     ));
     // os/io/debug/package stay nil — type() returns the string "nil".
@@ -141,9 +144,16 @@ fn sandbox_51_excludes_string_pack() {
     // string.pack/unpack/packsize landed in 5.3 — 5.1 hosts must
     // not see them.
     let mut vm = sandbox_51();
-    let r = run(&mut vm, b"return string.pack, string.unpack, string.packsize").unwrap();
+    let r = run(
+        &mut vm,
+        b"return string.pack, string.unpack, string.packsize",
+    )
+    .unwrap();
     for v in &r {
-        assert!(matches!(v, Value::Nil), "5.1 should not have string.pack family, got {v:?}");
+        assert!(
+            matches!(v, Value::Nil),
+            "5.1 should not have string.pack family, got {v:?}"
+        );
     }
 }
 
@@ -169,8 +179,11 @@ fn sandbox_budget_clears_after_exhaustion() {
     let err = run(&mut vm, b"while true do end").unwrap_err();
     assert!(vm.error_text(&err).contains("instruction budget exceeded"));
     // After firing, the budget is cleared — a fresh call runs free.
-    let r = run(&mut vm, b"local s = 0; for i = 1, 100 do s = s + i end; return s")
-        .expect("clean run after budget clear");
+    let r = run(
+        &mut vm,
+        b"local s = 0; for i = 1, 100 do s = s + i end; return s",
+    )
+    .expect("clean run after budget clear");
     // 5.1 has no Int subtype — sum is a Float.
     match r.first() {
         Some(&Value::Float(f)) if (f - 5050.0).abs() < 1e-9 => {}

@@ -194,6 +194,101 @@ service the JIT backend, not the public API.
 
 ---
 
+## AOT pipeline (`luna-aot`)
+
+The `luna-aot` crate compiles a Lua source file to a self-contained
+native binary at build time. The produced binary embeds the bytecode in
+a `.luna.bytecode` ELF / Mach-O / PE section, statically links against
+`luna-runtime-helpers` (a thin staticlib around `luna-core` + `luna-jit`),
+and optionally embeds AOT-lowered trace mcode in a `luna_trace_meta` +
+`luna_trace_blob` section pair so hot loops dispatch into native code
+without the runtime JIT warmup.
+
+The pipeline:
+
+```
+   foo.lua
+     │  parse + compile + dump (luna-core/src/vm/dump)
+     ▼
+   bytecode bytes
+     │  embed into .luna.bytecode section (luna-aot/src/embed.rs)
+     ▼
+   foo.luna_bytecode.o
+     │
+     │  + warmup Vm runs the chunk; trace recorder captures
+     │    closed TraceRecords (luna-aot/src/embed.rs::
+     │    harvest_and_emit_aot_traces)
+     ▼
+   foo.luna_traces.o   (one .o per cross target, codegen'd via
+                        the target's Cranelift TargetIsa — see below)
+     │
+     │  + libluna_runtime_helpers.a (built per target via cargo)
+     │  + cmain.c stub linking the brackets
+     ▼
+   cc / cross-cc link
+     ▼
+   foo   (runnable on the target triple)
+```
+
+### Cross-compile model
+
+`luna-aot` cross-compiles by parameterising every stage on a
+`TargetSpec` resolved from a triple string (`--target
+x86_64-unknown-linux-musl`):
+
+- **Object format**: `TargetSpec.{format, arch, endian}` drives
+  `object::write::Object::new` → the bytecode .o and trace .o land with
+  the target's magic.
+- **Staticlib build**: `cargo build -p luna-runtime-helpers
+  --target=<triple>` produces the per-target `.a`.
+- **C cmain**: `TargetSpec::cc_command()` picks the right cc driver
+  (`cc -target ...` for Apple cross-darwin, `<triple>-gcc` for GNU
+  cross-cc, `musl-gcc` for Alpine deploys).
+- **Trace mcode** (Stage 7 polish 4): `TargetSpec::cranelift_isa_builder()`
+  returns the Cranelift `TargetIsa` for the deploy triple — `x86_64`,
+  `aarch64`, `s390x`, `riscv64` — so the offline trace lowerer codegens
+  for the deploy ABI, not the host's. The warmup Vm still runs on the
+  build host (we can't dispatch target mcode at record time), but the
+  captured `TraceRecord`s are luna-IR-level shape (op + guard + reg
+  moves) and re-lower correctly for any target — pointer width and
+  endianness are encoded as Cranelift `I64` / little-endian, stable
+  across every triple in our tier set.
+
+The `cranelift-codegen = { features = ["all-arch"] }` dep pulls in
+every backend; without it, a `cargo build` on an aarch64 host would only
+link arm64 codegen tables and `isa::lookup` for the cross triple would
+return `SupportDisabled`. The extra backends add ~1 MB to luna-aot's
+binary; luna-aot is a build-time tool so deployed binaries are
+unaffected.
+
+### Cross-compile limitations
+
+- **Helper symbols are target-built**: the `luna_jit_*` helpers the
+  trace mcode calls live in `libluna_runtime_helpers.a`, which is
+  re-built per target. Cranelift emits the calls as `Linkage::Import`
+  C-ABI calls, and the static linker resolves them at link time against
+  the target staticlib. Mixing host + target staticlibs would fail at
+  link time with `undefined reference`.
+- **Host warmup limits the trace set**: only traces that **close at
+  warmup time on the build host** can land in the produced AOT mcode.
+  If the chunk's hot path requires runtime CLI args / env vars / host
+  state, the warmup may close zero traces and the produced binary
+  falls back to interp + runtime JIT. This is a soft limitation
+  (correctness is unchanged; only the AOT fast-path is missing).
+- **MSVC link path not wired**: `*-pc-windows-msvc` targets return a
+  clear `AotError::Link` directing the user at `*-pc-windows-gnu` (MinGW)
+  instead. MSVC's link.exe is a separate driver-surface we haven't
+  bridged.
+- **Trace dispatch verification on cross targets**: the
+  `stage7_aot_cross_compile_traces` test verifies non-empty
+  `luna_trace_meta` in the cross-built binary (i.e. AOT mcode landed),
+  but doesn't run the binary — that needs qemu / docker / Rosetta. The
+  Stage 6 Alpine docker smoke test exercises the bytecode-interp path
+  end-to-end on a different arch; folding AOT-trace dispatch into the
+  same docker run is the natural follow-up.
+
+---
+
 ## Threading model
 
 `luna_core::Vm` is `!Send + !Sync` by construction. The GC uses

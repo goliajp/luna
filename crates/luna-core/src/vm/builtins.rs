@@ -31,25 +31,32 @@ pub(crate) fn open_base(vm: &mut Vm) {
     let f = vm.native(nat_rawlen);
     vm.set_global("rawlen", f).expect("stdlib registration");
     let f = vm.native(nat_setmetatable);
-    vm.set_global("setmetatable", f).expect("stdlib registration");
+    vm.set_global("setmetatable", f)
+        .expect("stdlib registration");
     let f = vm.native(nat_getmetatable);
-    vm.set_global("getmetatable", f).expect("stdlib registration");
+    vm.set_global("getmetatable", f)
+        .expect("stdlib registration");
     let f = vm.native(nat_select);
     vm.set_global("select", f).expect("stdlib registration");
     // pairs returns the same object as the global next (PUC identity)
     let next_obj = vm.native(nat_next);
-    vm.set_global("next", next_obj).expect("stdlib registration");
+    vm.set_global("next", next_obj)
+        .expect("stdlib registration");
     let pairs_obj = vm.native_with(nat_pairs, Box::new([next_obj]));
-    vm.set_global("pairs", pairs_obj).expect("stdlib registration");
+    vm.set_global("pairs", pairs_obj)
+        .expect("stdlib registration");
     let ipairs_it = vm.native(ipairs_iter);
     let ipairs_obj = vm.native_with(nat_ipairs, Box::new([ipairs_it]));
-    vm.set_global("ipairs", ipairs_obj).expect("stdlib registration");
+    vm.set_global("ipairs", ipairs_obj)
+        .expect("stdlib registration");
     let f = vm.native(nat_tonumber);
     vm.set_global("tonumber", f).expect("stdlib registration");
     let load_obj = vm.native(nat_load);
-    vm.set_global("load", load_obj).expect("stdlib registration");
+    vm.set_global("load", load_obj)
+        .expect("stdlib registration");
     let f = vm.native(nat_collectgarbage);
-    vm.set_global("collectgarbage", f).expect("stdlib registration");
+    vm.set_global("collectgarbage", f)
+        .expect("stdlib registration");
     // PUC 5.4 introduced the warning system. `warn(msg1, …, msgN)` emits
     // pieces of one message via the default warnf (`lauxlib.c::warnfon/off`),
     // which recognises `@on` / `@off` control messages and starts disabled.
@@ -61,7 +68,8 @@ pub(crate) fn open_base(vm: &mut Vm) {
     // (`loadstring` → `load`). Provide aliases so the 5.1 test suite, which
     // is full of `unpack(...)` and `loadstring("...")` calls, still resolves.
     if vm.version() == crate::version::LuaVersion::Lua51 {
-        vm.set_global("loadstring", load_obj).expect("stdlib registration");
+        vm.set_global("loadstring", load_obj)
+            .expect("stdlib registration");
         let f = vm.native(crate::vm::lib_table::t_unpack);
         vm.set_global("unpack", f).expect("stdlib registration");
         // PUC 5.1 also exposed `gcinfo()` (memory in KB) and `newproxy()`
@@ -87,6 +95,8 @@ pub(crate) fn open_base(vm: &mut Vm) {
         crate::version::LuaVersion::Lua52 => "Lua 5.2",
         crate::version::LuaVersion::Lua53 => "Lua 5.3",
         crate::version::LuaVersion::Lua54 => "Lua 5.4",
+        // MacroLua reports the 5.4 base it inherits from (audit-locked).
+        crate::version::LuaVersion::MacroLua => "Lua 5.4",
         crate::version::LuaVersion::Lua55 => "Lua 5.5",
     };
     let v = Value::Str(vm.heap.intern(version.as_bytes()));
@@ -258,10 +268,7 @@ fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             match s {
                 Value::Str(s) => s.as_bytes().to_vec(),
                 _ => {
-                    return Err(raise_str(
-                        vm,
-                        "'tostring' must return a string to 'print'",
-                    ));
+                    return Err(raise_str(vm, "'tostring' must return a string to 'print'"));
                 }
             }
         } else {
@@ -451,7 +458,8 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
 /// `pub(crate)` so the trace JIT (`Vm::jit_op_tforcall`) can
 /// fn-pointer-compare against it for the v3 fast path (skip
 /// `begin_call` + `nat_arg` and call `Table::get_int` directly).
-#[doc(hidden)] pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+#[doc(hidden)]
+pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
     let i = match vm.nat_arg(fs, nargs, 1) {
         Value::Int(i) => i,
@@ -517,7 +525,8 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, who: &str, extra: &str) -> LuaError
     // PUC walks package.loaded to qualify the running function's name.
     let name = if vm.running_natives.len() >= 2 {
         let target = vm.running_natives.last().expect("nested native").f;
-        vm.pushglobalfuncname(target).unwrap_or_else(|| who.to_string())
+        vm.pushglobalfuncname(target)
+            .unwrap_or_else(|| who.to_string())
     } else {
         who.to_string()
     };
@@ -636,8 +645,7 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                     let ver = vm.version();
                     if let Err(e) = crate::frontend::parse(&buf, ver) {
                         let msg_str = String::from_utf8_lossy(&e.msg);
-                        let eof_related =
-                            msg_str.contains("<eof>") || msg_str.contains("near eof");
+                        let eof_related = msg_str.contains("<eof>") || msg_str.contains("near eof");
                         if !eof_related {
                             // definitive error — leave the source as is; the
                             // post-loop parse at the same call site re-runs
@@ -889,7 +897,12 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Float(f) => {
             let i = f as i64;
             if (i as f64) != f {
-                return Err(arg_error(vm, 1, "getfenv", "number has no integer representation"));
+                return Err(arg_error(
+                    vm,
+                    1,
+                    "getfenv",
+                    "number has no integer representation",
+                ));
             }
             Some(i)
         }
@@ -921,11 +934,7 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     use crate::runtime::UpvalState;
     let env = match cl {
         Some(c) => {
-            let env_idx = c
-                .proto
-                .upvals
-                .iter()
-                .position(|d| &*d.name == "_ENV");
+            let env_idx = c.proto.upvals.iter().position(|d| &*d.name == "_ENV");
             match env_idx {
                 Some(i) => match c.upvals()[i].state() {
                     UpvalState::Closed(v) => v,
@@ -945,12 +954,7 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// the line at the tail call (mirrors `lbaselib.c::luaB_warn`).
 pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if nargs == 0 {
-        return Err(arg_error(
-            vm,
-            1,
-            "warn",
-            "string expected, got no value",
-        ));
+        return Err(arg_error(vm, 1, "warn", "string expected, got no value"));
     }
     let mut parts: Vec<Vec<u8>> = Vec::with_capacity(nargs as usize);
     for i in 0..nargs {

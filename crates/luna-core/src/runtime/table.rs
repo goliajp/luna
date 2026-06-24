@@ -153,7 +153,6 @@ impl Table {
         self.array_ptr = self.inline_storage.as_mut_ptr() as *mut u8;
     }
 
-
     /// P11-S5d.H/I — read view onto the array-part tag bytes. Trails
     /// the avals portion in the active backing (inline or slab).
     #[inline(always)]
@@ -312,6 +311,19 @@ impl Table {
             return self.aget(i as usize - 1);
         }
         self.get_hash(Value::Int(i))
+    }
+
+    /// String-keyed variant of [`Self::get`] for v1.2 D4 A1 GetField fast
+    /// path: the GetField interp arm always has a `Gc<LuaStr>` key from
+    /// `Proto.consts`. Skips the outer `Value` match (which would only
+    /// take the `_ => self.get_hash(k)` arm anyway) so the dispatcher
+    /// pays one less branch per call. ~5 GetField/iter × 1000 iters/cell
+    /// on the Redis-Lua-shape workload — every shaved nanosecond shows
+    /// up at the bench level. Counter-validated via
+    /// `examples/diag_opcode_breakdown.rs`.
+    #[inline]
+    pub fn get_str(&self, key: crate::runtime::Gc<crate::runtime::string::LuaStr>) -> Value {
+        self.get_hash(Value::Str(key))
     }
 
     fn get_hash(&self, k: Value) -> Value {
@@ -805,11 +817,7 @@ impl Table {
     /// (`alive` decides — strong/marked keys, plus strings/numbers which are
     /// never weakly collected). Returns true if any value was newly marked, so
     /// the caller can iterate to a fixpoint (PUC `traverseephemeron`).
-    pub(crate) fn converge_ephemeron(
-        &self,
-        alive: &dyn Fn(Value) -> bool,
-        m: &mut Marker,
-    ) -> bool {
+    pub(crate) fn converge_ephemeron(&self, alive: &dyn Fn(Value) -> bool, m: &mut Marker) -> bool {
         let mut changed = false;
         for n in self.nodes.iter() {
             if !n.val.is_nil() && alive(n.key) {
@@ -1030,7 +1038,10 @@ mod tests {
     #[test]
     fn bad_keys() {
         with_table(|heap, t| {
-            assert_eq!(t.set(heap, Value::Nil, Value::Int(1)), Err(TableError::NilIndex));
+            assert_eq!(
+                t.set(heap, Value::Nil, Value::Int(1)),
+                Err(TableError::NilIndex)
+            );
             assert_eq!(
                 t.set(heap, Value::Float(f64::NAN), Value::Int(1)),
                 Err(TableError::NanIndex)

@@ -72,7 +72,8 @@ const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua54,
         dir: "tests/official/lua-5.4.8-tests",
-        expected_pass: &["verybig.lua",
+        expected_pass: &[
+            "verybig.lua",
             "main.lua",
             "api.lua",
             "attrib.lua",
@@ -109,7 +110,8 @@ const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua53,
         dir: "tests/official/lua-5.3.4-tests",
-        expected_pass: &["verybig.lua",
+        expected_pass: &[
+            "verybig.lua",
             "main.lua",
             "api.lua",
             "attrib.lua",
@@ -141,7 +143,8 @@ const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua52,
         dir: "tests/official/lua-5.2.2-tests",
-        expected_pass: &["verybig.lua",
+        expected_pass: &[
+            "verybig.lua",
             "main.lua",
             "api.lua",
             "attrib.lua",
@@ -294,8 +297,24 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
             let _ = tx.send(r);
         })
         .expect("spawn");
-    // hard per-file timeout: a hang becomes a test failure, never a wedge
-    match rx.recv_timeout(Duration::from_secs(60)) {
+    // Hard per-file timeout: a hang becomes a test failure, never a wedge.
+    //
+    // `heavy.lua` pcalls a `t[i] = i` loop that grows the array part up to
+    // `table::MAX_ASIZE = 1 << 27` (134M entries × 9 bytes ≈ 1.2 GB) before
+    // `rehash` returns `TableError::Overflow`. Each grow is O(N), so the
+    // total work is dominated by the final 67M → 134M doubling. Measured
+    // debug-build runtime is 105-115s on macOS arm64; release builds
+    // finish the same file in ~8s. We give `heavy.lua` a 180s budget so
+    // the debug-build gate doesn't false-positive on the intentional
+    // stress test (the only thing that ever takes >60s here). Every other
+    // file keeps the original 60s; anything that genuinely hangs still
+    // trips the budget.
+    let budget = if name == "heavy.lua" {
+        Duration::from_secs(180)
+    } else {
+        Duration::from_secs(60)
+    };
+    match rx.recv_timeout(budget) {
         Ok(r) => r,
         Err(_) => Err("timed out (possible hang)".to_string()),
     }
@@ -303,8 +322,7 @@ fn run_file(name: &str, version: LuaVersion) -> Result<(), String> {
 
 fn run_suite(suite: &Suite) -> Vec<String> {
     let root = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(suite.dir)
-        .unwrap_or_else(|e| panic!("cd {}: {}", suite.dir, e));
+    std::env::set_current_dir(suite.dir).unwrap_or_else(|e| panic!("cd {}: {}", suite.dir, e));
     // attrib.lua's sub-package section writes `libs/P1/init.lua` and
     // `libs/P1/xuxu.lua` via `io.output(filename)`, which fails when
     // the parent dir doesn't exist (POSIX `open(O_WRONLY|O_CREAT)`

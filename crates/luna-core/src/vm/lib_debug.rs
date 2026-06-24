@@ -14,7 +14,9 @@ pub(crate) fn open_debug(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "getinfo", d_getinfo);
     set(vm, "getupvalue", d_getupvalue);
@@ -38,7 +40,8 @@ pub(crate) fn open_debug(vm: &mut Vm) {
         set(vm, "setfenv", d_setfenv);
         set(vm, "getfenv", d_getfenv);
     }
-    vm.set_global("debug", Value::Table(t)).expect("stdlib registration");
+    vm.set_global("debug", Value::Table(t))
+        .expect("stdlib registration");
     vm.barrier_back_table(t);
     // PUC's LUA_REGISTRYINDEX table — eagerly built so `_HOOKKEY` (weak-key)
     // is observable from db.lua :328 the moment the debug library loads.
@@ -61,7 +64,9 @@ pub(crate) fn open_debug(vm: &mut Vm) {
 fn set_field(vm: &mut Vm, t: Gc<crate::runtime::Table>, k: &str, v: Value) {
     let key = Value::Str(vm.heap.intern(k.as_bytes()));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }.set(&mut vm.heap, key, v).expect("valid key");
+    unsafe { t.as_mut() }
+        .set(&mut vm.heap, key, v)
+        .expect("valid key");
 }
 
 /// Build PUC's `LUA_REGISTRYINDEX` table (kept on `Vm.registry`, a GC root)
@@ -84,10 +89,7 @@ fn init_registry(vm: &mut Vm) {
 }
 
 fn d_getregistry(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    let r = vm
-        .registry
-        .map(Value::Table)
-        .unwrap_or(Value::Nil);
+    let r = vm.registry.map(Value::Table).unwrap_or(Value::Nil);
     Ok(vm.nat_return(fs, &[r]))
 }
 
@@ -197,11 +199,7 @@ fn info_for_closure(
     // db.lua :184 pins this with `assert(x.nups == 0)` on a function that
     // touches no upvalues but does reference globals.
     let nups = if vm.version() <= crate::version::LuaVersion::Lua51 {
-        proto
-            .upvals
-            .iter()
-            .filter(|u| &*u.name != "_ENV")
-            .count() as i64
+        proto.upvals.iter().filter(|u| &*u.name != "_ENV").count() as i64
     } else {
         cl.upvals().len() as i64
     };
@@ -325,14 +323,7 @@ fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 match vm.coro_frame_info(co, level) {
                     None => return Ok(vm.nat_return(fs, &[Value::Nil])),
                     Some((cl, line, extraargs, is_tail)) => {
-                        info_for_closure(
-                            vm,
-                            cl,
-                            out,
-                            Some(line),
-                            Some(extraargs),
-                            want_lines,
-                        );
+                        info_for_closure(vm, cl, out, Some(line), Some(extraargs), want_lines);
                         if is_tail {
                             set_field(vm, out, "istailcall", Value::Bool(true));
                         }
@@ -439,18 +430,8 @@ fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // doesn't currently match the hook frame) PUC also surfaces the same
     // pair, so we expose them unconditionally when "r" is requested.
     if want_transfers {
-        set_field(
-            vm,
-            out,
-            "ftransfer",
-            Value::Int(vm.hook_ftransfer as i64),
-        );
-        set_field(
-            vm,
-            out,
-            "ntransfer",
-            Value::Int(vm.hook_ntransfer as i64),
-        );
+        set_field(vm, out, "ftransfer", Value::Int(vm.hook_ftransfer as i64));
+        set_field(vm, out, "ntransfer", Value::Int(vm.hook_ntransfer as i64));
     }
     Ok(vm.nat_return(fs, &[Value::Table(out)]))
 }
@@ -493,7 +474,11 @@ fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         b"(no name)"
     };
-    let name_str: &[u8] = if name.is_empty() { no_name } else { name.as_bytes() };
+    let name_str: &[u8] = if name.is_empty() {
+        no_name
+    } else {
+        name.as_bytes()
+    };
     let value = vm.upvalue_value(cl, idx);
     let nv = Value::Str(vm.heap.intern(name_str));
     Ok(vm.nat_return(fs, &[nv, value]))
@@ -520,7 +505,11 @@ fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         b"(no name)"
     };
-    let name_str: &[u8] = if name.is_empty() { no_name } else { name.as_bytes() };
+    let name_str: &[u8] = if name.is_empty() {
+        no_name
+    } else {
+        name.as_bytes()
+    };
     let nv = Value::Str(vm.heap.intern(name_str));
     Ok(vm.nat_return(fs, &[nv]))
 }
@@ -819,9 +808,7 @@ fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let arg1 = vm.nat_arg(fs, nargs, 1);
     let arg2 = vm.nat_arg(fs, nargs, 2);
     let (func_val, n_val) = match (arg0, arg1) {
-        (Value::Coro(_), Value::Closure(_)) | (Value::Coro(_), Value::Native(_)) => {
-            (arg1, arg2)
-        }
+        (Value::Coro(_), Value::Closure(_)) | (Value::Coro(_), Value::Native(_)) => (arg1, arg2),
         (Value::Closure(_), _) | (Value::Native(_), _) => (arg0, arg1),
         _ => (Value::Nil, Value::Nil),
     };
@@ -989,9 +976,8 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 unsafe { co.as_mut() }.globals = env_t;
                 // co.globals is traced by Coro::trace — demote co back to
                 // gray so propagate re-traces the new env table.
-                vm.heap.barrier_back(
-                    co.as_ptr() as *mut crate::runtime::heap::GcHeader,
-                );
+                vm.heap
+                    .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
             }
         }
         Value::Userdata(_) => {
@@ -1004,7 +990,10 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 vm,
                 1,
                 "setfenv",
-                &format!("function, thread, or userdata expected, got {}", v.type_name()),
+                &format!(
+                    "function, thread, or userdata expected, got {}",
+                    v.type_name()
+                ),
             ));
         }
     }

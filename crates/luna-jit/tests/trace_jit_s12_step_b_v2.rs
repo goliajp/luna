@@ -11,7 +11,6 @@
 //! iterations).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Canonical ipairs-over-Int-array — the v2 sweet spot. After the
 /// 64-iter warmup, the inner ipairs loop dispatches per outer iter

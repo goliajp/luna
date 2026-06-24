@@ -3,18 +3,19 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 #[test]
-fn trace_recording_inactive_by_default() {
+fn trace_recording_inactive_when_disabled() {
+    // v1.3 TA3 flipped trace_enabled default to `true` (commit
+    // `7274887`). This test asserts the *disabled* path still works
+    // — explicitly turn off, then verify a loop runs to completion
+    // and a fresh eval still returns the correct value (the gate is
+    // genuinely closed, no stale trace state interferes).
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(false);
     assert!(!vm.trace_jit_enabled());
-    // Run a loop with plenty of back-edges; counter should not advance
-    // while the gate is closed, and no trace should be live afterwards.
     vm.eval("local s = 0 for i = 1, 1000 do s = s + i end return s")
         .unwrap();
-    // `active_trace` is `pub(crate)` so we infer "inactive" via
-    // continued correct behavior of a subsequent eval.
     let r = vm.eval("return 1 + 2").unwrap();
     assert!(matches!(r.first(), Some(Value::Int(3))));
 }
@@ -34,7 +35,8 @@ fn trace_recording_starts_at_hot_back_edge() {
         .unwrap();
     assert_eq!(r.len(), 1);
     let v = r[0];
-    let ok = matches!(v, Value::Int(500_500)) || matches!(v, Value::Float(f) if (f - 500_500.0).abs() < 1.0);
+    let ok = matches!(v, Value::Int(500_500))
+        || matches!(v, Value::Float(f) if (f - 500_500.0).abs() < 1.0);
     assert!(ok, "expected 500500 (sum of 1..1000), got {v:?}");
 }
 
@@ -54,9 +56,7 @@ fn trace_recording_closes_on_simple_loop() {
     // numeric `for` (which uses dedicated ForLoop opcode — back-edge
     // tracking for that is S1.E).
     let _ = vm
-        .eval(
-            "local i, s = 0, 0; while i < 1000 do i = i + 1; s = s + i end; return s",
-        )
+        .eval("local i, s = 0, 0; while i < 1000 do i = i + 1; s = s + i end; return s")
         .unwrap();
     assert!(
         vm.trace_closed_count() >= 1,
@@ -68,7 +68,11 @@ fn trace_recording_closes_on_simple_loop() {
 
 #[test]
 fn trace_jit_toggle_round_trip() {
+    // v1.3 TA3 default is `true`; explicitly toggle through false →
+    // true → false so the test exercises every transition regardless
+    // of the ship default.
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(false);
     assert!(!vm.trace_jit_enabled());
     vm.set_trace_jit_enabled(true);
     assert!(vm.trace_jit_enabled());

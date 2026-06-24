@@ -5,7 +5,6 @@
 //! Unset kind bails compile (runtime truthy check is v2 scope).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `if true_int_var then` body — truthy Int gates entry. The test
 /// fold + the entry body compile together.

@@ -23,7 +23,6 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -159,11 +158,7 @@ fn measure_external(bin: &str, bench: &Bench) -> Option<Duration> {
         samples = bench.samples,
         inner = bench.inner_calls,
     );
-    let out = Command::new(bin)
-        .arg("-e")
-        .arg(&wrapper)
-        .output()
-        .ok()?;
+    let out = Command::new(bin).arg("-e").arg(&wrapper).output().ok()?;
     if !out.status.success() {
         return None;
     }

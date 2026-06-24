@@ -59,7 +59,9 @@ fn count_hook_fires_at_instruction_interval() {
     let mut vm = fresh();
     // Fire every 100 instructions.
     vm.set_rust_debug_hook(Some(record_hook), HOOK_MASK_COUNT, 100);
-    let _ = vm.eval("local s = 0; for i = 1, 500 do s = s + i end").unwrap();
+    let _ = vm
+        .eval("local s = 0; for i = 1, 500 do s = s + i end")
+        .unwrap();
     let counts = EVENTS.with(|e| {
         e.borrow()
             .iter()
@@ -75,7 +77,9 @@ fn count_hook_fires_at_instruction_interval() {
 fn line_hook_fires_on_source_line_change() {
     let mut vm = fresh();
     vm.set_rust_debug_hook(Some(record_hook), HOOK_MASK_LINE, 0);
-    let _ = vm.eval("local a = 1\nlocal b = 2\nlocal c = a + b").unwrap();
+    let _ = vm
+        .eval("local a = 1\nlocal b = 2\nlocal c = a + b")
+        .unwrap();
     let lines: Vec<u32> = EVENTS.with(|e| {
         e.borrow()
             .iter()
@@ -86,10 +90,7 @@ fn line_hook_fires_on_source_line_change() {
             .collect()
     });
     // 3-line source dispatches a Line event per line change.
-    assert!(
-        lines.len() >= 2,
-        "expected ≥2 Line events, got {lines:?}"
-    );
+    assert!(lines.len() >= 2, "expected ≥2 Line events, got {lines:?}");
 }
 
 #[test]
@@ -103,7 +104,10 @@ fn clear_rust_debug_hook_stops_events() {
     let _ = vm.eval("local function g() return 2 end; g()").unwrap();
     let after = EVENTS.with(|e| e.borrow().len());
     assert!(before > 0);
-    assert_eq!(after, 0, "events should not fire after clear_rust_debug_hook");
+    assert_eq!(
+        after, 0,
+        "events should not fire after clear_rust_debug_hook"
+    );
 }
 
 #[test]

@@ -18,7 +18,6 @@
 //!   since ipairs stops at first nil)
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// ipairs over a small (inline-storage, asize ≤ 2) array — fast
 /// path's value/tag loads from `inline_storage` directly.

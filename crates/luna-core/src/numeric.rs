@@ -344,11 +344,7 @@ fn float_to_string(f: f64, legacy_float: bool) -> String {
     if (-4..14).contains(&exp) {
         let s = format!("{f}");
         if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
-            if legacy_float {
-                s
-            } else {
-                format!("{s}.0")
-            }
+            if legacy_float { s } else { format!("{s}.0") }
         } else {
             s
         }

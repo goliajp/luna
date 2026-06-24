@@ -16,7 +16,6 @@
 //! shape.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(28) under the new offset-aware emit still returns the right
 /// result. Step3b's plumbing changes (window_size, op_offsets,

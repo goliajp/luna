@@ -14,7 +14,6 @@
 //! be > 0 on positive cases and == 0 on the negative case.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(28) — multiple inline cmp@d>0 side-exits accumulate hits
 /// far past threshold. The first side-trace start MUST fire by the

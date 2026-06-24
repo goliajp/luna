@@ -9,7 +9,6 @@
 //! (Closure + SetTable + Close + ForLoop pattern).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `for i=1,N do local k=i; fns[i] = function() return k*k end end` —
 /// matches the cross_dialect closure_alloc bench shape. Each iter:

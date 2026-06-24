@@ -10,7 +10,6 @@
 //! finite count proving the C-2 redo broke the v1 infinite loop.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(28) under inline self-rec dispatch — the v2 of step4b-C-2's
 /// per-cmp-site array. Asserts the recursive descent computes

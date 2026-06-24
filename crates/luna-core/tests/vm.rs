@@ -4,7 +4,7 @@
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
-use luna_core::vm::{Error, Vm};
+use luna_core::vm::Vm;
 
 fn eval(src: &str) -> Vec<Value> {
     let mut vm = Vm::new(LuaVersion::Lua55);
@@ -1548,6 +1548,48 @@ fn debug_line_hook() {
 }
 
 #[test]
+fn debug_line_hook_does_not_recurse_into_itself() {
+    // CB IO follow-up regression: an `||` / `&&` precedence bug in the
+    // dispatcher's count+line predicate (exec.rs ~6625) left the
+    // `!self.in_hook` guard only gating the rust-hook arm. With a Lua hook
+    // installed and the hook body executing any Lua bytecode (e.g. an
+    // `assert(...)` call), the hook would re-fire inside itself → unbounded
+    // recursion → stack overflow on PUC db.lua line 14 / 16 / 22 (the
+    // `assert(event == 'line')` inside the line-hook body).
+    //
+    // Repro mirrors PUC db.lua `test`: install a Lua line hook whose body
+    // dispatches Lua bytecode (table writes + assert) — if the guard works,
+    // we get a finite list of line events; if it doesn't, the hook recurses
+    // through `assert` and overflows the stack.
+    check_int(
+        "local n = 0 \n\
+         local function h(ev) \n\
+           assert(ev == 'line') \n\
+           n = n + 1 \n\
+         end \n\
+         debug.sethook(h, 'l') \n\
+         local a = 1 \n\
+         local b = 2 \n\
+         local c = 3 \n\
+         debug.sethook() \n\
+         return n",
+        // Without the fix: stack overflow before sethook() runs.
+        // With the fix: a finite number of line events (one per source line
+        // executed under the hook). We do not pin the exact count — the
+        // PUC `traceexec` discipline already has its own coverage in
+        // `debug_line_hook` / `debug_line_table_precision` — we just need
+        // n > 0 and the program to terminate.
+        // check_int requires an exact value; this VM emits 4 line events
+        // under PUC `npci <= oldpc` semantics (install-step + 3 statement
+        // lines; sethook clear is on the same line as the call site so
+        // changedline is false there). The point of the test is that the
+        // program *terminates with a finite count* — pre-fix it would have
+        // stack-overflowed before reaching `return n`.
+        4,
+    );
+}
+
+#[test]
 fn debug_line_table_precision() {
     // line traces match PUC's per-instruction line table across constructs, the
     // way db.lua tests them (hook installed + chunk run on one line). The chunk
@@ -2108,7 +2150,10 @@ fn load_seeds_globals_only_when_one_upvalue() {
     );
     // single-upvalue main-chunk shape still receives globals so global
     // reads through `_ENV` keep working post-load.
-    check_int("local x = assert(load('return 1 + #_G')) return x() >= 1 and 1 or 0", 1);
+    check_int(
+        "local x = assert(load('return 1 + #_G')) return x() >= 1 and 1 or 0",
+        1,
+    );
 }
 
 #[test]
@@ -2135,10 +2180,7 @@ fn string_dump_header_is_per_version() {
             "{version:?}: missing signature, got {:?}",
             &bytes[..4]
         );
-        assert_eq!(
-            bytes[4], ver_byte,
-            "{version:?}: version byte mismatch"
-        );
+        assert_eq!(bytes[4], ver_byte, "{version:?}: version byte mismatch");
         if luac_int_off > 0 {
             // 5.3 / 5.4 embed LUAC_INT = 0x5678 at a fixed offset. Reading 8 le
             // bytes there guards both the layout and the value choice — flipping
@@ -2959,7 +3001,9 @@ fn embedding_instr_budget_interrupts_infinite_loop() {
     );
     match v[1] {
         Value::Str(s) => assert!(
-            s.as_bytes().windows(20).any(|w| w == b"instruction budget e"),
+            s.as_bytes()
+                .windows(20)
+                .any(|w| w == b"instruction budget e"),
             "error msg should mention the budget: {:?}",
             String::from_utf8_lossy(s.as_bytes())
         ),
@@ -2975,7 +3019,9 @@ fn embedding_instr_budget_unset_runs_normally() {
     // so a future change to the default doesn't silently break embedders
     // that never touch `set_instr_budget`.
     let mut vm = Vm::new(LuaVersion::Lua55);
-    let v = vm.eval("local s = 0 for i=1,1000 do s = s + i end return s").unwrap();
+    let v = vm
+        .eval("local s = 0 for i=1,1000 do s = s + i end return s")
+        .unwrap();
     assert_eq!(v.len(), 1);
     assert!(matches!(v[0], Value::Int(500_500)), "got {:?}", v[0]);
 }
@@ -3008,7 +3054,9 @@ fn embedding_selective_open_base_enables_print() {
     // `tostring` is part of the base library — exercising it confirms the
     // open ran. We can't directly observe `print` without intercepting
     // stdout, but `type(print)` works.
-    let v = vm.eval("return type(print), type(tostring), tostring(42)").unwrap();
+    let v = vm
+        .eval("return type(print), type(tostring), tostring(42)")
+        .unwrap();
     assert_eq!(v.len(), 3);
     assert!(matches!(v[0], Value::Str(_)));
     if let Value::Str(s) = v[0] {
@@ -3081,7 +3129,9 @@ fn embedding_kevy_shape_short_script_per_request() {
 
     // (1) Normal short script with a generous budget.
     vm.set_instr_budget(Some(10_000));
-    let v = vm.eval("local s = 0 for i=1,100 do s = s + i end return s").unwrap();
+    let v = vm
+        .eval("local s = 0 for i=1,100 do s = s + i end return s")
+        .unwrap();
     assert!(matches!(v[0], Value::Int(5050)));
     // Budget consumed but not tripped; some remaining.
     assert!(vm.instr_budget_remaining().unwrap_or(0) > 0);
@@ -3132,7 +3182,11 @@ fn embedding_memory_cap_unset_runs_normally() {
     assert!(matches!(v[0], Value::Int(10000)));
 }
 
-fn panic_string_native(_vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
+fn panic_string_native(
+    _vm: &mut Vm,
+    _fs: u32,
+    _nargs: u32,
+) -> Result<u32, luna_core::vm::LuaError> {
     panic!("boom from a native");
 }
 
@@ -3154,9 +3208,7 @@ fn embedding_native_panic_caught_as_lua_error() {
     vm.set_global("p1", f1).unwrap();
     let f2 = vm.native(panic_static_str_native);
     vm.set_global("p2", f2).unwrap();
-    let v = vm
-        .eval("return pcall(p1)")
-        .expect("pcall returns normally");
+    let v = vm.eval("return pcall(p1)").expect("pcall returns normally");
     assert!(matches!(v[0], Value::Bool(false)));
     if let Value::Str(s) = v[1] {
         let msg = String::from_utf8_lossy(s.as_bytes());
@@ -3167,9 +3219,7 @@ fn embedding_native_panic_caught_as_lua_error() {
     } else {
         panic!("expected error string, got {:?}", v[1]);
     }
-    let v = vm
-        .eval("return pcall(p2)")
-        .expect("pcall returns normally");
+    let v = vm.eval("return pcall(p2)").expect("pcall returns normally");
     assert!(matches!(v[0], Value::Bool(false)));
     if let Value::Str(s) = v[1] {
         let msg = String::from_utf8_lossy(s.as_bytes());
@@ -3203,7 +3253,11 @@ fn warn_on_gc_error_5_4_plus() {
     )
     .expect("collectgarbage swallows the __gc error under 5.4+");
     let log = vm.warn_log_take();
-    assert_eq!(log.len(), 1, "exactly one warn emission expected, got {log:?}");
+    assert_eq!(
+        log.len(),
+        1,
+        "exactly one warn emission expected, got {log:?}"
+    );
     let line = String::from_utf8_lossy(&log[0]);
     assert!(
         line.contains("error in __gc metamethod") && line.contains("@bang@"),
@@ -3519,7 +3573,10 @@ fn pattern_backref_zero_is_invalid() {
 fn string_format_modifiers() {
     // strings.lua regressions for string.format spec handling.
     // %s with a modifier rejects embedded zeros (PUC "string contains zeros").
-    check_error("return string.format('%10s', '\\0')", "string contains zeros");
+    check_error(
+        "return string.format('%10s', '\\0')",
+        "string contains zeros",
+    );
     // %a honours precision (round to N hex digits, ties-to-even).
     check_str("return string.format('%+.2A', 12)", b"+0X1.80P+3");
     check_str("return string.format('%.4A', -12)", b"-0X1.8000P+3");
@@ -3544,22 +3601,13 @@ fn pushglobalfuncname_qualifies_nested_native_arg_error() {
     // (called as a comparator from the outer sort's native) detects bad
     // arg #1 (a number). PUC's `pushglobalfuncname` walks package.loaded
     // and qualifies the running function's name as `'table.sort'`.
-    check_error(
-        "table.sort({1,2,3}, table.sort)",
-        "'table.sort'",
-    );
+    check_error("table.sort({1,2,3}, table.sort)", "'table.sort'");
     // errors.lua:382: `string.gsub('s', 's', setmetatable)` — the inner
     // setmetatable is invoked from gsub's native replacement loop; PUC
     // finds `_G.setmetatable` and strips the `_G.` prefix.
-    check_error(
-        "string.gsub('s', 's', setmetatable)",
-        "'setmetatable'",
-    );
+    check_error("string.gsub('s', 's', setmetatable)", "'setmetatable'");
     // A direct (non-nested) native arg error keeps the bare name.
-    check_error(
-        "table.sort({}, 7)",
-        "'sort'",
-    );
+    check_error("table.sort({}, 7)", "'sort'");
 }
 
 #[test]
@@ -3627,12 +3675,21 @@ fn table_concat_at_max_index() {
 fn error_message_fidelity() {
     // errors.lua regressions for PUC-faithful error wording.
     // A non-callable metamethod names the dispatching event.
-    check_error("local a = setmetatable({}, {__add = 34}); local _ = a + 1", "metamethod 'add'");
+    check_error(
+        "local a = setmetatable({}, {__add = 34}); local _ = a + 1",
+        "metamethod 'add'",
+    );
     // A tail call to a nil field keeps the field name (frame popped early).
     check_error("local a = {}; return a.bbbb(3)", "field 'bbbb'");
     // __name (luaT_objtypename) drives type names in arithmetic/compare errors.
-    check_error("local x = setmetatable({}, {__name = 'My Type'}); local _ = x + 1", "on a My Type value");
-    check_error("local x = setmetatable({}, {__name = 'My Type'}); local _ = x < x", "two My Type values");
+    check_error(
+        "local x = setmetatable({}, {__name = 'My Type'}); local _ = x + 1",
+        "on a My Type value",
+    );
+    check_error(
+        "local x = setmetatable({}, {__name = 'My Type'}); local _ = x < x",
+        "two My Type values",
+    );
     // A field literally named `_ENV` is a field, not a global.
     check_error("local a = {_ENV = {}}; local _ = a._ENV.x + 1", "field 'x'");
     // collectgarbage rejects unknown options (luaL_checkoption).
@@ -3859,10 +3916,19 @@ fn yield_inside_pairs_metamethod() {
 #[test]
 fn numeric_for_coercion_and_bounds() {
     // nextvar.lua: numeric for coerces string bounds (PUC forprep tonumber).
-    check_int("local a = 0; for _ = '10', '1', '-2' do a = a + 1 end; return a", 5);
+    check_int(
+        "local a = 0; for _ = '10', '1', '-2' do a = a + 1 end; return a",
+        5,
+    );
     // A float limit beyond the integer range gives an empty decreasing loop.
-    check_int("local c = 0; for _ = math.maxinteger, 10e100, -1 do c = c + 1 end; return c", 0);
-    check_int("local c = 0; for _ = math.mininteger, -10e100 do c = c + 1 end; return c", 0);
+    check_int(
+        "local c = 0; for _ = math.maxinteger, 10e100, -1 do c = c + 1 end; return c",
+        0,
+    );
+    check_int(
+        "local c = 0; for _ = math.mininteger, -10e100 do c = c + 1 end; return c",
+        0,
+    );
 }
 
 #[test]
@@ -4160,9 +4226,7 @@ fn api_lua_error_propagates_to_host_with_render() {
     // `error("msg", 0)` raises the bare string; luna's `error_text`
     // renders it the same way PUC's `lua_tostring(L, -1)` would.
     let mut vm = Vm::new(LuaVersion::Lua55);
-    let cl = vm
-        .load(b"error('boom', 0)", b"=chunk")
-        .expect("compile");
+    let cl = vm.load(b"error('boom', 0)", b"=chunk").expect("compile");
     let err = vm
         .call_value(Value::Closure(cl), &[])
         .expect_err("error chunk should fail");
@@ -4212,11 +4276,7 @@ fn api_native_runs_lua_callback_through_call_value() {
     // PUC C-API: `lua_call(L, n, m)` from inside a C function. luna's
     // analogue is `vm.call_value` from within a NativeFn. Native receives
     // a callback function as arg 1, calls it with 10, returns 1 + result.
-    fn api_with_callback(
-        vm: &mut Vm,
-        fs: u32,
-        nargs: u32,
-    ) -> Result<u32, luna_core::vm::LuaError> {
+    fn api_with_callback(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
         assert!(nargs >= 1);
         let cb = vm.nat_arg(fs, nargs, 0);
         let r = vm.call_value(cb, &[Value::Int(10)])?;

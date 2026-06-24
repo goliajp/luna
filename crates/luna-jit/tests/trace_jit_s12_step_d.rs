@@ -22,7 +22,6 @@
 //! shipped but not previously asserted on.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Empty-iter ipairs: TForLoop's `take_back_edge` gate (`ctrl !=
 /// nil`) is false on the very first call to the iter — so the

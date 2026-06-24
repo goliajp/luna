@@ -10,7 +10,6 @@
 //! S9-B unblocks compile success of make's body trace.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// binary_trees `make` body pre-S9-B bailed compile at the
 /// self-recursive `Call C=0`. Post-S9-B, var_count=1 → compile
@@ -89,10 +88,7 @@ fn call_c_zero_with_var_count_gt_1_still_bails_or_runs_via_interp() {
     // pre-emit; trace runs via interp) OR it compiled and
     // dispatched correctly. Both are valid — the contract is
     // RESULT correctness.
-    let _ = (
-        vm.trace_compiled_count(),
-        vm.trace_compile_failed_count(),
-    );
+    let _ = (vm.trace_compiled_count(), vm.trace_compile_failed_count());
 }
 
 /// `Op::Call C=2` (single return) still compiles + dispatches as

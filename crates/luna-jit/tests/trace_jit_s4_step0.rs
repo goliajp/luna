@@ -11,7 +11,6 @@
 //! head's pc).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(12) = 144. fib's Proto is called 145 times in total (1 outer +
 /// 144 inner recursions across the tree), which crosses the call-hot
@@ -85,10 +84,7 @@ fn depth_zero_gate_holds_for_loop_triggered_traces() {
              return s",
         )
         .unwrap();
-    assert!(matches!(
-        r[0],
-        luna_jit::runtime::Value::Int(40200)
-    ));
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(40200)));
     // The trace either compiles or aborts (helper's body uses
     // upvals/etc. the whitelist may not cover) — what we verify is
     // that the dispatcher did NOT fire a degenerate empty trace
@@ -111,7 +107,11 @@ fn depth_zero_gate_holds_for_loop_triggered_traces() {
 fn gate_off_keeps_all_trace_counters_zero() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
-    // trace_jit_enabled defaults to false; do not flip it.
+    // v1.3 TA3 flipped trace_enabled ship default to `true` (commit
+    // `7274887`); explicitly disable so this regression guard for the
+    // "trace-on-call branch even when gated" mistake still tests the
+    // gated-off path regardless of ship default.
+    vm.set_trace_jit_enabled(false);
 
     let r = vm
         .eval(

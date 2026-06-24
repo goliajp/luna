@@ -12,8 +12,8 @@
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::error::LuaError;
 use luna_jit::vm::Vm;
+use luna_jit::vm::error::LuaError;
 
 fn make_sandbox() -> Vm {
     // 5.1 dialect (script-host contract).

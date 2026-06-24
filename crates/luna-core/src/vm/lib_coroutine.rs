@@ -13,7 +13,9 @@ pub(crate) fn open_coroutine(vm: &mut Vm) {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         let fv = vm.native(f);
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "create", co_create);
     set(vm, "resume", co_resume);
@@ -23,7 +25,8 @@ pub(crate) fn open_coroutine(vm: &mut Vm) {
     set(vm, "isyieldable", co_isyieldable);
     set(vm, "wrap", co_wrap);
     set(vm, "close", co_close);
-    vm.set_global("coroutine", Value::Table(t)).expect("stdlib registration");
+    vm.set_global("coroutine", Value::Table(t))
+        .expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 
@@ -57,9 +60,7 @@ fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // table of `lim - 10` … `lim + 1` entries and asserts every
             // resume fails.
             if (vals.len() as i64) + 1 > vm.stack_room() {
-                let msg = vm
-                    .heap
-                    .intern(b"too many results to resume");
+                let msg = vm.heap.intern(b"too many results to resume");
                 return Ok(vm.nat_return(fs, &[Value::Bool(false), Value::Str(msg)]));
             }
             let mut out = Vec::with_capacity(vals.len() + 1);

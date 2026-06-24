@@ -18,7 +18,6 @@
 //! entry-tag → RegKind mapping.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `if v then ... end` over an Unset-kind v derived from a
 /// helper-reloaded slot. Verifies the trace compiles and

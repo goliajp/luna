@@ -20,7 +20,6 @@
 //! emit so deeper recursion levels also speed up.)
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib's trace must **close** (not abort) under the new
 /// close-on-call-reentry semantic. Whether compile succeeds is a
@@ -72,10 +71,7 @@ fn loop_triggered_close_unaffected_by_call_triggered_change() {
              return s",
         )
         .unwrap();
-    assert!(matches!(
-        r[0],
-        luna_jit::runtime::Value::Int(12502500)
-    ));
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(12502500)));
     // Loop-triggered trace closes cleanly → compiles → dispatches.
     // The exact dispatch count varies with how many back-edges the
     // loop took before the trace fired, but it must be > 0.

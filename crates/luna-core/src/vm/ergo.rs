@@ -51,44 +51,20 @@ impl Vm {
         self.heap.intern(s.as_bytes())
     }
 
-    // ─── B12 host-root pool ───────────────────────────────────────
+    // ─── B12 host-root pool — moved to `crate::vm::host_roots` ───
     //
-    // The `luna::Lua` facade (in the `luna` crate) leans on these
-    // methods to keep `LuaFunction` / `LuaTable` / `LuaRoot` handles
-    // alive across calls. The pool is append-only in v1.1; slot
-    // recycling lands in Phase 3 alongside B8 LuaUserdata.
-
-    /// Pin `v` as a host root and return its slot index. The value
-    /// becomes an extra GC root until the index is reset via
-    /// [`unpin_all`](Self::unpin_all).
-    pub fn pin_host(&mut self, v: Value) -> usize {
-        self.host_roots.push(v);
-        self.host_roots.len() - 1
-    }
-
-    /// Read a previously pinned host root. Panics if `idx` was never
-    /// pinned (or if the pool was cleared by `unpin_all`).
-    pub fn host_root_at(&self, idx: usize) -> Value {
-        self.host_roots[idx]
-    }
-
-    /// Mutate a previously pinned host root (for the `Lua` facade's
-    /// `LuaTable::set` after an in-place rewrite). Panics on OOB.
-    pub fn host_root_set(&mut self, idx: usize, v: Value) {
-        self.host_roots[idx] = v;
-    }
-
-    /// Number of currently-pinned host roots.
-    pub fn host_root_count(&self) -> usize {
-        self.host_roots.len()
-    }
-
-    /// Drop every pinned host root. Embedders driving the `Lua`
-    /// facade in a request-per-script loop call this between requests
-    /// to keep the pool bounded.
-    pub fn unpin_all(&mut self) {
-        self.host_roots.clear();
-    }
+    // v1.3 Phase SR migrated the append-only `Vec<Value>` to a
+    // slot-recycling pool keyed by `HostRootTicket { idx, generation }`.
+    // The new API surface (`pin_host` / `read_host` / `write_host` /
+    // `unpin` / `unpin_all` / `host_root_count`) lives in
+    // [`crate::vm::host_roots`]; the type re-exports are in
+    // [`crate::vm`] (`HostRootTicket`, `HostRootStale`).
+    //
+    // Breaking change vs v1.2 / v1.1: `pin_host` returns
+    // `HostRootTicket` (was `usize`); `host_root_at` / `host_root_set`
+    // are removed in favor of `read_host` / `write_host` which
+    // validate the ticket's generation. See CHANGELOG `[1.3.0]`
+    // Phase SR section for the migration recipe.
 
     // ─── B6 LuaError classification ──────────────────────────────
     //
@@ -146,17 +122,35 @@ impl Vm {
     // v1.1 restricts host types to `'static` (typically heap-only
     // `Box<...>` or `Rc<...>` to non-Gc objects). Trace-bearing host
     // payloads land in Phase 4+ alongside the userdata Trace ripple.
+    //
+    // v1.2 Track B: bounds tightened from `T: Any + 'static` to
+    // `T: LuaUserdata` so the metatable produced by `T::add_methods`
+    // is auto-installed at `create_userdata` time. Source-compatible
+    // for B8 users via a one-line `impl LuaUserdata for T {}`.
 
     /// Allocate a host userdata wrapping `value`. Returns the
     /// `Value::Userdata` you can `set_global` / pin / pass to scripts.
     ///
+    /// The metatable produced by [`crate::vm::LuaUserdata::add_methods`]
+    /// is auto-installed on the userdata (cached per `Vm` keyed by
+    /// `TypeId::of::<T>()`). For a type that only needs identity +
+    /// raw host-side access (no Lua-callable methods), provide an
+    /// empty impl:
+    ///
     /// ```
-    /// use luna_core::vm::Vm;
+    /// # use luna_core::vm::LuaUserdata;
+    /// struct Counter(i64);
+    /// impl LuaUserdata for Counter {}
+    /// ```
+    ///
+    /// ```
+    /// use luna_core::vm::{LuaUserdata, Vm};
     /// use luna_core::version::LuaVersion;
     /// use luna_core::runtime::Value;
     ///
     /// #[derive(Debug)]
     /// struct Counter(i64);
+    /// impl LuaUserdata for Counter {}
     ///
     /// let mut vm = Vm::sandbox(LuaVersion::Lua55).open_base().build();
     /// let ud = vm.create_userdata(Counter(42));
@@ -171,17 +165,48 @@ impl Vm {
     ///     _ => unreachable!(),
     /// }
     /// ```
-    pub fn create_userdata<T: std::any::Any + 'static>(&mut self, value: T) -> Value {
+    pub fn create_userdata<T: crate::vm::LuaUserdata>(&mut self, value: T) -> Value {
+        // Phase TB (v1.3): capture a monomorphic trace adapter for `T`.
+        // The fn item `trace_fn_for::<T>` is a distinct code address
+        // per `T` (LLVM monomorphization); the downcast cannot fail
+        // because `register_userdata::<T>` pairs the adapter with
+        // `TypeId::of::<T>()` here, and `Userdata::trace` always reads
+        // the adapter back through the same `Host` instance.
+        fn trace_fn_for<T: crate::vm::LuaUserdata>(
+            any: &(dyn std::any::Any + 'static),
+            m: &mut crate::vm::UserdataMarker<'_>,
+        ) {
+            let typed = any
+                .downcast_ref::<T>()
+                .expect("LuaUserdata trace adapter / TypeId mismatch");
+            typed.trace(m);
+        }
         let payload = crate::runtime::userdata::UserdataPayload::Host {
             type_id: std::any::TypeId::of::<T>(),
             data: Box::new(value),
+            trace_fn: Some(trace_fn_for::<T>),
         };
         let g = self.heap.new_userdata(payload, /* writable */ true);
+        // v1.2 Track B — install the trait-derived metatable (or
+        // fetch the cached one). Build only fails if the metatable's
+        // table set overflows MAX_ASIZE, which is impossible with
+        // <100 entries; expect-on-fail is appropriate here.
+        let mt = self
+            .register_userdata::<T>()
+            .expect("LuaUserdata metatable build overflowed");
+        // SAFETY: g is a freshly allocated Gc<Userdata>; the heap is
+        // single-threaded and the pointer is live.
+        unsafe { g.as_mut() }.set_metatable(Some(mt));
+        self.heap
+            .barrier_back(g.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        // PUC contract: __gc is registered for finalization at
+        // metatable-set time, not at later mutation of the metatable.
+        self.check_finalizer_userdata(g);
         Value::Userdata(g)
     }
 
     /// Convenience: [`Self::create_userdata`] + [`Self::set_global`].
-    pub fn set_userdata<T: std::any::Any + 'static>(
+    pub fn set_userdata<T: crate::vm::LuaUserdata>(
         &mut self,
         name: &str,
         value: T,
@@ -279,6 +304,26 @@ impl Vm {
     /// `set_rust_debug_hook(None, 0, 0)`).
     pub fn clear_rust_debug_hook(&mut self) {
         self.hook.rust_func = None;
+    }
+
+    /// Read the most recently dispatched Lua opcode, if the Vm is currently
+    /// executing inside a Lua frame. Intended for use from a Count hook
+    /// (installed via [`Self::set_rust_debug_hook`] with `HOOK_MASK_COUNT`)
+    /// to tally per-opcode distribution against a workload — the v1.2
+    /// methodology gate (`perf-decomposition-vs-polish.md` §2 Phase A,
+    /// in `~/.claude-shared/global/methodology/`) requires runtime-counter
+    /// validation of per-iter op mix before any stage decomposition is
+    /// acted on.
+    ///
+    /// Returns `None` outside a Lua frame (top-level setup, while a
+    /// native callback or Cont guard is on top of the call stack, etc.).
+    /// Reads `self.frames.last() → CallFrame::Lua(f) → f.closure.proto.code[f.pc - 1]`
+    /// — the just-dispatched opcode (PC has already advanced past it).
+    pub fn current_op(&self) -> Option<crate::vm::isa::Op> {
+        let f = self.jit_last_lua_frame()?;
+        let pc = (f.pc as usize).checked_sub(1)?;
+        let inst = f.closure.proto.code.get(pc)?;
+        Some(inst.op())
     }
 
     /// Mutable variant of [`Self::userdata_borrow`].

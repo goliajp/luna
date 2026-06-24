@@ -24,7 +24,6 @@
 //!    depth=0 cmps).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `for i = 1, 1000 do local t = {1, 2, 3}; if i > 500 then s = s + t[1] end end`.
 /// The recorder fires at the back-edge after ~64 iters where

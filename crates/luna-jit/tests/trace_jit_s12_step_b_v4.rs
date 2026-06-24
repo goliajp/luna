@@ -16,7 +16,6 @@
 //!     numeric ForLoop sharing the chunk's proto).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// 1M-element ipairs trace inside a function — gives the inner
 /// generic-for proto its own trace_hot_count.

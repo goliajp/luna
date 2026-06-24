@@ -1,13 +1,20 @@
 name: cargo-deny
 
+# Supply-chain gate. cargo-deny's [advisories] section consumes the
+# RustSec database (same source as cargo-audit), plus [licenses]
+# (no GPL contamination) and [bans] (no duplicate versions /
+# wildcard deps). A separate cargo-audit workflow would be
+# redundant; deny.toml is the single source of truth.
+
 on:
   push:
-    branches: [main]
+    branches: [master, develop]
   pull_request:
-    branches: [main]
+    branches: [master, develop]
   schedule:
     # Weekly check catches new advisories that hit existing pins
     - cron: '0 4 * * 1'  # Monday 04:00 UTC
+  workflow_dispatch:
 
 jobs:
   cargo-deny:

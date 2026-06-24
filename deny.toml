@@ -25,6 +25,12 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # BSL-1.0 (Boost Software License 1.0) — OSI-approved, FSF-Free,
+    # permissive with no source-disclosure / no advertising clauses.
+    # Pulled in transitively on Windows hosts through rustyline →
+    # clipboard-win + error-code. Equivalent permissiveness to MIT for
+    # our embedder-facing surface.
+    "BSL-1.0",
     "ISC",
     "Unicode-3.0",
     "Unicode-DFS-2016",

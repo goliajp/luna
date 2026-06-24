@@ -23,7 +23,6 @@
 //! Real perf wins are P14 (string subsystem rope/builder model).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Concat with two Int operands derived from arith — both
 /// `current_kinds` slots are `Int` so spill uses the proper

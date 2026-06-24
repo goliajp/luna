@@ -5,7 +5,6 @@
 //! emit the sunk path (same shape as SetI sunk write).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `local k = 2; local t = {nil, nil}; t[k] = i` — Move R[?]=R[k]
 /// → SetTable. const_fold walks: SetTable.B → Move source → LoadI 2.
