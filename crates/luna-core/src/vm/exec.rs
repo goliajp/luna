@@ -754,6 +754,21 @@ fn frames_pop_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32) -> Option<
     r
 }
 
+/// v1.3 Phase AOT Stage 7 sub-piece 4 — one-time env-var read for
+/// `LUNA_AOT_PROBE`. Returns `true` iff the env var is set to any
+/// non-empty value. The result is cached in a `OnceLock` so the
+/// dispatcher's hot path pays a single atomic load per process. Off
+/// by default — production deploys don't bleed diagnostic prints.
+fn jit_probe_enabled() -> bool {
+    static PROBE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PROBE_ON.get_or_init(|| {
+        std::env::var("LUNA_AOT_PROBE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .is_some()
+    })
+}
+
 impl Vm {
     /// P17-D Week 1 — re-sync `frames_top` after a bulk `frames: Vec`
     /// swap (take_ctx, put_ctx, load_coro_ctx). Must be called after
@@ -6123,6 +6138,17 @@ impl Vm {
                     // before falling through to the interpreter, else
                     // the stack grows unboundedly per deopted dispatch.
                     let pre_frames = self.frames.len();
+                    // v1.3 Phase AOT Stage 7 sub-piece 4 — `LUNA_AOT_PROBE`
+                    // diagnostic hook. The probe fires once per trace dispatch
+                    // (regardless of JIT vs AOT origin — both go through this
+                    // arm), letting the AOT smoke test verify mcode actually
+                    // executed. Guarded behind `OnceLock` so the env read is
+                    // a one-time cost per process; not gated on a particular
+                    // counter so the smoke test gets a deterministic single-
+                    // line `aot_trace_fired pc=N` per first dispatch.
+                    if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
+                        eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
+                    }
                     let continuation_pc = {
                         // v1.1 A1 Session A — chunk_compiler.enter
                         // (CraneliftBackend delegates to enter_jit;

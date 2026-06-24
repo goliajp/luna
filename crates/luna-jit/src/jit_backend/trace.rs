@@ -3080,9 +3080,31 @@ pub fn try_compile_trace_with_options(
 /// AOT pipeline resolves the symbol at link time and never invokes
 /// `entry` directly).
 pub fn lower_trace_into<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+) -> Option<(FuncId, CompiledTrace)> {
+    lower_trace_into_named(module, record, opts, None)
+}
+
+/// v1.3 Phase AOT Stage 7 sub-piece 4 — like [`lower_trace_into`] but
+/// lets the caller (luna-aot) pick a unique exported name for the
+/// trace function. Required for AOT: many traces from the same chunk
+/// would otherwise collide on `"luna_jit_trace"`, and `Linkage::Local`
+/// hides the symbol from the deploy-side staticlib's resolver.
+///
+/// `aot_fn_name = None` keeps the original behaviour (anonymous
+/// `Linkage::Local` `"luna_jit_trace"`), so the JIT wrapper and the
+/// existing AOT smoke tests are unaffected.
+///
+/// When `Some(name)`, `name` becomes the cranelift `FuncId` symbol
+/// with `Linkage::Export`, surfacing in the produced `.o`'s symbol
+/// table for the deploy-side `dlsym`/linker to resolve.
+pub fn lower_trace_into_named<M: Module>(
     mut module: &mut M,
     record: &TraceRecord,
     opts: CompileOptions,
+    aot_fn_name: Option<&str>,
 ) -> Option<(FuncId, CompiledTrace)> {
     checkpoint("enter");
     if !record.closed {
@@ -4653,8 +4675,16 @@ pub fn lower_trace_into<M: Module>(
     sig.params.push(AbiParam::new(types::I64));
     // Return — continuation PC (head_pc on clean close).
     sig.returns.push(AbiParam::new(types::I64));
+    // v1.3 Phase AOT Stage 7 sub-piece 4 — caller-provided name +
+    // export linkage when driving the AOT pipeline. The JIT wrapper
+    // (`try_compile_trace_with_options`) passes `None`, preserving the
+    // original `luna_jit_trace` / `Linkage::Local` shape.
+    let (trace_fn_name, trace_fn_linkage) = match aot_fn_name {
+        Some(name) => (name, Linkage::Export),
+        None => ("luna_jit_trace", Linkage::Local),
+    };
     let fn_id = module
-        .declare_function("luna_jit_trace", Linkage::Local, &sig)
+        .declare_function(trace_fn_name, trace_fn_linkage, &sig)
         .ok()?;
 
     let mut ctx = module.make_context();
