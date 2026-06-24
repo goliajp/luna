@@ -2,11 +2,11 @@
 //!
 //! This crate ships two macros that, together, let an embedder turn a
 //! plain Rust `struct` + `impl` block into a Lua-callable userdata
-//! without typing the [`luna_core::vm::UserdataMethods`] builder
+//! without typing the `luna_core::vm::UserdataMethods` builder
 //! boilerplate:
 //!
 //! 1. `#[derive(LuaUserdata)]` — applied to a struct, emits the
-//!    [`luna_core::vm::LuaUserdata`] trait impl with `type_name()`
+//!    `luna_core::vm::LuaUserdata` trait impl with `type_name()`
 //!    (overridable via `#[lua_type_name = "Foo"]`) and an
 //!    `add_methods()` body that forwards to a hidden registry fn
 //!    populated by [`macro@lua_userdata_methods`].
@@ -54,7 +54,7 @@ use syn::{
 // #[derive(LuaUserdata)]
 // ─────────────────────────────────────────────────────────────────────
 
-/// Emits the [`luna_core::vm::LuaUserdata`] trait impl for a struct.
+/// Emits the `luna_core::vm::LuaUserdata` trait impl for a struct.
 ///
 /// The companion attribute macro [`macro@lua_userdata_methods`] (applied
 /// to an `impl` block of the same struct) injects a hidden
@@ -179,14 +179,18 @@ fn parse_lua_type_name(attrs: &[Attribute]) -> Option<LitStr> {
 
 /// Walks the methods of an `impl T { ... }` block and, for each one
 /// tagged with a helper attribute (`#[lua_method("name")]` etc.),
-/// emits the corresponding [`UserdataMethods`] builder call inside a
+/// emits the corresponding `UserdataMethods` builder call inside a
 /// hidden `__luna_userdata_register` associated fn.
+///
+/// The `UserdataMethods` trait lives in
+/// `::luna_core::vm::UserdataMethods` — the emitted code references it
+/// by absolute path so the derive works for pure luna-core embedders
+/// too. The intra-doc-link form is omitted because this proc-macro
+/// crate cannot see luna_core in its `cargo doc` scope.
 ///
 /// The original impl block is re-emitted unchanged (minus the helper
 /// attributes themselves), so the named fns are still directly
 /// callable from Rust.
-///
-/// [`UserdataMethods`]: ::luna_core::vm::UserdataMethods
 #[proc_macro_attribute]
 pub fn lua_userdata_methods(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemImpl);

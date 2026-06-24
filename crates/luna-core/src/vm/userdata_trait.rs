@@ -57,8 +57,9 @@ use crate::vm::typed_native::{FromLuaArgs, IntoLuaReturn};
 /// Public facade over the GC mark accumulator passed to
 /// [`LuaUserdata::trace`].
 ///
-/// Wraps the crate-internal [`crate::runtime::heap::Marker`] so embedders
-/// never see the gray-stack / weak-table internals. Holds a mutable
+/// Wraps the crate-internal `Marker` (private GC primitive in
+/// `runtime::heap`) so embedders never see the gray-stack / weak-table
+/// internals. Holds a mutable
 /// borrow of the underlying marker for the duration of a single trace
 /// call. Constructed only by the collector via the crate-internal
 /// `__new_internal` constructor; embedders cannot synthesize one outside

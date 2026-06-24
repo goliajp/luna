@@ -1,6 +1,6 @@
 //! v1.3 Phase SR — host root pool types and slot-recycling API.
 //!
-//! This module owns the type definitions ([`HostRootSlot`],
+//! This module owns the type definitions (`HostRootSlot` (private),
 //! [`HostRootTicket`], [`HostRootStale`]) plus the `pin_host` /
 //! `read_host` / `write_host` / `unpin` / `unpin_all` /
 //! `host_root_count` impls. The `Vm` struct itself (in

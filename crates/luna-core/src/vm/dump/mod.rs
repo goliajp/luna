@@ -32,10 +32,10 @@ use crate::version::LuaVersion;
 
 /// Serialise a function prototype to a binary chunk.
 ///
-/// Delegates to [`luna::dump`]; output is luna's own body format (PUC
-/// dialect header + `"\x00LunaV1\x00"` sentinel + luna body). Not
-/// PUC-loadable — see RFC v1.3 §"open questions"-4 for the PUC-output
-/// `string.dump` v1.4 candidate.
+/// Delegates to `luna::dump` (private sibling module); output is luna's
+/// own body format (PUC dialect header + `"\x00LunaV1\x00"` sentinel +
+/// luna body). Not PUC-loadable — see RFC v1.3 §"open questions"-4 for
+/// the PUC-output `string.dump` v1.4 candidate.
 pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     luna::dump(proto, strip, version)
 }
@@ -50,12 +50,12 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 /// Reconstruct a prototype tree from a binary chunk.
 ///
 /// Routes by the leading 5 bytes:
-/// - `\x1bLua` + the running dialect's version byte → [`luna::undump`]
-///   (this is what luna's own `dump` emits, and the only path that
-///   accepts the `BODY_TAG` sentinel)
+/// - `\x1bLua` + the running dialect's version byte → `luna::undump`
+///   (private sibling module; this is what luna's own `dump` emits, and
+///   the only path that accepts the `BODY_TAG` sentinel)
 /// - `\x1bLua` + a `0x51..0x55` version byte that does NOT match the
-///   running dialect → [`puc::undump_puc`] (gated by `allow_puc`;
-///   rejected with a clear error when disabled)
+///   running dialect → `puc::undump_puc` (private sibling module; gated
+///   by `allow_puc`; rejected with a clear error when disabled)
 /// - anything else → `Err("not a binary chunk")`
 ///
 /// **Routing is decided by the version byte alone** — we do not try luna

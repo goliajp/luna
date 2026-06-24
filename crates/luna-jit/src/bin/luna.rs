@@ -1,11 +1,13 @@
 //! `luna` — small Lua runner CLI on top of the luna library.
 //!
 //! Usage:
+//! ```text
 //!   luna                                      interactive REPL (C1)
 //!   luna [--lua=5.X] <script.lua> [args...]   run a file
 //!   luna [--lua=5.X] -e "<code>" [args...]    run inline code
 //!   luna [--lua=5.X] -                        read stdin to EOF
 //!   luna -h | --help                          print this help
+//! ```
 //!
 //! Defaults to Lua 5.5 with the full standard library opened (matches
 //! `Vm::new`). The script's `arg` table is populated with extra positional
@@ -132,10 +134,10 @@ fn save_history(entries: &[String]) {
 
 /// True if `msg` indicates the parser ran out of input mid-block
 /// (incomplete `if … then`, `do … end`, `function … end`, long string,
-/// etc.). Per R-A1 audit: luna's `SyntaxError::msg` carries "near
-/// <eof>" / "unfinished … near <eof>" markers exactly when more input
+/// etc.). Per R-A1 audit: luna's `SyntaxError::msg` carries `near
+/// <eof>` / `unfinished … near <eof>` markers exactly when more input
 /// would let the parser continue. The single counter-example is the
-/// explicit "'<eof>' expected" form, which means the parser saw EXTRA
+/// explicit `'<eof>' expected` form, which means the parser saw EXTRA
 /// trailing input and is not asking for more.
 fn is_incomplete_syntax(msg: &str) -> bool {
     if msg.contains("'<eof>' expected") {
