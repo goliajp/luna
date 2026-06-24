@@ -190,9 +190,25 @@ impl Vm {
     /// }
     /// ```
     pub fn create_userdata<T: crate::vm::LuaUserdata>(&mut self, value: T) -> Value {
+        // Phase TB (v1.3): capture a monomorphic trace adapter for `T`.
+        // The fn item `trace_fn_for::<T>` is a distinct code address
+        // per `T` (LLVM monomorphization); the downcast cannot fail
+        // because `register_userdata::<T>` pairs the adapter with
+        // `TypeId::of::<T>()` here, and `Userdata::trace` always reads
+        // the adapter back through the same `Host` instance.
+        fn trace_fn_for<T: crate::vm::LuaUserdata>(
+            any: &(dyn std::any::Any + 'static),
+            m: &mut crate::vm::UserdataMarker<'_>,
+        ) {
+            let typed = any
+                .downcast_ref::<T>()
+                .expect("LuaUserdata trace adapter / TypeId mismatch");
+            typed.trace(m);
+        }
         let payload = crate::runtime::userdata::UserdataPayload::Host {
             type_id: std::any::TypeId::of::<T>(),
             data: Box::new(value),
+            trace_fn: Some(trace_fn_for::<T>),
         };
         let g = self.heap.new_userdata(payload, /* writable */ true);
         // v1.2 Track B — install the trait-derived metatable (or

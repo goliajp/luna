@@ -357,18 +357,76 @@ calling `check_finalizer_userdata` at `create_userdata` time.
 
 ### 7.6 Trait contract reminders
 
-- `T` must be `'static`. Trait-bearing host payloads with `Gc<...>`
-  fields are **not** supported in v1.2 — the collector traces the
-  metatable but not the boxed payload (`runtime/userdata.rs`).
+- `T` must be `'static`.
 - Method closures must be ZST (non-capturing). Capture state in `T`.
 - During an `add_method_mut` body, do **not** concurrently borrow
   the same userdata payload through another API (e.g. a host-side
   `userdata_borrow_mut("name")` on the same global). The trampoline's
   `&mut T` is exclusive within the call; aliasing is undefined.
+- If `T` carries a `Gc<...>` field, override [`LuaUserdata::trace`]
+  to mark it — see §7.7. The default `trace` is a no-op, suitable
+  for pure host types (no Gc-managed inner state).
 
 For the low-level path, get the `Gc<Userdata>` handle out of
 `Value::Userdata(g)` and use `g.as_ptr()` (or the heap-safe
 accessors) to inspect/mutate.
+
+### 7.7 Trace-bearing host payloads (v1.3+)
+
+When `T` stashes a `Gc<Table>` / `Gc<LuaStr>` / `Gc<NativeClosure>` /
+`Gc<Coro>` / `Gc<Userdata>` inside its fields, the collector cannot
+discover those handles by walking the `Box<dyn Any>` payload alone —
+the `Any` vtable has no "trace" entry. The embedder declares the
+reachable Gc set by overriding `LuaUserdata::trace`:
+
+```rust
+use luna_core::runtime::{Gc, Table};
+use luna_core::vm::{LuaUserdata, UserdataMarker};
+
+struct Cache {
+    entries: Gc<Table>,
+}
+
+impl LuaUserdata for Cache {
+    fn type_name() -> &'static str { "Cache" }
+
+    fn trace(&self, m: &mut UserdataMarker) {
+        m.mark(self.entries);
+    }
+}
+```
+
+`UserdataMarker` exposes two methods:
+
+- `mark<T>(&mut self, g: Gc<T>) -> bool` — mark a typed Gc handle.
+- `mark_value(&mut self, v: Value) -> bool` — mark every Gc-managed
+  object behind a `Value` (no-op for primitives like `Int` / `Bool`).
+
+For container fields, walk them and call `mark` per element:
+
+```rust
+struct Pool { tables: Vec<Gc<Table>> }
+impl LuaUserdata for Pool {
+    fn trace(&self, m: &mut UserdataMarker) {
+        for &t in &self.tables { m.mark(t); }
+    }
+}
+```
+
+Contract inside `trace`:
+
+- The call runs synchronously inside the collector's mark phase.
+- The embedder may **only** read `&self` and call `mark` / `mark_value`.
+- The embedder must **not** allocate new GC objects, reenter the `Vm`,
+  acquire locks, or perform I/O.
+- The default `trace` is a no-op, so existing v1.1 / v1.2 types with
+  empty `impl LuaUserdata for T {}` keep compiling and running
+  unchanged.
+
+Forgetting to override `trace` when `T` carries a `Gc<...>` field
+whose lifetime isn't otherwise rooted (via `Vm::pin_host` or a
+Lua-side table) risks dangling references after the next GC cycle.
+The contract is on the embedder; the runtime does not detect it.
 
 ---
 
