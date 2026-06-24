@@ -643,50 +643,101 @@ pub mod aot_strkey_resolver {
 
 /// v1.3 Phase AOT Stage 7 sub-piece 4 — trace dispatch registry.
 ///
-/// **STATUS**: design landed; runtime wiring deferred to a follow-up
-/// session.
+/// **STATUS**: Steps 1 + 3 landed; Steps 2/4/5 (offline trace recorder
+/// at compile time, deploy-side trace-meta walker, end-to-end smoke
+/// test) deferred to a follow-up session — see § TODO below.
 ///
-/// # What sub-piece 4 needs
+/// # Architecture (target shape)
 ///
-/// At AOT compile time, the build pipeline must identify which
-/// `(Proto, pc)` sites are hot enough to be worth lowering as trace
-/// mcode. The simplest approach (per RFC § Open question 1):
+/// 1. **Offline trace recorder** (build time, in `luna-aot::embed::
+///    compile_and_link`): warmup-run the dumped bytecode in a temp
+///    `Vm` with `trace_enabled = true`; close the first N traces.
+/// 2. **AOT lowerer call**: for each closed trace, call
+///    `lower_trace_into(&mut ObjectModule, record,
+///    CompileOptions { aot: true, .. })`. The resulting `FuncId`'s
+///    symbol becomes a strong extern in the trace object.
+/// 3. **Trace-meta section emission**: emit a `luna_trace_meta`
+///    section holding `[(proto_hash : [u8; 16], head_pc : u32,
+///    fn_name_offset : u32, fn_name_len : u32) ; N]` plus a string
+///    table for the fn names. Bracket the section with linker-
+///    synthetic `__start_luna_trace_meta` / `__stop_luna_trace_meta`
+///    on ELF, `section$start$__DATA$luna_trace_meta` on Mach-O
+///    (mirroring sub-piece 3's `luna_strkey_idx` plumbing).
+/// 4. **Deploy walk** (this module's eventual `resolve_all`): walks
+///    the bracketed section, looks up each entry's `fn_ptr` from
+///    the string table (or directly from `__start_luna_trace_funcs`
+///    if we choose the parallel-array shape instead), calls
+///    `vm.collect_proto_hashes(root_proto)` to build a hash → Proto
+///    lookup once, then calls `vm.install_aot_trace(proto, trace)`
+///    per matched entry. Trace metadata (`entry_tags`,
+///    `window_size`, `exit_tags`) lives next to the fn in the
+///    `.rodata` of the trace object — emitted by the lowerer alongside
+///    the mcode in step 2.
+/// 5. **Smoke test**: `crates/luna-aot/tests/stage7_aot_trace_fires
+///    .rs` (TODO) — AOT-compile a hot loop, run with
+///    `LUNA_AOT_PROBE=1`, assert stdout + assert stderr contains
+///    `aot_trace_fired pc=<N>`.
 ///
-/// 1. **Warmup-trigger recording** — `luna-aot::embed::compile_and_link`
-///    runs the dump bytes through a `Vm` with `trace_enabled = true`
-///    and a low hot-count threshold; closes the first M traces seen.
-/// 2. **Per-trace mcode emit** — for each closed trace, call
-///    `lower_trace_into(&mut object_module, &trace_record,
-///    CompileOptions { aot: true, ... })` and capture the resulting
-///    `FuncId`. The trace mcode object is added to the link line.
-/// 3. **Dispatch registry** — emit a third section
-///    `luna_trace_idx` holding
-///    `[(proto_sha256, entry_pc, fn_ptr) ; N]` triples. The deploy
-///    resolver walks this section after `vm.load` (so undumped
-///    `Proto`s are available) and patches each matched proto's
-///    `Proto.jit` field with `JitProtoState::Compiled` carrying the
-///    AOT-provided entry pointer.
-/// 4. **Smoke test** — `luna-aot compile fib28.lua --out fib28` →
-///    run with `LUNA_AOT_PROBE=1` → assert stderr contains a
-///    "aot_trace_dispatched" probe and stdout matches interp output.
+/// # What landed this session
 ///
-/// # Why not landed this session
+/// - **Step 1** (`Proto::stable_hash` in
+///   `luna-core/src/runtime/function.rs`): FNV-1a-128 over bytecode +
+///   constants + upvals descriptors. Hand-rolled, no third-party
+///   deps. 4 unit tests in `tests/proto_stable_hash.rs`.
+/// - **Step 3** (`Vm::install_aot_trace` + `Vm::collect_proto_hashes`
+///   in `luna-core/src/vm/exec.rs`, bottom-of-file `impl Vm` block):
+///   the install API the deploy resolver will call once per AOT
+///   trace meta entry, plus the BFS-by-hash lookup the resolver uses
+///   to match `proto_hash → Gc<Proto>`. 3 unit tests in
+///   `tests/aot_trace_install.rs`.
 ///
-/// Steps 1-3 each touch a load-bearing subsystem (trace recorder
-/// public surface, per-`Proto` SHA-256 stability across
-/// `dump`/`undump`, `Proto.jit` mutator API). The combined risk
-/// envelope is multi-day, exceeding this session's budget. The
-/// resolver in [`aot_strkey_resolver`] (sub-piece 3) is the
-/// load-bearing dependency for any sub-piece-4 work — it shipped
-/// here, so a follow-up session can pick up at "emit trace mcode +
-/// register entries" without redoing strkey plumbing.
+/// # TODO (Steps 2 + 4 + 5)
+///
+/// Open work, in dependency order:
+///
+/// - **Step 2 (trace recorder driver, ~1d effort)**: in
+///   `crates/luna-aot/src/embed.rs::compile_and_link`, after
+///   `compile_to_dump`, build a temp `Vm` with low hot-count
+///   thresholds (need a `Vm::set_trace_hot_count_threshold` setter —
+///   today it's a const), run the script through `vm.call_value`
+///   with a small driver, and harvest the closed traces from
+///   `Proto.traces` of each visited proto. Convert each to an
+///   `ObjectModule` symbol via `lower_trace_into(&mut object_module,
+///   record, CompileOptions { aot: true, internal_loop: true,
+///   pre53: false })`.
+/// - **Step 4 (deploy-side trace-meta walker, ~0.5d effort)**: add a
+///   sibling resolver module to [`aot_strkey_resolver`] that walks
+///   `__start_luna_trace_meta` .. `__stop_luna_trace_meta`,
+///   calls `vm.collect_proto_hashes(root)` once (where `root` is the
+///   `LuaClosure.proto` returned by `vm.load`), and per entry:
+///   resolves the fn ptr, builds a `CompiledTrace` from the linked
+///   meta fields, calls `vm.install_aot_trace`. Plumbed into
+///   `run_inner` between `vm.load` and `vm.call_value`.
+/// - **Step 5 (end-to-end smoke test, ~0.5d effort)**: AOT-compile a
+///   tight loop, run with `LUNA_AOT_PROBE=1`, assert stdout AND
+///   `aot_trace_fired` probe in stderr. Add an `eprintln!` guarded
+///   on `LUNA_AOT_PROBE` inside the trace's first-dispatch path
+///   (either in the IR via a probe helper, or in
+///   `install_aot_trace` itself for a coarser "trace installed for
+///   pc=N" signal).
+///
+/// Effort total: ~2-3 dev-days for Steps 2/4/5 combined, dominated
+/// by the trace-recorder threshold-tuning (Step 2). Sub-piece 3's
+/// strkey resolver + this sub-piece's Steps 1/3 are the load-bearing
+/// dependencies — both shipped, so Steps 2/4/5 can be picked up
+/// without redoing any of the strkey or hash plumbing.
 ///
 /// The `LUNA_AOT_PROBE` env-var convention is reserved: when set,
-/// both sub-pieces 3 and 4 print one diagnostic line each to stderr.
-/// Sub-piece 4 will print `aot_trace_dispatched: id=<N>` on each
-/// trace fire.
+/// sub-pieces 3 and 4 each print one diagnostic line per resolve.
+/// Sub-piece 4's eventual line: `aot_trace_installed: pc=<N>` from
+/// the deploy walker, plus optional `aot_trace_fired pc=<N>` from
+/// the dispatch site for the smoke test.
 #[cfg(feature = "jit-helpers")]
 pub mod aot_trace_registry {
-    // Intentionally empty for sub-piece 3 ship — see the module-level
-    // doc above for the sub-piece 4 plan.
+    // Intentionally empty for this session's Steps 1 + 3 ship —
+    // those land on the luna-core API surface (`Proto::stable_hash` +
+    // `Vm::install_aot_trace` + `Vm::collect_proto_hashes`).
+    // Sub-piece 4 Steps 2/4/5 (compile-time recorder + deploy walker
+    // + smoke test) populate this module in a follow-up session;
+    // see the module-level docstring for the plan.
 }

@@ -9613,3 +9613,127 @@ impl Vm {
         out
     }
 }
+
+// ────────────────────────────────────────────────────────────────────
+// v1.3 Phase AOT Stage 7 sub-piece 4 — AOT trace dispatch install.
+//
+// The deploy-side resolver in `luna-runtime-helpers` walks the binary's
+// trace-meta section after `vm.load`, resolves each entry's
+// `(proto_hash, head_pc, fn_ptr)` triple against the loaded chunk's
+// proto tree, and pushes a `CompiledTrace` onto the matching Proto's
+// `traces` Vec via [`Vm::install_aot_trace`] below. The existing
+// trace-dispatch loop (this file's `cl.proto.traces.borrow().iter()
+// .find(|t| t.head_pc == pc && t.dispatchable)`) then fires the AOT
+// mcode without further plumbing — same code path the runtime JIT
+// uses.
+//
+// Why a separate impl block: keeps the AOT API surface (one fn) easy
+// to locate when grep'ing for `install_aot_trace`, without dragging
+// the 8500-line `impl Vm` block above.
+// ────────────────────────────────────────────────────────────────────
+
+impl Vm {
+    /// v1.3 Phase AOT Stage 7 sub-piece 4 — install a precompiled
+    /// `CompiledTrace` onto `proto.traces` so the interp dispatcher
+    /// fires it at the trace's `head_pc`. This is the runtime install
+    /// API the deploy-side `luna-runtime-helpers` resolver calls once
+    /// per AOT-emitted trace meta entry, after looking up `proto` by
+    /// stable hash (see [`Proto::stable_hash`]).
+    ///
+    /// # What this does
+    ///
+    /// Pushes `trace` onto `proto.traces` via the existing `RefCell`.
+    /// The trace's `entry` fn ptr must already point at runnable
+    /// machine code (the AOT linker resolved the symbol at link time;
+    /// the deploy resolver passes the address verbatim).
+    ///
+    /// # What this does NOT do
+    ///
+    /// - **No deduplication.** Calling twice with the same `head_pc`
+    ///   pushes two entries; the dispatcher's `find` will pick the
+    ///   first match. The deploy resolver is responsible for not
+    ///   double-installing.
+    /// - **No invalidation of the runtime JIT cache.** If the runtime
+    ///   JIT later records + compiles a trace for the same
+    ///   `(proto, head_pc)`, both coexist on `proto.traces` and the
+    ///   dispatcher's `find` picks whichever appears first. AOT
+    ///   traces install before any runtime recording is possible
+    ///   (resolver runs before `vm.load` returns its first closure),
+    ///   so AOT traces win the race for the same site.
+    /// - **No coverage gating.** AOT traces are trusted by
+    ///   construction — they were validated at compile time. Setting
+    ///   `dispatchable: false` on the input would silently disable
+    ///   dispatch; the caller controls that flag.
+    ///
+    /// # Safety / soundness
+    ///
+    /// `trace.entry` is an `unsafe extern "C" fn` (mmap'd or linked
+    /// machine code). Soundness contract:
+    ///
+    /// - The fn pointer must remain valid for the `Vm`'s lifetime.
+    ///   In the AOT-binary deploy shape this is trivially satisfied —
+    ///   the fn lives in the binary's `.text`.
+    /// - `trace.entry_tags` / `exit_tags` / `window_size` must match
+    ///   what the trace's IR actually compiled against; the dispatcher
+    ///   uses them to marshal `reg_state` in and out without further
+    ///   validation. A mismatch corrupts vm.stack.
+    ///
+    /// The AOT pipeline (`luna-aot`) is responsible for ensuring these
+    /// invariants hold; this fn is a plain push — no validation that
+    /// would slow the dispatcher's hot path either.
+    pub fn install_aot_trace(
+        &mut self,
+        proto: crate::runtime::Gc<crate::runtime::function::Proto>,
+        trace: crate::jit::trace::CompiledTrace,
+    ) {
+        let _ = self; // resolver passes &mut Vm for symmetry with future
+        // pending-install + hash-walk variants; nothing on `self` to
+        // mutate today because the install target lives on the Proto.
+        proto.traces.borrow_mut().push(std::rc::Rc::new(trace));
+    }
+
+    /// v1.3 Phase AOT Stage 7 sub-piece 4 — walk the proto tree
+    /// reachable from `root` and return `(proto, stable_hash)` pairs
+    /// for every Proto found. Used by the deploy-side resolver to
+    /// match AOT-emitted `proto_hash` keys against the freshly
+    /// `undump`'d chunk's protos.
+    ///
+    /// The walk is BFS over `Proto.protos`. Same-Proto deduplication
+    /// is done via `Gc::as_ptr` identity — a Proto re-referenced from
+    /// multiple nested closures (rare; the cache field would catch
+    /// the closure-side dedup, not the Proto side) is reported once.
+    ///
+    /// # Why on `&Vm` and not a free fn
+    ///
+    /// Keeps the AOT install API discoverable on the Vm surface —
+    /// `vm.collect_proto_hashes(root)` reads naturally next to
+    /// `vm.install_aot_trace(proto, trace)`. Doesn't actually touch
+    /// any Vm field, so `&self` (read-only) is enough.
+    pub fn collect_proto_hashes(
+        &self,
+        root: crate::runtime::Gc<crate::runtime::function::Proto>,
+    ) -> Vec<(
+        crate::runtime::Gc<crate::runtime::function::Proto>,
+        [u8; 16],
+    )> {
+        let _ = self;
+        let mut out = Vec::new();
+        let mut seen: std::collections::HashSet<*const crate::runtime::function::Proto> =
+            std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<
+            crate::runtime::Gc<crate::runtime::function::Proto>,
+        > = std::collections::VecDeque::new();
+        queue.push_back(root);
+        while let Some(p) = queue.pop_front() {
+            let key = p.as_ptr() as *const _;
+            if !seen.insert(key) {
+                continue;
+            }
+            out.push((p, p.stable_hash()));
+            for &child in p.protos.iter() {
+                queue.push_back(child);
+            }
+        }
+        out
+    }
+}
