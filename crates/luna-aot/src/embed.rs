@@ -434,7 +434,10 @@ pub fn compile_and_link(
     // Stage 6b: ensure the runtime staticlib exists for `target`.
     // For the host triple this is a workspace cargo build; for a cross
     // triple it's `cargo build --target=<triple>` and the resulting
-    // staticlib lives under `target/<triple>/release/`.
+    // staticlib lives under `target/<triple>/release-aot-helpers/`.
+    // The `release-aot-helpers` profile (workspace `Cargo.toml`) has
+    // `lto = "off"` so the 27 `luna_jit_*` Cranelift trace-mcode
+    // helpers survive the rlib → staticlib bundling step.
     let staticlib = build_runtime_helpers_staticlib(target.triple_for_cargo())?;
 
     // Stage 6c: final link via the target's cc driver. Order matters on
@@ -506,8 +509,12 @@ fn compile_to_dump(source_path: &Path, version: LuaVersion) -> Result<Vec<u8>, A
 ///    the override doesn't accidentally mix ABIs.
 /// 2. Otherwise, look up `CARGO_MANIFEST_DIR`, ascend to the workspace
 ///    root (two `..`), and invoke
-///    `cargo build -p luna-runtime-helpers --release [--target T]`.
-///    The staticlib lands at `target/<T or default>/release/libluna_runtime_helpers.a`.
+///    `cargo build -p luna-runtime-helpers --profile=release-aot-helpers [--target T]`.
+///    The staticlib lands at
+///    `target/<T or default>/release-aot-helpers/libluna_runtime_helpers.a`.
+///    The dedicated profile (workspace `Cargo.toml`) turns LTO off so
+///    the `luna_jit_*` helper symbols survive bundling — see
+///    `[profile.release-aot-helpers]` for the rationale.
 ///
 /// Cross-target builds require the matching `rustup target add <triple>`
 /// to have been run beforehand; failures (missing rust-std) are
@@ -568,7 +575,23 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
         .arg("build")
         .arg("-p")
         .arg("luna-runtime-helpers")
-        .arg("--release")
+        // v1.3 Stage 7 follow-on — dedicated `release-aot-helpers`
+        // profile (defined in workspace `Cargo.toml`) turns LTO off
+        // for this staticlib build. Workspace `[profile.release]`
+        // has `lto = true`, which strips the 27 `luna_jit_*`
+        // Cranelift trace-mcode helper symbols from the staticlib
+        // bundle (the cross-crate optimizer correctly observes they
+        // are never *called* from the staticlib's Rust-side surface
+        // and treats their cgus as unreachable). The AOT-binary
+        // link step then fails with "undefined reference to
+        // `_luna_jit_table_get_field`" et al. for any trace mcode
+        // that touches a table.
+        //
+        // Trade-off: no cross-crate inlining into the helper bodies.
+        // Cranelift emits the calls as `Linkage::Import` indirect
+        // jumps regardless, so the inlining wouldn't apply at the
+        // call site anyway — the runtime-JIT path is unaffected.
+        .arg("--profile=release-aot-helpers")
         // Don't inherit RUSTFLAGS that might pollute the staticlib
         // (e.g. coverage instrumentation from the parent test build).
         // Acceptable since the staticlib build is deterministic
@@ -614,7 +637,10 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
     if let Some(t) = target_triple {
         staticlib.push(t);
     }
-    staticlib.push("release");
+    // Profile name mirrors the `--profile=release-aot-helpers` arg
+    // above. Cargo's target dir layout uses the profile name verbatim
+    // for non-`dev`/`release` profiles.
+    staticlib.push("release-aot-helpers");
     // On Windows the staticlib is named `luna_runtime_helpers.lib`
     // rather than `lib*.a`. We try both so the same code path covers
     // both ABIs.
@@ -712,8 +738,9 @@ pub struct TargetSpec {
     pub triple: String,
     /// `true` when the triple matches the build host's rust triple. The
     /// staticlib-build step shortcuts the `--target` flag in this case,
-    /// landing the `.a` under `target/release/` (the workspace default
-    /// dir, not `target/<triple>/release/`).
+    /// landing the `.a` under `target/release-aot-helpers/` (the
+    /// workspace default dir for the dedicated AOT-helpers profile,
+    /// not `target/<triple>/release-aot-helpers/`).
     pub is_host: bool,
     /// Object-file binary format for `object::write::Object::new`.
     pub format: BinaryFormat,

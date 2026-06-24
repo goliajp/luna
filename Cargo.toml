@@ -50,6 +50,35 @@ categories = ["compilers", "no-std"]
 lto = true
 codegen-units = 16
 
+# v1.3 Stage 7 follow-on — dedicated profile for the
+# `luna-runtime-helpers` staticlib build that the AOT pipeline
+# (`luna-aot::embed::compile_and_link`) consumes. LTO must be OFF
+# for this build because the staticlib's whole purpose is to expose
+# the 27 `#[no_mangle] pub unsafe extern "C" fn luna_jit_*`
+# Cranelift trace-mcode helpers as resolvable externals for the AOT
+# binary's link step. With full LTO, the cross-crate optimizer
+# correctly observes the helpers are never *called* from within the
+# staticlib's Rust-side code path and strips their defining cgus
+# from the rlib → staticlib bundle. The downstream AOT binary then
+# fails to link with "undefined reference to
+# `_luna_jit_table_get_field`" et al.
+#
+# Verified empirically: with `lto = "off"` here,
+# `nm libluna_runtime_helpers.a | grep -c " T _luna_jit_"` reports
+# 27; with workspace `lto = true` it reports 0.
+#
+# Cargo currently disallows `lto = ...` in `[profile.*.package.*]`
+# overrides (cargo issue #9330), so the staticlib must be built in a
+# dedicated profile rather than per-package. `luna-aot::embed`'s
+# `cargo build` shell-out picks this profile via
+# `--profile=release-aot-helpers` when building the staticlib.
+#
+# All other crates (luna-core, luna-jit's normal rlib, luna-aot
+# itself) keep full LTO and the inlining performance wins it brings.
+[profile.release-aot-helpers]
+inherits = "release"
+lto = "off"
+
 [profile.release-dbg]
 inherits = "release"
 debug = true

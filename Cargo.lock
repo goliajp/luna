@@ -695,6 +695,7 @@ name = "luna-runtime-helpers"
 version = "1.3.0"
 dependencies = [
  "luna-core",
+ "luna-jit",
 ]
 
 [[package]]
