@@ -762,11 +762,13 @@ pub mod aot_trace_registry {
                 // past it via the size-rounding above. An entry whose
                 // `fn_ptr` is null came from that placeholder and must
                 // be skipped (not from a real AOT-emitted trace).
-                if entry.fn_ptr.is_null() || entry.meta_ptr.is_null() {
+                if entry.fn_ptr == 0 || entry.meta_ptr == 0 {
                     continue;
                 }
-                let meta_bytes =
-                    core::slice::from_raw_parts(entry.meta_ptr, entry.meta_len as usize);
+                let meta_bytes = core::slice::from_raw_parts(
+                    entry.meta_ptr as *const u8,
+                    entry.meta_len as usize,
+                );
                 let decoded = match decode_meta_blob(meta_bytes) {
                     Ok(d) => d,
                     Err(reason) => {
@@ -824,11 +826,13 @@ pub mod aot_trace_registry {
                 }
                 let entry_tags_rc: std::rc::Rc<[u8]> = decoded.entry_tags.into();
                 let exit_tags_rc: std::rc::Rc<[ExitTag]> = exit_tags_vec.into();
-                // Transmute the C-ABI fn ptr from `*const u8` to
-                // `TraceFn`. Safe because the trace .o was emitted by
-                // `lower_trace_into_named` with sig `(I64) -> I64`,
-                // matching `TraceFn`.
-                let fn_ptr_raw = entry.fn_ptr;
+                // Transmute the C-ABI fn ptr from u64 (wire-width-
+                // stable) to `TraceFn`. Safe because the trace .o was
+                // emitted by `lower_trace_into_named` with sig
+                // `(I64) -> I64`, matching `TraceFn`. AOT-binary
+                // deploy is always 64-bit so the u64 narrows to a
+                // valid pointer on this target.
+                let fn_ptr_raw = entry.fn_ptr as *const u8;
                 let trace_entry: TraceFn = core::mem::transmute::<*const u8, TraceFn>(fn_ptr_raw);
                 let ct = CompiledTrace::from_aot_meta(
                     trace_entry,

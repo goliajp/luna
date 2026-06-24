@@ -19,7 +19,7 @@ optimization.
 
 ---
 
-## [1.3.0] — TBD
+## [1.3.0] — 2026-06-25
 
 **Mega sprint** — 2026-06-24 user directive collapsed the planned
 v1.2.0 + v1.3.0 + v1.4.0 + parts of v2.0 into a single ship under

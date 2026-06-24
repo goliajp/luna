@@ -9664,7 +9664,7 @@ impl Vm {
     /// fires it at the trace's `head_pc`. This is the runtime install
     /// API the deploy-side `luna-runtime-helpers` resolver calls once
     /// per AOT-emitted trace meta entry, after looking up `proto` by
-    /// stable hash (see [`Proto::stable_hash`]).
+    /// stable hash (see `crate::runtime::function::Proto::stable_hash`).
     ///
     /// # What this does
     ///
