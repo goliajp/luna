@@ -127,7 +127,8 @@ jobs:
           fi
 
   # ─────────────────────────────────────────────────────────────────
-  # v1.2 G2: unsafe-usage drift detection.
+  # G2: unsafe-usage drift detection (introduced in the v1.3 mega
+  # sprint Phase A — formerly tagged v1.2 G2).
   #
   # Counts `unsafe (\{|fn |impl |trait |extern )` sites across first-party
   # src trees and fails CI if the count exceeds the recorded ceiling.
@@ -136,11 +137,12 @@ jobs:
   # error rather than fix the root cause.
   #
   # Baseline: docs/unsafe-accounting.md §"v1.1 snapshot" recorded 461
-  # sites at v1.1.0 ship. v1.2 Track B (userdata_trait.rs trampolines
-  # + auto-install) brought the count up by ~15 → ceiling 490 leaves
-  # ~14 slots of headroom for the rest of v1.2 + early v1.3 work.
-  # Bump the ceiling explicitly when an unsafe addition is justified;
-  # never silence by widening to a round number.
+  # sites at v1.1.0 ship. Phase A (LuaUserdata trait sugar) brought the
+  # count up by ~15 → ceiling 490 with ~14 slots of headroom. v1.3
+  # subsequent phases (Send-safety SendVm fork, userdata Trace-bearing
+  # GC ripple, luna-aot codegen) will need explicit ceiling bumps as
+  # each justified unsafe addition lands. Never widen to a round number
+  # to silence drift.
   # ─────────────────────────────────────────────────────────────────
   unsafe-drift:
     name: unsafe-usage drift detection

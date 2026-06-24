@@ -19,9 +19,36 @@ optimization.
 
 ---
 
-## [1.2.0] — 2026-06-24
+## [1.3.0] — TBD
 
-Polish + ergonomics sprint on the v1.1 ship. Headline: **`LuaUserdata`
+**Mega sprint** — 2026-06-24 user directive collapsed the planned
+v1.2.0 + v1.3.0 + v1.4.0 + parts of v2.0 into a single ship under
+the `nodefer` upgrade ("nothing is deferred to v1.4 or later").
+Headline phases:
+
+- **Phase A** (was v1.2): `LuaUserdata` trait sugar, REPL multi-line
+  + history, lint debt cleared, Track B/L/P/R/S/G floor — already
+  on develop (commits `bc088bd` / `65ca2cc` / `70c4bff`).
+- **Phase B-N** (v1.3 expanded): PUC luac body 5.1-5.5, Send-safety
+  full impl, perf attack round 2 (Path B math-fold extend), wasm32-
+  wasip1 port, true `obj.x` field-style + `derive(LuaUserdata)`,
+  REPL tab + syntax highlight, async natives in dispatch, userdata
+  Trace-bearing host payloads, host_roots slot recycling, **luna-aot
+  native-binary compile**, **MacroLua dialect support**.
+
+See `.dev/rfcs/v1.3-charter.md` for the full track list, time
+window estimate, and Phase ordering. `nodefer` is the operating
+contract: every line item ships in v1.3 or is documented as
+permanently out-of-scope (currently only the `luna` crates.io name
+reclaim falls there — sticking with `luna-jit`).
+
+The Phase A content below was previously written under the
+`[1.2.0]` heading; it ships now as part of v1.3.0 without a
+separately-published v1.2.0 on crates.io.
+
+### Phase A headline
+
+Polish + ergonomics on the v1.1 ship. **`LuaUserdata`
 trait sugar** for Lua-callable host types, REPL gets multi-line input
 plus history, lint debt cleared, perf attack discovers the real
 bottleneck (interp, not trace) and updates the methodology accordingly.
@@ -29,9 +56,9 @@ bottleneck (interp, not trace) and updates the methodology accordingly.
 ### Track B — `LuaUserdata` trait (new embedder surface)
 
 - **`luna_core::vm::userdata_trait`** module exposes the
-  [`LuaUserdata`](https://docs.rs/luna-core/1.2/luna_core/vm/trait.LuaUserdata.html)
-  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.2/luna_core/vm/trait.UserdataMethods.html)
-  builder + [`MetaMethod`](https://docs.rs/luna-core/1.2/luna_core/vm/enum.MetaMethod.html)
+  [`LuaUserdata`](https://docs.rs/luna-core/1.3/luna_core/vm/trait.LuaUserdata.html)
+  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.3/luna_core/vm/trait.UserdataMethods.html)
+  builder + [`MetaMethod`](https://docs.rs/luna-core/1.3/luna_core/vm/enum.MetaMethod.html)
   enum. Embedders register methods (`add_method` / `add_method_mut`),
   static fns (`add_function`), metamethods (`add_meta_method`), and
   call-syntax field getters (`add_field_method_get`) via a typed
@@ -136,34 +163,61 @@ bottleneck (interp, not trace) and updates the methodology accordingly.
 - `.dev/discussions/luna-crate-name-history.md` — archives the
   v1.1.0 ship-time rename story (`luna` → `luna-jit`).
 
-### Deferred to v1.3 (NOT silent)
+### Phase B-N — v1.3 expansion in flight
 
-These items are scoped out of v1.2 explicitly:
+Per the 2026-06-24 `nodefer` directive every item below is **in
+scope** for v1.3 (no longer deferred). Tracked in
+`.dev/rfcs/v1.3-charter.md` + `.dev/rfcs/v1.3-plan-state.md`:
 
-- **Path B math-fold extend** (`min` / `max` 2-arg) — required for
-  trace JIT to actually dispatch on token-bucket-style workloads.
-  Audit ~1-2d effort. Bundled with TA3 `trace_enabled` default flip
-  + Linux taskset bench (macOS local variance band is too wide).
+- **Path B math-fold extend** (`min` / `max` 2-arg) — `trace.rs::try_match_trace_math_fold`
+  extension so trace JIT actually dispatches on Redis-Lua-shape workloads.
+  Bundled with `trace_enabled` default flip + Linux taskset bench.
 - **D4 A3 / A4 / A5** (newindex double-walk collapse / Move
-  elimination / dispatcher reshape) — audit revealed cost estimates
-  4-5× too high; marginal once A1 lands.
+  elimination / dispatcher reshape) — perf polish on top of A1.
 - **`add_field_method_set` + true `obj.x` field-style access** —
-  v1.2 trait sugar ships call-syntax only (`obj:width()`). True
-  field-style needs `__index` as a function dispatcher.
-- **`#[derive(LuaUserdata)]` proc-macro** — hand impl is mlua's
-  surface; revisit if dogfood reports demand the derive.
-- **Track S `feature="send"` actual impl** — 1Q sprint scoped in
-  `v1.2-audit-send-cost.md`; needs `SendVm` newtype fork if Phase A
-  bench confirms x86_64 budget overrun.
-- **REPL C3 tab completion + syntax highlight** — gated on adding
-  `rustyline` as a non-default `repl-line-editor` cargo feature.
-- **PUC 5.4 luac body loading (Track E E1)** — explicitly deferred
-  to a **v1.3 quarter sprint** covering 5.1-5.5 binary formats
-  together (audit estimate 17-20d for the full matrix vs 7-10d for
-  5.4 alone). Shipping 5.4 standalone leaves an asymmetric matrix
-  that the v1.3 sprint would have to backfill anyway; deferring the
-  whole bundle to one sprint preserves the per-dialect symmetry the
-  Lua compatibility doc baselines on.
+  `__index` upgraded to function-dispatcher so `obj.x` (no parens)
+  works alongside `obj:x()`. Phase A shipped call-syntax sugar; this
+  closes the gap.
+- **`#[derive(LuaUserdata)]` proc-macro** — `luna-jit-derive` crate
+  ships the derive; hand impl stays as the escape hatch. luna-core
+  0-dep contract preserved (derive lives in luna-jit-derive only).
+- **`feature = "send"` real implementation** — `SendVm` newtype
+  fork (UnsafeCell fast path + RwLock slow path) per the audit;
+  tokio embed pattern documented.
+- **REPL C3 tab completion + syntax highlight** — `[features]
+  repl-line-editor` (rustyline) non-default cargo feature.
+- **PUC luac body 5.1-5.5** — full binary compat across all
+  shipping Lua dialects; opt-in `Vm::set_puc_bytecode_loading(true)`
+  + per-dialect translator under `crates/luna-core/src/vm/dump/`.
+- **wasm32-wasip1 support** — `io.popen` / `os.execute` cfg-gated
+  + wasi stubs return PUC error tuple.
+- **`official_run` flakiness fix** — compiler short-circuit AND
+  `debug_assert_eq!(reg, base)` + sweep misaligned-pointer cascade
+  root cause + fix.
+- **Async natives in dispatcher** (B11 hook firing) — close the
+  B10 stage 2 deferred path so async-marked natives compose with
+  Rust-side debug hooks.
+- **Userdata `Trace`-bearing host payloads** — `T` may hold
+  `Gc<...>` fields; collector recurses into the payload (userdata
+  GC ripple).
+- **`host_roots` slot recycling** — append-only pool gets a free
+  list + ticket invalidation; long-running embedders no longer
+  monotonically grow the host-root vector.
+- **`luna-aot` native-binary compile** — ahead-of-time compiler
+  that emits a self-contained binary embedding the Lua sources
+  with no runtime parse step. Architectural addition; separate
+  crate but published as part of the v1.3 wave.
+- **MacroLua dialect support** — Lua syntax extension as an
+  optional dialect alongside 5.1-5.5; routed through the existing
+  per-dialect lexer/parser machinery so it doesn't disturb the
+  PUC compatibility matrix.
+
+### Permanently out-of-scope (decision 2026-06-24)
+
+- **Reclaim `luna` crate name on crates.io** — abandoned; sticking
+  with `luna-jit` for the JIT-equipped crate and `luna-core` for
+  the 0-dep interpreter. See
+  `.dev/discussions/luna-crate-name-history.md`.
 
 ### Internal — sprint methodology
 
