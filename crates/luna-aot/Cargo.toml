@@ -1,0 +1,44 @@
+[package]
+name = "luna-aot"
+description = "Ahead-of-time compiler from Lua source to self-contained native binary, built on luna-core's VM. v1.3 scaffold ships the bytecode-embed pipeline (Lua source → luna bytecode dump → ELF/Mach-O/PE data section → linked binary); the Cranelift-lowered native trace codegen lands in follow-up sessions within the same v1.3 mega sprint. Embedders that want a runtime JIT keep using `luna-jit`; embedders that want pure interp keep using `luna-core`. `luna-aot` is a build-time tool, not a runtime dep of the produced binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[lib]
+# rlib: programmatic embedders (build scripts, custom packagers).
+# No cdylib/staticlib because luna-aot is a build tool, not a host lib.
+crate-type = ["rlib"]
+
+[[bin]]
+name = "luna-aot"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Runtime + bytecode-format upstream. Pinned to the matching luna-core
+# release so `cargo publish` lookups still resolve when the path
+# fallback isn't in play.
+luna-core = { path = "../luna-core", version = "= 1.3.0" }
+
+# Object-file emission for the embedded bytecode section.
+# `default-features = false` + the selected formats keeps the crate
+# closure small; we don't need read support here.
+object = { version = "0.36", default-features = false, features = ["write_std", "elf", "macho", "pe"] }
+
+# CLI plumbing. Matches the rest of the v1.3 sprint's preference for
+# `clap` derive (used by luna-jit in test fixtures and v1.3 phase doc
+# tools) over hand-rolled parsing — luna-aot's CLI surface is larger
+# than `luna` runner's so the maintenance trade-off favours `clap`.
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

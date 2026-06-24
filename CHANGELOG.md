@@ -382,10 +382,62 @@ scope** for v1.3 (no longer deferred). Tracked in
     (10 tests covering basic recycle, ABA detection, `unpin_all`
     invalidation, 100k pin/unpin smoke, free-list LIFO, GC tracer
     correctness across recycle).
-- **`luna-aot` native-binary compile** — ahead-of-time compiler
-  that emits a self-contained binary embedding the Lua sources
-  with no runtime parse step. Architectural addition; separate
-  crate but published as part of the v1.3 wave.
+- **`luna-aot` native-binary compile** *(Phase AOT scaffold landed;
+  Cranelift codegen follow-up within v1.3)* — new sibling crate
+  `crates/luna-aot/` (workspace member alongside `luna-core` +
+  `luna-jit` + `luna-jit-derive`). Ahead-of-time compiler that
+  emits a self-contained binary embedding the Lua bytecode with no
+  runtime parse step.
+  - **Scaffold pipeline end-to-end** today: Lua source →
+    `luna_core::frontend::parser::parse` → AST →
+    `luna_core::compiler::compile_chunk` → `Gc<Proto>` →
+    `luna_core::vm::dump::dump` → luna body dump bytes →
+    `object::write::Object` with a `.luna.bytecode` ReadOnlyData
+    section bracketed by global symbols
+    `__luna_bytecode_start` / `__luna_bytecode_end` (Mach-O
+    `_`-prefixed) → system `cc` link with a minimal C entry +
+    bytecode `.o` → host-triple native binary that prints the
+    embedded section length to `stderr` (proves the section is
+    reachable end-to-end).
+  - **CLI**: `luna-aot compile <input.lua> [--out <path>]
+    [--target <triple>] [--dialect 5.1|5.2|5.3|5.4|5.5|macrolua]`.
+    `clap` derive surface; scaffold rejects non-host `--target`
+    until Stage 6 cross-compile lands.
+  - **Library surface**: `luna_aot::embed::embed_bytecode(source,
+    out, target_triple, version)` for programmatic embedders;
+    `luna_aot::runtime_stub::aot_main()` (interp-driven Vm
+    entry — compiles cleanly, awaiting wire-up to the link step in
+    the follow-up session via cargo-bootstrap or staticlib
+    distribution per audit § Stage 6 Option A/B); constants
+    `BYTECODE_START_SYMBOL` / `BYTECODE_END_SYMBOL` /
+    `BYTECODE_SECTION_NAME`.
+  - **Supply-chain delta**: `luna-aot` pulls `object 0.36`
+    (`default-features = false`, `elf` + `macho` + `pe` + `write_std`)
+    + `clap 4` (derive) + dev-only `tempfile 3`. **luna-core
+    0-third-party-dep contract is unaffected** — `cargo tree -p
+    luna-core --prefix none --no-default-features | grep -cE " v[0-9]"`
+    still reports 1. Workspace-wide transitive growth = ~50 crates
+    (clap + object + their derive transitives). cargo-deny config
+    may want a `[bans] multiple-versions = "warn"` pass; flagged
+    for the follow-up phase that adds the per-crate deny job.
+  - **Test**: `crates/luna-aot/tests/scaffold_smoke.rs` exercises
+    the end-to-end path (parse + compile + dump + `.o` write + `cc`
+    link → on-disk non-empty native binary). Does not execute the
+    binary — the scaffold's C entry's stderr-only output isn't a
+    correctness signal for this session; the runtime-stub follow-up
+    adds the stdout-comparison test.
+  - **Follow-up sessions** within v1.3 (per
+    `.dev/rfcs/v1.3-audit-luna-aot.md` Stages 3-6, ~60 dev-days
+    remaining of the 70-day audit estimate): (1) wire
+    `runtime_stub::aot_main` into the link step so the binary
+    actually `undump`s + runs the embedded bytecode through a `Vm`;
+    (2) Stage 3 lowerer refactor (lift `lower_int_chunk_into<M:
+    Module>` + `lower_trace_into<M: Module>` over
+    `cranelift_module::Module` so the same code emits both
+    `JITModule` runtime + `ObjectModule` AOT); (3) Cranelift trace
+    mcode emission via `cranelift-object`; (4) cross-compile via
+    `--target` + per-triple `cc` flags; (5) Alpine
+    no-lua-installed deploy smoke test (audit § AOT6).
 - **MacroLua dialect support** — Lua syntax extension as an
   optional dialect alongside 5.1-5.5; routed through the existing
   per-dialect lexer/parser machinery so it doesn't disturb the
