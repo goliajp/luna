@@ -165,7 +165,23 @@ fn emit_str_key_arg<M: Module>(
         // is 15. ELF / COFF have no such limit but accept the same
         // short name — the deploy resolver brackets by the literal
         // section name on both platforms.
-        desc.set_segment_section("", "luna_strkey_idx");
+        // Use `__DATA` segment explicitly on Mach-O so this section
+        // merges with the cmain shim's `__DATA,luna_strkey_idx`
+        // placeholder. An empty segment string lands the section in
+        // segment `""`, separate from `__DATA` — the deploy resolver's
+        // `section$start$__DATA$luna_strkey_idx` would then bracket
+        // only the placeholder, missing every real trace entry by 8
+        // bytes (verified via `otool -lv` of an AOT binary). ELF / PE
+        // ignore the segment arg (segment is Mach-O specific) so the
+        // change is a no-op there.
+        desc.set_segment_section("__DATA", "luna_strkey_idx");
+        // 8-byte alignment for the two pointer relocations at offsets
+        // 0 and 8. Mach-O `ld` hard-rejects unaligned pointer slots
+        // ("pointer not aligned in `___luna_aot_strkey_idx_…`+0x8"),
+        // which fires the first time a trace AOT-compiles a GetField/
+        // SetField op (the strkey idx didn't exist in the trivial
+        // smoke source).
+        desc.set_align(8);
         // Two pointer-sized relocations: linker fills 0..8 with the
         // resolved address of `bytes_id` and 8..16 with `slot_id`.
         let bytes_gv = module.declare_data_in_data(bytes_id, &mut desc);

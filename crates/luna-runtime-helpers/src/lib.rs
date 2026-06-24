@@ -177,6 +177,44 @@ fn run_inner(bytecode: &[u8]) -> i32 {
     // and survives any default change.
     vm.set_bytecode_loading(true);
 
+    // v1.3 Phase AOT Stage 7 trace-coverage follow-up — install the
+    // real Cranelift JIT backend (= `enter_jit` that pins `JIT_VM` /
+    // `JIT_CL` TLS) BEFORE any AOT-emitted trace mcode dispatches.
+    //
+    // Without this swap, the deploy `Vm` runs `NullJitBackend.enter`,
+    // which is a no-op — `JIT_VM` TLS stays null, and the first AOT
+    // trace that calls any `luna_jit_*` helper (e.g. `_table_get_field`,
+    // `_op_get_tab_up`, `_table_set_int`) hits `debug_assert!(!p.is_null
+    // ())` in debug builds or dereferences null in release →
+    // SIGSEGV.
+    //
+    // Recorder is irrelevant on the deploy side (AOT traces install
+    // before any record fires; the active `trace_compiler` would never
+    // get called), but `IntChunkCompiler::enter` IS load-bearing —
+    // it's the function the dispatcher calls right before
+    // `entry_fn(reg_state)`.
+    //
+    // `install_jit_backend` is luna-core API; `CraneliftBackend`
+    // implements both `IntChunkCompiler` (whose `enter` is what we
+    // actually need) and `TraceCompiler`. Wrap behind `jit-helpers`
+    // feature so a future no-JIT-on-deploy build can opt out (in
+    // which case AOT traces that touch helpers would have to be
+    // filtered at AOT-compile time — currently all of them do).
+    #[cfg(feature = "jit-helpers")]
+    {
+        vm.install_jit_backend(
+            luna_jit::jit_backend::CraneliftBackend,
+            luna_jit::jit_backend::CraneliftBackend,
+        );
+        // NOTE: `trace_enabled = true` (the TA3 ship default) is
+        // load-bearing for AOT dispatch too — `Vm::run`'s trace
+        // lookup gate is `if self.jit.trace_enabled`, used for BOTH
+        // runtime-compiled traces AND AOT-installed traces.
+        // Disabling here would silently skip the AOT install's
+        // dispatch. Runtime re-recording for back-edges the AOT
+        // didn't cover is fine — same pattern interp + JIT uses.
+    }
+
     // v1.3 Phase AOT Stage 7 sub-piece 3 — interned-string slot
     // resolver. Runs BEFORE `vm.load` so the resulting closure's
     // first dispatch into AOT mcode sees populated slots. Idempotent
@@ -826,6 +864,39 @@ pub mod aot_trace_registry {
                 }
                 let entry_tags_rc: std::rc::Rc<[u8]> = decoded.entry_tags.into();
                 let exit_tags_rc: std::rc::Rc<[ExitTag]> = exit_tags_vec.into();
+                // v2 per_exit_tags decode: reconstruct
+                // `Vec<(cont_pc, Rc<[ExitTag]>)>` matching the
+                // dispatcher's `decode_exit_shape` shape lookup. Each
+                // entry's packed-byte `ExitTag` array unpacks via
+                // [`unpack_exit_tag`]; an invalid byte = skip the
+                // whole trace (matches the existing exit-tag handling).
+                let mut per_exit_tags_decoded: Vec<(u32, std::rc::Rc<[ExitTag]>)> =
+                    Vec::with_capacity(decoded.per_exit_tags.len());
+                let mut per_exit_tags_ok = true;
+                for ent in &decoded.per_exit_tags {
+                    let mut tags: Vec<ExitTag> = Vec::with_capacity(ent.tags_packed.len());
+                    for raw in ent.tags_packed.iter().copied() {
+                        if let Some(t) = unpack_exit_tag(raw) {
+                            tags.push(t);
+                        } else {
+                            per_exit_tags_ok = false;
+                            break;
+                        }
+                    }
+                    if !per_exit_tags_ok {
+                        break;
+                    }
+                    per_exit_tags_decoded.push((ent.cont_pc, tags.into()));
+                }
+                if !per_exit_tags_ok {
+                    if probe_on {
+                        eprintln!(
+                            "luna-runtime-helpers: aot_trace skip head_pc={} reason=per_exit_tag_invalid",
+                            entry.head_pc
+                        );
+                    }
+                    continue;
+                }
                 // Transmute the C-ABI fn ptr from u64 (wire-width-
                 // stable) to `TraceFn`. Safe because the trace .o was
                 // emitted by `lower_trace_into_named` with sig
@@ -843,6 +914,7 @@ pub mod aot_trace_registry {
                     entry_tags_rc,
                     exit_tags_rc,
                     tag_res_kind,
+                    per_exit_tags_decoded,
                 );
                 vm.install_aot_trace(proto, ct);
                 installed += 1;

@@ -23,27 +23,45 @@
 //! [`AOT_META_VERSION`]; a mismatch on the deploy side is a hard
 //! reject, not silent fallback).
 //!
-//! # Why not full `CompiledTrace` serialization
+//! # Wire format versions
+//!
+//! - **v1** — sub-piece-4 minimal cut. Fields: `head_pc`, `n_ops`,
+//!   `window_size`, `dispatchable`, `entry_tags`, `exit_tags`,
+//!   `global_tag_res_kind`. Only "simple" traces (no inline side-
+//!   exits, no per-cont_pc tag exits) installable.
+//! - **v2** — Stage 7 trace-coverage follow-up. Appends a trailing
+//!   `per_exit_tags` array (`(cont_pc, [ExitTag])` per entry) so
+//!   traces with typed-register side-exit guards (GetUpval-heavy
+//!   closures, type-specialized GetField loops) are AOT-installable.
+//!   Inline cmp@d>0 side-exits (`per_exit_inline`) still require
+//!   runtime `FrameMaterializeInfo` chains — they remain JIT-only
+//!   this cut. v2 readers MUST accept v1 blobs as if `per_exit_tags`
+//!   were empty (the trailing block becomes optional via the
+//!   `total_payload < bytes.len()` predicate at decode time).
+//!
+//! # Field summary
 //!
 //! `CompiledTrace` carries 30+ fields including `RefCell<HashMap>`,
-//! `Box<Cell<*const u8>>`, `Rc<[InlineSideExit]>` — most are
-//! side-trace bookkeeping that's irrelevant for AOT (the deploy `Vm`
-//! never side-traces an AOT-installed trace, so all those start
-//! empty). The sub-piece-4 cut serializes only the **dispatch-load-
-//! bearing** fields:
+//! `Box<Cell<*const u8>>`, `Rc<[InlineSideExit]>` — most are side-
+//! trace bookkeeping irrelevant for AOT (the deploy `Vm` never side-
+//! traces an AOT-installed trace, so all those start empty). The
+//! AOT meta format serializes only the **dispatch-load-bearing**
+//! fields:
 //!
 //! - `head_pc`, `n_ops`, `window_size`, `dispatchable`
 //! - `entry_tags: Rc<[u8]>` — per-slot entry-tag specialization
-//! - `exit_tags: Rc<[ExitTag]>` — per-slot exit-tag restore
+//! - `exit_tags: Rc<[ExitTag]>` — per-slot exit-tag restore (clean tail)
 //! - `global_tag_res_kind` — fast-path classification
+//! - `per_exit_tags` *(v2+)* — per-cont_pc slot-shape entries the
+//!   dispatcher uses to restore vm.stack on a typed-register
+//!   side-exit
 //!
-//! Everything else defaults to its `..Default::default()` equivalent:
-//! empty `per_exit_inline`, empty `per_exit_tags`, empty
-//! `body_writes`, null side-trace ptrs, etc. Traces with non-trivial
-//! side-exit shapes (`per_exit_inline.len() > 0` etc.) **are
-//! intentionally not installable** through this format — the AOT-side
-//! recorder must filter to traces whose `is_aot_installable()` returns
-//! true.
+//! `per_exit_inline`, `body_writes`, side-trace ptrs etc. default to
+//! empty / null. Traces whose runtime shape requires non-empty
+//! `per_exit_inline` (depth>0 inlined cmp side-exits with frame
+//! materialization) **are intentionally not installable** through
+//! this format — the AOT-side recorder filters to traces whose
+//! `per_exit_inline.is_empty()` before serializing.
 
 use crate::jit::trace_types::{ExitTag, TagResKind};
 
@@ -53,12 +71,19 @@ use crate::jit::trace_types::{ExitTag, TagResKind};
 /// causing arbitrary deserialization.
 pub const AOT_META_MAGIC: u32 = 0xAA77_0001;
 
-/// Wire-format version. Incremented whenever a field is added /
-/// removed / its on-disk shape changes. The deploy walker hard-rejects
-/// any blob whose version != this crate's `AOT_META_VERSION` — same-
-/// version invariant is the only way to keep the format independent of
-/// `CompiledTrace`'s field churn.
-pub const AOT_META_VERSION: u32 = 1;
+/// Wire-format version. v1 = minimal cut (sub-piece 4). v2 = appends
+/// trailing `per_exit_tags` block so typed-register side-exits
+/// (GetUpval-heavy traces) install at deploy time.
+///
+/// **Forward compatibility contract**: a v2 writer emits the same
+/// fixed-prefix header layout as v1 plus the v2 tail. A v2 reader
+/// MUST accept v1 blobs (= header + tags only, no v2 tail) as if
+/// `per_exit_tags` were empty — implementation lives in
+/// [`decode_meta_blob`]'s `bytes.len() > total_payload` predicate.
+/// A v1 reader on a v2 blob would mis-parse the trailing block as
+/// garbage; we bump `AOT_META_VERSION` so v1 readers hard-reject
+/// instead of silently mis-installing.
+pub const AOT_META_VERSION: u32 = 2;
 
 /// Fixed-size header at the top of every meta blob. All ints are
 /// little-endian.
@@ -148,19 +173,45 @@ pub fn unpack_tag_res_kind(b: u8) -> Option<TagResKind> {
     }
 }
 
-/// Serialize a header + the two tag arrays into a fresh `Vec<u8>`. The
-/// produced bytes are what `luna-aot` embeds into the
+/// One per-cont_pc side-exit entry serialized into the v2 tail of a
+/// meta blob. Mirrors `CompiledTrace::per_exit_tags`'s `(u32,
+/// Rc<[ExitTag]>)` shape, with the `ExitTag` slice already packed
+/// through [`pack_exit_tag`].
+#[derive(Clone, Debug)]
+pub struct PerExitTagsEntry {
+    /// Pc the interp resumes at after the side-exit fires. Matches
+    /// the IR's `iconst` baked into the side-exit return.
+    pub cont_pc: u32,
+    /// Per-slot `ExitTag` snapshot at the side-exit moment, packed
+    /// via [`pack_exit_tag`]. Length is the trace's caller-window
+    /// `max_stack` (always ≤ `window_size`).
+    pub tags_packed: Vec<u8>,
+}
+
+/// Serialize a header + the two tag arrays + the v2 `per_exit_tags`
+/// tail into a fresh `Vec<u8>`. Pass an empty `per_exit_tags` slice
+/// to emit a "simple" trace (the tail then carries a single
+/// `count = 0` u32 — still v2 layout, just empty).
+///
+/// The produced bytes are what `luna-aot` embeds into the
 /// `luna_trace_blob` section per-trace; the deploy walker reads from
-/// the same wire shape.
+/// the same wire shape via [`decode_meta_blob`].
 pub fn encode_meta_blob(
     header: &AotTraceMetaHeader,
     entry_tags: &[u8],
     exit_tags_packed: &[u8],
+    per_exit_tags: &[PerExitTagsEntry],
 ) -> Vec<u8> {
     assert_eq!(entry_tags.len(), header.entry_tags_len as usize);
     assert_eq!(exit_tags_packed.len(), header.exit_tags_len as usize);
-    let mut out =
-        Vec::with_capacity(AotTraceMetaHeader::SIZE + entry_tags.len() + exit_tags_packed.len());
+    assert_eq!(header.version, AOT_META_VERSION);
+    let tail_bytes: usize = 4 + per_exit_tags
+        .iter()
+        .map(|e| 4 + 4 + e.tags_packed.len())
+        .sum::<usize>();
+    let mut out = Vec::with_capacity(
+        AotTraceMetaHeader::SIZE + entry_tags.len() + exit_tags_packed.len() + tail_bytes,
+    );
     out.extend_from_slice(&header.magic.to_le_bytes());
     out.extend_from_slice(&header.version.to_le_bytes());
     out.extend_from_slice(&header.head_pc.to_le_bytes());
@@ -172,6 +223,13 @@ pub fn encode_meta_blob(
     out.extend_from_slice(&header.exit_tags_len.to_le_bytes());
     out.extend_from_slice(entry_tags);
     out.extend_from_slice(exit_tags_packed);
+    // v2 tail: u32 count, then per entry [cont_pc:u32, tags_len:u32, tags:[u8; tags_len]].
+    out.extend_from_slice(&(per_exit_tags.len() as u32).to_le_bytes());
+    for ent in per_exit_tags {
+        out.extend_from_slice(&ent.cont_pc.to_le_bytes());
+        out.extend_from_slice(&(ent.tags_packed.len() as u32).to_le_bytes());
+        out.extend_from_slice(&ent.tags_packed);
+    }
     out
 }
 
@@ -185,6 +243,9 @@ pub struct DecodedMeta {
     /// `exit_tags` payload (length = `header.exit_tags_len`), still in
     /// packed `u8` form. Caller maps each through [`unpack_exit_tag`].
     pub exit_tags: Vec<u8>,
+    /// v2 tail — per-cont_pc tag arrays. Empty for v1 blobs and for
+    /// v2 traces with no typed-register side-exits.
+    pub per_exit_tags: Vec<PerExitTagsEntry>,
 }
 
 /// Deserialize a blob produced by [`encode_meta_blob`]. Returns
@@ -230,10 +291,43 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
     let exit_end = entry_end + exit_tags_len as usize;
     let entry_tags = bytes[entry_start..entry_end].to_vec();
     let exit_tags = bytes[entry_end..exit_end].to_vec();
+    // v2 tail: optional per_exit_tags block. Absent (= empty) when
+    // the blob ends exactly at `exit_end` — covers both v1 producers
+    // (which never wrote a tail) AND v2 producers serializing a
+    // trace with zero typed-register side-exits.
+    let mut per_exit_tags: Vec<PerExitTagsEntry> = Vec::new();
+    if bytes.len() > exit_end {
+        let mut cur = exit_end;
+        if bytes.len() < cur + 4 {
+            return Err("v2 tail truncated at count");
+        }
+        let count = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
+        cur += 4;
+        per_exit_tags.reserve(count);
+        for _ in 0..count {
+            if bytes.len() < cur + 8 {
+                return Err("v2 tail truncated at entry header");
+            }
+            let cont_pc = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap());
+            cur += 4;
+            let tags_len = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
+            cur += 4;
+            if bytes.len() < cur + tags_len {
+                return Err("v2 tail truncated at entry tags");
+            }
+            let tags_packed = bytes[cur..cur + tags_len].to_vec();
+            cur += tags_len;
+            per_exit_tags.push(PerExitTagsEntry {
+                cont_pc,
+                tags_packed,
+            });
+        }
+    }
     Ok(DecodedMeta {
         header,
         entry_tags,
         exit_tags,
+        per_exit_tags,
     })
 }
 
@@ -316,9 +410,11 @@ mod tests {
             pack_exit_tag(ExitTag::Untouched),
             pack_exit_tag(ExitTag::Float),
         ];
-        let blob = encode_meta_blob(&header, &entry_tags, &exit_tags);
-        assert_eq!(blob.len(), AotTraceMetaHeader::SIZE + 2 + 3);
+        let blob = encode_meta_blob(&header, &entry_tags, &exit_tags, &[]);
+        // SIZE + entry_tags + exit_tags + v2-tail-count(4)
+        assert_eq!(blob.len(), AotTraceMetaHeader::SIZE + 2 + 3 + 4);
         let decoded = decode_meta_blob(&blob).expect("decode");
+        assert!(decoded.per_exit_tags.is_empty());
         assert_eq!(decoded.header.head_pc, 42);
         assert_eq!(decoded.header.window_size, 4);
         assert_eq!(decoded.header.dispatchable, 1);
@@ -348,6 +444,79 @@ mod tests {
         blob[..4].copy_from_slice(&AOT_META_MAGIC.to_le_bytes());
         let err = decode_meta_blob(&blob).unwrap_err();
         assert!(err.contains("VERSION"));
+    }
+
+    #[test]
+    fn v2_per_exit_tags_round_trip() {
+        // Two entries — one shorter than the other so the tail walker
+        // exercises variable-length parsing per entry.
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 7,
+            n_ops: 12,
+            window_size: 5,
+            dispatchable: 1,
+            tag_res_kind: pack_tag_res_kind(TagResKind::Mixed),
+            entry_tags_len: 0,
+            exit_tags_len: 0,
+        };
+        let entries = vec![
+            PerExitTagsEntry {
+                cont_pc: 3,
+                tags_packed: vec![
+                    pack_exit_tag(ExitTag::Int),
+                    pack_exit_tag(ExitTag::Untouched),
+                ],
+            },
+            PerExitTagsEntry {
+                cont_pc: 11,
+                tags_packed: vec![
+                    pack_exit_tag(ExitTag::Closure),
+                    pack_exit_tag(ExitTag::Table),
+                    pack_exit_tag(ExitTag::Float),
+                ],
+            },
+        ];
+        let blob = encode_meta_blob(&header, &[], &[], &entries);
+        let decoded = decode_meta_blob(&blob).expect("decode v2");
+        assert_eq!(decoded.per_exit_tags.len(), 2);
+        assert_eq!(decoded.per_exit_tags[0].cont_pc, 3);
+        assert_eq!(decoded.per_exit_tags[0].tags_packed.len(), 2);
+        assert_eq!(decoded.per_exit_tags[1].cont_pc, 11);
+        assert_eq!(decoded.per_exit_tags[1].tags_packed.len(), 3);
+    }
+
+    #[test]
+    fn decode_tolerates_v1_blob_shape() {
+        // Emulate a v1-shaped blob: header + tags, NO trailing v2
+        // count u32. The v2 decoder should accept it as an empty
+        // per_exit_tags.
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 0,
+            n_ops: 0,
+            window_size: 0,
+            dispatchable: 0,
+            tag_res_kind: 0,
+            entry_tags_len: 1,
+            exit_tags_len: 0,
+        };
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&header.magic.to_le_bytes());
+        blob.extend_from_slice(&header.version.to_le_bytes());
+        blob.extend_from_slice(&header.head_pc.to_le_bytes());
+        blob.extend_from_slice(&header.n_ops.to_le_bytes());
+        blob.extend_from_slice(&header.window_size.to_le_bytes());
+        blob.push(header.dispatchable);
+        blob.push(header.tag_res_kind);
+        blob.extend_from_slice(&header.entry_tags_len.to_le_bytes());
+        blob.extend_from_slice(&header.exit_tags_len.to_le_bytes());
+        blob.push(0); // entry_tags[0]
+        // No v2 tail.
+        let decoded = decode_meta_blob(&blob).expect("decode v1-shaped");
+        assert!(decoded.per_exit_tags.is_empty());
     }
 
     #[test]
