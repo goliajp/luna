@@ -498,22 +498,76 @@ scope** for v1.3 (no longer deferred). Tracked in
     Windows / missing-`cc` hosts (Stage 4 ships Unix-only).
     Stage 5 Cranelift trace-mcode emission and Stage 6
     cross-compile remain follow-ups.
-  - **Follow-up sessions** within v1.3 (per
-    `.dev/rfcs/v1.3-audit-luna-aot.md` Stages 5-6, ~40 dev-days
-    remaining of the 70-day audit estimate): (1) Cranelift trace
-    mcode emission via `cranelift-object` — walk every reachable
-    `Proto`'s hot loops, drive each through the new generic
-    lowerer, emit symbols + dispatch table into the AOT binary
-    (the staticlib runtime already carries the interp fallback,
-    so trace.o is purely additive); (2) extract or expose the
-    26 `luna_jit_*` C-ABI helpers from `luna-jit` so the AOT-linked
-    binary resolves them at static-link time (no `JITBuilder::symbol`
-    available deploy-side); (3) cross-compile via `--target` +
-    per-triple `cc` flags + per-triple
-    `cargo build --target=<triple> -p luna-runtime-helpers`
-    bootstrap; (4) Alpine no-lua-installed deploy smoke test
-    (audit § AOT6); (5) Windows linker support (`link.exe` /
-    `clang-cl`).
+  - **Phase AOT Stage 5 — cross-compile via `--target`** *(landed in
+    this commit)*. New public `luna_aot::embed::TargetSpec` resolves
+    a triple string into the per-target bundle the pipeline needs:
+    `object` format (ELF / Mach-O / PE), arch, endianness, OS family
+    (`TargetOs::{MacOs, Linux, Windows}`), libc flavour
+    (`TargetLibc::{Default, Musl, MinGw}`), and the right `cc`
+    driver. Resolution prefers a named cross-cc on PATH
+    (`aarch64-linux-gnu-gcc`, `x86_64-w64-mingw32-gcc`,
+    `x86_64-linux-musl-gcc`, ...) then falls back to `cc -target
+    <triple>` (works on macOS hosts where Apple's clang accepts
+    `-target` natively). `build_runtime_helpers_staticlib` now takes
+    `Option<&str>` and shells out to
+    `cargo build --target=<triple> -p luna-runtime-helpers --release`
+    when a non-host triple is requested; the resulting staticlib
+    lands at `target/<triple>/release/libluna_runtime_helpers.a`
+    (or `luna_runtime_helpers.lib` on Windows). The final link uses
+    a per-OS lib set: macOS keeps `-framework CoreFoundation
+    -framework Security -liconv`; glibc Linux keeps the Stage 4
+    `-lpthread -ldl -lm -lrt -lgcc_s -lutil` set; musl Linux drops
+    `-lrt -lgcc_s -lutil` (those symbols are inside musl libc);
+    Windows-MinGW adds `-luserenv -lkernel32 -lws2_32 -lbcrypt
+    -ladvapi32 -lntdll` (the rust stdlib's win32 shim deps as
+    reported by `rustc --print native-static-libs`). Tier 1
+    (verified end-to-end on macOS aarch64 host): host triple +
+    `x86_64-apple-darwin` cross. Tier 2 (codegen + link wired,
+    self-skip when host cross-cc is missing):
+    `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`,
+    `x86_64-unknown-linux-musl`, `x86_64-pc-windows-gnu`. New test
+    `crates/luna-aot/tests/stage5_cross_compile.rs` covers seven
+    cases: pure-unit triple-parser smoke (`target_spec_parses_tier1_triples`),
+    unsupported-arch rejection (`target_spec_rejects_unsupported_arch`),
+    plus one `cross_compile_*` test per tier-2 triple. Each
+    per-triple test reads the produced binary's leading bytes and
+    asserts the object-file magic matches the requested format
+    (ELF `\x7fELF`, Mach-O `0xfeedfacf` / `0xcffaedfe`, PE `MZ`).
+    All tests self-skip with informative `eprintln!` lines when
+    rust-std or cross-cc isn't installed; the test list is green
+    on a generic dev box without any cross-toolchains.
+  - **Phase AOT Stage 5 — Windows linker** *(landed in this commit)*.
+    The Stage 4 hard error `"Windows linker support not implemented"`
+    is replaced with two clear paths: MinGW
+    (`x86_64-pc-windows-gnu` → `x86_64-w64-mingw32-gcc`) is wired
+    through the regular target-aware `cc` driver pick + the
+    Windows-MinGW lib set; MSVC (`x86_64-pc-windows-msvc`) returns
+    `AotError::Link` with a concrete workaround message
+    ("target `x86_64-pc-windows-gnu` instead, or run
+    `--scaffold-only` and invoke link.exe by hand"). The MinGW path
+    is exercised by `stage5_cross_compile::cross_compile_x86_64_pc_windows_gnu`,
+    which self-skips when `x86_64-w64-mingw32-gcc` isn't on PATH.
+  - **Phase AOT Stage 6 — Alpine no-Lua deploy smoke** *(landed in
+    this commit)*. Charter AOT6 closure. New test
+    `crates/luna-aot/tests/stage6_alpine_smoke.rs` builds
+    `hello.lua` for `x86_64-unknown-linux-musl`, runs the
+    resulting binary inside an `alpine:3.20` container with **no
+    Lua installed** (no `apk add lua*`), and asserts stdout matches
+    the expected `print(...)` output. A best-effort secondary
+    `verify_only_musl_libc` step uses busybox `strings | grep` to
+    confirm the binary doesn't reference `liblua` or `libluna`.
+    Self-skips cleanly when any prerequisite is missing:
+    docker/podman daemon (tries both), rust-std for the musl
+    triple, musl cross-cc, network access to `docker.io`. The skip
+    paths print one-line `eprintln!` install hints (`brew install
+    FiloSottile/musl-cross/musl-cross` for macOS, `apt install
+    musl-tools` for Debian).
+  - **Final phase remaining**: trace JIT mcode emission via
+    `cranelift-object` (walk every reachable `Proto`'s hot loops,
+    drive each through the Stage 3 generic lowerer, emit symbols +
+    dispatch table into the AOT binary). The interp staticlib
+    runtime already carries the fallback so trace.o is purely
+    additive; this is post-v1.3.
 - **MacroLua dialect support** — Lua syntax extension as an
   optional dialect alongside 5.1-5.5; routed through the existing
   per-dialect lexer/parser machinery so it doesn't disturb the
