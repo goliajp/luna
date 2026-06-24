@@ -42,3 +42,15 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
+# v1.3 Phase AOT Stage 3 — smoke test for the shared lowerer. The
+# luna-jit crate exposes `lower_int_chunk_into<M: Module>` which is
+# backend-agnostic; the test drives it with an `ObjectModule` from
+# `cranelift-object` to prove the same codegen pipeline can emit a
+# `.o` file (deploy shape) as well as live mmap'd RWX memory (the
+# runtime JIT shape). Dev-only; the AOT crate proper does not yet
+# depend on cranelift (Stage 4+ wires the dep into the build path).
+luna-jit = { path = "../luna-jit", version = "= 1.3.0" }
+cranelift-codegen = "0.124"
+cranelift-module = "0.124"
+cranelift-native = "0.124"
+cranelift-object = "0.124"

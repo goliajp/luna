@@ -426,18 +426,53 @@ scope** for v1.3 (no longer deferred). Tracked in
     binary — the scaffold's C entry's stderr-only output isn't a
     correctness signal for this session; the runtime-stub follow-up
     adds the stdout-comparison test.
+  - **Phase AOT Stage 3 — backend-agnostic lowerer** *(landed in
+    this commit)*. Both `lower_int_chunk_into<M: Module>` and
+    `lower_trace_into<M: Module>` in `luna-jit::jit_backend` are now
+    generic over `cranelift_module::Module`, so the same codegen
+    body drives the runtime `JITModule` (live RWX mmap) and the AOT
+    `ObjectModule` (`.o` file emission). The JIT-specific module
+    construction (`JITBuilder::with_isa` + `builder.symbol("luna_jit_*",
+    …)`) is factored into thin helpers `build_jit_module_with_helpers`
+    (int-chunk) + `build_trace_jit_module` (trace), keeping
+    `JITModule::finalize_definitions` /
+    `get_finalized_function` / `TRACE_JIT_HANDLES` insertion isolated
+    in the JIT wrappers. The two trace-lowering free fns
+    `emit_table_set` / `emit_materialize_live_sunk` are now also
+    generic over the module trait. Trace returns place a
+    `placeholder_trace_fn` in `CompiledTrace.entry`; the JIT wrapper
+    patches the real fn pointer after finalize, while the AOT
+    pipeline resolves the symbol at static-link time and never
+    invokes `entry` directly. A new smoke test
+    `crates/luna-aot/tests/stage3_lower_into_object.rs` drives the
+    int-chunk lowerer with `cranelift_object::ObjectModule` and
+    asserts the produced bytes carry the host's object-file magic
+    number — load-bearing witness that the generic boundary is
+    actually consumed by a second backend, not just claimed.
+    Helper-symbol registration is JIT-only for now; the AOT pipeline
+    will resolve these via static link against a small
+    `luna-runtime-helpers` rlib in a follow-up (audit § Stage 3
+    Action item 3). 274 / 274 workspace lib tests + 360+ luna-jit
+    integration tests stay green; the pre-existing
+    `trace_jit_s1` failures (2 / 4, baseline-drift from the TA3
+    `trace_enabled = true` ship default) and the known
+    `official_run` SIGABRT (IO Safety fd-double-close, see
+    `.dev/known-bugs/io-safety-fd-double-close.md`) are unchanged
+    by this refactor.
   - **Follow-up sessions** within v1.3 (per
-    `.dev/rfcs/v1.3-audit-luna-aot.md` Stages 3-6, ~60 dev-days
+    `.dev/rfcs/v1.3-audit-luna-aot.md` Stages 4-6, ~50 dev-days
     remaining of the 70-day audit estimate): (1) wire
     `runtime_stub::aot_main` into the link step so the binary
     actually `undump`s + runs the embedded bytecode through a `Vm`;
-    (2) Stage 3 lowerer refactor (lift `lower_int_chunk_into<M:
-    Module>` + `lower_trace_into<M: Module>` over
-    `cranelift_module::Module` so the same code emits both
-    `JITModule` runtime + `ObjectModule` AOT); (3) Cranelift trace
-    mcode emission via `cranelift-object`; (4) cross-compile via
-    `--target` + per-triple `cc` flags; (5) Alpine
-    no-lua-installed deploy smoke test (audit § AOT6).
+    (2) Cranelift trace mcode emission via `cranelift-object` —
+    walk every reachable `Proto`'s hot loops, drive each through the
+    new generic lowerer, emit symbols + dispatch table into the AOT
+    binary; (3) extract a `luna-runtime-helpers` rlib carrying the
+    26 `luna_jit_*` C-ABI helpers so the AOT-linked binary resolves
+    them at static-link time (no `JITBuilder::symbol` available
+    deploy-side); (4) cross-compile via `--target` + per-triple
+    `cc` flags; (5) Alpine no-lua-installed deploy smoke test
+    (audit § AOT6).
 - **MacroLua dialect support** — Lua syntax extension as an
   optional dialect alongside 5.1-5.5; routed through the existing
   per-dialect lexer/parser machinery so it doesn't disturb the

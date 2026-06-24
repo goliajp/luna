@@ -18,7 +18,7 @@ use cranelift::prelude::*;
 use cranelift_codegen::ir::{BlockArg, UserFuncName};
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{Linkage, Module};
+use cranelift_module::{FuncId, Linkage, Module};
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::jit::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
@@ -1434,6 +1434,74 @@ struct MathFold {
     dst_reg: u32,
 }
 
+/// v1.3 Phase AOT Stage 3 — backend-agnostic metadata describing one
+/// lowered Lua chunk's ABI shape. Returned by [`lower_int_chunk_into`]
+/// so callers (runtime JIT today, ahead-of-time `luna-aot` tomorrow)
+/// can wrap the produced [`FuncId`] in their own dispatch handle.
+#[derive(Clone, Copy, Debug)]
+pub struct ChunkMeta {
+    /// Number of i64 args the entry expects (0..=MAX_JIT_ARITY).
+    pub num_args: u8,
+    /// True when the Lua chunk this fn was lowered from contains a
+    /// `Return1`; false when only `Return0` is present.
+    pub returns_one: bool,
+    /// Bit `i = 1` ↔ arg slot `i` is f64 (passed as i64 bit-pattern).
+    pub arg_float_mask: u8,
+    /// Bit `i = 1` ↔ arg slot `i` is `Gc<Table>` raw ptr.
+    pub arg_table_mask: u8,
+    /// True iff the Proto's `Return1` value is f64.
+    pub ret_is_float: bool,
+    /// True iff the Proto's `Return1` value is a `Gc<Table>` raw ptr.
+    pub ret_is_table: bool,
+}
+
+/// v1.3 Phase AOT Stage 3 — build a fresh `JITModule` configured with
+/// all `luna_jit_*` helper symbols pre-registered. Shared by the
+/// runtime JIT entry [`try_compile_int_chunk`] and tests; the AOT
+/// pipeline (luna-aot) builds an `ObjectModule` instead and feeds it
+/// to the same [`lower_int_chunk_into`] generic body.
+fn build_jit_module_with_helpers() -> Option<JITModule> {
+    let mut flag_builder = settings::builder();
+    flag_builder.set("use_colocated_libcalls", "false").ok();
+    flag_builder.set("is_pic", "false").ok();
+    flag_builder.set("opt_level", "speed").ok();
+    let isa = cranelift_native::builder()
+        .ok()?
+        .finish(settings::Flags::new(flag_builder))
+        .ok()?;
+    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    // P11-S5c — register Rust helper symbols so the cranelift JIT can
+    // resolve them at finalize time. Without this, executables that
+    // link luna as an rlib strip the `#[no_mangle]` symbols at link
+    // time and the default `dlsym(RTLD_DEFAULT)` resolver fails. The
+    // libm symbols S5b uses (`sin`, `cos`, …) are linked from libc
+    // and stay resolvable via dlsym, so they don't need this step.
+    builder.symbol("luna_jit_new_table", luna_jit_new_table as *const u8);
+    builder.symbol(
+        "luna_jit_new_table_sized",
+        luna_jit_new_table_sized as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_set_int",
+        luna_jit_table_set_int as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_set_float_float",
+        luna_jit_table_set_float_float as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_int",
+        luna_jit_table_get_int as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_float",
+        luna_jit_table_get_float as *const u8,
+    );
+    builder.symbol("luna_jit_table_len", luna_jit_table_len as *const u8);
+    builder.symbol("luna_jit_upval_get", luna_jit_upval_get as *const u8);
+    Some(JITModule::new(builder))
+}
+
 /// Try to JIT-compile `proto`. Returns `None` when any opcode in the
 /// body falls outside the cumulative whitelist — the interpreter then
 /// handles the chunk unchanged. `pre53` (Lua 5.1 / 5.2 / 5.3) selects
@@ -1441,7 +1509,75 @@ struct MathFold {
 /// loop lowering bail; pass `false` (Lua 5.4 / 5.5) to enable the
 /// counted-loop emit. The dialect bit also participates in the
 /// thread-local cache key — see `proto_cache_key`.
+///
+/// v1.3 Phase AOT Stage 3 — thin wrapper around the backend-agnostic
+/// [`lower_int_chunk_into`] generic; constructs a `JITModule`,
+/// finalizes the compiled fn into RWX memory, and wraps the entry ptr
+/// in a [`JitHandle`] that owns the module for the entry's lifetime.
 pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) -> Option<JitHandle> {
+    let mut module = build_jit_module_with_helpers()?;
+    let (fn_id, meta) = lower_int_chunk_into(&mut module, proto, pre53, float_only)?;
+    module.finalize_definitions().ok()?;
+
+    // P11-S5d.C diag — `LUNA_JIT_TRACE=1` prints one line per
+    // successful JIT compile with the Proto's source location +
+    // signature. Future S5d.C work hitting a regression in
+    // (e.g.) errors.lua can grep this trace to pinpoint the
+    // exact `load(...)` snippet that JIT'd, instead of bisecting
+    // by hand. The check is one TLS read per compile when the
+    // env var is unset — negligible vs the cranelift codegen
+    // cost.
+    if std::env::var_os("LUNA_JIT_TRACE").is_some() {
+        let src_bytes = proto.source.as_bytes();
+        let src = std::str::from_utf8(src_bytes).unwrap_or("<non-utf8 source>");
+        let line_start = proto.line_defined;
+        let line_end = proto.last_line_defined;
+        let ChunkMeta {
+            num_args,
+            arg_float_mask,
+            arg_table_mask,
+            ret_is_float,
+            ret_is_table,
+            ..
+        } = meta;
+        eprintln!(
+            "[luna jit] {src}:{line_start}-{line_end} params={} code_len={} num_args={num_args} arg_float_mask={arg_float_mask:#x} arg_table_mask={arg_table_mask:#x} ret_is_float={ret_is_float} ret_is_table={ret_is_table}",
+            proto.num_params,
+            proto.code.len(),
+        );
+    }
+
+    let ptr = module.get_finalized_function(fn_id);
+    Some(JitHandle {
+        _module: module,
+        entry_raw: ptr,
+        num_args: meta.num_args,
+        returns_one: meta.returns_one,
+        arg_float_mask: meta.arg_float_mask,
+        arg_table_mask: meta.arg_table_mask,
+        ret_is_float: meta.ret_is_float,
+        ret_is_table: meta.ret_is_table,
+    })
+}
+
+/// v1.3 Phase AOT Stage 3 — backend-agnostic body of the int-chunk
+/// lowerer. Generic over any `cranelift_module::Module` so the same
+/// codegen pipeline drives the runtime JIT (`JITModule`,
+/// [`try_compile_int_chunk`]) and the AOT pipeline (`ObjectModule` in
+/// `luna-aot`).
+///
+/// Returns `None` when any opcode in the body falls outside the
+/// cumulative whitelist (same gate as [`try_compile_int_chunk`]). On
+/// success returns the declared [`FuncId`] for the lowered chunk
+/// alongside ABI metadata; the caller drives backend-specific
+/// finalization (`JITModule::finalize_definitions` /
+/// `ObjectModule::finish`).
+pub fn lower_int_chunk_into<M: Module>(
+    module: &mut M,
+    proto: Gc<Proto>,
+    pre53: bool,
+    float_only: bool,
+) -> Option<(FuncId, ChunkMeta)> {
     if proto.num_params > MAX_JIT_ARITY {
         return None;
     }
@@ -3462,46 +3598,6 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
         }
     }
 
-    let mut flag_builder = settings::builder();
-    flag_builder.set("use_colocated_libcalls", "false").ok();
-    flag_builder.set("is_pic", "false").ok();
-    flag_builder.set("opt_level", "speed").ok();
-    let isa = cranelift_native::builder()
-        .ok()?
-        .finish(settings::Flags::new(flag_builder))
-        .ok()?;
-    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-    // P11-S5c — register Rust helper symbols so the cranelift JIT can
-    // resolve them at finalize time. Without this, executables that
-    // link luna as an rlib strip the `#[no_mangle]` symbols at link
-    // time and the default `dlsym(RTLD_DEFAULT)` resolver fails. The
-    // libm symbols S5b uses (`sin`, `cos`, …) are linked from libc
-    // and stay resolvable via dlsym, so they don't need this step.
-    builder.symbol("luna_jit_new_table", luna_jit_new_table as *const u8);
-    builder.symbol(
-        "luna_jit_new_table_sized",
-        luna_jit_new_table_sized as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_set_int",
-        luna_jit_table_set_int as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_set_float_float",
-        luna_jit_table_set_float_float as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_get_int",
-        luna_jit_table_get_int as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_get_float",
-        luna_jit_table_get_float as *const u8,
-    );
-    builder.symbol("luna_jit_table_len", luna_jit_table_len as *const u8);
-    builder.symbol("luna_jit_upval_get", luna_jit_upval_get as *const u8);
-    let mut module = JITModule::new(builder);
-
     let mut sig = module.make_signature();
     for _ in 0..num_params {
         sig.params.push(AbiParam::new(types::I64));
@@ -4612,39 +4708,24 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
 
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
-    module.finalize_definitions().ok()?;
 
-    // P11-S5d.C diag — `LUNA_JIT_TRACE=1` prints one line per
-    // successful JIT compile with the Proto's source location +
-    // signature. Future S5d.C work hitting a regression in
-    // (e.g.) errors.lua can grep this trace to pinpoint the
-    // exact `load(...)` snippet that JIT'd, instead of bisecting
-    // by hand. The check is one TLS read per compile when the
-    // env var is unset — negligible vs the cranelift codegen
-    // cost.
-    if std::env::var_os("LUNA_JIT_TRACE").is_some() {
-        let src_bytes = proto.source.as_bytes();
-        let src = std::str::from_utf8(src_bytes).unwrap_or("<non-utf8 source>");
-        let line_start = proto.line_defined;
-        let line_end = proto.last_line_defined;
-        eprintln!(
-            "[luna jit] {src}:{line_start}-{line_end} params={} code_len={} ret_kind={ret_kind:?} arg_float_mask={arg_float_mask:#x} arg_table_mask={arg_table_mask:#x} ret_is_float={ret_is_float} ret_is_table={ret_is_table}",
-            proto.num_params,
-            proto.code.len(),
-        );
-    }
+    // v1.3 Phase AOT Stage 3 — diag of the lowered chunk's shape
+    // (used to live with the JIT finalize step; moved alongside in
+    // the runtime wrapper [`try_compile_int_chunk`]). The generic
+    // body only emits the function; finalize is the caller's job.
+    let _ = ret_kind; // tracked for diag in the JIT wrapper; backend-agnostic here.
 
-    let ptr = module.get_finalized_function(fn_id);
-    Some(JitHandle {
-        _module: module,
-        entry_raw: ptr,
-        num_args: num_params as u8,
-        returns_one: sees_return1,
-        arg_float_mask,
-        arg_table_mask,
-        ret_is_float,
-        ret_is_table,
-    })
+    Some((
+        fn_id,
+        ChunkMeta {
+            num_args: num_params as u8,
+            returns_one: sees_return1,
+            arg_float_mask,
+            arg_table_mask,
+            ret_is_float,
+            ret_is_table,
+        },
+    ))
 }
 
 /// S3 — align a value with the Variable's declared Cranelift type
