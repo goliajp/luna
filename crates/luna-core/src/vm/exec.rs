@@ -288,7 +288,11 @@ pub struct Vm {
     /// Slot recycling lands in Phase 3 alongside B8 LuaUserdata, when
     /// the trade-offs between `Drop` plumbing and append-only memory
     /// growth have a richer ergonomics envelope to live in.
-    pub(crate) host_roots: Vec<Value>,
+    pub(crate) host_roots: Vec<crate::vm::host_roots::HostRootSlot>,
+    /// v1.3 Phase SR — recycled-slot index pool. `pin_host` pops the
+    /// back if non-empty, else extends `host_roots`. Generation
+    /// overflow at `u32::MAX` retires the slot (NOT pushed here).
+    pub(crate) host_roots_free: Vec<u32>,
 
     /// v1.2 Track B — per-Vm cache of `Gc<Table>` metatables keyed
     /// by `TypeId::of::<T>()` for embedder types implementing
@@ -920,6 +924,7 @@ impl Vm {
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // v1.1 B12 — host roots ticket pool for the `Lua` facade.
             host_roots: Vec::new(),
+            host_roots_free: Vec::new(),
             // v1.2 Track B — LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),
@@ -2567,7 +2572,10 @@ impl Vm {
         // values alive across calls/yields. Trace the whole vector;
         // unused slots (post-`unpin_all`) carry Value::Nil which the
         // GC ignores.
-        roots.extend_from_slice(&self.host_roots);
+        for slot in &self.host_roots {
+            // v1.3 SR — free-list slots carry Value::Nil (GC no-op).
+            roots.push(slot.value);
+        }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
         if let Some(h) = self.hook.func {

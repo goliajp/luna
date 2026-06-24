@@ -65,19 +65,98 @@ const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"ceil", "ceil"),
 ];
 
-/// A single recognised `math.<fn>(arg)` fold. Four consecutive
-/// `RecordedOp`s (GetTabUp / GetField / Move / Call) collapse to
-/// one libm call. The fold's `start_idx` keys both the `folded_ops`
-/// bitmap and the libm-id lookup at emit time.
+/// Kind of a recognised `math.<fn>(args...)` fold. `Libm1` is the
+/// single-arg fold over libm (sin/cos/sqrt/floor/...) — emits a
+/// libm call. `Min2` / `Max2` are 2-arg `math.min` / `math.max`
+/// folds — emit Cranelift's native `fmin` / `fmax` (single mcode
+/// insn on ARM64 and x86_64).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FoldKind {
+    Libm1,
+    Min2,
+    Max2,
+}
+
+/// Source of a Libm1 fold's argument register slot. Only `Move`
+/// is accepted (existing v1.2 contract). The 2-arg `Min2 / Max2`
+/// folds skip the [`FoldArgSrc`] decoding entirely — they emit at
+/// the Call's position and read `R[A+1] / R[A+2]` directly, so
+/// arg-prep ops can be arbitrarily-shaped (LoadI / Move / GetField
+/// / Add / etc.) and execute normally before the Call's fold emit.
+#[derive(Clone, Copy, Debug)]
+enum FoldArgSrc {
+    /// `Move R[A+k] := R[reg]`. Libm1 emit reads the variable at `reg`.
+    Reg { reg: u32 },
+}
+
+/// A single recognised `math.<fn>(arg...)` fold.
+///
+/// Two shape kinds:
+///
+/// * **`Libm1`** — 4-op contiguous window: `GetTabUp + GetField +
+///   Move + Call(B=2,C=2)`. The 4 indices `start_idx..start_idx+4`
+///   are flagged in `folded_ops`. Emit fires at `start_idx` (the
+///   `GetTabUp`) and produces one libm call.
+///
+/// * **`Min2 / Max2`** — *split-window* fold: `GetTabUp` at
+///   `start_idx`, `GetField "min" / "max"` at `start_idx + 1`, and
+///   `Call(B=3,C=2)` at `call_idx` (typically `start_idx + 4` for
+///   `Move + Move` arg-prep, but can be `start_idx + 5` or more
+///   when arg2 is computed by an in-place `GetField + Add` chain
+///   like `bucket.tokens + refill`). Only `start_idx`,
+///   `start_idx + 1`, and `call_idx` are flagged in `folded_ops`
+///   — the arg-prep ops between them execute normally so the
+///   Call's `R[A+1] / R[A+2]` arrive at their natural Lua-frame
+///   slots. Emit fires at `call_idx` (the `Call`) and produces
+///   `fmin / fmax` reading from `R[A+1] / R[A+2]`. The GetTabUp
+///   and GetField emit positions are silent (their semantic result
+///   — the resolved `math.min` function pointer — is discarded;
+///   the trace knows the call target statically).
 #[derive(Clone, Copy, Debug)]
 struct TraceMathFold {
     start_idx: usize,
+    /// Libm name ("sin", "cos", ...) for Libm1; "min" / "max"
+    /// (diagnostic only) for Min2 / Max2.
     fn_name: &'static str,
-    arg_reg: u32,
+    kind: FoldKind,
+    /// Libm1 only: source of the single arg. `None` for Min2/Max2
+    /// (their args live at R[A+1] / R[A+2] by Call ABI).
+    arg_src: Option<FoldArgSrc>,
+    /// Trace-index of the Op::Call this fold collapses. For
+    /// `Libm1` it's `start_idx + 3`; for `Min2 / Max2` it's the
+    /// recognised Call op's index. Used by `folded_ops` indexing
+    /// and the emit-site `start_idx == i` lookup.
+    call_idx: usize,
+    /// `R[A]` of the Call — the destination of the fold's result.
+    /// For `Libm1` this is also `start_idx`'s GetTabUp A; for
+    /// `Min2 / Max2` it's identically `start_idx`'s GetTabUp A
+    /// (and the Call's A).
     dst_reg: u32,
+    /// `R[A+1]` of the Call — only meaningful for `Min2 / Max2`.
+    arg1_reg: u32,
+    /// `R[A+2]` of the Call — only meaningful for `Min2 / Max2`.
+    arg2_reg: u32,
 }
 
-/// Detect a `math.<fn>(arg)` fold starting at recorded op index `i`.
+/// Maximum number of arg-prep ops the `Min2 / Max2` fold scans
+/// between the `GetField "min"/"max"` and the closing `Call`.
+/// Covers the common patterns (Move+Move = 2; LoadI+Move = 2;
+/// LoadI + GetField + Add = 3; Move + GetField + Add + Add = 4) and
+/// caps cost on adversarial trace shapes.
+const MINMAX_FOLD_ARG_PREP_MAX: usize = 6;
+
+/// Detect a `math.<fn>(arg...)` fold starting at recorded op index `i`.
+/// Two arms recognised:
+///   * `Libm1` — 4-op window `GetTabUp + GetField + Move + Call(B=2,C=2)`
+///     mapped onto a libm fn in [`MATH_LIBM_FNS`].
+///   * `Min2 / Max2` — split-window fold: `GetTabUp` at `i`, `GetField
+///     "min"|"max"` at `i + 1`, then up to [`MINMAX_FOLD_ARG_PREP_MAX`]
+///     arg-prep ops, then the closing `Call(B=3,C=2)`. The arg-prep
+///     ops execute normally; only the GetTabUp/GetField/Call indices
+///     are flagged in `folded_ops`. This lets `math.min(K, expr)`
+///     fold even when `expr` is computed by an in-place `GetField +
+///     Add` chain (the canonical Redis-Lua / BullMQ idiom).
+///
 /// Mirrors method JIT's `try_match_math_fold` but reads from
 /// `record.ops[..]` instead of the Proto's code slice.
 fn try_match_trace_math_fold(
@@ -85,13 +164,14 @@ fn try_match_trace_math_fold(
     i: usize,
     head_proto: Gc<Proto>,
 ) -> Option<TraceMathFold> {
-    if i + 3 >= record.ops.len() {
+    // Common prefix (GetTabUp + GetField) needs at least 2 ops.
+    if i + 1 >= record.ops.len() {
         return None;
     }
-    // All four ops must come from `head_proto`. Cross-Proto ops
-    // are recorded when a callee body runs through; the math fold
-    // pattern doesn't apply mid-callee.
-    for k in 0..=3 {
+    // The first 2 ops must come from `head_proto` at depth 0.
+    // Cross-Proto / inlined ops break the fold (would mis-resolve
+    // the const-pool slots).
+    for k in 0..=1 {
         if !std::ptr::eq(record.ops[i + k].proto.as_ptr(), head_proto.as_ptr()) {
             return None;
         }
@@ -101,19 +181,11 @@ fn try_match_trace_math_fold(
     }
     let i0 = record.ops[i].inst;
     let i1 = record.ops[i + 1].inst;
-    let i2 = record.ops[i + 2].inst;
-    let i3 = record.ops[i + 3].inst;
 
     if !matches!(i0.op(), Op::GetTabUp) {
         return None;
     }
     if !matches!(i1.op(), Op::GetField) {
-        return None;
-    }
-    if !matches!(i2.op(), Op::Move) {
-        return None;
-    }
-    if !matches!(i3.op(), Op::Call) {
         return None;
     }
 
@@ -139,44 +211,128 @@ fn try_match_trace_math_fold(
     let luna_core::runtime::Value::Str(fname) = k_fn else {
         return None;
     };
-    let fn_name = MATH_LIBM_FNS
+    let fname_bytes = fname.as_bytes();
+
+    // ── Libm1 arm (4-op window, B=2 C=2 call) ─────────────────
+    if let Some(fn_name) = MATH_LIBM_FNS
         .iter()
-        .find_map(|&(needle, name)| (needle == fname.as_bytes()).then_some(name))?;
-
-    // Move R[A+1] = R[arg_reg]. The dst lands in the Call's arg slot.
-    if i2.a() != a + 1 {
-        return None;
+        .find_map(|&(needle, name)| (needle == fname_bytes).then_some(name))
+    {
+        if i + 3 >= record.ops.len() {
+            return None;
+        }
+        // Tail ops i+2, i+3 same head_proto + depth 0 constraint.
+        for k in 2..=3 {
+            if !std::ptr::eq(record.ops[i + k].proto.as_ptr(), head_proto.as_ptr()) {
+                return None;
+            }
+            if record.ops[i + k].inline_depth != 0 {
+                return None;
+            }
+        }
+        let i2 = record.ops[i + 2].inst;
+        let i3 = record.ops[i + 3].inst;
+        if !matches!(i2.op(), Op::Move) {
+            return None;
+        }
+        if !matches!(i3.op(), Op::Call) {
+            return None;
+        }
+        // Move R[A+1] = R[arg_reg].
+        if i2.a() != a + 1 {
+            return None;
+        }
+        let arg_reg = i2.b();
+        // Call R[A], B=2 (1 arg), C=2 (1 result).
+        if i3.a() != a || i3.b() != 2 || i3.c() != 2 {
+            return None;
+        }
+        return Some(TraceMathFold {
+            start_idx: i,
+            fn_name,
+            kind: FoldKind::Libm1,
+            arg_src: Some(FoldArgSrc::Reg { reg: arg_reg }),
+            call_idx: i + 3,
+            dst_reg: a,
+            arg1_reg: 0,
+            arg2_reg: 0,
+        });
     }
-    let arg_reg = i2.b();
 
-    // Call R[A], B=2 (1 arg), C=2 (1 result).
-    if i3.a() != a || i3.b() != 2 || i3.c() != 2 {
-        return None;
+    // ── Min2 / Max2 arm (split-window, B=3 C=2 call) ───────────
+    //
+    // GetTabUp at `i`, GetField at `i+1`, then scan forward up to
+    // MINMAX_FOLD_ARG_PREP_MAX ops looking for the matching
+    // `Op::Call A B=3 C=2`. All scanned ops must come from
+    // `head_proto` at depth 0. We do NOT constrain the shape of
+    // the arg-prep ops — they execute normally and leave the call
+    // args at `R[a+1]` / `R[a+2]` by the standard Lua Call ABI.
+    let kind = match fname_bytes {
+        b"min" => FoldKind::Min2,
+        b"max" => FoldKind::Max2,
+        _ => return None,
+    };
+    let mut call_idx: Option<usize> = None;
+    let search_limit = (i + 2 + MINMAX_FOLD_ARG_PREP_MAX + 1).min(record.ops.len());
+    for j in (i + 2)..search_limit {
+        let rop_j = &record.ops[j];
+        if !std::ptr::eq(rop_j.proto.as_ptr(), head_proto.as_ptr()) || rop_j.inline_depth != 0 {
+            return None;
+        }
+        let inst_j = rop_j.inst;
+        if matches!(inst_j.op(), Op::Call) {
+            // Call R[A], B=3 (2 args), C=2 (1 result), A matches
+            // the GetTabUp dest (the fn lives in R[A]).
+            if inst_j.a() != a || inst_j.b() != 3 || inst_j.c() != 2 {
+                return None;
+            }
+            call_idx = Some(j);
+            break;
+        }
+        // Arg-prep ops between GetField and Call must not overwrite
+        // the fn slot R[A] — the Call expects R[A] = the resolved
+        // math.<fn>. (In practice the parser allocates A+1/A+2 for
+        // args, leaving R[A] untouched, but we double-check.)
+        if inst_j.a() == a {
+            return None;
+        }
     }
-
+    let call_idx = call_idx?;
+    let diag_name = if matches!(kind, FoldKind::Min2) {
+        "min"
+    } else {
+        "max"
+    };
     Some(TraceMathFold {
         start_idx: i,
-        fn_name,
-        arg_reg,
+        fn_name: diag_name,
+        kind,
+        arg_src: None,
+        call_idx,
         dst_reg: a,
+        arg1_reg: a + 1,
+        arg2_reg: a + 2,
     })
 }
 
-/// Forward-look type inference for `Op::GetI` / `Op::GetTable`.
-/// The helper returns the table cell's raw 8-byte payload — Int,
-/// Table, or anything else — so a static prediction needs context.
-/// We look at the immediate next op for a use of `R[getx_a]`:
+/// Single-op classifier — the per-op decision logic used by the
+/// look-ahead walker [`infer_getx_exit_lookahead`].
+///
+/// The helpers returning a GetX value (`Op::GetI` / `Op::GetTable` /
+/// `Op::GetField` / `Op::GetTabUp`) hand back the table cell's raw
+/// 8-byte payload — Int, Table, Float, or anything else. A static
+/// prediction of the payload's tag needs context from the use site.
 ///
 /// - Arithmetic / numeric cmp operand → must be Int.
 /// - Table-base operand (Get / Set / Len) → must be Table.
-/// - Anything else (`Move`, `Eq` (bitwise-ok), trace tail) →
-///   unknown; return `None` and the trace's `dispatchable` flag
-///   flips to `false`.
+/// - Anything else (`Move`, `Eq` (bitwise-ok), trace tail, literal
+///   materialisation) → unknown; return `None`. The walker treats
+///   `LoadI / LoadF / LoadK` as transparent and walks past them.
 ///
-/// `Eq` is *not* a tag indicator: `icmp eq` of i64 payloads
+/// `Op::Eq` is *not* a tag indicator: `icmp eq` of i64 payloads
 /// catches both `Int == 0` and `Table == nil` correctly, so the
 /// cmp itself doesn't pin the result's tag.
-fn infer_getx_exit(getx_a: u32, next: Inst) -> Option<ExitTag> {
+fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
     let na = next.a();
     let nb = next.b();
     let nc = next.c();
@@ -229,6 +385,64 @@ fn infer_getx_exit(getx_a: u32, next: Inst) -> Option<ExitTag> {
         // nothing about the operand's tag.
         _ => None,
     }
+}
+
+/// Look-ahead variant of [`infer_getx_exit`]: walks the recorded ops
+/// after the GetX, skipping ops that are *transparent* (provably
+/// don't read `R[getx_a]` and don't overwrite it). Returns as soon
+/// as the first non-transparent op classifies the use, or `None` if
+/// nothing in the trail consumes the slot or the slot is overwritten
+/// first.
+///
+/// The transparent set is intentionally tight: only `LoadI`,
+/// `LoadF`, `LoadK` (literal materialisation into a register slot ≠
+/// getx_a) qualify. These ops never read any register, so they can
+/// never consume `R[getx_a]`; if their `A` ≠ `getx_a` they also
+/// don't overwrite it. Anything else stops the walk — either we
+/// classify (Add / Sub / Mul / Lt / Le / Get* / Set* / Len) or
+/// we conservatively return `None`.
+///
+/// This unblocks the common Lua codegen pattern
+///
+/// ```text
+///   GetField R[a], R[base], "k"   ; read
+///   LoadI    R[a+1], <literal>    ; materialise const operand
+///   Le       R[?],  R[a], R[a+1]  ; compare R[a] vs literal
+/// ```
+///
+/// where the 1-op-ahead path saw `LoadI` next and bailed.
+fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<ExitTag> {
+    // Bound the walk — analysis cost cap on faulty trace shapes.
+    // Most use sites are within 1-2 ops; 4 is generous.
+    const MAX_LOOKAHEAD: usize = 4;
+    for rop in ops_after.iter().take(MAX_LOOKAHEAD) {
+        let inst = rop.inst;
+        let op = inst.op();
+        let a = inst.a();
+        // First, a per-op classification attempt — if the use site
+        // is right here, that wins.
+        if let Some(tag) = infer_getx_exit_inst(getx_a, inst) {
+            return Some(tag);
+        }
+        // Transparent: `LoadI / LoadF / LoadK` materialise a
+        // literal into `R[A]`. They read no registers. If `A` is
+        // not our slot they don't affect it; walk past. This
+        // covers the canonical Lua codegen pattern
+        // `GetField R[a]; LoadI R[a+1], K; Le R[?], R[a], R[a+1]`
+        // where the 1-op-ahead path would have stopped at LoadI.
+        if matches!(op, Op::LoadI | Op::LoadF | Op::LoadK) {
+            if a == getx_a {
+                // LoadX overwrites our slot before any use — give up.
+                return None;
+            }
+            continue;
+        }
+        // Any other op stops the walk: either the per-op classifier
+        // already pinned a tag (handled above) or we conservatively
+        // bail to avoid a wrong static prediction.
+        return None;
+    }
+    None
 }
 
 /// P12-S4-step2c — forward-look exit-tag inference for `Op::GetUpval`.
@@ -2774,15 +2988,44 @@ pub fn try_compile_trace_with_options(
     let mut folded_ops: Vec<bool> = vec![false; n];
     let mut math_folds: Vec<TraceMathFold> = Vec::new();
     {
+        // Recogniser does its own internal bounds check per arm
+        // (libm1 needs 4 ops, min2/max2 needs ≥3 ops with the
+        // Call no more than `MINMAX_FOLD_ARG_PREP_MAX` past
+        // `start_idx + 1`). Walk every index; the matcher returns
+        // None when the window doesn't fit so we don't run off
+        // the end of `record.ops`.
+        //
+        // `folded_ops` bitmap layout:
+        //   * `Libm1` — flags 4 consecutive indices
+        //     `start_idx..=start_idx+3` (GetTabUp, GetField, Move,
+        //     Call). All emit silently except `start_idx` which
+        //     fires the libm call.
+        //   * `Min2 / Max2` — flags only `start_idx`,
+        //     `start_idx + 1`, and `call_idx`. Arg-prep ops in
+        //     between are NOT folded — they execute normally so
+        //     the Call args land at R[A+1] / R[A+2] by the
+        //     standard Lua Call ABI. The Call's emit position
+        //     fires `fmin / fmax`.
         let mut i = 0;
-        while i + 3 < n {
+        while i < n {
             if let Some(fold) = try_match_trace_math_fold(record, i, head_proto) {
-                folded_ops[i] = true;
-                folded_ops[i + 1] = true;
-                folded_ops[i + 2] = true;
-                folded_ops[i + 3] = true;
+                match fold.kind {
+                    FoldKind::Libm1 => {
+                        for k in 0..4 {
+                            folded_ops[i + k] = true;
+                        }
+                        i += 4;
+                    }
+                    FoldKind::Min2 | FoldKind::Max2 => {
+                        folded_ops[fold.start_idx] = true;
+                        folded_ops[fold.start_idx + 1] = true;
+                        folded_ops[fold.call_idx] = true;
+                        // Advance past the Call so the next scan
+                        // starts beyond the recognised fold.
+                        i = fold.call_idx + 1;
+                    }
+                }
                 math_folds.push(fold);
-                i += 4;
             } else {
                 i += 1;
             }
@@ -4556,37 +4799,139 @@ pub fn try_compile_trace_with_options(
             // would double-jump.
             continue;
         }
-        // Math fold: only the fold's start op (`GetTabUp`) emits
-        // IR (single libm call). The other three ops in the fold
-        // window are silent.
+        // Math fold emit. Layout (see `math_folds` doc above):
+        //
+        //   * `Libm1` — folded indices are `start..=start+3`. The
+        //     emit fires at `start` (single libm call); the trailing
+        //     3 ops are silent.
+        //
+        //   * `Min2 / Max2` — folded indices are `start`, `start+1`,
+        //     and `call_idx`. The emit fires at `call_idx` (the
+        //     `Op::Call`) because that's when args have already
+        //     been computed into R[A+1] / R[A+2] by the standard
+        //     arg-prep ops between GetField and Call. The
+        //     `start` (GetTabUp) and `start+1` (GetField) emit
+        //     positions are silent — their semantic result (the
+        //     resolved `math.<fn>` callable in R[A]) is known
+        //     statically and never consumed by anything except
+        //     the Call we're collapsing.
         if folded_ops[i] {
-            if let Some(fold) = math_folds.iter().find(|f| f.start_idx == i) {
-                // Declare libm fn fresh per fold (cranelift dedups
-                // by name in the same module).
-                let mut libm_sig = module.make_signature();
-                libm_sig.params.push(AbiParam::new(types::F64));
-                libm_sig.returns.push(AbiParam::new(types::F64));
-                let libm_id = module
-                    .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
-                    .ok()?;
-                let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
-                // Coerce arg to f64. Int operand → fcvt_from_sint;
-                // Float operand → bitcast i64→f64.
-                let arg_kind = k_op(&current_kinds, off as u32 + fold.arg_reg);
-                let arg_f64 = if matches!(arg_kind, RegKind::Float) {
-                    use_var_f64(&mut bcx, regs, fold.arg_reg)
-                } else {
-                    // Treat Int/Unset/Nil as Int → fcvt. (Calling
-                    // math.sin on a non-numeric is a runtime error
-                    // in Lua; the recorded trace path saw a numeric
-                    // arg or it wouldn't have closed.)
-                    let raw = bcx.use_var(regs[fold.arg_reg as usize]);
-                    bcx.ins().fcvt_from_sint(types::F64, raw)
-                };
-                let call = bcx.ins().call(libm_ref, &[arg_f64]);
-                let r = bcx.inst_results(call)[0];
-                def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
-                current_kinds[fold.dst_reg as usize] = RegKind::Float;
+            // Resolve which fold this index belongs to: the start
+            // (Libm1 emit site or Min2/Max2 silent GetTabUp), the
+            // GetField mid-op (Min2/Max2 silent), or the Call
+            // (Min2/Max2 emit site).
+            let fold = math_folds.iter().find(|f| {
+                f.start_idx == i
+                    || (matches!(f.kind, FoldKind::Min2 | FoldKind::Max2)
+                        && (f.start_idx + 1 == i || f.call_idx == i))
+            });
+            if let Some(fold) = fold {
+                match fold.kind {
+                    FoldKind::Libm1 if fold.start_idx == i => {
+                        // Declare libm fn fresh per fold (cranelift
+                        // dedups by name in the same module).
+                        let mut libm_sig = module.make_signature();
+                        libm_sig.params.push(AbiParam::new(types::F64));
+                        libm_sig.returns.push(AbiParam::new(types::F64));
+                        let libm_id = module
+                            .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
+                            .ok()?;
+                        let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
+                        // Libm1 always has a Reg arg_src — coerce
+                        // to f64 via the existing Int→f64 / bitcast
+                        // ladder based on current_kinds.
+                        let arg_src = fold.arg_src.expect("Libm1 has arg_src");
+                        let FoldArgSrc::Reg { reg: arg_reg } = arg_src;
+                        let arg_kind = k_op(&current_kinds, off as u32 + arg_reg);
+                        let arg_f64 = if matches!(arg_kind, RegKind::Float) {
+                            use_var_f64(&mut bcx, regs, arg_reg)
+                        } else {
+                            // Treat Int/Unset/Nil as Int → fcvt. The
+                            // recorded trace saw a numeric arg or
+                            // it wouldn't have closed.
+                            let raw = bcx.use_var(regs[arg_reg as usize]);
+                            bcx.ins().fcvt_from_sint(types::F64, raw)
+                        };
+                        let call = bcx.ins().call(libm_ref, &[arg_f64]);
+                        let r = bcx.inst_results(call)[0];
+                        def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
+                        current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
+                    }
+                    FoldKind::Libm1 => {
+                        // Libm1 silent trailer (Move / Call) — folded
+                        // away, no IR.
+                    }
+                    FoldKind::Min2 | FoldKind::Max2 if fold.call_idx == i => {
+                        // 2-arg min/max. PUC's `math.min(a, b)` preserves
+                        // the operand type — both Int → Int result;
+                        // either Float → Float result. So we pick the
+                        // IR lowering based on the recorded operand
+                        // kinds, mirroring PUC's `vm.less_than` +
+                        // pick-loser semantics.
+                        //
+                        //   Int  / Int  → cranelift `imin_s` / `imax_s`
+                        //   Float/ Float → cranelift `fmin` / `fmax`
+                        //   mixed         → promote Int to Float, use fmin/fmax
+                        //
+                        // The IEEE-754 NaN handling of `fmin`/`fmax`
+                        // matches PUC's `less_than(NaN, x) = false`
+                        // fallthrough for the all-numeric paths the
+                        // trace recorder admits.
+                        let k1 = k_op(&current_kinds, off as u32 + fold.arg1_reg);
+                        let k2 = k_op(&current_kinds, off as u32 + fold.arg2_reg);
+                        let result_kind = match (k1, k2) {
+                            (RegKind::Float, _) | (_, RegKind::Float) => RegKind::Float,
+                            _ => RegKind::Int,
+                        };
+                        if matches!(result_kind, RegKind::Float) {
+                            let coerce_to_f64 = |bcx: &mut FunctionBuilder<'_>,
+                                                 regs: &[Variable],
+                                                 current_kinds: &[RegKind],
+                                                 off: usize,
+                                                 reg: u32|
+                             -> Value {
+                                let kind = k_op(current_kinds, off as u32 + reg);
+                                if matches!(kind, RegKind::Float) {
+                                    use_var_f64(bcx, regs, reg)
+                                } else {
+                                    let raw = bcx.use_var(regs[reg as usize]);
+                                    bcx.ins().fcvt_from_sint(types::F64, raw)
+                                }
+                            };
+                            let a1 =
+                                coerce_to_f64(&mut bcx, regs, &current_kinds, off, fold.arg1_reg);
+                            let a2 =
+                                coerce_to_f64(&mut bcx, regs, &current_kinds, off, fold.arg2_reg);
+                            let r = match fold.kind {
+                                FoldKind::Min2 => bcx.ins().fmin(a1, a2),
+                                FoldKind::Max2 => bcx.ins().fmax(a1, a2),
+                                FoldKind::Libm1 => unreachable!(),
+                            };
+                            def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
+                            current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
+                        } else {
+                            // Int / Int — both operands are i64
+                            // payloads holding Int values. Use
+                            // signed integer min/max so the result
+                            // stays Int-tagged.
+                            let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
+                            let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
+                            let r = match fold.kind {
+                                FoldKind::Min2 => bcx.ins().smin(a1, a2),
+                                FoldKind::Max2 => bcx.ins().smax(a1, a2),
+                                FoldKind::Libm1 => unreachable!(),
+                            };
+                            bcx.def_var(regs[fold.dst_reg as usize], r);
+                            current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
+                        }
+                    }
+                    FoldKind::Min2 | FoldKind::Max2 => {
+                        // Silent: this index is either `start_idx`
+                        // (GetTabUp) or `start_idx + 1` (GetField).
+                        // The Call's emit will fire at `call_idx`
+                        // and produce the fold's IR.
+                    }
+                }
             }
             continue;
         }
@@ -5277,7 +5622,7 @@ pub fn try_compile_trace_with_options(
                 bcx.def_var(regs[ins.a() as usize], v);
                 // GetX inference: look at the immediate next op.
                 let inferred = if i + 1 < effective_end {
-                    infer_getx_exit(ins.a(), record.ops[i + 1].inst)
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
@@ -5299,7 +5644,7 @@ pub fn try_compile_trace_with_options(
                 let v = bcx.inst_results(call)[0];
                 bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
-                    infer_getx_exit(ins.a(), record.ops[i + 1].inst)
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
@@ -5396,7 +5741,7 @@ pub fn try_compile_trace_with_options(
                 let v = bcx.inst_results(call)[0];
                 bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
-                    infer_getx_exit(ins.a(), record.ops[i + 1].inst)
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
@@ -5430,7 +5775,7 @@ pub fn try_compile_trace_with_options(
                 let v = bcx.inst_results(call)[0];
                 bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
-                    infer_getx_exit(ins.a(), record.ops[i + 1].inst)
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };

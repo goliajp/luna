@@ -662,7 +662,6 @@ fn f_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// produced by `io.popen` waits on its child process and reports the same
 /// `(success, "exit"|"signal", code)` triple that `os.execute` produces.
 fn close_file(vm: &mut Vm, fs: u32, u: Gc<Userdata>) -> Result<u32, LuaError> {
-    use crate::version::LuaVersion;
     if u.file().is_closed() {
         // PUC f_close runs tofile() first, rejecting an already-closed handle.
         return Err(raise_str(vm, "attempt to use a closed file"));
@@ -680,25 +679,32 @@ fn close_file(vm: &mut Vm, fs: u32, u: Gc<Userdata>) -> Result<u32, LuaError> {
     // popen handle: take the child out of the userdata, drop the pipe (so
     // the child sees EOF on its end), and wait. PUC `lua_pclose` returns
     // the same triple as `os.execute`; for 5.1 we mirror its integer-status
-    // shape.
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    let popen_child = unsafe { u.as_mut() }.popen_child.take();
-    if let Some(mut child) = popen_child {
-        // Drop the pipe-end File the userdata held *before* waiting so the
-        // child notices EOF (matters for read pipes; harmless for write).
-        // `FileHandle::Closed` above already dropped it.
-        let _ = drain; // popen pipes don't share PUC's flush-on-close error path
-        let status = match child.wait() {
-            Ok(s) => s,
-            Err(e) => return Ok(file_result_err(vm, fs, "popen", &e)),
-        };
-        let (kind, code) = exit_status_breakdown(&status);
-        if vm.version() <= LuaVersion::Lua51 {
-            return Ok(vm.nat_return(fs, &[Value::Int(code as i64)]));
+    // shape. On wasi the field is always `None` (io_popen stub never sets
+    // it); we gate the whole block on `any(unix, windows)` so wasi builds
+    // don't reach `Child::wait` / `exit_status_breakdown` (neither has a
+    // wasi impl).
+    #[cfg(any(unix, windows))]
+    {
+        use crate::version::LuaVersion;
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        let popen_child = unsafe { u.as_mut() }.popen_child.take();
+        if let Some(mut child) = popen_child {
+            // Drop the pipe-end File the userdata held *before* waiting so the
+            // child notices EOF (matters for read pipes; harmless for write).
+            // `FileHandle::Closed` above already dropped it.
+            let _ = drain; // popen pipes don't share PUC's flush-on-close error path
+            let status = match child.wait() {
+                Ok(s) => s,
+                Err(e) => return Ok(file_result_err(vm, fs, "popen", &e)),
+            };
+            let (kind, code) = exit_status_breakdown(&status);
+            if vm.version() <= LuaVersion::Lua51 {
+                return Ok(vm.nat_return(fs, &[Value::Int(code as i64)]));
+            }
+            let kind_s = Value::Str(vm.heap.intern(kind.as_bytes()));
+            let ok = matches!(kind, "exit") && code == 0;
+            return Ok(vm.nat_return(fs, &[Value::Bool(ok), kind_s, Value::Int(code as i64)]));
         }
-        let kind_s = Value::Str(vm.heap.intern(kind.as_bytes()));
-        let ok = matches!(kind, "exit") && code == 0;
-        return Ok(vm.nat_return(fs, &[Value::Bool(ok), kind_s, Value::Int(code as i64)]));
     }
     match drain {
         Ok(()) => Ok(vm.nat_return(fs, &[Value::Bool(true)])),
@@ -842,6 +848,7 @@ fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// and `IntoRawHandle` on Windows) so existing read/write/seek/flush paths
 /// stay zero-touch; only `:close` knows to wait on the child and report
 /// `(success, "exit"|"signal", code)` instead of `(true)`.
+#[cfg(any(unix, windows))]
 fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let prog = str_arg(vm, fs, nargs, 0, "popen")?;
     let mode: Vec<u8> = match vm.nat_arg(fs, nargs, 1) {
@@ -906,10 +913,36 @@ fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
 }
 
+/// `io.popen` stub for targets without `proc_*` (`wasm32-wasip1` / `-wasip2`).
+/// Validates the prog/mode args for parity with the real path so a wasi caller
+/// sees the same arg-type errors as a native caller, then returns the PUC
+/// `(nil, "popen not supported on this platform", -1)` error tuple.
+#[cfg(not(any(unix, windows)))]
+fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let _prog = str_arg(vm, fs, nargs, 0, "popen")?;
+    match vm.nat_arg(fs, nargs, 1) {
+        Value::Nil | Value::Str(_) => {}
+        v => {
+            return Err(arg_error(
+                vm,
+                2,
+                "popen",
+                &format!("string expected, got {}", v.type_name()),
+            ));
+        }
+    };
+    let msg = Value::Str(vm.heap.intern(b"popen not supported on this platform"));
+    Ok(vm.nat_return(fs, &[Value::Nil, msg, Value::Int(-1)]))
+}
+
 /// Convert a child stdio pipe (`ChildStdout` or `ChildStdin`) into a generic
 /// `std::fs::File` via the platform's raw handle. Unix uses `IntoRawFd`;
 /// Windows uses `IntoRawHandle`. The pipe is consumed (its Drop is skipped),
 /// and the File takes ownership of the underlying OS resource.
+///
+/// Gated on `any(unix, windows)`: the trait has no impl on other targets
+/// (wasi) and the only caller, `io_popen`, is gated the same way.
+#[cfg(any(unix, windows))]
 fn pipe_to_file<T>(pipe: T) -> std::fs::File
 where
     T: PipeAsFile,
@@ -917,6 +950,7 @@ where
     pipe.into_file()
 }
 
+#[cfg(any(unix, windows))]
 trait PipeAsFile {
     fn into_file(self) -> std::fs::File;
 }
@@ -1670,6 +1704,12 @@ fn os_rename(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// (luna currently only reports "exit" because Rust's `ExitStatus` exposes
 /// signal info only behind the unix-only `ExitStatusExt::signal`, so we
 /// promote that to "signal" when present).
+///
+/// Targets without `std::process::Command::spawn` (e.g. `wasm32-wasip1`)
+/// get the `#[cfg(not(any(unix, windows)))]` stub: the no-arg probe reports
+/// shell-unavailable (5.1 → `0`, 5.2+ → `false`); with an arg, returns the
+/// PUC failure triple `(false, "exit", -1)` (5.2+) or `-1` (5.1).
+#[cfg(any(unix, windows))]
 fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     use crate::version::LuaVersion;
     // No arg: probe for shell availability. luna always reports yes (Rust
@@ -1711,10 +1751,38 @@ fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(vm.nat_return(fs, &[Value::Bool(ok), kind_s, Value::Int(code as i64)]))
 }
 
+/// `os.execute` stub for targets without `proc_*` (`wasm32-wasip1` / `-wasip2`).
+/// No-arg probe reports shell-unavailable (5.1 → `0`, 5.2+ → `false`); with
+/// a command arg, returns the PUC failure triple `(false, "exit", -1)` on
+/// 5.2+ or `-1` on 5.1. The 5.2+ shape uses `"exit"` (not `"signal"`) to
+/// match PUC, which reports `WEXITSTATUS`-style failures even when the
+/// reason is "system() returned non-zero".
+#[cfg(not(any(unix, windows)))]
+fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    use crate::version::LuaVersion;
+    if nargs == 0 || matches!(vm.nat_arg(fs, nargs, 0), Value::Nil) {
+        return Ok(if vm.version() <= LuaVersion::Lua51 {
+            vm.nat_return(fs, &[Value::Int(0)])
+        } else {
+            vm.nat_return(fs, &[Value::Bool(false)])
+        });
+    }
+    let _cmd = str_arg(vm, fs, nargs, 0, "execute")?;
+    if vm.version() <= LuaVersion::Lua51 {
+        return Ok(vm.nat_return(fs, &[Value::Int(-1)]));
+    }
+    let kind = Value::Str(vm.heap.intern(b"exit"));
+    Ok(vm.nat_return(fs, &[Value::Bool(false), kind, Value::Int(-1)]))
+}
+
 /// Decompose an `ExitStatus` into PUC's `("exit"|"signal", code)`. The signal
 /// path is unix-only — on Windows we always report "exit" since the API gives
 /// no signal info. A `None` exit code (process killed without standard exit
 /// on unix) also degrades to "signal" with code -1.
+///
+/// Gated on `any(unix, windows)`: only callers are `close_file`'s popen
+/// branch and `os_execute`, both gated the same way.
+#[cfg(any(unix, windows))]
 fn exit_status_breakdown(status: &std::process::ExitStatus) -> (&'static str, i32) {
     #[cfg(unix)]
     {

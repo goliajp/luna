@@ -1,0 +1,30 @@
+[package]
+name = "luna-jit-derive"
+description = "Procedural macros for the luna-jit Lua runtime. The `#[derive(LuaUserdata)]` macro lives here so the parent `luna-core` crate stays zero-dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[lib]
+# Standard derive trio crate — emits `proc-macro` linkage so rustc
+# loads it at compile time and exposes its public macros as
+# `#[derive(...)]` / `#[attr]` targets.
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Standard derive trio. syn = "2" pinned for stable proc-macro2 ABI;
+# `full` enables item-level parsing (we need `impl` blocks, not just
+# fields). `extra-traits` deliberately omitted — we don't need Debug
+# printing for AST nodes, and dropping it trims ~50KB compile artifact.
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

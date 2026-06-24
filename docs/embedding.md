@@ -41,6 +41,17 @@ The CLI binary lives in `luna`:
 cargo install luna-jit  # installs the `luna` REPL + script runner
 ```
 
+The default install keeps the `luna` binary minimal: stdin REPL with
+multi-line continuation + `~/.luna_history`, no extra deps beyond
+Cranelift. For an interactive editor with **tab completion against
+your `Vm` globals** and **Lua syntax highlighting**, opt into the
+`repl-line-editor` feature (pulls `rustyline` and friends; luna-core
+stays 0-dep regardless):
+
+```sh
+cargo install luna-jit --features repl-line-editor
+```
+
 ---
 
 ## 2. Hello, world
@@ -339,13 +350,107 @@ m.add_method_mut("call", |vm, this, args: Vec<Value>| {
 See `crates/luna-jit/examples/userdata_redis_stub.rs` for the
 full pattern.
 
-### 7.4 Field-style sugar — v1.2 limitation
+### 7.4 Field-style sugar (v1.3 UD1+UD2)
 
-`add_field_method_get` exists today as sugar for a 0-arg method
-returning a single value. **It uses call-syntax** in v1.2 — `obj:width()`
-not `obj.width`. True field-style access (no parentheses) needs
-`__index` as a function dispatcher rather than a table; that is a
-v1.3 polish item, tracked in the v1.2 release notes.
+`add_field_method_get(name, fn)` and the new
+`add_field_method_set(name, fn)` register accessors for true field-style
+syntax:
+
+```rust
+impl LuaUserdata for Box2 {
+    fn add_methods<M: UserdataMethods<Self>>(m: &mut M) {
+        m.add_field_method_get("width", |_vm, this| Ok::<_, _>(this.width));
+        m.add_field_method_set("width", |_vm, this, (w,): (i64,)| {
+            this.width = w;
+            Ok(())
+        });
+    }
+}
+```
+
+```lua
+print(b.width)   -- 16
+b.width = 100
+print(b.width)   -- 100
+b.unknown = 1    -- error: attempt to write unknown field 'unknown' on Box2
+```
+
+Implementation: when any getter is registered, the metatable's `__index`
+slot becomes a native trampoline that dispatches `methods → field-
+getters → nil`; when any setter is registered, the metatable's
+`__newindex` slot becomes a trampoline that dispatches to the setter
+or raises `attempt to write unknown field …` (no silent fallback,
+per `code/no-unsolicited-fallback`).
+
+**v1.2 → v1.3 breaking change**: in v1.2, `add_field_method_get`
+generated a method-table entry, so `obj:width()` (call-syntax) worked.
+In v1.3 the entry is dispatched through the function-`__index`
+trampoline, so `obj.width` returns the field value directly and
+`obj:width()` no longer works for getters defined this way (calling a
+returned `Int(16)` errors). Embedders who need both shapes should
+register an explicit `add_method("width", ...)` alongside the
+field-getter. Methods win over field-getters on name collision
+(matches mlua; precedence is documented in
+`crates/luna-core/tests/userdata_trait.rs::methods_win_on_collision`).
+
+### 7.4a `#[derive(LuaUserdata)]` proc-macro (v1.3 UD3)
+
+For ≥5-method userdata types the builder calls become repetitive; the
+new `luna-jit-derive` crate ships a derive that emits the trait impl
+for you:
+
+```rust
+use luna_jit::{LuaUserdata, lua_userdata_methods};
+use luna_core::vm::{LuaError, Vm};
+
+#[derive(LuaUserdata)]
+#[lua_type_name = "Counter"]
+struct Counter { value: i64 }
+
+#[lua_userdata_methods]
+impl Counter {
+    #[lua_method("get")]
+    fn get(&self, _vm: &mut Vm, _: ()) -> Result<i64, LuaError> {
+        Ok(self.value)
+    }
+
+    #[lua_method_mut("incr")]
+    fn incr(&mut self, _vm: &mut Vm, (by,): (i64,)) -> Result<(), LuaError> {
+        self.value += by;
+        Ok(())
+    }
+}
+```
+
+Helper attrs (placed on `fn` items inside the impl block):
+
+| Attribute | Lowers to |
+|---|---|
+| `#[lua_method("name")]` | `add_method` |
+| `#[lua_method_mut("name")]` | `add_method_mut` |
+| `#[lua_function("name")]` | `add_function` (no receiver) |
+| `#[lua_meta_method(Add)]` | `add_meta_method(MetaMethod::Add, …)` |
+| `#[lua_meta_method_mut(Concat)]` | `add_meta_method_mut` |
+| `#[lua_field_get("name")]` | `add_field_method_get` |
+| `#[lua_field_set("name")]` | `add_field_method_set` |
+| `#[lua_skip]` | keep the fn as a pure-Rust helper |
+
+`luna-jit-derive` lives downstream of `luna-core` so the 0-dep
+contract is preserved — luna-core embedders who want the derive can
+either upgrade to `luna-jit`, or add `luna-jit-derive = "1.3"` as a
+direct dep alongside `luna-core` (the derive emits fully-qualified
+`::luna_core::vm::*` paths and has no other runtime deps). Hand-impl
+remains the supported escape hatch for generic types, conditional
+method sets, and `MSRV`-sensitive embedders avoiding `syn` 2.
+
+Add the dep:
+
+```toml
+luna-jit = "1.3"
+# or
+luna-core = "1.3"
+luna-jit-derive = "1.3"
+```
 
 ### 7.5 GC + `__gc` finalizers
 
@@ -577,9 +682,44 @@ let answer: i64 = g.get(&mut lua, "answer")?;
 ```
 
 Handles (`LuaFunction`, `LuaTable`, `LuaRoot`) are `Copy + Clone`
-and survive across calls. The host root pool is append-only;
-release the whole pool with `lua.unpin_all()` between batches
-(slot recycling lands in Phase 4+).
+and survive across calls. They wrap an opaque
+`luna_core::vm::HostRootTicket` (8 bytes) that the underlying
+slot-recycling pool issues at `pin_host` time.
+
+**v1.3 Phase SR — slot recycling**: long-running embedders
+(request-per-script loops, edge workers) release individual handles
+via `lua.unpin(handle)`; the slot is recycled for the next pin so
+the pool size stays bounded. The whole batch can still be released
+in one shot via `lua.unpin_all()`. Both operations bump the slot's
+generation; using a stale `LuaFunction` / `LuaTable` / `LuaRoot`
+after release panics with `"<HandleType> used after unpin /
+unpin_all"`.
+
+```rust
+// Request-per-script loop — pool stays at ≤ N slots regardless of
+// loop count.
+loop {
+    let t = lua.create_table();
+    t.set(&mut lua, "name", "request")?;
+    // ... use t ...
+    lua.unpin(t)?;  // single-handle release; slot recycled
+}
+```
+
+Embedders authoring their own facade (parallel to `LuaFunction`)
+work with the raw `Vm` API: `vm.pin_host(v) -> HostRootTicket`,
+`vm.read_host(t) -> Option<Value>`, `vm.write_host(t, v) ->
+Result<(), HostRootStale>`, `vm.unpin(t) -> Result<(),
+HostRootStale>`. The `HostRootStale` error type carries the
+ABA-detection semantics — stale tickets (held across an
+unpin/re-pin on the same slot) read as `None` rather than
+silently returning the new slot's unrelated value.
+
+**Migration from v1.1 / v1.2**: callers stashing the bare `usize`
+from `Vm::pin_host` move to `HostRootTicket`; `host_root_at(idx)`
+and `host_root_set(idx, v)` (panic on OOB) are removed in favor of
+`read_host(t)` (returns `Option<Value>`) and `write_host(t, v)`
+(returns `Result<(), HostRootStale>`).
 
 For escape-hatch access to the underlying `Vm`:
 

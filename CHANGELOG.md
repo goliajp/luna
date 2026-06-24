@@ -175,12 +175,30 @@ scope** for v1.3 (no longer deferred). Tracked in
 - **D4 A3 / A4 / A5** (newindex double-walk collapse / Move
   elimination / dispatcher reshape) — perf polish on top of A1.
 - **`add_field_method_set` + true `obj.x` field-style access** —
-  `__index` upgraded to function-dispatcher so `obj.x` (no parens)
-  works alongside `obj:x()`. Phase A shipped call-syntax sugar; this
-  closes the gap.
-- **`#[derive(LuaUserdata)]` proc-macro** — `luna-jit-derive` crate
-  ships the derive; hand impl stays as the escape hatch. luna-core
-  0-dep contract preserved (derive lives in luna-jit-derive only).
+  *(Phase UD1+UD2 landed)* `add_field_method_set(name, fn)` registers
+  setters for `obj.name = value`; the `__index` slot becomes a native
+  trampoline when any getter is registered, so `obj.width` (no parens)
+  resolves to the field value directly. **Breaking change** from the
+  v1.2 sugar: `obj:name()` call-syntax for `add_field_method_get` no
+  longer works (the trampoline calls the getter and returns
+  `Int(...)`, so `Int(...)(obj)` errors). Embedders who need both
+  shapes should register an explicit `add_method("name", ...)`
+  alongside the field-getter. Unknown writes go to a runtime error
+  rather than silently dropping (`code/no-unsolicited-fallback`).
+- **`#[derive(LuaUserdata)]` proc-macro** — *(Phase UD3 landed)* new
+  `luna-jit-derive` crate ships the derive + `#[lua_userdata_methods]`
+  attr macro. Helper attributes: `#[lua_method("name")]`,
+  `#[lua_method_mut]`, `#[lua_function]`, `#[lua_meta_method(Add)]`,
+  `#[lua_meta_method_mut]`, `#[lua_field_get]`, `#[lua_field_set]`,
+  `#[lua_skip]`, plus struct-level `#[lua_type_name = "X"]`. Hand
+  impl stays as the escape hatch (generic types, conditional method
+  sets). luna-core 0-dep contract preserved — derive lives in
+  `luna-jit-derive` only; luna-jit's build-time supply chain grows by
+  `syn + quote + proc-macro2` (the standard derive trio). `cargo
+  tree -p luna-core --prefix none --no-default-features` still
+  reports 1 row. Embedders writing `use luna_jit::LuaUserdata;` get
+  both the trait (via the `pub use luna_core::*;` re-export) and the
+  derive (`pub use luna_jit_derive::LuaUserdata;`).
 - **`feature = "send"` real implementation** — `SendVm` newtype
   fork (UnsafeCell fast path + RwLock slow path) per the audit;
   tokio embed pattern documented.
@@ -200,9 +218,45 @@ scope** for v1.3 (no longer deferred). Tracked in
 - **Userdata `Trace`-bearing host payloads** — `T` may hold
   `Gc<...>` fields; collector recurses into the payload (userdata
   GC ripple).
-- **`host_roots` slot recycling** — append-only pool gets a free
-  list + ticket invalidation; long-running embedders no longer
-  monotonically grow the host-root vector.
+- **`host_roots` slot recycling** *(Phase SR landed)* — the v1.1
+  append-only `Vec<Value>` is replaced by a free-list-backed slot
+  pool keyed by `HostRootTicket { idx: u32, generation: u32 }`
+  (8 bytes, `Copy`). `pin_host` returns the ticket; `unpin` clears
+  the slot to `Nil`, bumps generation, and pushes the index onto
+  the free list for reuse; `read_host` / `write_host` validate the
+  ticket's generation and return `None` / `Err(HostRootStale)` on
+  stale lookup (ABA-safe). Generation overflow at `u32::MAX` retires
+  the slot permanently (bounded leak: ~4 days at 10⁹ unpins/day per
+  slot). Long-running embedders (request-per-script loops, edge
+  workers) now hold at a bounded pool size instead of growing the
+  vector monotonically.
+  - **BREAKING — embedder Vm API**: `Vm::pin_host(v: Value) -> usize`
+    is now `Vm::pin_host(v: Value) -> HostRootTicket`;
+    `Vm::host_root_at(idx) -> Value` and `Vm::host_root_set(idx, v)`
+    are **removed** in favor of `Vm::read_host(t) -> Option<Value>`
+    and `Vm::write_host(t, v) -> Result<(), HostRootStale>`. New
+    methods: `Vm::unpin(t) -> Result<(), HostRootStale>`. Existing
+    `Vm::unpin_all()` and `Vm::host_root_count() -> usize` signatures
+    unchanged; `unpin_all` semantics extended to bump every slot's
+    generation (all outstanding tickets become stale uniformly).
+    Migration: replace stored `usize` index with `HostRootTicket`;
+    `vm.host_root_at(idx)` → `vm.read_host(ticket).expect("...")`;
+    `vm.host_root_set(idx, v)` → `vm.write_host(ticket, v).unwrap()`.
+  - **BREAKING — `luna-jit` facade structs**: `LuaFunction` /
+    `LuaTable` / `LuaRoot` now carry `ticket: HostRootTicket`
+    (was `idx: usize`). `Copy + Clone` preserved; public method
+    surface (`call` / `call_multi` / `get` / `set` / etc.) is
+    invariant. New `Lua::unpin(handle)` releases a single handle
+    via the new `PinnedHandle` trait (impl'd by all three handle
+    types). Reads after `Lua::unpin` / `Lua::unpin_all` panic with
+    `"<HandleType> used after unpin / unpin_all"` — matches the v1.1
+    "handles created before `unpin_all` become invalid" docstring.
+  - New module: `luna_core::vm::host_roots` (own the pool impls);
+    types re-exported as `luna_core::vm::{HostRootTicket, HostRootStale}`.
+    Tests: `crates/luna-core/tests/host_roots_slot_recycling.rs`
+    (10 tests covering basic recycle, ABA detection, `unpin_all`
+    invalidation, 100k pin/unpin smoke, free-list LIFO, GC tracer
+    correctness across recycle).
 - **`luna-aot` native-binary compile** — ahead-of-time compiler
   that emits a self-contained binary embedding the Lua sources
   with no runtime parse step. Architectural addition; separate

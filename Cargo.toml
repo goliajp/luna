@@ -3,6 +3,13 @@ resolver = "2"
 members = [
     "crates/luna-core",
     "crates/luna-jit",
+    # v1.3 UD3 — `#[derive(LuaUserdata)]` proc-macro. Lives as a
+    # separate crate because Rust requires `proc-macro = true` to
+    # be crate-level, AND because the luna-core 0-dep contract
+    # forbids pulling in `syn`/`quote`/`proc-macro2` upstream of
+    # luna-core. The derive emits fully-qualified `::luna_core::vm::*`
+    # paths so it's reachable from pure-luna-core embedders too.
+    "crates/luna-jit-derive",
 ]
 
 [workspace.package]

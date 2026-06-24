@@ -20,12 +20,17 @@
 //!
 //! ## Handles
 //!
-//! [`LuaFunction`] / [`LuaTable`] / [`LuaRoot<V>`] are `Copy` wrappers
-//! around an index into [`Vm::pin_host`]'s pool. They keep their
-//! referenced `Gc<T>` alive across calls (so a `LuaTable` survives
-//! a GC cycle even when no Lua-side reference exists). v1.1 ships
-//! append-only pin semantics; release the entire pool with
-//! [`Lua::unpin_all`]. Slot recycling lands in Phase 3 alongside B8.
+//! [`LuaFunction`] / [`LuaTable`] / [`LuaRoot`] are `Copy` wrappers
+//! around a [`HostRootTicket`] returned by [`Vm::pin_host`]. They
+//! keep their referenced `Gc<T>` alive across calls (so a `LuaTable`
+//! survives a GC cycle even when no Lua-side reference exists).
+//!
+//! v1.3 Phase SR added slot recycling — a single handle can be
+//! released via [`Lua::unpin`]; the whole batch via
+//! [`Lua::unpin_all`]. Both operations bump the slot's generation,
+//! invalidating any further use of `LuaFunction` / `LuaTable` /
+//! `LuaRoot` `Copy` values that referenced the released slot
+//! (subsequent reads / calls panic on the stale ticket).
 //!
 //! ## Threading
 //!
@@ -35,7 +40,10 @@
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
-use luna_core::vm::{FromLuaValue, IntoValue, LuaError, NativeTypedSig, SandboxBuilder, Vm};
+use luna_core::vm::{
+    FromLuaValue, HostRootStale, HostRootTicket, IntoValue, LuaError, NativeTypedSig,
+    SandboxBuilder, Vm,
+};
 
 /// `mlua`-style front door for embedders. Wraps a [`Vm`] with JIT
 /// installed by default (`Vm::new_minimal_with_jit`).
@@ -153,15 +161,15 @@ impl Lua {
     /// Borrow the globals table as a [`LuaTable`] handle.
     pub fn globals(&mut self) -> LuaTable {
         let g = self.0.globals();
-        let idx = self.0.pin_host(Value::Table(g));
-        LuaTable { idx }
+        let ticket = self.0.pin_host(Value::Table(g));
+        LuaTable { ticket }
     }
 
     /// Allocate a fresh empty table; return a handle that keeps it alive.
     pub fn create_table(&mut self) -> LuaTable {
         let t = self.0.new_table().build();
-        let idx = self.0.pin_host(Value::Table(t));
-        LuaTable { idx }
+        let ticket = self.0.pin_host(Value::Table(t));
+        LuaTable { ticket }
     }
 
     /// Wrap a typed Rust function as a Lua callable. See
@@ -171,28 +179,52 @@ impl Lua {
         F: NativeTypedSig<Marker>,
     {
         let v = self.0.native_typed(f);
-        let idx = self.0.pin_host(v);
-        LuaFunction { idx }
+        let ticket = self.0.pin_host(v);
+        LuaFunction { ticket }
     }
 
     /// Pin an arbitrary value as a host root; the returned [`LuaRoot`]
-    /// keeps it alive until [`Lua::unpin_all`].
+    /// keeps it alive until [`Lua::unpin`] or [`Lua::unpin_all`].
     pub fn pin<V: IntoValue>(&mut self, v: V) -> LuaRoot {
         let v = v.into_value(&mut self.0);
-        let idx = self.0.pin_host(v);
-        LuaRoot { idx }
+        let ticket = self.0.pin_host(v);
+        LuaRoot { ticket }
     }
 
-    /// Drop every pinned handle. `LuaFunction` / `LuaTable` / `LuaRoot`
-    /// created before this call become invalid (panic on use).
+    /// Release a single pinned handle (v1.3 Phase SR). The handle's
+    /// slot is recycled; the supplied `LuaFunction` / `LuaTable` /
+    /// `LuaRoot` value (and any `Copy`-cloned aliases) becomes stale
+    /// and will panic on subsequent reads / calls.
+    ///
+    /// Returns `Err(HostRootStale)` if the handle was already
+    /// released — pool is unchanged in that case, so embedders can
+    /// safely ignore the error if double-unpin is acceptable.
+    pub fn unpin<H: PinnedHandle>(&mut self, h: H) -> Result<(), HostRootStale> {
+        self.0.unpin(h.ticket())
+    }
+
+    /// Drop every pinned handle. `LuaFunction` / `LuaTable` /
+    /// `LuaRoot` created before this call become invalid (panic on
+    /// use). Bumps every slot's generation; underlying `Vec` capacity
+    /// is retained for amortized future allocations.
     pub fn unpin_all(&mut self) {
         self.0.unpin_all();
     }
 
-    /// Number of currently-pinned handles (diagnostic).
+    /// Number of currently-pinned handles (diagnostic). v1.3 Phase
+    /// SR: counts live (non-free) slots, so a steady `pin → unpin`
+    /// loop holds at 1 instead of growing monotonically.
     pub fn pinned_count(&self) -> usize {
         self.0.host_root_count()
     }
+}
+
+/// v1.3 Phase SR — common trait for handle types that wrap a
+/// [`HostRootTicket`]. Lets [`Lua::unpin`] accept `LuaFunction` /
+/// `LuaTable` / `LuaRoot` uniformly.
+pub trait PinnedHandle {
+    /// The ticket this handle wraps.
+    fn ticket(&self) -> HostRootTicket;
 }
 
 impl Default for Lua {
@@ -260,13 +292,21 @@ impl LuaSandboxBuilder {
 
 /// Handle to a Lua-callable value (`Value::Closure` or
 /// `Value::Native`) pinned in the host root pool. `Copy`-able —
-/// clones share the same pinned slot.
+/// clones share the same [`HostRootTicket`].
+///
+/// Becomes stale (panics on call) after [`Lua::unpin`] /
+/// [`Lua::unpin_all`].
 #[derive(Copy, Clone, Debug)]
 pub struct LuaFunction {
-    idx: usize,
+    ticket: HostRootTicket,
 }
 
 impl LuaFunction {
+    /// The underlying [`HostRootTicket`]. Facade-author use only.
+    pub fn ticket(self) -> HostRootTicket {
+        self.ticket
+    }
+
     /// Call this function with the given typed args; decode the
     /// (first) return as `R`. Use [`LuaFunction::call_multi`] for
     /// the full result vector.
@@ -275,7 +315,10 @@ impl LuaFunction {
         A: IntoLuaArgs,
         R: FromLuaValue,
     {
-        let f = lua.0.host_root_at(self.idx);
+        let f = lua
+            .0
+            .read_host(self.ticket)
+            .expect("LuaFunction used after unpin / unpin_all");
         let args = args.into_lua_args(&mut lua.0);
         let mut r = lua.0.call_value(f, &args)?;
         if r.is_empty() {
@@ -290,7 +333,10 @@ impl LuaFunction {
     where
         A: IntoLuaArgs,
     {
-        let f = lua.0.host_root_at(self.idx);
+        let f = lua
+            .0
+            .read_host(self.ticket)
+            .expect("LuaFunction used after unpin / unpin_all");
         let args = args.into_lua_args(&mut lua.0);
         lua.0.call_value(f, &args)
     }
@@ -298,17 +344,29 @@ impl LuaFunction {
 
 impl IntoValue for LuaFunction {
     fn into_value(self, vm: &mut Vm) -> Value {
-        vm.host_root_at(self.idx)
+        vm.read_host(self.ticket)
+            .expect("LuaFunction used after unpin / unpin_all")
+    }
+}
+
+impl PinnedHandle for LuaFunction {
+    fn ticket(&self) -> HostRootTicket {
+        self.ticket
     }
 }
 
 /// Handle to a `Value::Table` pinned in the host root pool.
 #[derive(Copy, Clone, Debug)]
 pub struct LuaTable {
-    idx: usize,
+    ticket: HostRootTicket,
 }
 
 impl LuaTable {
+    /// The underlying [`HostRootTicket`]. Facade-author use only.
+    pub fn ticket(self) -> HostRootTicket {
+        self.ticket
+    }
+
     /// Set `t[k] = v`. Both `k` and `v` may be any [`IntoValue`].
     pub fn set<K: IntoValue, V: IntoValue>(
         self,
@@ -316,7 +374,11 @@ impl LuaTable {
         k: K,
         v: V,
     ) -> Result<(), LuaError> {
-        let t = match lua.0.host_root_at(self.idx) {
+        let t = match lua
+            .0
+            .read_host(self.ticket)
+            .expect("LuaTable used after unpin / unpin_all")
+        {
             Value::Table(t) => t,
             _ => return Err(LuaError(Value::Nil)),
         };
@@ -341,7 +403,11 @@ impl LuaTable {
 
     /// Read `t[k]` as a raw [`Value`] (no type coercion).
     pub fn raw_get<K: IntoValue>(self, lua: &mut Lua, k: K) -> Result<Value, LuaError> {
-        let t = match lua.0.host_root_at(self.idx) {
+        let t = match lua
+            .0
+            .read_host(self.ticket)
+            .expect("LuaTable used after unpin / unpin_all")
+        {
             Value::Table(t) => t,
             _ => return Err(LuaError(Value::Nil)),
         };
@@ -353,7 +419,14 @@ impl LuaTable {
 
 impl IntoValue for LuaTable {
     fn into_value(self, vm: &mut Vm) -> Value {
-        vm.host_root_at(self.idx)
+        vm.read_host(self.ticket)
+            .expect("LuaTable used after unpin / unpin_all")
+    }
+}
+
+impl PinnedHandle for LuaTable {
+    fn ticket(&self) -> HostRootTicket {
+        self.ticket
     }
 }
 
@@ -361,19 +434,33 @@ impl IntoValue for LuaTable {
 /// wants to keep alive without wrapping in `LuaFunction` / `LuaTable`.
 #[derive(Copy, Clone, Debug)]
 pub struct LuaRoot {
-    idx: usize,
+    ticket: HostRootTicket,
 }
 
 impl LuaRoot {
-    /// Read the pinned value.
+    /// The underlying [`HostRootTicket`]. Facade-author use only.
+    pub fn ticket(self) -> HostRootTicket {
+        self.ticket
+    }
+
+    /// Read the pinned value. Panics if the handle was released.
     pub fn get(self, lua: &Lua) -> Value {
-        lua.0.host_root_at(self.idx)
+        lua.0
+            .read_host(self.ticket)
+            .expect("LuaRoot used after unpin / unpin_all")
     }
 }
 
 impl IntoValue for LuaRoot {
     fn into_value(self, vm: &mut Vm) -> Value {
-        vm.host_root_at(self.idx)
+        vm.read_host(self.ticket)
+            .expect("LuaRoot used after unpin / unpin_all")
+    }
+}
+
+impl PinnedHandle for LuaRoot {
+    fn ticket(&self) -> HostRootTicket {
+        self.ticket
     }
 }
 
