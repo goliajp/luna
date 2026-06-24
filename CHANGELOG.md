@@ -459,20 +459,61 @@ scope** for v1.3 (no longer deferred). Tracked in
     `official_run` SIGABRT (IO Safety fd-double-close, see
     `.dev/known-bugs/io-safety-fd-double-close.md`) are unchanged
     by this refactor.
+  - **Phase AOT Stage 4 — linker + interp-runtime staticlib**
+    *(landed in this commit)*. A new sibling crate
+    `crates/luna-runtime-helpers/` ships as a dual
+    `crate-type = ["staticlib", "rlib"]` library that depends only
+    on `luna-core` (luna-core's 0-third-party-dep contract is
+    unaffected — `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"`
+    still reports 1). It exposes one C-ABI symbol
+    `#[unsafe(no_mangle)] pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32`
+    that constructs a `Vm::new(LuaVersion::Lua55)`, enables
+    bytecode loading, calls `Vm::load(slice, b"=embedded")`, runs
+    `call_value` on the root closure, and returns the process exit
+    code (0 success / 1 load-or-runtime-error / panics caught and
+    reported). The new `luna_aot::embed::compile_and_link`
+    function in `crates/luna-aot/src/embed.rs` drives the full
+    deploy pipeline: parse → compile → dump → bytecode `.o` → C
+    `main.c` (extern-decls the bracket symbols + `luna_aot_run`,
+    emits `cc -c main.c -o main.o`) → `cargo build -p
+    luna-runtime-helpers --release` (or `LUNA_AOT_RUNTIME_HELPERS_STATICLIB`
+    env override for distribution scenarios; in-process `Mutex`
+    serialises concurrent in-test callers against cargo's atomic-
+    rename window) → `cc bytecode.o main.o libluna_runtime_helpers.a
+    [platform libs] -o <out>` (mac: `-framework CoreFoundation
+    -framework Security -liconv`; linux:
+    `-lpthread -ldl -lm -lrt -lgcc_s -lutil`; windows: explicit
+    `AotError::Link` — Windows folds into the cross-compile
+    follow-up). The CLI's `compile` subcommand routes through
+    `compile_and_link` by default; the prior scaffold path
+    (C-entry-only, prints section length to stderr) remains
+    reachable via `--scaffold-only` for users who want to
+    benchmark the link step in isolation. New test
+    `crates/luna-aot/tests/stage4_link_and_run.rs` covers three
+    end-to-end scenarios: `print('hello from aot')` lands on
+    stdout with exit 0; arithmetic + multi-print
+    (`print(5); print('done', 10)`) produces the expected
+    tab-separated PUC-shape output; `error('boom')` propagates as
+    exit 1 with the message on stderr. Tests skip cleanly on
+    Windows / missing-`cc` hosts (Stage 4 ships Unix-only).
+    Stage 5 Cranelift trace-mcode emission and Stage 6
+    cross-compile remain follow-ups.
   - **Follow-up sessions** within v1.3 (per
-    `.dev/rfcs/v1.3-audit-luna-aot.md` Stages 4-6, ~50 dev-days
-    remaining of the 70-day audit estimate): (1) wire
-    `runtime_stub::aot_main` into the link step so the binary
-    actually `undump`s + runs the embedded bytecode through a `Vm`;
-    (2) Cranelift trace mcode emission via `cranelift-object` —
-    walk every reachable `Proto`'s hot loops, drive each through the
-    new generic lowerer, emit symbols + dispatch table into the AOT
-    binary; (3) extract a `luna-runtime-helpers` rlib carrying the
-    26 `luna_jit_*` C-ABI helpers so the AOT-linked binary resolves
-    them at static-link time (no `JITBuilder::symbol` available
-    deploy-side); (4) cross-compile via `--target` + per-triple
-    `cc` flags; (5) Alpine no-lua-installed deploy smoke test
-    (audit § AOT6).
+    `.dev/rfcs/v1.3-audit-luna-aot.md` Stages 5-6, ~40 dev-days
+    remaining of the 70-day audit estimate): (1) Cranelift trace
+    mcode emission via `cranelift-object` — walk every reachable
+    `Proto`'s hot loops, drive each through the new generic
+    lowerer, emit symbols + dispatch table into the AOT binary
+    (the staticlib runtime already carries the interp fallback,
+    so trace.o is purely additive); (2) extract or expose the
+    26 `luna_jit_*` C-ABI helpers from `luna-jit` so the AOT-linked
+    binary resolves them at static-link time (no `JITBuilder::symbol`
+    available deploy-side); (3) cross-compile via `--target` +
+    per-triple `cc` flags + per-triple
+    `cargo build --target=<triple> -p luna-runtime-helpers`
+    bootstrap; (4) Alpine no-lua-installed deploy smoke test
+    (audit § AOT6); (5) Windows linker support (`link.exe` /
+    `clang-cl`).
 - **MacroLua dialect support** — Lua syntax extension as an
   optional dialect alongside 5.1-5.5; routed through the existing
   per-dialect lexer/parser machinery so it doesn't disturb the

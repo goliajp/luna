@@ -347,6 +347,357 @@ fn link_with_cc(objects: &[&Path], out_path: &Path) -> Result<(), AotError> {
     Ok(())
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Stage 4 — interp-runtime link path
+//
+// This is the "real" deploy shape: the produced binary embeds the
+// bytecode, links against the `luna-runtime-helpers` staticlib (which
+// bundles luna-core + rust stdlib), and runs the embedded chunk
+// through a `Vm` at process start.
+//
+// Pipeline:
+//
+//   1. Parse + compile + dump (shared with `embed_bytecode`).
+//   2. Write `.luna.bytecode` object (shared).
+//   3. Build `libluna_runtime_helpers.a` via `cargo build -p
+//      luna-runtime-helpers --release` (idempotent — cargo caches).
+//   4. Write a tiny C `main.c` that extern-decls the bracket symbols
+//      + extern-decls `luna_aot_run`, then calls
+//      `luna_aot_run(start, end - start)`. Compile via `cc -c`.
+//   5. Link bytecode.o + main.o + libluna_runtime_helpers.a +
+//      platform libs (`-lpthread -ldl -lm -framework CoreFoundation`
+//      on Mac) into the final binary.
+//
+// Stage 3 Cranelift trace mcode emission is a separate concern — it
+// adds a third object file (containing the lowered traces) to the
+// link line. The interp-runtime fallback path lives in the staticlib
+// either way, so adding the trace.o is purely additive.
+// ────────────────────────────────────────────────────────────────────
+
+/// End-to-end AOT compile: produces a self-contained binary that, when
+/// run, loads the embedded bytecode through a luna `Vm` and executes
+/// it (interp-driven; Cranelift trace mcode is a follow-up).
+///
+/// Differs from [`embed_bytecode`]:
+/// - Builds and links `luna-runtime-helpers` (staticlib carrying
+///   luna-core + a `luna_aot_run` C-ABI entry).
+/// - Produced binary actually **runs** the script — `print(...)` lands
+///   on stdout, runtime errors print to stderr + exit 1, etc.
+///
+/// `target_triple` parsing is host-only in this session; cross-compile
+/// requires per-triple staticlib builds (`cargo build --target=<triple>
+/// -p luna-runtime-helpers`) + the matching `cc --target=...` flag,
+/// folded in by Stage 4 cross-compile follow-up.
+///
+/// `cargo_dir` overrides the working directory `cargo build` runs in
+/// (defaults to the workspace this crate lives in, looked up via
+/// `CARGO_MANIFEST_DIR`). Useful for downstream embedders that ship
+/// a vendored copy of the workspace and want the build to land in a
+/// known cache dir.
+pub fn compile_and_link(
+    source_path: &Path,
+    out_path: &Path,
+    target_triple: Option<&str>,
+    version: LuaVersion,
+) -> Result<(), AotError> {
+    if let Some(t) = target_triple {
+        if t != host_triple() {
+            return Err(AotError::UnsupportedTarget(t.to_string()));
+        }
+    }
+
+    // Stage 1 + 2 + 5a: shared with `embed_bytecode`.
+    let dump_bytes = compile_to_dump(source_path, version)?;
+
+    let workdir = out_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let stem = out_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("luna_aot");
+    let bytecode_obj_path = workdir.join(format!("{stem}.luna_bytecode.o"));
+    let cmain_obj_path = workdir.join(format!("{stem}.luna_cmain.o"));
+
+    // Stage 5b: bytecode object.
+    write_bytecode_object(&dump_bytes, &bytecode_obj_path)?;
+
+    // Stage 6a: tiny C main that calls into the staticlib.
+    write_aot_cmain_object(&cmain_obj_path)?;
+
+    // Stage 6b: ensure the runtime staticlib exists.
+    let staticlib = build_runtime_helpers_staticlib()?;
+
+    // Stage 6c: final link. Order matters on some toolchains: bytecode
+    // + main first (they reference symbols from the staticlib), then
+    // the staticlib, then system libs.
+    link_aot_binary(&bytecode_obj_path, &cmain_obj_path, &staticlib, out_path)?;
+
+    Ok(())
+}
+
+/// Run Stages 1-2 (parse + compile) and produce the dump bytes the
+/// bytecode object holds. Factored out so [`embed_bytecode`] and
+/// [`compile_and_link`] share the front-end exactly.
+fn compile_to_dump(source_path: &Path, version: LuaVersion) -> Result<Vec<u8>, AotError> {
+    let src = fs::read(source_path)?;
+    let ast = parse(&src, version).map_err(|e| {
+        AotError::Syntax(format!(
+            "{}:{}: {}",
+            source_path.display(),
+            e.line,
+            String::from_utf8_lossy(&e.msg)
+        ))
+    })?;
+
+    let mut heap = Heap::new();
+    let chunk_name = source_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("aot-chunk")
+        .as_bytes()
+        .to_vec();
+    let proto = compile_chunk(&ast, version, &chunk_name, &mut heap).map_err(|e| {
+        AotError::Syntax(format!(
+            "{}:{}: {}",
+            source_path.display(),
+            e.line,
+            String::from_utf8_lossy(&e.msg)
+        ))
+    })?;
+
+    Ok(dump::dump(&proto, false, version))
+}
+
+/// Generate + compile the C main that drives the staticlib entry.
+///
+/// The generated C looks like:
+///
+/// ```c
+/// #include <stddef.h>
+/// #include <stdint.h>
+///
+/// extern uint8_t __luna_bytecode_start[];
+/// extern uint8_t __luna_bytecode_end[];
+/// extern int luna_aot_run(const uint8_t *bytecode, size_t len);
+///
+/// int main(int argc, char **argv) {
+///     (void)argc; (void)argv;
+///     size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
+///     return luna_aot_run(__luna_bytecode_start, len);
+/// }
+/// ```
+///
+/// On Mach-O the `__luna_bytecode_{start,end}` and `luna_aot_run`
+/// symbols are stored with a `_` prefix in the object file's symbol
+/// table; the C extern syntax resolves to the prefixed form
+/// automatically. On ELF / PE no prefix is added.
+fn write_aot_cmain_object(out: &Path) -> Result<(), AotError> {
+    let c_src = r#"#include <stddef.h>
+#include <stdint.h>
+
+extern uint8_t __luna_bytecode_start[];
+extern uint8_t __luna_bytecode_end[];
+extern int luna_aot_run(const uint8_t *bytecode, size_t len);
+
+int main(int argc, char **argv) {
+    (void)argc; (void)argv;
+    size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
+    return luna_aot_run(__luna_bytecode_start, len);
+}
+"#;
+
+    let mut c_path = out.to_path_buf();
+    c_path.set_extension("c");
+    fs::write(&c_path, c_src)?;
+
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let status = Command::new(&cc)
+        .arg("-c")
+        .arg(&c_path)
+        .arg("-o")
+        .arg(out)
+        .output()
+        .map_err(|e| AotError::Link(format!("spawn {cc}: {e}")))?;
+    if !status.status.success() {
+        return Err(AotError::Link(format!(
+            "cc -c {} failed (exit {:?}):\n{}",
+            c_path.display(),
+            status.status.code(),
+            String::from_utf8_lossy(&status.stderr)
+        )));
+    }
+    Ok(())
+}
+
+/// Build `libluna_runtime_helpers.a` and return the path to the
+/// produced staticlib.
+///
+/// Resolution rules:
+///
+/// 1. If `LUNA_AOT_RUNTIME_HELPERS_STATICLIB` is set, take it as the
+///    absolute path of a pre-built `.a` and skip the cargo build.
+///    Useful for distribution scenarios where the staticlib is shipped
+///    out-of-band (audit § Stage 6 Option B).
+/// 2. Otherwise, look up `CARGO_MANIFEST_DIR`, ascend to the workspace
+///    root (one `..`), and invoke
+///    `cargo build -p luna-runtime-helpers --release`. The resulting
+///    `target/release/libluna_runtime_helpers.a` is returned.
+///
+/// The `cargo` invocation is idempotent — cargo caches across runs.
+/// On a clean workspace the first call takes ~3s; subsequent calls
+/// are sub-second.
+fn build_runtime_helpers_staticlib() -> Result<PathBuf, AotError> {
+    if let Ok(prebuilt) = std::env::var("LUNA_AOT_RUNTIME_HELPERS_STATICLIB") {
+        let p = PathBuf::from(prebuilt);
+        if !p.exists() {
+            return Err(AotError::Link(format!(
+                "LUNA_AOT_RUNTIME_HELPERS_STATICLIB points at {} but the file does not exist",
+                p.display()
+            )));
+        }
+        return Ok(p);
+    }
+
+    // Serialize concurrent in-process callers (e.g. cargo's parallel
+    // integration tests). Cargo's own target-dir lock handles
+    // inter-process serialization, but in-process callers can race
+    // each other against cargo's "file briefly absent during atomic
+    // rename" window. A `Mutex` collapses that to one sequential
+    // build at a time per process.
+    use std::sync::Mutex;
+    static BUILD_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = BUILD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    // `CARGO_MANIFEST_DIR` is the directory containing the
+    // **luna-aot** Cargo.toml. The workspace root is one level up.
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
+        AotError::Link(
+            "CARGO_MANIFEST_DIR not set — cannot locate workspace to build \
+             luna-runtime-helpers. Set LUNA_AOT_RUNTIME_HELPERS_STATICLIB \
+             to bypass."
+                .to_string(),
+        )
+    })?;
+    let workspace_root = PathBuf::from(&manifest_dir)
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            AotError::Link(format!(
+                "could not derive workspace root from CARGO_MANIFEST_DIR={manifest_dir}"
+            ))
+        })?;
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .current_dir(&workspace_root)
+        .arg("build")
+        .arg("-p")
+        .arg("luna-runtime-helpers")
+        .arg("--release")
+        // Don't inherit RUSTFLAGS that might pollute the staticlib
+        // (e.g. coverage instrumentation from the parent test build).
+        // Acceptable since the staticlib build is deterministic
+        // independent of the parent crate's profile.
+        .env_remove("RUSTFLAGS")
+        .output()
+        .map_err(|e| AotError::Link(format!("spawn cargo: {e}")))?;
+    if !output.status.success() {
+        return Err(AotError::Link(format!(
+            "cargo build -p luna-runtime-helpers failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )));
+    }
+
+    let staticlib = workspace_root
+        .join("target")
+        .join("release")
+        .join("libluna_runtime_helpers.a");
+    if !staticlib.exists() {
+        return Err(AotError::Link(format!(
+            "cargo build succeeded but {} is missing",
+            staticlib.display()
+        )));
+    }
+    Ok(staticlib)
+}
+
+/// Link the final AOT binary: `cc bytecode.o cmain.o libluna_runtime_helpers.a
+/// -lpthread -ldl -lm [platform-specific] -o out`.
+///
+/// The platform-specific flags are detected from `cfg!(target_os)` at
+/// `luna-aot` build time — we run on the host, so the host CC sees the
+/// same set of libs the staticlib was built against.
+fn link_aot_binary(
+    bytecode_obj: &Path,
+    cmain_obj: &Path,
+    staticlib: &Path,
+    out_path: &Path,
+) -> Result<(), AotError> {
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let mut cmd = Command::new(&cc);
+
+    // Object files first (they reference symbols defined in the
+    // staticlib). Order matters for some traditional Unix linkers
+    // (`ld` resolves left-to-right; modern `lld` is order-independent
+    // but we keep the canonical order for portability).
+    cmd.arg(cmain_obj).arg(bytecode_obj).arg(staticlib);
+
+    // Platform-specific runtime deps. The staticlib bundles rust
+    // stdlib, which transitively needs libc / pthread / libm / etc.
+    // The set below is what `rustc --print native-static-libs` reports
+    // for a `crate-type = ["staticlib"]` on each platform.
+    if cfg!(target_os = "macos") {
+        // `rustc --print native-static-libs` on aarch64-apple-darwin
+        // for a staticlib that pulls std reports the System framework
+        // + a handful of low-level libs. The CC driver on macOS adds
+        // the SDK linker search paths automatically; we only need to
+        // name what's actually referenced.
+        cmd.args(["-framework", "CoreFoundation"]);
+        cmd.args(["-framework", "Security"]);
+        cmd.arg("-liconv");
+    } else if cfg!(target_os = "linux") {
+        // libgcc_s for unwinding; pthread / dl / m for stdlib bits.
+        // `-lutil` is occasionally required by std on glibc; harmless
+        // when present.
+        cmd.arg("-lpthread");
+        cmd.arg("-ldl");
+        cmd.arg("-lm");
+        cmd.arg("-lrt");
+        cmd.arg("-lgcc_s");
+        cmd.arg("-lutil");
+    } else if cfg!(target_os = "windows") {
+        // `cc` on Windows is usually `cl.exe` or `clang-cl` — the link
+        // surface is very different. Stage 4 ships Unix-only; Windows
+        // support folds in with the cross-compile follow-up.
+        return Err(AotError::Link(
+            "Windows linker support not implemented in v1.3 Phase AOT Stage 4 \
+             (cross-compile follow-up); use --target=x86_64-unknown-linux-gnu \
+             from a Linux host instead."
+                .to_string(),
+        ));
+    }
+
+    cmd.arg("-o").arg(out_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| AotError::Link(format!("spawn {cc}: {e}")))?;
+    if !output.status.success() {
+        return Err(AotError::Link(format!(
+            "cc link failed (exit {:?}):\ncommand: {:?}\nstderr:\n{}",
+            output.status.code(),
+            cmd,
+            String::from_utf8_lossy(&output.stderr),
+        )));
+    }
+    Ok(())
+}
+
 /// Map the host triple to `object::{BinaryFormat, Architecture, Endianness}`.
 /// Scaffold only — cross-compile triples flow in via a richer map in
 /// the follow-up Stage 6 work.
