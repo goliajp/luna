@@ -42,12 +42,64 @@
 use std::any::TypeId;
 use std::marker::PhantomData;
 
-use crate::runtime::heap::Gc;
+use crate::runtime::heap::{Gc, GcHeader};
 use crate::runtime::table::Table;
 use crate::runtime::value::{NativeFn, Value};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 use crate::vm::typed_native::{FromLuaArgs, IntoLuaReturn};
+
+// ─────────────────────────────────────────────────────────────────────
+// UserdataMarker — public facade over the GC marker passed to
+// `LuaUserdata::trace`. Phase TB (v1.3).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Public facade over the GC mark accumulator passed to
+/// [`LuaUserdata::trace`].
+///
+/// Wraps the crate-internal [`crate::runtime::heap::Marker`] so embedders
+/// never see the gray-stack / weak-table internals. Holds a mutable
+/// borrow of the underlying marker for the duration of a single trace
+/// call. Constructed only by the collector via the crate-internal
+/// `__new_internal` constructor; embedders cannot synthesize one outside
+/// a trace call.
+///
+/// ## Trace-method contract
+///
+/// Inside [`LuaUserdata::trace`] the embedder may **only**:
+/// - call [`UserdataMarker::mark`] / [`UserdataMarker::mark_value`] on
+///   `Gc<...>` handles / `Value`s reachable from `&self`
+/// - read fields of `&self`
+///
+/// The embedder must **not** allocate new GC objects, reenter the `Vm`,
+/// take locks, or perform I/O. The trace call runs synchronously inside
+/// the collector's mark phase and must return in bounded wall time.
+pub struct UserdataMarker<'a> {
+    inner: &'a mut crate::runtime::heap::Marker,
+}
+
+impl<'a> UserdataMarker<'a> {
+    /// Crate-internal constructor. Not part of the public API — only
+    /// the collector (`Userdata::trace`) builds one.
+    #[doc(hidden)]
+    pub(crate) fn __new_internal(inner: &'a mut crate::runtime::heap::Marker) -> Self {
+        UserdataMarker { inner }
+    }
+
+    /// Mark a Gc-managed object as reachable. Returns `true` on the
+    /// first visit (white → gray transition). Idempotent on later
+    /// visits within the same cycle.
+    pub fn mark<T>(&mut self, g: Gc<T>) -> bool {
+        self.inner.header(g.as_ptr() as *mut GcHeader)
+    }
+
+    /// Convenience: mark every Gc-managed object referenced by a
+    /// [`Value`]. No-op for primitive variants (`Int`, `Float`,
+    /// `Bool`, `Nil`, `LightUserdata`).
+    pub fn mark_value(&mut self, v: Value) -> bool {
+        self.inner.value(v)
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // MetaMethod — public-facing metamethod tag
@@ -188,11 +240,19 @@ impl MetaMethod {
 ///
 /// ## Contract on the host payload
 ///
-/// `T` must not hold `Gc<...>` fields. The collector traces the
-/// userdata's metatable but **not** the boxed `Box<dyn Any>` payload —
-/// stashing a `Gc<...>` inside `T` makes it invisible to the marker and
-/// risks dangling references. v1.1 [`crate::runtime::userdata::Userdata::trace`]
-/// pins this contract; trait sugar inherits it unchanged.
+/// `T` may hold `Gc<...>` fields **provided it overrides [`trace`]** to
+/// mark every such handle. The default [`trace`] is a no-op, suitable
+/// for pure host types (no Gc-managed inner state). Forgetting to
+/// override [`trace`] when `T` carries a `Gc<Table>` / `Gc<LuaStr>` /
+/// `Gc<NativeClosure>` / `Gc<Coro>` / `Gc<Userdata>` field whose
+/// lifetime is not otherwise rooted risks dangling references after
+/// collection.
+///
+/// v1.2 forbade Gc-bearing payloads entirely; v1.3 Phase TB lifts the
+/// limitation by giving the trait a default [`trace`] method and
+/// storing a monomorphic adapter in [`crate::runtime::userdata::UserdataPayload::Host`].
+///
+/// [`trace`]: LuaUserdata::trace
 pub trait LuaUserdata: 'static + Sized {
     /// Lua-visible type name. Used as the `__name` field of the
     /// generated metatable; surfaces in tostring fallback messages and
@@ -208,6 +268,39 @@ pub trait LuaUserdata: 'static + Sized {
     /// [`set_userdata::<T>`](Vm::set_userdata) — the resulting
     /// metatable is cached on the Vm keyed by `TypeId::of::<T>()`.
     fn add_methods<M: UserdataMethods<Self>>(_m: &mut M) {}
+
+    /// Mark every Gc-managed handle reachable from `self`. The default
+    /// is a no-op — override only when `T` directly holds
+    /// `Gc<Table>` / `Gc<LuaStr>` / `Gc<NativeClosure>` / `Gc<Coro>` /
+    /// `Gc<Userdata>` fields whose lifetime is not otherwise rooted
+    /// (i.e. not pinned via [`Vm::pin_host`] and not reachable from a
+    /// Lua-side table).
+    ///
+    /// Called by the collector during the mark phase; the call runs
+    /// synchronously, single-threaded, and must return in bounded wall
+    /// time. The embedder must not allocate new GC objects, reenter the
+    /// `Vm`, take locks, or perform I/O from inside `trace` — see the
+    /// [`UserdataMarker`] type docs for the full contract.
+    ///
+    /// ## Override example
+    ///
+    /// ```ignore
+    /// use luna_core::runtime::{Gc, Table};
+    /// use luna_core::vm::{LuaUserdata, UserdataMarker};
+    ///
+    /// struct Cache { entries: Gc<Table> }
+    /// impl LuaUserdata for Cache {
+    ///     fn trace(&self, m: &mut UserdataMarker) {
+    ///         m.mark(self.entries);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Overriding `trace` does not require touching any other trait
+    /// method; existing B8 / v1.2 types remain source-compatible with
+    /// an unchanged empty `impl LuaUserdata for T {}` (the default
+    /// no-op runs and no Gc tracing is performed).
+    fn trace(&self, _m: &mut UserdataMarker) {}
 }
 
 /// Builder passed to [`LuaUserdata::add_methods`]. The concrete impl
