@@ -43,7 +43,7 @@ use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::settings;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{Linkage, Module};
+use cranelift_module::{FuncId, Linkage, Module};
 
 /// Recognised single-arg libm math functions. Each entry maps the
 /// Lua-side const-pool name (bytes) to the libm symbol cranelift
@@ -893,9 +893,9 @@ fn kind_to_raw_tag(k: RegKind) -> u8 {
 /// sites land inside the window).
 ///
 /// Returns the number of sites materialised at this emit point.
-fn emit_materialize_live_sunk(
+fn emit_materialize_live_sunk<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
-    module: &mut JITModule,
+    module: &mut M,
     mat_sunk_id: cranelift_module::FuncId,
     escape: &EscapeAnalysis,
     virt_vars: &[Option<Vec<Variable>>],
@@ -2409,9 +2409,9 @@ fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
 /// `RegKind`. Without the kind-aware dispatch a Closure / Table /
 /// Float src would be silently wrapped as `Value::Int(raw_bits)`
 /// by the legacy `set_int` helper.
-fn emit_table_set(
+fn emit_table_set<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
-    module: &mut JITModule,
+    module: &mut M,
     set_int_id: cranelift_module::FuncId,
     set_nil_id: cranelift_module::FuncId,
     set_raw_id: cranelift_module::FuncId,
@@ -2702,13 +2702,229 @@ pub fn last_op_id() -> u8 {
     LAST_OP_ID.with(|c| c.get())
 }
 
+/// v1.3 Phase AOT Stage 3 — build a fresh `JITModule` configured with
+/// every trace-side `luna_jit_*` helper symbol registered for
+/// `Linkage::Import` resolution at finalize time.
+///
+/// Companion of [`super::build_jit_module_with_helpers`] (the int-chunk
+/// counterpart). The AOT pipeline (luna-aot) builds an `ObjectModule`
+/// instead and resolves the same symbols at static-link time — see
+/// `.dev/rfcs/v1.3-audit-luna-aot.md` § "Stage 3: bytecode → Cranelift
+/// IR (the shared lowerer)".
+///
+/// **Stage 3 status**: both the int-chunk lowerer
+/// ([`super::lower_int_chunk_into`]) and the trace lowerer
+/// ([`lower_trace_into`]) are fully generic over
+/// `M: cranelift_module::Module`. The two emit-time helper free fns
+/// ([`emit_table_set`] / [`emit_materialize_live_sunk`]) are also
+/// generic. JIT-specific surfaces remaining are: this module-
+/// construction helper, the JIT wrappers ([`try_compile_trace_with_options`]
+/// + [`super::try_compile_int_chunk`]) that finalize, and the
+/// `TraceHandle` / `JitHandle` types that own the mmap'd `JITModule`
+/// for the entry's lifetime. The trace lowerer returns a
+/// `CompiledTrace` with [`placeholder_trace_fn`] in `entry`; the JIT
+/// wrapper patches the real fn pointer after `finalize_definitions` +
+/// `get_finalized_function`. The AOT pipeline (luna-aot) never
+/// invokes the entry directly — it resolves the trace symbol at
+/// static-link time and dispatches through its own table.
+fn build_trace_jit_module() -> Option<JITModule> {
+    let mut flag_builder = settings::builder();
+    flag_builder.set("use_colocated_libcalls", "false").ok()?;
+    flag_builder.set("is_pic", "false").ok()?;
+    flag_builder.set("opt_level", "speed").ok()?;
+    let isa = cranelift_native::builder()
+        .ok()?
+        .finish(settings::Flags::new(flag_builder))
+        .ok()?;
+    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    // Step 4 emits `Op::NewTable / SetI / GetI / Len` as calls to
+    // the method JIT's `luna_jit_*` helpers — register the symbols
+    // so cranelift's `Linkage::Import` resolver finds them at
+    // finalize time. (rlib link strips `#[no_mangle]` for executables
+    // like `cargo test`, so the default `dlsym(RTLD_DEFAULT)` resolver
+    // misses them without an explicit `builder.symbol(...)`.)
+    builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
+    builder.symbol(
+        "luna_jit_table_set_int",
+        super::luna_jit_table_set_int as *const u8,
+    );
+    // P12-S6-A2 — Nil-valued SetList/SetI/SetTable helper. Trace JIT
+    // emits a call here when an Op::LoadNil-written source register
+    // is fed into a (non-sunk) table write.
+    builder.symbol(
+        "luna_jit_table_set_nil",
+        super::luna_jit_table_set_nil as *const u8,
+    );
+    // P12-S7-C — generalised SetTable/SetI/SetList helper for any
+    // (tag, raw_bits) pair. Used for Closure / Table / non-Int/Nil
+    // sources where the legacy set_int helper would mis-wrap as
+    // Value::Int(ptr_bits).
+    builder.symbol(
+        "luna_jit_table_set_raw",
+        super::luna_jit_table_set_raw as *const u8,
+    );
+    // P12-S11-A — SetField + GetField helpers (string key from
+    // Proto.consts; raw pointer baked into IR at emit time).
+    builder.symbol(
+        "luna_jit_table_set_field",
+        super::luna_jit_table_set_field as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_field",
+        super::luna_jit_table_get_field as *const u8,
+    );
+    // v1.2 D3 Path B — standalone GetTabUp helper.
+    builder.symbol(
+        "luna_jit_op_get_tab_up",
+        super::luna_jit_op_get_tab_up as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_int",
+        super::luna_jit_table_get_int as *const u8,
+    );
+    builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
+    // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
+    // helper. Reuses the method JIT helper; the trace dispatcher's
+    // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
+    // the closure at runtime.
+    builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
+    // P12-S4-step4b-A — frame materialization helper. Step4b-C will
+    // emit calls to it from the cmp@d>0 side-exit path. Register the
+    // symbol unconditionally so the lowerer can declare the import
+    // without needing per-trace gating; cranelift's dead-symbol
+    // elimination drops the import if no IR references it.
+    builder.symbol(
+        "luna_jit_trace_materialize_frames",
+        super::luna_jit_trace_materialize_frames as *const u8,
+    );
+    // P12-S5-C — sunk-table materialise helper. Emit calls it at
+    // each cmp side-exit (depth=0 today) for every live Sinkable
+    // site whose virt slots must reach interp via the heap path.
+    builder.symbol(
+        "luna_jit_materialize_sunk_table",
+        super::luna_jit_materialize_sunk_table as *const u8,
+    );
+    // P12-S7-A — Op::Closure shared-upval helper.
+    builder.symbol(
+        "luna_jit_op_closure",
+        super::luna_jit_op_closure as *const u8,
+    );
+    // P12-S7-B — pre-Closure spill helper. Emit calls this once
+    // per in_stack upval just before luna_jit_op_closure so
+    // find_or_create_upval sees a live vm.stack slot.
+    builder.symbol(
+        "luna_jit_spill_to_stack",
+        super::luna_jit_spill_to_stack as *const u8,
+    );
+    // P12-S7-C — Op::Close predict-and-deopt helper.
+    builder.symbol("luna_jit_op_close", super::luna_jit_op_close as *const u8);
+    // P12-S12-B-v2 — generic-for helpers. `op_tforcall` runs the
+    // iterator function via vm.begin_call (Native iters only — Lua
+    // closure iters deopt); `stack_load` / `stack_tag` read vm.stack
+    // back into trace IR `Variable`s after the helper has mutated
+    // R[A+2] (control) and R[A+4..] (returned key/value).
+    builder.symbol(
+        "luna_jit_op_tforcall",
+        super::luna_jit_op_tforcall as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_stack_load",
+        super::luna_jit_stack_load as *const u8,
+    );
+    builder.symbol("luna_jit_stack_tag", super::luna_jit_stack_tag as *const u8);
+    // P12-S12-C v1 — Op::Concat helpers.
+    builder.symbol("luna_jit_op_concat", super::luna_jit_op_concat as *const u8);
+    builder.symbol(
+        "luna_jit_stack_update_raw",
+        super::luna_jit_stack_update_raw as *const u8,
+    );
+    // P14-S14-B v2 — string accumulator buffer pool helpers.
+    builder.symbol(
+        "luna_jit_str_buf_acquire",
+        super::luna_jit_str_buf_acquire as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_str_buf_release",
+        super::luna_jit_str_buf_release as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_str_buf_extend",
+        super::luna_jit_str_buf_extend as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_str_buf_intern",
+        super::luna_jit_str_buf_intern as *const u8,
+    );
+    Some(JITModule::new(builder))
+}
+
+/// v1.3 Phase AOT Stage 3 placeholder `TraceFn` — installed in
+/// [`CompiledTrace::entry`] by the backend-agnostic [`lower_trace_into`]
+/// body and patched to the real finalized entry pointer by the JIT
+/// wrapper [`try_compile_trace_with_options`]. The AOT pipeline
+/// (`luna-aot`) never calls into a TraceFn directly (resolution happens
+/// at the deploy-side runtime, not at codegen time), so the placeholder
+/// reaching the AOT output is harmless; the deploy-side runtime
+/// resolves the trace symbol through the static dispatch table built in
+/// `luna-aot`'s embed pipeline.
+unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
+    panic!(
+        "placeholder_trace_fn called: CompiledTrace.entry must be patched by the JIT finalize wrapper before dispatch"
+    );
+}
+
 /// Variant of [`try_compile_trace`] that takes a [`CompileOptions`]
 /// — the close handler uses this with `internal_loop = true` so the
 /// JIT'd trace runs in a native loop until a cmp side-exits.
+///
+/// v1.3 Phase AOT Stage 3 — thin wrapper around the backend-agnostic
+/// [`lower_trace_into`] generic. Constructs a `JITModule`, finalizes
+/// the compiled trace into RWX memory, patches the real entry fn ptr
+/// into the returned [`CompiledTrace`], and stashes the module in
+/// `TRACE_JIT_HANDLES` so the entry stays callable for the thread's
+/// lifetime.
 pub fn try_compile_trace_with_options(
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
+    let mut module = build_trace_jit_module()?;
+    let (fn_id, mut compiled) = lower_trace_into(&mut module, record, opts)?;
+    module.finalize_definitions().ok()?;
+    let ptr = module.get_finalized_function(fn_id);
+    // SAFETY: the cranelift fn signature declared by `lower_trace_into`
+    // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
+    // is owned by `module`, which we park in `TRACE_JIT_HANDLES`
+    // immediately below.
+    let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
+    compiled.entry = entry_fn;
+    TRACE_JIT_HANDLES.with(|cell| {
+        cell.borrow_mut().push(TraceHandle {
+            _module: module,
+            _entry_raw: ptr,
+        });
+    });
+    Some(compiled)
+}
+
+/// v1.3 Phase AOT Stage 3 — backend-agnostic body of the trace
+/// lowerer. Generic over any `cranelift_module::Module` so the same
+/// codegen pipeline drives the runtime JIT (`JITModule`,
+/// [`try_compile_trace_with_options`]) and the AOT pipeline
+/// (`ObjectModule` in `luna-aot`).
+///
+/// Returns `None` on the same bail conditions as
+/// [`try_compile_trace`] (see its docstring). On success returns the
+/// declared [`FuncId`] for the lowered trace alongside a
+/// [`CompiledTrace`] whose `entry` field holds a
+/// [`placeholder_trace_fn`]; backend-specific finalize must patch the
+/// real entry pointer before dispatch (the JIT wrapper does this; the
+/// AOT pipeline resolves the symbol at link time and never invokes
+/// `entry` directly).
+pub fn lower_trace_into<M: Module>(
+    mut module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+) -> Option<(FuncId, CompiledTrace)> {
     checkpoint("enter");
     if !record.closed {
         checkpoint("bail:not-closed");
@@ -3966,135 +4182,12 @@ pub fn try_compile_trace_with_options(
         }
     }
 
-    // --- cranelift setup (mirrors method JIT, src/jit/mod.rs ~L2761).
-    let mut flag_builder = settings::builder();
-    flag_builder.set("use_colocated_libcalls", "false").ok()?;
-    flag_builder.set("is_pic", "false").ok()?;
-    flag_builder.set("opt_level", "speed").ok()?;
-    let isa = cranelift_native::builder()
-        .ok()?
-        .finish(settings::Flags::new(flag_builder))
-        .ok()?;
-    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-    // Step 4 emits `Op::NewTable / SetI / GetI / Len` as calls to
-    // the method JIT's `luna_jit_*` helpers — register the symbols
-    // so cranelift's `Linkage::Import` resolver finds them at
-    // finalize time. (rlib link strips `#[no_mangle]` for executables
-    // like `cargo test`, so the default `dlsym(RTLD_DEFAULT)` resolver
-    // misses them without an explicit `builder.symbol(...)`.)
-    builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
-    builder.symbol(
-        "luna_jit_table_set_int",
-        super::luna_jit_table_set_int as *const u8,
-    );
-    // P12-S6-A2 — Nil-valued SetList/SetI/SetTable helper. Trace JIT
-    // emits a call here when an Op::LoadNil-written source register
-    // is fed into a (non-sunk) table write.
-    builder.symbol(
-        "luna_jit_table_set_nil",
-        super::luna_jit_table_set_nil as *const u8,
-    );
-    // P12-S7-C — generalised SetTable/SetI/SetList helper for any
-    // (tag, raw_bits) pair. Used for Closure / Table / non-Int/Nil
-    // sources where the legacy set_int helper would mis-wrap as
-    // Value::Int(ptr_bits).
-    builder.symbol(
-        "luna_jit_table_set_raw",
-        super::luna_jit_table_set_raw as *const u8,
-    );
-    // P12-S11-A — SetField + GetField helpers (string key from
-    // Proto.consts; raw pointer baked into IR at emit time).
-    builder.symbol(
-        "luna_jit_table_set_field",
-        super::luna_jit_table_set_field as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_get_field",
-        super::luna_jit_table_get_field as *const u8,
-    );
-    // v1.2 D3 Path B — standalone GetTabUp helper.
-    builder.symbol(
-        "luna_jit_op_get_tab_up",
-        super::luna_jit_op_get_tab_up as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_get_int",
-        super::luna_jit_table_get_int as *const u8,
-    );
-    builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
-    // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
-    // helper. Reuses the method JIT helper; the trace dispatcher's
-    // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
-    // the closure at runtime.
-    builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
-    // P12-S4-step4b-A — frame materialization helper. Step4b-C will
-    // emit calls to it from the cmp@d>0 side-exit path. Register the
-    // symbol unconditionally so the lowerer can declare the import
-    // without needing per-trace gating; cranelift's dead-symbol
-    // elimination drops the import if no IR references it.
-    builder.symbol(
-        "luna_jit_trace_materialize_frames",
-        super::luna_jit_trace_materialize_frames as *const u8,
-    );
-    // P12-S5-C — sunk-table materialise helper. Emit calls it at
-    // each cmp side-exit (depth=0 today) for every live Sinkable
-    // site whose virt slots must reach interp via the heap path.
-    builder.symbol(
-        "luna_jit_materialize_sunk_table",
-        super::luna_jit_materialize_sunk_table as *const u8,
-    );
-    // P12-S7-A — Op::Closure shared-upval helper.
-    builder.symbol(
-        "luna_jit_op_closure",
-        super::luna_jit_op_closure as *const u8,
-    );
-    // P12-S7-B — pre-Closure spill helper. Emit calls this once
-    // per in_stack upval just before luna_jit_op_closure so
-    // find_or_create_upval sees a live vm.stack slot.
-    builder.symbol(
-        "luna_jit_spill_to_stack",
-        super::luna_jit_spill_to_stack as *const u8,
-    );
-    // P12-S7-C — Op::Close predict-and-deopt helper.
-    builder.symbol("luna_jit_op_close", super::luna_jit_op_close as *const u8);
-    // P12-S12-B-v2 — generic-for helpers. `op_tforcall` runs the
-    // iterator function via vm.begin_call (Native iters only — Lua
-    // closure iters deopt); `stack_load` / `stack_tag` read vm.stack
-    // back into trace IR `Variable`s after the helper has mutated
-    // R[A+2] (control) and R[A+4..] (returned key/value).
-    builder.symbol(
-        "luna_jit_op_tforcall",
-        super::luna_jit_op_tforcall as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_stack_load",
-        super::luna_jit_stack_load as *const u8,
-    );
-    builder.symbol("luna_jit_stack_tag", super::luna_jit_stack_tag as *const u8);
-    // P12-S12-C v1 — Op::Concat helpers.
-    builder.symbol("luna_jit_op_concat", super::luna_jit_op_concat as *const u8);
-    builder.symbol(
-        "luna_jit_stack_update_raw",
-        super::luna_jit_stack_update_raw as *const u8,
-    );
-    // P14-S14-B v2 — string accumulator buffer pool helpers.
-    builder.symbol(
-        "luna_jit_str_buf_acquire",
-        super::luna_jit_str_buf_acquire as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_str_buf_release",
-        super::luna_jit_str_buf_release as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_str_buf_extend",
-        super::luna_jit_str_buf_extend as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_str_buf_intern",
-        super::luna_jit_str_buf_intern as *const u8,
-    );
-    let mut module = JITModule::new(builder);
+    // v1.3 Phase AOT Stage 3 — `module` arrives as `&mut M` from the
+    // caller. The JIT wrapper [`try_compile_trace_with_options`]
+    // constructs a `JITModule` via [`build_trace_jit_module`]; the AOT
+    // pipeline (luna-aot) feeds an `ObjectModule` of its own. The
+    // helper-symbol contract is identical (both resolve `luna_jit_*` —
+    // the JIT via `JITBuilder::symbol`, the AOT via static link).
 
     // Helper signatures — declared up front so emit can look them
     // up without re-declaring per call site. Unused declarations
@@ -6241,53 +6334,52 @@ pub fn try_compile_trace_with_options(
                 // Allocates the 3-slot buffer, calls the helper,
                 // brif-checks the result, def_vars regs + tag from
                 // the buffer.
-                let emit_helper_call =
-                    |bcx: &mut FunctionBuilder<'_>, module: &mut JITModule| -> () {
-                        let out_ss =
-                            bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                                24,
-                                3,
-                            ));
-                        let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
-                        let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
-                        let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
-                        let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
-                        let nvars_arg = bcx.ins().iconst(types::I64, nvars);
-                        let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
-                        let call_inst = bcx
-                            .ins()
-                            .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
-                        let status_or_tag = bcx.inst_results(call_inst)[0];
-                        let zero = bcx.ins().iconst(types::I64, 0);
-                        let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status_or_tag, zero);
-                        let cont_blk = bcx.create_block();
-                        let deopt_blk = bcx.create_block();
-                        bcx.ins().brif(is_err, deopt_blk, &[], cont_blk, &[]);
-                        bcx.switch_to_block(deopt_blk);
-                        bcx.seal_block(deopt_blk);
-                        emit_store_back_and_return_pc(
-                            bcx,
-                            &regs_full[..max_stack],
-                            reg_state,
-                            rop.pc,
-                            flush_ctx.as_ref(),
-                            0i64,
-                            trace_fn_sig_ref,
-                            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                        );
-                        bcx.switch_to_block(cont_blk);
-                        bcx.seal_block(cont_blk);
-                        bcx.def_var(tforcall_tag_var, status_or_tag);
-                        let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
-                        let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
-                        let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
-                        bcx.def_var(regs[a_us + 2], ctrl_raw);
-                        bcx.def_var(regs[a_us + 4], key_raw);
-                        if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                            bcx.def_var(regs[a_us + 5], val_raw);
-                        }
-                    };
+                let emit_helper_call = |bcx: &mut FunctionBuilder<'_>, module: &mut M| -> () {
+                    let out_ss =
+                        bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                            24,
+                            3,
+                        ));
+                    let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+                    let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
+                    let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
+                    let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
+                    let nvars_arg = bcx.ins().iconst(types::I64, nvars);
+                    let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
+                    let call_inst = bcx
+                        .ins()
+                        .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
+                    let status_or_tag = bcx.inst_results(call_inst)[0];
+                    let zero = bcx.ins().iconst(types::I64, 0);
+                    let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status_or_tag, zero);
+                    let cont_blk = bcx.create_block();
+                    let deopt_blk = bcx.create_block();
+                    bcx.ins().brif(is_err, deopt_blk, &[], cont_blk, &[]);
+                    bcx.switch_to_block(deopt_blk);
+                    bcx.seal_block(deopt_blk);
+                    emit_store_back_and_return_pc(
+                        bcx,
+                        &regs_full[..max_stack],
+                        reg_state,
+                        rop.pc,
+                        flush_ctx.as_ref(),
+                        0i64,
+                        trace_fn_sig_ref,
+                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+                    );
+                    bcx.switch_to_block(cont_blk);
+                    bcx.seal_block(cont_blk);
+                    bcx.def_var(tforcall_tag_var, status_or_tag);
+                    let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
+                    let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
+                    let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
+                    bcx.def_var(regs[a_us + 2], ctrl_raw);
+                    bcx.def_var(regs[a_us + 4], key_raw);
+                    if (nvars as usize) >= 2 && a_us + 5 < max_stack {
+                        bcx.def_var(regs[a_us + 5], val_raw);
+                    }
+                };
 
                 if is_ipairs_trace {
                     // Inline aget fast path. The recorder confirmed
@@ -6430,14 +6522,14 @@ pub fn try_compile_trace_with_options(
                     // value. R[A]/R[A+1] still hold their entry
                     // values in vm.stack.
                     spill_slot(&mut bcx, a_us + 2);
-                    emit_helper_call(&mut bcx, &mut module);
+                    emit_helper_call(&mut bcx, module);
                     bcx.ins().jump(merge_blk, &[]);
 
                     // ----- merge_blk -----
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
                 } else {
-                    emit_helper_call(&mut bcx, &mut module);
+                    emit_helper_call(&mut bcx, module);
                 }
 
                 current_kinds[off + a_us + 2] = RegKind::Unset;
@@ -6928,21 +7020,15 @@ pub fn try_compile_trace_with_options(
     }
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
-    module.finalize_definitions().ok()?;
-
-    let ptr = module.get_finalized_function(fn_id);
-    // SAFETY: the cranelift fn signature we declared above
-    // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn
-    // body is owned by `module`, which we park in
-    // `TRACE_JIT_HANDLES` immediately below.
-    let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
-
-    TRACE_JIT_HANDLES.with(|cell| {
-        cell.borrow_mut().push(TraceHandle {
-            _module: module,
-            _entry_raw: ptr,
-        });
-    });
+    // v1.3 Phase AOT Stage 3 — module finalization is the JIT-specific
+    // wrapper's job (see [`try_compile_trace_with_options`]). The
+    // generic body emits the function definition and stops at
+    // `clear_context`; the JIT wrapper calls `finalize_definitions`
+    // + `get_finalized_function`, patches `compiled.entry` with the
+    // real fn pointer, and parks the module in `TRACE_JIT_HANDLES`.
+    // The AOT pipeline (luna-aot) calls `ObjectModule::finish` /
+    // `ObjectProduct::emit` to produce a `.o` file instead, and
+    // resolves the trace symbol at static link time.
 
     // Op::ForLoop at the tail writes R[A] (next loop var), R[A+1]
     // (decremented count), and R[A+3] (visible loop var copy) —
@@ -7124,9 +7210,11 @@ pub fn try_compile_trace_with_options(
             .collect();
         v.into()
     };
-    Some(CompiledTrace {
+    let compiled = CompiledTrace {
         head_pc: record.head_pc,
-        entry: entry_fn,
+        // v1.3 Phase AOT Stage 3 — caller (JIT wrapper or AOT pipeline)
+        // patches `entry` after finalize. See [`placeholder_trace_fn`].
+        entry: placeholder_trace_fn,
         n_ops: record.ops.len() as u32,
         dispatchable,
         // P12-S4-step3b — real window_size now ≥ max_stack; the
@@ -7185,7 +7273,8 @@ pub fn try_compile_trace_with_options(
         // gate. Uses op_offsets (already computed above) to apply
         // inline-depth offsets per op.
         body_writes: compute_body_writes(record, &op_offsets).into(),
-    })
+    };
+    Some((fn_id, compiled))
 }
 
 #[cfg(test)]
