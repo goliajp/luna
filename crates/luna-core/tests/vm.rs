@@ -1548,6 +1548,48 @@ fn debug_line_hook() {
 }
 
 #[test]
+fn debug_line_hook_does_not_recurse_into_itself() {
+    // CB IO follow-up regression: an `||` / `&&` precedence bug in the
+    // dispatcher's count+line predicate (exec.rs ~6625) left the
+    // `!self.in_hook` guard only gating the rust-hook arm. With a Lua hook
+    // installed and the hook body executing any Lua bytecode (e.g. an
+    // `assert(...)` call), the hook would re-fire inside itself → unbounded
+    // recursion → stack overflow on PUC db.lua line 14 / 16 / 22 (the
+    // `assert(event == 'line')` inside the line-hook body).
+    //
+    // Repro mirrors PUC db.lua `test`: install a Lua line hook whose body
+    // dispatches Lua bytecode (table writes + assert) — if the guard works,
+    // we get a finite list of line events; if it doesn't, the hook recurses
+    // through `assert` and overflows the stack.
+    check_int(
+        "local n = 0 \n\
+         local function h(ev) \n\
+           assert(ev == 'line') \n\
+           n = n + 1 \n\
+         end \n\
+         debug.sethook(h, 'l') \n\
+         local a = 1 \n\
+         local b = 2 \n\
+         local c = 3 \n\
+         debug.sethook() \n\
+         return n",
+        // Without the fix: stack overflow before sethook() runs.
+        // With the fix: a finite number of line events (one per source line
+        // executed under the hook). We do not pin the exact count — the
+        // PUC `traceexec` discipline already has its own coverage in
+        // `debug_line_hook` / `debug_line_table_precision` — we just need
+        // n > 0 and the program to terminate.
+        // check_int requires an exact value; this VM emits 4 line events
+        // under PUC `npci <= oldpc` semantics (install-step + 3 statement
+        // lines; sethook clear is on the same line as the call site so
+        // changedline is false there). The point of the test is that the
+        // program *terminates with a finite count* — pre-fix it would have
+        // stack-overflowed before reaching `return n`.
+        4,
+    );
+}
+
+#[test]
 fn debug_line_table_precision() {
     // line traces match PUC's per-instruction line table across constructs, the
     // way db.lua tests them (hook installed + chunk run on one line). The chunk

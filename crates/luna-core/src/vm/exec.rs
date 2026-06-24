@@ -6622,7 +6622,12 @@ impl Vm {
 
             // count + line hooks (PUC traceexec): before executing the
             // instruction. Skipped while the hook itself runs.
-            if self.hook.func.is_some() || self.hook.rust_func.is_some() && !self.in_hook {
+            // (Parens here are load-bearing — without them `&&` binds tighter
+            // than `||` and the `!in_hook` guard only gates the rust-hook arm,
+            // letting a Lua line hook recurse into itself → stack overflow
+            // on db.lua line-hook assertions. Matches the `hook_call_with` /
+            // `hook_return` predicate shape at lines 2245 / 2279 / 2294 / 4023.)
+            if !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
                 let lines = &cl.proto.lines;
                 let cur_line = if lines.is_empty() {
                     None
