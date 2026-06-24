@@ -21,6 +21,15 @@ optimization.
 
 ## [1.3.0] — 2026-06-25
 
+> **Released** — 2026-06-25 to crates.io. All five workspace crates
+> shipped at `= 1.3.0`:
+> [`luna-core`](https://crates.io/crates/luna-core/1.3.0) ·
+> [`luna-jit-derive`](https://crates.io/crates/luna-jit-derive/1.3.0) ·
+> [`luna-jit`](https://crates.io/crates/luna-jit/1.3.0) ·
+> [`luna-runtime-helpers`](https://crates.io/crates/luna-runtime-helpers/1.3.0) ·
+> [`luna-aot`](https://crates.io/crates/luna-aot/1.3.0). GitHub
+> release: <https://github.com/goliajp/luna/releases/tag/v1.3.0>.
+
 **Mega sprint** — 2026-06-24 user directive collapsed the planned
 v1.2.0 + v1.3.0 + v1.4.0 + parts of v2.0 into a single ship under
 the `nodefer` upgrade ("nothing is deferred to v1.4 or later").
