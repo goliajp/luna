@@ -400,11 +400,13 @@ pub fn compile_and_link(
     target_triple: Option<&str>,
     version: LuaVersion,
 ) -> Result<(), AotError> {
-    if let Some(t) = target_triple {
-        if t != host_triple() {
-            return Err(AotError::UnsupportedTarget(t.to_string()));
-        }
-    }
+    // Resolve the target: explicit triple if supplied, else host. Anything
+    // we can't describe (object-file format, cc invocation, lib set)
+    // surfaces as `UnsupportedTarget` here — no silent fallback to host.
+    let target = match target_triple {
+        Some(t) => TargetSpec::from_triple(t)?,
+        None => TargetSpec::host(),
+    };
 
     // Stage 1 + 2 + 5a: shared with `embed_bytecode`.
     let dump_bytes = compile_to_dump(source_path, version)?;
@@ -420,21 +422,42 @@ pub fn compile_and_link(
     let bytecode_obj_path = workdir.join(format!("{stem}.luna_bytecode.o"));
     let cmain_obj_path = workdir.join(format!("{stem}.luna_cmain.o"));
 
-    // Stage 5b: bytecode object.
-    write_bytecode_object(&dump_bytes, &bytecode_obj_path)?;
+    // Stage 5b: bytecode object — target-aware format/arch.
+    write_bytecode_object_for(&dump_bytes, &bytecode_obj_path, &target)?;
 
-    // Stage 6a: tiny C main that calls into the staticlib.
-    write_aot_cmain_object(&cmain_obj_path)?;
+    // Stage 6a: tiny C main that calls into the staticlib. The C source
+    // is target-independent (extern decls only); the `cc -c` invocation
+    // routes through the target-aware cc driver so the .o has the right
+    // ABI / object-format magic.
+    write_aot_cmain_object_for(&cmain_obj_path, &target)?;
 
-    // Stage 6b: ensure the runtime staticlib exists.
-    let staticlib = build_runtime_helpers_staticlib()?;
+    // Stage 6b: ensure the runtime staticlib exists for `target`.
+    // For the host triple this is a workspace cargo build; for a cross
+    // triple it's `cargo build --target=<triple>` and the resulting
+    // staticlib lives under `target/<triple>/release/`.
+    let staticlib = build_runtime_helpers_staticlib(target.triple_for_cargo())?;
 
-    // Stage 6c: final link. Order matters on some toolchains: bytecode
-    // + main first (they reference symbols from the staticlib), then
-    // the staticlib, then system libs.
-    link_aot_binary(&bytecode_obj_path, &cmain_obj_path, &staticlib, out_path)?;
+    // Stage 6c: final link via the target's cc driver. Order matters on
+    // some toolchains: bytecode + main first (they reference symbols
+    // from the staticlib), then the staticlib, then system libs.
+    link_aot_binary_for(
+        &bytecode_obj_path,
+        &cmain_obj_path,
+        &staticlib,
+        out_path,
+        &target,
+    )?;
 
     Ok(())
+}
+
+/// Convenience wrapper for callers that want explicit host-target builds.
+pub fn compile_and_link_host(
+    source_path: &Path,
+    out_path: &Path,
+    version: LuaVersion,
+) -> Result<(), AotError> {
+    compile_and_link(source_path, out_path, None, version)
 }
 
 /// Run Stages 1-2 (parse + compile) and produce the dump bytes the
@@ -470,94 +493,43 @@ fn compile_to_dump(source_path: &Path, version: LuaVersion) -> Result<Vec<u8>, A
     Ok(dump::dump(&proto, false, version))
 }
 
-/// Generate + compile the C main that drives the staticlib entry.
-///
-/// The generated C looks like:
-///
-/// ```c
-/// #include <stddef.h>
-/// #include <stdint.h>
-///
-/// extern uint8_t __luna_bytecode_start[];
-/// extern uint8_t __luna_bytecode_end[];
-/// extern int luna_aot_run(const uint8_t *bytecode, size_t len);
-///
-/// int main(int argc, char **argv) {
-///     (void)argc; (void)argv;
-///     size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
-///     return luna_aot_run(__luna_bytecode_start, len);
-/// }
-/// ```
-///
-/// On Mach-O the `__luna_bytecode_{start,end}` and `luna_aot_run`
-/// symbols are stored with a `_` prefix in the object file's symbol
-/// table; the C extern syntax resolves to the prefixed form
-/// automatically. On ELF / PE no prefix is added.
-fn write_aot_cmain_object(out: &Path) -> Result<(), AotError> {
-    let c_src = r#"#include <stddef.h>
-#include <stdint.h>
-
-extern uint8_t __luna_bytecode_start[];
-extern uint8_t __luna_bytecode_end[];
-extern int luna_aot_run(const uint8_t *bytecode, size_t len);
-
-int main(int argc, char **argv) {
-    (void)argc; (void)argv;
-    size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
-    return luna_aot_run(__luna_bytecode_start, len);
-}
-"#;
-
-    let mut c_path = out.to_path_buf();
-    c_path.set_extension("c");
-    fs::write(&c_path, c_src)?;
-
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-    let status = Command::new(&cc)
-        .arg("-c")
-        .arg(&c_path)
-        .arg("-o")
-        .arg(out)
-        .output()
-        .map_err(|e| AotError::Link(format!("spawn {cc}: {e}")))?;
-    if !status.status.success() {
-        return Err(AotError::Link(format!(
-            "cc -c {} failed (exit {:?}):\n{}",
-            c_path.display(),
-            status.status.code(),
-            String::from_utf8_lossy(&status.stderr)
-        )));
-    }
-    Ok(())
-}
-
-/// Build `libluna_runtime_helpers.a` and return the path to the
-/// produced staticlib.
+/// Build `libluna_runtime_helpers.a` for the optional `target_triple`
+/// (host build when `None`) and return the path to the produced staticlib.
 ///
 /// Resolution rules:
 ///
 /// 1. If `LUNA_AOT_RUNTIME_HELPERS_STATICLIB` is set, take it as the
 ///    absolute path of a pre-built `.a` and skip the cargo build.
 ///    Useful for distribution scenarios where the staticlib is shipped
-///    out-of-band (audit § Stage 6 Option B).
+///    out-of-band (audit § Stage 6 Option B). Only honoured for the
+///    host triple — cross triples must build their own staticlib so
+///    the override doesn't accidentally mix ABIs.
 /// 2. Otherwise, look up `CARGO_MANIFEST_DIR`, ascend to the workspace
-///    root (one `..`), and invoke
-///    `cargo build -p luna-runtime-helpers --release`. The resulting
-///    `target/release/libluna_runtime_helpers.a` is returned.
+///    root (two `..`), and invoke
+///    `cargo build -p luna-runtime-helpers --release [--target T]`.
+///    The staticlib lands at `target/<T or default>/release/libluna_runtime_helpers.a`.
+///
+/// Cross-target builds require the matching `rustup target add <triple>`
+/// to have been run beforehand; failures (missing rust-std) are
+/// reported via the cargo stderr with a helpful hint.
 ///
 /// The `cargo` invocation is idempotent — cargo caches across runs.
 /// On a clean workspace the first call takes ~3s; subsequent calls
 /// are sub-second.
-fn build_runtime_helpers_staticlib() -> Result<PathBuf, AotError> {
-    if let Ok(prebuilt) = std::env::var("LUNA_AOT_RUNTIME_HELPERS_STATICLIB") {
-        let p = PathBuf::from(prebuilt);
-        if !p.exists() {
-            return Err(AotError::Link(format!(
-                "LUNA_AOT_RUNTIME_HELPERS_STATICLIB points at {} but the file does not exist",
-                p.display()
-            )));
+fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBuf, AotError> {
+    if target_triple.is_none() {
+        // Honour the override only for host builds — for cross we
+        // must control the ABI to match the linker invocation.
+        if let Ok(prebuilt) = std::env::var("LUNA_AOT_RUNTIME_HELPERS_STATICLIB") {
+            let p = PathBuf::from(prebuilt);
+            if !p.exists() {
+                return Err(AotError::Link(format!(
+                    "LUNA_AOT_RUNTIME_HELPERS_STATICLIB points at {} but the file does not exist",
+                    p.display()
+                )));
+            }
+            return Ok(p);
         }
-        return Ok(p);
     }
 
     // Serialize concurrent in-process callers (e.g. cargo's parallel
@@ -571,7 +543,7 @@ fn build_runtime_helpers_staticlib() -> Result<PathBuf, AotError> {
     let _guard = BUILD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
     // `CARGO_MANIFEST_DIR` is the directory containing the
-    // **luna-aot** Cargo.toml. The workspace root is one level up.
+    // **luna-aot** Cargo.toml. The workspace root is two levels up.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
         AotError::Link(
             "CARGO_MANIFEST_DIR not set — cannot locate workspace to build \
@@ -591,8 +563,8 @@ fn build_runtime_helpers_staticlib() -> Result<PathBuf, AotError> {
         })?;
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let output = Command::new(&cargo)
-        .current_dir(&workspace_root)
+    let mut cmd = Command::new(&cargo);
+    cmd.current_dir(&workspace_root)
         .arg("build")
         .arg("-p")
         .arg("luna-runtime-helpers")
@@ -601,101 +573,66 @@ fn build_runtime_helpers_staticlib() -> Result<PathBuf, AotError> {
         // (e.g. coverage instrumentation from the parent test build).
         // Acceptable since the staticlib build is deterministic
         // independent of the parent crate's profile.
-        .env_remove("RUSTFLAGS")
+        .env_remove("RUSTFLAGS");
+    if let Some(t) = target_triple {
+        cmd.arg("--target").arg(t);
+    }
+    let output = cmd
         .output()
         .map_err(|e| AotError::Link(format!("spawn cargo: {e}")))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Detect the most common cross-compile failure mode (missing
+        // rust-std for the target) and translate to a concrete fix.
+        let hint = if let Some(t) = target_triple {
+            if stderr.contains("can't find crate for `std`")
+                || stderr.contains("the `std` crate is not available")
+                || stderr.contains("target may not be installed")
+            {
+                format!(
+                    "\nhint: cross-compiling to {t} requires the rust-std component — \
+                     run `rustup target add {t}` and retry."
+                )
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
         return Err(AotError::Link(format!(
-            "cargo build -p luna-runtime-helpers failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}",
+            "cargo build -p luna-runtime-helpers{target_suffix} failed (exit {:?}):\nstdout:\n{}\nstderr:\n{}{hint}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
+            stderr,
+            target_suffix = target_triple
+                .map(|t| format!(" --target={t}"))
+                .unwrap_or_default(),
         )));
     }
 
-    let staticlib = workspace_root
-        .join("target")
-        .join("release")
-        .join("libluna_runtime_helpers.a");
-    if !staticlib.exists() {
-        return Err(AotError::Link(format!(
-            "cargo build succeeded but {} is missing",
-            staticlib.display()
-        )));
+    let mut staticlib = workspace_root.join("target");
+    if let Some(t) = target_triple {
+        staticlib.push(t);
     }
-    Ok(staticlib)
-}
-
-/// Link the final AOT binary: `cc bytecode.o cmain.o libluna_runtime_helpers.a
-/// -lpthread -ldl -lm [platform-specific] -o out`.
-///
-/// The platform-specific flags are detected from `cfg!(target_os)` at
-/// `luna-aot` build time — we run on the host, so the host CC sees the
-/// same set of libs the staticlib was built against.
-fn link_aot_binary(
-    bytecode_obj: &Path,
-    cmain_obj: &Path,
-    staticlib: &Path,
-    out_path: &Path,
-) -> Result<(), AotError> {
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-    let mut cmd = Command::new(&cc);
-
-    // Object files first (they reference symbols defined in the
-    // staticlib). Order matters for some traditional Unix linkers
-    // (`ld` resolves left-to-right; modern `lld` is order-independent
-    // but we keep the canonical order for portability).
-    cmd.arg(cmain_obj).arg(bytecode_obj).arg(staticlib);
-
-    // Platform-specific runtime deps. The staticlib bundles rust
-    // stdlib, which transitively needs libc / pthread / libm / etc.
-    // The set below is what `rustc --print native-static-libs` reports
-    // for a `crate-type = ["staticlib"]` on each platform.
-    if cfg!(target_os = "macos") {
-        // `rustc --print native-static-libs` on aarch64-apple-darwin
-        // for a staticlib that pulls std reports the System framework
-        // + a handful of low-level libs. The CC driver on macOS adds
-        // the SDK linker search paths automatically; we only need to
-        // name what's actually referenced.
-        cmd.args(["-framework", "CoreFoundation"]);
-        cmd.args(["-framework", "Security"]);
-        cmd.arg("-liconv");
-    } else if cfg!(target_os = "linux") {
-        // libgcc_s for unwinding; pthread / dl / m for stdlib bits.
-        // `-lutil` is occasionally required by std on glibc; harmless
-        // when present.
-        cmd.arg("-lpthread");
-        cmd.arg("-ldl");
-        cmd.arg("-lm");
-        cmd.arg("-lrt");
-        cmd.arg("-lgcc_s");
-        cmd.arg("-lutil");
-    } else if cfg!(target_os = "windows") {
-        // `cc` on Windows is usually `cl.exe` or `clang-cl` — the link
-        // surface is very different. Stage 4 ships Unix-only; Windows
-        // support folds in with the cross-compile follow-up.
-        return Err(AotError::Link(
-            "Windows linker support not implemented in v1.3 Phase AOT Stage 4 \
-             (cross-compile follow-up); use --target=x86_64-unknown-linux-gnu \
-             from a Linux host instead."
-                .to_string(),
-        ));
+    staticlib.push("release");
+    // On Windows the staticlib is named `luna_runtime_helpers.lib`
+    // rather than `lib*.a`. We try both so the same code path covers
+    // both ABIs.
+    let unix_name = "libluna_runtime_helpers.a";
+    let windows_name = "luna_runtime_helpers.lib";
+    let unix_path = staticlib.join(unix_name);
+    let windows_path = staticlib.join(windows_name);
+    if unix_path.exists() {
+        Ok(unix_path)
+    } else if windows_path.exists() {
+        Ok(windows_path)
+    } else {
+        Err(AotError::Link(format!(
+            "cargo build succeeded but neither {} nor {} exist",
+            unix_path.display(),
+            windows_path.display(),
+        )))
     }
-
-    cmd.arg("-o").arg(out_path);
-
-    let output = cmd
-        .output()
-        .map_err(|e| AotError::Link(format!("spawn {cc}: {e}")))?;
-    if !output.status.success() {
-        return Err(AotError::Link(format!(
-            "cc link failed (exit {:?}):\ncommand: {:?}\nstderr:\n{}",
-            output.status.code(),
-            cmd,
-            String::from_utf8_lossy(&output.stderr),
-        )));
-    }
-    Ok(())
 }
 
 /// Map the host triple to `object::{BinaryFormat, Architecture, Endianness}`.
@@ -741,4 +678,478 @@ fn host_triple() -> &'static str {
     } else {
         "unknown"
     }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Stage 5 — target-aware emission + cross-compile + Windows linker
+//
+// `TargetSpec` is the per-triple bundle of facts the AOT pipeline
+// needs:
+//
+//   - `BinaryFormat` / `Architecture` / `Endianness` so `object::write`
+//     emits the right `.o` magic
+//   - the `cc` invocation (`cc`, `clang -target ...`, or
+//     `<triple>-gcc`) and whether the C entry-point object needs
+//     extra flags to land in the right ABI
+//   - the lib set the staticlib transitively pulls (libpthread, libm,
+//     CoreFoundation, ws2_32, ...) so the final link resolves all
+//     externs without leaving the user to figure it out from cargo's
+//     `--print native-static-libs` output
+//
+// Adding a new tier just means a new `from_triple` arm. The host arm
+// keeps its `cfg!`-derived defaults so we don't regress the
+// already-shipped Stage 4 path.
+// ────────────────────────────────────────────────────────────────────
+
+/// Per-target bundle of facts the AOT pipeline needs to emit a
+/// runnable binary. Constructed via [`TargetSpec::host`] or
+/// [`TargetSpec::from_triple`].
+#[derive(Debug, Clone)]
+pub struct TargetSpec {
+    /// The rustc triple string (e.g. "aarch64-apple-darwin"). For the
+    /// host build this matches [`host_triple`]; for cross builds it's
+    /// whatever the caller passed via `--target`.
+    pub triple: String,
+    /// `true` when the triple matches the build host's rust triple. The
+    /// staticlib-build step shortcuts the `--target` flag in this case,
+    /// landing the `.a` under `target/release/` (the workspace default
+    /// dir, not `target/<triple>/release/`).
+    pub is_host: bool,
+    /// Object-file binary format for `object::write::Object::new`.
+    pub format: BinaryFormat,
+    /// Object-file architecture for `object::write::Object::new`.
+    pub arch: Architecture,
+    /// Object-file endianness for `object::write::Object::new`. Every
+    /// tier-1 cranelift target is little-endian; if we ever ship s390x
+    /// or big-endian PPC, this needs to flip.
+    pub endian: Endianness,
+    /// `cfg!(target_os = "...")` style family for selecting which lib
+    /// set to pass at link time. Decoupled from `cc!` so a Linux host
+    /// can describe a Windows target without rebuilding luna-aot.
+    pub os: TargetOs,
+    /// libc flavour — distinguishes glibc vs musl on Linux. Drives
+    /// `-lgcc_s` (glibc) vs no-such-lib (musl).
+    pub libc: TargetLibc,
+}
+
+/// Coarse target-OS family used by [`TargetSpec`]. Granular enough to
+/// pick the right `cc` driver and lib set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetOs {
+    /// macOS / Darwin (`*-apple-darwin`).
+    MacOs,
+    /// Linux (any libc).
+    Linux,
+    /// Windows (MSVC or MinGW; the libc distinction is on `TargetLibc`).
+    Windows,
+}
+
+/// libc flavour for the target. Drives the lib set passed at link time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetLibc {
+    /// glibc on Linux, Apple libc on Darwin, MSVCRT on Windows MSVC.
+    Default,
+    /// musl on Linux (Alpine, static deploys). Skips `-lgcc_s` and
+    /// `-lutil`, which aren't present in musl's lib set.
+    Musl,
+    /// MinGW on Windows (gcc-based toolchain producing PE-COFF that
+    /// still links against the system C runtime via the mingwex shim).
+    MinGw,
+}
+
+impl TargetSpec {
+    /// Host-triple spec. Mirrors the Stage 4 host-only path: object
+    /// format from `cfg!` derivation, libc from `cfg!(target_env)`.
+    pub fn host() -> Self {
+        let (format, arch, endian) = host_object_target();
+        let triple = host_triple().to_string();
+        let os = if cfg!(target_os = "macos") {
+            TargetOs::MacOs
+        } else if cfg!(target_os = "linux") {
+            TargetOs::Linux
+        } else if cfg!(target_os = "windows") {
+            TargetOs::Windows
+        } else {
+            // Unknown OS: pick Linux as the least-surprising default
+            // for unix-y systems; the caller will see a clear cc error
+            // if the assumption fails.
+            TargetOs::Linux
+        };
+        let libc = if cfg!(target_env = "musl") {
+            TargetLibc::Musl
+        } else if cfg!(all(target_os = "windows", target_env = "gnu")) {
+            TargetLibc::MinGw
+        } else {
+            TargetLibc::Default
+        };
+        TargetSpec {
+            triple,
+            is_host: true,
+            format,
+            arch,
+            endian,
+            os,
+            libc,
+        }
+    }
+
+    /// Parse a triple string into a `TargetSpec`. Unrecognised triples
+    /// return [`AotError::UnsupportedTarget`].
+    ///
+    /// Tier 1 (verified end-to-end on macOS aarch64 host): the host
+    /// triple, plus the same-OS cross to `x86_64-apple-darwin` /
+    /// `aarch64-apple-darwin` (Apple's universal clang handles both).
+    ///
+    /// Tier 2 (codegen-verified, link requires the matching cross-cc
+    /// toolchain on PATH): `*-unknown-linux-gnu`, `*-unknown-linux-musl`,
+    /// `x86_64-pc-windows-gnu` (MinGW). The cargo staticlib build
+    /// succeeds when the rust-std for the triple is installed; the
+    /// final `cc` link fails with a clear error if the cross-gcc is
+    /// missing.
+    pub fn from_triple(triple: &str) -> Result<Self, AotError> {
+        // Short-circuit: if the requested triple matches the host
+        // triple, route through `host()` so we get the Stage-4 lib
+        // detection (which uses the actual cfg! the binary was built
+        // under, not the parsed triple string).
+        if triple == host_triple() {
+            return Ok(Self::host());
+        }
+
+        let parts: Vec<&str> = triple.split('-').collect();
+        if parts.len() < 3 {
+            return Err(AotError::UnsupportedTarget(format!(
+                "triple {triple:?} has fewer than 3 components (expected arch-vendor-os[-env])"
+            )));
+        }
+        let arch_str = parts[0];
+        // parts[1] is the vendor (unknown / apple / pc / ...); we don't
+        // gate on it, only inform the object-format pick via os.
+        let os_str = parts[2];
+        let env_str = parts.get(3).copied().unwrap_or("");
+
+        let arch = match arch_str {
+            "x86_64" => Architecture::X86_64,
+            "aarch64" => Architecture::Aarch64,
+            "i686" | "i586" | "x86" => Architecture::I386,
+            "riscv64" | "riscv64gc" => Architecture::Riscv64,
+            other => {
+                return Err(AotError::UnsupportedTarget(format!(
+                    "arch component {other:?} of triple {triple:?} not in tier 1/2 set \
+                     (supported: x86_64, aarch64, i686, riscv64)"
+                )));
+            }
+        };
+
+        let (os, format, libc) = match os_str {
+            "darwin" => (TargetOs::MacOs, BinaryFormat::MachO, TargetLibc::Default),
+            "linux" => {
+                let libc = if env_str.contains("musl") {
+                    TargetLibc::Musl
+                } else {
+                    TargetLibc::Default
+                };
+                (TargetOs::Linux, BinaryFormat::Elf, libc)
+            }
+            "windows" => {
+                // env can be "gnu" (MinGW) or "msvc"; we route by env.
+                let libc = if env_str == "gnu" {
+                    TargetLibc::MinGw
+                } else {
+                    TargetLibc::Default
+                };
+                (TargetOs::Windows, BinaryFormat::Coff, libc)
+            }
+            other => {
+                return Err(AotError::UnsupportedTarget(format!(
+                    "os component {other:?} of triple {triple:?} not in tier 1/2 set \
+                     (supported: darwin, linux, windows)"
+                )));
+            }
+        };
+
+        Ok(TargetSpec {
+            triple: triple.to_string(),
+            is_host: false,
+            format,
+            arch,
+            endian: Endianness::Little,
+            os,
+            libc,
+        })
+    }
+
+    /// Cargo `--target` value, or `None` for the host build (cargo
+    /// defaults to the host triple when `--target` is omitted).
+    pub fn triple_for_cargo(&self) -> Option<&str> {
+        if self.is_host {
+            None
+        } else {
+            Some(&self.triple)
+        }
+    }
+
+    /// Pick the `cc` driver invocation for this target. Returns the
+    /// command (already constructed with the driver name and any
+    /// `-target` / `--target` flags) ready for the caller to add
+    /// inputs / outputs / lib flags.
+    ///
+    /// Resolution order:
+    ///
+    /// 1. `$CC` environment variable wins, full stop (matches the
+    ///    Stage 4 host path).
+    /// 2. For non-host targets we try the toolchain-named cross
+    ///    compiler first (e.g. `aarch64-linux-gnu-gcc`,
+    ///    `x86_64-w64-mingw32-gcc`, `x86_64-linux-musl-gcc`).
+    /// 3. Fall through to `cc -target <triple>` (works on macOS where
+    ///    Apple's clang is the system cc and supports cross-darwin
+    ///    natively).
+    ///
+    /// The returned `Command` already has any `-target`/`--target`
+    /// flag set; the caller adds the remaining args.
+    pub fn cc_command(&self) -> Command {
+        if let Ok(cc) = std::env::var("CC") {
+            return Command::new(cc);
+        }
+
+        if self.is_host {
+            return Command::new("cc");
+        }
+
+        // Non-host: try the named cross-cc first.
+        let cross_candidates: &[&str] = match (self.os, self.arch, self.libc) {
+            (TargetOs::Linux, Architecture::Aarch64, TargetLibc::Default) => {
+                &["aarch64-linux-gnu-gcc"]
+            }
+            (TargetOs::Linux, Architecture::X86_64, TargetLibc::Default) => {
+                &["x86_64-linux-gnu-gcc"]
+            }
+            (TargetOs::Linux, Architecture::Aarch64, TargetLibc::Musl) => {
+                &["aarch64-linux-musl-gcc", "musl-gcc"]
+            }
+            (TargetOs::Linux, Architecture::X86_64, TargetLibc::Musl) => {
+                &["x86_64-linux-musl-gcc", "musl-gcc"]
+            }
+            (TargetOs::Windows, Architecture::X86_64, TargetLibc::MinGw) => {
+                &["x86_64-w64-mingw32-gcc"]
+            }
+            (TargetOs::Windows, Architecture::I386, TargetLibc::MinGw) => &["i686-w64-mingw32-gcc"],
+            _ => &[],
+        };
+        for candidate in cross_candidates {
+            if which_on_path(candidate) {
+                return Command::new(candidate);
+            }
+        }
+
+        // Apple cross-darwin: clang -target accepts e.g.
+        // `x86_64-apple-darwin` directly when the SDK is installed.
+        if self.os == TargetOs::MacOs {
+            let mut cmd = Command::new("cc");
+            cmd.arg("-target").arg(&self.triple);
+            return cmd;
+        }
+
+        // Last resort: `cc -target` and hope the host cc is clang.
+        // Will error at link time on gcc hosts; the error message
+        // includes the triple so the user knows what to install.
+        let mut cmd = Command::new("cc");
+        cmd.arg("-target").arg(&self.triple);
+        cmd
+    }
+}
+
+/// Check whether `binary` resolves on `PATH`. Used by
+/// [`TargetSpec::cc_command`] to prefer a named cross-cc over the
+/// host `cc`.
+fn which_on_path(binary: &str) -> bool {
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(if cfg!(windows) { ';' } else { ':' }) {
+            if dir.is_empty() {
+                continue;
+            }
+            let candidate = std::path::Path::new(dir).join(binary);
+            if candidate.exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Target-aware variant of [`write_bytecode_object`]. Emits a `.o`
+/// using the target's format/arch/endian rather than the host's.
+fn write_bytecode_object_for(
+    bytecode: &[u8],
+    out: &Path,
+    target: &TargetSpec,
+) -> Result<(), AotError> {
+    let mut obj = Object::new(target.format, target.arch, target.endian);
+
+    let section_id = obj.add_section(
+        Vec::new(),
+        BYTECODE_SECTION_NAME.as_bytes().to_vec(),
+        SectionKind::ReadOnlyData,
+    );
+    let _start_offset = obj.append_section_data(section_id, bytecode, 1);
+
+    let start_name = BYTECODE_START_SYMBOL.to_string();
+    let end_name = BYTECODE_END_SYMBOL.to_string();
+    let _start_sym = obj.add_symbol(Symbol {
+        name: start_name.into_bytes(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(section_id),
+        flags: object::SymbolFlags::None,
+    });
+    let _end_sym = obj.add_symbol(Symbol {
+        name: end_name.into_bytes(),
+        value: bytecode.len() as u64,
+        size: 0,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(section_id),
+        flags: object::SymbolFlags::None,
+    });
+
+    let bytes = obj
+        .write()
+        .map_err(|e| AotError::Object(format!("Object::write: {e}")))?;
+    fs::write(out, bytes)?;
+    Ok(())
+}
+
+/// Target-aware variant of [`write_aot_cmain_object`]. Generates the
+/// same C source as Stage 4 but invokes the target-specific cc driver
+/// so the produced `.o` has the right ABI.
+fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), AotError> {
+    let c_src = r#"#include <stddef.h>
+#include <stdint.h>
+
+extern uint8_t __luna_bytecode_start[];
+extern uint8_t __luna_bytecode_end[];
+extern int luna_aot_run(const uint8_t *bytecode, size_t len);
+
+int main(int argc, char **argv) {
+    (void)argc; (void)argv;
+    size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
+    return luna_aot_run(__luna_bytecode_start, len);
+}
+"#;
+
+    let mut c_path = out.to_path_buf();
+    c_path.set_extension("c");
+    fs::write(&c_path, c_src)?;
+
+    let mut cmd = target.cc_command();
+    cmd.arg("-c").arg(&c_path).arg("-o").arg(out);
+    let status = cmd
+        .output()
+        .map_err(|e| AotError::Link(format!("spawn cc for target {}: {e}", target.triple)))?;
+    if !status.status.success() {
+        return Err(AotError::Link(format!(
+            "cc -c {} (target {}) failed (exit {:?}):\n{}",
+            c_path.display(),
+            target.triple,
+            status.status.code(),
+            String::from_utf8_lossy(&status.stderr)
+        )));
+    }
+    Ok(())
+}
+
+/// Target-aware variant of [`link_aot_binary`]. Picks the cc driver,
+/// per-OS lib set, and (for Windows) the MinGW vs MSVC path.
+fn link_aot_binary_for(
+    bytecode_obj: &Path,
+    cmain_obj: &Path,
+    staticlib: &Path,
+    out_path: &Path,
+    target: &TargetSpec,
+) -> Result<(), AotError> {
+    // Windows MSVC requires link.exe and a totally different invocation
+    // surface (`/OUT:`, `/SUBSYSTEM:CONSOLE`, msvcrt libs). We don't
+    // attempt to drive link.exe directly — instead the MSVC arm
+    // returns a clear `AotError::Link` directing the user to either
+    // (a) build from a Windows host where the staticlib's
+    // `--print native-static-libs` output is reliable, or
+    // (b) target `x86_64-pc-windows-gnu` (MinGW) which uses a gcc-
+    //     style driver we *can* shell out to.
+    if target.os == TargetOs::Windows && target.libc == TargetLibc::Default {
+        return Err(AotError::Link(format!(
+            "MSVC link path (triple {}) is not implemented — luna-aot only \
+             drives gcc/clang-style cc drivers. Workarounds: (1) target \
+             x86_64-pc-windows-gnu instead (MinGW; works on linux/mac hosts \
+             with the matching cross-gcc installed), or (2) run luna-aot \
+             with `--scaffold-only` to emit the bytecode object + run \
+             `link.exe` by hand.",
+            target.triple
+        )));
+    }
+
+    let mut cmd = target.cc_command();
+
+    // Object files first (they reference symbols defined in the
+    // staticlib). Order matters for some traditional Unix linkers
+    // (`ld` resolves left-to-right; modern `lld` is order-independent
+    // but we keep the canonical order for portability).
+    cmd.arg(cmain_obj).arg(bytecode_obj).arg(staticlib);
+
+    // Per-OS lib set — what `rustc --print native-static-libs` reports
+    // for a `crate-type = ["staticlib"]` on each platform that pulls
+    // std. Match Stage 4's host-only set verbatim for the macOS+linux
+    // host paths so the cross arm doesn't regress an already-shipped
+    // path.
+    match target.os {
+        TargetOs::MacOs => {
+            cmd.args(["-framework", "CoreFoundation"]);
+            cmd.args(["-framework", "Security"]);
+            cmd.arg("-liconv");
+        }
+        TargetOs::Linux => {
+            cmd.arg("-lpthread");
+            cmd.arg("-ldl");
+            cmd.arg("-lm");
+            // glibc-only libs; musl ships these symbols inside libc
+            // so naming them here would be a `cannot find -lgcc_s` /
+            // `cannot find -lutil` failure on Alpine.
+            if target.libc != TargetLibc::Musl {
+                cmd.arg("-lrt");
+                cmd.arg("-lgcc_s");
+                cmd.arg("-lutil");
+            }
+        }
+        TargetOs::Windows => {
+            // MinGW: rust stdlib's std::sys::windows shim needs these.
+            // The set comes from `rustc --print native-static-libs --target=x86_64-pc-windows-gnu`
+            // run on a probe staticlib in CI; we replicate the typical
+            // dependency list here.
+            cmd.arg("-luserenv");
+            cmd.arg("-lkernel32");
+            cmd.arg("-lws2_32");
+            cmd.arg("-lbcrypt");
+            cmd.arg("-ladvapi32");
+            cmd.arg("-lntdll");
+            // MinGW gcc adds its own startup; nothing more needed.
+        }
+    }
+
+    cmd.arg("-o").arg(out_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| AotError::Link(format!("spawn cc for target {}: {e}", target.triple)))?;
+    if !output.status.success() {
+        return Err(AotError::Link(format!(
+            "cc link failed (target {}, exit {:?}):\ncommand: {:?}\nstderr:\n{}",
+            target.triple,
+            output.status.code(),
+            cmd,
+            String::from_utf8_lossy(&output.stderr),
+        )));
+    }
+    Ok(())
 }
