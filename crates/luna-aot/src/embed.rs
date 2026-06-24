@@ -53,7 +53,7 @@ use object::{Architecture, BinaryFormat, Endianness, SectionKind, SymbolKind, Sy
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::aot_meta::{
-    AotTraceMetaHeader, encode_meta_blob, pack_exit_tag, pack_tag_res_kind,
+    AotTraceMetaHeader, PerExitTagsEntry, encode_meta_blob, pack_exit_tag, pack_tag_res_kind,
 };
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::runtime::Heap;
@@ -1130,16 +1130,28 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // `aligned(8)` is needed because the section's other entries
     // carry pointer relocations at offsets 24 / 32 — a misaligned
     // placeholder shifts those into bad lanes.
+    // Strkey idx placeholder: sized to a full `IndexEntry` (16 bytes,
+    // 8-byte aligned) so the deploy resolver's
+    // `start + N * sizeof::<IndexEntry>` iteration lines up with
+    // any real trace-emitted entries that follow. A `[1]`-sized
+    // placeholder used to land 7 bytes of zero pad between itself
+    // and the first trace entry (the trace lower sets `align(8)`),
+    // which mis-aligned the divide-by-16 entry count: the walker
+    // saw the placeholder as half an entry and missed the real one
+    // by 8 bytes. Sizing the placeholder to 16 means the section
+    // is exactly N+1 entries for N real traces; the placeholder's
+    // zero-valued `bytes_ptr` short-circuits via the resolver's
+    // `entry.bytes_ptr.is_null()` guard.
     let placeholder = match target.os {
         TargetOs::MacOs => {
-            "__attribute__((used, section(\"__DATA,luna_strkey_idx\")))\n\
-             static const char luna_strkey_idx_placeholder[1] = {0};\n\
+            "__attribute__((used, section(\"__DATA,luna_strkey_idx\"), aligned(8)))\n\
+             static const char luna_strkey_idx_placeholder[16] = {0};\n\
              __attribute__((used, section(\"__DATA,luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n"
         }
         TargetOs::Linux => {
-            "__attribute__((used, section(\"luna_strkey_idx\")))\n\
-             static const char luna_strkey_idx_placeholder[1] = {0};\n\
+            "__attribute__((used, section(\"luna_strkey_idx\"), aligned(8)))\n\
+             static const char luna_strkey_idx_placeholder[16] = {0};\n\
              __attribute__((used, section(\"luna_trace_meta\"), aligned(8)))\n\
              static const char luna_trace_meta_placeholder[48] = {0};\n"
         }
@@ -1436,10 +1448,14 @@ fn harvest_and_emit_aot_traces(
     // lookup keys on (proto_ptr, head_pc); records that didn't survive
     // compile (lowerer bailed, returned None) drop here.
     //
-    // Filter to AOT-installable shapes only: no inline / per-cont_pc
-    // side-exits, dispatchable. Traces with those richer side-exit
-    // shapes need the full `CompiledTrace` field serialization which
-    // sub-piece-4 doesn't ship — they stay JIT-only.
+    // Filter to AOT-installable shapes. Wire format v2 carries
+    // `per_exit_tags` (typed-register side-exit guards — GetUpval-
+    // heavy traces); only `per_exit_inline` (depth>0 inlined cmp
+    // side-exits with `FrameMaterializeInfo` chains) is still
+    // unsupported because the chain carries runtime pointers we
+    // can't relocate. The wire format also doesn't ship sunk-alloc
+    // materialize sites yet; `materialize_emit_count > 0` traces
+    // need the chain too — JIT-only.
     let mut installable: Vec<(
         usize,
         [u8; 16],
@@ -1461,19 +1477,24 @@ fn harvest_and_emit_aot_traces(
             continue;
         }
         if !ct.per_exit_inline.is_empty() {
+            // depth>0 inlined cmp side-exits ship a chain of
+            // FrameMaterializeInfo pointers — out of scope for the
+            // wire format this cut.
             filter_stats.2 += 1;
             continue;
         }
+        // per_exit_tags is NOW supported by wire format v2 — accept.
+        // (Counter retained for diagnostics: how many of the captured
+        // traces went through the v2 path.)
         if !ct.per_exit_tags.is_empty() {
             filter_stats.3 += 1;
-            continue;
         }
         installable.push((i, hash, head_pc, record, ct));
     }
 
     if probe_on {
         eprintln!(
-            "luna-aot harvest: installable={}, filtered: no_ct={}, undispatchable={}, has_inline={}, has_per_exit_tags={}",
+            "luna-aot harvest: installable={}, filtered: no_ct={}, undispatchable={}, has_inline={}, accepted_with_per_exit_tags={}",
             installable.len(),
             filter_stats.0,
             filter_stats.1,
@@ -1543,6 +1564,19 @@ fn harvest_and_emit_aot_traces(
         // Serialize the meta blob for this trace.
         let entry_tags_vec: Vec<u8> = ct.entry_tags.iter().copied().collect();
         let exit_tags_vec: Vec<u8> = ct.exit_tags.iter().copied().map(pack_exit_tag).collect();
+        // v2 tail — per-cont_pc typed-register side-exit shapes.
+        // Each entry's `tags_packed` mirrors the JIT-time
+        // `(cont_pc, Rc<[ExitTag]>)` pair, packed through
+        // `pack_exit_tag` so the deploy-side reader unpacks via the
+        // same byte → ExitTag mapping.
+        let per_exit_tags_entries: Vec<PerExitTagsEntry> = ct
+            .per_exit_tags
+            .iter()
+            .map(|(cont_pc, tags)| PerExitTagsEntry {
+                cont_pc: *cont_pc,
+                tags_packed: tags.iter().copied().map(pack_exit_tag).collect(),
+            })
+            .collect();
         let header = AotTraceMetaHeader {
             magic: luna_core::jit::aot_meta::AOT_META_MAGIC,
             version: luna_core::jit::aot_meta::AOT_META_VERSION,
@@ -1554,7 +1588,12 @@ fn harvest_and_emit_aot_traces(
             entry_tags_len: entry_tags_vec.len() as u16,
             exit_tags_len: exit_tags_vec.len() as u32,
         };
-        let blob = encode_meta_blob(&header, &entry_tags_vec, &exit_tags_vec);
+        let blob = encode_meta_blob(
+            &header,
+            &entry_tags_vec,
+            &exit_tags_vec,
+            &per_exit_tags_entries,
+        );
         let blob_offset = blob_payload.len() as u32;
         let blob_len = blob.len() as u32;
         blob_payload.extend_from_slice(&blob);

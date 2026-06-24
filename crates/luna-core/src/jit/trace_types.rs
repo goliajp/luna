@@ -766,27 +766,28 @@ impl std::fmt::Debug for CompiledTrace {
 
 impl CompiledTrace {
     /// v1.3 Phase AOT Stage 7 sub-piece 4 — minimal AOT install
-    /// constructor.
+    /// constructor; Stage 7 follow-up — extended to accept
+    /// `per_exit_tags` (typed-register side-exits) so GetUpval-heavy
+    /// traces install correctly.
     ///
-    /// Builds a [`CompiledTrace`] from the small set of fields the
-    /// AOT meta blob carries plus a deploy-resolved trace fn pointer.
-    /// **All side-trace bookkeeping fields default to empty**:
-    /// `per_exit_inline`, `per_exit_tags`, `tags_side_trace_ptrs`,
-    /// `side_trace_cache`, `body_writes` are zeroed / empty;
-    /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to 1
-    /// (the global / clean-tail slot only). The deploy `Vm` never
-    /// records side traces against an AOT-installed parent (the
-    /// recorder is invoked from the dispatch path; AOT traces install
-    /// before any record can fire), so the empty defaults are sound.
+    /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
+    /// carries plus a deploy-resolved trace fn pointer.
+    /// `per_exit_inline`, `tags_side_trace_ptrs`,
+    /// `side_trace_cache`, `body_writes` default to empty / null;
+    /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to
+    /// `per_exit_tags.len() + 1` (each typed-exit slot + the global
+    /// clean-tail). The deploy `Vm` never records side traces against
+    /// an AOT-installed parent (the recorder is invoked from the
+    /// dispatch path; AOT traces install before any record can fire),
+    /// so the side-trace bookkeeping defaults are sound.
     ///
     /// Traces whose runtime shape requires non-empty
-    /// `per_exit_inline` / `per_exit_tags` (depth>0 inlined cmp side-
-    /// exits, GetUpval `Closure` exit-tag specializations) **must
-    /// not** be emitted by the AOT pipeline — this constructor produces
-    /// a CompiledTrace that the dispatcher would mis-restore for
-    /// those traces. The AOT recorder driver (luna-aot side) filters
-    /// to traces whose `per_exit_inline.is_empty() &&
-    /// per_exit_tags.is_empty()` before serializing.
+    /// `per_exit_inline` (depth>0 inlined cmp side-exits with frame
+    /// materialization chains) **must not** be emitted by the AOT
+    /// pipeline — this constructor produces a CompiledTrace that the
+    /// dispatcher would mis-restore for those traces. The AOT
+    /// recorder driver (luna-aot side) filters to traces whose
+    /// `per_exit_inline.is_empty()` before serializing.
     ///
     /// # Safety
     ///
@@ -803,15 +804,33 @@ impl CompiledTrace {
         entry_tags: std::rc::Rc<[u8]>,
         exit_tags: std::rc::Rc<[ExitTag]>,
         global_tag_res_kind: TagResKind,
+        per_exit_tags: Vec<(u32, std::rc::Rc<[ExitTag]>)>,
     ) -> Self {
-        // Length-1 exit_hit_counts / exit_side_trace_ptrs covers the
-        // "global / clean-tail" slot the dispatcher always probes.
+        // `exit_hit_counts` / `exit_side_trace_ptrs` sized to
+        // `inline_n + tags_n + 1` (matches the dispatcher's
+        // `hot_exit_iter` invariant). `inline_n = 0` for AOT installs.
+        let total_slots = per_exit_tags.len() + 1;
         let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
-            let v: Vec<std::cell::Cell<u32>> = vec![std::cell::Cell::new(0)];
+            let v: Vec<std::cell::Cell<u32>> =
+                (0..total_slots).map(|_| std::cell::Cell::new(0)).collect();
             v.into()
         };
         let exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]> = {
-            let v: Vec<std::cell::Cell<*const u8>> = vec![std::cell::Cell::new(std::ptr::null())];
+            let v: Vec<std::cell::Cell<*const u8>> = (0..total_slots)
+                .map(|_| std::cell::Cell::new(std::ptr::null()))
+                .collect();
+            v.into()
+        };
+        // Parallel `tags_side_trace_ptrs` slice — one Box per
+        // per_exit_tags entry, all null. The AOT install never wires
+        // a side trace (no recorder fires on this parent), so the
+        // cells stay null for the binary's lifetime; sizing matches
+        // the dispatcher's `per_exit_kinds.len() == tags_side_trace
+        // _ptrs.len()` invariant the close handler asserts.
+        let tags_side_trace_ptrs: std::rc::Rc<[Box<std::cell::Cell<*const u8>>]> = {
+            let v: Vec<Box<std::cell::Cell<*const u8>>> = (0..per_exit_tags.len())
+                .map(|_| Box::new(std::cell::Cell::new(std::ptr::null())))
+                .collect();
             v.into()
         };
         CompiledTrace {
@@ -823,13 +842,13 @@ impl CompiledTrace {
             exit_tags,
             global_tag_res_kind,
             entry_tags,
-            per_exit_tags: std::rc::Rc::from(Vec::<(u32, std::rc::Rc<[ExitTag]>)>::new()),
+            per_exit_tags: std::rc::Rc::from(per_exit_tags),
             per_exit_inline: std::rc::Rc::from(
                 Vec::<crate::jit::trace_types::InlineSideExit>::new(),
             ),
             exit_hit_counts,
             exit_side_trace_ptrs,
-            tags_side_trace_ptrs: std::rc::Rc::from(Vec::<Box<std::cell::Cell<*const u8>>>::new()),
+            tags_side_trace_ptrs,
             global_side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
             side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
             has_any_side_wired: std::cell::Cell::new(false),
