@@ -805,11 +805,23 @@ impl CompiledTrace {
         exit_tags: std::rc::Rc<[ExitTag]>,
         global_tag_res_kind: TagResKind,
         per_exit_tags: Vec<(u32, std::rc::Rc<[ExitTag]>)>,
+        per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
+        // v1.3 Phase AOT Stage 7 polish 6 — `inline_n` non-zero when
+        // the AOT trace ships depth>0 inlined cmp side-exits. The
+        // chain pointers baked into the trace mcode are populated by
+        // the deploy-side `aot_inline_chain_resolver`; the
+        // `per_exit_inline` entries here own a separate Rc<[...]>
+        // rebuilt from the v3 wire format's `chain_bytes`, used by
+        // the dispatcher for side-exit shape decode + side-trace
+        // routing. Neither side compares pointers — both consume the
+        // metadata they own.
+        //
         // `exit_hit_counts` / `exit_side_trace_ptrs` sized to
         // `inline_n + tags_n + 1` (matches the dispatcher's
-        // `hot_exit_iter` invariant). `inline_n = 0` for AOT installs.
-        let total_slots = per_exit_tags.len() + 1;
+        // `hot_exit_iter` invariant).
+        let inline_n = per_exit_inline.len();
+        let total_slots = inline_n + per_exit_tags.len() + 1;
         let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
             let v: Vec<std::cell::Cell<u32>> =
                 (0..total_slots).map(|_| std::cell::Cell::new(0)).collect();
@@ -843,9 +855,7 @@ impl CompiledTrace {
             global_tag_res_kind,
             entry_tags,
             per_exit_tags: std::rc::Rc::from(per_exit_tags),
-            per_exit_inline: std::rc::Rc::from(
-                Vec::<crate::jit::trace_types::InlineSideExit>::new(),
-            ),
+            per_exit_inline: std::rc::Rc::from(per_exit_inline),
             exit_hit_counts,
             exit_side_trace_ptrs,
             tags_side_trace_ptrs,
