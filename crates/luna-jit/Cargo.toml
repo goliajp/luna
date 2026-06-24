@@ -29,6 +29,13 @@ workspace = true
 # `path` fallback isn't in play.
 luna-core = { path = "../luna-core", version = "= 1.3.0" }
 
+# v1.3 UD3 — `#[derive(LuaUserdata)]` + `#[lua_userdata_methods]`
+# proc-macros. Re-exported in `lib.rs` so embedders can `use
+# luna_jit::LuaUserdata;` for both the trait (via luna-core re-export)
+# and the derive. Adds `syn` + `quote` + `proc-macro2` to luna-jit's
+# build-time supply chain ONLY; luna-core stays 0-dep.
+luna-jit-derive = { path = "../luna-jit-derive", version = "= 1.3.0" }
+
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
 # mature regalloc + opt. luna lowers Lua bytecode → Cranelift IR →
@@ -40,6 +47,23 @@ cranelift-module = "0.124"
 cranelift-codegen = "0.124"
 cranelift-frontend = "0.124"
 cranelift-native = "0.124"
+
+# v1.3 R3 — optional rustyline-powered REPL polish (tab completion
+# against Vm globals + Lua syntax highlighting + native
+# `~/.luna_history`). Opt-in via `--features repl-line-editor`.
+#
+# Default `cargo install luna-jit` does NOT pull rustyline — the v1.2
+# REPL (multi-line continuation + plain-text history) stays the
+# baseline so the shipped binary stays small and the supply-chain
+# surface unchanged. luna-core remains 0-third-party-dep regardless;
+# this dep lives in luna-jit only.
+rustyline = { version = "14", optional = true }
+
+[features]
+# v1.3 R3 — opt-in REPL polish. See the `rustyline` dep comment above.
+# CI builds both with and without this feature (see .github/workflows/ci.yml
+# `repl-line-editor` job) so the default-feature surface keeps verifying.
+repl-line-editor = ["dep:rustyline"]
 
 # v1.2 D2 (P-A1 audit): criterion as luna-jit-only dev-dep. The luna-core
 # 0-third-party-dep contract is unaffected (CI `zero-dep` job verifies).

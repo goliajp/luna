@@ -50,6 +50,36 @@ jobs:
         run: cargo build -p luna-core --target wasm32-unknown-unknown --release
 
   # ─────────────────────────────────────────────────────────────────
+  # v1.3 Phase WW: wasm32-wasip1 build of luna-core. Mirrors the
+  # `wasm32` job above. wasip1 has more std::process surface than
+  # wasm32-unknown-unknown, so `io.popen` / `os.execute` are
+  # cfg-gated on `any(unix, windows)`; wasi gets a stub that returns
+  # the PUC error tuple `(nil, "popen not supported on this platform", -1)`.
+  # See .dev/rfcs/v1.3-audit-wasi-port.md for the gating shape.
+  #
+  # Smoke (Phase WW4 follow-up, not yet wired): install `wasmtime`
+  # via `curl https://wasmtime.dev/install.sh | bash`, build
+  # `crates/luna-core/examples/wasi_smoke.rs` (to be created) for
+  # wasm32-wasip1, and run it via `wasmtime run`. The smoke would
+  # exercise dispatcher / GC / base lib / `eval` under the wasi
+  # runtime — far stronger than build-only. The build-only gate
+  # below catches the regression class we care about today
+  # (cfg-gate forgotten on a new `std::process::*` use).
+  # ─────────────────────────────────────────────────────────────────
+  wasm32-wasip1:
+    name: wasm32-wasip1 — luna-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - name: cargo build -p luna-core --target wasm32-wasip1
+        run: cargo build -p luna-core --target wasm32-wasip1
+      - name: cargo build -p luna-core --target wasm32-wasip1 --release
+        run: cargo build -p luna-core --target wasm32-wasip1 --release
+
+  # ─────────────────────────────────────────────────────────────────
   # cargo doc: catches dangling intra-doc links and undocumented
   # public items (luna-core declares missing_docs warn-by-default
   # in lib.rs once F2 lands; for v1.1 in progress this stays soft).
@@ -125,6 +155,29 @@ jobs:
             cargo tree -p luna-core --prefix none --no-default-features
             exit 1
           fi
+
+  # ─────────────────────────────────────────────────────────────────
+  # v1.3 R3: build the optional `repl-line-editor` feature so
+  # rustyline-side bit-rot doesn't surprise us at release time. The
+  # default `cargo install luna-jit` (no feature) is already covered
+  # by the `native` matrix above; this job adds the feature-on flavour
+  # + clippy gate to keep the LuaHelper / highlighter trait wiring
+  # honest. luna-core's 0-third-party-dep contract is unaffected
+  # (rustyline lives in luna-jit only) — verified by the `zero-dep`
+  # job above.
+  # ─────────────────────────────────────────────────────────────────
+  repl-line-editor:
+    name: luna-jit --features repl-line-editor build + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo build -p luna-jit --features repl-line-editor
+        run: cargo build -p luna-jit --features repl-line-editor
+      - name: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
+        run: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────
   # G2: unsafe-usage drift detection (introduced in the v1.3 mega

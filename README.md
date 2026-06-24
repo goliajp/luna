@@ -74,6 +74,9 @@ For the CLI binary:
 
 ```sh
 cargo install luna-jit   # `luna` REPL + script runner
+# or, for the polished REPL (tab completion against globals + Lua
+# syntax highlighting; pulls rustyline as a dep):
+cargo install luna-jit --features repl-line-editor
 ```
 
 ## Embedding (quick demo)

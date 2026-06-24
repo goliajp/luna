@@ -35,6 +35,14 @@
 // re-export below.
 pub use luna_core::*;
 
+// v1.3 UD3 — re-export the derive macro + impl-block attr macro so
+// embedders writing `use luna_jit::LuaUserdata;` get both the trait
+// (from the `pub use luna_core::*;` above) and the derive (here).
+// Rust allows the same path to resolve to both a trait and a derive
+// — they live in different namespaces (mirrors serde's
+// `pub use serde_derive::Serialize;` pattern).
+pub use luna_jit_derive::{LuaUserdata, lua_userdata_methods};
+
 pub mod capi;
 pub mod jit_backend;
 pub mod lua_facade;

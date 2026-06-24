@@ -51,44 +51,20 @@ impl Vm {
         self.heap.intern(s.as_bytes())
     }
 
-    // ─── B12 host-root pool ───────────────────────────────────────
+    // ─── B12 host-root pool — moved to `crate::vm::host_roots` ───
     //
-    // The `luna::Lua` facade (in the `luna` crate) leans on these
-    // methods to keep `LuaFunction` / `LuaTable` / `LuaRoot` handles
-    // alive across calls. The pool is append-only in v1.1; slot
-    // recycling lands in Phase 3 alongside B8 LuaUserdata.
-
-    /// Pin `v` as a host root and return its slot index. The value
-    /// becomes an extra GC root until the index is reset via
-    /// [`unpin_all`](Self::unpin_all).
-    pub fn pin_host(&mut self, v: Value) -> usize {
-        self.host_roots.push(v);
-        self.host_roots.len() - 1
-    }
-
-    /// Read a previously pinned host root. Panics if `idx` was never
-    /// pinned (or if the pool was cleared by `unpin_all`).
-    pub fn host_root_at(&self, idx: usize) -> Value {
-        self.host_roots[idx]
-    }
-
-    /// Mutate a previously pinned host root (for the `Lua` facade's
-    /// `LuaTable::set` after an in-place rewrite). Panics on OOB.
-    pub fn host_root_set(&mut self, idx: usize, v: Value) {
-        self.host_roots[idx] = v;
-    }
-
-    /// Number of currently-pinned host roots.
-    pub fn host_root_count(&self) -> usize {
-        self.host_roots.len()
-    }
-
-    /// Drop every pinned host root. Embedders driving the `Lua`
-    /// facade in a request-per-script loop call this between requests
-    /// to keep the pool bounded.
-    pub fn unpin_all(&mut self) {
-        self.host_roots.clear();
-    }
+    // v1.3 Phase SR migrated the append-only `Vec<Value>` to a
+    // slot-recycling pool keyed by `HostRootTicket { idx, generation }`.
+    // The new API surface (`pin_host` / `read_host` / `write_host` /
+    // `unpin` / `unpin_all` / `host_root_count`) lives in
+    // [`crate::vm::host_roots`]; the type re-exports are in
+    // [`crate::vm`] (`HostRootTicket`, `HostRootStale`).
+    //
+    // Breaking change vs v1.2 / v1.1: `pin_host` returns
+    // `HostRootTicket` (was `usize`); `host_root_at` / `host_root_set`
+    // are removed in favor of `read_host` / `write_host` which
+    // validate the ticket's generation. See CHANGELOG `[1.3.0]`
+    // Phase SR section for the migration recipe.
 
     // ─── B6 LuaError classification ──────────────────────────────
     //

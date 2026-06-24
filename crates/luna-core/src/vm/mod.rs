@@ -11,6 +11,7 @@ pub mod lib_coroutine;
 
 pub mod async_drive;
 pub mod ergo;
+pub mod host_roots;
 pub mod into_value;
 pub mod sandbox;
 pub mod table_builder;
@@ -20,6 +21,7 @@ pub mod userdata_trait;
 pub use async_drive::{AsyncNativeFn, EvalFuture};
 pub use error::{LuaError, LuaErrorKind};
 pub use exec::{Error, Vm};
+pub use host_roots::{HostRootStale, HostRootTicket};
 pub use into_value::IntoValue;
 pub use sandbox::SandboxBuilder;
 pub use table_builder::TableBuilder;
