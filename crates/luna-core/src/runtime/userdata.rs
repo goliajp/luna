@@ -7,6 +7,17 @@
 use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::table::Table;
 
+/// Type of the per-host trace adapter stored in [`UserdataPayload::Host`].
+/// Captured at `create_userdata::<T>` time as a monomorphic
+/// `trace_fn_for::<T>` whose body calls `T::trace` on the downcast
+/// payload. Phase TB (v1.3) — see `.dev/rfcs/v1.3-audit-trace-bearing-userdata.md`.
+///
+/// `fn` items are inherently `Send + Sync` and `Copy`, so this type
+/// imposes no auto-trait constraints on `Userdata`. Phase SS (`feature =
+/// "send"`) layers atop without changing the signature.
+pub(crate) type HostTraceFn =
+    fn(&(dyn std::any::Any + 'static), &mut crate::vm::UserdataMarker<'_>);
+
 /// A Lua userdata object — a GC-managed handle wrapping a host-side payload
 /// (an io file handle, a `newproxy` identity token, or an embedder-supplied
 /// Rust value) plus an optional metatable.
@@ -67,6 +78,20 @@ pub enum UserdataPayload {
         /// Boxed host payload (the embedder owns the underlying data
         /// semantically; luna treats it as opaque `Any`).
         data: Box<dyn std::any::Any + 'static>,
+        /// Trace adapter for the concrete `T` keyed by `type_id`.
+        /// Captured by [`crate::vm::Vm::create_userdata`] as a monomorphic
+        /// `fn(&dyn Any, &mut UserdataMarker)` whose body downcasts the
+        /// payload to `&T` and calls [`crate::vm::LuaUserdata::trace`].
+        ///
+        /// `None` means "no trace adapter wired" — only possible for
+        /// payloads constructed via the v1.1 [`crate::runtime::heap::Heap::new_userdata`]
+        /// path that bypasses the trait sugar (none exist in luna today,
+        /// but the `Option` preserves source-compat for any external
+        /// crate that built a `UserdataPayload::Host` literal under the
+        /// v1.2 shape).
+        ///
+        /// Phase TB (v1.3) — see `.dev/rfcs/v1.3-audit-trace-bearing-userdata.md`.
+        trace_fn: Option<HostTraceFn>,
     },
 }
 
@@ -96,7 +121,10 @@ impl FileHandle {
 
     /// Standard streams cannot be closed (io.close(io.stdin) fails in PUC).
     pub fn is_std(&self) -> bool {
-        matches!(self, FileHandle::Stdin | FileHandle::Stdout | FileHandle::Stderr)
+        matches!(
+            self,
+            FileHandle::Stdin | FileHandle::Stdout | FileHandle::Stderr
+        )
     }
 }
 
@@ -127,6 +155,19 @@ impl Userdata {
     pub(crate) fn trace(&self, m: &mut Marker) {
         if let Some(mt) = self.metatable {
             m.header(mt.as_ptr() as *mut GcHeader);
+        }
+        // Phase TB (v1.3): recurse into the host payload via the
+        // captured monomorphic trace adapter. The adapter's body
+        // downcasts to the concrete `T` (paired with `type_id` at
+        // `create_userdata::<T>` time) and calls `T::trace`.
+        if let UserdataPayload::Host {
+            data,
+            trace_fn: Some(trace_fn),
+            ..
+        } = &self.payload
+        {
+            let mut um = crate::vm::UserdataMarker::__new_internal(m);
+            trace_fn(data.as_ref(), &mut um);
         }
     }
 
@@ -171,7 +212,7 @@ impl Userdata {
     /// match arm.
     pub fn downcast<T: std::any::Any + 'static>(&self) -> Option<&T> {
         match &self.payload {
-            UserdataPayload::Host { type_id, data } => {
+            UserdataPayload::Host { type_id, data, .. } => {
                 if *type_id == std::any::TypeId::of::<T>() {
                     data.downcast_ref::<T>()
                 } else {
@@ -185,7 +226,7 @@ impl Userdata {
     /// Mutable borrow variant of [`Self::downcast`].
     pub fn downcast_mut<T: std::any::Any + 'static>(&mut self) -> Option<&mut T> {
         match &mut self.payload {
-            UserdataPayload::Host { type_id, data } => {
+            UserdataPayload::Host { type_id, data, .. } => {
                 if *type_id == std::any::TypeId::of::<T>() {
                     data.downcast_mut::<T>()
                 } else {

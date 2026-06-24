@@ -10,7 +10,6 @@
 //! materialise with hash slot support).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// dict_simple pattern: `local t = {}; t.x = i; t.y = i*2; s = s
 /// + t.x + t.y`. No cmp in body → hash site stays Sinkable; SetField

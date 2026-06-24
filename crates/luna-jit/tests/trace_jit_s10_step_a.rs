@@ -10,7 +10,6 @@
 //! inline sites.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Result correctness: depth>0 sites must round-trip semantics
 /// correctly. binary_trees pattern is the canonical multi-depth

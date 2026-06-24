@@ -32,11 +32,7 @@ thread_local! {
     static CAPTURE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-fn capture_print(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-) -> Result<u32, luna_core::vm::LuaError> {
+fn capture_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
     // Same format as PUC print: tab-separated, trailing newline.
     // Use the Lua-level global `tostring` so the output formatting
     // matches PUC's `print` byte-for-byte (including number-to-string
@@ -87,21 +83,21 @@ fn reference_bin_for(version: LuaVersion) -> Option<&'static str> {
         LuaVersion::Lua51 => &["lua-5.1"][..],
         LuaVersion::Lua52 => &["lua-5.2"][..],
         LuaVersion::Lua53 => &["lua-5.3"][..],
-        LuaVersion::Lua54 => &["lua-5.4"][..],
+        LuaVersion::Lua54 | LuaVersion::MacroLua => &["lua-5.4"][..],
         LuaVersion::Lua55 => &["lua-5.5"][..],
     };
-    for &c in candidates {
-        if Command::new(c)
-            .arg("-v")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()
-        {
-            return Some(c);
-        }
-    }
-    None
+    candidates
+        .iter()
+        .find(|&&c| {
+            Command::new(c)
+                .arg("-v")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+        })
+        .copied()
+        .map(|v| v as _)
 }
 
 fn run_on_puc(bin: &str, src: &str) -> Vec<u8> {
@@ -772,7 +768,12 @@ fn e2e_diff_for_dialect(version: LuaVersion, label: &str) {
         for f in &failures {
             writeln!(&mut s, "{}", f).unwrap();
         }
-        panic!("e2e dialect {}: {} divergences\n{}", label, failures.len(), s);
+        panic!(
+            "e2e dialect {}: {} divergences\n{}",
+            label,
+            failures.len(),
+            s
+        );
     }
 }
 

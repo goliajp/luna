@@ -3,7 +3,6 @@
 //! emits a Move-style def_var R[A] = R[B] with kind propagation.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `local x = a or b` lowers (when a truthy at trace time) to
 /// TestSet that copies a → x on pass. Kind-fold case: a is Int.

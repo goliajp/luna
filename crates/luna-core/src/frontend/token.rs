@@ -141,6 +141,25 @@ pub enum Token {
         /// Source text of the identifier.
         Box<str>,
     ),
+    /// MacroLua `@` sigil (v1.3 Phase ML). Lexed only when
+    /// `version.is_macro_lua()`; PUC 5.1-5.5 sources continue to
+    /// error `unexpected symbol near '@'`.
+    At,
+    /// MacroLua explicit quote-block opener `@{`. Lexed only when
+    /// `version.is_macro_lua()`; pairs with [`Token::MacroBraceClose`].
+    MacroBraceOpen,
+    /// MacroLua explicit quote-block closer `}@`. Lexed only when
+    /// `version.is_macro_lua()`; pairs with [`Token::MacroBraceOpen`].
+    MacroBraceClose,
+    /// Synthetic token produced by the macro expander pre-pass: a
+    /// captured token run (the body of a `@quote{...}` or `@{...}@`
+    /// block). The lexer never emits this. After the expander runs
+    /// it splices these back into the stream as raw token sequences
+    /// before the parser proper sees them.
+    MacroQuote(
+        /// Captured token run.
+        Box<[TokenInfo]>,
+    ),
     /// End-of-file marker.
     Eof,
 }
@@ -166,7 +185,7 @@ impl Token {
 }
 
 /// A token plus where it came from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TokenInfo {
     /// The lexical token.
     pub tok: Token,

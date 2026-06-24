@@ -214,11 +214,7 @@ impl TraceRecord {
             is_call_triggered: false,
             tfor_iter_ptr: None,
             tfor_val_tag: None,
-            side_trace_parent: Some((
-                parent_head_proto,
-                parent_head_pc,
-                parent_exit_idx,
-            )),
+            side_trace_parent: Some((parent_head_proto, parent_head_pc, parent_exit_idx)),
             self_link_kind: None,
         }
     }
@@ -336,7 +332,8 @@ pub enum TagResKind {
 
 /// Walk an `exit_tags` slice and classify it for the
 /// dispatcher fast path.
-#[doc(hidden)] pub fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
+#[doc(hidden)]
+pub fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
     if tags.iter().all(|t| matches!(t, ExitTag::Untouched)) {
         return TagResKind::AllUntouched;
     }
@@ -502,9 +499,7 @@ pub struct CompiledTrace {
     /// `RefCell<HashMap<u32, u32>>` because the close handler
     /// holds only `&CompiledTrace` (the parent's traces borrow is
     /// immutable while we're walking it to find the parent_ct).
-    pub side_trace_cache: std::cell::RefCell<
-        std::collections::HashMap<u32, u32>,
-    >,
+    pub side_trace_cache: std::cell::RefCell<std::collections::HashMap<u32, u32>>,
     /// P15-A v2-D-A8 — fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when ANY of this trace's
@@ -656,7 +651,7 @@ pub const SIDE_SENT_KIND_GLOBAL: u8 = 3;
 /// `side_trace_cache`.
 pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
     debug_assert!(
-        kind >= 1 && kind <= 3,
+        (1..=3).contains(&kind),
         "kind must be SIDE_SENT_KIND_* (1..=3)"
     );
     ((kind as u32 & 0x3) << 5) | (local & 0x1F)
@@ -668,8 +663,7 @@ pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
 /// so production runs pay no overhead — even the IR-emitted probe
 /// call is conditional on the probe helper itself short-circuiting
 /// when the OnceLock resolves to `false`.
-static V2C_PROBE_ON: std::sync::OnceLock<bool> =
-    std::sync::OnceLock::new();
+static V2C_PROBE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// True iff the side-trace dispatch probes are enabled via
 /// `LUNA_V2C_PROBE=1`. Diagnostic-only; production builds keep this
 /// off so the IR-emitted probe call short-circuits cheaply.
@@ -767,6 +761,116 @@ impl std::fmt::Debug for CompiledTrace {
             .field("exit_tags", &self.exit_tags)
             .field("entry", &"<fn>")
             .finish()
+    }
+}
+
+impl CompiledTrace {
+    /// v1.3 Phase AOT Stage 7 sub-piece 4 — minimal AOT install
+    /// constructor; Stage 7 follow-up — extended to accept
+    /// `per_exit_tags` (typed-register side-exits) so GetUpval-heavy
+    /// traces install correctly.
+    ///
+    /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
+    /// carries plus a deploy-resolved trace fn pointer.
+    /// `per_exit_inline`, `tags_side_trace_ptrs`,
+    /// `side_trace_cache`, `body_writes` default to empty / null;
+    /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to
+    /// `per_exit_tags.len() + 1` (each typed-exit slot + the global
+    /// clean-tail). The deploy `Vm` never records side traces against
+    /// an AOT-installed parent (the recorder is invoked from the
+    /// dispatch path; AOT traces install before any record can fire),
+    /// so the side-trace bookkeeping defaults are sound.
+    ///
+    /// Traces whose runtime shape requires non-empty
+    /// `per_exit_inline` (depth>0 inlined cmp side-exits with frame
+    /// materialization chains) **must not** be emitted by the AOT
+    /// pipeline — this constructor produces a CompiledTrace that the
+    /// dispatcher would mis-restore for those traces. The AOT
+    /// recorder driver (luna-aot side) filters to traces whose
+    /// `per_exit_inline.is_empty()` before serializing.
+    ///
+    /// # Safety
+    ///
+    /// `entry` must be a valid `unsafe extern "C" fn(*mut i64) -> i64`
+    /// living in the binary's text segment (linker-resolved from the
+    /// AOT-emitted trace `.o`). The constructor doesn't validate this
+    /// — `install_aot_trace` is the next gate.
+    pub fn from_aot_meta(
+        entry: TraceFn,
+        head_pc: u32,
+        n_ops: u32,
+        dispatchable: bool,
+        window_size: u32,
+        entry_tags: std::rc::Rc<[u8]>,
+        exit_tags: std::rc::Rc<[ExitTag]>,
+        global_tag_res_kind: TagResKind,
+        per_exit_tags: Vec<(u32, std::rc::Rc<[ExitTag]>)>,
+        per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
+    ) -> Self {
+        // v1.3 Phase AOT Stage 7 polish 6 — `inline_n` non-zero when
+        // the AOT trace ships depth>0 inlined cmp side-exits. The
+        // chain pointers baked into the trace mcode are populated by
+        // the deploy-side `aot_inline_chain_resolver`; the
+        // `per_exit_inline` entries here own a separate Rc<[...]>
+        // rebuilt from the v3 wire format's `chain_bytes`, used by
+        // the dispatcher for side-exit shape decode + side-trace
+        // routing. Neither side compares pointers — both consume the
+        // metadata they own.
+        //
+        // `exit_hit_counts` / `exit_side_trace_ptrs` sized to
+        // `inline_n + tags_n + 1` (matches the dispatcher's
+        // `hot_exit_iter` invariant).
+        let inline_n = per_exit_inline.len();
+        let total_slots = inline_n + per_exit_tags.len() + 1;
+        let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
+            let v: Vec<std::cell::Cell<u32>> =
+                (0..total_slots).map(|_| std::cell::Cell::new(0)).collect();
+            v.into()
+        };
+        let exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]> = {
+            let v: Vec<std::cell::Cell<*const u8>> = (0..total_slots)
+                .map(|_| std::cell::Cell::new(std::ptr::null()))
+                .collect();
+            v.into()
+        };
+        // Parallel `tags_side_trace_ptrs` slice — one Box per
+        // per_exit_tags entry, all null. The AOT install never wires
+        // a side trace (no recorder fires on this parent), so the
+        // cells stay null for the binary's lifetime; sizing matches
+        // the dispatcher's `per_exit_kinds.len() == tags_side_trace
+        // _ptrs.len()` invariant the close handler asserts.
+        let tags_side_trace_ptrs: std::rc::Rc<[Box<std::cell::Cell<*const u8>>]> = {
+            let v: Vec<Box<std::cell::Cell<*const u8>>> = (0..per_exit_tags.len())
+                .map(|_| Box::new(std::cell::Cell::new(std::ptr::null())))
+                .collect();
+            v.into()
+        };
+        CompiledTrace {
+            head_pc,
+            entry,
+            n_ops,
+            dispatchable,
+            window_size,
+            exit_tags,
+            global_tag_res_kind,
+            entry_tags,
+            per_exit_tags: std::rc::Rc::from(per_exit_tags),
+            per_exit_inline: std::rc::Rc::from(per_exit_inline),
+            exit_hit_counts,
+            exit_side_trace_ptrs,
+            tags_side_trace_ptrs,
+            global_side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
+            side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            has_any_side_wired: std::cell::Cell::new(false),
+            is_inline_abort_close: false,
+            dispatch_off_reason: None,
+            sinkable_sites_seen: 0,
+            accum_bufferable_seen: 0,
+            sunk_alloc_seen: 0,
+            materialize_emit_count: 0,
+            closure_seen: 0,
+            body_writes: Box::new([]),
+        }
     }
 }
 
@@ -920,7 +1024,7 @@ pub fn decode_exit_shape<'a>(
                 cont_pc,
                 site_id: 0,
                 exit_hit_idx: inline_n + i,
-                exit_tags_for_pc: &**tags,
+                exit_tags_for_pc: tags,
                 using_global_exit_tags: false,
             },
             None => DecodedExit {
@@ -935,7 +1039,7 @@ pub fn decode_exit_shape<'a>(
 }
 
 /// Compile-time options for the trace lowerer.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CompileOptions {
     /// When `true`, the trace's clean-close path emits a back-edge
     /// jump to its own body-loop block instead of returning
@@ -963,13 +1067,28 @@ pub struct CompileOptions {
     /// only lowers the 5.4+ Int count form; pre-5.3 traces bail
     /// and stay on the interp side.
     pub pre53: bool,
-}
-
-impl Default for CompileOptions {
-    fn default() -> Self {
-        Self {
-            internal_loop: false,
-            pre53: false,
-        }
-    }
+    /// v1.3 Phase AOT Stage 7 sub-piece 2 — emit AOT-relocatable IR.
+    ///
+    /// When `false` (the JIT default), interned-string-key arguments
+    /// to `luna_jit_*_field` helpers are baked as
+    /// `iconst(I64, key_str.as_ptr() as i64)` — the live runtime
+    /// pointer, valid because the lowered mcode runs in the same
+    /// process / `Vm` / `StringTable` as the recorder.
+    ///
+    /// When `true` (the AOT path), the lowerer instead routes each
+    /// key through a writable data slot named
+    /// `__luna_aot_strkey_slot_<hex>` (8 bytes, zero-initialised at
+    /// link time) and emits a load through that symbol. A sibling
+    /// read-only object `__luna_aot_strkey_bytes_<hex>` carries the
+    /// UTF-8 bytes; the deploy-side startup hook walks every
+    /// `_bytes_<hex>` symbol, interns the bytes into the deploy
+    /// `Vm`'s `StringTable`, and writes the resulting
+    /// `Gc<LuaStr>::as_ptr()` into the matching `_slot_<hex>` before
+    /// any AOT trace dispatches. JIT path is unaffected — same
+    /// `iconst` it always emitted.
+    ///
+    /// See `.dev/rfcs/v1.3-rfc-trace-aot-relocation.md` for the full
+    /// scheme; sub-piece 2 (this flag) lands the codegen half — the
+    /// deploy-side resolver is sub-piece 3.
+    pub aot: bool,
 }

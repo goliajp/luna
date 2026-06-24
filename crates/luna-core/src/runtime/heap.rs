@@ -551,6 +551,29 @@ impl Heap {
             if is_new {
                 self.link(p as *mut GcHeader);
                 self.bytes += string::alloc_size(bytes.len());
+            } else {
+                // PUC `luaS_new` resurrect guard (lstring.c).
+                // The bucket-chain is walked open-loop without consulting GC
+                // color; during incremental sweep an existing entry may be
+                // dead-white (in `sweep_cur`, scheduled for `free_obj`). If we
+                // hand its pointer back, the budget-paced sweep frees it out
+                // from under the mutator and the next bucket walk dereferences
+                // a libc-recycled slot — the symptom recorded in
+                // `.dev/known-bugs/stringtable-intern-uaf.md` (misaligned ptr
+                // `0x800002a80000002d` deep in `StringTable::intern`).
+                //
+                // Flip the white bits to `current_white` so the upcoming sweep
+                // skips it (PUC `changewhite`). Black / not-white objects are
+                // already safe and untouched.
+                // SAFETY: `p` came from `StringTable::intern` and is a valid
+                // `LuaStr` header (its bucket chain is consistent under our
+                // single-threaded heap).
+                unsafe {
+                    let f = (*(p as *mut GcHeader)).flags;
+                    if is_white(f) && (f & self.current_white) == 0 {
+                        (*(p as *mut GcHeader)).flags = (f & !WHITE_BITS) | self.current_white;
+                    }
+                }
             }
             Gc::from_ptr(p)
         } else {
@@ -662,7 +685,7 @@ impl Heap {
         };
         // Drain any barrier-grayed objects carried over: each was demoted from
         // BLACK back to gray by a write barrier and is awaiting (re-)trace.
-        m.stack.extend(self.gray.drain(..));
+        m.stack.append(&mut self.gray);
         for &r in roots {
             m.value(r);
         }
@@ -970,6 +993,7 @@ impl Heap {
     /// step traces it. Mirrors PUC `luaC_barrier_`. No-op outside Propagate
     /// (parent is gray or white — the mutator never sees a BLACK object live
     /// outside an incremental cycle).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
     pub fn barrier_forward(&mut self, parent: *mut GcHeader, child: Value) {
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
@@ -1003,6 +1027,7 @@ impl Heap {
     /// Mirrors PUC `luaC_barrierback_`. One call covers any number of
     /// subsequent stores until the next propagate finishes — much cheaper for
     /// tables than per-child forward barriers. No-op outside Propagate.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // Internal GC barrier; caller (Gc<T>::write_*) guarantees ptr validity per SAFETY below.
     pub fn barrier_back(&mut self, parent: *mut GcHeader) {
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
@@ -1568,11 +1593,8 @@ mod tests {
         for ti in 0..50 {
             let t = heap.new_table();
             for k in 1..=200 {
-                let _ = unsafe { t.as_mut() }.set(
-                    &mut heap,
-                    Value::Int(k),
-                    Value::Int(ti * 1000 + k),
-                );
+                let _ =
+                    unsafe { t.as_mut() }.set(&mut heap, Value::Int(k), Value::Int(ti * 1000 + k));
             }
             for sk in 0..32 {
                 let key = Value::Str(heap.intern(format!("k{ti}-{sk}").as_bytes()));
@@ -1588,13 +1610,73 @@ mod tests {
         let half = roots.len() / 2;
         let freed = heap.collect(&roots[..half]);
         assert!(freed > 0, "some objects should have been freed");
-        assert!(heap.bytes() < bytes_peak, "bytes must drop after partial collect");
-        assert!(heap.live_objects() < live_peak, "live must drop after partial collect");
+        assert!(
+            heap.bytes() < bytes_peak,
+            "bytes must drop after partial collect"
+        );
+        assert!(
+            heap.live_objects() < live_peak,
+            "live must drop after partial collect"
+        );
         // Drop everything: counters must return to 0 exactly.
         drop(roots);
         let _ = heap.collect(&[]);
         assert_eq!(heap.live_objects(), 0, "live not zero after full collect");
-        assert_eq!(heap.bytes(), 0, "bytes not zero after full collect — asymmetric alloc/free");
+        assert_eq!(
+            heap.bytes(),
+            0,
+            "bytes not zero after full collect — asymmetric alloc/free"
+        );
+    }
+
+    /// Regression for `.dev/known-bugs/stringtable-intern-uaf.md`:
+    /// `StringTable::intern` must NOT return a dead-white (about-to-be-swept)
+    /// short-string pointer. Mirrors PUC `luaS_new`'s resurrect-on-hit guard
+    /// (lstring.c — `if (isdead(g, ts)) changewhite(ts);`).
+    ///
+    /// Without the guard, the bucket-chain still references the unswept
+    /// short string after the atomic flip; a re-`intern` of the same bytes
+    /// hands back that pointer; the budget-paced sweep then frees it and
+    /// the next bucket walk dereferences libc-recycled garbage (the
+    /// `0x800002a80000002d` misaligned pointer seen in the audit).
+    #[test]
+    fn intern_resurrects_dead_white_short_string() {
+        let mut heap = Heap::new();
+        let alive = heap.intern(b"keep-me-alive-1");
+        let dying = heap.intern(b"transient-x");
+        let dying_ptr = dying.as_ptr();
+        let dying_bytes = dying.as_bytes().to_vec();
+        // Drive an incremental cycle by hand to reproduce the race:
+        //   1. mark-propagate with `alive` only as a root → `dying` stays white
+        //   2. atomic flip → `dying` becomes dead-white, bucket still points at it
+        //   3. RE-INTERN the same bytes BEFORE sweep clears the bucket
+        //   4. fix must either (a) skip the dead entry & alloc fresh, or
+        //      (b) resurrect dying back to current-white
+        let alive_root = [Value::Str(alive)];
+        heap.gc_start_propagate(&alive_root, &[]);
+        while !heap.gc_step_propagate(usize::MAX) {}
+        heap.gc_finish_atomic();
+        // At this point sweep_cur holds the detached old-heap list and the
+        // dying string is dead-white. The bucket chain in `self.strings`
+        // still references it.
+        let resurrected = heap.intern(&dying_bytes);
+        // Two valid outcomes:
+        //   * resurrect: same pointer, but flagged current-white so sweep
+        //     will keep it alive (PUC luaS_new shape)
+        //   * skip-and-alloc-fresh: different pointer, dying gets swept
+        //     normally as it should
+        // Either way, after completing the sweep the heap must NOT crash
+        // when we try to intern more short strings (which walks bucket chains).
+        while !heap.gc_sweep_step(usize::MAX) {}
+        // Smoke: bucket-chain walk for a fresh string must not deref a
+        // freed pointer.
+        let _fresh = heap.intern(b"after-sweep-canary");
+        // If the fix is "resurrect", same pointer + bytes preserved:
+        if resurrected.as_ptr() == dying_ptr {
+            assert_eq!(resurrected.as_bytes(), dying_bytes.as_slice());
+        }
+        // Final cleanup: full collect must complete without UAF.
+        drop(heap);
     }
 
     #[test]

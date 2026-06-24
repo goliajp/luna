@@ -12,7 +12,6 @@
 //!   return x end`) still bails until S7-B.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `local function f() return function() return 1 end end` — the
 /// inner closure has 0 upvals. Trace fires on f's body (Closure +

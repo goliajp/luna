@@ -20,6 +20,13 @@
 pub mod trace_types;
 pub use trace_types::*;
 
+// v1.3 Phase AOT Stage 7 sub-piece 4 — wire format for AOT trace
+// metadata (header + index entry + encode/decode). Pure data; both
+// `luna-aot` (compile-time encode) and `luna-runtime-helpers`
+// (deploy-time decode) depend on this single module so the on-disk
+// shape stays in lock-step.
+pub mod aot_meta;
+
 // v1.1 A1 Session A — backend trait surface introduced in-place.
 // Session C moves it to luna-core (this file) and extracts the
 // Cranelift-bound CraneliftBackend struct out into luna's

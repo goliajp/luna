@@ -11,7 +11,6 @@
 //! `table.set(Value::Str(key), …)` at materialise time.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// dict + cmp body: previously demoted by has_any_cmp gate.
 /// Post-S11-B-v2: hash site stays Sinkable, cmp side-exit

@@ -186,6 +186,14 @@ pub struct Vm {
     /// limits). When `false`, the loader rejects any source whose first
     /// byte is the bytecode signature `\27` ("`\27Lua`").
     pub(crate) bytecode_loading: bool,
+    /// PUC bytecode-loading gate. Default `false` — PUC `.luac` files are
+    /// a strictly larger trust surface than luna's own dump format
+    /// (third-party toolchain bugs, malformed chunks, unknown opcode
+    /// shapes). When `true`, the loader routes `\x1bLua\x{51..55}` inputs
+    /// through the per-dialect PUC translators in `crate::vm::dump::puc`
+    /// (Phase LB Wave 2 — currently returns "not yet implemented" stubs).
+    /// Embedder toggles via `set_puc_bytecode_loading`.
+    pub(crate) puc_bytecode_loading: bool,
     /// In-process log of fully-emitted warnings (each entry = one flushed
     /// message, sans the "Lua warning: " prefix and trailing newline). Lets
     /// tests assert what was warned without scraping stderr.
@@ -260,7 +268,6 @@ pub struct Vm {
     // v1.1 A2 — was: jit_pending_err, jit_reg_state_buf, jit_str_buf_pool,
     // jit_str_buf_pool_cap, jit_entry_tags_buf, chunk_compiler,
     // trace_compiler — all moved to JitState. See `jit` below.
-
     /// v1.1 A2 — JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
     /// [`crate::jit::NullJitBackend`]. See [`crate::vm::jit_state`].
@@ -281,7 +288,28 @@ pub struct Vm {
     /// Slot recycling lands in Phase 3 alongside B8 LuaUserdata, when
     /// the trade-offs between `Drop` plumbing and append-only memory
     /// growth have a richer ergonomics envelope to live in.
-    pub(crate) host_roots: Vec<Value>,
+    pub(crate) host_roots: Vec<crate::vm::host_roots::HostRootSlot>,
+    /// v1.3 Phase SR — recycled-slot index pool. `pin_host` pops the
+    /// back if non-empty, else extends `host_roots`. Generation
+    /// overflow at `u32::MAX` retires the slot (NOT pushed here).
+    pub(crate) host_roots_free: Vec<u32>,
+
+    /// v1.3 Phase ML — MacroLua compile-time macro registry.
+    /// Pre-populated with built-in macros (`@quote` / `@unquote` /
+    /// `@if` / `@gensym`) at construction time when `version ==
+    /// LuaVersion::MacroLua`; embedders register custom macros via
+    /// [`Vm::define_macro`]. The expander runs once per `load()` call
+    /// between lexing and parsing (only when `is_macro_lua()`).
+    pub(crate) macro_registry: crate::frontend::macro_expander::MacroRegistry,
+
+    /// v1.2 Track B — per-Vm cache of `Gc<Table>` metatables keyed
+    /// by `TypeId::of::<T>()` for embedder types implementing
+    /// [`crate::vm::userdata_trait::LuaUserdata`]. Populated lazily by
+    /// [`Vm::register_userdata`]; metatables are pinned via
+    /// [`Vm::pin_host`] at registration time so the entry's
+    /// `Gc<Table>` stays live for the rest of the Vm's lifetime.
+    pub(crate) userdata_metatables:
+        std::collections::HashMap<std::any::TypeId, Gc<crate::runtime::table::Table>>,
 
     /// B6 — classification of the most recent error raised on this Vm.
     /// Embedders read via [`Vm::error_kind`]; the dispatcher sets it
@@ -726,6 +754,21 @@ fn frames_pop_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32) -> Option<
     r
 }
 
+/// v1.3 Phase AOT Stage 7 sub-piece 4 — one-time env-var read for
+/// `LUNA_AOT_PROBE`. Returns `true` iff the env var is set to any
+/// non-empty value. The result is cached in a `OnceLock` so the
+/// dispatcher's hot path pays a single atomic load per process. Off
+/// by default — production deploys don't bleed diagnostic prints.
+fn jit_probe_enabled() -> bool {
+    static PROBE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PROBE_ON.get_or_init(|| {
+        std::env::var("LUNA_AOT_PROBE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .is_some()
+    })
+}
+
 impl Vm {
     /// P17-D Week 1 — re-sync `frames_top` after a bulk `frames: Vec`
     /// swap (take_ctx, put_ctx, load_coro_ctx). Must be called after
@@ -762,7 +805,11 @@ impl Vm {
     #[inline]
     #[allow(dead_code)] // Phase 2 — consumer is Phase 3.
     fn write_frame_closure(&mut self, base: u32, cl: crate::runtime::Gc<LuaClosure>) {
-        debug_assert!(base >= 2, "frame closure slot needs base >= 2; got {}", base);
+        debug_assert!(
+            base >= 2,
+            "frame closure slot needs base >= 2; got {}",
+            base
+        );
         let idx = (base - 2) as usize;
         debug_assert!(idx < self.stack.len(), "stack[base-2] out of range");
         self.stack[idx] = Value::Closure(cl);
@@ -815,9 +862,9 @@ impl Vm {
         let v = self.stack.get((base - 1) as usize)?;
         if v.tag_byte() == crate::runtime::value::tag::INT {
             // SAFETY: tag byte just verified == INT.
-            Some(crate::runtime::frame_marker::FrameMarker::from_raw(unsafe {
-                v.as_int_unchecked()
-            }))
+            Some(crate::runtime::frame_marker::FrameMarker::from_raw(
+                unsafe { v.as_int_unchecked() },
+            ))
         } else {
             None
         }
@@ -837,7 +884,8 @@ impl Vm {
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
         let globals = heap.new_table();
         let mm_names = MM_NAMES.iter().map(|n| heap.intern(n.as_bytes())).collect();
-        let vm = Vm {
+
+        Vm {
             heap,
             stack: Vec::new(),
             frames: Vec::new(),
@@ -875,6 +923,7 @@ impl Vm {
             warn_log: Vec::new(),
             instr_budget: None,
             bytecode_loading: true,
+            puc_bytecode_loading: false,
             registry: None,
             file_mt: None,
             io_input: None,
@@ -898,6 +947,18 @@ impl Vm {
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // v1.1 B12 — host roots ticket pool for the `Lua` facade.
             host_roots: Vec::new(),
+            // v1.3 Phase ML — MacroLua registry. Pre-populated with
+            // built-ins (`@quote` / `@unquote` / `@if` / `@gensym`)
+            // when this Vm is constructed under `LuaVersion::MacroLua`.
+            macro_registry: if version == LuaVersion::MacroLua {
+                crate::frontend::macro_expander::MacroRegistry::with_builtins()
+            } else {
+                crate::frontend::macro_expander::MacroRegistry::new()
+            },
+            host_roots_free: Vec::new(),
+            // v1.2 Track B — LuaUserdata trait sugar's per-Vm
+            // metatable cache. Populated lazily by register_userdata.
+            userdata_metatables: std::collections::HashMap::new(),
             // v1.1 B6 — error classification metadata. Defaults to
             // Runtime; set at known sites (syntax / budget trip /
             // native error / type error).
@@ -915,8 +976,7 @@ impl Vm {
             // async-marked NativeClosure is invoked under async_mode.
             pending_async_native_fut: None,
             pending_async_native_ctx: None,
-        };
-        vm
+        }
     }
 
     /// Build a fully-loaded Vm — the default for embedders that want PUC's
@@ -1162,12 +1222,15 @@ impl Vm {
     /// let r = vm.eval("return answer, ratio, hello").unwrap();
     /// assert_eq!(r.len(), 3);
     /// ```
-    pub fn set_global<V: crate::vm::IntoValue>(&mut self, name: &str, v: V) -> Result<(), LuaError> {
+    pub fn set_global<V: crate::vm::IntoValue>(
+        &mut self,
+        name: &str,
+        v: V,
+    ) -> Result<(), LuaError> {
         let v = v.into_value(self);
         let k = Value::Str(self.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { self.globals.as_mut() }
-            .set(&mut self.heap, k, v)?;
+        unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v)?;
         self.heap
             .barrier_back(self.globals.as_ptr() as *mut crate::runtime::heap::GcHeader);
         Ok(())
@@ -1189,6 +1252,23 @@ impl Vm {
             .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, child);
     }
 
+    /// v1.3 Phase ML — register a MacroLua macro under `name`. Inert
+    /// under non-MacroLua dialects (the macro is stored but the load
+    /// path only consults the registry when
+    /// `self.version == LuaVersion::MacroLua`).
+    ///
+    /// `name` is stored without the leading `@` — source code writes
+    /// `@double(x)` to invoke a macro registered as `"double"`.
+    pub fn define_macro(&mut self, name: &str, m: Box<dyn crate::frontend::macro_expander::Macro>) {
+        self.macro_registry.register(name, m);
+    }
+
+    /// v1.3 Phase ML — drop all MacroLua macros (built-in + custom).
+    /// Mostly useful for tests / dogfood resets.
+    pub fn clear_macros(&mut self) {
+        self.macro_registry.clear();
+    }
+
     /// Parse + compile a chunk and close it over the globals table.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
         // a precompiled (binary) chunk is undumped; source is parsed + compiled
@@ -1200,8 +1280,35 @@ impl Vm {
             });
         }
         let proto = if is_bytecode {
-            crate::vm::dump::undump(src, &mut self.heap, self.version)
-                .map_err(|msg| SyntaxError { line: 0, msg: msg.into_bytes() })?
+            let allow_puc = self.puc_bytecode_loading;
+            crate::vm::dump::undump(src, &mut self.heap, self.version, allow_puc).map_err(
+                |msg| SyntaxError {
+                    line: 0,
+                    msg: msg.into_bytes(),
+                },
+            )?
+        } else if self.version.is_macro_lua() {
+            // v1.3 Phase ML — MacroLua dialect: drain the lexer into a
+            // token vec, run the macro expander pre-pass against the
+            // per-Vm registry, then hand the rewritten stream to
+            // `parse_tokens`. The AST + compiler are dialect-agnostic
+            // because by this point all `@`/quote tokens are gone.
+            let mut lexer = crate::frontend::lexer::Lexer::new(src, self.version);
+            let mut raw: Vec<crate::frontend::token::TokenInfo> = Vec::new();
+            loop {
+                let t = lexer.next_token()?;
+                let eof = matches!(t.tok, crate::frontend::token::Token::Eof);
+                raw.push(t);
+                if eof {
+                    break;
+                }
+            }
+            // Drop the trailing Eof — expander operates on the body and
+            // `parse_tokens` reinserts Eof when it runs out of tokens.
+            raw.pop();
+            let expanded = self.macro_registry.expand(raw)?;
+            let ast = crate::frontend::parse_tokens(expanded, src, self.version)?;
+            compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
         } else {
             let ast = parse(src, self.version)?;
             compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
@@ -1273,13 +1380,12 @@ impl Vm {
         // mmap'd native code. The lookup is one Cell::get + one match —
         // the slow path (compile attempt on first reach) is paid once per
         // Proto.
-        if args.is_empty() {
-            if let Value::Closure(cl) = f
-                && let Some(vs) = self.try_jit_call(cl)
-            {
-                self.public_call_depth -= 1;
-                return Ok(vs);
-            }
+        if args.is_empty()
+            && let Value::Closure(cl) = f
+            && let Some(vs) = self.try_jit_call(cl)
+        {
+            self.public_call_depth -= 1;
+            return Ok(vs);
         }
         let r = self.call_value_impl(f, args, true);
         self.public_call_depth -= 1;
@@ -1372,7 +1478,11 @@ impl Vm {
         // are Float). The JIT's `GetUpval` ValueRead path uses this
         // to default-pin upvalue reads to Float without a tag check.
         let float_only = version <= crate::version::LuaVersion::Lua52;
-        match self.jit.chunk_compiler.try_compile(proto, pre53, float_only) {
+        match self
+            .jit
+            .chunk_compiler
+            .try_compile(proto, pre53, float_only)
+        {
             crate::jit::CompileResult::Compiled {
                 entry,
                 num_args,
@@ -1472,7 +1582,9 @@ impl Vm {
             match num_args {
                 0 => (std::mem::transmute::<*const u8, crate::jit::IntChunkFn>(entry))(),
                 1 => (std::mem::transmute::<*const u8, crate::jit::IntFn1>(entry))(args[0]),
-                2 => (std::mem::transmute::<*const u8, crate::jit::IntFn2>(entry))(args[0], args[1]),
+                2 => {
+                    (std::mem::transmute::<*const u8, crate::jit::IntFn2>(entry))(args[0], args[1])
+                }
                 3 => (std::mem::transmute::<*const u8, crate::jit::IntFn3>(entry))(
                     args[0], args[1], args[2],
                 ),
@@ -1556,7 +1668,11 @@ impl Vm {
     /// boundary and errors instead of suspending. Used by library callbacks
     /// (sort comparator, gsub replacement) that run via synchronous Rust
     /// recursion and so could not be re-entered after a yield.
-    pub(crate) fn call_noyield(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+    pub(crate) fn call_noyield(
+        &mut self,
+        f: Value,
+        args: &[Value],
+    ) -> Result<Vec<Value>, LuaError> {
         self.nny += 1;
         let r = self.call_value(f, args);
         self.nny -= 1;
@@ -1584,7 +1700,8 @@ impl Vm {
 
     /// Read an open-upvalue slot from its owning thread's stack (the live VM
     /// stack if that thread is current, else its saved context).
-    #[doc(hidden)] pub fn read_slot(&self, slot: u32, thread: Option<Gc<Coro>>) -> Value {
+    #[doc(hidden)]
+    pub fn read_slot(&self, slot: u32, thread: Option<Gc<Coro>>) -> Value {
         let s = slot as usize;
         if self.is_current_thread(thread) {
             self.stack[s]
@@ -1929,8 +2046,9 @@ impl Vm {
                         let mut tb = self.error_traceback.take().unwrap_or_default();
                         if let Some(nm) = self.errored_native.take() {
                             let mut prefixed: Vec<u8> = Vec::new();
-                            prefixed
-                                .extend_from_slice(format!("\n\t[C]: in function '{nm}'").as_bytes());
+                            prefixed.extend_from_slice(
+                                format!("\n\t[C]: in function '{nm}'").as_bytes(),
+                            );
                             prefixed.extend(tb);
                             tb = prefixed;
                         }
@@ -2132,8 +2250,16 @@ impl Vm {
     /// a call hook is the param window: ftransfer = 1, ntransfer = nargs.
     /// `is_tail` selects the "tail call" event (PUC `LUA_HOOKTAILCALL`); a
     /// tail-call hook has no matching return hook (PUC luaD_pretailcall).
-    fn hook_call_with(&mut self, from_native: bool, nargs: u32, is_tail: bool) -> Result<(), LuaError> {
-        if self.hook.call && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+    fn hook_call_with(
+        &mut self,
+        from_native: bool,
+        nargs: u32,
+        is_tail: bool,
+    ) -> Result<(), LuaError> {
+        if self.hook.call
+            && !self.in_hook
+            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+        {
             self.hook_ftransfer = 1;
             self.hook_ntransfer = nargs.min(u16::MAX as u32) as u16;
             // PUC 5.1 didn't distinguish tail-call events — every call,
@@ -2141,27 +2267,33 @@ impl Vm {
             // the separate `"tail call"` event (mask `"c"` covers both).
             // 5.1 db.lua :366 pins this with `{"call","call","call","call",
             // "return","tail return","return","tail return"}`.
-            let event: &[u8] =
-                if is_tail && self.version >= LuaVersion::Lua52 { b"tail call" } else { b"call" };
+            let event: &[u8] = if is_tail && self.version >= LuaVersion::Lua52 {
+                b"tail call"
+            } else {
+                b"call"
+            };
             self.run_hook(event, None, from_native)?;
         }
         Ok(())
     }
 
-    fn hook_call(&mut self, from_native: bool, nargs: u32) -> Result<(), LuaError> {
+    pub(crate) fn hook_call(&mut self, from_native: bool, nargs: u32) -> Result<(), LuaError> {
         self.hook_call_with(from_native, nargs, false)
     }
 
     /// Fire the "return" hook on exit from a function, if armed. ftransfer is
     /// the first result slot relative to the activation's func slot, ntransfer
     /// the number of results.
-    fn hook_return(
+    pub(crate) fn hook_return(
         &mut self,
         from_native: bool,
         ftransfer: u32,
         nresults: u32,
     ) -> Result<(), LuaError> {
-        if self.hook.ret && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+        if self.hook.ret
+            && !self.in_hook
+            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+        {
             self.hook_ftransfer = ftransfer.min(u16::MAX as u32) as u16;
             self.hook_ntransfer = nresults.min(u16::MAX as u32) as u16;
             self.run_hook(b"return", None, from_native)?;
@@ -2173,7 +2305,10 @@ impl Vm {
     /// into the activation now returning, *after* its own "return" event.
     /// 5.1 hook mask `"r"` covers both `return` and `tail return`.
     fn hook_tail_return(&mut self) -> Result<(), LuaError> {
-        if self.hook.ret && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+        if self.hook.ret
+            && !self.in_hook
+            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+        {
             self.run_hook(b"tail return", None, false)?;
         }
         Ok(())
@@ -2211,11 +2346,15 @@ impl Vm {
         self.stack.push(func);
         self.stack.extend_from_slice(args);
         self.top = self.stack.len() as u32;
-        frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Cont(NativeCont {
-            kind: ContKind::Meta(MetaCont { action, saved_top }),
-            func_slot: cont_slot,
-            nresults: 1,
-        }));
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Meta(MetaCont { action, saved_top }),
+                func_slot: cont_slot,
+                nresults: 1,
+            }),
+        );
         let saved_tm = self.pending_tm.replace(tm);
         // begin_call drives a Lua metamethod through the loop (returns true) or
         // runs a native one inline (returns false, leaving results at cont_slot
@@ -2266,23 +2405,13 @@ impl Vm {
         match step {
             MmOut::Done(v) => self.cond_skip(v.truthy(), k),
             MmOut::Mm { func, .. } => {
-                self.begin_meta_call(
-                    func,
-                    &[l, r],
-                    MetaAction::Compare { k, negate: false },
-                    tm,
-                )?;
+                self.begin_meta_call(func, &[l, r], MetaAction::Compare { k, negate: false }, tm)?;
             }
             MmOut::CompareSynth { func } => {
                 // ≤5.3 `__le` falls back to `not __lt(r, l)`; the swap and
                 // negation are driven through `MetaAction::Compare` so the
                 // metamethod call can yield like any other compare.
-                self.begin_meta_call(
-                    func,
-                    &[r, l],
-                    MetaAction::Compare { k, negate: true },
-                    "lt",
-                )?;
+                self.begin_meta_call(func, &[r, l], MetaAction::Compare { k, negate: true }, "lt")?;
             }
         }
         Ok(())
@@ -2295,7 +2424,11 @@ impl Vm {
             MetaAction::Store { dst } => self.stack[dst as usize] = result,
             MetaAction::Discard => {}
             MetaAction::Compare { k, negate } => {
-                let t = if negate { !result.truthy() } else { result.truthy() };
+                let t = if negate {
+                    !result.truthy()
+                } else {
+                    result.truthy()
+                };
                 self.cond_skip(t, k);
             }
             MetaAction::Concat { dst, base_a } => {
@@ -2373,7 +2506,12 @@ impl Vm {
         v.type_name().to_string()
     }
 
-    fn call_at(&mut self, func_slot: u32, nargs: u32, from_c: bool) -> Result<Vec<Value>, LuaError> {
+    fn call_at(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        from_c: bool,
+    ) -> Result<Vec<Value>, LuaError> {
         if self.begin_call(func_slot, Some(nargs), -1, from_c)? {
             self.exec()
         } else {
@@ -2504,7 +2642,10 @@ impl Vm {
         // values alive across calls/yields. Trace the whole vector;
         // unused slots (post-`unpin_all`) carry Value::Nil which the
         // GC ignores.
-        roots.extend_from_slice(&self.host_roots);
+        for slot in &self.host_roots {
+            // v1.3 SR — free-list slots carry Value::Nil (GC no-op).
+            roots.push(slot.value);
+        }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
         if let Some(h) = self.hook.func {
@@ -2830,8 +2971,7 @@ impl Vm {
             out: &mut Vec<(u32, Vec<u32>)>,
         ) {
             for ct in proto.traces.borrow().iter() {
-                let counts: Vec<u32> =
-                    ct.exit_hit_counts.iter().map(|c| c.get()).collect();
+                let counts: Vec<u32> = ct.exit_hit_counts.iter().map(|c| c.get()).collect();
                 out.push((ct.head_pc, counts));
             }
             for inner in proto.protos.iter() {
@@ -2947,7 +3087,8 @@ impl Vm {
     /// P12-S4-step4b — last live Lua frame (the trace head's frame at
     /// dispatch time). The frame-materialization helper reads `.base`
     /// to compute offsets for each inlined frame's window.
-    #[doc(hidden)] pub fn jit_last_lua_frame(&self) -> Option<Frame> {
+    #[doc(hidden)]
+    pub fn jit_last_lua_frame(&self) -> Option<Frame> {
         match self.frames.last() {
             Some(CallFrame::Lua(f)) => Some(*f),
             _ => None,
@@ -2958,7 +3099,8 @@ impl Vm {
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
-    #[doc(hidden)] pub fn jit_ensure_stack(&mut self, need: usize) {
+    #[doc(hidden)]
+    pub fn jit_ensure_stack(&mut self, need: usize) {
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
         }
@@ -2974,27 +3116,25 @@ impl Vm {
     ///
     /// Returns are i64-shaped so the cranelift import sig stays
     /// trivial (i64 → i64 mapping).
-    #[doc(hidden)] pub fn jit_op_close(&mut self, start_offset: u32) -> i64 {
+    #[doc(hidden)]
+    pub fn jit_op_close(&mut self, start_offset: u32) -> i64 {
         if self.jit.pending_err.is_some() {
             return 1;
         }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err =
-                Some(self.rt_err("JIT op_close: no Lua frame"));
+            self.jit.pending_err = Some(self.rt_err("JIT op_close: no Lua frame"));
             return 1;
         };
         let from = f.base + start_offset;
         let has_handler = self.tbc.iter().any(|&s| {
-            s >= from
-                && {
-                    let v = self.stack[s as usize];
-                    !matches!(v, Value::Nil | Value::Bool(false))
-                }
+            s >= from && {
+                let v = self.stack[s as usize];
+                !matches!(v, Value::Nil | Value::Bool(false))
+            }
         });
         if has_handler {
-            self.jit.pending_err = Some(
-                self.rt_err("JIT deopt: Op::Close with active tbc handler"),
-            );
+            self.jit.pending_err =
+                Some(self.rt_err("JIT deopt: Op::Close with active tbc handler"));
             return 1;
         }
         self.close_from(from);
@@ -3024,12 +3164,8 @@ impl Vm {
     /// `raw_bits` is the trace Variable's `use_var` payload
     /// (i64-shaped — Float is its bit-pattern, Table/Closure is the
     /// raw `Gc::as_ptr` cast).
-    #[doc(hidden)] pub fn jit_spill_stack(
-        &mut self,
-        slot_offset: u32,
-        tag: u8,
-        raw_bits: u64,
-    ) {
+    #[doc(hidden)]
+    pub fn jit_spill_stack(&mut self, slot_offset: u32, tag: u8, raw_bits: u64) {
         let Some(f) = self.jit_last_lua_frame() else {
             self.jit.pending_err =
                 Some(self.rt_err("JIT spill: no Lua frame on jit_last_lua_frame()"));
@@ -3042,10 +3178,7 @@ impl Vm {
         // SAFETY: caller (trace JIT IR emit) provides matching
         // `(tag, raw_bits)` — same shape produced by Value::unpack.
         let v = unsafe {
-            crate::runtime::Value::pack(
-                tag,
-                crate::runtime::value::RawVal { zero: raw_bits },
-            )
+            crate::runtime::Value::pack(tag, crate::runtime::value::RawVal { zero: raw_bits })
         };
         self.stack[idx] = v;
     }
@@ -3071,11 +3204,8 @@ impl Vm {
     /// model). The interp's previous execution of the same op
     /// already populated the slot with the right tag — the trace
     /// only needs to swap in its current raw value.
-    #[doc(hidden)] pub fn jit_stack_update_raw(
-        &mut self,
-        slot_offset: u32,
-        raw_bits: u64,
-    ) {
+    #[doc(hidden)]
+    pub fn jit_stack_update_raw(&mut self, slot_offset: u32, raw_bits: u64) {
         let Some(f) = self.jit_last_lua_frame() else {
             return;
         };
@@ -3086,10 +3216,7 @@ impl Vm {
         let (tag, _) = self.stack[idx].unpack();
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         self.stack[idx] = unsafe {
-            crate::runtime::Value::pack(
-                tag,
-                crate::runtime::value::RawVal { zero: raw_bits },
-            )
+            crate::runtime::Value::pack(tag, crate::runtime::value::RawVal { zero: raw_bits })
         };
     }
 
@@ -3106,17 +3233,13 @@ impl Vm {
     /// The frame-push detection uses `pre/post frames.len()` and
     /// unwinds any pushed frames before deopting, so the
     /// dispatcher's existing deopt path sees a clean stack.
-    #[doc(hidden)] pub fn jit_op_concat(
-        &mut self,
-        slot_offset: u32,
-        n: i32,
-    ) -> i64 {
+    #[doc(hidden)]
+    pub fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64 {
         if self.jit.pending_err.is_some() {
             return -1;
         }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err =
-                Some(self.rt_err("JIT Concat: no Lua frame"));
+            self.jit.pending_err = Some(self.rt_err("JIT Concat: no Lua frame"));
             return -1;
         };
         let abs_a = f.base + slot_offset;
@@ -3135,9 +3258,7 @@ impl Vm {
             return -1;
         }
         if post_frames > pre_frames {
-            self.jit.pending_err = Some(
-                self.rt_err("JIT Concat: __concat metamethod path"),
-            );
+            self.jit.pending_err = Some(self.rt_err("JIT Concat: __concat metamethod path"));
             return -1;
         }
         0
@@ -3152,8 +3273,9 @@ impl Vm {
     /// Safety: the returned pointer is valid until
     /// `jit_str_buf_release` is called or the Vm is dropped. The
     /// caller MUST not retain it across `enter_jit` boundaries.
-    #[doc(hidden)] pub fn jit_str_buf_acquire(&mut self) -> *mut Vec<u8> {
-        let buf = self.jit.str_buf_pool.pop().unwrap_or_else(Vec::new);
+    #[doc(hidden)]
+    pub fn jit_str_buf_acquire(&mut self) -> *mut Vec<u8> {
+        let buf = self.jit.str_buf_pool.pop().unwrap_or_default();
         // Move into a Box so the pointer is stable until release.
         Box::into_raw(Box::new(buf))
     }
@@ -3165,7 +3287,9 @@ impl Vm {
     ///
     /// Safety: `buf` must have been returned by a prior
     /// `jit_str_buf_acquire` on the same Vm.
-    #[doc(hidden)] pub fn jit_str_buf_release(&mut self, buf: *mut Vec<u8>) {
+    #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` round-trips through `Box::into_raw`; SAFETY documented below.
+    pub fn jit_str_buf_release(&mut self, buf: *mut Vec<u8>) {
         if buf.is_null() {
             return;
         }
@@ -3188,11 +3312,9 @@ impl Vm {
     ///
     /// Safety: `buf` from prior `acquire`; `str_ptr` from the
     /// trace's piece slot raw bits.
-    #[doc(hidden)] pub fn jit_str_buf_extend(
-        &mut self,
-        buf: *mut Vec<u8>,
-        str_ptr: i64,
-    ) -> i64 {
+    #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` from prior `acquire`; `str_ptr` from trace piece slot; SAFETY documented below.
+    pub fn jit_str_buf_extend(&mut self, buf: *mut Vec<u8>, str_ptr: i64) -> i64 {
         if buf.is_null() || str_ptr == 0 {
             return -1;
         }
@@ -3200,9 +3322,7 @@ impl Vm {
         let buf = unsafe { &mut *buf };
         let lua_str_ptr = str_ptr as *const crate::runtime::string::LuaStr;
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        let bytes = unsafe {
-            crate::runtime::string::bytes_of(lua_str_ptr)
-        };
+        let bytes = unsafe { crate::runtime::string::bytes_of(lua_str_ptr) };
         buf.extend_from_slice(bytes);
         0
     }
@@ -3216,10 +3336,9 @@ impl Vm {
     ///
     /// Safety: `buf` from prior `acquire`. The buffer is left
     /// CLEAR (drained) ready for `release`.
-    #[doc(hidden)] pub fn jit_str_buf_intern(
-        &mut self,
-        buf: *mut Vec<u8>,
-    ) -> i64 {
+    #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `buf` from prior `acquire`; SAFETY documented below.
+    pub fn jit_str_buf_intern(&mut self, buf: *mut Vec<u8>) -> i64 {
         if buf.is_null() {
             return 0;
         }
@@ -3245,7 +3364,9 @@ impl Vm {
     ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
     ///     `luna_jit_stack_tag` call by reading the buffer via
     ///     cranelift `stack_load` IR instead. Returns -1 on deopt.
-    #[doc(hidden)] pub fn jit_op_tforcall(
+    #[doc(hidden)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `ctrl_out`/`key_out`/`val_out` are caller-stack buffers from Cranelift-emitted prologue; SAFETY documented below.
+    pub fn jit_op_tforcall(
         &mut self,
         slot_offset: u32,
         nvars: i32,
@@ -3257,8 +3378,7 @@ impl Vm {
             return -1;
         }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err =
-                Some(self.rt_err("JIT TForCall: no Lua frame"));
+            self.jit.pending_err = Some(self.rt_err("JIT TForCall: no Lua frame"));
             return -1;
         };
         let abs = f.base + slot_offset;
@@ -3270,8 +3390,7 @@ impl Vm {
         let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]
             && std::ptr::fn_addr_eq(
                 n.f,
-                crate::vm::builtins::ipairs_iter
-                    as crate::runtime::value::NativeFn,
+                crate::vm::builtins::ipairs_iter as crate::runtime::value::NativeFn,
             )
             && let Value::Table(t) = self.stack[(abs + 1) as usize]
             && t.metatable().is_none()
@@ -3305,8 +3424,7 @@ impl Vm {
             self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
             self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
             if !matches!(self.stack[abs as usize], Value::Native(_)) {
-                self.jit.pending_err =
-                    Some(self.rt_err("JIT TForCall: non-Native iter (v2 only)"));
+                self.jit.pending_err = Some(self.rt_err("JIT TForCall: non-Native iter (v2 only)"));
                 return -1;
             }
             if let Err(e) = self.begin_call(abs + 4, Some(2), nvars, false) {
@@ -3319,9 +3437,7 @@ impl Vm {
         // reload via cranelift `stack_load` instead of separate
         // `luna_jit_stack_load` helper calls.
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        let ctrl_raw = unsafe {
-            self.stack[(abs + 2) as usize].unpack().1.zero
-        };
+        let ctrl_raw = unsafe { self.stack[(abs + 2) as usize].unpack().1.zero };
         let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let key_raw = unsafe { key_rv.zero };
@@ -3345,7 +3461,8 @@ impl Vm {
     /// Lua frame. Used to reload trace IR `Variable`s after a
     /// helper has written to `vm.stack` directly (e.g. TForCall's
     /// iter results land at `R[A+4..A+4+nvars]`).
-    #[doc(hidden)] pub fn jit_stack_load(&mut self, slot_offset: u32) -> i64 {
+    #[doc(hidden)]
+    pub fn jit_stack_load(&mut self, slot_offset: u32) -> i64 {
         let Some(f) = self.jit_last_lua_frame() else {
             return 0;
         };
@@ -3364,7 +3481,8 @@ impl Vm {
     /// to dispatch on the iterator's return-key tag at runtime
     /// (`raw::NIL` → loop end exit, `raw::INT` → continue, other →
     /// deopt for v2).
-    #[doc(hidden)] pub fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {
+    #[doc(hidden)]
+    pub fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {
         let Some(f) = self.jit_last_lua_frame() else {
             return crate::runtime::value::raw::NIL;
         };
@@ -3384,29 +3502,34 @@ impl Vm {
     /// because the lowerer bails Op::Call C != 2), and the caller
     /// has already called `jit_ensure_stack` to cover
     /// `[0..base + cl.proto.max_stack)`.
-    #[doc(hidden)] pub fn jit_push_inlined_frame(
+    #[doc(hidden)]
+    pub fn jit_push_inlined_frame(
         &mut self,
         cl: Gc<LuaClosure>,
         base: u32,
         pc: u32,
         nresults: i32,
     ) {
-        frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Lua(Frame {
-            closure: cl,
-            base,
-            pc,
-            // Lua call ABI: callee R[0] sits at caller R[A+1], so
-            // callee.base = caller.base + A + 1; func_slot is
-            // caller.base + A = callee.base - 1.
-            func_slot: base - 1,
-            n_varargs: 0,
-            nresults,
-            hook_oldpc: u32::MAX,
-            from_c: false,
-            tm: None,
-            is_hook: false,
-            tailcalls: 0,
-        }));
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            CallFrame::Lua(Frame {
+                closure: cl,
+                base,
+                pc,
+                // Lua call ABI: callee R[0] sits at caller R[A+1], so
+                // callee.base = caller.base + A + 1; func_slot is
+                // caller.base + A = callee.base - 1.
+                func_slot: base - 1,
+                n_varargs: 0,
+                nresults,
+                hook_oldpc: u32::MAX,
+                from_c: false,
+                tm: None,
+                is_hook: false,
+                tailcalls: 0,
+            }),
+        );
     }
 
     /// Toggle precompiled-chunk loading. Default `true`. Sandbox embedders
@@ -3419,6 +3542,20 @@ impl Vm {
     /// Current bytecode-loading gate state.
     pub fn bytecode_loading(&self) -> bool {
         self.bytecode_loading
+    }
+
+    /// Toggle PUC `.luac` bytecode loading. Default `false` — PUC
+    /// bytecode is a strictly larger trust surface than luna's own dump
+    /// format (third-party toolchain bugs, malformed chunks, unknown
+    /// opcode shapes). Enable only for trusted PUC chunks. Per-dialect
+    /// translators (Phase LB Wave 2) live in `crate::vm::dump::puc`.
+    pub fn set_puc_bytecode_loading(&mut self, enabled: bool) {
+        self.puc_bytecode_loading = enabled;
+    }
+
+    /// Current PUC bytecode-loading gate state.
+    pub fn puc_bytecode_loading(&self) -> bool {
+        self.puc_bytecode_loading
     }
 
     /// Take the error traceback captured at the latest error point and
@@ -3703,11 +3840,8 @@ impl Vm {
                         if proto.trace_gave_up.get() {
                             return Ok(true);
                         }
-                        let call_already_cached = proto
-                            .traces
-                            .borrow()
-                            .iter()
-                            .any(|t| t.head_pc == 0);
+                        let call_already_cached =
+                            proto.traces.borrow().iter().any(|t| t.head_pc == 0);
                         if c >= crate::jit::trace::CALL_HOT_THRESHOLD
                             && self.jit.active_trace.is_none()
                             && !call_already_cached
@@ -3730,11 +3864,10 @@ impl Vm {
                                 let (tag, _) = self.stack[base_us + i].unpack();
                                 entry_tags.push(tag);
                             }
-                            self.jit.active_trace = Some(Box::new(
-                                crate::jit::trace::TraceRecord::start(
+                            self.jit.active_trace =
+                                Some(Box::new(crate::jit::trace::TraceRecord::start(
                                     cl.proto, 0, entry_tags, true,
-                                ),
-                            ));
+                                )));
                             self.jit.recording_frame_base = frame_idx;
                         }
                     }
@@ -3748,11 +3881,10 @@ impl Vm {
                     // executor to drive the returned future).
                     if nc.is_async {
                         if !self.async_mode {
-                            let s = Value::Str(self.heap.intern(
-                                b"async native called in sync context",
-                            ));
-                            self.last_error_kind =
-                                crate::vm::error::LuaErrorKind::Runtime;
+                            let s = Value::Str(
+                                self.heap.intern(b"async native called in sync context"),
+                            );
+                            self.last_error_kind = crate::vm::error::LuaErrorKind::Runtime;
                             return Err(LuaError(s));
                         }
                         // Same root-up bookkeeping as the sync path:
@@ -3761,6 +3893,25 @@ impl Vm {
                         // keeps the arg window live.
                         self.native_nresults = nresults;
                         self.gc_top = func_slot + nargs + 1;
+                        // v1.3 Phase AS — fire the "call" hook BEFORE
+                        // building the future. Mirrors the sync native
+                        // path's `hook_call(true, nargs)` site
+                        // (`exec.rs` further down) so embedders with a
+                        // Rust debug hook installed see a Call event
+                        // for async natives identical to the sync
+                        // path. The matching "return" hook fires from
+                        // `commit_async_native_result` in
+                        // `async_drive.rs` after the future resolves.
+                        // Placement follows audit §"Open questions"
+                        // Q6: after the `native_nresults` / `gc_top`
+                        // pin, before the future is constructed, so a
+                        // hook body that triggers GC observes the
+                        // correct pinned window. On hook error the
+                        // sentinel never returns and
+                        // `pending_async_native_*` remain `None` —
+                        // the executor sees `DispatchOutcome::Error`
+                        // (audit §A.1 edge cases).
+                        self.hook_call(true, nargs)?;
                         // Transmute the stored NativeFn back to its
                         // real AsyncNativeFn shape. Sound because
                         // `set_async_native` / `create_async_native`
@@ -3780,13 +3931,12 @@ impl Vm {
                         // Stash the future + post-call context for
                         // `drive_one` to surface to `EvalFuture::poll`.
                         self.pending_async_native_fut = Some(fut);
-                        self.pending_async_native_ctx =
-                            Some(AsyncNativeCallCtx {
-                                func_slot,
-                                nargs,
-                                nresults,
-                                gc_top: self.gc_top,
-                            });
+                        self.pending_async_native_ctx = Some(AsyncNativeCallCtx {
+                            func_slot,
+                            nargs,
+                            nresults,
+                            gc_top: self.gc_top,
+                        });
                         // Sentinel Err walked up to `drive_one` (same
                         // shape as `host_yield_pending`'s budget yield).
                         // Value::Nil — never seen by user code.
@@ -3845,17 +3995,18 @@ impl Vm {
                     // `AssertUnwindSafe` is sound because the caller is the
                     // dispatch loop and any half-done state is fenced behind
                     // the immediate Err return below.
-                    use std::panic::{catch_unwind, AssertUnwindSafe};
-                    let result = match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
-                        Ok(r) => r,
-                        Err(payload) => {
-                            let msg = panic_payload_str(&payload);
-                            let s = Value::Str(
-                                self.heap.intern(format!("native panic: {msg}").as_bytes()),
-                            );
-                            Err(LuaError(s))
-                        }
-                    };
+                    use std::panic::{AssertUnwindSafe, catch_unwind};
+                    let result =
+                        match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
+                            Ok(r) => r,
+                            Err(payload) => {
+                                let msg = panic_payload_str(&payload);
+                                let s = Value::Str(
+                                    self.heap.intern(format!("native panic: {msg}").as_bytes()),
+                                );
+                                Err(LuaError(s))
+                            }
+                        };
                     let nret = match result {
                         Ok(n) => n,
                         Err(e) => {
@@ -3883,7 +4034,10 @@ impl Vm {
                     // copying back for `finish_results`. db.lua :541 reads
                     // `getinfo("r").ftransfer` + `getlocal` to inspect a
                     // returning native's results this way.
-                    if self.hook.ret && !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+                    if self.hook.ret
+                        && !self.in_hook
+                        && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+                    {
                         let res_dst = func_slot + nargs + 1;
                         let need = (res_dst + nret) as usize;
                         if self.stack.len() < need {
@@ -4004,23 +4158,27 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..need)
                 .fill(Value::Nil);
         }
-        frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Lua(Frame {
-            closure: cl,
-            base,
-            pc: 0,
-            func_slot,
-            nresults,
-            hook_oldpc: u32::MAX,
-            from_c,
-            n_varargs,
-            // single-shot consume: `close_slots` sets pending_tm before each
-            // handler call; the next Lua frame born is that handler's.
-            tm: self.pending_tm.take(),
-            // `run_hook` sets `pending_is_hook` before dispatching the user
-            // hook so its frame reports `namewhat = "hook"` via getinfo.
-            is_hook: std::mem::take(&mut self.pending_is_hook),
-            tailcalls: std::mem::take(&mut self.pending_tailcalls),
-        }));
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            CallFrame::Lua(Frame {
+                closure: cl,
+                base,
+                pc: 0,
+                func_slot,
+                nresults,
+                hook_oldpc: u32::MAX,
+                from_c,
+                n_varargs,
+                // single-shot consume: `close_slots` sets pending_tm before each
+                // handler call; the next Lua frame born is that handler's.
+                tm: self.pending_tm.take(),
+                // `run_hook` sets `pending_is_hook` before dispatching the user
+                // hook so its frame reports `namewhat = "hook"` via getinfo.
+                is_hook: std::mem::take(&mut self.pending_is_hook),
+                tailcalls: std::mem::take(&mut self.pending_tailcalls),
+            }),
+        );
         // PUC 5.1 `LUAI_COMPAT_VARARG`: populate the hidden `arg` local with
         // `{ n = n_varargs, [1] = e1, [2] = e2, … }`. The compiler reserved
         // the slot at `base + nparams`; the extras sit just below `base` from
@@ -4040,7 +4198,8 @@ impl Vm {
                     let _ = tm.set_int(&mut self.heap, (i + 1) as i64, v);
                 }
                 let nk = Value::Str(self.heap.intern(b"n"));
-                tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64)).expect("'n' key");
+                tm.set(&mut self.heap, nk, Value::Int(n_varargs as i64))
+                    .expect("'n' key");
             }
             // once-per-table barrier mirrors SETLIST: t is born BLACK during
             // Propagate and the bulk `set_int`/`set` calls above don't barrier
@@ -4081,11 +4240,15 @@ impl Vm {
             return Err(self.rt_err("C stack overflow"));
         }
         self.pcall_depth += 1;
-        frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Cont(NativeCont {
-            kind: ContKind::Pcall,
-            func_slot,
-            nresults,
-        }));
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Pcall,
+                func_slot,
+                nresults,
+            }),
+        );
         // call f (slot func_slot+1) with the remaining args, asking for all
         // results; a yield or error inside propagates with the continuation kept
         // on the stack (caught by `unwind` / preserved across a yield).
@@ -4096,7 +4259,12 @@ impl Vm {
     /// `xpcall(f, msgh, ...)` (PUC luaB_xpcall): like `begin_pcall`, but the
     /// message handler is stashed in the continuation and the arguments are
     /// shifted down over the handler's slot so `f`'s args are contiguous.
-    fn begin_xpcall(&mut self, func_slot: u32, nargs: u32, nresults: i32) -> Result<bool, LuaError> {
+    fn begin_xpcall(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<bool, LuaError> {
         if nargs < 2 {
             return Err(crate::vm::builtins::raise_str(
                 self,
@@ -4115,11 +4283,15 @@ impl Vm {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
         }
         self.top = func_slot + 2 + nfargs;
-        frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Cont(NativeCont {
-            kind: ContKind::Xpcall { handler },
-            func_slot,
-            nresults,
-        }));
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Xpcall { handler },
+                func_slot,
+                nresults,
+            }),
+        );
         self.begin_call(func_slot + 1, Some(nfargs), -1, true)?;
         Ok(true)
     }
@@ -4135,11 +4307,15 @@ impl Vm {
         // layout becomes [mm@func_slot, t@func_slot+1]; call mm(t) wanting 4.
         self.stack[func_slot as usize] = mm;
         self.top = func_slot + 2;
-        frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Cont(NativeCont {
-            kind: ContKind::Pairs,
-            func_slot,
-            nresults,
-        }));
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Pairs,
+                func_slot,
+                nresults,
+            }),
+        );
         self.begin_call(func_slot, Some(1), 4, true)?;
         Ok(true)
     }
@@ -4197,7 +4373,8 @@ impl Vm {
 
     // ---- open upvalues ----
 
-    #[doc(hidden)] pub fn find_or_create_upval(&mut self, slot: u32) -> Gc<Upvalue> {
+    #[doc(hidden)]
+    pub fn find_or_create_upval(&mut self, slot: u32) -> Gc<Upvalue> {
         match self.open_upvals.binary_search_by_key(&slot, |&(s, _)| s) {
             Ok(i) => self.open_upvals[i].1,
             Err(i) => {
@@ -4239,14 +4416,11 @@ impl Vm {
             let f = self.top_frame();
             let reg = slot - f.base;
             let pc = (f.pc as usize).saturating_sub(1);
-            let where_ = match crate::vm::objname::getlocalname(&f.closure.proto, reg, pc)
-            {
+            let where_ = match crate::vm::objname::getlocalname(&f.closure.proto, reg, pc) {
                 Some(n) => format!("variable '{n}'"),
                 None => "to-be-closed slot".to_string(),
             };
-            return Err(self.rt_err(&format!(
-                "{where_} got a non-closable value (a {tn} value)"
-            )));
+            return Err(self.rt_err(&format!("{where_} got a non-closable value (a {tn} value)")));
         }
         debug_assert!(self.tbc.last().is_none_or(|&s| s < slot));
         self.tbc.push(slot);
@@ -4415,11 +4589,19 @@ impl Vm {
             // PUC `luaF_close` flags the handler frame as "metamethod 'close'"
             // for traceback / getinfo.
             let saved_tm = self.pending_tm.replace("close");
-            frames_push_sync(&mut self.frames, &mut self.frames_top, CallFrame::Cont(NativeCont {
-                kind: ContKind::Close(CloseCont { from, pending, after }),
-                func_slot,
-                nresults: 0,
-            }));
+            frames_push_sync(
+                &mut self.frames,
+                &mut self.frames_top,
+                CallFrame::Cont(NativeCont {
+                    kind: ContKind::Close(CloseCont {
+                        from,
+                        pending,
+                        after,
+                    }),
+                    func_slot,
+                    nresults: 0,
+                }),
+            );
             // PUC luaF_close runs a normal close *within* the closing
             // function's activation (debug parent = that function); during an
             // error unwind the function's frame is already gone and the
@@ -4451,7 +4633,11 @@ impl Vm {
                 Some(e) => Err(LuaError(e)),
                 None => Ok(None),
             },
-            AfterClose::Return { abs_a, nret, from_native } => match pending {
+            AfterClose::Return {
+                abs_a,
+                nret,
+                from_native,
+            } => match pending {
                 Some(e) => Err(LuaError(e)),
                 None => self.complete_return(abs_a, nret, from_native, entry_depth),
             },
@@ -4527,7 +4713,9 @@ impl Vm {
         for _ in 0..tailcalls {
             self.hook_tail_return()?;
         }
-        let CallFrame::Lua(fr) = frames_pop_sync(&mut self.frames, &mut self.frames_top).expect("no frame") else {
+        let CallFrame::Lua(fr) =
+            frames_pop_sync(&mut self.frames, &mut self.frames_top).expect("no frame")
+        else {
             unreachable!("returning from a non-Lua frame")
         };
         for i in 0..nret {
@@ -4544,7 +4732,8 @@ impl Vm {
         Ok(None)
     }
 
-    #[doc(hidden)] pub fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
+    #[doc(hidden)]
+    pub fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
         match cl.upvals()[idx as usize].state() {
             UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
             UpvalState::Closed(v) => v,
@@ -4591,7 +4780,8 @@ impl Vm {
         }
     }
 
-    #[doc(hidden)] pub fn rt_err(&mut self, msg: &str) -> LuaError {
+    #[doc(hidden)]
+    pub fn rt_err(&mut self, msg: &str) -> LuaError {
         let text = match self.position_prefix() {
             Some(p) => format!("{p}{msg}"),
             None => msg.to_string(),
@@ -4956,7 +5146,9 @@ impl Vm {
                     self.tbc.retain(|&s| s < func_slot);
                     match self.drive_close(cc.from, Some(err), cc.after, entry_depth) {
                         Ok(Some(_)) => {
-                            unreachable!("Block / Return / ResumeUnwind never return host values mid-unwind")
+                            unreachable!(
+                                "Block / Return / ResumeUnwind never return host values mid-unwind"
+                            )
                         }
                         Ok(None) => return Unwound::Caught,
                         Err(e) => {
@@ -4994,9 +5186,7 @@ impl Vm {
                             let mut capped = false;
                             loop {
                                 if iters >= MSGH_CAP && !capped {
-                                    cur_err = Value::Str(
-                                        self.heap.intern(b"C stack overflow"),
-                                    );
+                                    cur_err = Value::Str(self.heap.intern(b"C stack overflow"));
                                     capped = true;
                                 }
                                 iters += 1;
@@ -5137,8 +5327,7 @@ impl Vm {
                         // distinguish budget exhaustion from a
                         // generic Runtime error and retry / give up
                         // accordingly.
-                        self.last_error_kind =
-                            crate::vm::error::LuaErrorKind::InstrBudget;
+                        self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
                         let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
                         return Err(LuaError(s));
                     }
@@ -5298,15 +5487,13 @@ impl Vm {
                 //   Recording any deeper would just bloat the IR; close
                 //   with the body we have. Lowerer's existing length
                 //   gate + InlineAbort path handles short bodies.
-                let returned_past_head =
-                    self.frames.len() <= self.jit.recording_frame_base;
+                let returned_past_head = self.frames.len() <= self.jit.recording_frame_base;
                 let cur_depth = if returned_past_head {
                     0
                 } else {
                     self.frames.len() - 1 - self.jit.recording_frame_base
                 };
-                let depth_cap_hit =
-                    cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
+                let depth_cap_hit = cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
                 let rec = self.jit.active_trace.as_mut().expect("just checked Some");
                 let at_head_loop = cur_depth == 0
                     && !rec.ops.is_empty()
@@ -5375,8 +5562,7 @@ impl Vm {
                     rec.self_link_kind = Some(kind);
                 }
                 let should_close =
-                    at_head_loop || returned_past_head || depth_cap_hit
-                        || self_link_trip.is_some();
+                    at_head_loop || returned_past_head || depth_cap_hit || self_link_trip.is_some();
                 if should_close {
                     // P13-S13-H — long-trace bias: a call-triggered
                     // recording that closed with a very short body
@@ -5483,162 +5669,155 @@ impl Vm {
                         // P13-S13-I — bump discard count BEFORE
                         // dropping the recording so the next
                         // close sees the updated counter.
-                        rec.head_proto
-                            .trace_discard_count
-                            .set(prior_discards + 1);
+                        rec.head_proto.trace_discard_count.set(prior_discards + 1);
                         self.jit.counters.closed += 1;
-                        self.jit.counters.closed_lens.push((
-                            rec.is_call_triggered,
-                            rec.ops.len(),
-                        ));
+                        self.jit
+                            .counters
+                            .closed_lens
+                            .push((rec.is_call_triggered, rec.ops.len()));
                         self.jit.active_trace = None;
                         // Continue with interp loop — don't
                         // fall through to compile path.
                         // The op at `pc` hasn't dispatched yet;
                         // the outer loop iteration handles it.
                     } else {
-                    rec.closed = true;
-                    // P12-S2.C — detach the closed record, then try
-                    // to compile it. Dedup by `head_pc`: a Proto
-                    // already carrying a CompiledTrace for this PC
-                    // skips recompile (the hot counter caps
-                    // re-recording at `u32::MAX / 2` anyway, but
-                    // explicit dedup keeps `Proto.traces` short
-                    // for the S3 dispatcher's linear scan).
-                    //
-                    // No `Vm::run` change for failure: we just bump
-                    // the failed counter and drop the record. S3
-                    // will read `Proto.traces` to decide whether to
-                    // dispatch — until then, this is bookkeeping.
-                    let head_pc_val = rec.head_pc;
-                    let closed_record = self
-                        .jit
-                        .active_trace
-                        .take()
-                        .expect("active_trace was Some this branch");
-                    self.jit.counters.closed += 1;
-                    self.jit.counters.closed_lens.push((
-                        closed_record.is_call_triggered,
-                        closed_record.ops.len(),
-                    ));
-                    // P12-S5-B fix: cache the trace on the
-                    // recorder's *head proto*, not the current
-                    // closure's proto. For non-recursive
-                    // call-triggered traces, close fires after
-                    // `Return1` pops the callee frame — `cl` at
-                    // that point is the CALLER's closure, while
-                    // `closed_record.head_proto` is the CALLEE's
-                    // proto (the one we actually want the trace
-                    // to be discoverable from on the next call).
-                    // Self-recursive fib closed via depth-cap
-                    // mid-recursion so `cl.proto == head_proto`
-                    // happened to coincide — this fix makes that
-                    // accidental coincidence intentional.
-                    let head_proto = closed_record.head_proto;
-                    let already_cached = head_proto
-                        .traces
-                        .borrow()
-                        .iter()
-                        .any(|t| t.head_pc == head_pc_val);
-                    if !already_cached {
-                        // Internal-loop = true: the trace runs in
-                        // a native loop until a cmp side-exits, so
-                        // the dispatcher's per-entry marshal cost
-                        // amortizes across the whole run of
-                        // iterations the loop's recorded direction
-                        // stays valid. The lowerer auto-downgrades
-                        // to one-shot for cmp-less or Call-truncating
-                        // traces.
-                        // P15-A v2-C-A6-5 — side traces MUST NOT
-                        // internal-loop. The parent's recorded prefix
-                        // (ops at PCs < side trace's head_pc) defines
-                        // values for registers the child's body reads
-                        // without re-writing each iter — e.g. for
-                        // s12_step_b, parent's `pc=19 Add R[12] = R[1]
-                        // + R[11]` sets R[12], and the child trace
-                        // (head_pc=24) re-runs `pc=20 Move R[1] =
-                        // R[12]` each iter via its outer ForLoop
-                        // internal-loop, ALWAYS reading the stale
-                        // entry-time R[12]. The parent's Add never
-                        // re-runs during child's loop, so R[1] gets
-                        // pinned to one stale value. Force one-shot
-                        // for side traces: each parent-exit round-
-                        // trips through dispatcher → parent's Add
-                        // runs → side trace runs ONE iter → return.
-                        let opts = crate::jit::trace::CompileOptions {
-                            internal_loop: closed_record
-                                .side_trace_parent
-                                .is_none(),
-                            pre53: self.version() <= LuaVersion::Lua53,
-                        };
-                        // v1.1 A1 Session A — route through trace_compiler.
-                        match self.jit.trace_compiler.try_compile_trace(
-                            &closed_record,
-                            opts,
-                        ) {
-                            Some(mut ct) => {
-                                // P12-S5-A/B/C — tally Sinkable sites
-                                // + actually-sunk-emit sites + materialise
-                                // emit sites before moving `ct` into
-                                // Proto.traces.
-                                self.jit.counters.sinkable_seen +=
-                                    ct.sinkable_sites_seen as u64;
-                                self.jit.counters.accum_bufferable_seen +=
-                                    ct.accum_bufferable_seen as u64;
-                                self.jit.counters.sunk_alloc +=
-                                    ct.sunk_alloc_seen as u64;
-                                self.jit.counters.materialize_emit +=
-                                    ct.materialize_emit_count as u64;
-                                self.jit.counters.closure_emit +=
-                                    ct.closure_seen as u64;
-                                if ct.is_inline_abort_close {
-                                    self.jit.counters.inline_abort += 1;
-                                }
-                                if let Some(reason) = ct.dispatch_off_reason {
-                                    self.jit.counters.dispatch_off_reasons.push(reason);
-                                }
-                                // P15-A v2-A — side-trace finalisation.
-                                // Pin `dispatchable=false` so the
-                                // primary lookup `traces.find(|t|
-                                // t.head_pc == pc && t.dispatchable)`
-                                // never matches this entry — the
-                                // side trace is meant to be entered
-                                // ONLY through the parent's exit
-                                // indirection (v2-B/C IR), not the
-                                // back-edge / call-trigger paths.
-                                // Then write the entry fn ptr into
-                                // the parent's `exit_side_trace_ptrs`
-                                // slot so v2-B/C IR can read it.
-                                if let Some((parent_proto, parent_head_pc, parent_exit_idx)) =
-                                    closed_record.side_trace_parent
-                                {
-                                    ct.dispatchable = false;
-                                    let entry_ptr = ct.entry as *const () as *const u8;
-                                    let _side_trace_head_pc =
-                                        closed_record.head_pc;
-                                    let parent_traces = parent_proto.traces.borrow();
-                                    if let Some(parent_ct) = parent_traces
-                                        .iter()
-                                        .find(|t| t.head_pc == parent_head_pc)
+                        rec.closed = true;
+                        // P12-S2.C — detach the closed record, then try
+                        // to compile it. Dedup by `head_pc`: a Proto
+                        // already carrying a CompiledTrace for this PC
+                        // skips recompile (the hot counter caps
+                        // re-recording at `u32::MAX / 2` anyway, but
+                        // explicit dedup keeps `Proto.traces` short
+                        // for the S3 dispatcher's linear scan).
+                        //
+                        // No `Vm::run` change for failure: we just bump
+                        // the failed counter and drop the record. S3
+                        // will read `Proto.traces` to decide whether to
+                        // dispatch — until then, this is bookkeeping.
+                        let head_pc_val = rec.head_pc;
+                        let closed_record = self
+                            .jit
+                            .active_trace
+                            .take()
+                            .expect("active_trace was Some this branch");
+                        self.jit.counters.closed += 1;
+                        self.jit
+                            .counters
+                            .closed_lens
+                            .push((closed_record.is_call_triggered, closed_record.ops.len()));
+                        // P12-S5-B fix: cache the trace on the
+                        // recorder's *head proto*, not the current
+                        // closure's proto. For non-recursive
+                        // call-triggered traces, close fires after
+                        // `Return1` pops the callee frame — `cl` at
+                        // that point is the CALLER's closure, while
+                        // `closed_record.head_proto` is the CALLEE's
+                        // proto (the one we actually want the trace
+                        // to be discoverable from on the next call).
+                        // Self-recursive fib closed via depth-cap
+                        // mid-recursion so `cl.proto == head_proto`
+                        // happened to coincide — this fix makes that
+                        // accidental coincidence intentional.
+                        let head_proto = closed_record.head_proto;
+                        let already_cached = head_proto
+                            .traces
+                            .borrow()
+                            .iter()
+                            .any(|t| t.head_pc == head_pc_val);
+                        if !already_cached {
+                            // Internal-loop = true: the trace runs in
+                            // a native loop until a cmp side-exits, so
+                            // the dispatcher's per-entry marshal cost
+                            // amortizes across the whole run of
+                            // iterations the loop's recorded direction
+                            // stays valid. The lowerer auto-downgrades
+                            // to one-shot for cmp-less or Call-truncating
+                            // traces.
+                            // P15-A v2-C-A6-5 — side traces MUST NOT
+                            // internal-loop. The parent's recorded prefix
+                            // (ops at PCs < side trace's head_pc) defines
+                            // values for registers the child's body reads
+                            // without re-writing each iter — e.g. for
+                            // s12_step_b, parent's `pc=19 Add R[12] = R[1]
+                            // + R[11]` sets R[12], and the child trace
+                            // (head_pc=24) re-runs `pc=20 Move R[1] =
+                            // R[12]` each iter via its outer ForLoop
+                            // internal-loop, ALWAYS reading the stale
+                            // entry-time R[12]. The parent's Add never
+                            // re-runs during child's loop, so R[1] gets
+                            // pinned to one stale value. Force one-shot
+                            // for side traces: each parent-exit round-
+                            // trips through dispatcher → parent's Add
+                            // runs → side trace runs ONE iter → return.
+                            let opts = crate::jit::trace::CompileOptions {
+                                internal_loop: closed_record.side_trace_parent.is_none(),
+                                pre53: self.version() <= LuaVersion::Lua53,
+                                aot: false,
+                            };
+                            // v1.1 A1 Session A — route through trace_compiler.
+                            match self
+                                .jit
+                                .trace_compiler
+                                .try_compile_trace(&closed_record, opts)
+                            {
+                                Some(mut ct) => {
+                                    // P12-S5-A/B/C — tally Sinkable sites
+                                    // + actually-sunk-emit sites + materialise
+                                    // emit sites before moving `ct` into
+                                    // Proto.traces.
+                                    self.jit.counters.sinkable_seen +=
+                                        ct.sinkable_sites_seen as u64;
+                                    self.jit.counters.accum_bufferable_seen +=
+                                        ct.accum_bufferable_seen as u64;
+                                    self.jit.counters.sunk_alloc += ct.sunk_alloc_seen as u64;
+                                    self.jit.counters.materialize_emit +=
+                                        ct.materialize_emit_count as u64;
+                                    self.jit.counters.closure_emit += ct.closure_seen as u64;
+                                    if ct.is_inline_abort_close {
+                                        self.jit.counters.inline_abort += 1;
+                                    }
+                                    if let Some(reason) = ct.dispatch_off_reason {
+                                        self.jit.counters.dispatch_off_reasons.push(reason);
+                                    }
+                                    // P15-A v2-A — side-trace finalisation.
+                                    // Pin `dispatchable=false` so the
+                                    // primary lookup `traces.find(|t|
+                                    // t.head_pc == pc && t.dispatchable)`
+                                    // never matches this entry — the
+                                    // side trace is meant to be entered
+                                    // ONLY through the parent's exit
+                                    // indirection (v2-B/C IR), not the
+                                    // back-edge / call-trigger paths.
+                                    // Then write the entry fn ptr into
+                                    // the parent's `exit_side_trace_ptrs`
+                                    // slot so v2-B/C IR can read it.
+                                    if let Some((parent_proto, parent_head_pc, parent_exit_idx)) =
+                                        closed_record.side_trace_parent
                                     {
-                                        // P15-A v2-C-A5-C — shape-match
-                                        // gate. Find the parent's per-exit
-                                        // tag snapshot at the wired exit
-                                        // (inline / tag / global) and
-                                        // check the child's entry_tags
-                                        // match. If not, leave the cell
-                                        // null + skip cache populate so
-                                        // the future v2-C-A2 IR's
-                                        // `call_indirect` stays inert at
-                                        // this exit (the child's
-                                        // shape-specialised IR would
-                                        // mis-interpret raw bits the
-                                        // parent writes to reg_state).
-                                        let inline_n =
-                                            parent_ct.per_exit_inline.len();
-                                        let tags_n =
-                                            parent_ct.per_exit_tags.len();
-                                        let parent_exit_tags_slice: &[
+                                        ct.dispatchable = false;
+                                        let entry_ptr = ct.entry as *const () as *const u8;
+                                        let _side_trace_head_pc = closed_record.head_pc;
+                                        let parent_traces = parent_proto.traces.borrow();
+                                        if let Some(parent_ct) = parent_traces
+                                            .iter()
+                                            .find(|t| t.head_pc == parent_head_pc)
+                                        {
+                                            // P15-A v2-C-A5-C — shape-match
+                                            // gate. Find the parent's per-exit
+                                            // tag snapshot at the wired exit
+                                            // (inline / tag / global) and
+                                            // check the child's entry_tags
+                                            // match. If not, leave the cell
+                                            // null + skip cache populate so
+                                            // the future v2-C-A2 IR's
+                                            // `call_indirect` stays inert at
+                                            // this exit (the child's
+                                            // shape-specialised IR would
+                                            // mis-interpret raw bits the
+                                            // parent writes to reg_state).
+                                            let inline_n = parent_ct.per_exit_inline.len();
+                                            let tags_n = parent_ct.per_exit_tags.len();
+                                            let parent_exit_tags_slice: &[
                                             crate::jit::trace::ExitTag
                                         ] = if parent_exit_idx < inline_n {
                                             &parent_ct.per_exit_inline
@@ -5653,131 +5832,114 @@ impl Vm {
                                         } else {
                                             &parent_ct.exit_tags
                                         };
-                                        let shape_ok =
-                                            crate::jit::trace::exit_tags_match_entry_tags(
-                                                &ct.entry_tags,
-                                                parent_exit_tags_slice,
-                                                &parent_ct.entry_tags,
-                                            );
-                                        if !shape_ok {
-                                            self.jit.counters.side_trace_shape_mismatch += 1;
-                                        }
-                                        // P15-A v2-C-A4 — write the child's
-                                        // entry fn ptr to BOTH the legacy
-                                        // v2-A `exit_side_trace_ptrs[idx]`
-                                        // cell (kept so v2-A's
-                                        // walk_any_side_ptr_non_null tests
-                                        // stay green) AND the per-kind cell
-                                        // whose heap address the parent's
-                                        // IR baked (v2-C-A2). The IR-baked
-                                        // cell is what the call_indirect
-                                        // gate actually reads. Only write
-                                        // when A5-C shape gate passes.
-                                        if shape_ok {
-                                            if let Some(cell) = parent_ct
-                                                .exit_side_trace_ptrs
-                                                .get(parent_exit_idx)
-                                            {
-                                                cell.set(entry_ptr);
+                                            let shape_ok =
+                                                crate::jit::trace::exit_tags_match_entry_tags(
+                                                    &ct.entry_tags,
+                                                    parent_exit_tags_slice,
+                                                    &parent_ct.entry_tags,
+                                                );
+                                            if !shape_ok {
+                                                self.jit.counters.side_trace_shape_mismatch += 1;
                                             }
-                                            // Compute (kind, local) for the
-                                            // IR-baked cell. Layout follows
-                                            // exit_hit_counts: inline first,
-                                            // then per_exit_tags, then the
-                                            // global tail slot.
-                                            let (sent_kind, sent_local) = if parent_exit_idx
-                                                < inline_n
-                                            {
-                                                parent_ct.per_exit_inline
-                                                    [parent_exit_idx]
-                                                    .side_trace_ptr
-                                                    .set(entry_ptr);
-                                                (
-                                                    crate::jit::trace::SIDE_SENT_KIND_INLINE,
-                                                    parent_exit_idx as u32,
-                                                )
-                                            } else if parent_exit_idx
-                                                < inline_n + tags_n
-                                            {
-                                                let local =
-                                                    parent_exit_idx - inline_n;
-                                                if let Some(b) = parent_ct
-                                                    .tags_side_trace_ptrs
-                                                    .get(local)
+                                            // P15-A v2-C-A4 — write the child's
+                                            // entry fn ptr to BOTH the legacy
+                                            // v2-A `exit_side_trace_ptrs[idx]`
+                                            // cell (kept so v2-A's
+                                            // walk_any_side_ptr_non_null tests
+                                            // stay green) AND the per-kind cell
+                                            // whose heap address the parent's
+                                            // IR baked (v2-C-A2). The IR-baked
+                                            // cell is what the call_indirect
+                                            // gate actually reads. Only write
+                                            // when A5-C shape gate passes.
+                                            if shape_ok {
+                                                if let Some(cell) = parent_ct
+                                                    .exit_side_trace_ptrs
+                                                    .get(parent_exit_idx)
                                                 {
-                                                    b.set(entry_ptr);
+                                                    cell.set(entry_ptr);
                                                 }
-                                                (
-                                                    crate::jit::trace::SIDE_SENT_KIND_TAG,
-                                                    local as u32,
-                                                )
-                                            } else {
-                                                parent_ct
-                                                    .global_side_trace_ptr
-                                                    .set(entry_ptr);
-                                                (
-                                                    crate::jit::trace::SIDE_SENT_KIND_GLOBAL,
-                                                    0,
-                                                )
-                                            };
-                                            self.jit.counters.side_trace_compiled += 1;
-                                            // P15-A v2-D-A8 — flip the
-                                            // parent's fast-path hint so
-                                            // the dispatcher knows to do
-                                            // the tentative decode + cell
-                                            // check on subsequent
-                                            // dispatches. Set once and
-                                            // stays true (we never unwire
-                                            // a side trace today).
-                                            parent_ct.has_any_side_wired.set(true);
+                                                // Compute (kind, local) for the
+                                                // IR-baked cell. Layout follows
+                                                // exit_hit_counts: inline first,
+                                                // then per_exit_tags, then the
+                                                // global tail slot.
+                                                let (sent_kind, sent_local) = if parent_exit_idx
+                                                    < inline_n
+                                                {
+                                                    parent_ct.per_exit_inline[parent_exit_idx]
+                                                        .side_trace_ptr
+                                                        .set(entry_ptr);
+                                                    (
+                                                        crate::jit::trace::SIDE_SENT_KIND_INLINE,
+                                                        parent_exit_idx as u32,
+                                                    )
+                                                } else if parent_exit_idx < inline_n + tags_n {
+                                                    let local = parent_exit_idx - inline_n;
+                                                    if let Some(b) =
+                                                        parent_ct.tags_side_trace_ptrs.get(local)
+                                                    {
+                                                        b.set(entry_ptr);
+                                                    }
+                                                    (
+                                                        crate::jit::trace::SIDE_SENT_KIND_TAG,
+                                                        local as u32,
+                                                    )
+                                                } else {
+                                                    parent_ct.global_side_trace_ptr.set(entry_ptr);
+                                                    (crate::jit::trace::SIDE_SENT_KIND_GLOBAL, 0)
+                                                };
+                                                self.jit.counters.side_trace_compiled += 1;
+                                                // P15-A v2-D-A8 — flip the
+                                                // parent's fast-path hint so
+                                                // the dispatcher knows to do
+                                                // the tentative decode + cell
+                                                // check on subsequent
+                                                // dispatches. Set once and
+                                                // stays true (we never unwire
+                                                // a side trace today).
+                                                parent_ct.has_any_side_wired.set(true);
 
-                                            // P15-A v2-C-A1/A4 — populate
-                                            // the O(1) lookup cache the
-                                            // dispatcher consults on
-                                            // sentinel-bit-set returns.
-                                            // Key is the encoded sentinel
-                                            // (same encoding the IR ORs
-                                            // into bits 56..=62 of the
-                                            // child's i64 return).
-                                            let sentinel =
-                                                crate::jit::trace::encode_side_sentinel(
-                                                    sent_kind,
-                                                    sent_local,
-                                                );
-                                            let predicted_idx = if std::ptr::eq(
-                                                parent_proto.as_ptr(),
-                                                head_proto.as_ptr(),
-                                            ) {
-                                                parent_traces.len() as u32
-                                            } else {
-                                                head_proto
-                                                    .traces
-                                                    .borrow()
-                                                    .len()
-                                                    as u32
-                                            };
-                                            parent_ct
-                                                .side_trace_cache
-                                                .borrow_mut()
-                                                .insert(
-                                                    sentinel,
-                                                    predicted_idx,
-                                                );
+                                                // P15-A v2-C-A1/A4 — populate
+                                                // the O(1) lookup cache the
+                                                // dispatcher consults on
+                                                // sentinel-bit-set returns.
+                                                // Key is the encoded sentinel
+                                                // (same encoding the IR ORs
+                                                // into bits 56..=62 of the
+                                                // child's i64 return).
+                                                let sentinel =
+                                                    crate::jit::trace::encode_side_sentinel(
+                                                        sent_kind, sent_local,
+                                                    );
+                                                let predicted_idx = if std::ptr::eq(
+                                                    parent_proto.as_ptr(),
+                                                    head_proto.as_ptr(),
+                                                ) {
+                                                    parent_traces.len() as u32
+                                                } else {
+                                                    head_proto.traces.borrow().len() as u32
+                                                };
+                                                parent_ct
+                                                    .side_trace_cache
+                                                    .borrow_mut()
+                                                    .insert(sentinel, predicted_idx);
+                                            }
                                         }
+                                        drop(parent_traces);
                                     }
-                                    drop(parent_traces);
+                                    head_proto.traces.borrow_mut().push(std::rc::Rc::new(ct));
+                                    self.jit.counters.compiled += 1;
                                 }
-                                head_proto.traces.borrow_mut().push(std::rc::Rc::new(ct));
-                                self.jit.counters.compiled += 1;
-                            }
-                            None => {
-                                self.jit.counters.compile_failed += 1;
-                                self.jit.counters.compile_failed_reasons.push(
-                                    self.jit.trace_compiler.last_compile_checkpoint(),
-                                );
+                                None => {
+                                    self.jit.counters.compile_failed += 1;
+                                    self.jit
+                                        .counters
+                                        .compile_failed_reasons
+                                        .push(self.jit.trace_compiler.last_compile_checkpoint());
+                                }
                             }
                         }
-                    }
                     } // P13-S13-H — close the long-trace-bias else branch
                 } else {
                     // P12-S4-step1 + step4a — depth-aware push at the
@@ -5911,12 +6073,10 @@ impl Vm {
                 // mem::take leaves an empty placeholder we restore
                 // at the end of the dispatch block (success +
                 // deopt paths both fall through to the restore).
-                let mut entry_tags: Vec<u8> =
-                    std::mem::take(&mut self.jit.entry_tags_buf);
+                let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
                 entry_tags.clear();
                 entry_tags.reserve(max_stack);
-                let mut reg_state: Vec<i64> =
-                    std::mem::take(&mut self.jit.reg_state_buf);
+                let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
                 reg_state.clear();
                 reg_state.resize(window_size_us, 0i64);
                 let mut dispatch_ok = true;
@@ -5933,9 +6093,7 @@ impl Vm {
                     // Skip dispatch on mismatch so interp handles
                     // this entry shape; the trace stays cached for
                     // future entries that match.
-                    if i < compile_entry_tags.len()
-                        && tag != compile_entry_tags[i]
-                    {
+                    if i < compile_entry_tags.len() && tag != compile_entry_tags[i] {
                         dispatch_ok = false;
                         break;
                     }
@@ -5980,6 +6138,17 @@ impl Vm {
                     // before falling through to the interpreter, else
                     // the stack grows unboundedly per deopted dispatch.
                     let pre_frames = self.frames.len();
+                    // v1.3 Phase AOT Stage 7 sub-piece 4 — `LUNA_AOT_PROBE`
+                    // diagnostic hook. The probe fires once per trace dispatch
+                    // (regardless of JIT vs AOT origin — both go through this
+                    // arm), letting the AOT smoke test verify mcode actually
+                    // executed. Guarded behind `OnceLock` so the env read is
+                    // a one-time cost per process; not gated on a particular
+                    // counter so the smoke test gets a deterministic single-
+                    // line `aot_trace_fired pc=N` per first dispatch.
+                    if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
+                        eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
+                    }
                     let continuation_pc = {
                         // v1.1 A1 Session A — chunk_compiler.enter
                         // (CraneliftBackend delegates to enter_jit;
@@ -6038,30 +6207,29 @@ impl Vm {
                             decode_hit_counts,
                             decode_body,
                         ) = if from_side_trace {
-                            let sentinel_code =
-                                ((raw_ret >> 56) & 0x7F) as u32;
-                            let body =
-                                raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
+                            let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
+                            let body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
                             let traces = cl.proto.traces.borrow();
                             let child_idx = traces
                                 .iter()
                                 .find(|t| t.head_pc == head_pc_val)
                                 .and_then(|pct| {
-                                    pct.side_trace_cache
-                                        .borrow()
-                                        .get(&sentinel_code)
-                                        .copied()
+                                    pct.side_trace_cache.borrow().get(&sentinel_code).copied()
                                 });
                             if let Some(idx) = child_idx
-                                && let Some(child) =
-                                    traces.get(idx as usize)
+                                && let Some(child) = traces.get(idx as usize)
                             {
                                 if crate::jit::trace::v2c_probe_enabled() {
                                     eprintln!(
                                         "[v2c-A3-decode] sentinel={:#04x} body={:#018x} child_idx={} child.n_ops={} child.head_pc={} child.window_size={} parent.pc={} parent.window_size={} child.dispatchable={} child.inline_abort={}",
-                                        sentinel_code, body, idx,
-                                        child.n_ops, child.head_pc,
-                                        child.window_size, pc, window_size,
+                                        sentinel_code,
+                                        body,
+                                        idx,
+                                        child.n_ops,
+                                        child.head_pc,
+                                        child.window_size,
+                                        pc,
+                                        window_size,
                                         child.dispatchable,
                                         child.is_inline_abort_close,
                                     );
@@ -6121,39 +6289,39 @@ impl Vm {
                             {
                                 let tentative = crate::jit::trace::decode_exit_shape(
                                     raw_ret,
-                                    &per_exit_inline,
-                                    &per_exit_tags,
-                                    &exit_tags,
+                                    per_exit_inline,
+                                    per_exit_tags,
+                                    exit_tags,
                                 );
                                 let tentative_exit_idx = tentative.exit_hit_idx;
                                 let child_invoke = {
                                     let traces = cl.proto.traces.borrow();
-                                    traces
-                                        .iter()
-                                        .find(|t| t.head_pc == head_pc_val)
-                                        .and_then(|pct| {
-                                            let cell = pct
-                                                .exit_side_trace_ptrs
-                                                .get(tentative_exit_idx)?;
+                                    traces.iter().find(|t| t.head_pc == head_pc_val).and_then(
+                                        |pct| {
+                                            let cell =
+                                                pct.exit_side_trace_ptrs.get(tentative_exit_idx)?;
                                             let fn_ptr = cell.get();
                                             if fn_ptr.is_null() {
                                                 return None;
                                             }
-                                            traces.iter().find(|t| {
-                                                t.entry as *const () as *const u8
-                                                    == fn_ptr
-                                            }).map(|child| (
-                                                child.entry,
-                                                child.per_exit_inline.clone(),
-                                                child.per_exit_tags.clone(),
-                                                child.exit_tags.clone(),
-                                                child.exit_hit_counts.clone(),
-                                            ))
-                                        })
+                                            traces
+                                                .iter()
+                                                .find(|t| {
+                                                    t.entry as *const () as *const u8 == fn_ptr
+                                                })
+                                                .map(|child| {
+                                                    (
+                                                        child.entry,
+                                                        child.per_exit_inline.clone(),
+                                                        child.per_exit_tags.clone(),
+                                                        child.exit_tags.clone(),
+                                                        child.exit_hit_counts.clone(),
+                                                    )
+                                                })
+                                        },
+                                    )
                                 };
-                                if let Some((cent, cpi, cpt, cet, chc)) =
-                                    child_invoke
-                                {
+                                if let Some((cent, cpi, cpt, cet, chc)) = child_invoke {
                                     let child_raw_ret = {
                                         // v1.1 A1 Session A — chunk_compiler.enter
                                         // (side-trace entry).
@@ -6215,7 +6383,9 @@ impl Vm {
                         // own Rc).
                         if let Some(c) = decode_hit_counts.get(exit_hit_idx) {
                             let v = c.get();
-                            if v < u32::MAX { c.set(v + 1); }
+                            if v < u32::MAX {
+                                c.set(v + 1);
+                            }
                             if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
                                 && self.jit.active_trace.is_none()
                                 && self.jit.trace_enabled
@@ -6247,7 +6417,8 @@ impl Vm {
                         // and won't leak meaningful data past the
                         // pushed frames' R[0..max_stack) windows.
                         if self.stack.len() < base_us + slot_count {
-                            self.stack.resize(base_us + slot_count, crate::runtime::Value::Nil);
+                            self.stack
+                                .resize(base_us + slot_count, crate::runtime::Value::Nil);
                         }
                         // P13-S13-E — fast-path restore loop. When
                         // we landed on the global `exit_tags`,
@@ -6334,7 +6505,9 @@ impl Vm {
                                 self.stack[base_us + i] = unsafe {
                                     Value::pack(
                                         tag,
-                                        crate::runtime::value::RawVal { zero: reg_state[i] as u64 },
+                                        crate::runtime::value::RawVal {
+                                            zero: reg_state[i] as u64,
+                                        },
                                     )
                                 };
                             }
@@ -6379,9 +6552,13 @@ impl Vm {
                                 if crate::jit::trace::v2c_probe_enabled() {
                                     eprintln!(
                                         "[v2c-set-pc] from_side={} sentinel_or_raw={:#018x} prev_pc={} new_cont_pc={} site_id={} frames.len={} pre_frames={} max_stack={}",
-                                        from_side_trace, raw_ret,
-                                        fmut.pc, cont_pc, site_id,
-                                        frames_len_now, pre_frames,
+                                        from_side_trace,
+                                        raw_ret,
+                                        fmut.pc,
+                                        cont_pc,
+                                        site_id,
+                                        frames_len_now,
+                                        pre_frames,
                                         max_stack,
                                     );
                                 }
@@ -6405,17 +6582,12 @@ impl Vm {
                         // is the resume frame (top of `self.frames`
                         // — inline-pushed frames moved this).
                         if side_trace_should_start {
-                            let (resume_base, resume_proto) =
-                                match self.frames.last() {
-                                    Some(CallFrame::Lua(f)) => {
-                                        (f.base as usize, f.closure.proto)
-                                    }
-                                    _ => (base_us, cl.proto),
-                                };
-                            let resume_max_stack =
-                                resume_proto.max_stack as usize;
-                            let mut side_entry_tags: Vec<u8> =
-                                Vec::with_capacity(resume_max_stack);
+                            let (resume_base, resume_proto) = match self.frames.last() {
+                                Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
+                                _ => (base_us, cl.proto),
+                            };
+                            let resume_max_stack = resume_proto.max_stack as usize;
+                            let mut side_entry_tags: Vec<u8> = Vec::with_capacity(resume_max_stack);
                             // Extend stack if cont_pc's frame window
                             // overhangs the current stack len (rare,
                             // but inline-pushed frame stack writes
@@ -6427,22 +6599,19 @@ impl Vm {
                                 );
                             }
                             for i in 0..resume_max_stack {
-                                let (tag, _) =
-                                    self.stack[resume_base + i].unpack();
+                                let (tag, _) = self.stack[resume_base + i].unpack();
                                 side_entry_tags.push(tag);
                             }
-                            self.jit.active_trace = Some(Box::new(
-                                crate::jit::trace::TraceRecord::start_side_trace(
+                            self.jit.active_trace =
+                                Some(Box::new(crate::jit::trace::TraceRecord::start_side_trace(
                                     resume_proto,
                                     cont_pc,
                                     side_entry_tags,
                                     cl.proto,
                                     head_pc_val,
                                     exit_hit_idx,
-                                ),
-                            ));
-                            self.jit.recording_frame_base =
-                                self.frames.len() - 1;
+                                )));
+                            self.jit.recording_frame_base = self.frames.len() - 1;
                             self.jit.counters.side_trace_started += 1;
                         }
                         // P13-S13-D — put the dispatch buffers back
@@ -6480,7 +6649,12 @@ impl Vm {
 
             // count + line hooks (PUC traceexec): before executing the
             // instruction. Skipped while the hook itself runs.
-            if self.hook.func.is_some() || self.hook.rust_func.is_some() && !self.in_hook {
+            // (Parens here are load-bearing — without them `&&` binds tighter
+            // than `||` and the `!in_hook` guard only gates the rust-hook arm,
+            // letting a Lua line hook recurse into itself → stack overflow
+            // on db.lua line-hook assertions. Matches the `hook_call_with` /
+            // `hook_return` predicate shape at lines 2245 / 2279 / 2294 / 4023.)
+            if !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
                 let lines = &cl.proto.lines;
                 let cur_line = if lines.is_empty() {
                     None
@@ -6528,7 +6702,7 @@ impl Vm {
                 }
             }
 
-match inst.op() {
+            match inst.op() {
                 Op::Move => {
                     let v = self.r(base, inst.b());
                     self.set_r(base, inst.a(), v);
@@ -6582,7 +6756,22 @@ match inst.op() {
                 Op::GetField => {
                     let t = self.r(base, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    self.op_index(t, key, base + inst.a())?;
+                    // v1.2 D4 A1 — fast path: known-Str const key + no
+                    // metatable on the table → skip `op_index` /
+                    // `index_step`'s MAX_TAG_LOOP setup and the outer
+                    // `Value` match. Falls through to the slow path
+                    // unchanged when either invariant breaks (so
+                    // `__index` metamethods, non-Table receivers, and
+                    // non-Str keys behave exactly as before).
+                    if let Value::Table(tb) = t
+                        && tb.metatable().is_none()
+                        && let Value::Str(s) = key
+                    {
+                        let v = tb.get_str(s);
+                        self.stack[(base + inst.a()) as usize] = v;
+                    } else {
+                        self.op_index(t, key, base + inst.a())?;
+                    }
                 }
                 Op::SetTabUp => {
                     let t = self.upval_get(cl, inst.a());
@@ -6633,8 +6822,8 @@ match inst.op() {
                     for i in 1..=n {
                         let v = self.r(base, a + i);
                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        if let Err(TableError::Overflow) = unsafe { t.as_mut() }
-                            .set_int(&mut self.heap, offset + i as i64, v)
+                        if let Err(TableError::Overflow) =
+                            unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
                         {
                             return Err(self.rt_err("table overflow"));
                         }
@@ -6678,7 +6867,9 @@ match inst.op() {
                 Op::Unm => {
                     let v = self.r(base, inst.b());
                     match coerce_num(v) {
-                        Some(Num::Int(i)) => self.set_r(base, inst.a(), Value::Int(i.wrapping_neg())),
+                        Some(Num::Int(i)) => {
+                            self.set_r(base, inst.a(), Value::Int(i.wrapping_neg()))
+                        }
                         Some(Num::Float(f)) => self.set_r(base, inst.a(), Value::Float(-f)),
                         None => {
                             let mm = self.get_mm(v, Mm::Unm);
@@ -6747,12 +6938,8 @@ match inst.op() {
                     // wipe clobber the outer tbc slot before it could be
                     // closed (locals.lua:1219 nested-for goto regression).
                     self.top = self.top.max(base + cl.proto.max_stack as u32);
-                    let _ = self.begin_close(
-                        base + inst.a(),
-                        None,
-                        AfterClose::Block,
-                        entry_depth,
-                    )?;
+                    let _ =
+                        self.begin_close(base + inst.a(), None, AfterClose::Block, entry_depth)?;
                 }
                 Op::Tbc => {
                     self.register_tbc(base + inst.a())?;
@@ -6796,11 +6983,7 @@ match inst.op() {
                         let back_edge_already_cached = if proto.trace_gave_up.get() {
                             true
                         } else {
-                            proto
-                                .traces
-                                .borrow()
-                                .iter()
-                                .any(|t| t.head_pc == target_pc)
+                            proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
                         };
                         if c >= crate::jit::trace::TRACE_HOT_THRESHOLD
                             && self.jit.active_trace.is_none()
@@ -6821,11 +7004,10 @@ match inst.op() {
                                 let (tag, _) = self.stack[base_us + i].unpack();
                                 entry_tags.push(tag);
                             }
-                            self.jit.active_trace = Some(Box::new(
-                                crate::jit::trace::TraceRecord::start(
+                            self.jit.active_trace =
+                                Some(Box::new(crate::jit::trace::TraceRecord::start(
                                     cl.proto, target, entry_tags, false,
-                                ),
-                            ));
+                                )));
                             // P12-S4 — record the frame the trace
                             // started in. `self.frames.len() - 1`
                             // since we're inside the currently-running
@@ -6955,8 +7137,7 @@ match inst.op() {
                             self.stack.resize(end + 1, Value::Nil);
                         }
                         for i in (0..=nargs).rev() {
-                            self.stack[(abs + 1 + i) as usize] =
-                                self.stack[(abs + i) as usize];
+                            self.stack[(abs + 1 + i) as usize] = self.stack[(abs + i) as usize];
                         }
                         self.stack[abs as usize] = mm;
                         nargs += 1;
@@ -7030,7 +7211,11 @@ match inst.op() {
                     if let Some(vals) = self.begin_close(
                         base,
                         None,
-                        AfterClose::Return { abs_a, nret, from_native: false },
+                        AfterClose::Return {
+                            abs_a,
+                            nret,
+                            from_native: false,
+                        },
                         entry_depth,
                     )? {
                         return Ok(vals);
@@ -7051,24 +7236,21 @@ match inst.op() {
                     if self.jit.trace_enabled {
                         let a = inst.a();
                         let pre53 = self.version() <= LuaVersion::Lua53;
-                        let take_back_edge = match (
-                            self.r(base, a),
-                            self.r(base, a + 1),
-                            self.r(base, a + 2),
-                        ) {
-                            (Value::Int(_), Value::Int(count), Value::Int(_)) if !pre53 => {
-                                count > 0
-                            }
-                            (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
-                                let next = cur.wrapping_add(st);
-                                if st > 0 { next <= lim } else { next >= lim }
-                            }
-                            (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
-                                let next = cur + st;
-                                if st > 0.0 { next <= lim } else { next >= lim }
-                            }
-                            _ => false,
-                        };
+                        let take_back_edge =
+                            match (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2)) {
+                                (Value::Int(_), Value::Int(count), Value::Int(_)) if !pre53 => {
+                                    count > 0
+                                }
+                                (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
+                                    let next = cur.wrapping_add(st);
+                                    if st > 0 { next <= lim } else { next >= lim }
+                                }
+                                (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
+                                    let next = cur + st;
+                                    if st > 0.0 { next <= lim } else { next >= lim }
+                                }
+                                _ => false,
+                            };
                         if take_back_edge {
                             let proto = cl.proto;
                             let c = proto.trace_hot_count.get();
@@ -7090,11 +7272,10 @@ match inst.op() {
                                     let (tag, _) = self.stack[base_us + i].unpack();
                                     entry_tags.push(tag);
                                 }
-                                self.jit.active_trace = Some(Box::new(
-                                    crate::jit::trace::TraceRecord::start(
+                                self.jit.active_trace =
+                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
                                         cl.proto, target, entry_tags, false,
-                                    ),
-                                ));
+                                    )));
                                 // P12-S4 — record the frame the trace
                                 // started in. The currently-running
                                 // Lua frame is at len() - 1.
@@ -7159,13 +7340,12 @@ match inst.op() {
                                 // fn's address if Native, so the
                                 // lowerer can specialise ipairs into
                                 // inline Table aget IR.
-                                let iter_ptr = if let Value::Native(n) =
-                                    self.stack[base_us + a as usize]
-                                {
-                                    Some(n.f as usize)
-                                } else {
-                                    None
-                                };
+                                let iter_ptr =
+                                    if let Value::Native(n) = self.stack[base_us + a as usize] {
+                                        Some(n.f as usize)
+                                    } else {
+                                        None
+                                    };
                                 // P12-S12-C v3 — snapshot R[A+5]'s
                                 // tag (= current iter's val from
                                 // the just-fired TForCall). The v5
@@ -7203,9 +7383,9 @@ match inst.op() {
                     // _ENV + a single capture). Beyond that, fall back
                     // to a heap Vec.
                     use crate::runtime::function::INLINE_UPVALS_N;
-                    let mut stack_buf: [std::mem::MaybeUninit<Gc<crate::runtime::function::Upvalue>>;
-                        INLINE_UPVALS_N] =
-                        [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
+                    let mut stack_buf: [std::mem::MaybeUninit<
+                        Gc<crate::runtime::function::Upvalue>,
+                    >; INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
                     let mut heap_buf: Vec<Gc<crate::runtime::function::Upvalue>> = Vec::new();
                     let use_inline = n_ups <= INLINE_UPVALS_N;
                     if !use_inline {
@@ -7234,7 +7414,8 @@ match inst.op() {
                         // covering exactly them.
                         unsafe {
                             std::slice::from_raw_parts_mut(
-                                stack_buf.as_mut_ptr() as *mut Gc<crate::runtime::function::Upvalue>,
+                                stack_buf.as_mut_ptr()
+                                    as *mut Gc<crate::runtime::function::Upvalue>,
                                 n_ups,
                             )
                         }
@@ -7278,9 +7459,10 @@ match inst.op() {
                     } else {
                         let cached = proto.cache.get().filter(|c| {
                             c.upvals().len() == ups_slice.len()
-                                && c.upvals().iter().zip(ups_slice.iter()).all(|(a, b)| {
-                                    std::ptr::eq(a.as_ptr(), b.as_ptr())
-                                })
+                                && c.upvals()
+                                    .iter()
+                                    .zip(ups_slice.iter())
+                                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
                         });
                         match cached {
                             Some(c) => c,
@@ -7524,7 +7706,10 @@ match inst.op() {
             };
             match mm {
                 Value::Closure(_) | Value::Native(_) => {
-                    return Ok(MmOut::Mm { func: mm, recv: cur });
+                    return Ok(MmOut::Mm {
+                        func: mm,
+                        recv: cur,
+                    });
                 }
                 next => cur = next,
             }
@@ -7577,7 +7762,10 @@ match inst.op() {
             };
             match mm {
                 Value::Closure(_) | Value::Native(_) => {
-                    return Ok(MmOut::Mm { func: mm, recv: cur });
+                    return Ok(MmOut::Mm {
+                        func: mm,
+                        recv: cur,
+                    });
                 }
                 next => cur = next,
             }
@@ -7607,8 +7795,8 @@ match inst.op() {
         if l.raw_eq(r) {
             return MmOut::Done(Value::Bool(true));
         }
-        if let (Value::Table(_), Value::Table(_))
-        | (Value::Userdata(_), Value::Userdata(_)) = (l, r)
+        if let (Value::Table(_), Value::Table(_)) | (Value::Userdata(_), Value::Userdata(_)) =
+            (l, r)
         {
             // PUC 5.2+ accepts any `__eq` reachable from either operand; 5.1
             // (and earlier) required the two operands' metatables to expose a
@@ -7837,13 +8025,25 @@ match inst.op() {
     fn less_step(&mut self, l: Value, r: Value, or_eq: bool) -> Result<MmOut, LuaError> {
         let b = match (l, r) {
             (Value::Int(a), Value::Int(b)) => {
-                if or_eq { a <= b } else { a < b }
+                if or_eq {
+                    a <= b
+                } else {
+                    a < b
+                }
             }
             (Value::Float(a), Value::Float(b)) => {
-                if or_eq { a <= b } else { a < b }
+                if or_eq {
+                    a <= b
+                } else {
+                    a < b
+                }
             }
             (Value::Int(a), Value::Float(b)) => {
-                if or_eq { int_le_float(a, b) } else { int_lt_float(a, b) }
+                if or_eq {
+                    int_le_float(a, b)
+                } else {
+                    int_lt_float(a, b)
+                }
             }
             (Value::Float(a), Value::Int(b)) => {
                 if a.is_nan() {
@@ -7882,10 +8082,7 @@ match inst.op() {
                 // The fallback calls `__lt(r, l)` synchronously (the suite's
                 // `__lt` doesn't yield) and negates the result; the yieldable
                 // `__lt` path stays reserved for the explicit `<` operator.
-                if mm.is_nil()
-                    && or_eq
-                    && self.version <= crate::version::LuaVersion::Lua53
-                {
+                if mm.is_nil() && or_eq && self.version <= crate::version::LuaVersion::Lua53 {
                     let lt = Mm::Lt;
                     let mut mm_lt = self.get_mm(l, lt);
                     if mm_lt.is_nil() {
@@ -7931,9 +8128,7 @@ match inst.op() {
                 ("initial value", init)
             };
             let tn = self.obj_typename(bad);
-            return Err(self.rt_err(&format!(
-                "bad 'for' {what} (number expected, got {tn})"
-            )));
+            return Err(self.rt_err(&format!("bad 'for' {what} (number expected, got {tn})")));
         };
         // PUC 5.1–5.3 `OP_FORPREP` stores `i = init - step` and *unconditionally*
         // jumps to the matching `OP_FORLOOP` — the body never runs ahead of the
@@ -8037,8 +8232,12 @@ match inst.op() {
         let pre53 = self.version() <= LuaVersion::Lua53;
         match self.r(base, a) {
             Value::Int(cur) if pre53 => {
-                let Value::Int(lim) = self.r(base, a + 1) else { unreachable!() };
-                let Value::Int(st) = self.r(base, a + 2) else { unreachable!() };
+                let Value::Int(lim) = self.r(base, a + 1) else {
+                    unreachable!()
+                };
+                let Value::Int(st) = self.r(base, a + 2) else {
+                    unreachable!()
+                };
                 let next = cur.wrapping_add(st);
                 let cont = if st > 0 { next <= lim } else { next >= lim };
                 if cont {
@@ -8128,7 +8327,6 @@ match inst.op() {
             Value::Nil
         }
     }
-
 
     /// Push the return values of a `NativeFn` and return their count
     /// (analogous to pushing N values then `return N` from a C function).
@@ -8221,8 +8419,7 @@ match inst.op() {
                         mm = self.get_mm(y, Mm::Concat);
                     }
                     if mm.is_nil() {
-                        let legacy =
-                            self.version <= crate::version::LuaVersion::Lua52;
+                        let legacy = self.version <= crate::version::LuaVersion::Lua52;
                         let bad = if concat_piece(x, legacy).is_none() {
                             x
                         } else {
@@ -8232,7 +8429,12 @@ match inst.op() {
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.
                     let dst = i - 1;
-                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a }, "concat")?;
+                    self.begin_meta_call(
+                        mm,
+                        &[x, y],
+                        MetaAction::Concat { dst, base_a },
+                        "concat",
+                    )?;
                     return Ok(());
                 }
             }
@@ -8272,8 +8474,7 @@ match inst.op() {
             // distinguishable from `print(2)`. pm.lua :13 builds patterns by
             // concatenating these renderings.
             Value::Float(f) => {
-                let legacy =
-                    self.version <= crate::version::LuaVersion::Lua52;
+                let legacy = self.version <= crate::version::LuaVersion::Lua52;
                 numeric::num_to_string_for(Num::Float(f), legacy).into_bytes()
             }
             Value::Str(s) => s.as_bytes().to_vec(),
@@ -8943,11 +9144,7 @@ impl Vm {
         Some(self.frames[fi].lua()?.closure)
     }
 
-    pub(crate) fn coro_level_in_range(
-        &self,
-        co: Gc<crate::runtime::Coro>,
-        level: i64,
-    ) -> bool {
+    pub(crate) fn coro_level_in_range(&self, co: Gc<crate::runtime::Coro>, level: i64) -> bool {
         if level < 1 {
             return false;
         }
@@ -9268,8 +9465,9 @@ impl Vm {
         // To name a Lua frame, PUC consults the caller's OP_CALL via
         // getobjname: find the index `fi` of the current frame in co.frames,
         // then look at frames[fi-1] (the caller) and read its `code[pc-1]`.
-        let coro_frame_name = |frames: &[CallFrame], target: &crate::runtime::function::Frame|
-            -> Option<(&'static str, String)> {
+        let coro_frame_name = |frames: &[CallFrame],
+                               target: &crate::runtime::function::Frame|
+         -> Option<(&'static str, String)> {
             let fi = frames
                 .iter()
                 .position(|cf| matches!(cf, CallFrame::Lua(f) if std::ptr::eq(f, target)))?;
@@ -9281,9 +9479,7 @@ impl Vm {
             let call_pc = (caller.pc as usize).checked_sub(1)?;
             let instr = *p.code.get(call_pc)?;
             match instr.op() {
-                Op::Call | Op::TailCall => {
-                    crate::vm::objname::getobjname(p, call_pc, instr.a())
-                }
+                Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
                 Op::TForCall => Some(("for iterator", "for iterator".to_string())),
                 _ => None,
             }
@@ -9322,10 +9518,7 @@ impl Vm {
                 // `'coroutine.yield'` under 5.3 and 5.4 (5.3 :566 / 5.4 :830
                 // `checktraceback` baselines). 5.1/5.2/5.5 emit the bare
                 // `'yield'` (5.5 :841).
-                let qualified = matches!(
-                    self.version,
-                    LuaVersion::Lua53 | LuaVersion::Lua54
-                );
+                let qualified = matches!(self.version, LuaVersion::Lua53 | LuaVersion::Lua54);
                 if qualified {
                     out.extend_from_slice(b"\n\t[C]: in function 'coroutine.yield'");
                 } else {
@@ -9441,6 +9634,130 @@ impl Vm {
             out.extend_from_slice(format!("\n\t...\t(skipping {dropped} levels)").as_bytes());
             for &v in &visible[total - LEVELS2..] {
                 emit_frame(&mut out, v, self);
+            }
+        }
+        out
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// v1.3 Phase AOT Stage 7 sub-piece 4 — AOT trace dispatch install.
+//
+// The deploy-side resolver in `luna-runtime-helpers` walks the binary's
+// trace-meta section after `vm.load`, resolves each entry's
+// `(proto_hash, head_pc, fn_ptr)` triple against the loaded chunk's
+// proto tree, and pushes a `CompiledTrace` onto the matching Proto's
+// `traces` Vec via [`Vm::install_aot_trace`] below. The existing
+// trace-dispatch loop (this file's `cl.proto.traces.borrow().iter()
+// .find(|t| t.head_pc == pc && t.dispatchable)`) then fires the AOT
+// mcode without further plumbing — same code path the runtime JIT
+// uses.
+//
+// Why a separate impl block: keeps the AOT API surface (one fn) easy
+// to locate when grep'ing for `install_aot_trace`, without dragging
+// the 8500-line `impl Vm` block above.
+// ────────────────────────────────────────────────────────────────────
+
+impl Vm {
+    /// v1.3 Phase AOT Stage 7 sub-piece 4 — install a precompiled
+    /// `CompiledTrace` onto `proto.traces` so the interp dispatcher
+    /// fires it at the trace's `head_pc`. This is the runtime install
+    /// API the deploy-side `luna-runtime-helpers` resolver calls once
+    /// per AOT-emitted trace meta entry, after looking up `proto` by
+    /// stable hash (see `crate::runtime::function::Proto::stable_hash`).
+    ///
+    /// # What this does
+    ///
+    /// Pushes `trace` onto `proto.traces` via the existing `RefCell`.
+    /// The trace's `entry` fn ptr must already point at runnable
+    /// machine code (the AOT linker resolved the symbol at link time;
+    /// the deploy resolver passes the address verbatim).
+    ///
+    /// # What this does NOT do
+    ///
+    /// - **No deduplication.** Calling twice with the same `head_pc`
+    ///   pushes two entries; the dispatcher's `find` will pick the
+    ///   first match. The deploy resolver is responsible for not
+    ///   double-installing.
+    /// - **No invalidation of the runtime JIT cache.** If the runtime
+    ///   JIT later records + compiles a trace for the same
+    ///   `(proto, head_pc)`, both coexist on `proto.traces` and the
+    ///   dispatcher's `find` picks whichever appears first. AOT
+    ///   traces install before any runtime recording is possible
+    ///   (resolver runs before `vm.load` returns its first closure),
+    ///   so AOT traces win the race for the same site.
+    /// - **No coverage gating.** AOT traces are trusted by
+    ///   construction — they were validated at compile time. Setting
+    ///   `dispatchable: false` on the input would silently disable
+    ///   dispatch; the caller controls that flag.
+    ///
+    /// # Safety / soundness
+    ///
+    /// `trace.entry` is an `unsafe extern "C" fn` (mmap'd or linked
+    /// machine code). Soundness contract:
+    ///
+    /// - The fn pointer must remain valid for the `Vm`'s lifetime.
+    ///   In the AOT-binary deploy shape this is trivially satisfied —
+    ///   the fn lives in the binary's `.text`.
+    /// - `trace.entry_tags` / `exit_tags` / `window_size` must match
+    ///   what the trace's IR actually compiled against; the dispatcher
+    ///   uses them to marshal `reg_state` in and out without further
+    ///   validation. A mismatch corrupts vm.stack.
+    ///
+    /// The AOT pipeline (`luna-aot`) is responsible for ensuring these
+    /// invariants hold; this fn is a plain push — no validation that
+    /// would slow the dispatcher's hot path either.
+    pub fn install_aot_trace(
+        &mut self,
+        proto: crate::runtime::Gc<crate::runtime::function::Proto>,
+        trace: crate::jit::trace::CompiledTrace,
+    ) {
+        let _ = self; // resolver passes &mut Vm for symmetry with future
+        // pending-install + hash-walk variants; nothing on `self` to
+        // mutate today because the install target lives on the Proto.
+        proto.traces.borrow_mut().push(std::rc::Rc::new(trace));
+    }
+
+    /// v1.3 Phase AOT Stage 7 sub-piece 4 — walk the proto tree
+    /// reachable from `root` and return `(proto, stable_hash)` pairs
+    /// for every Proto found. Used by the deploy-side resolver to
+    /// match AOT-emitted `proto_hash` keys against the freshly
+    /// `undump`'d chunk's protos.
+    ///
+    /// The walk is BFS over `Proto.protos`. Same-Proto deduplication
+    /// is done via `Gc::as_ptr` identity — a Proto re-referenced from
+    /// multiple nested closures (rare; the cache field would catch
+    /// the closure-side dedup, not the Proto side) is reported once.
+    ///
+    /// # Why on `&Vm` and not a free fn
+    ///
+    /// Keeps the AOT install API discoverable on the Vm surface —
+    /// `vm.collect_proto_hashes(root)` reads naturally next to
+    /// `vm.install_aot_trace(proto, trace)`. Doesn't actually touch
+    /// any Vm field, so `&self` (read-only) is enough.
+    pub fn collect_proto_hashes(
+        &self,
+        root: crate::runtime::Gc<crate::runtime::function::Proto>,
+    ) -> Vec<(
+        crate::runtime::Gc<crate::runtime::function::Proto>,
+        [u8; 16],
+    )> {
+        let _ = self;
+        let mut out = Vec::new();
+        let mut seen: std::collections::HashSet<*const crate::runtime::function::Proto> =
+            std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<
+            crate::runtime::Gc<crate::runtime::function::Proto>,
+        > = std::collections::VecDeque::new();
+        queue.push_back(root);
+        while let Some(p) = queue.pop_front() {
+            let key = p.as_ptr() as *const _;
+            if !seen.insert(key) {
+                continue;
+            }
+            out.push((p, p.stable_hash()));
+            for &child in p.protos.iter() {
+                queue.push_back(child);
             }
         }
         out

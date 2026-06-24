@@ -101,11 +101,8 @@ use std::task::{Context, Poll};
 /// dispatcher resumes, treats slots `[func_slot, func_slot+n)` as the
 /// return list, and continues. On `Poll::Ready(Err(e))` the error
 /// propagates as if a sync native had returned it.
-pub type AsyncNativeFn = fn(
-    *mut Vm,
-    func_slot: u32,
-    nargs: u32,
-) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>;
+pub type AsyncNativeFn =
+    fn(*mut Vm, func_slot: u32, nargs: u32) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>;
 
 /// v1.1 B10 Stage 1 — outcome of a single dispatcher slice driven by
 /// [`Vm::drive_one`]. Stage 2 adds the `AsyncNativeAwaiting` variant
@@ -151,19 +148,14 @@ impl Vm {
         // is the discriminant the dispatcher reads before transmuting
         // back to `AsyncNativeFn` at the call site; without the bit
         // the pointer is never invoked.
-        let raw_fn: crate::runtime::value::NativeFn =
-            unsafe { std::mem::transmute(f) };
+        let raw_fn: crate::runtime::value::NativeFn = unsafe { std::mem::transmute(f) };
         Value::Native(self.heap.new_async_native(raw_fn, Box::new([])))
     }
 
     /// v1.1 B10 Stage 2 — convenience: install an async native under
     /// `name` as a Lua global. Equivalent to
     /// `vm.set_global(name, vm.create_async_native(f))`.
-    pub fn set_async_native(
-        &mut self,
-        name: &str,
-        f: AsyncNativeFn,
-    ) -> Result<(), LuaError> {
+    pub fn set_async_native(&mut self, name: &str, f: AsyncNativeFn) -> Result<(), LuaError> {
         let v = self.create_async_native(f);
         self.set_global(name, v)
     }
@@ -267,10 +259,7 @@ impl Vm {
                 // an in-flight async-native call) but the async-native
                 // future must be drained first.
                 if self.pending_async_native_fut.is_some() {
-                    let fut = self
-                        .pending_async_native_fut
-                        .take()
-                        .expect("checked above");
+                    let fut = self.pending_async_native_fut.take().expect("checked above");
                     // ctx stays in place — `commit_async_native_result`
                     // consumes it when the future resolves.
                     DispatchOutcome::AsyncNativeAwaiting(fut)
@@ -294,16 +283,31 @@ impl Vm {
     ///
     /// Called by [`EvalFuture::poll`] after the awaited future
     /// resolves to `Poll::Ready(Ok(nret))`.
-    pub(crate) fn commit_async_native_result(&mut self, nret: u32) {
+    pub(crate) fn commit_async_native_result(&mut self, nret: u32) -> Result<(), LuaError> {
         let ctx = self
             .pending_async_native_ctx
             .take()
             .expect("commit_async_native_result without a pending ctx");
         self.finish_results(ctx.func_slot, nret, ctx.nresults);
+        // v1.3 Phase AS — fire the matching "return" hook for the
+        // async native, after results land in the call window and
+        // before the post-call GC checkpoint. Mirrors the sync
+        // native's `hook_return(true, nargs + 1, nret)` placement in
+        // `exec.rs`. The sync path widens its C-frame argument window
+        // around the hook so `debug.getlocal(2, ftransfer..)` reads
+        // the results; the async path doesn't push to
+        // `running_natives` (the future owned the borrow window
+        // across `.await`), so there's no `running_native_slots` to
+        // widen — `hook_ftransfer` / `hook_ntransfer` set by
+        // `hook_return` carry the same information for Rust hooks
+        // and for Lua hooks reading `debug.getinfo(.).ftransfer`.
+        let ftransfer = ctx.nargs + 1;
+        self.hook_return(true, ftransfer, nret)?;
         // Same post-call GC checkpoint the sync path runs: the native
         // may have allocated, and the live boundary is now the result
         // window.
         self.maybe_collect_garbage(self.top);
+        Ok(())
     }
 }
 
@@ -398,7 +402,8 @@ impl<'vm> Future for EvalFuture<'vm> {
                     Err(syntax) => {
                         // Match `eval_chunk`'s syntax-error shaping
                         // (B6 classification + source position).
-                        this.vm.set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
+                        this.vm
+                            .set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
                         this.vm.set_error_source(name.clone(), syntax.line);
                         let msg = format!("{}", syntax);
                         let s = this.vm.intern_str(&msg);
@@ -507,7 +512,20 @@ impl<'vm> Future for EvalFuture<'vm> {
                     match fut.as_mut().poll(cx) {
                         Poll::Ready(Ok(nret)) => {
                             let ed = *entry_depth;
-                            this.vm.commit_async_native_result(nret);
+                            // v1.3 Phase AS — commit may fire the
+                            // async-native "return" hook, which can
+                            // error (hook propagates `LuaError`). On
+                            // error, run the same cleanup the
+                            // `Poll::Ready(Err)` arm runs below.
+                            if let Err(e) = this.vm.commit_async_native_result(nret) {
+                                if let Some(prev) = this.saved_jit_enabled.take() {
+                                    this.vm.set_jit_enabled(prev);
+                                }
+                                this.vm.async_mode = false;
+                                this.vm.async_waker = None;
+                                this.state = EvalState::Done;
+                                return Poll::Ready(Err(e));
+                            }
                             this.state = EvalState::Running {
                                 entry_depth: ed,
                                 first_slice: false,

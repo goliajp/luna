@@ -3,7 +3,6 @@
 //! otherwise.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 const NUMERIC_LOOP: &str = "local i, s, step, limit = 0, 0, 1, 1000
                             repeat

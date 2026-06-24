@@ -16,7 +16,6 @@
 //! Value::Int(0).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `for i=1,1000 do local t = {nil, nil}; if t[1] == nil then s = s + 1 end end`.
 /// Body shape: `NewTable + LoadNil×2 + SetList + GetI + LoadNil +

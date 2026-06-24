@@ -13,7 +13,9 @@ pub(crate) fn open_math(vm: &mut Vm) {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, fv).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
     };
     set(vm, "abs", m_abs);
     set(vm, "ceil", m_ceil);
@@ -62,9 +64,12 @@ pub(crate) fn open_math(vm: &mut Vm) {
     for (name, v) in consts {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, v).expect("valid key");
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, v)
+            .expect("valid key");
     }
-    vm.set_global("math", Value::Table(t)).expect("stdlib registration");
+    vm.set_global("math", Value::Table(t))
+        .expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 
@@ -76,7 +81,12 @@ fn check_num(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<Num,
             .ok_or_else(|| arg_error(vm, i + 1, who, "number expected, got string")),
         v => {
             let tn = vm.obj_typename(v);
-            Err(arg_error(vm, i + 1, who, &format!("number expected, got {tn}")))
+            Err(arg_error(
+                vm,
+                i + 1,
+                who,
+                &format!("number expected, got {tn}"),
+            ))
         }
     }
 }
@@ -349,16 +359,9 @@ fn m_random(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // check. math.lua 5.3 :800-:803 still expect huge non-overflowing
     // ranges (`0..maxint`, `minint..-1`) to succeed, so encoding the exact
     // PUC condition keeps both the success and the :819+ failure cases.
-    if vm.version() <= crate::version::LuaVersion::Lua53
-        && lo < 0
-        && hi > i64::MAX.wrapping_add(lo)
+    if vm.version() <= crate::version::LuaVersion::Lua53 && lo < 0 && hi > i64::MAX.wrapping_add(lo)
     {
-        return Err(arg_error(
-            vm,
-            nargs.min(2),
-            "random",
-            "interval too large",
-        ));
+        return Err(arg_error(vm, nargs.min(2), "random", "interval too large"));
     }
     // PUC project(): uniform in [0, range] by rejection
     let range = (hi as u64).wrapping_sub(lo as u64);

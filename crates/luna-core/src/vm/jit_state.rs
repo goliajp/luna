@@ -171,14 +171,19 @@ pub struct JitCounters {
 impl JitState {
     /// Build an inert `JitState` whose backends are
     /// [`crate::jit::NullJitBackend`]. `enabled = true` (preserves
-    /// v1.0 surface behavior); `trace_enabled = false` (sprint default).
+    /// v1.0 surface behavior); **`trace_enabled = true`** (v1.3 TA3 flip
+    /// after Phase P2A Path B math.min/max fold landed `trace_dispatched_count
+    /// 0 → 200/200` on token_bucket and Linux taskset perf-gate confirmed
+    /// `redis_lua_shape ≥ 1.0×` baseline). Embedders that want the
+    /// v1.2 interp-only default call `vm.set_trace_jit_enabled(false)`
+    /// explicitly.
     /// `Vm::new_inner` calls this; the `luna` crate's
     /// `Vm::new_minimal_with_jit` then swaps the backends to
     /// `CraneliftBackend` via `Vm::install_jit_backend`.
     pub fn with_null_backend() -> JitState {
         JitState {
             enabled: true,
-            trace_enabled: false,
+            trace_enabled: true,
             p16_self_link_enabled: false,
             active_trace: None,
             recording_frame_base: 0,

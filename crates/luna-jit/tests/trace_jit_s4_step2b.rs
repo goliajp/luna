@@ -19,7 +19,6 @@
 //! perf gain still gated on step 2c.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 #[test]
 fn fib_trace_compiles_after_getupval_whitelist() {

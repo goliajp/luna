@@ -17,7 +17,6 @@
 //!    bumps by 1 per compiled trace.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// Pure numeric for-loop, no tables — the sweep should find zero
 /// sites and the tally should stay 0 even after the trace compiles.

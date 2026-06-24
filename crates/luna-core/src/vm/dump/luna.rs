@@ -1,14 +1,17 @@
-//! `string.dump` / chunk undump.
+//! luna's own `string.dump` / chunk undump (per-dialect PUC header +
+//! luna-specific body).
 //!
 //! The header mirrors PUC's per-version layout (calls.lua's `headformat`
 //! round-trips with the matching component values for whichever dialect is
 //! running), so a corrupted-header test rejects luna's chunks the same way
 //! PUC would. The body that follows is luna-specific — luna's VM cannot
-//! execute PUC bytecode (different opcode encoding, register conventions,
-//! etc.), so the chunk only needs to round-trip within luna. `strip` drops
-//! debug names (local-variable records and upvalue names); line info is
-//! always kept because the VM indexes it for error positions.
+//! execute PUC bytecode through this path (different opcode encoding,
+//! register conventions, etc.); PUC bytecode loading lives in
+//! `super::puc` (Phase LB Wave 2). `strip` drops debug names (local-variable
+//! records and upvalue names); line info is always kept because the VM
+//! indexes it for error positions.
 
+use super::reader::Reader;
 use crate::runtime::Value;
 use crate::runtime::function::{LocVar, Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, GcHeader, Heap, ObjTag};
@@ -29,17 +32,9 @@ use crate::version::LuaVersion;
 /// 11. `8` (1)     — sizeof(lua_Number)
 /// 12. float `-370.5`      (8)  — sanity check (le)
 const HEADER_55: &[u8] = &[
-    0x1b, b'L', b'u', b'a',
-    0x55, 0x00,
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4,
-    0x88, 0xa9, 0xff, 0xff,
-    4,
-    0x78, 0x56, 0x34, 0x12,
-    8,
-    0x88, 0xa9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    8,
-    0, 0, 0, 0, 0, 0x28, 0x77, 0xc0,
+    0x1b, b'L', b'u', b'a', 0x55, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n', 4, 0x88, 0xa9, 0xff,
+    0xff, 4, 0x78, 0x56, 0x34, 0x12, 8, 0x88, 0xa9, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 8, 0, 0, 0,
+    0, 0, 0x28, 0x77, 0xc0,
 ];
 
 /// PUC 5.4 binary-chunk header (31 bytes), per `ldump.c DumpHeader`:
@@ -48,14 +43,12 @@ const HEADER_55: &[u8] = &[
 /// LUAC_NUM (370.5). calls.lua :395 packs the first 15 bytes plus an
 /// `(jn)` unpack of the next 16 to lock these values in.
 const HEADER_54: &[u8] = &[
-    0x1b, b'L', b'u', b'a',
-    0x54, 0x00,
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4,                                              // sizeof(Instruction)
-    8,                                              // sizeof(lua_Integer)
-    8,                                              // sizeof(lua_Number)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0,                   // LUAC_INT = 0x5678
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40,                // LUAC_NUM = 370.5
+    0x1b, b'L', b'u', b'a', 0x54, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
+    4, // sizeof(Instruction)
+    8, // sizeof(lua_Integer)
+    8, // sizeof(lua_Number)
+    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT = 0x5678
+    0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
 /// PUC 5.3 binary-chunk header (33 bytes), per 5.3 `ldump.c DumpHeader`:
@@ -65,16 +58,14 @@ const HEADER_54: &[u8] = &[
 /// 25 bytes; the trailing 8-byte LUAC_NUM is not locked by an assertion
 /// but the loader still expects it.
 const HEADER_53: &[u8] = &[
-    0x1b, b'L', b'u', b'a',
-    0x53, 0x00,
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4,                                              // sizeof(int)
-    8,                                              // sizeof(size_t)
-    4,                                              // sizeof(Instruction)
-    8,                                              // sizeof(lua_Integer)
-    8,                                              // sizeof(lua_Number)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0,                   // LUAC_INT = 0x5678
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40,                // LUAC_NUM = 370.5
+    0x1b, b'L', b'u', b'a', 0x53, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
+    4, // sizeof(int)
+    8, // sizeof(size_t)
+    4, // sizeof(Instruction)
+    8, // sizeof(lua_Integer)
+    8, // sizeof(lua_Number)
+    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT = 0x5678
+    0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
 fn header_for(version: LuaVersion) -> &'static [u8] {
@@ -188,7 +179,7 @@ fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8
 
 /// Serialise a function prototype to a binary chunk: the PUC header for the
 /// running dialect, a luna body tag, then the luna body.
-pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
+pub(super) fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     let header = header_for(version);
     let mut out = Vec::with_capacity(header.len() + BODY_TAG.len() + proto.code.len() * 4);
     out.extend_from_slice(header);
@@ -197,40 +188,8 @@ pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     out
 }
 
-/// True when `bytes` is a luna binary chunk (so `load` should undump, not
-/// parse). Only the escape byte is needed to disambiguate from source.
-pub fn is_binary_chunk(bytes: &[u8]) -> bool {
-    bytes.first() == Some(&0x1b)
-}
-
-// ---- reader ----
-
-struct Reader<'a> {
-    b: &'a [u8],
-    p: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self.p.checked_add(n).ok_or("truncated chunk")?;
-        let slice = self.b.get(self.p..end).ok_or("truncated chunk")?;
-        self.p = end;
-        Ok(slice)
-    }
-
-    fn u8(&mut self) -> Result<u8, String> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn u32(&mut self) -> Result<u32, String> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-
-    fn bytes(&mut self) -> Result<&'a [u8], String> {
-        let n = self.u32()? as usize;
-        self.take(n)
-    }
-}
+// `Reader` lives in `super::reader` so the per-dialect PUC translators
+// (`super::puc_5{1,2,3,4,5}` in Wave 2) can share the same primitives.
 
 fn r_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
     Ok(match r.u8()? {
@@ -357,7 +316,11 @@ fn r_proto(
 /// Validates the running dialect's PUC header byte-for-byte (the calls.lua
 /// corrupted-header test flips a single byte and expects a load failure),
 /// then the luna body tag, then the luna body.
-pub fn undump(bytes: &[u8], heap: &mut Heap, version: LuaVersion) -> Result<Gc<Proto>, String> {
+pub(super) fn undump(
+    bytes: &[u8],
+    heap: &mut Heap,
+    version: LuaVersion,
+) -> Result<Gc<Proto>, String> {
     let header = header_for(version);
     if bytes.len() < header.len() {
         return Err("truncated binary chunk".to_string());
@@ -380,12 +343,9 @@ pub fn undump(bytes: &[u8], heap: &mut Heap, version: LuaVersion) -> Result<Gc<P
     if &bytes[pos..pos + BODY_TAG.len()] != BODY_TAG {
         return Err("bad binary chunk body tag".to_string());
     }
-    let mut r = Reader {
-        b: bytes,
-        p: pos + BODY_TAG.len(),
-    };
+    let mut r = Reader::at(bytes, pos + BODY_TAG.len());
     let proto = r_proto(&mut r, heap, None)?;
-    if r.p != bytes.len() {
+    if r.pos() != bytes.len() {
         return Err("trailing bytes in chunk".to_string());
     }
     Ok(proto)

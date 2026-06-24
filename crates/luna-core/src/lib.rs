@@ -76,6 +76,16 @@
 //!   embedding; flag if the threat model includes side-channel
 //!   probing.
 
+// v1.3 Phase SS-B — `send` feature gate lit. Embedders opt in via
+// `cargo add luna-core --features send`; this surfaces the
+// `vm::SendVm` newtype (`Arc<UnsafeCell<Vm>>` + `Arc<RwLock<()>>`
+// behind the scenes) for cross-thread embedding. v1.3 ships
+// `SendVm` interp-only (`NullJitBackend`); JIT-aware `SendVm` is a
+// post-v1.3 polish item. Default-feature builds are unchanged —
+// `Vm` stays `!Send + !Sync` and bit-identical with v1.2. See
+// `.dev/rfcs/v1.3-rfc-send-arc.md` for the design, and
+// `docs/threading.md` for the embedder-facing usage patterns.
+
 pub mod compiler;
 pub mod frontend;
 pub mod jit;

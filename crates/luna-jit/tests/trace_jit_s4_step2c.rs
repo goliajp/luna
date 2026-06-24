@@ -19,7 +19,6 @@
 //! paths.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// fib(12) under trace_jit_enabled compiles the GetUpval-touching
 /// trace (step 2b) and step 2c keeps it dispatchable in principle

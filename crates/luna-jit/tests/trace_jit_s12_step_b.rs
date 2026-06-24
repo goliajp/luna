@@ -10,7 +10,6 @@
 //! v2 dispatch-counter assertions live in `trace_jit_s12_step_b_v2.rs`.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `ipairs` over a non-empty array, looped well past TRACE_HOT_THRESHOLD
 /// (=64). Verifies recorder triggers AND end-to-end correctness.

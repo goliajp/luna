@@ -457,33 +457,39 @@ impl Chunk {
 /// branch, which is a body-level decision. luna's compiler now runs
 /// this AST walk before declaring the auto-`arg` local.
 pub fn block_uses_vararg(chunk: &Chunk, block: &Block) -> bool {
-    block.stats.iter().any(|&sid| stat_uses_vararg(chunk, chunk.stat(sid)))
+    block
+        .stats
+        .iter()
+        .any(|&sid| stat_uses_vararg(chunk, chunk.stat(sid)))
 }
 
 fn stat_uses_vararg(chunk: &Chunk, stat: &Stat) -> bool {
     use Stat::*;
     match stat {
         Do(b) => block_uses_vararg(chunk, b),
-        While { cond, body } => {
-            expr_uses_vararg(chunk, *cond) || block_uses_vararg(chunk, body)
-        }
-        Repeat { body, cond } => {
-            block_uses_vararg(chunk, body) || expr_uses_vararg(chunk, *cond)
-        }
+        While { cond, body } => expr_uses_vararg(chunk, *cond) || block_uses_vararg(chunk, body),
+        Repeat { body, cond } => block_uses_vararg(chunk, body) || expr_uses_vararg(chunk, *cond),
         If { arms, else_body } => {
-            arms.iter().any(|(c, _, b)| {
-                expr_uses_vararg(chunk, *c) || block_uses_vararg(chunk, b)
-            }) || else_body.as_ref().is_some_and(|b| block_uses_vararg(chunk, b))
+            arms.iter()
+                .any(|(c, _, b)| expr_uses_vararg(chunk, *c) || block_uses_vararg(chunk, b))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|b| block_uses_vararg(chunk, b))
         }
-        NumericFor { start, limit, step, body, .. } => {
+        NumericFor {
+            start,
+            limit,
+            step,
+            body,
+            ..
+        } => {
             expr_uses_vararg(chunk, *start)
                 || expr_uses_vararg(chunk, *limit)
                 || step.is_some_and(|s| expr_uses_vararg(chunk, s))
                 || block_uses_vararg(chunk, body)
         }
         GenericFor { exprs, body, .. } => {
-            exprs.iter().any(|&e| expr_uses_vararg(chunk, e))
-                || block_uses_vararg(chunk, body)
+            exprs.iter().any(|&e| expr_uses_vararg(chunk, e)) || block_uses_vararg(chunk, body)
         }
         Local { exprs, .. } | Global { exprs, .. } => {
             exprs.iter().any(|&e| expr_uses_vararg(chunk, e))
@@ -508,9 +514,7 @@ fn expr_uses_vararg(chunk: &Chunk, eid: ExprId) -> bool {
         Expr::Vararg => true,
         // Stop at function literals — their `...` is scoped to them.
         Expr::Function(_) => false,
-        Expr::Index { obj, key } => {
-            expr_uses_vararg(chunk, *obj) || expr_uses_vararg(chunk, *key)
-        }
+        Expr::Index { obj, key } => expr_uses_vararg(chunk, *obj) || expr_uses_vararg(chunk, *key),
         Expr::Call { func, args, .. } => {
             expr_uses_vararg(chunk, *func) || args.iter().any(|&a| expr_uses_vararg(chunk, a))
         }
@@ -536,8 +540,6 @@ fn expr_uses_vararg(chunk: &Chunk, eid: ExprId) -> bool {
 fn table_field_uses_vararg(chunk: &Chunk, f: &TableField) -> bool {
     match f {
         TableField::Item(e) | TableField::Named(_, e) => expr_uses_vararg(chunk, *e),
-        TableField::Keyed(k, v) => {
-            expr_uses_vararg(chunk, *k) || expr_uses_vararg(chunk, *v)
-        }
+        TableField::Keyed(k, v) => expr_uses_vararg(chunk, *k) || expr_uses_vararg(chunk, *v),
     }
 }

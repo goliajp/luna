@@ -12,7 +12,6 @@
 //! the recorder's intermediate state via a dedicated probe.
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `binary_trees make` body has `Call C=0` + `SetList B=0`.
 /// Trigger a trace on it and confirm the trace JIT closed at least

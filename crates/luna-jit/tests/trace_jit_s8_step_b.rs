@@ -9,7 +9,6 @@
 //! constructor (`local t = {nil, nil}; t[1]=i; ...`).
 
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
 
 /// `for i=1,N do local t = {nil, nil}; t[1] = i; t[2] = i*2;
 /// s = s + t[1] + t[2] end` — the seti_pattern. Pre-S8: Move
