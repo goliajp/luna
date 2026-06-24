@@ -169,9 +169,16 @@ Per the 2026-06-24 `nodefer` directive every item below is **in
 scope** for v1.3 (no longer deferred). Tracked in
 `.dev/rfcs/v1.3-charter.md` + `.dev/rfcs/v1.3-plan-state.md`:
 
-- **Path B math-fold extend** (`min` / `max` 2-arg) — `trace.rs::try_match_trace_math_fold`
-  extension so trace JIT actually dispatches on Redis-Lua-shape workloads.
-  Bundled with `trace_enabled` default flip + Linux taskset bench.
+- **Path B math-fold extend** (`min` / `max` 2-arg) — *(landed Phase P2A)*
+  `trace.rs::try_match_trace_math_fold` extended with `FoldKind::Min2 /
+  Max2`. Split-window recognizer (only `GetTabUp + GetField + Call`
+  flagged in `folded_ops` — arg-prep ops execute normally). Cranelift
+  `smin/smax` for Int/Int, `fmin/fmax` for Float-or-mixed.
+  `trace_dispatched_count` flipped 0 → 200/200 on `diag_token_bucket`.
+  **TA3 default flip done** — `jit_state.rs::with_null_backend` ships
+  `trace_enabled = true` (was `false`) after Linux taskset perf-gate
+  confirmed `redis_lua_shape ≥ 1.0×` v1.2 baseline. Embedders that want
+  the v1.2 interp-only default call `vm.set_trace_jit_enabled(false)`.
 - **D4 A3 / A4 / A5** (newindex double-walk collapse / Move
   elimination / dispatcher reshape) — perf polish on top of A1.
 - **`add_field_method_set` + true `obj.x` field-style access** —
