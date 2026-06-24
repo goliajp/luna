@@ -1741,6 +1741,13 @@ impl<'a> Compiler<'a> {
             let jmp_lhs = self.emit_jump();
             self.set_freereg(base);
             let re = self.expr(rhs)?;
+            // RHS shapes that leak freereg += 1 (nested and/or, function call,
+            // table ctor) would make the next `reserve(1)` return `base + 1`,
+            // tripping the debug_assert and silently emitting `LFalseSkip` /
+            // `LoadTrue` at `base + 1` in release — clobbering RHS's
+            // temporary. Restore the invariant before reserving the result
+            // slot, mirroring the non-Cmp branch below (lines 1786-1796).
+            self.set_freereg(base);
             let reg = self.reserve(1)?;
             debug_assert_eq!(reg, base);
             // Materialize RHS into `reg` with the standard Cmp pad shape
