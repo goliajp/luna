@@ -48,10 +48,30 @@ clap = { version = "4", features = ["derive"] }
 # Until this commit these were dev-deps; promoting them to prod
 # deps for the end-to-end AOT-mcode-firing pipeline.
 luna-jit = { path = "../luna-jit", version = "= 1.3.0" }
-cranelift-codegen = "0.124"
+# v1.3 Phase AOT Stage 7 polish 4 — cross-compile AOT traces. The
+# `all-arch` feature pulls in every Cranelift backend (x86_64, arm64,
+# s390x, riscv64) so the offline trace lowerer can codegen for any
+# `TargetSpec` the caller passes, not just the build host. Without
+# this, `cargo build` on an aarch64 host only links arm64 codegen
+# tables into cranelift-codegen and `--target x86_64-*` falls back
+# to interp+JIT in the produced binary (the trace harvest skips on
+# `isa::lookup` returning `SupportDisabled`). The extra backends add
+# ~1 MB to luna-aot's binary; luna-aot is a build-time tool so this
+# is invisible to deployed binaries.
+cranelift-codegen = { version = "0.124", features = ["all-arch"] }
 cranelift-module = "0.124"
 cranelift-native = "0.124"
 cranelift-object = "0.124"
+# Triple parsing for `TargetSpec::cranelift_isa_builder`. Already a
+# transitive dep through cranelift-codegen / cranelift-native; the
+# direct dep here pins the version surface we depend on (`Triple::
+# from_str`) and survives any future cranelift-internal refactor.
+target-lexicon = "0.13"
 
 [dev-dependencies]
 tempfile = "3"
+# Read-side `object` features for tests that parse the produced binary
+# (e.g. `stage7_aot_cross_compile_traces` walks `luna_trace_meta` to
+# count AOT trace entries). Production code only writes; keeping `read`
+# out of the runtime deps trims luna-aot's downstream surface.
+object = { version = "0.36", features = ["read"] }
