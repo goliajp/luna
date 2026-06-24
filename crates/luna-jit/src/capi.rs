@@ -631,6 +631,8 @@ pub unsafe extern "C" fn lua_version(L: *mut LuaState) -> c_int {
         LuaVersion::Lua52 => 502,
         LuaVersion::Lua53 => 503,
         LuaVersion::Lua54 => 504,
+        // MacroLua reports the 5.4 base it inherits from (audit-locked).
+        LuaVersion::MacroLua => 504,
         LuaVersion::Lua55 => 505,
     }
 }

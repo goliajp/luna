@@ -95,6 +95,8 @@ pub(crate) fn open_base(vm: &mut Vm) {
         crate::version::LuaVersion::Lua52 => "Lua 5.2",
         crate::version::LuaVersion::Lua53 => "Lua 5.3",
         crate::version::LuaVersion::Lua54 => "Lua 5.4",
+        // MacroLua reports the 5.4 base it inherits from (audit-locked).
+        crate::version::LuaVersion::MacroLua => "Lua 5.4",
         crate::version::LuaVersion::Lua55 => "Lua 5.5",
     };
     let v = Value::Str(vm.heap.intern(version.as_bytes()));

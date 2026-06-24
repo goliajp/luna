@@ -83,7 +83,7 @@ fn reference_bin_for(version: LuaVersion) -> Option<&'static str> {
         LuaVersion::Lua51 => &["lua-5.1"][..],
         LuaVersion::Lua52 => &["lua-5.2"][..],
         LuaVersion::Lua53 => &["lua-5.3"][..],
-        LuaVersion::Lua54 => &["lua-5.4"][..],
+        LuaVersion::Lua54 | LuaVersion::MacroLua => &["lua-5.4"][..],
         LuaVersion::Lua55 => &["lua-5.5"][..],
     };
     candidates

@@ -87,7 +87,8 @@ pub fn undump(
     let written_version_byte = match version {
         LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua55 => 0x55,
         LuaVersion::Lua53 => 0x53,
-        LuaVersion::Lua54 => 0x54,
+        // MacroLua dumps using the 5.4 base header (audit-locked).
+        LuaVersion::Lua54 | LuaVersion::MacroLua => 0x54,
     };
     let foreign_puc = bytes.len() >= 5
         && &bytes[0..4] == b"\x1bLua"
