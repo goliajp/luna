@@ -1053,19 +1053,51 @@ fn write_bytecode_object_for(
 /// same C source as Stage 4 but invokes the target-specific cc driver
 /// so the produced `.o` has the right ABI.
 fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), AotError> {
-    let c_src = r#"#include <stddef.h>
+    // v1.3 Phase AOT Stage 7 sub-piece 3 — guarantee the
+    // `luna_strkey_idx` section exists in the link image even when
+    // the binary linked zero AOT trace `.o`s. Without a defining
+    // input the bracket symbols `__start_luna_strkey_idx` /
+    // `__stop_luna_strkey_idx` (or the Mach-O `section$start$...`
+    // equivalents) are undefined and the link fails. Defining an
+    // empty placeholder lets the deploy resolver see `start == end`
+    // and short-circuit cleanly.
+    //
+    // The placeholder uses a `static` zero-length array marked
+    // `used` so the C compiler emits the section header even though
+    // nothing references it. On Mach-O the `section` attribute
+    // takes a `"__SEG,__SECT"` pair; we use `__DATA,luna_strkey_idx`
+    // mirroring the lowerer's `set_segment_section("", ...)` call
+    // (cranelift's empty segment routes to `__DATA` on Mach-O). On
+    // ELF the `section` attribute takes just the section name.
+    let placeholder = match target.os {
+        TargetOs::MacOs => {
+            "__attribute__((used, section(\"__DATA,luna_strkey_idx\")))\n\
+             static const char luna_strkey_idx_placeholder[1] = {0};\n"
+        }
+        TargetOs::Linux => {
+            "__attribute__((used, section(\"luna_strkey_idx\")))\n\
+             static const char luna_strkey_idx_placeholder[1] = {0};\n"
+        }
+        TargetOs::Windows => "",
+    };
+
+    let c_src = format!(
+        r#"#include <stddef.h>
 #include <stdint.h>
 
 extern uint8_t __luna_bytecode_start[];
 extern uint8_t __luna_bytecode_end[];
 extern int luna_aot_run(const uint8_t *bytecode, size_t len);
 
-int main(int argc, char **argv) {
+{placeholder}
+
+int main(int argc, char **argv) {{
     (void)argc; (void)argv;
     size_t len = (size_t)(__luna_bytecode_end - __luna_bytecode_start);
     return luna_aot_run(__luna_bytecode_start, len);
-}
-"#;
+}}
+"#
+    );
 
     let mut c_path = out.to_path_buf();
     c_path.set_extension("c");

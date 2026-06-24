@@ -242,6 +242,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
     // Match the bare core name to stay portable.
     let slot_core = format!("luna_aot_strkey_slot_{hex}");
     let bytes_core = format!("luna_aot_strkey_bytes_{hex}");
+    let idx_core = format!("luna_aot_strkey_idx_{hex}");
 
     assert!(
         nm_str.contains(&slot_core),
@@ -253,4 +254,42 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
         "emitted .o must contain `__{bytes_core}` (bytes manifest). \
          nm output:\n{nm_str}"
     );
+
+    // Sub-piece 3 — index entry per unique key. Local linkage, so
+    // `nm` reports it lowercase-`t`/`s` (small letter = local). The
+    // deploy-side resolver doesn't need it by name (it walks the
+    // dedicated section instead) but its presence is the load-bearing
+    // contract for the resolver's whole-program walk.
+    assert!(
+        nm_str.contains(&idx_core),
+        "emitted .o must contain `__{idx_core}` (index entry; \
+         sub-piece 3 contract). nm output:\n{nm_str}"
+    );
+
+    // Section walk: verify the dedicated `luna_strkey_idx` section is
+    // present. The deploy-side resolver brackets this section
+    // whole-program via `__start_luna_strkey_idx` (ELF) /
+    // `section$start$__DATA$luna_strkey_idx` (Mach-O), so the
+    // section name on the .o must match exactly. Use `objdump -h` on
+    // ELF, `otool -s __DATA luna_strkey_idx` on Mach-O.
+    let (probe_cmd, probe_args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
+        ("otool", vec!["-l"])
+    } else {
+        ("objdump", vec!["-h"])
+    };
+    if have_on_path(probe_cmd) {
+        let probe = Command::new(probe_cmd)
+            .args(&probe_args)
+            .arg(&obj_path)
+            .output();
+        if let Ok(out) = probe {
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                text.contains("luna_strkey_idx"),
+                "`{probe_cmd}` did not surface section `luna_strkey_idx` on \
+                 sp2 .o (sub-piece 3 expects it as the resolver walk target). \
+                 {probe_cmd} output:\n{text}"
+            );
+        }
+    }
 }
