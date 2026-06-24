@@ -186,6 +186,14 @@ pub struct Vm {
     /// limits). When `false`, the loader rejects any source whose first
     /// byte is the bytecode signature `\27` ("`\27Lua`").
     pub(crate) bytecode_loading: bool,
+    /// PUC bytecode-loading gate. Default `false` — PUC `.luac` files are
+    /// a strictly larger trust surface than luna's own dump format
+    /// (third-party toolchain bugs, malformed chunks, unknown opcode
+    /// shapes). When `true`, the loader routes `\x1bLua\x{51..55}` inputs
+    /// through the per-dialect PUC translators in `crate::vm::dump::puc`
+    /// (Phase LB Wave 2 — currently returns "not yet implemented" stubs).
+    /// Embedder toggles via `set_puc_bytecode_loading`.
+    pub(crate) puc_bytecode_loading: bool,
     /// In-process log of fully-emitted warnings (each entry = one flushed
     /// message, sans the "Lua warning: " prefix and trailing newline). Lets
     /// tests assert what was warned without scraping stderr.
@@ -888,6 +896,7 @@ impl Vm {
             warn_log: Vec::new(),
             instr_budget: None,
             bytecode_loading: true,
+            puc_bytecode_loading: false,
             registry: None,
             file_mt: None,
             io_input: None,
@@ -1218,12 +1227,13 @@ impl Vm {
             });
         }
         let proto = if is_bytecode {
-            crate::vm::dump::undump(src, &mut self.heap, self.version).map_err(|msg| {
-                SyntaxError {
+            let allow_puc = self.puc_bytecode_loading;
+            crate::vm::dump::undump(src, &mut self.heap, self.version, allow_puc).map_err(
+                |msg| SyntaxError {
                     line: 0,
                     msg: msg.into_bytes(),
-                }
-            })?
+                },
+            )?
         } else {
             let ast = parse(src, self.version)?;
             compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
@@ -3454,6 +3464,20 @@ impl Vm {
     /// Current bytecode-loading gate state.
     pub fn bytecode_loading(&self) -> bool {
         self.bytecode_loading
+    }
+
+    /// Toggle PUC `.luac` bytecode loading. Default `false` — PUC
+    /// bytecode is a strictly larger trust surface than luna's own dump
+    /// format (third-party toolchain bugs, malformed chunks, unknown
+    /// opcode shapes). Enable only for trusted PUC chunks. Per-dialect
+    /// translators (Phase LB Wave 2) live in `crate::vm::dump::puc`.
+    pub fn set_puc_bytecode_loading(&mut self, enabled: bool) {
+        self.puc_bytecode_loading = enabled;
+    }
+
+    /// Current PUC bytecode-loading gate state.
+    pub fn puc_bytecode_loading(&self) -> bool {
+        self.puc_bytecode_loading
     }
 
     /// Take the error traceback captured at the latest error point and
