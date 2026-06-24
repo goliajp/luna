@@ -52,7 +52,12 @@ use object::{Architecture, BinaryFormat, Endianness, SectionKind, SymbolKind, Sy
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
+use luna_core::jit::aot_meta::{
+    AotTraceMetaHeader, encode_meta_blob, pack_exit_tag, pack_tag_res_kind,
+};
+use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::runtime::Heap;
+use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::dump;
 
@@ -431,6 +436,29 @@ pub fn compile_and_link(
     // ABI / object-format magic.
     write_aot_cmain_object_for(&cmain_obj_path, &target)?;
 
+    // v1.3 Phase AOT Stage 7 sub-piece 4 — offline trace recorder +
+    // AOT trace mcode emission. Host-only: cross-compile of trace
+    // mcode requires a host-different cranelift `TargetIsa`, which is
+    // a much larger surface than the .o emit code below — deferred.
+    //
+    // Returns Ok(None) when no traces close (small / non-loopy source),
+    // Ok(Some(path)) when at least one trace was emitted into a fresh
+    // `.luna_traces.o`. The smoke test below picks up either shape.
+    let traces_obj_path = if target.is_host {
+        let path = workdir.join(format!("{stem}.luna_traces.o"));
+        match harvest_and_emit_aot_traces(&dump_bytes, version, &path)? {
+            HarvestedTraces::None => None,
+            HarvestedTraces::Some => Some(path),
+        }
+    } else {
+        // Cross AOT-mcode emission is out of scope this commit. The
+        // produced binary still runs the embedded chunk through the
+        // interp + JIT fallback (the staticlib carries luna-jit), so
+        // correctness is unchanged — only the AOT-trace fast path is
+        // missing on cross builds.
+        None
+    };
+
     // Stage 6b: ensure the runtime staticlib exists for `target`.
     // For the host triple this is a workspace cargo build; for a cross
     // triple it's `cargo build --target=<triple>` and the resulting
@@ -446,12 +474,28 @@ pub fn compile_and_link(
     link_aot_binary_for(
         &bytecode_obj_path,
         &cmain_obj_path,
+        traces_obj_path.as_deref(),
         &staticlib,
         out_path,
         &target,
     )?;
 
     Ok(())
+}
+
+/// v1.3 Phase AOT Stage 7 sub-piece 4 — return shape for
+/// [`harvest_and_emit_aot_traces`]. `None` = warmup recorded zero
+/// dispatchable traces (small / non-loopy source); `Some` = at least
+/// one trace .o was written.
+enum HarvestedTraces {
+    /// Warmup didn't produce any dispatchable traces. Pipeline
+    /// continues without a trace `.o` on the link line; AOT binary
+    /// runs through interp + runtime JIT only.
+    None,
+    /// Trace `.o` was written at the path passed in. Link step adds it
+    /// to the cc invocation; deploy walker installs the contained
+    /// traces at startup.
+    Some,
 }
 
 /// Convenience wrapper for callers that want explicit host-target builds.
@@ -1069,14 +1113,34 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // mirroring the lowerer's `set_segment_section("", ...)` call
     // (cranelift's empty segment routes to `__DATA` on Mach-O). On
     // ELF the `section` attribute takes just the section name.
+    // v1.3 Phase AOT Stage 7 sub-piece 4 — also guarantee the
+    // `luna_trace_meta` section exists in the link image when zero
+    // trace `.o`s linked in (small / non-loopy sources where the
+    // warmup recorder didn't close any traces). Same placeholder
+    // pattern as `luna_strkey_idx` from sub-piece 3.
+    //
+    // **Sized at 48 bytes** (matching `AotTraceIndexEntry::SIZE`) and
+    // 8-byte aligned so when a real AOT-emitted trace .o lands in the
+    // same section, the linker's section merge concatenates the
+    // entries without misaligning anyone. The placeholder bytes are
+    // all-zero; the deploy walker sees a single entry whose `fn_ptr`
+    // is NULL and skips it (via the `entry.fn_ptr.is_null()` guard).
+    //
+    // `aligned(8)` is needed because the section's other entries
+    // carry pointer relocations at offsets 24 / 32 — a misaligned
+    // placeholder shifts those into bad lanes.
     let placeholder = match target.os {
         TargetOs::MacOs => {
             "__attribute__((used, section(\"__DATA,luna_strkey_idx\")))\n\
-             static const char luna_strkey_idx_placeholder[1] = {0};\n"
+             static const char luna_strkey_idx_placeholder[1] = {0};\n\
+             __attribute__((used, section(\"__DATA,luna_trace_meta\"), aligned(8)))\n\
+             static const char luna_trace_meta_placeholder[48] = {0};\n"
         }
         TargetOs::Linux => {
             "__attribute__((used, section(\"luna_strkey_idx\")))\n\
-             static const char luna_strkey_idx_placeholder[1] = {0};\n"
+             static const char luna_strkey_idx_placeholder[1] = {0};\n\
+             __attribute__((used, section(\"luna_trace_meta\"), aligned(8)))\n\
+             static const char luna_trace_meta_placeholder[48] = {0};\n"
         }
         TargetOs::Windows => "",
     };
@@ -1122,9 +1186,16 @@ int main(int argc, char **argv) {{
 
 /// Target-aware variant of [`link_aot_binary`]. Picks the cc driver,
 /// per-OS lib set, and (for Windows) the MinGW vs MSVC path.
+///
+/// `traces_obj` (Stage 7 sub-piece 4): optional AOT-trace mcode `.o`
+/// emitted by [`harvest_and_emit_aot_traces`]. When `Some`, the linker
+/// pulls in the trace mcode + the `luna_trace_meta` / `luna_trace_blob`
+/// data sections that the deploy walker reads at startup. When `None`,
+/// the binary runs through interp + runtime-JIT fallback only.
 fn link_aot_binary_for(
     bytecode_obj: &Path,
     cmain_obj: &Path,
+    traces_obj: Option<&Path>,
     staticlib: &Path,
     out_path: &Path,
     target: &TargetSpec,
@@ -1155,7 +1226,16 @@ fn link_aot_binary_for(
     // staticlib). Order matters for some traditional Unix linkers
     // (`ld` resolves left-to-right; modern `lld` is order-independent
     // but we keep the canonical order for portability).
-    cmd.arg(cmain_obj).arg(bytecode_obj).arg(staticlib);
+    cmd.arg(cmain_obj).arg(bytecode_obj);
+    if let Some(traces) = traces_obj {
+        // Trace mcode `.o` from Stage 7 sub-piece 4. Placed after the
+        // bytecode object (which references the AOT trace `luna_aot_
+        // trace_*` symbols via its bracketed meta section's
+        // relocations) so resolution flows correctly under traditional
+        // left-to-right ld.
+        cmd.arg(traces);
+    }
+    cmd.arg(staticlib);
 
     // Per-OS lib set — what `rustc --print native-static-libs` reports
     // for a `crate-type = ["staticlib"]` on each platform that pulls
@@ -1211,4 +1291,378 @@ fn link_aot_binary_for(
         )));
     }
     Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────
+// v1.3 Phase AOT Stage 7 sub-piece 4 — offline trace harvester +
+// AOT trace mcode emission.
+//
+// The pipeline:
+//   1. Build a JIT-equipped warmup `Vm` (luna_jit::new_with_jit) and
+//      swap in a `RecordingTraceCompiler` wrapper that forwards every
+//      compile attempt to the real Cranelift backend AND captures the
+//      input `TraceRecord` into a thread-local. The recorder runs at
+//      every back-edge that crosses the const `TRACE_HOT_THRESHOLD = 64`,
+//      so simple counted loops with iteration counts in the thousands
+//      will close at least one trace.
+//   2. Load the dump and call the chunk's root closure. The dispatcher
+//      records + compiles + dispatches as normal; we only care about
+//      the captured records.
+//   3. For each captured (proto, record) pair, re-lower the record via
+//      `lower_trace_into_named` against a fresh `ObjectModule` per .o,
+//      writing the emitted bytes + a per-trace `luna_trace_blob` payload
+//      + a `luna_trace_meta` 48-byte index entry. All three sections are
+//      bracket-symbol enumerated by the deploy walker at startup.
+//   4. Bail-tolerantly: if no traces close (small / non-loopy source),
+//      return `HarvestedTraces::None` and the pipeline skips the trace .o.
+// ────────────────────────────────────────────────────────────────────
+
+/// Records every `TraceRecord` the dispatcher tries to compile; forwards
+/// the actual compile to the wrapped real Cranelift backend so the
+/// warmup run dispatches normally afterwards.
+///
+/// Records are appended to a thread-local Vec — read out after the
+/// warmup `vm.call_value` returns.
+struct RecordingTraceCompiler {
+    inner: luna_jit::jit_backend::CraneliftBackend,
+}
+
+thread_local! {
+    /// Thread-local capture buffer for `TraceRecord`s observed during
+    /// the AOT warmup run. Each entry is `(head_proto_hash,
+    /// head_pc, TraceRecord)`. Cleared at the start of every
+    /// [`harvest_and_emit_aot_traces`] call.
+    static AOT_CAPTURED_RECORDS: std::cell::RefCell<Vec<([u8; 16], u32, TraceRecord)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
+    fn try_compile_trace(
+        &self,
+        record: &TraceRecord,
+        opts: CompileOptions,
+    ) -> Option<CompiledTrace> {
+        // Capture a cloneable image of the record so we can re-lower at
+        // AOT emit time. TraceRecord is Clone since every field is
+        // Clone (Gc<Proto> = NonNull copy; Vec<RecordedOp> is Clone).
+        let hash = record.head_proto.stable_hash();
+        AOT_CAPTURED_RECORDS.with(|cell| {
+            cell.borrow_mut()
+                .push((hash, record.head_pc, record.clone()));
+        });
+        self.inner.try_compile_trace(record, opts)
+    }
+
+    fn last_compile_checkpoint(&self) -> &'static str {
+        self.inner.last_compile_checkpoint()
+    }
+}
+
+/// Run a warmup `Vm` on the dumped bytecode, harvest closed
+/// `TraceRecord`s the trace JIT compiled, re-lower each through
+/// `lower_trace_into_named` into a fresh `ObjectModule`, and write the
+/// produced bytes (plus a `luna_trace_meta` index + `luna_trace_blob`
+/// payload) to `out`.
+///
+/// Returns `Ok(HarvestedTraces::None)` if the warmup recorded zero
+/// AOT-installable traces — the calling pipeline then skips the .o on
+/// the link line entirely (no placeholder .o on disk).
+///
+/// `dump_bytes` is the same chunk the deploy binary will execute, so
+/// the proto identities (and therefore `stable_hash`) match between
+/// AOT compile and deploy load.
+fn harvest_and_emit_aot_traces(
+    dump_bytes: &[u8],
+    version: LuaVersion,
+    out: &Path,
+) -> Result<HarvestedTraces, AotError> {
+    use cranelift_codegen::settings::{self, Configurable};
+    use cranelift_module::{DataDescription, Linkage, Module, default_libcall_names};
+    use cranelift_object::{ObjectBuilder, ObjectModule};
+
+    // Reset the capture buffer for this harvest call. A previous run
+    // in the same process (e.g. unit tests running back-to-back) must
+    // not leak its records into this one.
+    AOT_CAPTURED_RECORDS.with(|cell| cell.borrow_mut().clear());
+
+    // Build the warmup Vm + install the recording compiler. We use
+    // `new_with_jit` (= new_minimal_with_jit + open_all_libs) so the
+    // script can call `print`, `math.*`, etc. — typical hot loops in
+    // realistic programs touch these libs.
+    let mut vm = luna_jit::new_with_jit(version);
+    vm.install_jit_backend(
+        luna_jit::jit_backend::CraneliftBackend,
+        RecordingTraceCompiler {
+            inner: luna_jit::jit_backend::CraneliftBackend,
+        },
+    );
+    vm.set_trace_jit_enabled(true);
+    vm.set_bytecode_loading(true);
+
+    // Load + call the root closure. Errors here are **non-fatal** —
+    // the script may rely on host-side state we don't have (CLI args,
+    // env vars), may `error()` intentionally as part of normal control
+    // flow, or may diverge from any reproducible path. The warmup's
+    // job is to surface hot traces, not to validate the script —
+    // produce 0 AOT traces and move on if anything goes sideways.
+    //
+    // The deploy binary still runs the script through interp + JIT;
+    // a missing AOT fast-path doesn't break correctness, only perf.
+    let closure = match vm.load(dump_bytes, b"=embedded-aot-warmup") {
+        Ok(c) => c,
+        Err(_) => return Ok(HarvestedTraces::None),
+    };
+    let _ = vm.call_value(Value::Closure(closure), &[]);
+
+    // Snapshot the captured records. Take ownership so the thread-
+    // local Vec is empty going forward (matches the test-isolation
+    // invariant established at the top of this fn).
+    let captured: Vec<([u8; 16], u32, TraceRecord)> =
+        AOT_CAPTURED_RECORDS.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+
+    let probe_on = std::env::var_os("LUNA_AOT_HARVEST_PROBE").is_some();
+    if probe_on {
+        eprintln!("luna-aot harvest: captured {} TraceRecords", captured.len());
+    }
+    if captured.is_empty() {
+        return Ok(HarvestedTraces::None);
+    }
+
+    // Pair each captured record with the actual CompiledTrace that
+    // landed in the proto's traces vec — we need the post-lower fields
+    // (window_size, entry_tags, exit_tags, dispatchable,
+    // global_tag_res_kind) for the meta blob. The record-by-record
+    // lookup keys on (proto_ptr, head_pc); records that didn't survive
+    // compile (lowerer bailed, returned None) drop here.
+    //
+    // Filter to AOT-installable shapes only: no inline / per-cont_pc
+    // side-exits, dispatchable. Traces with those richer side-exit
+    // shapes need the full `CompiledTrace` field serialization which
+    // sub-piece-4 doesn't ship — they stay JIT-only.
+    let mut installable: Vec<(
+        usize,
+        [u8; 16],
+        u32,
+        TraceRecord,
+        std::rc::Rc<CompiledTrace>,
+    )> = Vec::new();
+    let mut filter_stats = (0usize, 0usize, 0usize, 0usize);
+    for (i, (hash, head_pc, record)) in captured.into_iter().enumerate() {
+        let proto = record.head_proto;
+        let traces_ref = proto.traces.borrow();
+        let Some(ct) = traces_ref.iter().find(|c| c.head_pc == head_pc).cloned() else {
+            filter_stats.0 += 1;
+            continue;
+        };
+        drop(traces_ref);
+        if !ct.dispatchable {
+            filter_stats.1 += 1;
+            continue;
+        }
+        if !ct.per_exit_inline.is_empty() {
+            filter_stats.2 += 1;
+            continue;
+        }
+        if !ct.per_exit_tags.is_empty() {
+            filter_stats.3 += 1;
+            continue;
+        }
+        installable.push((i, hash, head_pc, record, ct));
+    }
+
+    if probe_on {
+        eprintln!(
+            "luna-aot harvest: installable={}, filtered: no_ct={}, undispatchable={}, has_inline={}, has_per_exit_tags={}",
+            installable.len(),
+            filter_stats.0,
+            filter_stats.1,
+            filter_stats.2,
+            filter_stats.3,
+        );
+    }
+    if installable.is_empty() {
+        return Ok(HarvestedTraces::None);
+    }
+
+    // Build the ObjectModule for the trace .o. PIC required for ELF/
+    // Mach-O linker relocations.
+    let isa = {
+        let mut flag_builder = settings::builder();
+        flag_builder
+            .set("use_colocated_libcalls", "false")
+            .expect("flag");
+        flag_builder.set("is_pic", "true").expect("flag");
+        flag_builder.set("opt_level", "speed").expect("flag");
+        cranelift_native::builder()
+            .map_err(|e| AotError::Object(format!("cranelift_native::builder: {e}")))?
+            .finish(settings::Flags::new(flag_builder))
+            .map_err(|e| AotError::Object(format!("ISA finish: {e}")))?
+    };
+    let object_builder = ObjectBuilder::new(isa, "luna_aot_traces", default_libcall_names())
+        .map_err(|e| AotError::Object(format!("ObjectBuilder: {e}")))?;
+    let mut module = ObjectModule::new(object_builder);
+
+    // Per-trace emission: lower IR + meta blob + index entry.
+    // We accumulate the meta blobs into one combined `luna_trace_blob`
+    // data symbol (so the linker has a single object per pipeline,
+    // not N), and emit one `luna_trace_meta_<idx>` entry per trace.
+    let mut blob_payload: Vec<u8> = Vec::new();
+    // Per-trace `(fn_name, meta_blob_offset_within_combined, meta_blob_len)`.
+    let mut per_trace_meta: Vec<(String, u32, u32)> = Vec::new();
+    for (idx, _hash, _head_pc, record, ct) in installable.iter() {
+        let fn_name = format!("luna_aot_trace_{idx:08x}");
+        let opts = CompileOptions {
+            internal_loop: true,
+            pre53: matches!(version, LuaVersion::Lua51 | LuaVersion::Lua52),
+            aot: true,
+        };
+        // Re-lower this record into the ObjectModule under a unique
+        // exported name. Any bail here = the record was lowerable at
+        // warmup time (it appeared in the captured list AND the
+        // matched ct is non-None) but failed under aot=true codegen —
+        // most likely a relocation path that fails for some opcode the
+        // AOT lowerer's strkey resolver doesn't cover. Skip + continue;
+        // the trace will fall back to JIT at deploy time.
+        let lower_res = luna_jit::jit_backend::trace::lower_trace_into_named(
+            &mut module,
+            record,
+            opts,
+            Some(&fn_name),
+        );
+        if lower_res.is_none() {
+            if probe_on {
+                eprintln!(
+                    "luna-aot harvest: AOT lower bailed for trace idx={idx} head_pc={}",
+                    ct.head_pc
+                );
+            }
+            continue;
+        }
+
+        // Serialize the meta blob for this trace.
+        let entry_tags_vec: Vec<u8> = ct.entry_tags.iter().copied().collect();
+        let exit_tags_vec: Vec<u8> = ct.exit_tags.iter().copied().map(pack_exit_tag).collect();
+        let header = AotTraceMetaHeader {
+            magic: luna_core::jit::aot_meta::AOT_META_MAGIC,
+            version: luna_core::jit::aot_meta::AOT_META_VERSION,
+            head_pc: ct.head_pc,
+            n_ops: ct.n_ops,
+            window_size: ct.window_size,
+            dispatchable: u8::from(ct.dispatchable),
+            tag_res_kind: pack_tag_res_kind(ct.global_tag_res_kind),
+            entry_tags_len: entry_tags_vec.len() as u16,
+            exit_tags_len: exit_tags_vec.len() as u32,
+        };
+        let blob = encode_meta_blob(&header, &entry_tags_vec, &exit_tags_vec);
+        let blob_offset = blob_payload.len() as u32;
+        let blob_len = blob.len() as u32;
+        blob_payload.extend_from_slice(&blob);
+        per_trace_meta.push((fn_name, blob_offset, blob_len));
+    }
+
+    if per_trace_meta.is_empty() {
+        // Everything filtered out by the AOT lower bail. Same shape as
+        // "no traces at all".
+        return Ok(HarvestedTraces::None);
+    }
+
+    // Emit the combined `luna_trace_blob` data symbol. Single object;
+    // each per-trace meta entry references it via offset.
+    let blob_data_id = module
+        .declare_data("__luna_trace_blob_combined", Linkage::Local, false, false)
+        .map_err(|e| AotError::Object(format!("declare_data blob: {e}")))?;
+    {
+        let mut desc = DataDescription::new();
+        desc.define(blob_payload.into_boxed_slice());
+        // Read-only data section. Mach-O caps section names at 16 chars;
+        // `luna_trace_blob` is 15 — fits with one byte of headroom for
+        // the implicit comparator NUL.
+        // `__DATA` segment on Mach-O — the deploy walker doesn't
+        // bracket this section (each meta entry references it by
+        // pointer relocation), but keeping it next to `luna_trace_
+        // meta` in `__DATA` is the path of least surprise for ld /
+        // strip.
+        desc.set_segment_section("__DATA", "luna_trace_blob");
+        module
+            .define_data(blob_data_id, &desc)
+            .map_err(|e| AotError::Object(format!("define_data blob: {e}")))?;
+    }
+
+    // Emit one 48-byte `luna_trace_meta_<idx>` index entry per trace
+    // into the dedicated `luna_trace_meta` section. The static linker
+    // auto-brackets via `__start_luna_trace_meta` / `__stop_luna_trace_
+    // meta` (ELF) or `section$start$__DATA$luna_trace_meta` (Mach-O).
+    for (idx, (fn_name, blob_offset, blob_len)) in per_trace_meta.iter().enumerate() {
+        let hash = installable[idx].1;
+        let head_pc = installable[idx].2;
+
+        let entry_data_id = module
+            .declare_data(
+                &format!("__luna_trace_meta_entry_{idx:08x}"),
+                Linkage::Local,
+                false,
+                false,
+            )
+            .map_err(|e| AotError::Object(format!("declare_data meta entry: {e}")))?;
+        let mut desc = DataDescription::new();
+        // 48 bytes: [hash 16] [head_pc 4] [_pad 4] [fn_ptr 8] [meta_ptr 8] [meta_len 4] [_pad2 4]
+        let mut payload = [0u8; 48];
+        payload[0..16].copy_from_slice(&hash);
+        payload[16..20].copy_from_slice(&head_pc.to_le_bytes());
+        // payload[20..24] _pad
+        // payload[24..32] fn_ptr — relocation
+        // payload[32..40] meta_ptr — relocation
+        payload[40..44].copy_from_slice(&blob_len.to_le_bytes());
+        desc.define(Box::new(payload));
+        // Use `__DATA` segment explicitly on Mach-O so the section
+        // merges with the cmain shim's `__DATA,luna_trace_meta`
+        // placeholder. cranelift_object passes the segment arg
+        // through verbatim; an empty segment lands the section in
+        // segment `""`, separate from `__DATA` — and the deploy
+        // walker's `section$start$__DATA$luna_trace_meta` would only
+        // see the placeholder. ELF / PE ignore the segment arg
+        // (segment concept is Mach-O specific) so passing `__DATA`
+        // is a no-op there.
+        desc.set_segment_section("__DATA", "luna_trace_meta");
+        // 8-byte alignment for the fn_ptr / meta_ptr relocations at
+        // offsets 24 and 32. Without explicit `set_align(8)` the
+        // entries can land at odd offsets in the .o, and Mach-O's
+        // `ld` rejects the unaligned pointer slots ("pointer not
+        // aligned in `___luna_trace_meta_entry_…`+0x20").
+        desc.set_align(8);
+
+        // Declare the trace fn as Import so we can relocate against it.
+        // (It's Export'd by `lower_trace_into_named` above.) The
+        // declare_function call here re-uses the same name; cranelift
+        // module name-interning matches the two so the relocation
+        // resolves to the lowerer-emitted body.
+        let trace_fn_sig = {
+            let mut sig = module.make_signature();
+            sig.params.push(cranelift_codegen::ir::AbiParam::new(
+                cranelift_codegen::ir::types::I64,
+            ));
+            sig.returns.push(cranelift_codegen::ir::AbiParam::new(
+                cranelift_codegen::ir::types::I64,
+            ));
+            sig
+        };
+        let fn_id = module
+            .declare_function(fn_name, Linkage::Import, &trace_fn_sig)
+            .map_err(|e| AotError::Object(format!("declare_function for reloc: {e}")))?;
+        let fn_gv = module.declare_func_in_data(fn_id, &mut desc);
+        desc.write_function_addr(24, fn_gv);
+        let blob_gv = module.declare_data_in_data(blob_data_id, &mut desc);
+        desc.write_data_addr(32, blob_gv, *blob_offset as i64);
+
+        module
+            .define_data(entry_data_id, &desc)
+            .map_err(|e| AotError::Object(format!("define_data meta entry: {e}")))?;
+    }
+
+    let product = module.finish();
+    let bytes = product
+        .emit()
+        .map_err(|e| AotError::Object(format!("ObjectProduct::emit: {e}")))?;
+    fs::write(out, &bytes)?;
+    Ok(HarvestedTraces::Some)
 }

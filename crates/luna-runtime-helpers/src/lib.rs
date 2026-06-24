@@ -210,6 +210,27 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         }
     };
 
+    // v1.3 Phase AOT Stage 7 sub-piece 4 — install AOT-emitted traces
+    // against the loaded chunk's proto tree. Runs after `vm.load`
+    // (the resolver needs the closure's proto as the BFS root) and
+    // BEFORE `vm.call_value` (so the dispatcher's first back-edge
+    // visit finds the installed trace and fires AOT mcode, instead
+    // of bumping `trace_hot_count` from zero and going through the
+    // runtime recorder again). Empty-section tolerant: a binary with
+    // zero linked AOT trace `.o`s sees `installed == 0`, fall through
+    // to runtime JIT.
+    #[cfg(feature = "jit-helpers")]
+    {
+        // SAFETY: closure is a live Gc<LuaClosure>; reading .proto is
+        // a NonNull pointer copy. The heap is single-threaded so no
+        // concurrent mutation is possible during this read.
+        let root_proto = unsafe { (*closure.as_ptr()).proto };
+        let installed = aot_trace_registry::install_all(&mut vm, root_proto);
+        if std::env::var_os("LUNA_AOT_PROBE").is_some() {
+            eprintln!("luna-runtime-helpers: aot_trace_install_count = {installed}");
+        }
+    }
+
     match vm.call_value(Value::Closure(closure), &[]) {
         Ok(_results) => 0,
         Err(err) => {
@@ -641,103 +662,194 @@ pub mod aot_strkey_resolver {
     }
 }
 
-/// v1.3 Phase AOT Stage 7 sub-piece 4 — trace dispatch registry.
-///
-/// **STATUS**: Steps 1 + 3 landed; Steps 2/4/5 (offline trace recorder
-/// at compile time, deploy-side trace-meta walker, end-to-end smoke
-/// test) deferred to a follow-up session — see § TODO below.
-///
-/// # Architecture (target shape)
-///
-/// 1. **Offline trace recorder** (build time, in `luna-aot::embed::
-///    compile_and_link`): warmup-run the dumped bytecode in a temp
-///    `Vm` with `trace_enabled = true`; close the first N traces.
-/// 2. **AOT lowerer call**: for each closed trace, call
-///    `lower_trace_into(&mut ObjectModule, record,
-///    CompileOptions { aot: true, .. })`. The resulting `FuncId`'s
-///    symbol becomes a strong extern in the trace object.
-/// 3. **Trace-meta section emission**: emit a `luna_trace_meta`
-///    section holding `[(proto_hash : [u8; 16], head_pc : u32,
-///    fn_name_offset : u32, fn_name_len : u32) ; N]` plus a string
-///    table for the fn names. Bracket the section with linker-
-///    synthetic `__start_luna_trace_meta` / `__stop_luna_trace_meta`
-///    on ELF, `section$start$__DATA$luna_trace_meta` on Mach-O
-///    (mirroring sub-piece 3's `luna_strkey_idx` plumbing).
-/// 4. **Deploy walk** (this module's eventual `resolve_all`): walks
-///    the bracketed section, looks up each entry's `fn_ptr` from
-///    the string table (or directly from `__start_luna_trace_funcs`
-///    if we choose the parallel-array shape instead), calls
-///    `vm.collect_proto_hashes(root_proto)` to build a hash → Proto
-///    lookup once, then calls `vm.install_aot_trace(proto, trace)`
-///    per matched entry. Trace metadata (`entry_tags`,
-///    `window_size`, `exit_tags`) lives next to the fn in the
-///    `.rodata` of the trace object — emitted by the lowerer alongside
-///    the mcode in step 2.
-/// 5. **Smoke test**: `crates/luna-aot/tests/stage7_aot_trace_fires
-///    .rs` (TODO) — AOT-compile a hot loop, run with
-///    `LUNA_AOT_PROBE=1`, assert stdout + assert stderr contains
-///    `aot_trace_fired pc=<N>`.
-///
-/// # What landed this session
-///
-/// - **Step 1** (`Proto::stable_hash` in
-///   `luna-core/src/runtime/function.rs`): FNV-1a-128 over bytecode +
-///   constants + upvals descriptors. Hand-rolled, no third-party
-///   deps. 4 unit tests in `tests/proto_stable_hash.rs`.
-/// - **Step 3** (`Vm::install_aot_trace` + `Vm::collect_proto_hashes`
-///   in `luna-core/src/vm/exec.rs`, bottom-of-file `impl Vm` block):
-///   the install API the deploy resolver will call once per AOT
-///   trace meta entry, plus the BFS-by-hash lookup the resolver uses
-///   to match `proto_hash → Gc<Proto>`. 3 unit tests in
-///   `tests/aot_trace_install.rs`.
-///
-/// # TODO (Steps 2 + 4 + 5)
-///
-/// Open work, in dependency order:
-///
-/// - **Step 2 (trace recorder driver, ~1d effort)**: in
-///   `crates/luna-aot/src/embed.rs::compile_and_link`, after
-///   `compile_to_dump`, build a temp `Vm` with low hot-count
-///   thresholds (need a `Vm::set_trace_hot_count_threshold` setter —
-///   today it's a const), run the script through `vm.call_value`
-///   with a small driver, and harvest the closed traces from
-///   `Proto.traces` of each visited proto. Convert each to an
-///   `ObjectModule` symbol via `lower_trace_into(&mut object_module,
-///   record, CompileOptions { aot: true, internal_loop: true,
-///   pre53: false })`.
-/// - **Step 4 (deploy-side trace-meta walker, ~0.5d effort)**: add a
-///   sibling resolver module to [`aot_strkey_resolver`] that walks
-///   `__start_luna_trace_meta` .. `__stop_luna_trace_meta`,
-///   calls `vm.collect_proto_hashes(root)` once (where `root` is the
-///   `LuaClosure.proto` returned by `vm.load`), and per entry:
-///   resolves the fn ptr, builds a `CompiledTrace` from the linked
-///   meta fields, calls `vm.install_aot_trace`. Plumbed into
-///   `run_inner` between `vm.load` and `vm.call_value`.
-/// - **Step 5 (end-to-end smoke test, ~0.5d effort)**: AOT-compile a
-///   tight loop, run with `LUNA_AOT_PROBE=1`, assert stdout AND
-///   `aot_trace_fired` probe in stderr. Add an `eprintln!` guarded
-///   on `LUNA_AOT_PROBE` inside the trace's first-dispatch path
-///   (either in the IR via a probe helper, or in
-///   `install_aot_trace` itself for a coarser "trace installed for
-///   pc=N" signal).
-///
-/// Effort total: ~2-3 dev-days for Steps 2/4/5 combined, dominated
-/// by the trace-recorder threshold-tuning (Step 2). Sub-piece 3's
-/// strkey resolver + this sub-piece's Steps 1/3 are the load-bearing
-/// dependencies — both shipped, so Steps 2/4/5 can be picked up
-/// without redoing any of the strkey or hash plumbing.
-///
-/// The `LUNA_AOT_PROBE` env-var convention is reserved: when set,
-/// sub-pieces 3 and 4 each print one diagnostic line per resolve.
-/// Sub-piece 4's eventual line: `aot_trace_installed: pc=<N>` from
-/// the deploy walker, plus optional `aot_trace_fired pc=<N>` from
-/// the dispatch site for the smoke test.
+// v1.3 Phase AOT Stage 7 sub-piece 4 — trace dispatch registry.
+// See module-level docs inside the block for the deploy-side walker
+// shape; the AOT-compile-side recorder + emitter lives in
+// `crates/luna-aot/src/embed.rs::harvest_and_emit_aot_traces`.
 #[cfg(feature = "jit-helpers")]
 pub mod aot_trace_registry {
-    // Intentionally empty for this session's Steps 1 + 3 ship —
-    // those land on the luna-core API surface (`Proto::stable_hash` +
-    // `Vm::install_aot_trace` + `Vm::collect_proto_hashes`).
-    // Sub-piece 4 Steps 2/4/5 (compile-time recorder + deploy walker
-    // + smoke test) populate this module in a follow-up session;
-    // see the module-level docstring for the plan.
+    //! v1.3 Phase AOT Stage 7 sub-piece 4 — deploy-side trace-meta
+    //! walker.
+    //!
+    //! `luna-aot::embed::harvest_and_emit_aot_traces` emits a 48-byte
+    //! [`luna_core::jit::aot_meta::AotTraceIndexEntry`] per AOT-installable
+    //! trace into the `luna_trace_meta` bracketed section, plus a
+    //! combined meta-blob payload in `luna_trace_blob`. This walker
+    //! runs once at startup (between `vm.set_bytecode_loading(true)`
+    //! and `vm.load`), iterates the bracket-bounded section, matches
+    //! each entry's `proto_hash` against the loaded chunk's proto
+    //! tree via [`Vm::collect_proto_hashes`], and calls
+    //! [`Vm::install_aot_trace`] with a freshly constructed
+    //! [`CompiledTrace`] whose `entry` points at the linker-resolved
+    //! AOT mcode.
+    //!
+    //! Empty-section tolerant: a binary with zero linked trace `.o`s
+    //! has both bracket symbols collapse to the same address; the walk
+    //! short-circuits with `Ok(0)`.
+
+    use luna_core::jit::aot_meta::{
+        AotTraceIndexEntry, decode_meta_blob, unpack_exit_tag, unpack_tag_res_kind,
+    };
+    use luna_core::jit::trace_types::{CompiledTrace, ExitTag, TraceFn};
+    use luna_core::vm::Vm;
+
+    // Bracket symbols — same pattern as sub-piece 3's strkey_idx
+    // walker. ELF / lld auto-create `__start_<name>` / `__stop_<name>`
+    // for sections whose name is a valid C identifier; Mach-O uses
+    // `section$start$<seg>$<sect>` / `section$end$<seg>$<sect>`.
+    //
+    // Windows COFF has no bracket-symbol convention; AOT trace install
+    // is a known gap there (`install_all` returns `Ok(0)`).
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    unsafe extern "C" {
+        #[link_name = "__start_luna_trace_meta"]
+        static mut LUNA_TRACE_META_START: u8;
+        #[link_name = "__stop_luna_trace_meta"]
+        static mut LUNA_TRACE_META_END: u8;
+    }
+
+    #[cfg(target_vendor = "apple")]
+    unsafe extern "C" {
+        #[link_name = "\u{1}section$start$__DATA$luna_trace_meta"]
+        static mut LUNA_TRACE_META_START: u8;
+        #[link_name = "\u{1}section$end$__DATA$luna_trace_meta"]
+        static mut LUNA_TRACE_META_END: u8;
+    }
+
+    /// Walk the `luna_trace_meta` section, install one `CompiledTrace`
+    /// per entry whose `proto_hash` matches a Proto reachable from
+    /// `root`. Returns the count installed.
+    ///
+    /// Entries whose meta blob fails to decode (magic / version
+    /// mismatch, truncation) are skipped silently — the trace falls
+    /// back to JIT at runtime. `LUNA_AOT_PROBE=1` surfaces the count
+    /// + per-entry skip reasons on stderr for diagnosis.
+    ///
+    /// The deploy `Vm` never side-traces an AOT-installed parent
+    /// (recorder is invoked from the dispatch path; AOT install
+    /// happens BEFORE the first dispatch), so the bare
+    /// [`CompiledTrace::from_aot_meta`] constructor with empty
+    /// `per_exit_inline` / `per_exit_tags` is sufficient.
+    pub fn install_all(
+        vm: &mut Vm,
+        root: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
+    ) -> usize {
+        // Windows + any platform we don't have bracket externs for: no-op.
+        #[cfg(not(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple")))]
+        {
+            let _ = (vm, root);
+            return 0;
+        }
+
+        #[cfg(any(all(unix, not(target_vendor = "apple")), target_vendor = "apple"))]
+        unsafe {
+            let start = &raw mut LUNA_TRACE_META_START as *mut AotTraceIndexEntry;
+            let end = &raw mut LUNA_TRACE_META_END as *mut AotTraceIndexEntry;
+            let len_bytes = (end as isize) - (start as isize);
+            if len_bytes <= 0 {
+                return 0;
+            }
+            let n_entries = (len_bytes as usize) / core::mem::size_of::<AotTraceIndexEntry>();
+            // Build the hash → Gc<Proto> lookup once. BFS over the
+            // root's proto tree.
+            let proto_hashes = vm.collect_proto_hashes(root);
+            let probe_on = std::env::var_os("LUNA_AOT_PROBE").is_some();
+            let mut installed = 0usize;
+            for i in 0..n_entries {
+                let entry = &*start.add(i);
+                // The placeholder entry in `luna_trace_meta` is a single
+                // zero byte from the cmain shim — the section walk steps
+                // past it via the size-rounding above. An entry whose
+                // `fn_ptr` is null came from that placeholder and must
+                // be skipped (not from a real AOT-emitted trace).
+                if entry.fn_ptr.is_null() || entry.meta_ptr.is_null() {
+                    continue;
+                }
+                let meta_bytes =
+                    core::slice::from_raw_parts(entry.meta_ptr, entry.meta_len as usize);
+                let decoded = match decode_meta_blob(meta_bytes) {
+                    Ok(d) => d,
+                    Err(reason) => {
+                        if probe_on {
+                            eprintln!(
+                                "luna-runtime-helpers: aot_trace skip head_pc={} reason={reason}",
+                                entry.head_pc
+                            );
+                        }
+                        continue;
+                    }
+                };
+                // Find the matching Proto by hash.
+                let matched = proto_hashes
+                    .iter()
+                    .find(|(_p, h)| *h == entry.proto_hash)
+                    .map(|(p, _h)| *p);
+                let Some(proto) = matched else {
+                    if probe_on {
+                        eprintln!(
+                            "luna-runtime-helpers: aot_trace skip head_pc={} reason=proto_hash_unmatched",
+                            entry.head_pc
+                        );
+                    }
+                    continue;
+                };
+                // Reconstruct exit_tags + entry_tags + global_tag_res_kind.
+                let mut exit_tags_vec: Vec<ExitTag> = Vec::with_capacity(decoded.exit_tags.len());
+                let mut tag_decode_ok = true;
+                for raw in decoded.exit_tags.iter().copied() {
+                    if let Some(t) = unpack_exit_tag(raw) {
+                        exit_tags_vec.push(t);
+                    } else {
+                        tag_decode_ok = false;
+                        break;
+                    }
+                }
+                let Some(tag_res_kind) = unpack_tag_res_kind(decoded.header.tag_res_kind) else {
+                    if probe_on {
+                        eprintln!(
+                            "luna-runtime-helpers: aot_trace skip head_pc={} reason=tag_res_kind_invalid",
+                            entry.head_pc
+                        );
+                    }
+                    continue;
+                };
+                if !tag_decode_ok {
+                    if probe_on {
+                        eprintln!(
+                            "luna-runtime-helpers: aot_trace skip head_pc={} reason=exit_tag_invalid",
+                            entry.head_pc
+                        );
+                    }
+                    continue;
+                }
+                let entry_tags_rc: std::rc::Rc<[u8]> = decoded.entry_tags.into();
+                let exit_tags_rc: std::rc::Rc<[ExitTag]> = exit_tags_vec.into();
+                // Transmute the C-ABI fn ptr from `*const u8` to
+                // `TraceFn`. Safe because the trace .o was emitted by
+                // `lower_trace_into_named` with sig `(I64) -> I64`,
+                // matching `TraceFn`.
+                let fn_ptr_raw = entry.fn_ptr;
+                let trace_entry: TraceFn = core::mem::transmute::<*const u8, TraceFn>(fn_ptr_raw);
+                let ct = CompiledTrace::from_aot_meta(
+                    trace_entry,
+                    decoded.header.head_pc,
+                    decoded.header.n_ops,
+                    decoded.header.dispatchable != 0,
+                    decoded.header.window_size,
+                    entry_tags_rc,
+                    exit_tags_rc,
+                    tag_res_kind,
+                );
+                vm.install_aot_trace(proto, ct);
+                installed += 1;
+                if probe_on {
+                    eprintln!(
+                        "luna-runtime-helpers: aot_trace_installed head_pc={}",
+                        decoded.header.head_pc
+                    );
+                }
+            }
+            installed
+        }
+    }
 }

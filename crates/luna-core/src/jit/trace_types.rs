@@ -764,6 +764,87 @@ impl std::fmt::Debug for CompiledTrace {
     }
 }
 
+impl CompiledTrace {
+    /// v1.3 Phase AOT Stage 7 sub-piece 4 — minimal AOT install
+    /// constructor.
+    ///
+    /// Builds a [`CompiledTrace`] from the small set of fields the
+    /// AOT meta blob carries plus a deploy-resolved trace fn pointer.
+    /// **All side-trace bookkeeping fields default to empty**:
+    /// `per_exit_inline`, `per_exit_tags`, `tags_side_trace_ptrs`,
+    /// `side_trace_cache`, `body_writes` are zeroed / empty;
+    /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to 1
+    /// (the global / clean-tail slot only). The deploy `Vm` never
+    /// records side traces against an AOT-installed parent (the
+    /// recorder is invoked from the dispatch path; AOT traces install
+    /// before any record can fire), so the empty defaults are sound.
+    ///
+    /// Traces whose runtime shape requires non-empty
+    /// `per_exit_inline` / `per_exit_tags` (depth>0 inlined cmp side-
+    /// exits, GetUpval `Closure` exit-tag specializations) **must
+    /// not** be emitted by the AOT pipeline — this constructor produces
+    /// a CompiledTrace that the dispatcher would mis-restore for
+    /// those traces. The AOT recorder driver (luna-aot side) filters
+    /// to traces whose `per_exit_inline.is_empty() &&
+    /// per_exit_tags.is_empty()` before serializing.
+    ///
+    /// # Safety
+    ///
+    /// `entry` must be a valid `unsafe extern "C" fn(*mut i64) -> i64`
+    /// living in the binary's text segment (linker-resolved from the
+    /// AOT-emitted trace `.o`). The constructor doesn't validate this
+    /// — `install_aot_trace` is the next gate.
+    pub fn from_aot_meta(
+        entry: TraceFn,
+        head_pc: u32,
+        n_ops: u32,
+        dispatchable: bool,
+        window_size: u32,
+        entry_tags: std::rc::Rc<[u8]>,
+        exit_tags: std::rc::Rc<[ExitTag]>,
+        global_tag_res_kind: TagResKind,
+    ) -> Self {
+        // Length-1 exit_hit_counts / exit_side_trace_ptrs covers the
+        // "global / clean-tail" slot the dispatcher always probes.
+        let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
+            let v: Vec<std::cell::Cell<u32>> = vec![std::cell::Cell::new(0)];
+            v.into()
+        };
+        let exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]> = {
+            let v: Vec<std::cell::Cell<*const u8>> = vec![std::cell::Cell::new(std::ptr::null())];
+            v.into()
+        };
+        CompiledTrace {
+            head_pc,
+            entry,
+            n_ops,
+            dispatchable,
+            window_size,
+            exit_tags,
+            global_tag_res_kind,
+            entry_tags,
+            per_exit_tags: std::rc::Rc::from(Vec::<(u32, std::rc::Rc<[ExitTag]>)>::new()),
+            per_exit_inline: std::rc::Rc::from(
+                Vec::<crate::jit::trace_types::InlineSideExit>::new(),
+            ),
+            exit_hit_counts,
+            exit_side_trace_ptrs,
+            tags_side_trace_ptrs: std::rc::Rc::from(Vec::<Box<std::cell::Cell<*const u8>>>::new()),
+            global_side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
+            side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            has_any_side_wired: std::cell::Cell::new(false),
+            is_inline_abort_close: false,
+            dispatch_off_reason: None,
+            sinkable_sites_seen: 0,
+            accum_bufferable_seen: 0,
+            sunk_alloc_seen: 0,
+            materialize_emit_count: 0,
+            closure_seen: 0,
+            body_writes: Box::new([]),
+        }
+    }
+}
+
 /// Result of attempting to lower a closed [`TraceRecord`] to native
 /// code. Most failure cases are recoverable — the recorder bumps the
 /// head PC's failure count and refuses to re-record until the
