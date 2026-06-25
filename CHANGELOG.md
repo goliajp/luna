@@ -19,6 +19,186 @@ optimization.
 
 ---
 
+## [Unreleased] — v2.0 dev sprint
+
+> **Status**: in-progress. Single mega sprint targeting "industrial-
+> grade production runtime" — 14 tracks across J/R/PI/AO/MM/DS/CV/DO/
+> PU/AT/TL/BM/CB/SQ. No ship-date target; landing milestones one
+> phase at a time. Full charter: `.dev/rfcs/v2.0-charter.md`.
+> No `1.4.x` planned — v2.0 collapses what would have been v1.4–v1.8
+> per the `nodefer` upgrade.
+
+### Phase 0 — 13 parallel audits (2026-06-25)
+
+- Tracks J / R / PI / AO / MM / DS / CV / DO / PU / AT / TL / BM /
+  CB each spawned a read-only audit agent. 13 RFCs landed; PI's
+  full 26 KB body preserved at `.dev/rfcs/v2.0-audit-perf-interp-gap.md`;
+  12 others' summaries (100–150 word + top-3 risks each) inlined as
+  truth-of-record in `.dev/rfcs/v2.0-plan-state.md`.
+- v2.0 Track SQ (textbook-grade source quality) added as Track 14
+  per user request mid-Phase-0, sequenced LAST. Audit at
+  `.dev/rfcs/v2.0-audit-source-quality.md` (45 KB / 821 lines).
+
+### Phase 1 — Correctness backfill (CB)
+
+- **CB-pre1** + **CB-pre2** verify-and-archive: pre-existing v1.0
+  debug-mode SIGTRAP + `debug_upvalue_order_and_id` flakiness both
+  cleared by the v1.3 fix chain (`fae0f9c` / `e5db587` / `f8afd64`);
+  bug docs moved to `.dev/known-bugs/fixed/`.
+- **CB-or** assert-counter wrapper at
+  `crates/luna-core/tests/official_run.rs` + per-PUC-file coverage
+  report at `.dev/rfcs/v2.0-cb-or-coverage-report.md`. 140 PUC files
+  exercised, 2.4M asserts reached, 2.36M passing, 101/140 files at
+  ≥80% hit rate, 27/29 below-80% are PUC-internal early-return
+  shims, 2 wrapper carve-outs (`errors.lua` / `db.lua` × 5 dialects).
+- **CB-edge** 13 spot tests pinned: 5 GC finalizer
+  (`cb_edge_gc_finalizer.rs` — recursive collect / weak-key+finalizer
+  / userdata-as-key / 1000-proxy stress / error-in-`__gc`) + 3
+  coroutine + hook (`cb_edge_coroutine_hook.rs`) + 6 compiler
+  stress (`cb_edge_compiler_stress.rs` — 2000-stmt fn body /
+  150-deep + 250-deep nesting cap / 60-deep paren / 100 upvals /
+  50-arg vararg forward).
+- **CB-edge real bug surfaced + fixed**: `Vm::set_hook` predicate
+  `target.is_none()` arm was missing — `debug.sethook(…)` called
+  from inside a coroutine body silently dropped. Root cause at
+  `crates/luna-core/src/vm/exec.rs:2151-2179`; regression test +
+  sibling test landed; known-bug doc moved to `.dev/known-bugs/fixed/`.
+
+### Phase 2 — Coverage + fuzz infrastructure (CV-infra)
+
+- New workspace-excluded `crates/luna-fuzz/` crate with 4
+  `fuzz_target!` harnesses: parser, dump_reader, vm_dispatch,
+  aot_meta. Nightly toolchain pinned via crate-scoped
+  `rust-toolchain.toml`.
+- `.github/workflows/coverage.yml` — `cargo llvm-cov` workspace
+  vs committed JSON baseline; fails PR on > 2pp regression in any
+  first-party crate.
+- `.github/workflows/fuzz.yml` — 5-min PR smoke (non-blocking) +
+  60-min weekly cron per target.
+- luna-core 0-third-party-dep contract intact: `libfuzzer-sys` lives
+  only in the excluded fuzz crate.
+
+### Phase 3 — Docs CI gate (DO-CI)
+
+- `.github/workflows/docs.yml` — `cargo doc -D warnings` +
+  `cargo test --doc` + `lychee` link check.
+- 1 pre-existing intra-doc warning in `crates/luna-aot/src/embed.rs`
+  fixed; 1 stale anchor in `docs/threading.md` fixed.
+- `.lycheeignore` configured for pre-publish `docs.rs/luna-*`
+  redirects.
+
+### Phase 4 — PUC bytecode polish punts collapsed (PU)
+
+PU audit identified 24 polish punts across 5.1/5.2/5.3/5.5 (5.4
+already punt-free at v1.3 ship). Wave 1 extracted three shared
+helpers (`lower_k_via_tmp` / `lower_i_imm` / `scan_tforprep_sites`)
+to `crates/luna-core/src/vm/dump/puc/mod.rs`. Waves 2-4 collapsed
+the punts dialect-by-dialect:
+
+- **5.1**: PC remap upgraded to bidirectional (modeled on `puc_54.rs`),
+  then 7/7 punts collapsed — SETLIST C=0 / arith RK-on-B (12 ops via
+  `lower_k_via_tmp`) / EQ/LT/LE RK / LOADBOOL true+skip (via
+  `LoadTrue + Jmp+1` pair through PC remap) / fb2int NEWTABLE hint /
+  TFORLOOP N-way split (lower to `TForCall + TForLoop` via new
+  `JumpKind::TForLoop` fixup; `A` direct = iter_base, differs from
+  5.3) / LUAI_COMPAT_VARARG (runtime cold-path at `exec.rs:4200`
+  already in v1.3; Wave 4 added the E2E test).
+- **5.2**: 9 cases across 3 categories collapsed — arith K-on-LHS /
+  arith K-on-both (inline pair) / EQ/LT/LE K (inline, since luna's
+  `Op::Eq/Lt/Le` `k` bit is sense not constant flag) / GETTABUP
+  register key (inline `GetUpval + GetTable` pair). 5.2 now
+  punt-free.
+- **5.3**: All 4 punts collapsed — generic-for (`TFORCALL + TFORLOOP`
+  with `A = iter_base + 2 → iter_base` conversion since 5.3 lacks
+  `OP_TFORPREP` but no TBC machinery either) / arith RK-on-B (12 ops
+  via PC remap + helper) / LOADBOOL true+skip (Jmp pair through
+  Fixup channel) / CONCAT B != A (Move-then-Concat pair with
+  overlap-safe direction). 5.3 now punt-free except `OP_JMP A!=0`
+  close-upvals (out of original 4-punt audit scope).
+- **5.5**: 8/8 I-imm ops collapsed — ADDI / SHRI via `lower_i_imm`;
+  SHLI / EQI / LTI / LEI / GTI / GEI inline (different shapes than
+  `lower_i_imm`'s arith template). 5.5 now punt-free.
+
+luna now loads `.luac` files from PUC 5.1 through 5.5 (and MacroLua)
+without silent miscompile across the previously-punted opcode shapes.
+
+### Phase 5 — Measurement-first baselines + documentation floor
+
+#### Memory (MM)
+
+- `dhat` dev-dep + `crates/luna-core/benches/mem_baseline.rs`
+  exercising 5 workloads (cold_start / repl_idle / host_roots_churn /
+  alloc_collect / userdata_lifecycle). Baseline snapshots at
+  `.dev/baselines/mem-2026-06-25/`.
+- luna-core prod 0-dep contract preserved via `--edges normal` flag
+  on `cargo tree`.
+- Surprising finding: `TraceRecord::start` allocates ~557 KB across
+  68 sites in `userdata_lifecycle` — confirms audit R2 (MM #5
+  TraceRecord shrink blocked on Track R IR shape).
+- Newly-surfaced attack candidate: `Vm::gc_roots` snapshot vec
+  reallocs every GC (198 KB / 218 allocs in `alloc_collect`) —
+  reusable.
+
+#### Disk + binary size (DS)
+
+- Baselines at `.dev/baselines/disk-2026-06-25/` covering per-crate
+  package sizes, AOT output binary sizes (3 representative scripts ×
+  3 build profiles), Mach-O section breakdown, runtime-helpers
+  staticlib/rlib. Zero material drift from v1.3 audit values.
+- 11 budget proposals with feasibility tags. AOT slim-profile output
+  ≤ 3.7 MiB stripped tagged HIGH effort (requires both
+  `panic="abort"` and Cranelift `all-arch` opt-out, both gated
+  breaking changes).
+
+#### Coverage (CV) gap fill
+
+- 38 new tests + 1 new CI job (`send-feature`) across the audit's
+  top-5 coverage gaps: async_drive (5 tests) / pattern engine (12
+  tests) / aot_meta walker error paths (10 tests) / luna-jit-derive
+  direct unit tests (11 tests, via inline `#[cfg(test)] mod`
+  reaching private fns without `pub(crate)` hatches) / send_vm
+  feature-matrix CI (8 SendVm tests already existed behind
+  `#[cfg(feature="send")]`, no CI job exercised them).
+- Zero real bugs surfaced.
+
+#### Docs (DO) — 6 industrial-grade docs landed
+
+- `docs/security.md` — threat model + sandbox boundaries.
+- `docs/migration-v1-to-v2.md` — scaffold with TBD placeholders
+  per breaking-change category, fills land at ship.
+- `docs/aot.md` — AOT single-binary deploy guide (when / how /
+  cross-compile / size breakdown / limitations / inspection).
+- `docs/deploy.md` — production deployment patterns
+  (crate selection / packaging shapes / runtime knobs / observability
+  / graceful shutdown / cross-thread).
+- `SECURITY.md` — formal CVE disclosure policy (email
+  `admin@golia.jp`, 90-day default window).
+- `CONTRIBUTING.md` — formal no-external-contrib policy
+  (single-maintainer; PRs closed without review; fork freely under
+  MIT/Apache-2.0).
+- `docs/embedding.md` `vm.open_io()` / `vm.open_os()` stale API
+  references corrected to `vm.open_os_io()`.
+- `docs/architecture.md` crate layout refreshed from v1.1's 2-crate
+  table to current 5 publishable + 2 dev-only; steel-cement-stone
+  classification updated with actual file paths and v2.0 sprint
+  discipline anchors.
+
+#### AOT polish 6 verdict (AO-PF)
+
+- Runtime counter added to chain reloc fire path
+  (`crates/luna-runtime-helpers/src/lib.rs`).
+- JIT in-process fib(28): **162,851 fires / 434,279 dispatches** —
+  Stage 7 polish 6 alive on the JIT side.
+- AOT-binary workload battery (fib(20), sum(1000), inlined helper,
+  counted loop, GetField loop): **0 fires across all 5** — Stage 7
+  polish 6 effectively dead in AOT, **but not the polish itself**:
+  the AOT recorder filter (`dispatchable=false` for self-recursive
+  traces) keeps input from ever reaching it. Verdict + handoff at
+  `.dev/rfcs/v2.0-ao-pf-verdict.md`. **Not reverted** (JIT side
+  active); recorder fix deferred to Track R landing.
+
+---
+
 ## [1.3.0] — 2026-06-25
 
 > **Released** — 2026-06-25 to crates.io. All five workspace crates
