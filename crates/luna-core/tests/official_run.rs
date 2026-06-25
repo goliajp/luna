@@ -490,6 +490,11 @@ fn run_suite(suite: &Suite, coverage: &mut Vec<FileCoverage>) -> Vec<String> {
     let _ = std::fs::create_dir_all("libs/P1");
     let mut failures = Vec::new();
     for &name in suite.expected_pass {
+        // Surface the file being attempted via stderr so a SIGSEGV
+        // inside `run_file` points at the exact PUC file in the CI
+        // log. Without this, a process-level crash leaves the last
+        // PUC-printed line as the deceptive "last test that ran".
+        eprintln!("[official_run] starting {:?}/{}", suite.version, name);
         let cov = run_file(name, suite.version);
         if let Some(err) = &cov.error {
             failures.push(format!("{:?} {name}: {err}", suite.version));
