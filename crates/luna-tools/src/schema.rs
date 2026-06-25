@@ -38,8 +38,8 @@ pub struct HeapSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeapTypeBucket {
     /// GC type tag name, e.g. `"table"`, `"string"`, `"proto"`.
-    /// Matches the [`luna_jit::inspect::HeapTypeTag`] discriminant
-    /// name (lower-cased).
+    /// Matches the `luna_jit::inspect::ObjTag` discriminant
+    /// name (lower-cased) — see `crates/luna-core/src/vm/inspect.rs`.
     pub type_name: String,
     /// Number of live objects of this type.
     pub count: u64,
