@@ -157,3 +157,55 @@ fn coroutine_generic_for_closeable_iterator_runs_close() {
         "expected __close to run at least once across coroutine generic-for; got {count}"
     );
 }
+
+/// Orthogonal direction of `coroutine_yield_under_count_hook_preserves_counter`:
+/// install the hook from the **main thread** (with explicit thread
+/// argument), then drive a coroutine that yields multiple times, and
+/// verify the hook keeps firing in the main thread after each yield
+/// boundary. Pre-fix this path went through the
+/// `else if let Some(co) = target` arm in `Vm::set_hook` when `target`
+/// is the coroutine (i.e. installing on a suspended thread); this
+/// regression pins the in-main install path (target = main thread, i.e.
+/// `target = None` from the main thread, which now routes to
+/// `install_hook` unconditionally). Together with the in-body test,
+/// both directions of the `set_hook` predicate are covered.
+#[test]
+fn coroutine_hook_installed_from_main_persists_across_yield_resume() {
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    let r = vm
+        .eval(
+            "
+            local main_fires = 0
+            -- Install on main thread (no thread arg) before driving the
+            -- coroutine. Pre-fix this hit is_current_thread(None) on the
+            -- main thread (current=None, target=None) — the (None,None)
+            -- arm matched — so it always worked from main. Pin it as a
+            -- regression in case the future predicate refactor regresses.
+            debug.sethook(function() main_fires = main_fires + 1 end, 'l', 1)
+            local co = coroutine.create(function()
+                for i = 1, 5 do coroutine.yield(i) end
+            end)
+            local sum = 0
+            for _ = 1, 6 do
+                coroutine.resume(co)
+                sum = sum + 1  -- main-thread line that should fire the hook
+            end
+            debug.sethook()
+            return main_fires, sum
+            ",
+        )
+        .expect("hook installed from main + coroutine drive must not panic");
+    let fires = match &r[0] {
+        luna_core::runtime::Value::Int(i) => *i,
+        other => panic!("expected Int for main_fires, got {other:?}"),
+    };
+    let sum = match &r[1] {
+        luna_core::runtime::Value::Int(i) => *i,
+        other => panic!("expected Int for sum, got {other:?}"),
+    };
+    assert_eq!(sum, 6, "main-thread loop must complete (got {sum})");
+    assert!(
+        fires >= 1,
+        "main-thread line hook must fire at least once across yield/resume cycles (fires={fires})"
+    );
+}
