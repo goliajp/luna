@@ -113,18 +113,14 @@ fn run(cli: &Cli) -> Result<(), String> {
     match cli.show {
         ShowMode::Summary => {}
         ShowMode::Ir => {
-            return Err(
-                "--show ir is reserved for Track R IR shape stabilising; \
+            return Err("--show ir is reserved for Track R IR shape stabilising; \
                  see .dev/rfcs/v2.0-plan-state.md § Track TL audit R1"
-                    .into(),
-            );
+                .into());
         }
         ShowMode::Mcode => {
-            return Err(
-                "--show mcode needs `--features mcode-disasm` (capstone); \
+            return Err("--show mcode needs `--features mcode-disasm` (capstone); \
                  see .dev/rfcs/v2.0-plan-state.md § Track TL audit R1"
-                    .into(),
-            );
+                .into());
         }
     }
 

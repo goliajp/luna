@@ -1,22 +1,22 @@
 #![warn(missing_docs)]
 //! luna-tools — developer-facing inspection + introspection CLIs.
 //!
-//! # v2.0 Track TL Phase 1 (THIS COMMIT) — scaffold + 2 tools real
+//! # v2.0 Track TL — Phase 1 + Phase 2 status
 //!
 //! Ships five binaries under one workspace member:
 //!
 //! | Binary | Phase | Status |
 //! | --- | --- | --- |
 //! | `luna-bin-inspect` | 1 | Real — walks an AOT-produced binary's `.luna.bytecode` / `luna_trace_meta` / `luna_inline_chnx` sections and reports a section table + trace index counts. |
-//! | `luna-heap-dump` | 1 | Real — runs a `.lua` script in a [`luna_jit::Vm`], then prints a per-type snapshot (object count + approximate bytes) using the new pure-read accessors in [`luna_jit::inspect`]. |
-//! | `luna-profile` | 2 | Stub — `unimplemented!` body; ships in Track TL Phase 2 (needs `--features flame-graph` for `inferno` + `pprof`). |
-//! | `luna-trace-inspect` | 2 | Stub — `unimplemented!`; depends on Track R IR shape stabilising first per `.dev/rfcs/v2.0-audit-tl.md` § R1. |
+//! | `luna-heap-dump` | 1 | Real — runs a `.lua` script in a [`luna_jit::Vm`], then prints a per-type snapshot (object count + approximate bytes) using the pure-read accessors in [`luna_jit::inspect`]. |
+//! | `luna-trace-inspect` | 2 | Real — runs a `.lua` script and dumps the resulting [`luna_jit::inspect::JitStateSnapshot`] (counters + active-trace head_pc / ops_len). `--show ir` + `--show mcode` are reserved CLI surface; they exit non-zero today with a pointer to the Track R IR stabilisation / capstone-feature tracking docs per `.dev/rfcs/v2.0-audit-tl.md` § R1. |
+//! | `luna-profile` | 2 | Real — Count-hook sampling profiler. Text top-N + folded-stack output for `inferno-flamegraph`. `--format pprof` is reserved for the `flame-graph` feature opt-in per audit R2. |
 //! | `luna-repl-polish` | 2 | Stub — `unimplemented!`; rustyline `=14.x` pin lands with the impl per audit R3. |
 //!
-//! Stubs are not silent skips: they call [`unimplemented!`] with a
-//! pointer to the tracking document so `cargo install luna-tools`
-//! followed by `luna-profile --foo` exits non-zero with a clear
-//! message instead of pretending to work.
+//! The remaining stub (`luna-repl-polish`) is not a silent skip: it
+//! calls [`unimplemented!`] with a pointer to the tracking document
+//! so `cargo install luna-tools` followed by `luna-repl-polish` exits
+//! non-zero with a clear message instead of pretending to work.
 //!
 //! # Why one crate for all five binaries
 //!
