@@ -297,6 +297,152 @@ fn check_header(r: &mut Reader) -> Result<(), String> {
 }
 
 // ---- per-opcode translator ----
+//
+// **Phase 4 PU Wave 2 PC remap infra** (Step 2): the per-PUC-op translation
+// path used to be a pure `translate_inst(word) -> Result<Inst, String>`
+// 1:1 re-encoder. Lowerings that need to emit more than one luna inst
+// (RK-on-B arith via `LoadK tmp; OP a tmp c`, LOADBOOL true+skip via
+// `LoadTrue; Jmp +1`, CONCAT B!=A via `Move a b; Concat a len`) cannot
+// fit that signature — they shift every downstream pc, so JMP / FORLOOP /
+// TFORLOOP targets must be patched after the full pc map is known and
+// PUC's per-pc lineinfo must be spread across the emitted instructions.
+//
+// `translate_code` is the new entry point: it loops over the PUC words,
+// invokes `translate_one` per op (which calls `emit_*` helpers to push
+// into `code` + record both pc maps), and runs a post-pass that patches
+// every recorded jump fixup against the final pc map.
+//
+// For now `translate_one` still returns the legacy `Inst` from a 1:1 match
+// arm. Once Step 4 routes the RK-on-B arith ops through `lower_k_via_tmp`
+// (and later sub-agents wire LOADBOOL+skip + CONCAT B!=A), the multi-inst
+// path will start using the same `emit_more` + `jump_fixups` channels that
+// the infra exposes here.
+
+/// Output of `translate_code`: luna instruction stream plus the bidirectional
+/// puc↔luna pc maps that downstream lineinfo / debug consumers need.
+///
+/// `puc_to_luna_pc[puc_pc]` is `Some(luna_pc)` for the **first** luna inst
+/// emitted by that PUC op (or for the only one in 1:1 ops). 5.3 has no
+/// dropped ops (unlike puc_54's MMBIN / VARARGPREP), so every entry is `Some`.
+/// We still use `Option<u32>` so the table type matches puc_54's and the
+/// helper fixup loops below stay structurally identical between dialects.
+///
+/// `luna_to_puc_pc[luna_pc]` is the originating PUC pc for each emitted luna
+/// inst — used to spread the PUC per-pc lineinfo across multi-inst lowerings
+/// (e.g. `LoadK tmp; Add a tmp c` from a single RK-on-B `ADD`).
+struct Translated {
+    code: Vec<Inst>,
+    puc_to_luna_pc: Vec<Option<u32>>,
+    luna_to_puc_pc: Vec<usize>,
+    /// Worst-case extra registers needed by RK-on-B / future LOADBOOL+skip /
+    /// CONCAT B!=A lowerings. Added to PUC's `max_stack` post-translation.
+    max_temp_bump: u8,
+}
+
+/// Translate a full PUC 5.3 instruction stream into luna's encoding,
+/// recording the puc↔luna pc maps for downstream lineinfo + jump fixup
+/// consumers. Returns `Err(...)` for opcodes / shapes the baseline doesn't
+/// cover; the caller surfaces the error verbatim to the embedder.
+fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
+    let mut code: Vec<Inst> = Vec::with_capacity(puc_code.len());
+    let mut puc_to_luna_pc: Vec<Option<u32>> = Vec::with_capacity(puc_code.len());
+    let mut luna_to_puc_pc: Vec<usize> = Vec::with_capacity(puc_code.len());
+    let mut max_temp_bump: u8 = 0;
+
+    // Stash pending jump fixups: (luna_pc_of_jump, puc_target_pc). The
+    // post-translation fixup loop walks this list and rewrites each placeholder
+    // `Jmp 0` to the correct sJ offset once the full pc map is built. Empty
+    // while every op is 1:1; populated by Step 3+ when LOADBOOL+skip /
+    // CONCAT B!=A start inserting instructions that shift JMP targets.
+    let mut jump_fixups: Vec<(usize, i64)> = Vec::new();
+
+    for (puc_pc, &word) in puc_code.iter().enumerate() {
+        translate_one(
+            puc_pc,
+            word,
+            &mut code,
+            &mut puc_to_luna_pc,
+            &mut luna_to_puc_pc,
+            &mut max_temp_bump,
+            &mut jump_fixups,
+        )
+        .map_err(|e| format!("{e} (pc={puc_pc})"))?;
+    }
+
+    // Patch jump fixups now that the full pc map is known. For 1:1 ops the
+    // direct `Inst::isj(Op::Jmp, sbx)` path inside `translate_one` already
+    // produced the correct offset; the fixup list only has entries from
+    // multi-inst lowerings (none today, used by Step 3+).
+    for (luna_pc, target_puc_pc) in jump_fixups {
+        let target_luna_pc = if target_puc_pc < 0 {
+            return Err(format!(
+                "PUC 5.3 JMP at luna pc {luna_pc} targets negative pc {target_puc_pc}"
+            ));
+        } else if target_puc_pc as usize >= puc_to_luna_pc.len() {
+            // Past-the-end: target the synthetic end-of-code pc.
+            code.len() as i64
+        } else {
+            // Find the next surviving op at or after target. 5.3 has no dropped
+            // ops today, but the loop matches puc_54's structure so a future
+            // drop (e.g. a 5.3-shape MMBIN equivalent) needs no rewrite.
+            let mut t = target_puc_pc as usize;
+            loop {
+                if t >= puc_to_luna_pc.len() {
+                    break code.len() as i64;
+                }
+                if let Some(p) = puc_to_luna_pc[t] {
+                    break p as i64;
+                }
+                t += 1;
+            }
+        };
+        // sJ encoding: target relative to *next pc* after the JMP.
+        let next_pc = luna_pc as i64 + 1;
+        let sj = (target_luna_pc - next_pc) as i32;
+        code[luna_pc] = Inst::isj(Op::Jmp, sj);
+    }
+
+    Ok(Translated {
+        code,
+        puc_to_luna_pc,
+        luna_to_puc_pc,
+        max_temp_bump,
+    })
+}
+
+/// Per-PUC-op translation step. Pushes one or more luna `Inst`s into `code`
+/// and records the pc mapping (`puc_to_luna_pc[puc_pc] = Some(first_luna_pc)`;
+/// each emitted inst pushes a `luna_to_puc_pc[luna_pc] = puc_pc` entry).
+///
+/// 5.3 has no dropped-op shape, so every call appends at least one entry to
+/// both maps. While Wave 2 lowerings (RK-on-B arith / LOADBOOL+skip / CONCAT
+/// B!=A) still land op-by-op, this function delegates to `translate_inst`
+/// for the 1:1 fast path and just records the trivial pc mapping. Once those
+/// lowerings move inline, the body fans out to the same `emit_more` channel
+/// that puc_54.rs uses.
+#[allow(clippy::too_many_arguments)]
+fn translate_one(
+    puc_pc: usize,
+    word: u32,
+    code: &mut Vec<Inst>,
+    puc_to_luna_pc: &mut Vec<Option<u32>>,
+    luna_to_puc_pc: &mut Vec<usize>,
+    max_temp_bump: &mut u8,
+    jump_fixups: &mut Vec<(usize, i64)>,
+) -> Result<(), String> {
+    // Wave 2 follow-ups (RK-on-B / LOADBOOL+skip / CONCAT B!=A) will populate
+    // these channels; for the 1:1 baseline we discard them so clippy doesn't
+    // grumble about the unused parameters (kept in the signature to avoid
+    // churning every later caller).
+    let _ = max_temp_bump;
+    let _ = jump_fixups;
+
+    let inst = translate_inst(word)?;
+    puc_to_luna_pc.push(Some(code.len() as u32));
+    luna_to_puc_pc.push(puc_pc);
+    code.push(inst);
+    Ok(())
+}
 
 /// Translate one PUC 5.3 instruction word into a luna `Inst`. Returns
 /// `Err(...)` for opcodes / shapes the baseline doesn't cover; the caller
@@ -881,7 +1027,7 @@ fn r_proto(
     let last_line_defined = r_int(r)? as u32;
     let num_params = r.u8()?;
     let is_vararg = r.u8()? != 0;
-    let max_stack = r.u8()?;
+    let max_stack_puc = r.u8()?;
 
     // ---- code ----
     let n = r_int(r)?;
@@ -889,11 +1035,15 @@ fn r_proto(
         return Err("PUC 5.3 translator: negative code length".to_string());
     }
     let n = n as usize;
-    let mut code = Vec::with_capacity(n);
-    for pc in 0..n {
-        let word = u32::from_le_bytes(r.take(4)?.try_into().unwrap());
-        code.push(translate_inst(word).map_err(|e| format!("{e} (pc={pc})"))?);
+    // Read the raw PUC words first; `translate_code` needs the full stream so
+    // post-translation jump-fixups can resolve targets against the final pc
+    // map (multi-inst lowerings — RK-on-B / LOADBOOL+skip / CONCAT B!=A —
+    // shift downstream pcs in ways the per-instruction loop can't see).
+    let mut puc_words: Vec<u32> = Vec::with_capacity(n);
+    for _ in 0..n {
+        puc_words.push(u32::from_le_bytes(r.take(4)?.try_into().unwrap()));
     }
+    let translated = translate_code(&puc_words)?;
 
     // ---- constants ----
     let n = r_int(r)?;
@@ -937,15 +1087,31 @@ fn r_proto(
     if n < 0 {
         return Err("PUC 5.3 translator: negative lineinfo count".to_string());
     }
-    let mut lines = Vec::with_capacity(n as usize);
+    let mut puc_lines: Vec<u32> = Vec::with_capacity(n as usize);
     for _ in 0..n {
         // PUC stores lineinfo as int (4 bytes) per instruction; luna
         // stores u32. Negative line numbers shouldn't occur in valid
         // chunks (the parser only assigns 1..=LINEMAX), but if we see
         // one we clamp to 0 — "unknown line" — rather than fail.
         let ln = r_int(r)?;
-        lines.push(if ln < 0 { 0 } else { ln as u32 });
+        puc_lines.push(if ln < 0 { 0 } else { ln as u32 });
     }
+    // Remap PUC's per-PUC-pc line numbers to luna's per-luna-pc layout via
+    // the `luna_to_puc_pc` table. For 1:1 ops the remap is the identity; for
+    // multi-inst lowerings (Step 4+) it duplicates the source line across each
+    // emitted inst so debug.getinfo / error traces stay accurate.
+    let lines: Vec<u32> = translated
+        .luna_to_puc_pc
+        .iter()
+        .map(|&puc_pc| {
+            puc_lines
+                .get(puc_pc)
+                .copied()
+                // Multi-inst lowerings that emit beyond the PUC stream length
+                // (shouldn't happen for 5.3 today) fall back to "unknown line".
+                .unwrap_or(0)
+        })
+        .collect();
     let n = r_int(r)?;
     if n < 0 {
         return Err("PUC 5.3 translator: negative locvar count".to_string());
@@ -990,9 +1156,12 @@ fn r_proto(
         .take(u8::MAX as usize)
         .position(|u| &*u.name == "_ENV")
         .map_or(u8::MAX, |i| i as u8);
+    // PUC's `max_stack` accounts only for its own register usage; multi-inst
+    // lowerings (RK-on-B etc.) reserve one or more extra slots above it.
+    let max_stack = max_stack_puc.saturating_add(translated.max_temp_bump);
     Ok(heap.adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: code.into_boxed_slice(),
+        code: translated.code.into_boxed_slice(),
         consts: consts.into_boxed_slice(),
         protos: protos.into_boxed_slice(),
         upvals: upvals.into_boxed_slice(),
