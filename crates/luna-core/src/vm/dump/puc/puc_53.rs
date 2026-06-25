@@ -479,6 +479,28 @@ fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
     })
 }
 
+/// Map a PUC 5.3 arith opcode to its luna `Op` counterpart, or `None` for
+/// non-arith ops. The router in `translate_one` uses this to decide whether
+/// to call `lower_k_via_tmp` for the RK-on-B shape; non-matching opcodes fall
+/// straight through to `translate_inst`.
+fn arith_op_for(puc_op: u8) -> Option<Op> {
+    Some(match puc_op {
+        OP_ADD => Op::Add,
+        OP_SUB => Op::Sub,
+        OP_MUL => Op::Mul,
+        OP_MOD => Op::Mod,
+        OP_POW => Op::Pow,
+        OP_DIV => Op::Div,
+        OP_IDIV => Op::IDiv,
+        OP_BAND => Op::BAnd,
+        OP_BOR => Op::BOr,
+        OP_BXOR => Op::BXor,
+        OP_SHL => Op::Shl,
+        OP_SHR => Op::Shr,
+        _ => return None,
+    })
+}
+
 /// Resolve a PUC target pc to the corresponding luna pc through the
 /// `puc_to_luna_pc` map. 5.3 has no dropped ops today so the inner loop
 /// terminates on its first iteration; the structure matches puc_54.rs so
@@ -531,11 +553,6 @@ fn translate_one(
     max_temp_bump: &mut u8,
     jump_fixups: &mut Vec<Fixup>,
 ) -> Result<(), String> {
-    // Wave 2 follow-ups (RK-on-B / LOADBOOL+skip / CONCAT B!=A) will populate
-    // `max_temp_bump`; for the Step 3 fixup-infra baseline only PC-relative
-    // ops produce side effects beyond `translate_inst`.
-    let _ = max_temp_bump;
-
     let i = decode_53(word);
     if i.op >= NUM_PUC53_OPS {
         return Err(format!(
@@ -543,6 +560,43 @@ fn translate_one(
             i.op,
             NUM_PUC53_OPS - 1
         ));
+    }
+
+    // Decode RK bits on the 9-bit B / C operands so the RK-on-B arith router
+    // below can peek before delegating to `translate_inst`.
+    let b_is_k = i.b & PUC53_BITRK != 0;
+    let c_is_k = i.c & PUC53_BITRK != 0;
+    let b_idx = i.b & (PUC53_BITRK - 1);
+    let c_idx = i.c & (PUC53_BITRK - 1);
+
+    // --- RK-on-B arith family: route through `lower_k_via_tmp` ---
+    //
+    // PUC 5.3's `OP_ADD` (and friends) lets either operand be RK; luna's `Add`
+    // only accepts the k flag on C. When B is the constant we materialize it
+    // via `LoadK tmp; OP a tmp c` — pure helper call, no new local logic. C
+    // can still be RK (passed through as the helper's `c_is_k` arg).
+    //
+    // The B-is-register path keeps falling through to `translate_inst`'s
+    // existing arith arm, which is the hot path in stock chunks (PUC's
+    // `luaK_exp2RK` prefers the C slot for the constant).
+    if let Some(luna_op) = arith_op_for(i.op) {
+        if b_is_k {
+            // Allocate a temp register above PUC's own usage. Same policy as
+            // puc_54.rs's I-imm lowering: `max(a, c) + 1` keeps the tmp slot
+            // distinct from both source registers (the arith reads `b/c` and
+            // writes `a`, so `tmp` must dodge `a` *and* the live C register).
+            let tmp = i.a.max(c_idx) + 1;
+            let pair =
+                super::lower_k_via_tmp(luna_op, i.a, b_idx, c_idx, c_is_k, tmp, max_temp_bump)?;
+            let first_luna_pc = code.len() as u32;
+            puc_to_luna_pc.push(Some(first_luna_pc));
+            luna_to_puc_pc.push(puc_pc);
+            code.push(pair[0]);
+            luna_to_puc_pc.push(puc_pc);
+            code.push(pair[1]);
+            return Ok(());
+        }
+        // B is a register → 1:1 path; let `translate_inst` handle bounds.
     }
 
     // --- PC-relative ops: emit placeholder + push fixup ---
@@ -1538,5 +1592,188 @@ mod tests {
         let bx: u32 = (PUC53_MAX_ARG_SBX - 1) as u32;
         let word = 42u32 | (1 << 6) | ((bx & 0x1FF) << 14) | (((bx >> 9) & 0x1FF) << 23);
         assert!(translate_inst(word).unwrap_err().contains("< 2"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase 4 PU Wave 2 — PC remap infra + RK-on-B routing
+    // ---------------------------------------------------------------------
+    //
+    // The legacy `translate_inst` tests above still cover the 1:1 fast path
+    // (and the rejection it emits for RK-on-B / close-upvalues JMP). The
+    // tests below exercise the full `translate_code` path that the embedder
+    // hits via `r_proto`, including the multi-inst lowerings that lift the
+    // earlier `translate_inst` rejections.
+
+    /// Build a PUC 5.3 iABC instruction word.
+    fn enc_iabc(op: u8, a: u32, b: u32, c: u32) -> u32 {
+        (op as u32) | ((a & 0xFF) << 6) | ((c & 0x1FF) << 14) | ((b & 0x1FF) << 23)
+    }
+
+    /// Build a PUC 5.3 iAsBx instruction word.
+    fn enc_iasbx(op: u8, a: u32, sbx: i32) -> u32 {
+        let bx = (sbx + PUC53_MAX_ARG_SBX) as u32;
+        (op as u32) | ((a & 0xFF) << 6) | ((bx & 0x1FF) << 14) | (((bx >> 9) & 0x1FF) << 23)
+    }
+
+    #[test]
+    fn pc_remap_identity_on_one_to_one_stream() {
+        // Pure 1:1 stream — `translate_code` should give back exactly the
+        // same instructions as `translate_inst`, with identity pc maps.
+        let words = vec![
+            enc_iabc(OP_MOVE, 0, 1, 0),    // MOVE 0 1
+            enc_iabc(OP_LOADNIL, 0, 0, 0), // LOADNIL 0 0
+            enc_iabc(OP_RETURN, 0, 1, 0),  // RETURN 0 1
+        ];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 3);
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(1), Some(2)]);
+        assert_eq!(t.luna_to_puc_pc, vec![0, 1, 2]);
+        assert_eq!(t.max_temp_bump, 0);
+    }
+
+    #[test]
+    fn jump_remap_through_fixup_loop() {
+        // JMP +1 at pc 0 over a MOVE → resolves to luna sJ = +1 on the
+        // unshifted stream (identity remap).
+        let words = vec![
+            enc_iasbx(OP_JMP, 0, 1),    // JMP +1 → target = pc 2
+            enc_iabc(OP_MOVE, 0, 1, 0), // skipped
+            enc_iabc(OP_RETURN, 0, 1, 0),
+        ];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 3);
+        assert_eq!(t.code[0].op(), Op::Jmp);
+        assert_eq!(t.code[0].sj(), 1);
+    }
+
+    /// Shape-validate the RK-on-B lowering for a single arith opcode.
+    /// Builds `OP A=2 B=K(5) C=3`, runs `translate_code`, and checks that
+    /// the emitted pair is `LoadK tmp 5; OP 2 tmp 3` with the right tmp
+    /// register (`max(A, C) + 1 = 4`) and `max_temp_bump = 5`.
+    fn assert_rk_on_b_lowered(puc_op: u8, luna_op: Op) {
+        let b_field = PUC53_BITRK | 5; // K-pool index 5
+        let words = vec![enc_iabc(puc_op, 2, b_field, 3)];
+        let t = translate_code(&words).expect("RK-on-B arith must lower cleanly");
+        assert_eq!(t.code.len(), 2, "{puc_op}: expected 2-inst lowering");
+        // First inst: LoadK tmp 5, where tmp = max(A=2, C=3) + 1 = 4.
+        assert_eq!(t.code[0].op(), Op::LoadK);
+        assert_eq!(t.code[0].a(), 4);
+        assert_eq!(t.code[0].bx(), 5);
+        // Second inst: <op> A=2 B=tmp=4 C=3, k bit clear (C is a register).
+        assert_eq!(t.code[1].op(), luna_op);
+        assert_eq!(t.code[1].a(), 2);
+        assert_eq!(t.code[1].b(), 4);
+        assert_eq!(t.code[1].c(), 3);
+        assert!(!t.code[1].k());
+        // pc maps: single PUC pc → first luna pc; both luna pcs cite puc_pc=0.
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0)]);
+        assert_eq!(t.luna_to_puc_pc, vec![0, 0]);
+        // max_temp_bump = tmp + 1 = 5 (one extra slot reserved past PUC frame).
+        assert_eq!(t.max_temp_bump, 5);
+    }
+
+    #[test]
+    fn rk_on_b_lowering_add() {
+        assert_rk_on_b_lowered(OP_ADD, Op::Add);
+    }
+    #[test]
+    fn rk_on_b_lowering_sub() {
+        assert_rk_on_b_lowered(OP_SUB, Op::Sub);
+    }
+    #[test]
+    fn rk_on_b_lowering_mul() {
+        assert_rk_on_b_lowered(OP_MUL, Op::Mul);
+    }
+    #[test]
+    fn rk_on_b_lowering_mod() {
+        assert_rk_on_b_lowered(OP_MOD, Op::Mod);
+    }
+    #[test]
+    fn rk_on_b_lowering_pow() {
+        assert_rk_on_b_lowered(OP_POW, Op::Pow);
+    }
+    #[test]
+    fn rk_on_b_lowering_div() {
+        assert_rk_on_b_lowered(OP_DIV, Op::Div);
+    }
+    #[test]
+    fn rk_on_b_lowering_idiv() {
+        assert_rk_on_b_lowered(OP_IDIV, Op::IDiv);
+    }
+    #[test]
+    fn rk_on_b_lowering_band() {
+        assert_rk_on_b_lowered(OP_BAND, Op::BAnd);
+    }
+    #[test]
+    fn rk_on_b_lowering_bor() {
+        assert_rk_on_b_lowered(OP_BOR, Op::BOr);
+    }
+    #[test]
+    fn rk_on_b_lowering_bxor() {
+        assert_rk_on_b_lowered(OP_BXOR, Op::BXor);
+    }
+    #[test]
+    fn rk_on_b_lowering_shl() {
+        assert_rk_on_b_lowered(OP_SHL, Op::Shl);
+    }
+    #[test]
+    fn rk_on_b_lowering_shr() {
+        assert_rk_on_b_lowered(OP_SHR, Op::Shr);
+    }
+
+    #[test]
+    fn rk_on_b_propagates_c_k_flag() {
+        // OP_ADD A=2 B=K(5) C=K(7): both sides constants. lowering should set
+        // the k bit on the emitted Add (since C is still RK) while the LoadK
+        // synthesizes B.
+        let b_field = PUC53_BITRK | 5;
+        let c_field = PUC53_BITRK | 7;
+        let words = vec![enc_iabc(OP_ADD, 2, b_field, c_field)];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 2);
+        assert_eq!(t.code[0].op(), Op::LoadK);
+        assert_eq!(t.code[0].bx(), 5);
+        assert_eq!(t.code[1].op(), Op::Add);
+        assert!(t.code[1].k(), "C side stays RK, k bit must propagate");
+        assert_eq!(t.code[1].c(), 7);
+    }
+
+    #[test]
+    fn rk_on_b_shifts_downstream_jump_target() {
+        // Stream:
+        //   pc 0: ADD A=0 B=K(0) C=1   (lowers to 2 luna insts → shifts)
+        //   pc 1: JMP +1               (target PUC pc 3 = RETURN)
+        //   pc 2: MOVE 0 1             (skipped by JMP)
+        //   pc 3: RETURN 0 1
+        //
+        // After lowering, luna stream is:
+        //   luna 0: LoadK tmp=2 0
+        //   luna 1: Add 0 tmp 1
+        //   luna 2: Jmp <fixup>       (was puc 1; target was puc 3 = luna 4)
+        //   luna 3: Move 0 1
+        //   luna 4: Return 0 1
+        // The fixup loop should set sJ on luna 2 = (4 - (2+1)) = 1.
+        let b_field = PUC53_BITRK | 0;
+        let words = vec![
+            enc_iabc(OP_ADD, 0, b_field, 1),
+            enc_iasbx(OP_JMP, 0, 1),
+            enc_iabc(OP_MOVE, 0, 1, 0),
+            enc_iabc(OP_RETURN, 0, 1, 0),
+        ];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 5);
+        assert_eq!(t.code[0].op(), Op::LoadK);
+        assert_eq!(t.code[1].op(), Op::Add);
+        assert_eq!(t.code[2].op(), Op::Jmp);
+        assert_eq!(
+            t.code[2].sj(),
+            1,
+            "JMP target must remap to luna pc 4 after lowering shift"
+        );
+        assert_eq!(t.code[3].op(), Op::Move);
+        assert_eq!(t.code[4].op(), Op::Return);
+        // puc_to_luna_pc: pc 0 = luna 0 (LoadK first); pc 1 = luna 2 (Jmp);
+        // pc 2 = luna 3; pc 3 = luna 4.
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(2), Some(3), Some(4)]);
     }
 }
