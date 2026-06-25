@@ -655,16 +655,36 @@ fn translate_code(
                 out.push(Inst::iabx(Op::LoadK, inst.a, inst.bx));
             }
             OP_LOADBOOL => {
-                // punt-D: only the non-skipping form is supported.
-                if inst.c != 0 {
-                    return Err("OP_LOADBOOL skip form (C != 0) not yet supported".into());
+                // 5.1: `R(A) := bool(B); if (C) pc++`. Four combinations:
+                //   B=0 C=0 → LoadFalse A
+                //   B=0 C=1 → LFalseSkip A           (single luna op)
+                //   B=1 C=0 → LoadTrue A
+                //   B=1 C=1 → LoadTrue A; Jmp +1     (luna has no LTrueSkip;
+                //             a Jmp with sj=1 advances pc past one inst,
+                //             matching PUC's `pc++` post-LOADBOOL effect)
+                //
+                // For the 2-emit case the deferred-fixup pass picks up the
+                // first-emitted pc via the bookkeeping after the match (see
+                // `puc_to_luna_pc[i] = Some(pre_emit_len)` below). The next
+                // PUC pc (the skipped instruction) maps to luna pc
+                // `pre_emit_len + 2`, which is also where our `Jmp +1` lands
+                // pc to after the dispatch loop's pc++ — i.e. any external
+                // jump aimed at PUC pc+1 falls naturally on the right spot.
+                match (inst.b != 0, inst.c != 0) {
+                    (false, false) => {
+                        out.push(Inst::iabc(Op::LoadFalse, inst.a, 0, 0, false));
+                    }
+                    (false, true) => {
+                        out.push(Inst::iabc(Op::LFalseSkip, inst.a, 0, 0, false));
+                    }
+                    (true, false) => {
+                        out.push(Inst::iabc(Op::LoadTrue, inst.a, 0, 0, false));
+                    }
+                    (true, true) => {
+                        out.push(Inst::iabc(Op::LoadTrue, inst.a, 0, 0, false));
+                        out.push(Inst::isj(Op::Jmp, 1));
+                    }
                 }
-                let op = if inst.b != 0 {
-                    Op::LoadTrue
-                } else {
-                    Op::LoadFalse
-                };
-                out.push(Inst::iabc(op, inst.a, 0, 0, false));
             }
             OP_LOADNIL => {
                 // 5.1 semantics: R(A..B) := nil  (inclusive range, B counts
@@ -1281,5 +1301,71 @@ mod tests {
         assert!(err.contains("out of range"), "got: {err}");
         let err = resolve_jump_target(&map, -1, 2).unwrap_err();
         assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    /// Build a synthetic Pre51Inst from raw fields (no real chunk needed).
+    fn p51(op: u8, a: u32, b: u32, c: u32) -> Pre51Inst {
+        // sBx bias matches `decode_inst_51`. bx = (c << 9) | b.
+        let bx = (c << 9) | b;
+        Pre51Inst {
+            op,
+            a,
+            b,
+            c,
+            bx,
+            sbx: bx as i32 - 131071,
+        }
+    }
+
+    /// Run translate_code over a synthetic instruction sequence with no
+    /// closures / upvalue churn. Returns the lowered luna code.
+    fn xlate(raw: &[Pre51Inst]) -> Vec<Inst> {
+        let lines = vec![0u32; raw.len()];
+        let mut upvals: Vec<UpvalDesc> = Vec::new();
+        let protos: Vec<Gc<Proto>> = Vec::new();
+        let t = translate_code(raw, &lines, &[], 0, &mut upvals, &protos, 256)
+            .expect("translate_code must succeed for these fixtures");
+        t.code
+    }
+
+    #[test]
+    fn translate_loadbool_false_noskip() {
+        // LOADBOOL R0 0 0 → LoadFalse R0
+        let code = xlate(&[p51(OP_LOADBOOL, 0, 0, 0)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::LoadFalse);
+        assert_eq!(code[0].a(), 0);
+    }
+
+    #[test]
+    fn translate_loadbool_true_noskip() {
+        // LOADBOOL R3 1 0 → LoadTrue R3
+        let code = xlate(&[p51(OP_LOADBOOL, 3, 1, 0)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::LoadTrue);
+        assert_eq!(code[0].a(), 3);
+    }
+
+    #[test]
+    fn translate_loadbool_false_skip() {
+        // LOADBOOL R2 0 1 → LFalseSkip R2 (luna has a dedicated op)
+        let code = xlate(&[p51(OP_LOADBOOL, 2, 0, 1)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::LFalseSkip);
+        assert_eq!(code[0].a(), 2);
+    }
+
+    #[test]
+    fn translate_loadbool_true_skip() {
+        // LOADBOOL R5 1 1 → LoadTrue R5; Jmp +1
+        // (luna has no LTrueSkip; the Jmp +1 pair advances pc past the
+        // next inst in the dispatch loop, matching PUC's `pc++`.)
+        let code = xlate(&[p51(OP_LOADBOOL, 5, 1, 1), p51(OP_MOVE, 0, 0, 0)]);
+        assert_eq!(code.len(), 3, "true+skip lowers to 2 insts then MOVE");
+        assert_eq!(code[0].op(), Op::LoadTrue);
+        assert_eq!(code[0].a(), 5);
+        assert_eq!(code[1].op(), Op::Jmp);
+        assert_eq!(code[1].sj(), 1);
+        assert_eq!(code[2].op(), Op::Move);
     }
 }
