@@ -62,11 +62,7 @@ fn main() {
     vm.open_math();
     vm.open_string();
     vm.open_table();
-    vm.set_rust_debug_hook(
-        Some(tally_hook),
-        luna_jit::vm::exec::HOOK_MASK_COUNT,
-        1,
-    );
+    vm.set_rust_debug_hook(Some(tally_hook), luna_jit::vm::exec::HOOK_MASK_COUNT, 1);
     vm.eval(TOKEN_BUCKET_SRC)
         .expect("token_bucket script must run cleanly");
 
