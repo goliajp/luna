@@ -304,8 +304,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     //     hook does fire on its body.
     //
     // For these files the report records `total = 0, note = "skipped"`.
-    let skip_wrapper =
-        matches!(name, "errors.lua" | "db.lua");
+    let skip_wrapper = matches!(name, "errors.lua" | "db.lua");
     let src = if skip_wrapper {
         body
     } else {
