@@ -45,19 +45,8 @@
 //!   `Proto.has_compat_vararg_arg` but does NOT yet populate the
 //!   synthetic `arg` table at runtime — chunks that reference `arg`
 //!   from a `...` function will see nil. Tracked: punt-B.
-//! - **`luaO_fb2int` for `NEWTABLE` size hints** — 5.1 packs the array
-//!   and hash size hints as floating-byte (8-bit mantissa+exponent);
-//!   translator decodes them naïvely (saturates to 0 if the decoded
-//!   value exceeds luna's 8-bit B/C field). Correctness-safe (hints are
-//!   advisory) but may pessimise table allocation. Tracked: punt-C.
-//! - **`LOADBOOL A B C` → `LFalseSkip` split** — 5.1's `LOADBOOL` has a
-//!   `pc++` form (when C != 0). Translator handles the common
-//!   `LOADBOOL A 0 0` / `LOADBOOL A 1 0` cases via `LoadFalse` /
-//!   `LoadTrue`; the `C != 0` skip form is rejected. Affects `(a == b)`
-//!   in boolean position; not common in straight-line code but the
-//!   short-circuit operators do emit it. Tracked: punt-D.
 //!
-//! ## Closed in PU Wave 2 (this commit)
+//! ## Closed in PU Wave 2
 //!
 //! - **`OP_SETLIST A B 0`** — when PUC packs the block index in the
 //!   following raw u32 code-stream slot (C==0), translator now consumes
@@ -71,6 +60,21 @@
 //!   no RK form, so each K-pool operand is materialised via
 //!   `LoadK tmp k_idx` first, then the comparison runs on register
 //!   operands. Same `max_temp_bump` mechanism as arith.
+//!
+//! ## Closed in PU Wave 3 (this commit)
+//!
+//! - **`LOADBOOL A B C` skip form** (punt-D) — `B=0 C=1` lowers to
+//!   luna's native `LFalseSkip A`; `B=1 C=1` (no `LTrueSkip` in luna's
+//!   ISA) lowers to a `LoadTrue A; Jmp +1` pair. The Jmp +1 advances
+//!   pc past the next inst in the dispatch loop, matching PUC's
+//!   `pc++` post-LOADBOOL effect. The 2-emit case piggy-backs on the
+//!   existing `puc_to_luna_pc` deferred-fixup infra.
+//! - **`luaO_fb2int` for `NEWTABLE` size hints** (punt-C) — already
+//!   decoded correctly via `fb2int_saturating` + clamp to `u8::MAX`
+//!   (mirrors puc_52's `fb_to_hint_u8`); doc comments sharpened to
+//!   spell out that luna's `Op::NewTable` ignores B/C, so the
+//!   forwarded hint is inert until luna VM grows hint-aware
+//!   allocation (out of scope for puc_51). Correctness-safe.
 //!
 //! The PC remap also flipped from a 1-way `Vec<i64>` (with `-1`
 //! sentinels) to the `Translated { puc_to_luna_pc, … }` shape pioneered
@@ -1255,16 +1259,16 @@ mod tests {
     #[test]
     fn fb2int_saturates_at_u8_max() {
         // e=4, x=0 → (0|8) << 3 = 64 — fits 8 bits.
-        let fb = (4u32 << 3) | 0;
+        let fb = 4u32 << 3;
         assert_eq!(fb2int_saturating(fb), 64);
         // e=5, x=0 → (0|8) << 4 = 128 — still fits.
-        let fb = (5u32 << 3) | 0;
+        let fb = 5u32 << 3;
         assert_eq!(fb2int_saturating(fb), 128);
         // e=5, x=7 → (7|8) << 4 = 240 — fits.
         let fb = (5u32 << 3) | 7;
         assert_eq!(fb2int_saturating(fb), 240);
         // e=6, x=0 → (0|8) << 5 = 256 — saturates to 255.
-        let fb = (6u32 << 3) | 0;
+        let fb = 6u32 << 3;
         assert_eq!(fb2int_saturating(fb), 0xFF);
         // Very large fb byte clamps too.
         let fb = (31u32 << 3) | 7;
@@ -1288,7 +1292,7 @@ mod tests {
     fn translate_newtable_fb_hint_saturates() {
         // Hash hint e=6 x=0 decodes to 256 — must clamp to 0xFF for
         // luna's 8-bit C field. Array hint stays small (8).
-        let large_fb = (6u32 << 3) | 0; // -> 256
+        let large_fb = 6u32 << 3; // -> 256
         let code = xlate(&[p51(OP_NEWTABLE, 0, 0x08, large_fb)]);
         assert_eq!(code.len(), 1);
         assert_eq!(code[0].op(), Op::NewTable);
