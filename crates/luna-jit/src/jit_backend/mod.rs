@@ -1180,6 +1180,25 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
+/// v2.0 Phase 5 Track AO sub-track AO-PF — runtime fire counter for
+/// the Stage 7 polish 6 inline-chain reloc path. Every call to
+/// [`luna_jit_trace_materialize_frames`] from trace mcode (JIT-baked
+/// OR AOT polish-6 slot-loaded) increments this counter. In an AOT-
+/// only run (no in-process JIT compilation of traces that carry
+/// inline cmp@d>0 side-exits) any non-zero value is direct evidence
+/// that the polish-6 chain reloc path actually fires at runtime — the
+/// resolver-side probe (`aot_inline_chains_resolved`) only confirms
+/// the slot was populated, not that any AOT mcode dispatch ever
+/// loaded it. See `.dev/rfcs/v2.0-ao-pf-verdict.md`.
+pub static TRACE_MATERIALIZE_FRAMES_FIRES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Reader for [`TRACE_MATERIALIZE_FRAMES_FIRES`]. Relaxed load is fine
+/// — the counter is diagnostic, not a synchronisation point.
+pub fn trace_materialize_frames_fires() -> u64 {
+    TRACE_MATERIALIZE_FRAMES_FIRES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// P12-S4-step4b — frame materialization helper.
 ///
 /// step4b-B body: walks `metas[0..n]` and pushes one
@@ -1214,6 +1233,10 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     n: u64,
     metas: *const luna_core::jit::trace::FrameMaterializeInfo,
 ) -> i64 {
+    // AO-PF — count every entry to this helper from trace mcode.
+    // Relaxed ordering: the counter is purely diagnostic; the read
+    // side runs after process work has quiesced.
+    TRACE_MATERIALIZE_FRAMES_FIRES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     let vm = unsafe { current_jit_vm() };
     // Honour the existing deopt protocol: if any earlier helper in
