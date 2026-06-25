@@ -24,10 +24,7 @@ fn counter_increments_on_fib_inline_self_rec_dispatch() {
         )
         .unwrap();
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(317811)));
-    assert!(
-        vm.trace_compiled_count() >= 1,
-        "fib's trace must compile"
-    );
+    assert!(vm.trace_compiled_count() >= 1, "fib's trace must compile");
     assert!(
         vm.trace_dispatched_count() >= 1,
         "fib(28) must dispatch via inline self-rec"
