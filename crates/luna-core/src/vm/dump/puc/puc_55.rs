@@ -611,7 +611,32 @@ fn load_function(
     }
 
     // ---- translate opcodes ----
-    let code = translate_code(&raw_code)?;
+    let translated = translate_code(&raw_code)?;
+
+    // Remap per-pc line table from PUC pc-space to luna pc-space (Wave 2:
+    // I-imm lowering will insert a `LoadI` slot per I-imm op, so
+    // luna_pc != puc_pc in general). `luna_to_puc_pc[luna_pc] = puc_pc` of
+    // the *originating* PUC op for every luna slot we emitted.
+    let lines_remapped: Vec<u32> = translated
+        .luna_to_puc_pc
+        .iter()
+        .map(|&puc_pc| lines.get(puc_pc).copied().unwrap_or(0))
+        .collect();
+
+    // Remap locvars' pc ranges from PUC pc-space to luna pc-space.
+    let locvars_remapped: Vec<LocVar> = locvars
+        .into_iter()
+        .map(|lv| LocVar {
+            start_pc: remap_pc(&translated.puc_to_luna_pc, lv.start_pc),
+            end_pc: remap_pc(&translated.puc_to_luna_pc, lv.end_pc),
+            ..lv
+        })
+        .collect();
+
+    // max_stack: PUC value + worst-case temp count from I-imm lowering
+    // (Wave 2: ADDI / SHRI / SHLI / EQI / LTI / LEI / GTI / GEI each claim
+    // one scratch slot above the PUC-reported max).
+    let max_stack = max_stack.saturating_add(translated.max_temp_bump);
 
     // ---- assemble the luna Proto ----
     let env_upval_idx = upvals
@@ -622,7 +647,7 @@ fn load_function(
 
     Ok(heap.adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: code.into_boxed_slice(),
+        code: translated.code.into_boxed_slice(),
         consts: consts.into_boxed_slice(),
         protos: protos.into_boxed_slice(),
         upvals: upvals.into_boxed_slice(),
@@ -631,11 +656,11 @@ fn load_function(
         has_vararg_table_pseudo,
         has_compat_vararg_arg: false,
         max_stack,
-        lines: lines.into_boxed_slice(),
+        lines: lines_remapped.into_boxed_slice(),
         source,
         line_defined,
         last_line_defined,
-        locvars: locvars.into_boxed_slice(),
+        locvars: locvars_remapped.into_boxed_slice(),
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(JitProtoState::Untried),
         env_upval_idx,
@@ -722,8 +747,38 @@ fn expand_lineinfo(raw: &[i8], abs: &[(u32, u32)], line_defined: u32) -> Vec<u32
 // "Drop" must preserve PC layout (other ops jump to fixed PCs); we emit
 // a no-op `Move A A` in place of dropped ops so PC math stays intact.
 
-fn translate_code(raw: &[u32]) -> Result<Vec<Inst>, String> {
-    let mut out: Vec<Inst> = Vec::with_capacity(raw.len());
+/// Output of `translate_code`: the gap-and-pad-free luna bytecode plus the
+/// PC remap tables that downstream debug/locvar/lineinfo logic uses to
+/// translate the PUC pc-space into luna pc-space.
+struct Translated {
+    /// Translated luna instructions.
+    code: Vec<Inst>,
+    /// `puc_to_luna_pc[puc_pc] = luna_pc of the FIRST emitted slot for
+    /// that puc op`. Always `Some(_)` for puc_55 — Wave 2 does not drop
+    /// any op; MMBIN / VARARGPREP become a `Move A A` no-op slot so PC
+    /// layout stays intact for backward jumps (FORLOOP / FORPREP Bx).
+    puc_to_luna_pc: Vec<Option<u32>>,
+    /// `luna_to_puc_pc[luna_pc] = puc_pc that originated this slot`. Used
+    /// to remap the per-pc line table after I-imm lowering inserts
+    /// secondary slots.
+    luna_to_puc_pc: Vec<usize>,
+    /// Highest `tmp + 1` claimed by any I-imm or cmp-imm lowering site;
+    /// the caller adds this to PUC's reported `max_stack`.
+    max_temp_bump: u8,
+}
+
+fn translate_code(raw: &[u32]) -> Result<Translated, String> {
+    let mut code: Vec<Inst> = Vec::with_capacity(raw.len());
+    let mut puc_to_luna_pc: Vec<Option<u32>> = Vec::with_capacity(raw.len());
+    let mut luna_to_puc_pc: Vec<usize> = Vec::with_capacity(raw.len());
+    let max_temp_bump: u8 = 0;
+
+    // Stash pending JMP fixups: (luna_pc_of_jmp, puc_target_pc). We
+    // can't compute the luna-pc target until the full pc map is built,
+    // since I-imm lowering inserts slots between the JMP and its target.
+    let jump_fixups: Vec<(usize, i64)> = Vec::new();
+    let _ = (&jump_fixups, max_temp_bump); // silence warnings until Wave 2 wires I-imm lowering
+
     // PUC `OP_LOADKX` and `OP_NEWTABLE` (k=1) and `OP_SETLIST` (k=1) are
     // each followed by an `OP_EXTRAARG`. luna treats EXTRAARG identically,
     // so emission is 1:1 — we just need to skip translating EXTRAARG's
@@ -731,10 +786,50 @@ fn translate_code(raw: &[u32]) -> Result<Vec<Inst>, String> {
     for (pc, &word) in raw.iter().enumerate() {
         let op_byte = (word & 0x7F) as u8;
         let puc_op = PucOp::from_byte(op_byte).map_err(|e| format!("pc {pc}: {e}"))?;
+
+        // Each surviving op claims its starting luna slot.
+        puc_to_luna_pc.push(Some(code.len() as u32));
+        luna_to_puc_pc.push(pc);
         let inst = translate_one(puc_op, word)?;
-        out.push(inst);
+        code.push(inst);
     }
-    Ok(out)
+
+    Ok(Translated {
+        code,
+        puc_to_luna_pc,
+        luna_to_puc_pc,
+        max_temp_bump,
+    })
+}
+
+/// Remap a PUC pc to a luna pc, clamping past-the-end values.
+fn remap_pc(map: &[Option<u32>], puc_pc: u32) -> u32 {
+    let idx = puc_pc as usize;
+    if idx >= map.len() {
+        // past-the-end (locvar end_pc = len): map to translated len.
+        return map
+            .iter()
+            .rev()
+            .find_map(|x| *x)
+            .map(|p| p + 1)
+            .unwrap_or(0);
+    }
+    map[idx].unwrap_or_else(|| {
+        // PUC pc fell on a dropped op; use the next surviving op (currently
+        // unreachable in 5.5 — every op produces at least one luna slot —
+        // but kept symmetric with `puc_54::remap_pc` so locvar tables stay
+        // safe if Wave 3 introduces drops).
+        for &slot in &map[idx + 1..] {
+            if let Some(p) = slot {
+                return p;
+            }
+        }
+        map.iter()
+            .rev()
+            .find_map(|x| *x)
+            .map(|p| p + 1)
+            .unwrap_or(0)
+    })
 }
 
 /// Translate one PUC 5.5 instruction word into a single luna `Inst`.
