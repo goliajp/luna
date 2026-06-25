@@ -22,6 +22,14 @@ members = [
     # driving a `luna-core` `Vm`. Depends only on `luna-core`; the
     # 0-third-party-dep contract on `luna-core` is unaffected.
     "crates/luna-runtime-helpers",
+    # v2.0 Track TL Phase 1 — `luna-tools` developer-facing CLIs
+    # (`luna-bin-inspect`, `luna-heap-dump`, + 3 Phase-2 stub
+    # binaries: `luna-profile`, `luna-trace-inspect`,
+    # `luna-repl-polish`). Depends on `luna-jit` (which depends on
+    # `luna-core`); pulls `clap` + `serde` + `object` for its own
+    # surface but NOT into `luna-core`'s tree. The 0-third-party-dep
+    # contract on `luna-core` is unaffected.
+    "crates/luna-tools",
 ]
 # v2.0 Track CV — `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
 # `libfuzzer-sys` and requires nightly rustc; excluding it from the
