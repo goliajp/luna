@@ -297,6 +297,179 @@ fn loads_closure_chunk_strips_pseudo_and_patches_jumps() {
     // accessor — see punt-test-A.
 }
 
+/// Build a 5.1 main proto exercising the SETLIST C=0 path: when PUC
+/// emits a SETLIST with C==0 the next raw 32-bit code-stream slot is a
+/// literal int (block index), NOT an opcode. PU Wave 2 收回 punt: this
+/// chunk's load must now succeed where it previously errored out.
+///
+/// Layout:
+/// ```text
+/// raw pc 0: NEWTABLE R0 0 0      (create empty table)
+/// raw pc 1: LOADK    R1 K0       (the value to store at t[1])
+/// raw pc 2: SETLIST  R0 B=1 C=0  (block-index in the next slot)
+/// raw pc 3: <raw u32 = 1>        (data payload: block index 1)
+/// raw pc 4: RETURN   R0 1        (no return values)
+/// ```
+fn build_setlist_c0_chunk() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&puc_str(b"@test"));
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 0);
+    body.push(0); // nups
+    body.push(0); // numparams
+    body.push(2); // is_vararg
+    body.push(2); // max_stack
+    // code: 5 insts (NEWTABLE / LOADK / SETLIST / payload / RETURN)
+    put_i32(&mut body, 5);
+    put_u32(&mut body, enc(10, 0, 0, 0)); // NEWTABLE R0 0 0
+    put_u32(&mut body, enc_bx(1, 1, 0)); // LOADK R1 K0
+    put_u32(&mut body, enc(34, 0, 1, 0)); // SETLIST R0 B=1 C=0
+    put_u32(&mut body, 1u32); // raw payload: block index 1
+    put_u32(&mut body, enc(30, 0, 1, 0)); // RETURN R0 B=1
+    // constants: one number = 42
+    put_i32(&mut body, 1);
+    body.push(3); // LUA_TNUMBER
+    put_f64(&mut body, 42.0);
+    put_i32(&mut body, 0); // 0 nested protos
+    put_i32(&mut body, 5); // 5 lineinfo entries
+    for _ in 0..5 {
+        put_i32(&mut body, 1);
+    }
+    put_i32(&mut body, 0); // 0 locvars
+    put_i32(&mut body, 0); // 0 upvalue names
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&HEADER_51);
+    chunk.extend(body);
+    chunk
+}
+
+/// Build a 5.1 main proto exercising arith with the constant on the
+/// B side (`R[A] := K[b] + R[c]`). PU Wave 2 收回 punt: this chunk's
+/// load must now succeed (translator routes through
+/// `super::lower_k_via_tmp` to materialise the K into a tmp register).
+///
+/// Layout:
+/// ```text
+/// raw pc 0: LOADK R0 K0             (R0 = 10.0; only to have a register)
+/// raw pc 1: ADD   R0 K(RK 0) R0     (R0 = K[0] + R[0] — K on B side)
+/// raw pc 2: RETURN R0 1
+/// ```
+fn build_arith_k_on_b_chunk() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&puc_str(b"@test"));
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 0);
+    body.push(0); // nups
+    body.push(0); // numparams
+    body.push(2); // is_vararg
+    body.push(2); // max_stack
+    put_i32(&mut body, 3);
+    put_u32(&mut body, enc_bx(1, 0, 0)); // LOADK R0 K0
+    // ADD R0 K(b) R0 — set the RK bit (0x100) on the B field so it's
+    // a K-pool index in the low 8 bits.
+    put_u32(&mut body, enc(12, 0, 0x100, 0)); // ADD R0 K[0] R0
+    put_u32(&mut body, enc(30, 0, 1, 0)); // RETURN R0 1
+    put_i32(&mut body, 1);
+    body.push(3); // LUA_TNUMBER
+    put_f64(&mut body, 10.0);
+    put_i32(&mut body, 0); // 0 nested protos
+    put_i32(&mut body, 3);
+    for _ in 0..3 {
+        put_i32(&mut body, 1);
+    }
+    put_i32(&mut body, 0); // 0 locvars
+    put_i32(&mut body, 0); // 0 upvalue names
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&HEADER_51);
+    chunk.extend(body);
+    chunk
+}
+
+/// Build a 5.1 main proto exercising EQ with a K-pool operand on C. PU
+/// Wave 2 收回 punt: 5.1 EQ A B C uses RK on B and C; luna's Eq has no
+/// RK form, so the translator must materialise the K into a tmp
+/// register first.
+///
+/// Layout:
+/// ```text
+/// raw pc 0: LOADK R0 K0           (R0 = 7.0)
+/// raw pc 1: EQ    A=0 B=R0 C=K1   (skip when R[0] != K[1] — note A=0
+///                                  means "skip when NOT equal", which
+///                                  is the truthiness flag carried into
+///                                  luna's k bit)
+/// raw pc 2: JMP   sBx=+0          (the obligatory JMP following EQ —
+///                                  PUC always pairs EQ with JMP)
+/// raw pc 3: RETURN R0 1
+/// ```
+fn build_eq_rk_chunk() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&puc_str(b"@test"));
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 0);
+    body.push(0); // nups
+    body.push(0); // numparams
+    body.push(2); // is_vararg
+    body.push(2); // max_stack
+    put_i32(&mut body, 4);
+    put_u32(&mut body, enc_bx(1, 0, 0)); // LOADK R0 K0
+    // EQ A=0 B=R0 C=K[1] — RK bit on C side only.
+    put_u32(&mut body, enc(23, 0, 0, 0x100 | 1)); // EQ A=0 B=R0 C=K[1]
+    put_u32(&mut body, enc_sbx(22, 0, 0)); // JMP +0
+    put_u32(&mut body, enc(30, 0, 1, 0)); // RETURN R0 1
+    put_i32(&mut body, 2);
+    body.push(3);
+    put_f64(&mut body, 7.0);
+    body.push(3);
+    put_f64(&mut body, 7.0);
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 4);
+    for _ in 0..4 {
+        put_i32(&mut body, 1);
+    }
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 0);
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&HEADER_51);
+    chunk.extend(body);
+    chunk
+}
+
+/// PU Wave 2 punt-7 收回: SETLIST with C=0 (block-index in next code
+/// slot) now translates to luna's `SetList k=true + ExtraArg` pair
+/// instead of erroring out.
+#[test]
+fn loads_setlist_c0_chunk() {
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_puc_bytecode_loading(true);
+    let chunk = build_setlist_c0_chunk();
+    vm.load(&chunk, b"=test")
+        .expect("SETLIST C=0 chunk loads (PU Wave 2 punt-7 收回)");
+}
+
+/// PU Wave 2 punt-5 收回: arith op with the constant on the B side
+/// (5.1 RK encoding) now lowers through `super::lower_k_via_tmp` instead
+/// of erroring out.
+#[test]
+fn loads_arith_k_on_b_chunk() {
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_puc_bytecode_loading(true);
+    let chunk = build_arith_k_on_b_chunk();
+    vm.load(&chunk, b"=test")
+        .expect("arith K-on-B chunk loads (PU Wave 2 punt-5 收回)");
+}
+
+/// PU Wave 2 punt-6 收回: EQ/LT/LE with a K-pool operand now
+/// materialises the K into a tmp register before comparing (5.1 RK
+/// encoding on comparison operands has no direct luna equivalent).
+#[test]
+fn loads_eq_rk_chunk() {
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_puc_bytecode_loading(true);
+    let chunk = build_eq_rk_chunk();
+    vm.load(&chunk, b"=test")
+        .expect("EQ RK chunk loads (PU Wave 2 punt-6 收回)");
+}
+
 /// Integration smoke: when an external `luac5.1` is installed, point at
 /// it via `LUAC51=/path/to/luac5.1` and the test compiles a tiny Lua
 /// source then loads the resulting bytecode through the translator. Not
