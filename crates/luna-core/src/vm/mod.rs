@@ -12,6 +12,7 @@ pub mod lib_coroutine;
 pub mod async_drive;
 pub mod ergo;
 pub mod host_roots;
+pub mod inspect;
 pub mod into_value;
 pub mod sandbox;
 pub mod table_builder;
