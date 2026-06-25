@@ -980,45 +980,37 @@ fn translate_code(puc_code: &[u32], _consts: &[Value]) -> Result<Translated, Str
                 // PUC-reported `max_stack`; the post-pass bump keeps the
                 // frame inside the runtime's growth check.
                 let tmp = b.max(a) + 1;
-                if tmp > 0xFF {
-                    return Err("PUC 5.4 ADDI lowering: temp register exceeds 255".to_string());
-                }
-                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
-                let imm = sc_of(w);
+                let pair = super::lower_i_imm(Op::Add, a, b, sc_of(w), tmp, &mut max_temp_bump)?;
                 emit(
                     &mut code,
                     &mut puc_to_luna_pc,
                     &mut luna_to_puc_pc,
-                    Inst::iasbx(Op::LoadI, tmp, imm),
+                    pair[0],
                     true,
                 );
                 emit(
                     &mut code,
                     &mut puc_to_luna_pc,
                     &mut luna_to_puc_pc,
-                    Inst::iabc(Op::Add, a, b, tmp, false),
+                    pair[1],
                     false,
                 );
             }
             puc_op::SHRI => {
                 let tmp = b.max(a) + 1;
-                if tmp > 0xFF {
-                    return Err("PUC 5.4 SHRI lowering: temp register exceeds 255".to_string());
-                }
-                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
-                let imm = sc_of(w);
+                let pair = super::lower_i_imm(Op::Shr, a, b, sc_of(w), tmp, &mut max_temp_bump)?;
                 emit(
                     &mut code,
                     &mut puc_to_luna_pc,
                     &mut luna_to_puc_pc,
-                    Inst::iasbx(Op::LoadI, tmp, imm),
+                    pair[0],
                     true,
                 );
                 emit(
                     &mut code,
                     &mut puc_to_luna_pc,
                     &mut luna_to_puc_pc,
-                    Inst::iabc(Op::Shr, a, b, tmp, false),
+                    pair[1],
                     false,
                 );
             }
