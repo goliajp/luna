@@ -289,7 +289,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         }
     }
 
-    match vm.call_value(Value::Closure(closure), &[]) {
+    let rc = match vm.call_value(Value::Closure(closure), &[]) {
         Ok(_results) => 0,
         Err(err) => {
             let msg = vm.error_text(&err);
@@ -299,7 +299,23 @@ fn run_inner(bytecode: &[u8]) -> i32 {
             }
             1
         }
+    };
+
+    // v2.0 Phase 5 Track AO sub-track AO-PF — post-run probe for the
+    // Stage 7 polish 6 inline-chain reloc fire path. Counts every
+    // entry to `luna_jit_trace_materialize_frames` from trace mcode
+    // (JIT-baked OR AOT polish-6 slot-loaded). In an AOT-only binary
+    // any non-zero value is direct evidence that the polish-6 chain
+    // reloc path actually fires at runtime — the resolver-side probe
+    // (`aot_inline_chains_resolved`) only confirms the slot got
+    // populated, not that any AOT mcode dispatch ever loaded it.
+    #[cfg(feature = "jit-helpers")]
+    if std::env::var_os("LUNA_AOT_PROBE").is_some() {
+        let fires = luna_jit::jit_backend::trace_materialize_frames_fires();
+        eprintln!("luna-runtime-helpers: trace_materialize_frames_fires = {fires}");
     }
+
+    rc
 }
 
 /// Best-effort extraction of a panic payload's display text. Matches
