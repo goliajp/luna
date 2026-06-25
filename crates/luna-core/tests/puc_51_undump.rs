@@ -538,6 +538,90 @@ fn translate_tforloop_5_1() {
     );
 }
 
+/// Build a 5.1 main proto compiled with `LUAI_COMPAT_VARARG=1`: the
+/// `is_vararg` byte sets both `ISVARARG` (bit 1) and `NEEDSARG` (bit 2),
+/// telling the runtime to materialise a hidden local `arg` table at
+/// `base + nparams`. With nparams=0 the slot lands at R0; body reads
+/// `arg.n` into R1 and `arg[1]` into R2 then returns both.
+///
+/// Bytecode layout (main proto):
+/// ```text
+/// pc 0: GETTABLE R1 R0 K0+RK    -- R1 = arg["n"]  (K0 = "n")
+/// pc 1: GETTABLE R2 R0 K1+RK    -- R2 = arg[K1]   (K1 = 1.0)
+/// pc 2: RETURN   R1 B=3         -- return R1, R2  (B-1 = 2 results)
+/// ```
+///
+/// max_stack=3 covers R0 (arg) + R1 + R2; nparams=0 + is_vararg=0x06
+/// (ISVARARG | NEEDSARG).
+fn build_compat_vararg_chunk() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&puc_str(b"@test"));
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 0);
+    body.push(0); // nups
+    body.push(0); // numparams
+    body.push(0x06); // is_vararg = ISVARARG | NEEDSARG
+    body.push(3); // max_stack
+    put_i32(&mut body, 3);
+    // GETTABLE R1 R0 K[0]  — RK bit on C (0x100 | 0)
+    put_u32(&mut body, enc(6, 1, 0, 0x100));
+    // GETTABLE R2 R0 K[1]  — RK bit on C (0x100 | 1)
+    put_u32(&mut body, enc(6, 2, 0, 0x100 | 1));
+    put_u32(&mut body, enc(30, 1, 3, 0)); // RETURN R1 B=3
+    // constants: 2 entries
+    put_i32(&mut body, 2);
+    body.push(4); // LUA_TSTRING "n"
+    body.extend_from_slice(&puc_str(b"n"));
+    body.push(3); // LUA_TNUMBER 1.0
+    put_f64(&mut body, 1.0);
+    put_i32(&mut body, 0); // 0 nested protos
+    put_i32(&mut body, 3); // 3 lineinfo
+    for _ in 0..3 {
+        put_i32(&mut body, 1);
+    }
+    put_i32(&mut body, 0); // 0 locvars
+    put_i32(&mut body, 0); // 0 upvalue names
+
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&HEADER_51);
+    chunk.extend(body);
+    chunk
+}
+
+/// PU Wave 4 punt-B 收回: `LUAI_COMPAT_VARARG` `arg` table now
+/// materialises at the runtime frame entry (`vm/exec.rs:4200` —
+/// `proto.has_compat_vararg_arg` cold path; hot path untouched). The
+/// test calls a 5.1 main chunk (nparams=0, NEEDSARG=1) with two
+/// varargs and asserts `arg.n == 2 && arg[1] == first_arg`.
+#[test]
+fn translate_compat_vararg_5_1_arg_table() {
+    use luna_core::runtime::Value;
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_puc_bytecode_loading(true);
+    let chunk = build_compat_vararg_chunk();
+    let cl = vm
+        .load(&chunk, b"=test")
+        .expect("compat-vararg chunk loads (PU Wave 4 punt-B 收回)");
+    let res = vm
+        .call_value(Value::Closure(cl), &[Value::Int(42), Value::Int(7)])
+        .expect("compat-vararg chunk runs");
+    assert_eq!(res.len(), 2, "expected (arg.n, arg[1]) — got {res:?}");
+    // arg.n = number of varargs
+    let n = match res[0] {
+        Value::Int(n) => n,
+        Value::Float(f) => f as i64,
+        ref other => panic!("arg.n: expected number, got {other:?}"),
+    };
+    assert_eq!(n, 2, "arg.n must equal the vararg count");
+    // arg[1] = first vararg
+    let one = match res[1] {
+        Value::Int(n) => n,
+        Value::Float(f) => f as i64,
+        ref other => panic!("arg[1]: expected number, got {other:?}"),
+    };
+    assert_eq!(one, 42, "arg[1] must equal the first passed vararg");
+}
+
 /// PU Wave 2 punt-7 收回: SETLIST with C=0 (block-index in next code
 /// slot) now translates to luna's `SetList k=true + ExtraArg` pair
 /// instead of erroring out.
