@@ -1089,7 +1089,7 @@ impl TargetSpec {
 
     /// v1.3 Phase AOT Stage 7 polish 4 — resolve the Cranelift
     /// `TargetIsa` builder for this target. Used by
-    /// [`harvest_and_emit_aot_traces`] so the offline trace lowerer
+    /// `harvest_and_emit_aot_traces` so the offline trace lowerer
     /// codegens for the deploy ABI rather than the build host's.
     ///
     /// Two layers:

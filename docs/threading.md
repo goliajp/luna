@@ -45,7 +45,7 @@ luna's `Vm` carries a compile-time `compile_fail` doctest enforcing
 this; if a future code change accidentally made `Vm: Send`, the
 build fails.
 
-For the planned post-v1.1 `feature = "send"` work, see §[Forward-looking](#forward-looking-feature--send).
+For the v1.3+ `feature = "send"` work, see §[`feature = "send"` — SendVm (v1.3+)](#feature--send--sendvm-v13).
 
 ---
 
