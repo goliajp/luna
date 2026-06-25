@@ -2160,8 +2160,20 @@ impl Vm {
     /// Install a hook on `target` (`None`/current thread → the live VM fields;
     /// another, suspended thread → its saved `Coro` state). PUC `debug.sethook`
     /// with an optional thread argument.
+    ///
+    /// `target == None` means "no explicit thread argument" — PUC binds that
+    /// to `L` (the running thread). luna's live VM fields (`self.hook`,
+    /// `self.frames`, `self.stack`) ARE the running thread's state, regardless
+    /// of whether that's the main thread or a currently-resumed coroutine
+    /// (save/restore happens at resume/yield boundaries via `load_coro_ctx`/
+    /// `store_coro_ctx`). So a `None` target should always route to
+    /// `install_hook` on the live fields. The pre-fix predicate gate
+    /// `is_current_thread(target)` returned `false` when running inside a
+    /// coroutine (`self.current = Some(co)`, `target = None` don't match)
+    /// and silently dropped the hook on the floor — the install happened on
+    /// no thread at all.
     pub(crate) fn set_hook(&mut self, target: Option<Gc<Coro>>, state: HookState) {
-        if self.is_current_thread(target) {
+        if target.is_none() || self.is_current_thread(target) {
             self.install_hook(state);
         } else if let Some(co) = target {
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
