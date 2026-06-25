@@ -76,4 +76,21 @@ pub const BYTECODE_SECTION_NAME: &str = ".luna.bytecode";
 
 pub mod cli;
 pub mod embed;
+// `runtime_stub` declares `extern "C" { static __luna_bytecode_start: u8 }`
+// + `__luna_bytecode_end`. These symbols are linker-provided by the
+// bytecode `.o` that `embed::embed_bytecode` writes; they exist only in
+// the AOT-produced binary's link set, not in the luna-aot crate's own
+// builds (rlib / test / doctest).
+//
+// Most linkers (ld / lld / Mach-O) tolerate unresolved `extern`
+// references unless something actually calls them. MSVC's `link.exe`
+// is stricter — even unused references trigger LNK2019. So the module
+// is gated off when building the luna-aot crate itself under MSVC;
+// the user-side Cargo bootstrap recipe (see `runtime_stub::aot_main`
+// rustdoc § Wiring) re-enables it by setting
+// `RUSTFLAGS=--cfg luna_aot_runtime_stub` when compiling against the
+// real bytecode object link set. Tier-1 deploys via the AOT pipeline's
+// own `cc` invocation (`embed::compile_and_link`) use the C entry +
+// `luna_aot_run` from `luna-runtime-helpers`, not this Rust stub.
+#[cfg(any(not(target_env = "msvc"), luna_aot_runtime_stub))]
 pub mod runtime_stub;

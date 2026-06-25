@@ -112,6 +112,18 @@ codegen-units = 16
 # stay at default (warn) so individual files can opt out with
 # `#![allow(...)]` where there's a documented reason.
 
+# Allow project-defined custom cfg names. Each entry needs a one-line
+# rationale; never widen to silence individual warnings.
+#
+# - `luna_aot_runtime_stub`: opt-in to compile `luna-aot::runtime_stub`
+#   when the user-side Cargo bootstrap recipe links against the real
+#   bytecode object set (`__luna_bytecode_start/end` bracket symbols).
+#   Default builds and tests under MSVC skip the module because the
+#   bracket symbols are linker-provided only in the AOT-produced
+#   binary; MSVC's `link.exe` rejects unresolved externs even when
+#   nothing references them.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(luna_aot_runtime_stub)"] }
+
 [workspace.lints.clippy]
 # Internal unsafe fn surface is large (~250 raw-ptr deref sites in GC +
 # JIT helpers) and SAFETY contracts live in `docs/unsafe-accounting.md`
