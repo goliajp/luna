@@ -1,0 +1,9 @@
+# File-scoped to crates/luna-fuzz/ — `cargo +nightly fuzz` requires
+# nightly rustc for the `-Z sanitizer=address` instrumentation that
+# libfuzzer-sys plugs into. This file overrides the inherited stable
+# toolchain ONLY when cargo is invoked from inside this directory.
+# Other crates (luna-core, luna-jit, luna-aot, luna-runtime-helpers)
+# continue to build on stable (msrv 1.86, enforced by `.github/workflows/msrv.yml`).
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]

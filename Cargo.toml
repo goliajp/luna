@@ -23,6 +23,15 @@ members = [
     # 0-third-party-dep contract on `luna-core` is unaffected.
     "crates/luna-runtime-helpers",
 ]
+# v2.0 Track CV — `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
+# `libfuzzer-sys` and requires nightly rustc; excluding it from the
+# default member set keeps `cargo build --workspace` on stable and
+# keeps the `zero-dep` luna-core gate trivially satisfied (libfuzzer
+# never enters the cross-crate dep graph). To exercise the fuzz
+# harnesses: `cd crates/luna-fuzz && cargo +nightly fuzz run <target>`.
+exclude = [
+    "crates/luna-fuzz",
+]
 
 [workspace.package]
 version = "1.3.0"
