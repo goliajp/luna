@@ -38,6 +38,22 @@ allow = [
 ]
 confidence-threshold = 0.93
 
+# Per-crate license exceptions — surgical opt-in for copyleft licenses
+# that only enter the workspace through documented opt-in features.
+# CDDL stays out of the global allow list above (project charter:
+# "permissive only, no copyleft contamination"); users who enable the
+# `flame-graph` feature on luna-tools accept the copyleft license
+# explicitly when they do so.
+exceptions = [
+    # `inferno` (CDDL-1.0): flame-graph rendering for luna-profile.
+    # Pulled only via `luna-tools` opt-in `flame-graph` feature
+    # (`crates/luna-tools/Cargo.toml::[features] flame-graph = ["dep:inferno", "dep:pprof"]`).
+    # cargo-deny inspects every crate in Cargo.lock regardless of
+    # feature gating, so the exception is required even though
+    # default builds never enable the feature.
+    { allow = ["CDDL-1.0"], name = "inferno" },
+]
+
 # ─────────────────────────────────────────────────────────────────────
 # Bans — luna-core's 0-third-party-dep contract.
 #
