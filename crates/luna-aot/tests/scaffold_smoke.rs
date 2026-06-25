@@ -35,7 +35,26 @@ fn embed_bytecode_produces_native_binary() {
         }
     }
 
-    let meta = fs::metadata(&out_path).expect("output binary exists");
+    // Windows linkers (lld-link / link.exe) append `.exe` regardless of
+    // the requested basename, so the actual artifact is `hello.exe`
+    // rather than `hello`. Probe both.
+    let actual_out = if out_path.exists() {
+        out_path.clone()
+    } else {
+        let with_ext = out_path.with_extension(std::env::consts::EXE_EXTENSION);
+        if with_ext.exists() {
+            with_ext
+        } else {
+            panic!(
+                "neither {} nor {} exists",
+                out_path.display(),
+                out_path
+                    .with_extension(std::env::consts::EXE_EXTENSION)
+                    .display()
+            );
+        }
+    };
+    let meta = fs::metadata(&actual_out).expect("output binary exists");
     assert!(meta.is_file(), "output is a regular file");
     assert!(meta.len() > 0, "output is non-empty");
 
