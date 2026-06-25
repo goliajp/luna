@@ -34,10 +34,13 @@
 //!   call / return / upvalue / closure ops (~30 PUC ops).
 //! - `LOADBOOL` lowering: `(false,no-skip)` → `LoadFalse`; `(true,no-skip)`
 //!   → `LoadTrue`; `(false,skip)` → `LFalseSkip` (PC-aligned 1:1).
-//!   `(true,skip)` has no PC-preserving luna form (luna lacks
-//!   `LTrueSkip`), so we reject it. This shape only fires from PUC's
-//!   `lcode.c::luaK_goiftrue` for `R(A) = (cond)` patterns; uncommon
-//!   in straight-line scripts.
+//!   `(true,skip)` has no PC-preserving luna form (luna lacks `LTrueSkip`),
+//!   so we lower it to a `LoadTrue A; Jmp <skip>` pair, with the Jmp
+//!   target remapped through the puc↔luna pc map so the skip stays
+//!   correct even when the skipped PUC inst itself lowers to multiple
+//!   luna insts (RK-on-B arith / CONCAT B!=A). This shape only fires
+//!   from PUC's `lcode.c::luaK_goiftrue` for `R(A) = (cond)` patterns;
+//!   uncommon in straight-line scripts.
 //! - `OP_JMP A==0` → `Jmp sJ` 1:1. `OP_JMP A!=0` (close upvalues ≥
 //!   R[A-1]) is rejected — supporting it requires PC remapping
 //!   (`Close; Jmp` pair). Rare in practice; tracked as polish.
@@ -298,25 +301,21 @@ fn check_header(r: &mut Reader) -> Result<(), String> {
 
 // ---- per-opcode translator ----
 //
-// **Phase 4 PU Wave 2 PC remap infra** (Step 2): the per-PUC-op translation
-// path used to be a pure `translate_inst(word) -> Result<Inst, String>`
-// 1:1 re-encoder. Lowerings that need to emit more than one luna inst
+// **Phase 4 PU Wave 2 PC remap infra**: the per-PUC-op translation path
+// used to be a pure `translate_inst(word) -> Result<Inst, String>` 1:1
+// re-encoder. Lowerings that need to emit more than one luna inst
 // (RK-on-B arith via `LoadK tmp; OP a tmp c`, LOADBOOL true+skip via
-// `LoadTrue; Jmp +1`, CONCAT B!=A via `Move a b; Concat a len`) cannot
+// `LoadTrue; Jmp <skip>`, CONCAT B!=A via `Move…; Concat a len`) cannot
 // fit that signature — they shift every downstream pc, so JMP / FORLOOP /
 // TFORLOOP targets must be patched after the full pc map is known and
 // PUC's per-pc lineinfo must be spread across the emitted instructions.
 //
 // `translate_code` is the new entry point: it loops over the PUC words,
-// invokes `translate_one` per op (which calls `emit_*` helpers to push
-// into `code` + record both pc maps), and runs a post-pass that patches
-// every recorded jump fixup against the final pc map.
-//
-// For now `translate_one` still returns the legacy `Inst` from a 1:1 match
-// arm. Once Step 4 routes the RK-on-B arith ops through `lower_k_via_tmp`
-// (and later sub-agents wire LOADBOOL+skip + CONCAT B!=A), the multi-inst
-// path will start using the same `emit_more` + `jump_fixups` channels that
-// the infra exposes here.
+// invokes `translate_one` per op (which writes into `code` + records both
+// pc maps), and runs a post-pass that patches every recorded jump fixup
+// against the final pc map. The multi-inst lowerings all live in
+// `translate_one`'s match; everything else still delegates to
+// `translate_inst`'s 1:1 fast path.
 
 /// Output of `translate_code`: luna instruction stream plus the bidirectional
 /// puc↔luna pc maps that downstream lineinfo / debug consumers need.
@@ -334,8 +333,10 @@ struct Translated {
     code: Vec<Inst>,
     puc_to_luna_pc: Vec<Option<u32>>,
     luna_to_puc_pc: Vec<usize>,
-    /// Worst-case extra registers needed by RK-on-B / future LOADBOOL+skip /
-    /// CONCAT B!=A lowerings. Added to PUC's `max_stack` post-translation.
+    /// Worst-case extra registers needed by the RK-on-B lowering (the
+    /// LOADBOOL+skip and CONCAT B!=A lowerings reuse the source registers
+    /// and don't need extra temps). Added to PUC's `max_stack`
+    /// post-translation.
     max_temp_bump: u8,
 }
 
@@ -344,7 +345,7 @@ struct Translated {
 #[derive(Clone, Copy, Debug)]
 enum FixupKind {
     /// `Op::Jmp` placeholder — encode as sJ (signed offset from next pc).
-    /// Used by `OP_JMP` (and by Step 3+ LOADBOOL+skip lowering).
+    /// Used by `OP_JMP` and by the LOADBOOL true+skip lowering.
     Jmp,
     /// `Op::ForPrep A Bx` placeholder — encode as positive Bx forward offset
     /// (PUC's `OP_FORPREP A sBx` uses `sBx >= 0` forward jump). luna ForPrep
@@ -380,10 +381,11 @@ fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
     let mut max_temp_bump: u8 = 0;
 
     // Stash pending jump fixups. Populated by `translate_one` for every
-    // PC-relative op (`JMP`, `FORPREP`, `FORLOOP`, `TFORLOOP`). The post-pass
+    // PC-relative op (`JMP`, `FORPREP`, `FORLOOP`, `TFORLOOP`) and for the
+    // synthesized `Jmp` of the LOADBOOL true+skip lowering. The post-pass
     // walks the list and rewrites each placeholder against the final pc map,
-    // so multi-inst lowerings (Step 4+ RK-on-B / LOADBOOL+skip / CONCAT B!=A)
-    // that shift downstream pcs stay correct without per-op accounting.
+    // so multi-inst lowerings (RK-on-B / LOADBOOL+skip / CONCAT B!=A) that
+    // shift downstream pcs stay correct without per-op accounting.
     let mut jump_fixups: Vec<Fixup> = Vec::new();
 
     for (puc_pc, &word) in puc_code.iter().enumerate() {
@@ -536,7 +538,7 @@ fn resolve_target(
 /// PC-relative ops (`JMP`, `FORPREP`, `FORLOOP`, `TFORLOOP`) take the
 /// fixup channel: a placeholder is emitted now and the real offset is
 /// patched in by `translate_code` once the full pc map is known. Multi-inst
-/// lowerings (Step 4+ RK-on-B / LOADBOOL+skip / CONCAT B!=A) shift downstream
+/// lowerings (RK-on-B / LOADBOOL+skip / CONCAT B!=A) shift downstream
 /// pcs, so the per-op `i.sbx()` computed at decode time is no longer the
 /// luna offset — only the fixup loop sees the final layout.
 ///
@@ -656,6 +658,98 @@ fn translate_one(
                 a: i.a,
             });
             return Ok(());
+        }
+        OP_LOADBOOL => {
+            // PUC `OP_LOADBOOL A B C`: R[A] = (bool)B; if C then pc++.
+            // luna lacks a single `LTrueSkip` op, so the `(B=1, C=1)` shape
+            // (true + skip) lowers to a `LoadTrue A; Jmp <skip-1-PUC-inst>`
+            // pair. The other three shapes still go through `translate_inst`
+            // (1:1 PC) below.
+            //
+            // The Jmp target is the PUC pc *after* the inst that LOADBOOL
+            // wants to skip — i.e. `puc_pc + 2`. We push a `Jmp` fixup so
+            // the post-pass remaps it through `puc_to_luna_pc`, which keeps
+            // the skip correct even when the skipped PUC inst itself lowers
+            // to multiple luna insts (RK-on-B arith / a CONCAT B!=A pair).
+            if b_idx != 0 && c_idx != 0 {
+                // Emit LoadTrue A first.
+                let first_luna_pc = code.len() as u32;
+                puc_to_luna_pc.push(Some(first_luna_pc));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::LoadTrue, i.a, 0, 0, false));
+                // Then a Jmp placeholder; fixup target = next-next PUC pc.
+                let jmp_luna_pc = code.len();
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::isj(Op::Jmp, 0));
+                jump_fixups.push(Fixup {
+                    luna_pc: jmp_luna_pc,
+                    target_puc_pc: puc_pc as i64 + 2,
+                    kind: FixupKind::Jmp,
+                    a: 0,
+                });
+                // LoadTrue's `A` slot already fits PUC's declared frame;
+                // the Jmp adds no extra register need, so we leave
+                // `max_temp_bump` untouched.
+                return Ok(());
+            }
+            // (false, no-skip) / (false, skip) / (true, no-skip) → 1:1 path.
+        }
+        OP_CONCAT => {
+            // PUC `OP_CONCAT A B C`: R[A] = R[B]..R[B+1]..…..R[C].
+            // luna `Op::Concat A len`: R[A] = R[A]..R[A+1]..…..R[A+len-1].
+            // Stock PUC compilers emit `B == A` (the result slot is the
+            // first source slot), but hand-written .luac may have `B != A`.
+            // We lower that shape to a series of `Move R[A+i] = R[B+i]`
+            // (chosen iter direction to avoid overlap) followed by a
+            // single-source-slot `Concat A len`.
+            //
+            // The 1:1 `B == A` path stays in `translate_inst` below.
+            if b_idx != i.a {
+                let len = c_idx
+                    .checked_sub(b_idx)
+                    .ok_or("PUC 5.3 translator: CONCAT C < B")?
+                    + 1;
+                if len > 0xFF {
+                    return Err(format!(
+                        "PUC 5.3 translator: CONCAT len {len} > 255 — out of luna's 8-bit field"
+                    ));
+                }
+                // Bounds: ensure dest range `A..A+len` and source range
+                // `B..B+len` both fit the 8-bit register field. PUC's own
+                // register check covers this for stock chunks; hand-written
+                // ones can stretch.
+                let last_dest = i.a.saturating_add(len - 1);
+                let last_src = b_idx.saturating_add(len - 1);
+                if last_dest > 0xFF || last_src > 0xFF {
+                    return Err(format!(
+                        "PUC 5.3 translator: CONCAT range out of 8-bit register field \
+                         (a={}, b={}, len={})",
+                        i.a, b_idx, len
+                    ));
+                }
+                let first_luna_pc = code.len() as u32;
+                puc_to_luna_pc.push(Some(first_luna_pc));
+                // Emit `len` Move insts. Iter direction picked to be safe
+                // against overlapping ranges (forward when src > dst,
+                // backward when src < dst — the canonical shift-array
+                // direction for in-place range copies).
+                if b_idx > i.a {
+                    for off in 0..len {
+                        luna_to_puc_pc.push(puc_pc);
+                        code.push(Inst::iabc(Op::Move, i.a + off, b_idx + off, 0, false));
+                    }
+                } else {
+                    for off in (0..len).rev() {
+                        luna_to_puc_pc.push(puc_pc);
+                        code.push(Inst::iabc(Op::Move, i.a + off, b_idx + off, 0, false));
+                    }
+                }
+                // Now `R[A..A+len]` holds the source range; emit Concat.
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Concat, i.a, len, 0, false));
+                return Ok(());
+            }
+            // B == A → 1:1 path in `translate_inst` below.
         }
         OP_TFORLOOP => {
             // PUC `OP_TFORLOOP A sBx`: if R(A+1) ~= nil { R(A) = R(A+1); pc += sBx }.
