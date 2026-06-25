@@ -36,11 +36,15 @@ jobs:
       - name: cargo tree -p luna-core
         run: |
           set -euo pipefail
-          OUTPUT=$(cargo tree -p luna-core --prefix none)
+          # `--edges normal` excludes dev-dependencies (e.g. `dhat`, used
+          # by the v2.0 Track MM `mem_baseline` bench) and build-deps —
+          # those never link into the published crate, so the F1
+          # 0-third-party-dep contract is preserved.
+          OUTPUT=$(cargo tree -p luna-core --prefix none --edges normal)
           echo "$OUTPUT"
           COUNT=$(echo "$OUTPUT" | grep -cE ' v[0-9]')
-          echo "third-party dep count: $((COUNT - 1))"
+          echo "third-party prod dep count: $((COUNT - 1))"
           if [ "$COUNT" -ne 1 ]; then
-            echo "::error::luna-core must depend on zero third-party crates (F1 contract). Found $COUNT crates in tree."
+            echo "::error::luna-core must depend on zero third-party prod crates (F1 contract). Found $COUNT crates in tree."
             exit 1
           fi
