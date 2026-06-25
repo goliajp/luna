@@ -184,6 +184,32 @@ jobs:
         run: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────
+  # v2.0 CV gap fill: feature="send" matrix coverage. SendVm is the
+  # cross-thread embedding path; its tests live in
+  # `crates/luna-core/tests/send_vm.rs` and are gated behind
+  # `#[cfg(feature = "send")]`. Without an explicit CI job, the
+  # default `cargo test` invocation never exercises the feature,
+  # so SendVm bit-rot would only surface at a release-time smoke.
+  # This job builds + clippies + tests luna-core with the feature
+  # flipped on so any regression in the lock / UnsafeCell wrapper
+  # lands as a red gate.
+  # ─────────────────────────────────────────────────────────────────
+  send-feature:
+    name: luna-core --features send build + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo build -p luna-core --features send
+        run: cargo build -p luna-core --features send
+      - name: cargo clippy -p luna-core --features send --tests -- -D warnings
+        run: cargo clippy -p luna-core --features send --tests -- -D warnings
+      - name: cargo test -p luna-core --features send --test send_vm
+        run: cargo test -p luna-core --features send --test send_vm
+
+  # ─────────────────────────────────────────────────────────────────
   # G2: unsafe-usage drift detection (introduced in the v1.3 mega
   # sprint Phase A — formerly tagged v1.2 G2).
   #
