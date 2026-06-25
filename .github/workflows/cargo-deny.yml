@@ -26,18 +26,19 @@ jobs:
         with:
           command: check
           log-level: warn
-          # Match deny.toml's [graph] config (`all-features = false`,
-          # `no-default-features = false` → default features per crate).
-          # cargo-deny-action's default invocation adds `--all-features`,
-          # which enables every optional dep across the workspace — in
-          # particular pulling `inferno` (CDDL-1.0 copyleft, gated behind
-          # luna-tools' opt-in `flame-graph` feature) into the license
-          # check. The project charter ("permissive only, no copyleft
-          # contamination") rejects CDDL by design; users who opt into
-          # `flame-graph` accept the copyleft license explicitly when
-          # they enable the feature. Matching local `cargo deny check`
-          # behavior keeps CI honest without widening the allow-list.
-          arguments: --hide-inclusion-graph
+          # `--hide-inclusion-graph` is a `check` sub-command option,
+          # not a cargo-deny global option. cargo-deny-action's
+          # `arguments` input is placed BEFORE the sub-command, so it
+          # must hold global flags only; sub-command flags go via
+          # `command-arguments` which appears AFTER. Putting this in
+          # `arguments` triggers
+          #   error: unexpected argument '--hide-inclusion-graph' found
+          #   tip: 'check --hide-inclusion-graph' exists
+          # at action startup. (Real license check still runs via
+          # deny.toml's `[licenses]` exceptions table, including the
+          # per-crate CDDL-1.0 exception for `inferno` pulled in via
+          # luna-tools' opt-in `flame-graph` feature.)
+          command-arguments: --hide-inclusion-graph
 
   luna-core-zero-dep:
     name: luna-core 0 third-party dep contract (F1)
