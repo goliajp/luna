@@ -27,7 +27,12 @@ jobs:
       - name: cargo test --workspace --lib
         run: cargo test --workspace --lib
       - name: cargo test --workspace --release
-        run: cargo test --workspace --release
+        # `--nocapture` propagates test-side eprintln + println straight
+        # to the CI log so a process-level abort (SIGSEGV / SIGILL / signal:
+        # N) leaves the `[official_run] starting Lua5X/file.lua` trail
+        # visible — without it, cargo test buffers per-test output and a
+        # hard abort drops the buffer.
+        run: cargo test --workspace --release -- --nocapture
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace
 
