@@ -1,0 +1,80 @@
+name: docs
+
+# v2.0 Track DO-CI — docs rot gate.
+#
+# Three gates fail the build the moment docs drift:
+#
+#   1. cargo doc -D warnings — catches dangling intra-doc links and
+#      (once `#![warn(missing_docs)]` is upgraded to `deny`) any
+#      undocumented public surface.
+#   2. cargo test --doc — catches stale rustdoc examples (snippets
+#      that no longer compile or whose `assert_*` lines no longer
+#      hold against the current public API).
+#   3. lychee — catches markdown link rot in docs/ + root markdown
+#      + crate READMEs. Allow-list lives in `.lycheeignore`
+#      (regex-per-line, comment-friendly).
+#
+# All three are run with `--all-features` so feature-gated docs
+# (e.g. `#[cfg(feature = "send")]` SendVm doctests) are also covered.
+#
+# Existing partial coverage in ci.yml (`doc` + `cargo test --doc`
+# steps) is intentionally left in place as defense-in-depth — this
+# workflow is the canonical docs-rot owner. Whichever fails first
+# stops the PR.
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # Gate 1 — rustdoc warnings = build failure.
+  # ─────────────────────────────────────────────────────────────────
+  rustdoc:
+    name: cargo doc -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo doc --no-deps --workspace --all-features
+        run: cargo doc --no-deps --workspace --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # ─────────────────────────────────────────────────────────────────
+  # Gate 2 — rustdoc examples must compile + pass.
+  # ─────────────────────────────────────────────────────────────────
+  doctest:
+    name: cargo test --doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test --doc --workspace --all-features
+        run: cargo test --doc --workspace --all-features
+
+  # ─────────────────────────────────────────────────────────────────
+  # Gate 3 — markdown link check via lychee.
+  # ─────────────────────────────────────────────────────────────────
+  link-check:
+    name: lychee markdown links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Mirror the local invocation documented in
+          # docs/contributing-docs.md. --include-fragments turns on
+          # in-doc anchor checks (catches renamed section headers).
+          args: >-
+            --include-fragments
+            --no-progress
+            docs/**/*.md
+            crates/*/README.md
+            CHANGELOG.md
+            README.md
+          fail: true
