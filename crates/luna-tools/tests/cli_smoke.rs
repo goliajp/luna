@@ -117,3 +117,151 @@ fn luna_bin_inspect_runs_on_self() {
     assert!(stdout.contains("format:"));
     assert!(stdout.contains("AOT trace index entries:"));
 }
+
+#[test]
+fn luna_trace_inspect_runs_simple_script() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script_path = dir.path().join("loop.lua");
+    // A small loop that gives the trace recorder a chance to engage
+    // but doesn't bog the test down. We don't assert it actually
+    // traced — only that the counter dump is well-formed.
+    std::fs::write(
+        &script_path,
+        "local s = 0; for i = 1, 50000 do s = s + i end; return s\n",
+    )
+    .expect("write script");
+
+    let path = binary_path("luna-trace-inspect");
+    let out = Command::new(&path)
+        .arg(&script_path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap_or_else(|e| panic!("running trace-inspect: {e}"));
+    assert!(
+        out.status.success(),
+        "trace-inspect exited non-zero: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("\"schema\": \"luna-trace-inspect.v1\""));
+    assert!(stdout.contains("\"counters\":"));
+    assert!(stdout.contains("\"trace_compiled\":"));
+    assert!(stdout.contains("\"trace_enabled\": true"));
+}
+
+#[test]
+fn luna_trace_inspect_rejects_show_ir_for_track_r() {
+    // --show ir is reserved for Track R IR shape stabilising
+    // (audit R1). Confirm the binary still exits non-zero with
+    // a tracking-doc pointer instead of pretending to render.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script_path = dir.path().join("noop.lua");
+    std::fs::write(&script_path, "return 1\n").expect("write script");
+    let path = binary_path("luna-trace-inspect");
+    let out = Command::new(&path)
+        .arg(&script_path)
+        .arg("--show")
+        .arg("ir")
+        .output()
+        .unwrap_or_else(|e| panic!("running trace-inspect: {e}"));
+    assert!(!out.status.success(), "expected --show ir to fail today");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Track R") || stderr.contains("audit R1"),
+        "expected R1 tracking pointer; got stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn luna_profile_collects_samples() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script_path = dir.path().join("hot.lua");
+    // A deeply-nested hot loop so the Count hook (at --every 100)
+    // gets several ticks across at least two distinct frames.
+    std::fs::write(
+        &script_path,
+        "local function inner(n) local s = 0 \
+         for i = 1, n do s = s + i end return s end\n\
+         local function outer() local t = 0 \
+         for j = 1, 100 do t = t + inner(1000) end return t end\n\
+         return outer()\n",
+    )
+    .expect("write script");
+
+    let path = binary_path("luna-profile");
+    let out = Command::new(&path)
+        .arg(&script_path)
+        .arg("--every")
+        .arg("100")
+        .output()
+        .unwrap_or_else(|e| panic!("running profile: {e}"));
+    assert!(
+        out.status.success(),
+        "profile exited non-zero: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("luna-profile"));
+    assert!(stdout.contains("samples:"));
+    // The hot loop is comfortably bigger than 100 instructions,
+    // so we expect ≥1 sample. Don't pin a higher floor — the
+    // exact count depends on dispatch policy.
+    let parses_nonzero = stdout
+        .lines()
+        .find(|l| l.contains("samples:"))
+        .map(|l| {
+            l.split_whitespace()
+                .find_map(|tok| tok.parse::<u64>().ok())
+                .unwrap_or(0)
+        })
+        .unwrap_or(0)
+        > 0;
+    assert!(parses_nonzero, "expected ≥1 sample; got stdout:\n{stdout}");
+}
+
+#[test]
+fn luna_profile_folded_emits_inferno_lines() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script_path = dir.path().join("hot2.lua");
+    // Wrap the hot loop in a function so the frame stack has at
+    // least one Lua activation when the Count hook ticks (the
+    // top-level chunk activation collapses on Return; mid-chunk
+    // dispatch may register zero frames).
+    std::fs::write(
+        &script_path,
+        "local function hot() local s = 0 \
+         for i = 1, 100000 do s = s + i end return s end\n\
+         return hot()\n",
+    )
+    .expect("write script");
+
+    let path = binary_path("luna-profile");
+    let out = Command::new(&path)
+        .arg(&script_path)
+        .arg("--every")
+        .arg("100")
+        .arg("--format")
+        .arg("folded")
+        .output()
+        .unwrap_or_else(|e| panic!("running profile: {e}"));
+    assert!(
+        out.status.success(),
+        "profile --format folded exited non-zero: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Each folded line ends with a space + integer count, and
+    // references the temp script's path via a `source:line` token.
+    let saw_line = stdout.lines().any(|line| {
+        line.contains("hot2.lua")
+            && line
+                .rsplit_once(' ')
+                .and_then(|(_, n)| n.parse::<u64>().ok())
+                .is_some()
+    });
+    assert!(
+        saw_line,
+        "expected ≥1 folded line referencing hot2.lua; got:\n{stdout}"
+    );
+}
