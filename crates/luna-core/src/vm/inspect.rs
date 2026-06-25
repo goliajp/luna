@@ -20,6 +20,7 @@
 //! field visibility.
 
 use crate::runtime::ObjTag;
+use crate::runtime::function::CallFrame;
 use crate::vm::Vm;
 
 /// Heap snapshot from one [`heap_walk`] invocation.
@@ -210,6 +211,62 @@ pub fn jit_state_snapshot(vm: &Vm) -> JitStateSnapshot {
     }
 }
 
+/// One activation record projected from a live `Vm.frames`. Used by
+/// [`frames_for_profile`] to feed the `luna-profile` sampler. Owned
+/// strings so the caller can keep samples across dispatch ticks
+/// without holding a `&Vm` borrow.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FrameInfo {
+    /// Lua source / chunk name (`Proto.source`, decoded as UTF-8
+    /// lossy). Mirrors what `debug.getinfo(level, "S").source`
+    /// reports — minus the leading `@`/`=` PUC-style chunk prefix
+    /// is preserved verbatim.
+    pub source: String,
+    /// Line number of the currently-dispatched instruction, derived
+    /// from `Proto.lines[pc - 1]`. `0` when the frame's PC hasn't
+    /// advanced past the entry yet (a freshly pushed frame mid-call
+    /// setup) — extremely rare from a Count hook, but tolerated.
+    pub line: u32,
+    /// `Proto.line_defined` — the line the function's `function`
+    /// keyword was on. Useful to differentiate two closures with
+    /// the same source but different definition lines.
+    pub line_defined: u32,
+}
+
+/// Walk the Vm's current call stack and project a vector of
+/// [`FrameInfo`]s, deepest-frame last (matches PUC `debug.traceback`
+/// ordering). Skips `CallFrame::Cont` (yieldable-native guards) —
+/// those aren't user-visible Lua activations and would noise the
+/// flame-graph.
+///
+/// Cost: O(frame_depth) `Vec::push` + one `String::from_utf8_lossy`
+/// per Lua frame; embedders calling this from a Count hook every N
+/// instructions trade hook overhead against sampling density.
+pub fn frames_for_profile(vm: &Vm) -> Vec<FrameInfo> {
+    let frames = vm.inspect_frames();
+    let mut out = Vec::with_capacity(frames.len());
+    for cf in frames {
+        let CallFrame::Lua(f) = cf else { continue };
+        // `Gc<T>: Deref<Target = T>` so the field access auto-borrows
+        // through the heap pointer; safe by the heap's
+        // single-threaded reachability invariant (see Heap docs).
+        let closure = &*f.closure;
+        let proto = &*closure.proto;
+        // PC has already advanced past the dispatched op; `pc - 1`
+        // is the just-executed instruction. Saturating sub so a
+        // freshly-pushed frame (pc=0) reports line 0.
+        let pc_idx = (f.pc as usize).saturating_sub(1);
+        let line = proto.lines.get(pc_idx).copied().unwrap_or(0);
+        let src_bytes = proto.source.as_bytes();
+        out.push(FrameInfo {
+            source: String::from_utf8_lossy(src_bytes).into_owned(),
+            line,
+            line_defined: proto.line_defined,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +302,17 @@ mod tests {
         assert!(snap.active_trace_head_pc.is_none());
         assert_eq!(snap.trace_closed_count, 0);
         assert_eq!(snap.trace_aborted_count, 0);
+    }
+
+    #[test]
+    fn frames_for_profile_empty_when_no_call_in_flight() {
+        let vm = Vm::new(crate::version::LuaVersion::Lua55);
+        // Between calls the frame stack is empty — confirm we
+        // don't panic and return an empty Vec.
+        let frames = frames_for_profile(&vm);
+        assert!(
+            frames.is_empty(),
+            "no Lua call in flight, expected empty frame list, got {frames:?}"
+        );
     }
 }

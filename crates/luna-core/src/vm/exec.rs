@@ -3107,6 +3107,16 @@ impl Vm {
         }
     }
 
+    /// v2.0 Track TL Phase 2 — read-only borrow of the current call
+    /// stack, for the [`crate::vm::inspect`] pure-read accessors used
+    /// by `luna-tools` (`luna-profile`'s sampler walks this from
+    /// inside a `Count` hook). Sibling-module scope: not part of the
+    /// public embedder surface, but `inspect::frames_for_profile` is.
+    #[doc(hidden)]
+    pub(super) fn inspect_frames(&self) -> &[CallFrame] {
+        &self.frames
+    }
+
     /// P12-S4-step4b — ensure the value stack covers indices
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
