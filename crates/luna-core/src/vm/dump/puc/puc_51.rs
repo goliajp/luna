@@ -744,9 +744,15 @@ fn translate_code(
                 out.push(Inst::iabc(op, inst.a, b_val, c_val, c_is_k));
             }
             OP_NEWTABLE => {
-                // punt-C: fb-byte decode — we use the raw bytes as a hint,
-                // saturating at 255. Hints are advisory; mis-sizing wastes
-                // some realloc time but doesn't affect correctness.
+                // 5.1 packs the array + hash size hints as PUC
+                // floating-bytes (`luaO_int2fb`: eeeeexxx where the value
+                // is `(1xxx) << e` for e > 0, else just `xxx`).
+                // `fb2int_saturating` reverses that and clamps to u8::MAX
+                // so it fits luna's 8-bit B/C fields (mirrors puc_52's
+                // `fb_to_hint_u8`). The luna VM's NewTable currently
+                // ignores B/C entirely (see exec.rs Op::NewTable), so
+                // even a saturated value is purely an advisory hint for
+                // future hint-aware allocation; correctness is unaffected.
                 let b = fb2int_saturating(inst.b);
                 let c = fb2int_saturating(inst.c);
                 out.push(Inst::iabc(Op::NewTable, inst.a, b, c, false));
@@ -1244,6 +1250,50 @@ mod tests {
         assert_eq!(fb2int_saturating(7), 7);
         assert_eq!(fb2int_saturating(8), 8); // e=1, x=0 → 0x08 << 0
         assert_eq!(fb2int_saturating(0b0000_1111), 15); // e=1, x=7 → 0xF << 0
+    }
+
+    #[test]
+    fn fb2int_saturates_at_u8_max() {
+        // e=4, x=0 → (0|8) << 3 = 64 — fits 8 bits.
+        let fb = (4u32 << 3) | 0;
+        assert_eq!(fb2int_saturating(fb), 64);
+        // e=5, x=0 → (0|8) << 4 = 128 — still fits.
+        let fb = (5u32 << 3) | 0;
+        assert_eq!(fb2int_saturating(fb), 128);
+        // e=5, x=7 → (7|8) << 4 = 240 — fits.
+        let fb = (5u32 << 3) | 7;
+        assert_eq!(fb2int_saturating(fb), 240);
+        // e=6, x=0 → (0|8) << 5 = 256 — saturates to 255.
+        let fb = (6u32 << 3) | 0;
+        assert_eq!(fb2int_saturating(fb), 0xFF);
+        // Very large fb byte clamps too.
+        let fb = (31u32 << 3) | 7;
+        assert_eq!(fb2int_saturating(fb), 0xFF);
+    }
+
+    #[test]
+    fn translate_newtable_fb_hint() {
+        // NEWTABLE R4 B=0x08 (e=1,x=0 -> 8) C=0x0F (e=1,x=7 -> 15).
+        // After decode the lowered op should carry the decoded ints,
+        // not the raw fb bytes.
+        let code = xlate(&[p51(OP_NEWTABLE, 4, 0x08, 0x0F)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::NewTable);
+        assert_eq!(code[0].a(), 4);
+        assert_eq!(code[0].b(), 8);
+        assert_eq!(code[0].c(), 15);
+    }
+
+    #[test]
+    fn translate_newtable_fb_hint_saturates() {
+        // Hash hint e=6 x=0 decodes to 256 — must clamp to 0xFF for
+        // luna's 8-bit C field. Array hint stays small (8).
+        let large_fb = (6u32 << 3) | 0; // -> 256
+        let code = xlate(&[p51(OP_NEWTABLE, 0, 0x08, large_fb)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::NewTable);
+        assert_eq!(code[0].b(), 8);
+        assert_eq!(code[0].c(), 0xFF);
     }
 
     #[test]
