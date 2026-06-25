@@ -771,27 +771,87 @@ fn translate_code(raw: &[u32]) -> Result<Translated, String> {
     let mut code: Vec<Inst> = Vec::with_capacity(raw.len());
     let mut puc_to_luna_pc: Vec<Option<u32>> = Vec::with_capacity(raw.len());
     let mut luna_to_puc_pc: Vec<usize> = Vec::with_capacity(raw.len());
-    let max_temp_bump: u8 = 0;
+    let mut max_temp_bump: u8 = 0;
 
     // Stash pending JMP fixups: (luna_pc_of_jmp, puc_target_pc). We
     // can't compute the luna-pc target until the full pc map is built,
     // since I-imm lowering inserts slots between the JMP and its target.
-    let jump_fixups: Vec<(usize, i64)> = Vec::new();
-    let _ = (&jump_fixups, max_temp_bump); // silence warnings until Wave 2 wires I-imm lowering
+    let mut jump_fixups: Vec<(usize, i64)> = Vec::new();
 
     // PUC `OP_LOADKX` and `OP_NEWTABLE` (k=1) and `OP_SETLIST` (k=1) are
     // each followed by an `OP_EXTRAARG`. luna treats EXTRAARG identically,
     // so emission is 1:1 — we just need to skip translating EXTRAARG's
     // own opcode bits (it's payload, not an instruction).
-    for (pc, &word) in raw.iter().enumerate() {
+    for (puc_pc, &word) in raw.iter().enumerate() {
         let op_byte = (word & 0x7F) as u8;
-        let puc_op = PucOp::from_byte(op_byte).map_err(|e| format!("pc {pc}: {e}"))?;
+        let puc_op = PucOp::from_byte(op_byte).map_err(|e| format!("pc {puc_pc}: {e}"))?;
 
         // Each surviving op claims its starting luna slot.
         puc_to_luna_pc.push(Some(code.len() as u32));
-        luna_to_puc_pc.push(pc);
-        let inst = translate_one(puc_op, word)?;
-        code.push(inst);
+
+        match puc_op {
+            // ---- I-imm arith (3-operand same-order shape) ----
+            //
+            // PUC `ADDI A B sC`: R[A] := R[B] + sC. luna has no I-imm arith
+            // form, so we lower to `LoadI tmp sC; Add A B tmp`. tmp lives
+            // at `max(a, b) + 1` (above both source slots so the arith op
+            // can still read B before writing A). `lower_i_imm` is the
+            // Wave 1 helper in `super`; same call site pattern as puc_54.
+            PucOp::ADDI => {
+                let a = f_a(word);
+                let b = f_b(word);
+                let sc = f_sc(word);
+                let tmp = a.max(b) + 1;
+                let pair = super::lower_i_imm(Op::Add, a, b, sc, tmp, &mut max_temp_bump)?;
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[0]);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[1]);
+            }
+
+            // ---- JMP needs a fixup; the sJ offset is in PUC pc-space ----
+            PucOp::JMP => {
+                let sj = f_sj(word);
+                let next_puc_pc = puc_pc as i64 + 1;
+                let target_puc_pc = next_puc_pc + sj as i64;
+                let luna_pc = code.len();
+                jump_fixups.push((luna_pc, target_puc_pc));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::isj(Op::Jmp, 0)); // placeholder
+            }
+
+            _ => {
+                luna_to_puc_pc.push(puc_pc);
+                let inst = translate_one(puc_op, word)?;
+                code.push(inst);
+            }
+        }
+    }
+
+    // Patch jump fixups now that we know the full pc map.
+    for (luna_pc, target_puc_pc) in jump_fixups {
+        let target_luna_pc: i64 = if target_puc_pc < 0 {
+            return Err(format!(
+                "PUC 5.5 JMP at luna pc {luna_pc} targets negative pc {target_puc_pc}"
+            ));
+        } else if target_puc_pc as usize >= puc_to_luna_pc.len() {
+            // Past-the-end: jump to the synthetic "end of code" pc.
+            code.len() as i64
+        } else {
+            let mut t = target_puc_pc as usize;
+            loop {
+                if t >= puc_to_luna_pc.len() {
+                    break code.len() as i64;
+                }
+                if let Some(p) = puc_to_luna_pc[t] {
+                    break p as i64;
+                }
+                t += 1;
+            }
+        };
+        let next_pc = luna_pc as i64 + 1;
+        let sj = (target_luna_pc - next_pc) as i32;
+        code[luna_pc] = Inst::isj(Op::Jmp, sj);
     }
 
     Ok(Translated {
@@ -942,17 +1002,21 @@ fn translate_one(op: PucOp, word: u32) -> Result<Inst, String> {
         PucOp::BORK => Inst::iabc(L::BOr, a, b, c, true),
         PucOp::BXORK => Inst::iabc(L::BXor, a, b, c, true),
 
-        // -------- I-immediate arith (no luna equivalent; reject loudly) --------
-        // PUC's `OP_ADDI` carries `sC` as a signed 8-bit literal. luna
-        // would need a synthetic constant-pool insert to lower. v1.3
-        // Wave 2 scope: refuse, with diagnostics that name the op + the
-        // immediate so the user can recompile with `-O0` or work around.
-        // (The full lowering is the Phase LB-9 follow-up per
-        // `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"5.4 risks"-2.)
+        // -------- I-immediate arith --------
+        //
+        // PUC's `OP_ADDI` carries `sC` as a signed 8-bit literal:
+        // `R[A] := R[B] + sC`. luna has no I-imm form, so the
+        // ADDI / SHRI sites are lowered inside `translate_code` to a
+        // `LoadI tmp sC; Add A B tmp` pair (via the Wave 1 shared
+        // `super::lower_i_imm` helper). This arm of `translate_one` is
+        // unreachable in the normal undump path; we keep a sentinel so
+        // unit tests that exercise the legacy single-Inst contract still
+        // get a clear error.
         PucOp::ADDI => {
             return Err(format!(
-                "PUC 5.5 OP_ADDI(A={a}, B={b}, sC={sc}) needs I-imm lowering \
-                 (TODO Phase LB-9: synth const-pool entry + lower to Add k=1)"
+                "PUC 5.5 OP_ADDI(A={a}, B={b}, sC={sc}): I-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
         PucOp::SHLI => {
@@ -1143,13 +1207,26 @@ mod tests {
     }
 
     #[test]
-    fn addi_unsupported_errs_with_diagnostic() {
-        let word = (PucOp::ADDI as u32) | (0u32 << 7) | (1u32 << 16) | (3u32 << 24);
-        let err = translate_one(PucOp::ADDI, word).unwrap_err();
-        assert!(err.contains("ADDI"), "got: {err}");
-        assert!(
-            err.contains("LB-9"),
-            "diagnostic must point at follow-up: {err}"
-        );
+    fn translate_addi_via_lower_i_imm() {
+        // OP_ADDI A=5 B=3 sC=42 (sC encoded as C = 42 + 0x80 = 170)
+        let sc_enc = (42 + OFFSET_SC) as u32;
+        let word = (PucOp::ADDI as u32) | (5u32 << 7) | (3u32 << 16) | (sc_enc << 24);
+        let translated = translate_code(&[word]).unwrap();
+        // Expect 2 luna insts: LoadI tmp 42; Add 5 3 tmp.
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].sbx(), 42);
+        let tmp = translated.code[0].a();
+        assert_eq!(tmp, 6, "tmp must be max(a, b) + 1 = max(5, 3) + 1 = 6");
+        assert_eq!(translated.code[1].op(), Op::Add);
+        assert_eq!(translated.code[1].a(), 5);
+        assert_eq!(translated.code[1].b(), 3);
+        assert_eq!(translated.code[1].c(), tmp);
+        assert!(!translated.code[1].k(), "I-imm arith never sets the k bit");
+        assert_eq!(translated.max_temp_bump, 7);
+        // PC maps: puc pc 0 → luna pc 0 (start of pair); both luna slots
+        // attribute back to puc pc 0 for line/locvar remap.
+        assert_eq!(translated.puc_to_luna_pc, vec![Some(0)]);
+        assert_eq!(translated.luna_to_puc_pc, vec![0, 0]);
     }
 }
