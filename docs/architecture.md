@@ -1,37 +1,53 @@
 # Architecture
 
 Architecture overview for embedders and contributors. Snapshot at
-v1.1 (target — sprint in progress as of 2026-06-23). For perf
-numbers see [`performance.md`](performance.md); for dialect
-support see [`compatibility.md`](compatibility.md).
+v1.3 (shipped 2026-06-25) with v2.0 sprint annotations. For perf
+methodology see [`performance.md`](performance.md); for dialect
+support see [`compatibility.md`](compatibility.md); for the deploy-
+side decision tree see [`deploy.md`](deploy.md).
 
 ---
 
 ## Crate layout
 
-luna ships as a Cargo **workspace** with two publishable crates:
+luna ships as a Cargo **workspace** with five publishable crates
+plus two dev-only members:
 
-| Crate | Depends on | Surface |
-|---|---|---|
-| `luna-core` | **0 third-party crates** (only `std`) | Lexer, parser, compiler, interpreter, runtime, stdlib, GC, pattern engine, JIT trait surface |
-| `luna` | `luna-core` + Cranelift × 6 | Cranelift JIT backend, capi (`lua_*` C ABI + `cdylib`/`staticlib`), `luna` CLI binary, benches |
+| Crate | Publishable | Depends on | Surface |
+|---|---|---|---|
+| `luna-core` | ✅ | **0 third-party crates** (only `std`) | Lexer, parser, compiler, interpreter, runtime, stdlib, GC, pattern engine, JIT trait surface |
+| `luna-jit-derive` | ✅ | `syn` + `quote` + `proc-macro2` | `#[derive(LuaUserdata)]` proc-macro |
+| `luna-jit` | ✅ | `luna-core` + `luna-jit-derive` + Cranelift × 6 + rustyline (opt) | Cranelift JIT backend, capi (`lua_*` C ABI), `luna` CLI (REPL + script runner), JIT-aware embed |
+| `luna-runtime-helpers` | ✅ | `luna-jit` (behind `jit-helpers` feature) | Static-link runtime entry for AOT-produced binaries. Exposes `luna_aot_run` C-ABI symbol |
+| `luna-aot` | ✅ | `luna-core` + `luna-jit` + Cranelift × 6 + `object` + `clap` | Build-time AOT compiler. Lua source → standalone native binary. Not a runtime dep of the produced binary |
+| `luna-fuzz` | ❌ workspace-excluded | `libfuzzer-sys` + `luna-core` | Fuzz harnesses (4: parser / dump / vm / aot_meta). Nightly toolchain. v2.0 Track CV |
+| `luna-tools` | ❌ in-flight | `clap` + `serde` + `object` + opt `pprof` / `capstone` / `inferno` | Dev tools: `luna-bin-inspect` / `luna-heap-dump` / `luna-profile` / `luna-trace-inspect` / REPL polish. v2.0 Track TL |
 
 The split lets embedders pick the dependency surface:
 
 ```toml
 # Minimum embedding — interpreter only, no JIT.
-# Builds in seconds; pulls only luna-core.
+# Builds in seconds; pulls only luna-core. WASM-friendly.
 [dependencies]
-luna-core = "1.1"
+luna-core = "1.3"
 ```
 
 ```toml
-# Full embedding — JIT'd hot loops, cdylib for C/C++ hosts.
+# Full embedding — JIT'd hot loops, derive macros, REPL.
 [dependencies]
-luna-jit = "1.1"
+luna-jit = "1.3"
 ```
 
-`cargo install luna-jit` installs the `luna` CLI binary (REPL + script runner).
+```toml
+# Cross-thread fleet (tokio / web workers).
+[dependencies]
+luna-jit = { version = "1.3", features = ["send"] }
+```
+
+`cargo install luna-jit` installs the `luna` CLI binary (REPL +
+script runner). `cargo install luna-aot` installs the `luna-aot`
+build-time tool. `cargo install luna-tools` (in flight per v2.0
+charter Track TL) installs the dev-tools binaries.
 
 The 0-dep `luna-core` is a hard contract enforced by `cargo deny check` in CI:
 `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` must equal `1`
@@ -70,47 +86,79 @@ you how risky a change is and how much testing it needs.
 
 ### Stone — business-agnostic foundations
 
-Generic algorithms and protocols. No knowledge of Lua semantics; could be
-lifted into another project if the contract holds.
+Generic algorithms and protocols. No knowledge of Lua semantics;
+could be lifted into another project if the contract holds.
 
-Lives in: `luna-core/src/{numeric,pattern}.rs`, parts of `luna-core/src/runtime/gc.rs`
-(the mark-sweep core).
+Lives in: `luna-core/src/runtime/string_match.rs` (PUC pattern
+engine), `luna-core/src/runtime/heap.rs` (intrusive mark-sweep
+core), `luna-core/src/runtime/value.rs` (NaN-boxed Value layout),
+`luna-core/src/runtime/string.rs` (UTF-8 + interning).
 
 Discipline:
-- Heavy unit tests + fuzz harness
+- Heavy unit tests + fuzz harness (`crates/luna-fuzz/fuzz_targets/`
+  exercises parser, dump reader, vm dispatcher, aot meta against
+  random inputs — `cargo +nightly fuzz run` per target)
 - API breaks require version bump + migration note
 - Cross-platform behavior verified (wasm32 inclusive)
+- Bench + heap baselines: `.dev/baselines/mem-2026-06-25/` +
+  `.dev/baselines/disk-2026-06-25/` pin v1.3-ship numbers
 
 ### Steel — Lua-domain primitives
 
-Knows Lua semantics (the language, the calling convention, the value
-model) but not any specific embedder workflow. The structural beams of
-the project.
+Knows Lua semantics (the language, the calling convention, the
+value model) but not any specific embedder workflow. The structural
+beams of the project.
 
-Lives in: `luna-core/src/{compiler,frontend,runtime/value,vm/exec,vm/isa}/`,
-`luna-core/src/jit/{abi,trace_types}.rs`.
+Lives in: `luna-core/src/{compiler,frontend}/`,
+`luna-core/src/vm/{exec,isa,dump}/`, `luna-core/src/jit/`
+(trait surfaces + AOT meta types), plus the JIT backend in
+`luna-jit/src/jit_backend/`.
 
 Discipline:
-- Integration tests cross-validate against PUC and LuaJIT reference behavior
-- Per-dialect (5.1-5.5) regression tests on every change
-- Behavior changes require an ADR / discussion entry
+- Integration tests cross-validate against PUC and LuaJIT reference
+  behavior (`crates/luna-core/tests/official_run.rs` runs 140 PUC
+  test files; CB-or wrapper at `.dev/rfcs/v2.0-cb-or-coverage-report.md`
+  pins ≥80% per-file assert hit rate as the v2.0 floor)
+- Per-dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5 / MacroLua) regression
+  tests on every change
+- Behavior changes require an audit / RFC entry in `.dev/rfcs/`
 
 ### Cement — concrete embeddings and host glue
 
-Glue between the steel and the outside world. Tightly coupled to a
-specific workflow or host integration.
+Glue between the steel and the outside world. Tightly coupled to
+a specific workflow or host integration.
 
-Lives in: `luna/src/{capi,bin}/`, `luna/src/jit_backend/`, benches, examples.
+Lives in: `luna-core/src/vm/lib_*.rs` (per-stdlib bindings),
+`luna-jit/src/{capi,bin}/` (C ABI + `luna` CLI), `luna-jit-derive/`,
+`luna-runtime-helpers/`, `luna-aot/`, `luna-tools/` (v2.0 Track TL),
+benches, examples.
 
 Discipline:
-- End-to-end tests in the relevant host shape (CLI, capi, JIT-on real workload)
-- Free to evolve as embedder needs change; not API-stable in the same sense
+- End-to-end tests in the relevant host shape (`crates/luna-aot/tests/`
+  for AOT, `crates/luna-jit/examples/` for embed cookbooks,
+  `crates/luna-jit/benches/` for perf)
+- Free to evolve as embedder needs change; not API-stable in the
+  same sense as the steel/stone tier (the `pub` surface still
+  follows semver; this just means breaking changes here cost less)
 - Bug fixes don't require touching steel
+- v2.0 Track SQ refactor (audit at `.dev/rfcs/v2.0-audit-source-quality.md`)
+  consolidates the cement layer's directory layout per this
+  classification — sequenced LAST so R/PI/AO refactors don't
+  invalidate the layout decisions
 
-The crate boundary roughly tracks this classification: most of `luna-core`
-is steel and stone, most of `luna` is cement. The few cement bits in
-`luna-core` (e.g. dialect-specific stdlib glue) are isolated under
-`luna-core/src/vm/lib_*.rs` so they can be feature-gated later if needed.
+The crate boundary roughly tracks this classification:
+
+- **Stone** = `luna-core` runtime / value / pattern (~30% of luna-core LOC)
+- **Steel** = `luna-core` compiler / frontend / vm dispatch + `luna-jit` JIT
+  backend (~50% of luna-core LOC, all of luna-jit's JIT pipeline)
+- **Cement** = `luna-jit` CLI + capi + `luna-jit-derive` + `luna-runtime-helpers`
+  + `luna-aot` + `luna-tools` + per-stdlib `lib_*.rs` glue
+
+The few cement bits in `luna-core` (dialect-specific stdlib glue
+under `luna-core/src/vm/lib_*.rs`) are isolated so they could be
+feature-gated later if a wasm-friendly minimal embed needs them
+out. See `~/.claude-shared/global/methodology/steel-cement-stone.md`
+for the full methodology + workflow tier transitions.
 
 ---
 
