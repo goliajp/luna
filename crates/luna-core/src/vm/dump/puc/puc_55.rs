@@ -723,17 +723,18 @@ fn expand_lineinfo(raw: &[i8], abs: &[(u32, u32)], line_defined: u32) -> Vec<u32
 //       * ADDK..BXORK    → luna's `Add..BXor` with k=1 (constant operand
 //         lives in C, k bit already set).
 //       * ADDI / SHRI    → no luna equivalent op; lower to `LoadI tmp;
-//         Add A B tmp` (with `max_stack` already accommodating tmp slot
-//         from PUC's compiler). The audit calls this out as the "K/I
-//         lowering register-pressure bump"; for v1.3 Wave 2, programs
-//         emitted by PUC have `max_stack` sized for these temps already
-//         because PUC reserves the slot for ADDI's i8 immediate. We
-//         keep the same A register and add an intermediate immediate
-//         load into A+1; PUC's frontend allocates A+1 as scratch so
-//         this is safe in practice for stock luac5.5 output.
-//       * SHLI            → `LoadI tmp; Shl A tmp B`.
-//       * EQI / LTI / LEI / GTI / GEI → `LoadI tmp; Eq/Lt/Le/Lt/Le A
-//         tmp k` (GTI/GEI flip operands).
+//         <op> A B tmp` via the Wave 1 shared `super::lower_i_imm`
+//         helper (3-operand same-order shape). tmp lives at
+//         `max(a, b) + 1`; `translate_code` tracks the worst-case
+//         `max_temp_bump` and `load_function` bumps the proto's
+//         `max_stack` accordingly.
+//       * SHLI            → `LoadI tmp; Shl A tmp B`. Inlined (not via
+//         `lower_i_imm`) because of the operand-swap shape
+//         `R[A] := sC << R[B]`.
+//       * EQI / LTI / LEI / GTI / GEI → `LoadI tmp; <cmp> ... k`.
+//         Inlined; cmp emits don't fit `lower_i_imm`'s arith shape.
+//         GTI/GEI flip operands (luna has no Gt/Ge ops; `R[A] > sB`
+//         becomes `sB < R[A]` → `Lt tmp A 0 k`).
 //       * MMBIN / MMBINI / MMBINK → **drop**; luna's arith ops handle
 //         metamethod fallback inline.
 //       * VARARGPREP     → **drop**; luna's call setup populates
@@ -746,6 +747,15 @@ fn expand_lineinfo(raw: &[i8], abs: &[(u32, u32)], line_defined: u32) -> Vec<u32
 //
 // "Drop" must preserve PC layout (other ops jump to fixed PCs); we emit
 // a no-op `Move A A` in place of dropped ops so PC math stays intact.
+// I-imm / cmp-imm lowering inserts an extra slot per site, so PC layout
+// shifts and `translate_code` builds full `puc_to_luna_pc` /
+// `luna_to_puc_pc` maps: lineinfo + locvar pc ranges remap through
+// `luna_to_puc_pc` / `remap_pc`, and JMP sJ offsets are patched up in
+// a post-pass via `jump_fixups`. (FORLOOP / FORPREP / TFORPREP /
+// TFORLOOP Bx offsets are kept as direct copies — same pre-existing
+// behavior as puc_54. A loop body that contains I-imm sites between
+// the loop start and the FORLOOP yields a wrong backward offset; that
+// gap is shared with puc_54 and is not in Wave 2 scope.)
 
 /// Output of `translate_code`: the gap-and-pad-free luna bytecode plus the
 /// PC remap tables that downstream debug/locvar/lineinfo logic uses to
@@ -1423,9 +1433,21 @@ mod tests {
         assert_eq!(translated.code[0].op(), Op::LoadI);
         assert_eq!(translated.code[0].a(), 3);
         assert_eq!(translated.code[0].sbx(), 8);
-        assert_eq!(translated.code[1].op(), Op::Lt, "GTI lowers to Lt with operand swap");
-        assert_eq!(translated.code[1].a(), 3, "Lt's A is the tmp (sB on the left)");
-        assert_eq!(translated.code[1].b(), 2, "Lt's B is the original A (sB on the right)");
+        assert_eq!(
+            translated.code[1].op(),
+            Op::Lt,
+            "GTI lowers to Lt with operand swap"
+        );
+        assert_eq!(
+            translated.code[1].a(),
+            3,
+            "Lt's A is the tmp (sB on the left)"
+        );
+        assert_eq!(
+            translated.code[1].b(),
+            2,
+            "Lt's B is the original A (sB on the right)"
+        );
         assert!(translated.code[1].k());
     }
 
@@ -1438,7 +1460,11 @@ mod tests {
         assert_eq!(translated.code[0].op(), Op::LoadI);
         assert_eq!(translated.code[0].a(), 3);
         assert_eq!(translated.code[0].sbx(), 4);
-        assert_eq!(translated.code[1].op(), Op::Le, "GEI lowers to Le with operand swap");
+        assert_eq!(
+            translated.code[1].op(),
+            Op::Le,
+            "GEI lowers to Le with operand swap"
+        );
         assert_eq!(translated.code[1].a(), 3);
         assert_eq!(translated.code[1].b(), 2);
         assert!(!translated.code[1].k());
@@ -1458,7 +1484,11 @@ mod tests {
         assert_eq!(translated.code[1].op(), Op::Shl);
         assert_eq!(translated.code[1].a(), 1);
         assert_eq!(translated.code[1].b(), tmp, "B (left operand) is the tmp");
-        assert_eq!(translated.code[1].c(), 3, "C (right operand) is the source reg");
+        assert_eq!(
+            translated.code[1].c(),
+            3,
+            "C (right operand) is the source reg"
+        );
         assert_eq!(translated.max_temp_bump, 5);
     }
 
