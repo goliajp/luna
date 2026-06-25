@@ -825,6 +825,28 @@ fn translate_code(raw: &[u32]) -> Result<Translated, String> {
                 code.push(pair[1]);
             }
 
+            // PUC `SHLI A B sC`: R[A] := sC << R[B] — note the operand
+            // SWAP vs SHRI (left-hand side is the immediate, right-hand
+            // side is the register). luna's `Shl A B C` is `R[A] := R[B]
+            // << R[C]`, so we emit `LoadI tmp sC; Shl A tmp B`. The
+            // Wave 1 helper assumes `OP A B tmp`, so SHLI stays inline.
+            PucOp::SHLI => {
+                let a = f_a(word);
+                let b = f_b(word);
+                let sc = f_sc(word);
+                let tmp = a.max(b) + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 SHLI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sc));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Shl, a, tmp, b, false));
+            }
+
             // ---- JMP needs a fixup; the sJ offset is in PUC pc-space ----
             PucOp::JMP => {
                 let sj = f_sj(word);
@@ -1036,8 +1058,14 @@ fn translate_one(op: PucOp, word: u32) -> Result<Inst, String> {
             ));
         }
         PucOp::SHLI => {
+            // SHLI's operand order swap (`R[A] := sC << R[B]`) doesn't
+            // fit `super::lower_i_imm`'s `OP A B tmp` shape, so it's
+            // lowered inline in `translate_code` to `LoadI tmp sC;
+            // Shl A tmp B`. This arm stays as a sentinel.
             return Err(format!(
-                "PUC 5.5 OP_SHLI(A={a}, B={b}, sC={sc}) needs I-imm lowering"
+                "PUC 5.5 OP_SHLI(A={a}, B={b}, sC={sc}): I-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
         PucOp::SHRI => {
@@ -1224,6 +1252,24 @@ mod tests {
         let inst = translate_one(PucOp::LOADI, word).unwrap();
         assert_eq!(inst.op(), Op::LoadI);
         assert_eq!(inst.sbx(), 42);
+    }
+
+    #[test]
+    fn translate_shli_inline_swap() {
+        // OP_SHLI A=1 B=3 sC=5 → `R[1] := 5 << R[3]` → LoadI tmp 5; Shl 1 tmp 3.
+        let sc_enc = (5 + OFFSET_SC) as u32;
+        let word = (PucOp::SHLI as u32) | (1u32 << 7) | (3u32 << 16) | (sc_enc << 24);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].sbx(), 5);
+        let tmp = translated.code[0].a();
+        assert_eq!(tmp, 4, "tmp must be max(a, b) + 1 = max(1, 3) + 1 = 4");
+        assert_eq!(translated.code[1].op(), Op::Shl);
+        assert_eq!(translated.code[1].a(), 1);
+        assert_eq!(translated.code[1].b(), tmp, "B (left operand) is the tmp");
+        assert_eq!(translated.code[1].c(), 3, "C (right operand) is the source reg");
+        assert_eq!(translated.max_temp_bump, 5);
     }
 
     #[test]
