@@ -136,8 +136,12 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # v1.1 F1 + v1.2 G: luna-core's 0 third-party dep contract.
-  # `cargo tree -p luna-core --prefix none` lists exactly one crate
-  # (luna-core itself); anything else is a regression. CI fails fast.
+  # `cargo tree -p luna-core --prefix none --edges normal` lists exactly
+  # one crate (luna-core itself); anything else is a prod-dep regression.
+  # `--edges normal` excludes dev-dependencies (e.g. `dhat`, used by the
+  # v2.0 Track MM `mem_baseline` bench) and build-dependencies — those
+  # never link into the published crate, so the F1 0-third-party-dep
+  # contract is preserved. CI fails fast on regression.
   # ─────────────────────────────────────────────────────────────────
   zero-dep:
     name: luna-core zero-third-party-dep contract
@@ -147,12 +151,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo tree -p luna-core
         run: |
-          count=$(cargo tree -p luna-core --prefix none --no-default-features 2>/dev/null \
+          count=$(cargo tree -p luna-core --prefix none --no-default-features --edges normal 2>/dev/null \
                   | grep -cE ' v[0-9]')
-          echo "luna-core dep count = $count"
+          echo "luna-core prod dep count = $count"
           if [ "$count" != "1" ]; then
-            echo "::error::luna-core gained a third-party dependency (count=$count, expected 1)"
-            cargo tree -p luna-core --prefix none --no-default-features
+            echo "::error::luna-core gained a third-party prod dependency (count=$count, expected 1)"
+            cargo tree -p luna-core --prefix none --no-default-features --edges normal
             exit 1
           fi
 
