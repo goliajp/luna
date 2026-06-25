@@ -100,9 +100,11 @@ let r: i64 = lua.eval("return 1 + 2").unwrap();
 ```
 
 The builder **omits `io`, `os`, `debug`, `package`** intentionally.
-Trusted hosts that need them call `vm.open_io()` / `vm.open_os()` /
-etc. on the built `Vm`. See [`compatibility.md`](compatibility.md)
-for the per-library feature matrix.
+Trusted hosts that need them call `vm.open_os_io()` (`io.*` + `os.*`
+together) / `vm.open_debug()` / `vm.open_package()` on the built
+`Vm`. See [`compatibility.md`](compatibility.md) for the per-library
+feature matrix and [`security.md`](security.md) for the threat model
+covering each opt-in.
 
 Bytecode loading is **off** by default in the builder. Enable it
 with `.allow_bytecode_loading()` only for fully trusted input.
