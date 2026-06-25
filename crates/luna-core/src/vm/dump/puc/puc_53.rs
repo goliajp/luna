@@ -1870,4 +1870,238 @@ mod tests {
         // pc 2 = luna 3; pc 3 = luna 4.
         assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(2), Some(3), Some(4)]);
     }
+
+    // ---------------------------------------------------------------------
+    // Phase 4 PU Wave 3 — LOADBOOL true+skip lowering
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn translate_loadbool_true_skip() {
+        // PUC `OP_LOADBOOL A=2 B=1 C=1` (true + skip) lowers via
+        // `translate_code` to `LoadTrue 2; Jmp +1` (skip the next 1:1 inst).
+        // Followed by a MOVE (skipped) and RETURN so the fixup loop has a
+        // concrete target.
+        let words = vec![
+            enc_iabc(OP_LOADBOOL, 2, 1, 1), // true + skip
+            enc_iabc(OP_MOVE, 0, 1, 0),     // skipped
+            enc_iabc(OP_RETURN, 0, 1, 0),
+        ];
+        let t = translate_code(&words).expect("LOADBOOL true+skip must lower");
+        assert_eq!(t.code.len(), 4, "1 punt-lowered pair + 2 1:1 insts");
+        // luna 0: LoadTrue A=2
+        assert_eq!(t.code[0].op(), Op::LoadTrue);
+        assert_eq!(t.code[0].a(), 2);
+        // luna 1: Jmp with sJ = +1 (skip the Move at luna 2)
+        assert_eq!(t.code[1].op(), Op::Jmp);
+        assert_eq!(
+            t.code[1].sj(),
+            1,
+            "Jmp must skip exactly one luna inst when next PUC op is 1:1"
+        );
+        // luna 2: Move (the skipped inst)
+        assert_eq!(t.code[2].op(), Op::Move);
+        // luna 3: Return
+        assert_eq!(t.code[3].op(), Op::Return);
+        // pc maps: PUC 0 → luna 0 (LoadTrue first); PUC 1 → luna 2; PUC 2 → luna 3.
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(2), Some(3)]);
+        // luna 0/1 both cite PUC pc 0; luna 2 cites PUC pc 1; luna 3 cites PUC pc 2.
+        assert_eq!(t.luna_to_puc_pc, vec![0, 0, 1, 2]);
+        // No extra registers needed beyond PUC's frame.
+        assert_eq!(t.max_temp_bump, 0);
+    }
+
+    #[test]
+    fn translate_loadbool_true_skip_target_remaps_through_lowered_next() {
+        // When the **skipped** PUC inst itself lowers to multiple luna insts
+        // (here an RK-on-B ADD = LoadK + Add pair), the LOADBOOL+skip Jmp
+        // must still land *past* the entire lowered pair via the pc map.
+        // Stream:
+        //   PUC 0: LOADBOOL A=2 B=1 C=1  (true + skip)
+        //   PUC 1: ADD A=0 B=K(0) C=1    (lowers to LoadK + Add)
+        //   PUC 2: RETURN 0 1
+        // Luna stream after lowering:
+        //   luna 0: LoadTrue 2
+        //   luna 1: Jmp  → should target luna 4 (skip 2 luna insts at 2-3)
+        //   luna 2: LoadK tmp 0
+        //   luna 3: Add 0 tmp 1
+        //   luna 4: Return 0 1
+        // sJ on luna 1 = (4 - (1 + 1)) = 2.
+        let b_field = PUC53_BITRK | 0;
+        let words = vec![
+            enc_iabc(OP_LOADBOOL, 2, 1, 1),
+            enc_iabc(OP_ADD, 0, b_field, 1),
+            enc_iabc(OP_RETURN, 0, 1, 0),
+        ];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 5);
+        assert_eq!(t.code[0].op(), Op::LoadTrue);
+        assert_eq!(t.code[1].op(), Op::Jmp);
+        assert_eq!(
+            t.code[1].sj(),
+            2,
+            "Jmp must skip the full LoadK+Add pair (2 luna insts)"
+        );
+        assert_eq!(t.code[2].op(), Op::LoadK);
+        assert_eq!(t.code[3].op(), Op::Add);
+        assert_eq!(t.code[4].op(), Op::Return);
+    }
+
+    #[test]
+    fn translate_loadbool_false_no_skip_still_one_to_one() {
+        // Sanity: the (B=0, C=0) shape stays on the 1:1 path — it must
+        // still emit a single `LoadFalse`, not the new multi-inst form.
+        let words = vec![enc_iabc(OP_LOADBOOL, 3, 0, 0), enc_iabc(OP_RETURN, 0, 1, 0)];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 2);
+        assert_eq!(t.code[0].op(), Op::LoadFalse);
+        assert_eq!(t.code[0].a(), 3);
+        assert_eq!(t.code[1].op(), Op::Return);
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn translate_loadbool_true_no_skip_still_one_to_one() {
+        // Sanity: the (B=1, C=0) shape stays on the 1:1 path.
+        let words = vec![enc_iabc(OP_LOADBOOL, 3, 1, 0), enc_iabc(OP_RETURN, 0, 1, 0)];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 2);
+        assert_eq!(t.code[0].op(), Op::LoadTrue);
+        assert_eq!(t.code[1].op(), Op::Return);
+    }
+
+    #[test]
+    fn translate_loadbool_false_skip_still_one_to_one() {
+        // Sanity: the (B=0, C=1) shape stays on the 1:1 path as `LFalseSkip`.
+        let words = vec![
+            enc_iabc(OP_LOADBOOL, 3, 0, 1),
+            enc_iabc(OP_MOVE, 0, 1, 0),
+            enc_iabc(OP_RETURN, 0, 1, 0),
+        ];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 3);
+        assert_eq!(t.code[0].op(), Op::LFalseSkip);
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase 4 PU Wave 3 — CONCAT B != A lowering
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn translate_concat_b_gt_a() {
+        // PUC `OP_CONCAT A=0 B=2 C=4` → R[0] := R[2]..R[3]..R[4]  (len=3).
+        // src range starts above dst → forward Move iteration (R[0..3] writes
+        // never clobber later src reads).
+        // Expected luna emission:
+        //   Move 0 2
+        //   Move 1 3
+        //   Move 2 4
+        //   Concat 0 3
+        let words = vec![enc_iabc(OP_CONCAT, 0, 2, 4), enc_iabc(OP_RETURN, 0, 2, 0)];
+        let t = translate_code(&words).expect("CONCAT B>A must lower");
+        assert_eq!(t.code.len(), 5);
+        assert_eq!(t.code[0].op(), Op::Move);
+        assert_eq!(t.code[0].a(), 0);
+        assert_eq!(t.code[0].b(), 2);
+        assert_eq!(t.code[1].op(), Op::Move);
+        assert_eq!(t.code[1].a(), 1);
+        assert_eq!(t.code[1].b(), 3);
+        assert_eq!(t.code[2].op(), Op::Move);
+        assert_eq!(t.code[2].a(), 2);
+        assert_eq!(t.code[2].b(), 4);
+        assert_eq!(t.code[3].op(), Op::Concat);
+        assert_eq!(t.code[3].a(), 0);
+        assert_eq!(t.code[3].b(), 3, "Concat len = C - B + 1 = 4 - 2 + 1");
+        assert_eq!(t.code[4].op(), Op::Return);
+        // pc maps: PUC 0 → luna 0 (first Move); PUC 1 → luna 4 (Return).
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(4)]);
+        // luna 0..3 cite PUC pc 0; luna 4 cites PUC pc 1.
+        assert_eq!(t.luna_to_puc_pc, vec![0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn translate_concat_b_lt_a() {
+        // PUC `OP_CONCAT A=3 B=0 C=2` → R[3] := R[0]..R[1]..R[2]  (len=3).
+        // src range starts below dst → backward Move iteration (avoids
+        // clobbering src reads, though here dst..dst+len doesn't actually
+        // overlap with src..src+len so order is correctness-equivalent —
+        // the iter direction is picked uniformly by the `b > a` predicate).
+        // Expected luna emission (backward iter):
+        //   Move 5 2
+        //   Move 4 1
+        //   Move 3 0
+        //   Concat 3 3
+        let words = vec![enc_iabc(OP_CONCAT, 3, 0, 2), enc_iabc(OP_RETURN, 0, 2, 0)];
+        let t = translate_code(&words).expect("CONCAT B<A must lower");
+        assert_eq!(t.code.len(), 5);
+        assert_eq!(t.code[0].op(), Op::Move);
+        assert_eq!(t.code[0].a(), 5);
+        assert_eq!(t.code[0].b(), 2);
+        assert_eq!(t.code[1].op(), Op::Move);
+        assert_eq!(t.code[1].a(), 4);
+        assert_eq!(t.code[1].b(), 1);
+        assert_eq!(t.code[2].op(), Op::Move);
+        assert_eq!(t.code[2].a(), 3);
+        assert_eq!(t.code[2].b(), 0);
+        assert_eq!(t.code[3].op(), Op::Concat);
+        assert_eq!(t.code[3].a(), 3);
+        assert_eq!(t.code[3].b(), 3);
+        assert_eq!(t.code[4].op(), Op::Return);
+    }
+
+    #[test]
+    fn translate_concat_b_eq_a_still_one_to_one() {
+        // Sanity: the stock-compiler `B == A` shape stays on the 1:1 path.
+        let words = vec![enc_iabc(OP_CONCAT, 2, 2, 4), enc_iabc(OP_RETURN, 0, 2, 0)];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 2);
+        assert_eq!(t.code[0].op(), Op::Concat);
+        assert_eq!(t.code[0].a(), 2);
+        assert_eq!(t.code[0].b(), 3);
+        assert_eq!(t.code[1].op(), Op::Return);
+    }
+
+    #[test]
+    fn translate_concat_b_ne_a_shifts_downstream_jump() {
+        // Stream:
+        //   PUC 0: CONCAT A=0 B=2 C=4  (lowers to 3 Moves + 1 Concat = 4 insts)
+        //   PUC 1: JMP +1              (target PUC pc 3 = RETURN)
+        //   PUC 2: MOVE 0 1            (skipped)
+        //   PUC 3: RETURN 0 1
+        // Luna stream after lowering:
+        //   luna 0..2: Moves
+        //   luna 3: Concat
+        //   luna 4: Jmp <fixup>     (was puc 1; target puc 3 → luna 6)
+        //   luna 5: Move
+        //   luna 6: Return
+        // sJ on luna 4 = (6 - (4 + 1)) = 1.
+        let words = vec![
+            enc_iabc(OP_CONCAT, 0, 2, 4),
+            enc_iasbx(OP_JMP, 0, 1),
+            enc_iabc(OP_MOVE, 0, 1, 0),
+            enc_iabc(OP_RETURN, 0, 1, 0),
+        ];
+        let t = translate_code(&words).unwrap();
+        assert_eq!(t.code.len(), 7);
+        assert_eq!(t.code[3].op(), Op::Concat);
+        assert_eq!(t.code[4].op(), Op::Jmp);
+        assert_eq!(
+            t.code[4].sj(),
+            1,
+            "JMP target must remap past the CONCAT lowering"
+        );
+        assert_eq!(t.code[6].op(), Op::Return);
+        assert_eq!(t.puc_to_luna_pc, vec![Some(0), Some(4), Some(5), Some(6)]);
+    }
+
+    #[test]
+    fn translate_concat_c_lt_b_rejected() {
+        // PUC `OP_CONCAT A=0 B=4 C=2` is malformed (C < B → negative len).
+        // We surface a clear error rather than silently producing 0-len.
+        let words = vec![enc_iabc(OP_CONCAT, 0, 4, 2)];
+        let err = match translate_code(&words) {
+            Ok(_) => panic!("CONCAT C<B must reject"),
+            Err(e) => e,
+        };
+        assert!(err.contains("CONCAT C < B"), "got: {err}");
+    }
 }
