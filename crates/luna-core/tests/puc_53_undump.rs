@@ -20,8 +20,9 @@
 //! `#[ignore]`d integration smoke test (similar to puc_51 / puc_54 / puc_55).
 //!
 //! See `crates/luna-core/src/vm/dump/puc/puc_53.rs` for the translator
-//! design + audit-tracked polish list (`LOADBOOL true+skip`, `OP_JMP
-//! close-upvalues`, generic-for, etc.).
+//! design + audit-tracked polish list (generic-for + RK-on-B +
+//! `LOADBOOL true+skip` + `CONCAT B!=A` all closed in Phase 4 PU
+//! Waves 2-3; `OP_JMP close-upvalues` still tracked).
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -104,7 +105,6 @@ fn put_f64(out: &mut Vec<u8>, v: f64) {
 
 // ---- opcode constants — kept in sync with translator's table ----
 const OP_LOADK: u8 = 1;
-#[allow(dead_code)]
 const OP_LOADBOOL: u8 = 3;
 #[allow(dead_code)]
 const OP_GETTABUP: u8 = 6;
@@ -344,6 +344,90 @@ fn end_to_end_returns_float() {
     match result[0] {
         Value::Float(f) if (f - 3.5).abs() < 1e-9 => {}
         other => panic!("expected Float(3.5), got {other:?}"),
+    }
+}
+
+/// Build a PUC 5.3 chunk whose body exercises the Phase 4 PU Wave 3
+/// **LOADBOOL true+skip** lowering. The body:
+///
+///   pc 0: LOADBOOL R0 1 1   (R0 = true, skip next)
+///   pc 1: LOADBOOL R0 0 0   (R0 = false, skipped)
+///   pc 2: RETURN R0 2       (return R0)
+///
+/// After translation the luna stream is:
+///
+///   luna 0: LoadTrue R0
+///   luna 1: Jmp +1          (skip the LoadFalse at luna 2)
+///   luna 2: LoadFalse R0    (the original "skipped" inst)
+///   luna 3: Return R0 2
+///
+/// If the Jmp target remap is wrong the LoadFalse fires and the
+/// function returns `false`; the end-to-end assertion catches that.
+fn build_return_true_via_loadbool_skip_chunk() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(1u8); // nupvalues
+
+    body.extend_from_slice(&puc53_str(b"@test"));
+    put_i32(&mut body, 0); // linedefined
+    put_i32(&mut body, 0); // lastlinedefined
+    body.push(0); // numparams
+    body.push(1); // is_vararg
+    body.push(1); // maxstacksize — R0 only
+
+    // ---- code (3 insts) ----
+    put_i32(&mut body, 3);
+    put_u32(&mut body, enc(OP_LOADBOOL, 0, 1, 1)); // LOADBOOL R0 B=1 C=1
+    put_u32(&mut body, enc(OP_LOADBOOL, 0, 0, 0)); // LOADBOOL R0 B=0 C=0 (skipped)
+    put_u32(&mut body, enc(OP_RETURN, 0, 2, 0)); // RETURN R0 B=2
+
+    // ---- constants (0) ----
+    put_i32(&mut body, 0);
+
+    // ---- upvalues (1: _ENV) ----
+    put_i32(&mut body, 1);
+    body.push(1);
+    body.push(0);
+
+    // ---- nested protos (0) ----
+    put_i32(&mut body, 0);
+
+    // ---- debug: lineinfo (3 entries) ----
+    put_i32(&mut body, 3);
+    put_i32(&mut body, 1);
+    put_i32(&mut body, 1);
+    put_i32(&mut body, 1);
+    // locvars (0)
+    put_i32(&mut body, 0);
+    // upvalue names (1: "_ENV")
+    put_i32(&mut body, 1);
+    body.extend_from_slice(&puc53_str(b"_ENV"));
+
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&HEADER_53);
+    chunk.extend(body);
+    chunk
+}
+
+/// End-to-end smoke for the LOADBOOL true+skip lowering. If the new
+/// `LoadTrue; Jmp <skip>` pair lands wrong (Jmp delta off, skipped inst
+/// reached) the function returns `false` instead of `true` and the
+/// assertion catches it. Pinned alongside `end_to_end_returns_42` so
+/// any future regression on the Phase 4 PU Wave 3 punt-lowering surface
+/// trips a clear test failure.
+#[test]
+fn end_to_end_loadbool_true_skip_returns_true() {
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_bytecode_loading(true);
+    vm.set_puc_bytecode_loading(true);
+    let chunk = build_return_true_via_loadbool_skip_chunk();
+    let closure = vm.load(&chunk, b"=test").expect("undump");
+    let result = vm
+        .call_value(Value::Closure(closure), &[])
+        .expect("call succeeds");
+    assert_eq!(result.len(), 1, "expected one return value");
+    match result[0] {
+        Value::Bool(true) => {}
+        other => panic!("expected Bool(true) (skipped LoadFalse), got {other:?}"),
     }
 }
 
