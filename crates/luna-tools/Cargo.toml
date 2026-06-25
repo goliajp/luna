@@ -68,8 +68,12 @@ inferno = { version = "0.11", optional = true }
 
 # Optional: kernel + JIT-mcode sampling for `luna-profile`. pprof
 # uses `prost` internally so its closure is heavy; opt-feature
-# only.
-pprof = { version = "0.13", optional = true }
+# only. Pinned >=0.14 to close RUSTSEC-2024-0408 (`TempFdArrayIterator::next`
+# unsound misaligned `from_raw_parts` — panics under
+# `ReportBuilder::build`); 0.13 was reachable only through the
+# `flame-graph` feature but cargo-deny's `[advisories]` walks the
+# whole lockfile regardless of feature gating.
+pprof = { version = "0.15", optional = true }
 
 # Optional: disassembly for `luna-trace-inspect --show mcode`.
 # Capstone wraps a C library so it's a build-toolchain ask;
