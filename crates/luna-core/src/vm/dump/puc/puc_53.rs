@@ -339,6 +339,36 @@ struct Translated {
     max_temp_bump: u8,
 }
 
+/// One pending jump-target patch. The shape (`kind`) tells the post-pass
+/// loop how to encode the resolved distance back into the placeholder inst.
+#[derive(Clone, Copy, Debug)]
+enum FixupKind {
+    /// `Op::Jmp` placeholder — encode as sJ (signed offset from next pc).
+    /// Used by `OP_JMP` (and by Step 3+ LOADBOOL+skip lowering).
+    Jmp,
+    /// `Op::ForPrep A Bx` placeholder — encode as positive Bx forward offset
+    /// (PUC's `OP_FORPREP A sBx` uses `sBx >= 0` forward jump). luna ForPrep
+    /// dispatcher matches PUC's `pc += sBx` semantics directly, so no off-by-one.
+    ForPrep,
+    /// `Op::ForLoop A Bx` placeholder — encode as positive Bx backward offset
+    /// (`PUC FORLOOP A sBx` uses `sBx < 0`; luna `Bx = -sBx`).
+    ForLoop,
+    /// `Op::TForLoop A Bx` placeholder — same backward-Bx encoding as ForLoop.
+    TForLoop,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Fixup {
+    luna_pc: usize,
+    /// PUC pc the original instruction targeted (its first byte's pc — the
+    /// post-pass remaps via `puc_to_luna_pc[target_puc_pc]`).
+    target_puc_pc: i64,
+    kind: FixupKind,
+    /// Original `A` operand for the iABx ops (FORPREP / FORLOOP / TFORLOOP) —
+    /// they encode A alongside Bx so we need it at patch time.
+    a: u32,
+}
+
 /// Translate a full PUC 5.3 instruction stream into luna's encoding,
 /// recording the puc↔luna pc maps for downstream lineinfo + jump fixup
 /// consumers. Returns `Err(...)` for opcodes / shapes the baseline doesn't
@@ -349,12 +379,12 @@ fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
     let mut luna_to_puc_pc: Vec<usize> = Vec::with_capacity(puc_code.len());
     let mut max_temp_bump: u8 = 0;
 
-    // Stash pending jump fixups: (luna_pc_of_jump, puc_target_pc). The
-    // post-translation fixup loop walks this list and rewrites each placeholder
-    // `Jmp 0` to the correct sJ offset once the full pc map is built. Empty
-    // while every op is 1:1; populated by Step 3+ when LOADBOOL+skip /
-    // CONCAT B!=A start inserting instructions that shift JMP targets.
-    let mut jump_fixups: Vec<(usize, i64)> = Vec::new();
+    // Stash pending jump fixups. Populated by `translate_one` for every
+    // PC-relative op (`JMP`, `FORPREP`, `FORLOOP`, `TFORLOOP`). The post-pass
+    // walks the list and rewrites each placeholder against the final pc map,
+    // so multi-inst lowerings (Step 4+ RK-on-B / LOADBOOL+skip / CONCAT B!=A)
+    // that shift downstream pcs stay correct without per-op accounting.
+    let mut jump_fixups: Vec<Fixup> = Vec::new();
 
     for (puc_pc, &word) in puc_code.iter().enumerate() {
         translate_one(
@@ -369,37 +399,76 @@ fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
         .map_err(|e| format!("{e} (pc={puc_pc})"))?;
     }
 
-    // Patch jump fixups now that the full pc map is known. For 1:1 ops the
-    // direct `Inst::isj(Op::Jmp, sbx)` path inside `translate_one` already
-    // produced the correct offset; the fixup list only has entries from
-    // multi-inst lowerings (none today, used by Step 3+).
-    for (luna_pc, target_puc_pc) in jump_fixups {
-        let target_luna_pc = if target_puc_pc < 0 {
-            return Err(format!(
-                "PUC 5.3 JMP at luna pc {luna_pc} targets negative pc {target_puc_pc}"
-            ));
-        } else if target_puc_pc as usize >= puc_to_luna_pc.len() {
-            // Past-the-end: target the synthetic end-of-code pc.
-            code.len() as i64
-        } else {
-            // Find the next surviving op at or after target. 5.3 has no dropped
-            // ops today, but the loop matches puc_54's structure so a future
-            // drop (e.g. a 5.3-shape MMBIN equivalent) needs no rewrite.
-            let mut t = target_puc_pc as usize;
-            loop {
-                if t >= puc_to_luna_pc.len() {
-                    break code.len() as i64;
+    // Resolve every pending fixup. For each one, look up the target PUC pc in
+    // `puc_to_luna_pc` to get the destination luna pc, then encode the
+    // distance back into the placeholder instruction per its `FixupKind`.
+    for fx in jump_fixups {
+        let target_luna_pc = resolve_target(fx.target_puc_pc, &puc_to_luna_pc, code.len())?;
+        let next_pc = fx.luna_pc as i64 + 1;
+        let delta = target_luna_pc - next_pc;
+        let inst = match fx.kind {
+            FixupKind::Jmp => {
+                // sJ encoding: signed offset from next pc.
+                Inst::isj(Op::Jmp, delta as i32)
+            }
+            FixupKind::ForPrep => {
+                // Forward jump — `pc += Bx` per luna ForPrep dispatcher.
+                if delta < 0 {
+                    return Err(format!(
+                        "PUC 5.3 FORPREP at luna pc {} resolved to backward delta {} \
+                         (FORPREP must jump forward)",
+                        fx.luna_pc, delta
+                    ));
                 }
-                if let Some(p) = puc_to_luna_pc[t] {
-                    break p as i64;
+                let bx = delta as u32;
+                if bx > crate::vm::isa::MAX_BX {
+                    return Err(format!(
+                        "PUC 5.3 FORPREP at luna pc {} forward distance {bx} \
+                         out of luna Bx range",
+                        fx.luna_pc
+                    ));
                 }
-                t += 1;
+                Inst::iabx(Op::ForPrep, fx.a, bx)
+            }
+            FixupKind::ForLoop => {
+                // Backward jump — luna `Bx = -delta` (positive back-distance).
+                if delta > 0 {
+                    return Err(format!(
+                        "PUC 5.3 FORLOOP at luna pc {} resolved to forward delta {} \
+                         (FORLOOP must jump backward)",
+                        fx.luna_pc, delta
+                    ));
+                }
+                let back = (-delta) as u32;
+                if back > crate::vm::isa::MAX_BX {
+                    return Err(format!(
+                        "PUC 5.3 FORLOOP at luna pc {} back-distance {back} \
+                         out of luna Bx range",
+                        fx.luna_pc
+                    ));
+                }
+                Inst::iabx(Op::ForLoop, fx.a, back)
+            }
+            FixupKind::TForLoop => {
+                if delta > 0 {
+                    return Err(format!(
+                        "PUC 5.3 TFORLOOP at luna pc {} resolved to forward delta {} \
+                         (TFORLOOP must jump backward)",
+                        fx.luna_pc, delta
+                    ));
+                }
+                let back = (-delta) as u32;
+                if back > crate::vm::isa::MAX_BX {
+                    return Err(format!(
+                        "PUC 5.3 TFORLOOP at luna pc {} back-distance {back} \
+                         out of luna Bx range",
+                        fx.luna_pc
+                    ));
+                }
+                Inst::iabx(Op::TForLoop, fx.a, back)
             }
         };
-        // sJ encoding: target relative to *next pc* after the JMP.
-        let next_pc = luna_pc as i64 + 1;
-        let sj = (target_luna_pc - next_pc) as i32;
-        code[luna_pc] = Inst::isj(Op::Jmp, sj);
+        code[fx.luna_pc] = inst;
     }
 
     Ok(Translated {
@@ -410,16 +479,48 @@ fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
     })
 }
 
+/// Resolve a PUC target pc to the corresponding luna pc through the
+/// `puc_to_luna_pc` map. 5.3 has no dropped ops today so the inner loop
+/// terminates on its first iteration; the structure matches puc_54.rs so
+/// a future 5.3 drop shape needs no rewrite.
+fn resolve_target(
+    target_puc_pc: i64,
+    puc_to_luna_pc: &[Option<u32>],
+    code_len: usize,
+) -> Result<i64, String> {
+    if target_puc_pc < 0 {
+        return Err(format!("PUC 5.3 jump targets negative pc {target_puc_pc}"));
+    }
+    if target_puc_pc as usize >= puc_to_luna_pc.len() {
+        // Past-the-end: target the synthetic end-of-code pc.
+        return Ok(code_len as i64);
+    }
+    let mut t = target_puc_pc as usize;
+    loop {
+        if t >= puc_to_luna_pc.len() {
+            return Ok(code_len as i64);
+        }
+        if let Some(p) = puc_to_luna_pc[t] {
+            return Ok(p as i64);
+        }
+        t += 1;
+    }
+}
+
 /// Per-PUC-op translation step. Pushes one or more luna `Inst`s into `code`
 /// and records the pc mapping (`puc_to_luna_pc[puc_pc] = Some(first_luna_pc)`;
 /// each emitted inst pushes a `luna_to_puc_pc[luna_pc] = puc_pc` entry).
 ///
-/// 5.3 has no dropped-op shape, so every call appends at least one entry to
-/// both maps. While Wave 2 lowerings (RK-on-B arith / LOADBOOL+skip / CONCAT
-/// B!=A) still land op-by-op, this function delegates to `translate_inst`
-/// for the 1:1 fast path and just records the trivial pc mapping. Once those
-/// lowerings move inline, the body fans out to the same `emit_more` channel
-/// that puc_54.rs uses.
+/// PC-relative ops (`JMP`, `FORPREP`, `FORLOOP`, `TFORLOOP`) take the
+/// fixup channel: a placeholder is emitted now and the real offset is
+/// patched in by `translate_code` once the full pc map is known. Multi-inst
+/// lowerings (Step 4+ RK-on-B / LOADBOOL+skip / CONCAT B!=A) shift downstream
+/// pcs, so the per-op `i.sbx()` computed at decode time is no longer the
+/// luna offset — only the fixup loop sees the final layout.
+///
+/// 5.3 has no dropped-op shape, so every call appends at least one entry
+/// to both maps. Everything that isn't a PC-relative op delegates to
+/// `translate_inst` for the 1:1 fast path.
 #[allow(clippy::too_many_arguments)]
 fn translate_one(
     puc_pc: usize,
@@ -428,15 +529,115 @@ fn translate_one(
     puc_to_luna_pc: &mut Vec<Option<u32>>,
     luna_to_puc_pc: &mut Vec<usize>,
     max_temp_bump: &mut u8,
-    jump_fixups: &mut Vec<(usize, i64)>,
+    jump_fixups: &mut Vec<Fixup>,
 ) -> Result<(), String> {
     // Wave 2 follow-ups (RK-on-B / LOADBOOL+skip / CONCAT B!=A) will populate
-    // these channels; for the 1:1 baseline we discard them so clippy doesn't
-    // grumble about the unused parameters (kept in the signature to avoid
-    // churning every later caller).
+    // `max_temp_bump`; for the Step 3 fixup-infra baseline only PC-relative
+    // ops produce side effects beyond `translate_inst`.
     let _ = max_temp_bump;
-    let _ = jump_fixups;
 
+    let i = decode_53(word);
+    if i.op >= NUM_PUC53_OPS {
+        return Err(format!(
+            "PUC 5.3 translator: unknown opcode {} (max {})",
+            i.op,
+            NUM_PUC53_OPS - 1
+        ));
+    }
+
+    // --- PC-relative ops: emit placeholder + push fixup ---
+    match i.op {
+        OP_JMP => {
+            if i.a != 0 {
+                return Err(
+                    "PUC 5.3 translator: OP_JMP with close-upvalues hint (A != 0) not yet \
+                     supported (planned: emit `Close (A-1); Jmp sBx` with PC remap)"
+                        .to_string(),
+                );
+            }
+            // PUC sBx is the signed offset from next pc; the target PUC pc is
+            // therefore `puc_pc + 1 + sBx`. The post-pass remaps that to the
+            // matching luna pc.
+            let target = puc_pc as i64 + 1 + i.sbx() as i64;
+            let luna_pc = code.len();
+            puc_to_luna_pc.push(Some(luna_pc as u32));
+            luna_to_puc_pc.push(puc_pc);
+            code.push(Inst::isj(Op::Jmp, 0)); // placeholder
+            jump_fixups.push(Fixup {
+                luna_pc,
+                target_puc_pc: target,
+                kind: FixupKind::Jmp,
+                a: 0,
+            });
+            return Ok(());
+        }
+        OP_FORPREP => {
+            // PUC `OP_FORPREP A sBx`: pc += sBx (forward, positive sBx).
+            let sbx = i.sbx();
+            let target = puc_pc as i64 + 1 + sbx as i64;
+            let luna_pc = code.len();
+            puc_to_luna_pc.push(Some(luna_pc as u32));
+            luna_to_puc_pc.push(puc_pc);
+            code.push(Inst::iabx(Op::ForPrep, i.a, 0)); // placeholder Bx
+            jump_fixups.push(Fixup {
+                luna_pc,
+                target_puc_pc: target,
+                kind: FixupKind::ForPrep,
+                a: i.a,
+            });
+            return Ok(());
+        }
+        OP_FORLOOP => {
+            // PUC `OP_FORLOOP A sBx`: pc += sBx (backward, negative sBx).
+            let sbx = i.sbx();
+            let target = puc_pc as i64 + 1 + sbx as i64;
+            let luna_pc = code.len();
+            puc_to_luna_pc.push(Some(luna_pc as u32));
+            luna_to_puc_pc.push(puc_pc);
+            code.push(Inst::iabx(Op::ForLoop, i.a, 0));
+            jump_fixups.push(Fixup {
+                luna_pc,
+                target_puc_pc: target,
+                kind: FixupKind::ForLoop,
+                a: i.a,
+            });
+            return Ok(());
+        }
+        OP_TFORLOOP => {
+            // PUC `OP_TFORLOOP A sBx`: if R(A+1) ~= nil { R(A) = R(A+1); pc += sBx }.
+            // luna `Op::TForLoop iABx A Bx` expects `A = iter_base` (PUC's A is
+            // `iter_base + 2`) and a positive backward Bx (`-sBx`). Mirror the
+            // existing 1:1 translation: convert A here and let the fixup loop
+            // resolve the absolute target through the pc map.
+            let sbx = i.sbx();
+            if sbx > 0 {
+                return Err(format!(
+                    "PUC 5.3 translator: TFORLOOP sBx {sbx} > 0 (expected backward jump)"
+                ));
+            }
+            let iter_base = i.a.checked_sub(2).ok_or_else(|| {
+                format!(
+                    "PUC 5.3 translator: TFORLOOP.A={} < 2 (cannot convert to luna iter_base)",
+                    i.a
+                )
+            })?;
+            let target = puc_pc as i64 + 1 + sbx as i64;
+            let luna_pc = code.len();
+            puc_to_luna_pc.push(Some(luna_pc as u32));
+            luna_to_puc_pc.push(puc_pc);
+            code.push(Inst::iabx(Op::TForLoop, iter_base, 0));
+            jump_fixups.push(Fixup {
+                luna_pc,
+                target_puc_pc: target,
+                kind: FixupKind::TForLoop,
+                a: iter_base,
+            });
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    // --- everything else: 1:1 via `translate_inst` ---
     let inst = translate_inst(word)?;
     puc_to_luna_pc.push(Some(code.len() as u32));
     luna_to_puc_pc.push(puc_pc);
