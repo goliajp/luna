@@ -47,6 +47,15 @@ pub mod capi;
 pub mod jit_backend;
 pub mod lua_facade;
 
+/// v2.0 Track TL — pure-read inspection accessors over a live `Vm`.
+/// Re-exports [`luna_core::vm::inspect`] so the `luna-tools`
+/// binaries (`luna-heap-dump`, `luna-trace-inspect`,
+/// `luna-profile`) can `use luna_jit::inspect::*` without a
+/// separate `luna-core` direct dep.
+pub mod inspect {
+    pub use luna_core::vm::inspect::*;
+}
+
 pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, LuaTable};
 
 /// Unified `jit` namespace — combines luna-core's trait surface +

@@ -595,6 +595,40 @@ impl Heap {
         self.bytes
     }
 
+    /// v2.0 Track TL — pure-read walk over the intrusive `all`
+    /// objects list, invoking `visit(tag)` once per live (or
+    /// not-yet-swept) GC-managed object. Used by `luna-tools`'s
+    /// `luna-heap-dump` to build a per-type histogram; embedders
+    /// can reuse it for ad-hoc heap introspection.
+    ///
+    /// # Read-only contract
+    ///
+    /// The callback receives only the [`ObjTag`] discriminant and
+    /// is invoked under a `&self` borrow on the heap: no pointer
+    /// to the GC payload escapes, no `as_mut`-style aliasing is
+    /// available, and the walk performs zero allocation in the
+    /// loop. Safe to call between dispatch ticks (the only allocs
+    /// happen in the caller's bookkeeping).
+    ///
+    /// The walk visits both the live `all` list and the
+    /// `sweep_cur` detached list so a mid-cycle invocation reports
+    /// the same total as [`Heap::live_objects`].
+    pub fn walk_objects(&self, mut visit: impl FnMut(ObjTag)) {
+        for head in [self.all, self.sweep_cur] {
+            let mut cur = head;
+            while !cur.is_null() {
+                // SAFETY: pointers come from the runtime's
+                // intrusive all-objects list. `&self` borrow on
+                // the heap prevents concurrent mutation; the GC
+                // cannot run while this walk holds the borrow,
+                // so every `next` link is valid until consumed.
+                let (tag, next) = unsafe { ((*cur).tag, (*cur).next) };
+                visit(tag);
+                cur = next;
+            }
+        }
+    }
+
     /// Whether allocation has crossed the auto-GC threshold (cheap safe-point
     /// check for the interpreter loop).
     #[inline(always)]
