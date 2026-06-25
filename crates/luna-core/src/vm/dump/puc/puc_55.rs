@@ -809,6 +809,22 @@ fn translate_code(raw: &[u32]) -> Result<Translated, String> {
                 code.push(pair[1]);
             }
 
+            // PUC `SHRI A B sC`: R[A] := R[B] >> sC. Same 3-operand
+            // same-order shape as ADDI, so the Wave 1 helper applies
+            // directly. (SHLI's operand order is swapped — handled
+            // inline below.)
+            PucOp::SHRI => {
+                let a = f_a(word);
+                let b = f_b(word);
+                let sc = f_sc(word);
+                let tmp = a.max(b) + 1;
+                let pair = super::lower_i_imm(Op::Shr, a, b, sc, tmp, &mut max_temp_bump)?;
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[0]);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[1]);
+            }
+
             // ---- JMP needs a fixup; the sJ offset is in PUC pc-space ----
             PucOp::JMP => {
                 let sj = f_sj(word);
@@ -1025,8 +1041,12 @@ fn translate_one(op: PucOp, word: u32) -> Result<Inst, String> {
             ));
         }
         PucOp::SHRI => {
+            // Handled in translate_code via `super::lower_i_imm`; same
+            // single-Inst contract as ADDI above.
             return Err(format!(
-                "PUC 5.5 OP_SHRI(A={a}, B={b}, sC={sc}) needs I-imm lowering"
+                "PUC 5.5 OP_SHRI(A={a}, B={b}, sC={sc}): I-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
         PucOp::EQI | PucOp::LTI | PucOp::LEI | PucOp::GTI | PucOp::GEI => {
@@ -1204,6 +1224,25 @@ mod tests {
         let inst = translate_one(PucOp::LOADI, word).unwrap();
         assert_eq!(inst.op(), Op::LoadI);
         assert_eq!(inst.sbx(), 42);
+    }
+
+    #[test]
+    fn translate_shri_via_lower_i_imm() {
+        // OP_SHRI A=2 B=4 sC=3 (sC encoded as C = 3 + 0x80 = 131)
+        let sc_enc = (3 + OFFSET_SC) as u32;
+        let word = (PucOp::SHRI as u32) | (2u32 << 7) | (4u32 << 16) | (sc_enc << 24);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].sbx(), 3);
+        let tmp = translated.code[0].a();
+        assert_eq!(tmp, 5, "tmp must be max(a, b) + 1 = max(2, 4) + 1 = 5");
+        assert_eq!(translated.code[1].op(), Op::Shr);
+        assert_eq!(translated.code[1].a(), 2);
+        assert_eq!(translated.code[1].b(), 4);
+        assert_eq!(translated.code[1].c(), tmp);
+        assert!(!translated.code[1].k());
+        assert_eq!(translated.max_temp_bump, 6);
     }
 
     #[test]
