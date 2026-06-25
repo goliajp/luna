@@ -1,14 +1,16 @@
 # Compatibility
 
 Compatibility surface for embedders deciding whether luna fits their
-host. Snapshot at v1.0.0 (2026-06-23). For perf numbers see
-[`performance.md`](performance.md).
+host. Snapshot at v1.3.0 (2026-06-25 ship) with v2.0 Track PU
+punt-collapse updates. For perf methodology + measured baselines
+see [`performance.md`](performance.md).
 
 ---
 
 ## Dialect support
 
-luna implements **Lua 5.1, 5.2, 5.3, 5.4, and 5.5** in a single Rust
+luna implements **Lua 5.1, 5.2, 5.3, 5.4, 5.5**, and **MacroLua**
+(5.4 + compile-time macros, v1.3 Phase ML) in a single Rust
 binary. The dialect is selected per-`Vm` at construction
 (`Vm::new(LuaVersion::Lua55)`); a single process can host multiple
 Vms running different dialects concurrently without interference.
@@ -18,32 +20,50 @@ bytecode matching PUC's compiler binary format, so PUC-compiled
 `.luac` files for the corresponding dialect load directly into
 luna.
 
+**v2.0 PU punt-collapse status (2026-06-25)**: 5.1 / 5.2 / 5.3 /
+5.4 / 5.5 are all punt-free for the v1.3-audit-listed opcode
+shapes (24 punts collapsed in 4 Wave passes — see
+`.dev/rfcs/v2.0-plan-state.md` §Track PU). The single residual
+polish is 5.3's `OP_JMP A!=0` close-upvals hint, out of original
+audit scope.
+
 ### Per-dialect feature matrix
 
 Sourced from `src/version.rs`'s capability predicates:
 
-| Feature | 5.1 | 5.2 | 5.3 | 5.4 | 5.5 |
-|---|:-:|:-:|:-:|:-:|:-:|
-| **Numeric** | | | | | |
-| Integer subtype (`Int`) | ✗ | ✗ | ✓ | ✓ | ✓ |
-| `//` floor-divide | ✗ | ✗ | ✓ | ✓ | ✓ |
-| Bitwise `& \| ~ << >>` | ✗ | ✗ | ✓ | ✓ | ✓ |
-| Hex-float `0x1p4` | ✗ | ✓ | ✓ | ✓ | ✓ |
-| **Syntax** | | | | | |
-| `goto` / `::label::` | ✗ | ✓ | ✓ | ✓ | ✓ |
-| Empty statement `;` | ✗ | ✓ | ✓ | ✓ | ✓ |
-| `break` anywhere in block | ✗ | ✓ | ✓ | ✓ | ✓ |
-| Nested `[[...]]` long strings | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Strings** | | | | | |
-| `\xXX` / `\z` escapes | ✗ | ✓ | ✓ | ✓ | ✓ |
-| `\u{XXXX}` unicode escape | ✗ | ✗ | ✓ | ✓ | ✓ |
-| **5.4+ attributes** | | | | | |
-| `local <const>` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| `local <close>` | ✗ | ✗ | ✗ | ✓ | ✓ |
-| **5.5+ exclusives** | | | | | |
-| `global` keyword | ✗ | ✗ | ✗ | ✗ | ✓ |
-| Named vararg `function f(...name)` | ✗ | ✗ | ✗ | ✗ | ✓ |
-| Collective attribute `local <const> a, b` | ✗ | ✗ | ✗ | ✗ | ✓ |
+| Feature | 5.1 | 5.2 | 5.3 | 5.4 | 5.5 | MacroLua |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| **Numeric** | | | | | | |
+| Integer subtype (`Int`) | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| `//` floor-divide | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Bitwise `& \| ~ << >>` | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Hex-float `0x1p4` | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Syntax** | | | | | | |
+| `goto` / `::label::` | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Empty statement `;` | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `break` anywhere in block | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Nested `[[...]]` long strings | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Strings** | | | | | | |
+| `\xXX` / `\z` escapes | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `\u{XXXX}` unicode escape | ✗ | ✗ | ✓ | ✓ | ✓ | ✓ |
+| **5.4+ attributes** | | | | | | |
+| `local <const>` | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ |
+| `local <close>` | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ |
+| **5.5+ exclusives** | | | | | | |
+| `global` keyword | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ |
+| Named vararg `function f(...name)` | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ |
+| Collective attribute `local <const> a, b` | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ |
+| **MacroLua exclusives** | | | | | | |
+| `@name(args)` compile-time macros | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+| 4 built-in macros (`@assert` / `@trace` / etc.) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+
+**MacroLua** lives between 5.4 and 5.5 in the LuaVersion enum
+(`LuaVersion::MacroLua`). It inherits 5.4's bytecode + syntax surface,
+plus a parse-time macro expansion pass triggered by the `@` sigil.
+See `crates/luna-core/src/frontend/macro_lua.rs` for the expansion
+implementation and `.dev/rfcs/v1.3-audit-macro-lua.md` for the
+design rationale (LuaMacro by Steve Donovan as the spec proxy —
+no upstream canonical spec exists).
 
 ## Standard library coverage
 
