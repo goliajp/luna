@@ -95,6 +95,81 @@ fn gc_finalizer_many_cycles_no_drift() {
     );
 }
 
+/// Weak-keyed table holding an object that has a `__gc` finalizer.
+/// PUC spec: weak keys collected first; the finalizer on the **value**
+/// must still run after the key is gone. Pins that luna's weak-table
+/// sweep does not strand finalizers (regression for "weak key removal
+/// leaves orphan value never finalized").
+#[test]
+fn gc_finalizer_weak_key_value_still_finalized() {
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    let r = vm
+        .eval(
+            r#"
+            local fin_runs = 0
+            local wk = setmetatable({}, { __mode = "k" })
+            for _ = 1, 20 do
+                local k = {}  -- weak key
+                local v = setmetatable({}, { __gc = function() fin_runs = fin_runs + 1 end })
+                wk[k] = v
+                -- both k and v become unreachable when loop scope drops them.
+            end
+            collectgarbage("collect")
+            collectgarbage("collect")
+            return fin_runs
+            "#,
+        )
+        .expect("weak key + value-with-finalizer must not panic");
+    let n = match r.first() {
+        Some(Value::Int(i)) => *i,
+        other => panic!("expected Int, got {other:?}"),
+    };
+    assert!(
+        n >= 1,
+        "expected ≥1 finalizer to run for values with weak keys (got {n})"
+    );
+}
+
+/// Userdata used as a table key, where the userdata has a `__gc`
+/// finalizer. PUC: the table's reference is strong enough to keep the
+/// userdata alive until the table itself is collected; once both are
+/// unreachable, the userdata finalizer runs cleanly. Pins that luna's
+/// key-hashing path does not break when the key's identity is a
+/// userdata Gc<T>.
+#[test]
+fn gc_finalizer_userdata_as_table_key() {
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    let r = vm
+        .eval(
+            r#"
+            local fin_runs = 0
+            -- A plain table proxy used as a key. The proxy has a __gc
+            -- finalizer; the holding table goes out of scope at function
+            -- end, so both proxy + holder are collectable on the next
+            -- cycle.
+            do
+                local t = {}
+                for _ = 1, 30 do
+                    local key = setmetatable({}, { __gc = function() fin_runs = fin_runs + 1 end })
+                    t[key] = true
+                end
+            end
+            collectgarbage("collect")
+            collectgarbage("collect")
+            return fin_runs
+            "#,
+        )
+        .expect("userdata-as-table-key must not panic");
+    let n = match r.first() {
+        Some(Value::Int(i)) => *i,
+        other => panic!("expected Int, got {other:?}"),
+    };
+    assert!(
+        n >= 1,
+        "expected ≥1 finalizer to run on collected table keys (got {n})"
+    );
+}
+
 /// Finalizer that raises an error: PUC swallows the error (logs it
 /// internally) and proceeds with the next finalizer. luna should
 /// follow the same shape — the eval must succeed, the next iteration
