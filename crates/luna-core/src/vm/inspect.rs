@@ -85,7 +85,11 @@ pub fn heap_walk(vm: &Vm) -> HeapSnapshot {
             })
         })
         .collect();
-    buckets.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.type_name.cmp(b.type_name)));
+    buckets.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.type_name.cmp(b.type_name))
+    });
 
     HeapSnapshot {
         total_objects: vm.heap.live_objects(),
@@ -196,7 +200,7 @@ pub fn jit_state_snapshot(vm: &Vm) -> JitStateSnapshot {
     JitStateSnapshot {
         enabled: js.enabled,
         trace_enabled: js.trace_enabled,
-        active_trace_head_pc: js.active_trace.as_ref().map(|t| t.head_pc as u32),
+        active_trace_head_pc: js.active_trace.as_ref().map(|t| t.head_pc),
         active_trace_len: js.active_trace.as_ref().map(|t| t.ops.len()),
         trace_closed_count: js.counters.closed,
         trace_aborted_count: js.counters.aborted,
