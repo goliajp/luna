@@ -434,6 +434,110 @@ fn build_eq_rk_chunk() -> Vec<u8> {
     chunk
 }
 
+/// Build a 5.1 main proto whose generic `for v in iter, nil, nil do … end`
+/// loop terminates immediately because the iterator returns `nil` on the
+/// first call. PU Wave 4 closes punt-A (OP_TFORLOOP N-way split): the
+/// chunk must now load *and* run, returning the unmodified accumulator.
+///
+/// Bytecode layout (main proto):
+/// ```text
+/// pc 0: LOADK   R0 K0           -- s = 100      (R0 = 100)
+/// pc 1: CLOSURE R1 P0           -- iter = function() return end (R1)
+/// pc 2: LOADNIL R2 R3           -- state, ctrl = nil, nil
+/// pc 3: JMP     +2              -- forward to TFORLOOP (skip body)
+/// pc 4: ADD     R0 R0 R0        -- body: s = s + s (skipped — iter→nil)
+/// pc 5: MOVE    R0 R0           -- body filler (so JMP +2 has a target)
+/// pc 6: TFORLOOP A=1 C=1        -- call iter, write 1 result; nil → exit
+/// pc 7: JMP     -4              -- back to pc 4 (body_top) on continue
+/// pc 8: RETURN  R0 2            -- return s   (B=2 ⇒ 1 result)
+/// ```
+///
+/// Sub-proto P0 is a 0-param, non-vararg closure whose body is a single
+/// `RETURN R0 1` (0 results — Lua-side `nil`), so the iter signals "end of
+/// iteration" on call #1.
+fn build_tforloop_chunk() -> Vec<u8> {
+    // ---- sub-proto P0 (the iterator) ----
+    let mut child = Vec::new();
+    child.extend_from_slice(&puc_str(b"@iter"));
+    put_i32(&mut child, 0); // line_defined
+    put_i32(&mut child, 0); // last_line_defined
+    child.push(0); // nups
+    child.push(2); // numparams = 2 (state, ctrl)
+    child.push(0); // is_vararg = 0
+    child.push(2); // max_stack
+    put_i32(&mut child, 1); // 1 inst
+    put_u32(&mut child, enc(30, 0, 1, 0)); // RETURN R0 B=1 (0 results)
+    put_i32(&mut child, 0); // 0 consts
+    put_i32(&mut child, 0); // 0 nested
+    put_i32(&mut child, 1); // 1 lineinfo
+    put_i32(&mut child, 1);
+    put_i32(&mut child, 0); // 0 locvars
+    put_i32(&mut child, 0); // 0 upvalue names
+
+    // ---- main proto ----
+    let mut body = Vec::new();
+    body.extend_from_slice(&puc_str(b"@test"));
+    put_i32(&mut body, 0);
+    put_i32(&mut body, 0);
+    body.push(0); // nups
+    body.push(0); // numparams
+    body.push(2); // is_vararg
+    body.push(8); // max_stack (covers R0..R7 including TForCall scratch)
+    put_i32(&mut body, 9); // 9 insts
+    put_u32(&mut body, enc_bx(1, 0, 0)); // LOADK R0 K0 (s = 100)
+    put_u32(&mut body, enc_bx(36, 1, 0)); // CLOSURE R1 P0
+    put_u32(&mut body, enc(3, 2, 3, 0)); // LOADNIL R2 R3 (state, ctrl = nil)
+    put_u32(&mut body, enc_sbx(22, 0, 2)); // JMP +2  (skip body → pc 6)
+    put_u32(&mut body, enc(12, 0, 0, 0)); // ADD R0 R0 R0 (skipped)
+    put_u32(&mut body, enc(0, 0, 0, 0)); // MOVE R0 R0 (filler so JMP +2 lands at TFORLOOP)
+    put_u32(&mut body, enc(33, 1, 0, 1)); // TFORLOOP A=1 C=1
+    put_u32(&mut body, enc_sbx(22, 0, -4)); // JMP -4 (back to pc 4 = body_top)
+    put_u32(&mut body, enc(30, 0, 2, 0)); // RETURN R0 B=2 (1 result)
+    put_i32(&mut body, 1); // 1 const
+    body.push(3); // LUA_TNUMBER
+    put_f64(&mut body, 100.0);
+    put_i32(&mut body, 1); // 1 nested proto
+    body.extend(child);
+    put_i32(&mut body, 9); // 9 lineinfo
+    for _ in 0..9 {
+        put_i32(&mut body, 1);
+    }
+    put_i32(&mut body, 0); // 0 locvars
+    put_i32(&mut body, 0); // 0 upvalue names
+
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&HEADER_51);
+    chunk.extend(body);
+    chunk
+}
+
+/// PU Wave 4 punt-A 收回: PUC 5.1 `OP_TFORLOOP A C` + trailing `JMP sBx`
+/// now lowers to luna's `TForCall A 0 C; TForLoop A back` pair. The chunk
+/// builds a generic-for that exits immediately (iter returns nil) so the
+/// body never executes; the post-loop return must read back the
+/// unmodified accumulator (`100`).
+#[test]
+fn translate_tforloop_5_1() {
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_puc_bytecode_loading(true);
+    let chunk = build_tforloop_chunk();
+    let cl = vm
+        .load(&chunk, b"=test")
+        .expect("TFORLOOP chunk loads (PU Wave 4 punt-A 收回)");
+    let res = vm
+        .call_value(luna_core::runtime::Value::Closure(cl), &[])
+        .expect("TFORLOOP chunk runs");
+    let n = match res[0] {
+        luna_core::runtime::Value::Int(n) => n as f64,
+        luna_core::runtime::Value::Float(f) => f,
+        ref other => panic!("expected number, got {other:?}"),
+    };
+    assert_eq!(
+        n, 100.0,
+        "iter returned nil immediately — body must not run"
+    );
+}
+
 /// PU Wave 2 punt-7 收回: SETLIST with C=0 (block-index in next code
 /// slot) now translates to luna's `SetList k=true + ExtraArg` pair
 /// instead of erroring out.
