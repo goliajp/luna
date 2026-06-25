@@ -34,17 +34,27 @@
 //!
 //! ## Punts (documented for follow-up, not silently dropped)
 //!
-//! - **`OP_TFORLOOP` 3-way split** — 5.1's single `TFORLOOP` op
-//!   (A C, no separate TFORPREP / TFORCALL) needs splitting into luna's
-//!   `TForPrep + TForCall + TForLoop` triad. Translator currently
-//!   rejects with `unsupported PUC 5.1 op TFORLOOP`. Affects generic
-//!   `for k,v in pairs(t) do … end` loops. Tracked: punt-A.
-//! - **`LUAI_COMPAT_VARARG` `arg` local** — 5.1 vararg functions
-//!   compiled with the compat flag set the `is_vararg` byte's bit 2
-//!   (`NEEDSARG`). Translator decodes the bit into
-//!   `Proto.has_compat_vararg_arg` but does NOT yet populate the
-//!   synthetic `arg` table at runtime — chunks that reference `arg`
-//!   from a `...` function will see nil. Tracked: punt-B.
+//! (none — 5.1 dialect is punt-free as of PU Wave 4.)
+//!
+//! ## Closed in PU Wave 4
+//!
+//! - **`OP_TFORLOOP` split** (punt-A) — PUC 5.1 emits a single
+//!   `TFORLOOP A C` followed by `JMP sBx` (back-edge). luna splits the
+//!   pair into `TForCall A 0 C; TForLoop A back`, registering the
+//!   back-distance as a `JumpKind::TForLoop` fixup so the post-walk pass
+//!   resolves it through `puc_to_luna_pc` (handles any earlier lowering
+//!   that bumped the luna pc count). No `TForPrep` is synthesised — 5.1
+//!   has no to-be-closed semantics and the pre-loop forward JMP lands on
+//!   the new `TForCall` directly. PUC 5.1 encodes `TFORLOOP.A` as
+//!   iter_base (same convention as luna), unlike 5.3 which uses
+//!   `iter_base + 2`.
+//! - **`LUAI_COMPAT_VARARG` `arg` local** (punt-B) — `Proto.has_compat_vararg_arg`
+//!   has been decoded by the reader since Wave 1; `vm/exec.rs:4200`
+//!   (`call_lua` frame entry) already synthesises the `arg = {n =
+//!   n_varargs, [1..] = e1..}` table on the cold path when the flag is
+//!   set. PU Wave 4 adds an end-to-end test that loads a 5.1 chunk
+//!   compiled with `LUAI_COMPAT_VARARG=1` and asserts
+//!   `arg.n` / `arg[1]` are populated correctly.
 //!
 //! ## Closed in PU Wave 2
 //!
@@ -839,12 +849,48 @@ fn translate_code(
                 out.push(Inst::iasbx(Op::ForPrep, inst.a, 0));
             }
             OP_TFORLOOP => {
-                // punt-A: 5.1's combined TFORLOOP needs splitting into
-                // luna's TForPrep + TForCall + TForLoop. Not yet
-                // implemented; generic-for loops will fail to load.
-                return Err(
-                    "OP_TFORLOOP translation not yet implemented (punt-A — see module docs)".into(),
-                );
+                // PUC 5.1 layout for `for k,v in expr do ... end`:
+                //   pc P  : TFORLOOP A C  (call iter; if R(A+3)==nil pc++)
+                //   pc P+1: JMP sBx       (back to body_top; sBx < 0)
+                // luna's split has no TFORPREP for the 5.1 path (5.1 has no
+                // to-be-closed; the pre-loop forward JMP already lands on
+                // TFORLOOP). At PUC pc P we emit `TForCall A 0 C`; at PUC pc
+                // P+1 we *replace* the JMP with `TForLoop A back`, where
+                // back = (luna pc of TForLoop) + 1 - (luna pc of body_top).
+                // The JMP's sBx tells us body_top = P+2+sBx. The fixup pass
+                // resolves the target through `puc_to_luna_pc` so any
+                // lowering between body_top and here that bumps the luna pc
+                // count is accounted for.
+                if inst.c > 0xFF {
+                    return Err(format!("OP_TFORLOOP C={} > 255", inst.c));
+                }
+                if i + 1 >= raw_code.len() {
+                    return Err("OP_TFORLOOP at end of code (missing trailing JMP)".into());
+                }
+                let jmp = raw_code[i + 1];
+                if jmp.op != OP_JMP {
+                    return Err(format!(
+                        "OP_TFORLOOP at pc {i} not followed by JMP (got op {})",
+                        jmp.op
+                    ));
+                }
+                let target_old = (i as i64) + 2 + jmp.sbx as i64;
+                // Emit TForCall at PUC's TFORLOOP pc.
+                out.push(Inst::iabc(Op::TForCall, inst.a, 0, inst.c, false));
+                puc_to_luna_pc[i] = Some(pre_emit_len as u32);
+                out_lines.push(line);
+                // Emit TForLoop placeholder at PUC's JMP pc; back distance
+                // patched by the fixup pass once every other lowering has
+                // settled the luna pcs.
+                let tforloop_luna_pc = out.len();
+                let jmp_line = raw_lines.get(i + 1).copied().unwrap_or(line);
+                out.push(Inst::iabx(Op::TForLoop, inst.a, 0));
+                out_lines.push(jmp_line);
+                puc_to_luna_pc[i + 1] = Some(tforloop_luna_pc as u32);
+                jump_fixups.push((tforloop_luna_pc, target_old, JumpKind::TForLoop(inst.a)));
+                // Consume the trailing JMP (already lowered into TForLoop).
+                i += 2;
+                continue;
             }
             OP_SETLIST => {
                 // 5.1 SETLIST A B C: R(A)[(C-1)*FPF + i] := R(A+i) for i in 1..B.
@@ -1051,6 +1097,24 @@ fn translate_code(
                 }
                 out[luna_pc] = Inst::iasbx(Op::ForPrep, a, delta as i32);
             }
+            JumpKind::TForLoop(a) => {
+                // luna `Op::TForLoop A Bx` back-jumps by `Bx` instructions
+                // *after* pc has been bumped past the TForLoop. With the
+                // standard fixup delta = `target_new - (luna_pc + 1)`
+                // (negative for a back-jump), the back-distance is `-delta`.
+                if delta > 0 {
+                    return Err(format!(
+                        "TFORLOOP forward delta {delta} (expected backward jump)"
+                    ));
+                }
+                let back = -delta;
+                if back < 0 || (back as u32) > crate::vm::isa::MAX_BX {
+                    return Err(format!(
+                        "TFORLOOP back-distance {back} exceeds luna Bx range"
+                    ));
+                }
+                out[luna_pc] = Inst::iabx(Op::TForLoop, a, back as u32);
+            }
         }
     }
     // Suppress unused warning.
@@ -1074,6 +1138,11 @@ enum JumpKind {
     ForLoop(u32),
     /// A field carried through from the PUC ForPrep opcode.
     ForPrep(u32),
+    /// A field carried through from the PUC TFORLOOP opcode (= iter_base
+    /// for luna's `Op::TForLoop`). The fixup target is the body-top PUC pc
+    /// (derived from the *following* JMP's sBx), and the encoded Bx is the
+    /// positive back-distance after PC-remap.
+    TForLoop(u32),
 }
 
 fn arith<F>(
