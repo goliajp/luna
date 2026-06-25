@@ -170,11 +170,7 @@ fn run(cli: &Cli) -> Result<(), String> {
     // doesn't fire the histogram path again.
     vm.clear_rust_debug_hook();
 
-    let hist = HISTOGRAM
-        .lock()
-        .unwrap()
-        .take()
-        .unwrap_or_default();
+    let hist = HISTOGRAM.lock().unwrap().take().unwrap_or_default();
     emit(cli, hist);
     Ok(())
 }
@@ -189,12 +185,7 @@ fn emit(cli: &Cli, hist: HashMap<StackKey, u64>) {
             for (stack, count) in &rows {
                 // Reverse the stack so the root frame appears first
                 // (inferno-flamegraph convention: leftmost = root).
-                let folded = stack
-                    .iter()
-                    .rev()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(";");
+                let folded = stack.iter().rev().cloned().collect::<Vec<_>>().join(";");
                 println!("{folded} {count}");
             }
         }
