@@ -41,10 +41,15 @@
 //! - `OP_JMP A==0` → `Jmp sJ` 1:1. `OP_JMP A!=0` (close upvalues ≥
 //!   R[A-1]) is rejected — supporting it requires PC remapping
 //!   (`Close; Jmp` pair). Rare in practice; tracked as polish.
-//! - Generic `for` (`OP_TFORCALL` / `OP_TFORLOOP`) is rejected — the
-//!   audit calls out that 5.3 lacks `OP_TFORPREP`, so the translator
-//!   must synthesise the to-be-closed register-tbc marker that luna's
-//!   `Op::TForPrep` writes. Tracked as polish.
+//! - Generic `for` (`OP_TFORCALL` / `OP_TFORLOOP`) — supported as of
+//!   v2.0 PU-53 phase. 5.3 has no `OP_TFORPREP` and no TBC machinery,
+//!   so the translator skips prep synthesis and emits TFORCALL/TFORLOOP
+//!   directly. PUC 5.3 encodes `TFORLOOP.A` as `iter_base + 2` (since
+//!   `R(A+1)` is the first call result == new ctrl, per
+//!   `lvm.c:OP_TFORLOOP`), whereas luna's `Op::TForLoop` expects
+//!   `A = iter_base` (reads `R(A+4)`). The translator subtracts 2 on
+//!   the way through. TFORCALL.A is iter_base in both conventions, so
+//!   it passes through unchanged.
 //!
 //! See `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"Lua 5.3 (~47 ops)"
 //! and §"5.3 risks" for the full per-opcode plan; this file lands the
@@ -701,13 +706,41 @@ fn translate_inst(word: u32) -> Result<Inst, String> {
             Inst::iabx(Op::ForLoop, i.a, back)
         }
 
-        OP_TFORCALL | OP_TFORLOOP => {
-            return Err(
-                "PUC 5.3 translator: generic-for (TFORCALL / TFORLOOP) not yet supported \
-                 (5.3 lacks OP_TFORPREP; translator must synthesise tbc marker via \
-                 luna Op::TForPrep — planned for next polish pass)"
-                    .to_string(),
-            );
+        OP_TFORCALL => {
+            // PUC 5.3 TFORCALL A C: R(A+3)..R(A+2+C) := R(A)(R(A+1), R(A+2)).
+            // luna Op::TForCall iABC A 0 C: dispatcher copies iter→R(A+4),
+            // state→R(A+5), ctrl→R(A+6), calls, writes C results starting
+            // at R(A+4). A is iter_base in both conventions — passes through.
+            Inst::iabc(Op::TForCall, i.a, 0, fit_b(c_idx, "TFORCALL.C")?, false)
+        }
+        OP_TFORLOOP => {
+            // PUC 5.3 TFORLOOP A sBx: if R(A+1) ~= nil then R(A) = R(A+1); pc += sBx.
+            // Here A is `iter_base + 2` (so R(A+1) = R(iter_base + 3) = first call
+            // result, R(A) = R(iter_base + 2) = ctrl slot). sBx is signed and
+            // negative for the back-jump.
+            //
+            // luna Op::TForLoop iABx A Bx: reads R(A+4) for ctrl, expects
+            // A = iter_base, Bx = positive back-distance. Convert by
+            // subtracting 2 from A and negating sBx.
+            let sbx = i.sbx();
+            if sbx > 0 {
+                return Err(format!(
+                    "PUC 5.3 translator: TFORLOOP sBx {sbx} > 0 (expected backward jump)"
+                ));
+            }
+            let back = (-sbx) as u32;
+            if back > crate::vm::isa::MAX_BX {
+                return Err(format!(
+                    "PUC 5.3 translator: TFORLOOP back-distance {back} out of luna Bx range"
+                ));
+            }
+            let iter_base = i.a.checked_sub(2).ok_or_else(|| {
+                format!(
+                    "PUC 5.3 translator: TFORLOOP.A={} < 2 (cannot convert to luna iter_base)",
+                    i.a
+                )
+            })?;
+            Inst::iabx(Op::TForLoop, iter_base, back)
         }
 
         OP_SETLIST => {
@@ -1091,5 +1124,49 @@ mod tests {
         let bx: u32 = (PUC53_MAX_ARG_SBX + 10) as u32;
         let word = 30u32 | (3 << 6) | ((bx & 0x1FF) << 14) | (((bx >> 9) & 0x1FF) << 23);
         assert!(translate_inst(word).unwrap_err().contains("close-upvalues"));
+    }
+
+    #[test]
+    fn translate_tforcall() {
+        // OP_TFORCALL A=5 C=2 → luna Op::TForCall A=5 B=0 C=2
+        let word = 41u32 | (5 << 6) | (2 << 14) | (0 << 23);
+        let inst = translate_inst(word).unwrap();
+        assert_eq!(inst.op(), Op::TForCall);
+        assert_eq!(inst.a(), 5);
+        assert_eq!(inst.b(), 0);
+        assert_eq!(inst.c(), 2);
+    }
+
+    #[test]
+    fn translate_tforloop_back_jump() {
+        // OP_TFORLOOP A=7 sBx=-3 (back-jump 3) → luna Op::TForLoop A=5 Bx=3
+        // PUC TFORLOOP.A=7 means iter_base=5 (R(A+1)=R(8)=first result;
+        // R(A)=R(7)=ctrl slot). luna A = iter_base = 5; Bx = -(-3) = 3.
+        let bx: u32 = (PUC53_MAX_ARG_SBX - 3) as u32;
+        let word = 42u32 | (7 << 6) | ((bx & 0x1FF) << 14) | (((bx >> 9) & 0x1FF) << 23);
+        let inst = translate_inst(word).unwrap();
+        assert_eq!(inst.op(), Op::TForLoop);
+        assert_eq!(inst.a(), 5);
+        assert_eq!(inst.bx(), 3);
+    }
+
+    #[test]
+    fn translate_tforloop_forward_jump_rejected() {
+        // OP_TFORLOOP with sBx > 0 → rejected (PUC always emits backward)
+        let bx: u32 = (PUC53_MAX_ARG_SBX + 3) as u32;
+        let word = 42u32 | (7 << 6) | ((bx & 0x1FF) << 14) | (((bx >> 9) & 0x1FF) << 23);
+        assert!(
+            translate_inst(word)
+                .unwrap_err()
+                .contains("expected backward jump")
+        );
+    }
+
+    #[test]
+    fn translate_tforloop_low_a_rejected() {
+        // OP_TFORLOOP A=1 (< 2, cannot convert iter_base via A-2) → rejected
+        let bx: u32 = (PUC53_MAX_ARG_SBX - 1) as u32;
+        let word = 42u32 | (1 << 6) | ((bx & 0x1FF) << 14) | (((bx >> 9) & 0x1FF) << 23);
+        assert!(translate_inst(word).unwrap_err().contains("< 2"));
     }
 }
