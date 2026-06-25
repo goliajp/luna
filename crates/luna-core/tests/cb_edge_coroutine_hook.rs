@@ -67,15 +67,15 @@ fn coroutine_hook_isolation_does_not_leak_to_main() {
 /// reset across the yield boundary. PUC traceexec keeps the hookcount
 /// on the thread's state; resume restores it.
 ///
-/// **STATUS 2026-06-25**: `#[ignore]` — CB-edge audit found that a hook
-/// installed inside the coroutine body (via the coroutine body's own
-/// `debug.sethook` call) does NOT fire across subsequent
-/// `coroutine.resume` boundaries; observed `fires=0` after 30 cycles
-/// with both empty and `'l'` mask + count=5. Tracked at
-/// `.dev/known-bugs/cb-edge-coroutine-hook-not-installed-from-body.md`
-/// for v2.0 CB-edge root-cause work. Unignore after fix.
+/// Regression for `Vm::set_hook(target=None, ...)` being silently
+/// dropped when called from inside a coroutine body. Pre-fix path went
+/// through `is_current_thread(None)`, which returns false whenever
+/// `self.current = Some(co)`, so neither install arm fired. v2.0 CB
+/// sub-track fix routes `target.is_none()` directly to `install_hook`
+/// on the live VM fields (= the running thread, main or current coro).
+/// Bug doc archived at `.dev/known-bugs/fixed/cb-edge-coroutine-hook-
+/// not-installed-from-body.md`.
 #[test]
-#[ignore = "v2.0 CB-edge known bug: hook installed from inside coroutine body does not fire across resume boundaries"]
 fn coroutine_yield_under_count_hook_preserves_counter() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let r = vm
