@@ -212,18 +212,24 @@ fn trace_lowerer_emits_into_object_module() {
         "emitted object file should contain bytes (got 0)"
     );
 
-    // Magic-byte check across the three formats Stage 5 supports.
-    // Anything else means the ObjectModule was misconfigured at
-    // construction (wrong BinaryFormat) or cranelift-object's emit
-    // changed shape under us.
+    // Magic-byte check across the formats Stage 5 supports. Cranelift's
+    // ObjectModule emits .obj artifacts (not PE executables) so Windows
+    // magic is the COFF Machine-field at offset 0 (0x8664 = AMD64,
+    // 0xAA64 = ARM64, 0x014c = I386), not the `MZ` DOS stub of a
+    // linked .exe. Same shape as stage3_lower_into_object.rs's check.
     let is_elf = bytes.starts_with(&[0x7f, b'E', b'L', b'F']);
     let is_macho = bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
         || bytes.starts_with(&[0xce, 0xfa, 0xed, 0xfe])
         || bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
         || bytes.starts_with(&[0xfe, 0xed, 0xfa, 0xce]);
+    let is_coff_obj = bytes.len() >= 2
+        && matches!(
+            (bytes[0], bytes[1]),
+            (0x64, 0x86) | (0x64, 0xAA) | (0x4c, 0x01)
+        );
     let is_pe = bytes.starts_with(b"MZ");
     assert!(
-        is_elf || is_macho || is_pe,
+        is_elf || is_macho || is_pe || is_coff_obj,
         "emitted bytes should be a recognized object format \
          (first 8 bytes: {:?})",
         &bytes[..bytes.len().min(8)]
