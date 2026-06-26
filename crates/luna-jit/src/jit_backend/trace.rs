@@ -3171,12 +3171,16 @@ pub fn last_op_id() -> u8 {
 /// `lower_trace_into_named` invocation that reaches the post-entry
 /// emit point and runs `declare_var` + `def_var(iconst(0))` for the
 /// depth-relative base address handle. Sub-1 scaffold-only: NO op-arm
-/// migration; the variable is in-scope for the entire lowerer body
-/// but `use_var` only happens once (as an `iadd_imm(0)` cargo-asm
-/// proof-of-life) at the end of the entry block prelude.
+/// migration (sub-2 territory); the Variable is in-scope for the
+/// entire lowerer body but `use_var(base_var)` doesn't happen yet.
 ///
 /// Read by `r3_3_sub1_base_var_scaffold.rs`; production paths
 /// (dispatcher / close handler / vm) never read this.
+///
+/// See `.dev/rfcs/v2.0-track-r-r3-3-sub1-verdict.md` for the scaffold
+/// shape decision (single-def_var, no audit anchor) + sub-2 handoff
+/// (replace `iconst(0)` init with `reg_state` + migrate Op::Move /
+/// Op::LoadK / Op::LoadNil arms to call `current_base_addr`).
 pub fn base_var_scaffold_declared_count() -> u64 {
     BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
 }
