@@ -2919,6 +2919,15 @@ impl Vm {
         self.jit.counters.downrec_deopt
     }
 
+    /// v2.0 Track-R R3d — see
+    /// [`crate::vm::jit_state::JitCounters::multi_way_guard_emitted`].
+    /// Number of compiled traces whose lowerer emitted a multi-way
+    /// caller-pc guard chain (>= 2 distinct `caller_pc` candidates)
+    /// at the `TraceEnd::DownRec` close + lifted `dispatchable = true`.
+    pub fn trace_multi_way_guard_emitted_count(&self) -> u64 {
+        self.jit.counters.multi_way_guard_emitted
+    }
+
     /// P12-S2.C — number of closed traces the lowerer compiled and
     /// parked on `Proto.traces`. Re-records of the same head_pc are
     /// deduped (the second close finds the head_pc already cached
@@ -5869,6 +5878,17 @@ impl Vm {
                                     if ct.downrec_link.is_some() {
                                         self.jit.counters.downrec_link_compiled += 1;
                                     }
+                                    // v2.0 Track-R R3d — multi-way
+                                    // guard emit counter. Bumped when
+                                    // the lowerer's R3d arm collected
+                                    // >= 2 distinct caller_pc candidates
+                                    // and lifted `dispatchable=true`.
+                                    // R3c's single-CMP shape stores
+                                    // `1` here without bumping; non-
+                                    // DownRec closes store `0`.
+                                    if ct.downrec_multi_way_count >= 2 {
+                                        self.jit.counters.multi_way_guard_emitted += 1;
+                                    }
                                     // P15-A v2-A — side-trace finalisation.
                                     // Pin `dispatchable=false` so the
                                     // primary lookup `traces.find(|t|
@@ -6242,19 +6262,30 @@ impl Vm {
                     traces
                         .iter()
                         .find(|t| {
-                            t.head_pc == pc
-                                && (t.dispatchable
-                                    // v2.0 Track-R R3c — admit
-                                    // `downrec_link`-bearing traces
-                                    // even when `dispatchable=false`
-                                    // (R3b's pin per task spec; R3d
-                                    // will lift `dispatchable=true`
-                                    // after R3c proves the consumer
-                                    // works). The one-shot block
-                                    // above prevents infinite re-
-                                    // admit after a force-deopt.
-                                    || (t.downrec_link.is_some()
-                                        && !downrec_admit_blocked))
+                            if t.head_pc != pc {
+                                return false;
+                            }
+                            let is_downrec = t.downrec_link.is_some();
+                            // v2.0 Track-R R3c — the one-shot suppress
+                            // flag blocks any admit (primary or fallback)
+                            // for `downrec_link`-bearing traces so the
+                            // next interp iter can run the natural op
+                            // at `head_pc` and advance past it. R3d's
+                            // `dispatchable=true` lift means the suppress
+                            // must also cover the primary `t.dispatchable`
+                            // arm — otherwise the lifted lookup would
+                            // immediately re-admit after a force-deopt
+                            // and the infinite loop returns.
+                            if is_downrec && downrec_admit_blocked {
+                                return false;
+                            }
+                            // Primary arm: `dispatchable=true` traces
+                            // (R3d-lifted DownRec or normal traces).
+                            // Fallback arm: R3c-shape `dispatchable=false`
+                            // DownRec traces (single-CMP guard kept
+                            // pinned because the 90% miss-rate would
+                            // make blind admit perf-negative).
+                            t.dispatchable || is_downrec
                         })
                         .cloned()
                 }
@@ -6296,7 +6327,15 @@ impl Vm {
                 // normal register window so R3b's lowerer guard load
                 // (`reg_state[window_size]`) compares the runtime
                 // saved caller PC against the recorded `dr_return_pc`.
-                let is_downrec_entry = ct.downrec_link.is_some() && !ct.dispatchable;
+                //
+                // v2.0 Track-R R3d — drop the `!ct.dispatchable`
+                // gate. After R3d lifts `dispatchable = true` for
+                // multi-way guards, the trace's body still emits the
+                // R3b/R3d sentinel shape on return — the saved-PC slot
+                // and post-invoke classifier must keep firing.
+                // `downrec_link.is_some()` is the unique structural
+                // signal that the trace closes via DownRec.
+                let is_downrec_entry = ct.downrec_link.is_some();
                 let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
                 reg_state.clear();
                 // v2.0 Track-R R3c — when admitting a downrec trace,
