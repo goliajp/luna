@@ -88,6 +88,15 @@ impl RegKind {
 // who depend on luna-core alone never link Cranelift.
 pub mod trace;
 
+// v2.0 Track J sub-step J-A — `Send` wrapper newtype for
+// `cranelift_jit::JITModule`. Pre-positioned for J-B's field
+// migration of `JIT_CACHE` / `JIT_CACHE_HANDLES` /
+// `TRACE_JIT_HANDLES` from `thread_local!` onto `Vm.VmJitStorage`.
+// Scoped `pub(crate)` — no embedder surface.
+mod send_jit_module;
+#[allow(unused_imports)] // J-B will consume; J-A wires the wrapper only.
+pub use send_jit_module::SendJitModule;
+
 // v1.1 A1 Session C — inline `#[cfg(test)] mod xx { ... }` blocks
 // throughout this file call `crate::jit_backend::test_vm_new(version)` / `crate::jit_backend::test_vm_new_minimal(version)`
 // and historically expected the Cranelift backend to be installed
