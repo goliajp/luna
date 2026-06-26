@@ -305,6 +305,21 @@ pub fn enter_jit(
     scoped_rebind::scoped_jit_vm_rebind(vm, cl)
 }
 
+/// v2.0 Track J sub-step J-D — test-only inspector of the active
+/// `(JIT_VM, JIT_CL)` TLS pointers. Used by the J-D regression test
+/// (`tests/j_d_scoped_rebind_and_sleeve.rs`) to assert RAII install +
+/// restore semantics across nested [`enter_jit`] calls. Not part of
+/// the embedder API.
+#[doc(hidden)]
+pub fn __j_d_tls_ptrs() -> (
+    *mut luna_core::vm::Vm,
+    *const luna_core::runtime::LuaClosure,
+) {
+    let vm = JIT_VM.with(|c| c.get());
+    let cl = JIT_CL.with(|c| c.get());
+    (vm, cl)
+}
+
 /// P11-S5c — read the active Vm pointer. SAFETY: the caller (always
 /// a Rust helper invoked from inside JIT'd code) must be running
 /// under an active [`enter_jit`] guard.
@@ -5001,6 +5016,19 @@ impl JitHandle {
     #[inline]
     pub fn entry_raw(&self) -> *const u8 {
         self.entry_raw
+    }
+
+    /// v2.0 Track J sub-step J-D — `#[doc(hidden)]` accessor returning
+    /// the parked `_module` borrowed at the `SendJitModule` newtype.
+    /// Lets the J-D regression test
+    /// (`tests/j_d_scoped_rebind_and_sleeve.rs`) statically assert the
+    /// field type is the J-A sleeve. The borrow checker enforces the
+    /// type match at this fn's signature — if `_module` ever degrades
+    /// to bare `JITModule` again, this signature stops compiling.
+    #[doc(hidden)]
+    #[inline]
+    pub fn __j_d_module(&self) -> &SendJitModule {
+        &self._module
     }
 
     /// Number of i64 args the entry expects (0..=MAX_JIT_ARITY).
