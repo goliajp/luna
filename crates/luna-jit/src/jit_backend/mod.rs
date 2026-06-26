@@ -1623,7 +1623,11 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
 
     let ptr = module.get_finalized_function(fn_id);
     Some(JitHandle {
-        _module: module,
+        // v2.0 Track J sub-step J-D — wrap with the `SendJitModule`
+        // sleeve. SAFETY criterion (default `SystemMemoryProvider`) is
+        // satisfied by `build_jit_module_with_helpers` which never
+        // calls `JITBuilder::memory_provider`; see send_jit_module.rs.
+        _module: SendJitModule::new(module),
         entry_raw: ptr,
         num_args: meta.num_args,
         returns_one: meta.returns_one,
@@ -4916,8 +4920,19 @@ fn jmp_target(pc: usize, inst: Inst) -> usize {
 
 /// Owns the JIT module + holds the entry fn ptr alive for the
 /// lifetime of the executable mmap. Drop deallocates the mmap.
+///
+/// v2.0 Track J sub-step J-D — `_module` is typed as
+/// [`SendJitModule`] (J-A's sleeve newtype) so the module's
+/// `Send` story stays type-system-asserted at this field. The
+/// wrapper is a `#[repr(Rust)]` newtype with `Deref<Target = JITModule>`
+/// + `DerefMut`, so existing call sites that touched
+/// `handle._module.<method>` keep working transparently. The wrapper
+/// also gates `Send` for any future container that wants to hold a
+/// `JitHandle`; today the handle itself stays `!Send` because
+/// `entry_raw: *const u8` is `!Send`, but the module sleeve is the
+/// J-A/J-E join point.
 pub struct JitHandle {
-    _module: JITModule,
+    _module: SendJitModule,
     entry_raw: *const u8,
     /// Number of i64 args the entry expects (0..=MAX_JIT_ARITY).
     /// Picks the right `extern "C"` fn-type to transmute to at the
