@@ -2502,6 +2502,19 @@ pub struct TraceHandle {
 // the manual `unsafe impl Send for TraceHandle` therefore stays
 // load-bearing for the outer struct, but the J-A wrapper localizes
 // the JITModule-side soundness reasoning to one place.
+//
+// v2.0 Track J sub-step J-E (audit): `_entry_raw` addresses mcode
+// in `_module`'s mmap'd page. Because `_module` ships with the
+// handle (the handle owns it by-value as a `SendJitModule`), the
+// pointer remains dereferenceable on whichever OS thread the
+// handle lands on after a Vm move. The pointer is read-only on
+// the dispatch hot path (transmuted to an `extern "C"` fn and
+// called); no aliasing concerns. Per-dispatch `JIT_VM` / `JIT_CL`
+// TLS slots are scoped via J-D's `scoped_jit_vm_rebind` RAII so
+// any thread that calls into the dispatcher re-arms its own slot.
+// Mirror impl: `unsafe impl Send for JitHandle` at
+// `jit_backend/mod.rs` just after the `JitHandle` struct.
+//
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
