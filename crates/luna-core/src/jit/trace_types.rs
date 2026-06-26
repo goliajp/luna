@@ -727,6 +727,27 @@ pub struct CompiledTrace {
     /// has `downrec_link == Some(_)` after the R3a recorder pushes
     /// the threshold-tripping retfs.
     pub downrec_link: Option<(u32, u32)>,
+    // v2.0 Track-R R3d — GC trace mcode lifetime invariant for the
+    // multi-way stitch path. The lowerer's R3d arm bakes
+    // `dr_return_pc` + each retf's `caller_pc` into the IR as plain
+    // `iconst(I64, _)` constants — none of these reach the runtime as
+    // a pointer dereference. The stitch HIT path returns the DOWNREC
+    // sentinel (a constant `u64`) and the deopt path stores back the
+    // caller window + returns via the GLOBAL sentinel; neither path
+    // dereferences any external trace's mcode. R3d's `downrec_link =
+    // Some((0, head_pc))` is a `(u32, u32)` pair, `Copy`. No
+    // `Box<Cell<*const u8>>` (the InlineSideExit / TAG / GLOBAL slot
+    // shape that R3.2+'s tail-call-into-target work will introduce)
+    // is added here.
+    //
+    // Consequence: this trace's mcode lifetime is governed solely by
+    // its own `Rc<CompiledTrace>` strong-count (held by `proto.traces`
+    // for as long as the proto lives). R3d introduces no cross-trace
+    // mcode dependency, so R3 prep §7.3 ("Child trace fn-ptr stale
+    // after parent recompile") doesn't apply to the R3d shape — the
+    // hazard surfaces only when the R3.2+ tail-call-into-target work
+    // wires `Rc<CompiledTrace>` / `Weak<CompiledTrace>` into
+    // `parent_ct.side_trace_cache` for the stitch target.
     /// v2.0 Track-R R3d — number of distinct caller_pc candidates the
     /// lowerer baked into the multi-way guard at the
     /// `TraceEnd::DownRec` close. `0` for every trace that doesn't
