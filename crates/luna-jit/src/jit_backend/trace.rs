@@ -3301,16 +3301,21 @@ pub fn try_compile_trace_with_options(
     // now per-`Vm` field on storage.
     let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
     compiled.entry = entry_fn;
-    crate::jit_backend::storage::from_storage(storage)
-        .trace_handles
-        .push(TraceHandle {
-            // v2.0 Track J sub-step J-D — wrap in `SendJitModule`
-            // sleeve. SAFETY: `build_trace_jit_module` uses the
-            // default `SystemMemoryProvider` path (no
-            // `JITBuilder::memory_provider` call).
-            _module: super::SendJitModule::new(module),
-            _entry_raw: ptr,
-        });
+    // v2.0 J-B follow-up — `from_storage` is `Result`-shaped now. On
+    // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
+    // skip parking the handle and return `None` — the freshly built
+    // `module` drops here and releases its mmap pages; the trace
+    // recorder sees `None` and gives up on this trace, falling back
+    // to interp dispatch. No SIGABRT across the C-ABI boundary.
+    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
+    cs.trace_handles.push(TraceHandle {
+        // v2.0 Track J sub-step J-D — wrap in `SendJitModule`
+        // sleeve. SAFETY: `build_trace_jit_module` uses the
+        // default `SystemMemoryProvider` path (no
+        // `JITBuilder::memory_provider` call).
+        _module: super::SendJitModule::new(module),
+        _entry_raw: ptr,
+    });
     Some(compiled)
 }
 

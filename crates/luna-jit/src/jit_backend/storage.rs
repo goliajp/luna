@@ -53,19 +53,42 @@ impl JitStorage for CraneliftJitStorage {
     }
 }
 
-/// Downcast helper. Panics if the Vm's storage isn't a
-/// `CraneliftJitStorage` — that means `install_jit_backend` was
-/// called with `CraneliftBackend` but `install_jit_storage` was not
-/// called with `CraneliftJitStorage`, an internal invariant
-/// violation that should be caught at install time.
+/// Error returned by [`from_storage`] when the `Vm.jit.storage` slot
+/// holds a [`JitStorage`] impl other than [`CraneliftJitStorage`].
+///
+/// v2.0 J-B follow-up — the original `from_storage` did an `expect`
+/// panic on mismatch. When the JIT compile path runs under a C-ABI
+/// callback (any of the `luaL_*` / `lua_*` entrypoints in
+/// [`crate::capi`]), a Rust panic across the `extern "C"` boundary
+/// triggers `fatal runtime error: failed to initiate panic` and
+/// aborts the process with SIGABRT — panic-into-`extern "C"` is UB
+/// and the runtime aborts rather than unwind.
+///
+/// Converting to `Result` lets callers (the four `from_storage` call
+/// sites in [`crate::jit_backend`] and [`crate::jit_backend::trace`])
+/// observe the mismatch and degrade to "no JIT" (`CompileResult::Skipped`
+/// / `None`), which the dispatcher already handles as the normal
+/// "this Proto stays on interp" path. The C-ABI boundary therefore
+/// completes the call via interp instead of aborting.
+///
+/// This is graceful-degradation, not a silent error: the underlying
+/// misconfig is `install_jit_backend(Cranelift, Cranelift)` without
+/// the paired `install_jit_storage(CraneliftJitStorage)`. The
+/// `crate::install_default_jit` shim installs both halves atomically
+/// and is the recommended entrypoint; `luaL_newstate` was updated to
+/// use it. Hand-rolled embedders that install only one half observe
+/// "JIT silently disabled" rather than process abort.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StorageMismatch;
+
+/// Downcast helper. Returns `Err(StorageMismatch)` if the Vm's storage
+/// isn't a `CraneliftJitStorage` — see [`StorageMismatch`] for why.
 #[inline]
-pub(crate) fn from_storage(storage: &mut dyn JitStorage) -> &mut CraneliftJitStorage {
+pub(crate) fn from_storage(
+    storage: &mut dyn JitStorage,
+) -> Result<&mut CraneliftJitStorage, StorageMismatch> {
     storage
         .as_any_mut()
         .downcast_mut::<CraneliftJitStorage>()
-        .expect(
-            "Vm.jit.storage is not CraneliftJitStorage — \
-             install_default_jit (or install_jit_storage \
-             with CraneliftJitStorage) was not called",
-        )
+        .ok_or(StorageMismatch)
 }
