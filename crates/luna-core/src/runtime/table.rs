@@ -1388,6 +1388,35 @@ impl Table {
             None => Value::Nil,
         }
     }
+
+    /// C3 — Tombstone deletion. Marks the live slot for `k` as
+    /// tombstoned, preserving the slot index (no backward shift).
+    /// Slot-index stability is the PUC `next()` iteration invariant
+    /// — `nextvar.lua:520-521` requires that deleting prior keys
+    /// during a `pairs` traversal does NOT move unvisited keys.
+    /// Backward-shift deletion would violate this; tombstones are
+    /// the standard Robin Hood resolution (see RFC §4.5 + §5.1).
+    ///
+    /// keys[idx] / vals[idx] are reset to Nil so the GC marker is
+    /// not held to the previous entries — only the tombstone bit
+    /// distinguishes "occupied tombstone" from "free empty".
+    ///
+    /// Returns true if the key was found and deleted, false if absent.
+    ///
+    /// Phase D: not yet hooked into public `set(k, Nil)` — wired in
+    /// Phase E alongside the `next()` migration.
+    pub(crate) fn soa_delete(&mut self, k: Value) -> bool {
+        if let Some(idx) = self.soa_find_slot(k) {
+            let psl = meta_bits::psl(self.meta[idx]);
+            self.meta[idx] = meta_bits::pack(psl, true);
+            self.keys[idx] = Value::Nil;
+            self.vals[idx] = Value::Nil;
+            self.tombstones = self.tombstones.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 fn normalize_set_key(key: Value) -> Result<Value, TableError> {
@@ -1751,6 +1780,75 @@ mod tests {
         for k in [kstr, kint, kbool] {
             assert!(chain.get(k).raw_eq(soa.soa_get(k)));
         }
+    }
+
+    #[test]
+    fn c3_soa_equivalence_delete_then_read() {
+        // Phase D: tombstone delete + read on both paths, verify
+        // matching nil-for-deleted, original-val-for-live.
+        let mut heap = Heap::new();
+        let mut ops_insert = Vec::new();
+        for i in 0..30 {
+            let k = Value::Str(heap.intern(format!("d_key_{i:03}").as_bytes()));
+            ops_insert.push((k, Value::Int(i * 11)));
+        }
+        let chain = unsafe { &mut *replay_chain(&mut heap, &ops_insert) };
+        let soa = unsafe { &mut *replay_soa(&mut heap, &ops_insert) };
+        // Delete every 3rd key.
+        let mut deleted: Vec<Value> = Vec::new();
+        for (i, (k, _)) in ops_insert.iter().enumerate() {
+            if i % 3 == 0 {
+                // chain: set to Nil is the chain-path's delete equivalent
+                chain.set(&mut heap, *k, Value::Nil).unwrap();
+                let was_present = soa.soa_delete(*k);
+                assert!(was_present, "soa_delete miss on inserted key {:?}", k);
+                deleted.push(*k);
+            }
+        }
+        // Read each key: deleted → nil, non-deleted → original val.
+        for (k, v) in &ops_insert {
+            let cv = chain.get(*k);
+            let sv = soa.soa_get(*k);
+            assert!(
+                cv.raw_eq(sv),
+                "delete/read mismatch on key {:?} — chain={:?} soa={:?}",
+                k,
+                cv,
+                sv,
+            );
+            if deleted.iter().any(|d| d.raw_eq(*k)) {
+                assert!(cv.is_nil(), "deleted key {:?} chain non-nil", k);
+                assert!(sv.is_nil(), "deleted key {:?} soa non-nil", k);
+            } else {
+                assert!(cv.raw_eq(*v), "live key {:?} chain val drift", k);
+            }
+        }
+        // Deleting an absent key is a no-op (returns false) on SoA.
+        let absent = Value::Str(heap.intern(b"never_d"));
+        assert!(!soa.soa_delete(absent));
+    }
+
+    #[test]
+    fn c3_soa_delete_then_reinsert_uses_tombstone() {
+        // After delete + reinsert, key is findable with new val. The
+        // SoA path may reuse the tombstoned slot (preferred) or place
+        // elsewhere — either is correct as long as soa_get returns
+        // the new val.
+        let mut heap = Heap::new();
+        let t = heap.new_table();
+        let tref = unsafe { t.as_mut() };
+        let k = Value::Str(heap.intern(b"reinsert_target"));
+        tref.soa_insert(&mut heap, k, Value::Int(100)).unwrap();
+        assert!(tref.soa_get(k).raw_eq(Value::Int(100)));
+        let pre_tombs = tref.tombstones;
+        assert!(tref.soa_delete(k));
+        assert!(tref.tombstones == pre_tombs + 1);
+        assert!(tref.soa_get(k).is_nil());
+        // Reinsert with new val.
+        tref.soa_insert(&mut heap, k, Value::Int(200)).unwrap();
+        assert!(tref.soa_get(k).raw_eq(Value::Int(200)));
+        // Tombstone reused — count back to pre_tombs.
+        assert_eq!(tref.tombstones, pre_tombs);
     }
 
     #[test]
