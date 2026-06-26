@@ -166,6 +166,40 @@ pub struct JitCounters {
     /// P13-S13-H — every closed trace's `(is_call_triggered, ops_len)`.
     /// (Was `Vm::trace_closed_lens`.)
     pub closed_lens: Vec<(bool, usize)>,
+    /// v2.0 Track-R R2 — close-cause hygiene. Single per-reason bucket
+    /// that covers BOTH recorder-side abort/discard outcomes AND
+    /// lowerer-side dispatch_off (`dispatchable=false` post-compile)
+    /// outcomes. Pre-R2 the close-cause taxonomy was split across
+    /// `aborted` (u64, no reason label), `closed_lens` (mixes real
+    /// closes and partial-coverage discards), and
+    /// `dispatch_off_reasons` (Vec ordered append, O(N) to count by
+    /// reason). R2 lifts the four known recorder/lowerer close sites
+    /// into this single HashMap via `bump_close_cause` so probes can
+    /// answer "how many of each reason fired" in O(1).
+    ///
+    /// Labels currently bumped (see `bump_close_cause` callers):
+    /// - `"trace-overflow"` (recorder MAX_TRACE_LEN overflow)
+    /// - `"partial-coverage-discard"` (recorder S13-I cap-not-reached discard)
+    /// - `"self-link-retf-r1"` (lowerer SelfLink-R1 dispatchable=false)
+    /// - `"length-gate"` / `"InlineAbort-gate"` / `"GetI:inference-fail"`
+    ///   / `"GetTable:inference-fail"` / `"GetField:inference-fail"`
+    ///   / `"GetTabUp:inference-fail"` / `"GetUpval:not-Closure-use"`
+    ///   (every lowerer-side dispatch_off label that already exists
+    ///   on `CompiledTrace.dispatch_off_reason`)
+    pub close_cause_counts: std::collections::HashMap<&'static str, u64>,
+}
+
+impl JitCounters {
+    /// v2.0 Track-R R2 — bump the close-cause bucket for `reason`.
+    /// Mirrors the existing per-site pattern (`aborted += 1`,
+    /// `dispatch_off_reasons.push(reason)`) but with O(1) per-reason
+    /// access via a `HashMap`. Single source of truth for the
+    /// close-cause taxonomy probe surface
+    /// (`Vm::trace_close_cause_counts`).
+    #[inline]
+    pub fn bump_close_cause(&mut self, reason: &'static str) {
+        *self.close_cause_counts.entry(reason).or_insert(0) += 1;
+    }
 }
 
 impl JitState {
