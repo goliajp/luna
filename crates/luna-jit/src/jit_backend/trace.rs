@@ -3668,9 +3668,37 @@ pub fn lower_trace_into_named<M: Module>(
     // R3a only adds the variant + picker arm — the tail emit below
     // still falls through to the R1 safe `dispatchable=false` path
     // (the `self_link_idx_opt` arm) for now. R3b lifts that.
+    //
+    // R3b — effective_end for DownRec is the index of the natural
+    // terminator (depth-0 Return/Call/ForLoop) so the body emit's
+    // whitelist gate doesn't bail on the final op. R3a's effective_
+    // end = `record.ops.len()` walked the natural close op as a body
+    // op, which fails the `is_whitelisted_step5` check (Op::Return at
+    // depth 0 is end-shape, not body) and aborted compile before the
+    // DownRec tail arm could fire. R3b scans for the first natural
+    // terminator and uses that idx (mirrors TraceEnd::Return / Call's
+    // picker shape). Falls back to `record.ops.len()` only when no
+    // natural terminator is present (R3a behaviour).
     let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
+        let mut natural_end = record.ops.len();
+        for (i, r) in record.ops.iter().enumerate() {
+            if folded_ops[i] {
+                continue;
+            }
+            let depth = r.inline_depth as usize;
+            if depth != 0 {
+                continue;
+            }
+            match r.inst.op() {
+                Op::Call | Op::ForLoop | Op::TForLoop | Op::Return0 | Op::Return1 => {
+                    natural_end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
         Some((
-            record.ops.len(),
+            natural_end,
             TraceEnd::DownRec {
                 return_pc: dr.return_pc,
                 target_proto_id: dr.target_proto.as_ptr() as usize,
@@ -7126,25 +7154,92 @@ pub fn lower_trace_into_named<M: Module>(
     // [max_stack..window_size) are inline-frame scratch and must not
     // leak into the dispatcher's reg_state restore.
     let caller_regs: &[Variable] = &regs_full[..max_stack];
+    // v2.0 Track-R R3b — populated by the `downrec_idx_opt` arm when
+    // it emits the stitch sentinel. Flows into `CompiledTrace.
+    // downrec_link` at the struct literal below. `None` for every
+    // other close shape.
+    let mut downrec_link_for_compiled: Option<(u32, u32)> = None;
     if let Some((_dr_idx, dr_return_pc, _target_proto_id, _depth_delta)) = downrec_idx_opt {
-        // v2.0 Track-R R3a — `TraceEnd::DownRec` close. R3a falls
-        // through to R1's safe deopt-tail (store back caller window,
-        // return head_pc through GLOBAL sentinel, pin
-        // `dispatchable=false`). R3b lifts to a real native
-        // back-edge by replacing this arm with a retf-guard +
-        // stitch sentinel:
-        //   1. Load `[base-8]` (saved caller PC).
+        // v2.0 Track-R R3b — `TraceEnd::DownRec` close: emit the
+        // stitch-sentinel + caller-pc-guard scaffold.
+        //
+        // Shape mirrors LuaJIT's `asm_retf` (`lj_asm_arm64.h:565`):
+        //   1. Load saved caller PC stand-in.
         //   2. CMP against IR-baked `dr_return_pc`.
-        //   3. brif eq → BASE adjust + tail-call into child trace
-        //      via `encode_side_sentinel(SIDE_SENT_KIND_DOWNREC,
-        //      parent_traceno)`.
-        //   4. brif ne → fall through to this deopt path.
-        // Today step 4 IS the whole arm — `dr_return_pc` is recorded
-        // but not yet consumed (kept here for R3b's IR emit).
-        // `_target_proto_id` and `_depth_delta` mirror the same
-        // R3b/R3c-only consumption surface; touched as a no-op so
-        // rustc treats them as live without flagging dead fields.
-        let _ = dr_return_pc;
+        //   3. brif eq → stitch_blk: return DOWNREC sentinel +
+        //      `record.head_pc` so the dispatcher (R3c) can walk
+        //      `downrec_link` + RetfRecord chain to materialise the
+        //      inlined frame and tail-call into the stitched child
+        //      trace.
+        //   4. brif ne → deopt_blk: R1's safe deopt-tail — store
+        //      back caller window + return `head_pc` through the
+        //      GLOBAL sentinel; the dispatcher resumes interp at
+        //      head_pc with the trace's `dispatchable = false` gate
+        //      blocking re-entry.
+        //
+        // Why the guard's load operand is `iconst(0)` today (NOT a
+        // real `[reg_state + reserved_slot * 8]` load): luna's
+        // trace ABI is `fn(reg_state: *mut i64) -> i64` — there is
+        // no slot in the current `reg_state` buffer that the
+        // dispatcher populates with the runtime saved caller PC.
+        // Wiring that slot is R3c's job (it must touch the
+        // dispatcher pre-trace-invoke path in `exec.rs` to write the
+        // saved PC into a reserved position). Until then, the
+        // immediate `iconst(0)` makes the guard's runtime
+        // comparison `0 == dr_return_pc`; cranelift constant-folds
+        // this to "always false" at codegen time (`dr_return_pc !=
+        // 0` for every valid recording — Op::Return's PC is past
+        // the prologue), so the emitted machine code unconditionally
+        // jumps to `deopt_blk`. Net behaviour identical to R3a's
+        // safe fall-through; both R3b's `downrec_link = Some(_)`
+        // scaffold AND the safe deopt land in this commit, ready
+        // for R3c to swap the `iconst(0)` for a real saved-PC load
+        // once the dispatcher exposes the slot.
+        //
+        // `_target_proto_id` / `_depth_delta` consumed in IR by R3c
+        // (target_proto_id becomes the helper-call argument that
+        // walks `parent_ct.downrec_close.target_proto`; depth_delta
+        // tunes how many CallFrames to push). R3b leaves them
+        // touched as `let _ = ...` to keep rustc seeing the fields
+        // as live for the next sub-step's hookup.
+        debug_assert!(
+            dr_return_pc != 0,
+            "DownRec recorder should never trip on a PC=0 Op::Return — Op::Return's PC is past the prologue"
+        );
+        let _ = _target_proto_id;
+        let _ = _depth_delta;
+
+        let stitch_blk = bcx.create_block();
+        let deopt_blk = bcx.create_block();
+
+        // Guard: caller-pc match. `iconst(0)` is the R3c-replace
+        // sentinel; once R3c wires the dispatcher slot the load
+        // becomes `bcx.ins().load(I64, MemFlags::trusted(), reg_state,
+        // <reserved_slot_offset>)`.
+        let saved_pc = bcx.ins().iconst(types::I64, 0);
+        let imm_pc = bcx.ins().iconst(types::I64, dr_return_pc as i64);
+        let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
+        bcx.ins().brif(eq, stitch_blk, &[], deopt_blk, &[]);
+
+        // Hit: return DOWNREC sentinel + `record.head_pc` as the
+        // low 32 bits. The full encoded value is
+        //   raw_ret = (1u64 << 63)             // side-trace marker
+        //           | ((DOWNREC_CODE as u64) << 56)
+        //           | (record.head_pc as u64)
+        // (bit 63 set so the dispatcher's `from_side_trace` branch
+        // at `exec.rs:6354+` decodes through the sentinel switch).
+        // R3c's stitch arm reads `parent_ct.downrec_link` for the
+        // stitch target rather than looking up via `side_trace_cache`.
+        bcx.switch_to_block(stitch_blk);
+        bcx.seal_block(stitch_blk);
+        let raw_ret =
+            (1u64 << 63) | ((SIDE_SENT_DOWNREC_CODE as u64) << 56) | (record.head_pc as u64);
+        let stitch_ret = bcx.ins().iconst(types::I64, raw_ret as i64);
+        bcx.ins().return_(&[stitch_ret]);
+
+        // Miss: R1's safe deopt-tail (identical to R3a's emit).
+        bcx.switch_to_block(deopt_blk);
+        bcx.seal_block(deopt_blk);
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
@@ -7155,8 +7250,22 @@ pub fn lower_trace_into_named<M: Module>(
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
+
+        // R3b populates downrec_link with the placeholder
+        // (trace_id=0, target_head_pc=record.head_pc). The
+        // `trace_id=0` sentinel means "self-stitch — target is the
+        // trace currently dispatching"; R3c interprets this when
+        // resolving the stitch target.
+        downrec_link_for_compiled = Some((0, record.head_pc));
+
+        // R3b deliberately keeps dispatchable=false. R3d will lift
+        // it after R3c wires the dispatcher consumer. The
+        // dispatch_off_reason label upgrades from R1's
+        // "self-link-retf-r1" to R3b's "downrec-stitch-pending" so
+        // a probe / Vm::trace_dispatch_off_reason_counts() can
+        // distinguish R1 fallbacks from R3b's scaffold-stage close.
         dispatchable = false;
-        dispatch_off_reason = dispatch_off_reason.or(Some("self-link-retf-r1"));
+        dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
     } else if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
         // v2.0 Track-R R1 — RETF-guards correctness primitive replaces
         // the previous P16-B snapshot-restore tail.
@@ -7725,6 +7834,13 @@ pub fn lower_trace_into_named<M: Module>(
         // gate. Uses op_offsets (already computed above) to apply
         // inline-depth offsets per op.
         body_writes: compute_body_writes(record, &op_offsets).into(),
+        // v2.0 Track-R R3b — populated by the `downrec_idx_opt` arm
+        // above into `downrec_link_for_compiled`. When the arm
+        // emitted a stitch sentinel + caller-pc guard, this carries
+        // `Some((0, head_pc))`; otherwise `None`. R3b deliberately
+        // keeps `dispatchable = false` even when `Some(_)` — R3d
+        // will lift it after R3c wires the dispatcher consumer.
+        downrec_link: downrec_link_for_compiled,
     };
     Some((fn_id, compiled))
 }
