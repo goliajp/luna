@@ -1024,6 +1024,25 @@ impl Vm {
         self.jit.trace_compiler = Box::new(trace);
     }
 
+    /// v2.0 Track J sub-step J-B — install a caller-supplied JIT
+    /// storage holder. Default is [`crate::jit::NullJitStorage`];
+    /// the `luna_jit` crate's `install_default_jit` pairs this with
+    /// `install_jit_backend(CraneliftBackend, CraneliftBackend)` to
+    /// also install a fresh `CraneliftJitStorage`. Storage holds
+    /// the per-`Vm` JIT cache + handle collections that used to be
+    /// `thread_local!`s in `luna_jit::jit_backend`.
+    ///
+    /// Idempotency: re-installing storage on a Vm that already
+    /// holds compiled-trace pointers WILL evict their owners (the
+    /// old `CraneliftJitStorage`'s `JITModule`s drop their mmap
+    /// pages). Call right after construction for a clean swap.
+    pub fn install_jit_storage<S>(&mut self, storage: S)
+    where
+        S: crate::jit::JitStorage + 'static,
+    {
+        self.jit.storage = Box::new(storage);
+    }
+
     /// v1.1 A1 Session A — install the no-op JIT backend. `try_compile`
     /// reports "skipped" so every closure stays on the interpreter
     /// path, and the trace recorder's compile attempt always returns
@@ -1478,10 +1497,14 @@ impl Vm {
         // are Float). The JIT's `GetUpval` ValueRead path uses this
         // to default-pin upvalue reads to Float without a tag check.
         let float_only = version <= crate::version::LuaVersion::Lua52;
-        match self
-            .jit
+        // v2.0 Track J sub-step J-B — split-borrow JitState so the
+        // trait method can take `&mut dyn JitStorage` without
+        // double-borrowing self.jit.
+        let jit = &mut self.jit;
+        let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
+        match jit
             .chunk_compiler
-            .try_compile(proto, pre53, float_only)
+            .try_compile(storage, proto, pre53, float_only)
         {
             crate::jit::CompileResult::Compiled {
                 entry,
@@ -5831,11 +5854,15 @@ impl Vm {
                                 aot: false,
                             };
                             // v1.1 A1 Session A — route through trace_compiler.
-                            match self
-                                .jit
-                                .trace_compiler
-                                .try_compile_trace(&closed_record, opts)
-                            {
+                            // v2.0 Track J sub-step J-B — split-borrow JitState
+                            // so the trait method can take `&mut dyn JitStorage`.
+                            let result = {
+                                let jit = &mut self.jit;
+                                let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
+                                jit.trace_compiler
+                                    .try_compile_trace(storage, &closed_record, opts)
+                            };
+                            match result {
                                 Some(mut ct) => {
                                     // P12-S5-A/B/C — tally Sinkable sites
                                     // + actually-sunk-emit sites + materialise

@@ -126,6 +126,16 @@ pub struct JitState {
     /// The `dispatchable=true` admit path is untouched by this
     /// flag — only the R3c-added downrec admit gate respects it.
     pub suppress_downrec_admit_once: bool,
+
+    /// v2.0 Track J sub-step J-B — per-`Vm` JIT storage holder.
+    /// Default is [`crate::jit::NullJitStorage`]; the `luna_jit`
+    /// crate's `install_default_jit` swaps in a
+    /// `CraneliftJitStorage` carrying the cache + compiled-handle
+    /// collections that used to live in `thread_local!`s on
+    /// `luna_jit::jit_backend::{mod,trace}`. Accessed via downcast
+    /// from the `CraneliftBackend` trait impls. See
+    /// `.dev/rfcs/v2.0-track-j-b-design.md`.
+    pub storage: Box<dyn crate::jit::JitStorage>,
 }
 
 impl JitState {
@@ -324,6 +334,7 @@ impl JitState {
             trace_compiler: Box::new(crate::jit::NullJitBackend),
             stitch_depth_remaining: JitState::STITCH_DEPTH_DEFAULT,
             suppress_downrec_admit_once: false,
+            storage: Box::new(crate::jit::NullJitStorage),
         }
     }
 }

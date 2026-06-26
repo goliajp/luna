@@ -1701,8 +1701,11 @@ thread_local! {
 }
 
 impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
+    // v2.0 Track J sub-step J-B — `storage` passthrough; the inner
+    // CraneliftBackend ignores it today (Phase F will consume).
     fn try_compile_trace(
         &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
@@ -1714,7 +1717,7 @@ impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
             cell.borrow_mut()
                 .push((hash, record.head_pc, record.clone()));
         });
-        self.inner.try_compile_trace(record, opts)
+        self.inner.try_compile_trace(storage, record, opts)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {

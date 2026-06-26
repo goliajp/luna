@@ -68,12 +68,11 @@ pub mod jit {
         CraneliftBackend, cache_lookup_or_compile, enter_jit, try_compile_int_chunk,
     };
     pub use luna_core::jit::*;
-    // `cache_clear` + `cache_entry_count` are #[cfg(test)] in the
-    // jit_backend, so they aren't re-exportable here (they don't
-    // exist in non-test builds). Tests reach them via
-    // `luna_jit::jit::cache_clear` only when both crates compile under
-    // `--test`, which luna's test binaries do today.
-    #[cfg(test)]
+    // v2.0 Track J sub-step J-B — `cache_clear` + `cache_entry_count`
+    // are no longer `#[cfg(test)]` (the per-Vm storage migration made
+    // them harmless probes). Re-exported unconditionally so the J-B
+    // integration test + any embedder can probe a Vm's JIT cache size
+    // / reset it without a downcast.
     pub use crate::jit_backend::{cache_clear, cache_entry_count};
 
     /// v2.0 Track J sub-step J-A — `Send` wrapper newtype for
@@ -128,6 +127,11 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// trait below restores the dotted-method form.
 pub fn install_default_jit(vm: &mut vm::Vm) {
     vm.install_jit_backend(jit_backend::CraneliftBackend, jit_backend::CraneliftBackend);
+    // v2.0 Track J sub-step J-B — pair the CraneliftBackend trait
+    // impls with a fresh CraneliftJitStorage so the trait impls'
+    // `_storage` param downcasts to the right concrete type once
+    // Phases D/E/F start using it.
+    vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::default());
 }
 
 /// Extension trait that exposes the JIT-installing constructors and

@@ -97,6 +97,12 @@ mod send_jit_module;
 #[allow(unused_imports)] // J-B will consume; J-A wires the wrapper only.
 pub use send_jit_module::SendJitModule;
 
+// v2.0 Track J sub-step J-B — concrete per-`Vm` JIT storage struct
+// (cache + cache_handles + trace_handles). Installed alongside the
+// `CraneliftBackend` by `crate::install_default_jit`. luna-core sees
+// it through the opaque `JitStorage` trait only.
+pub(crate) mod storage;
+
 // v1.1 A1 Session C — inline `#[cfg(test)] mod xx { ... }` blocks
 // throughout this file call `crate::jit_backend::test_vm_new(version)` / `crate::jit_backend::test_vm_new_minimal(version)`
 // and historically expected the Cranelift backend to be installed
@@ -107,6 +113,9 @@ pub use send_jit_module::SendJitModule;
 fn test_vm_new(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
     let mut vm = luna_core::vm::Vm::new(version);
     vm.install_jit_backend(CraneliftBackend, CraneliftBackend);
+    // v2.0 Track J sub-step J-B — pair the backend install with the
+    // CraneliftJitStorage so cache lookups can downcast.
+    vm.install_jit_storage(storage::CraneliftJitStorage::default());
     vm
 }
 #[cfg(test)]
@@ -114,6 +123,7 @@ fn test_vm_new(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
 fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
     let mut vm = luna_core::vm::Vm::new_minimal(version);
     vm.install_jit_backend(CraneliftBackend, CraneliftBackend);
+    vm.install_jit_storage(storage::CraneliftJitStorage::default());
     vm
 }
 
@@ -138,12 +148,16 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
 /// S5d — adds `arg_table_mask` (per-arg `Gc<Table>` indicator) and
 /// `ret_is_table` (true ↔ Return1 yields a `Gc<Table>` ptr).
 pub fn cache_lookup_or_compile(
+    storage: &mut dyn luna_core::jit::JitStorage,
     proto: luna_core::runtime::Gc<Proto>,
     pre53: bool,
     float_only: bool,
 ) -> Option<(*const u8, u8, bool, u8, u8, bool, bool)> {
     let key = proto_cache_key(&proto, pre53, float_only);
-    let cached = JIT_CACHE.with(|cell| cell.borrow().get(&key).copied());
+    // v2.0 Track J sub-step J-B Phase D — cache lookups read from the
+    // per-`Vm` `storage.cache` field instead of the `JIT_CACHE` TLS.
+    let cs = storage::from_storage(storage);
+    let cached = cs.cache.get(&key).copied();
     if let Some(hit) = cached {
         return match hit {
             CacheEntry::Failed => None,
@@ -175,11 +189,11 @@ pub fn cache_lookup_or_compile(
             let arg_table_mask = handle.arg_table_mask();
             let ret_is_float = handle.ret_is_float();
             let ret_is_table = handle.ret_is_table();
-            // Drop only the handle's bookkeeping side — the JITModule
-            // it owns is the one that holds the mmap. Keep the handle
-            // alive in the thread-local store so the entry_raw pointer
-            // stays valid for every Vm on this thread.
-            JIT_CACHE_HANDLES.with(|store| store.borrow_mut().push(handle));
+            // v2.0 Track J sub-step J-B Phase E — the JITModule the
+            // handle owns holds the mmap. Park the handle on the
+            // per-`Vm` storage so the entry_raw pointer stays valid
+            // for the lifetime of this `Vm`. Append-only.
+            storage::from_storage(storage).cache_handles.push(handle);
             CacheEntry::Compiled {
                 entry: raw,
                 num_args,
@@ -192,7 +206,7 @@ pub fn cache_lookup_or_compile(
         }
         None => CacheEntry::Failed,
     };
-    JIT_CACHE.with(|cell| cell.borrow_mut().insert(key, entry));
+    storage::from_storage(storage).cache.insert(key, entry);
     match entry {
         CacheEntry::Failed => None,
         CacheEntry::Compiled {
@@ -216,7 +230,7 @@ pub fn cache_lookup_or_compile(
 }
 
 #[derive(Clone, Copy)]
-enum CacheEntry {
+pub(crate) enum CacheEntry {
     Failed,
     Compiled {
         entry: *const u8,
@@ -230,14 +244,12 @@ enum CacheEntry {
 }
 
 thread_local! {
-    /// Compiled-fn cache, keyed by bytecode hash + ABI shape.
-    static JIT_CACHE: std::cell::RefCell<std::collections::HashMap<u64, CacheEntry>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Storage for the `JitHandle`s that own each cached fn's mmap.
-    /// Append-only — cached pointers stay valid for the thread's
-    /// lifetime.
-    static JIT_CACHE_HANDLES: std::cell::RefCell<Vec<JitHandle>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    /// v2.0 Track J sub-step J-B — `JIT_CACHE` (Phase D) and
+    /// `JIT_CACHE_HANDLES` (Phase E) both migrated to
+    /// `Vm.jit.storage.{cache,cache_handles}`. The JIT_VM / JIT_CL
+    /// per-dispatch slots below stay TLS until J-D's
+    /// `scoped_jit_vm_rebind` RAII lift.
+
     /// P11-S5c — current `Vm` pointer for Rust helpers called from
     /// JIT'd code. Set by [`enter_jit`] just before invoking the
     /// entry fn; cleared (RAII via [`JitVmGuard`]) on return. Helpers
@@ -1296,26 +1308,43 @@ pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
 }
 
 /// S4 introspection (test-only): number of *Compiled* entries in
-/// this thread's JIT cache (Failed cache slots are excluded so test
+/// the given Vm's JIT cache (Failed cache slots are excluded so test
 /// assertions over "compiled exactly once" don't drift when the
 /// outer chunk's bail also occupies a slot).
-#[cfg(test)]
-pub fn cache_entry_count() -> usize {
-    JIT_CACHE.with(|cell| {
-        cell.borrow()
-            .values()
-            .filter(|e| matches!(e, CacheEntry::Compiled { .. }))
-            .count()
-    })
+///
+/// v2.0 Track J sub-step J-B Phase D — takes `&Vm` since the cache
+/// is now per-`Vm` (was thread-local). Pre-J-B was `#[cfg(test)]` —
+/// lifted to pub so the J-B integration test (external binary, not
+/// cfg(test) from this crate's POV) can probe per-`Vm` cache size
+/// without a downcast. Harmless utility for any embedder.
+pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
+    let storage = vm.jit.storage.as_ref().as_any();
+    let cs = storage
+        .downcast_ref::<storage::CraneliftJitStorage>()
+        .expect("vm storage not CraneliftJitStorage");
+    cs.cache
+        .values()
+        .filter(|e| matches!(e, CacheEntry::Compiled { .. }))
+        .count()
 }
 
-/// S4 introspection (test-only): empty the JIT cache. Used between
-/// tests that want to measure first-compile vs cache-hit behaviour
-/// in isolation.
-#[cfg(test)]
-pub fn cache_clear() {
-    JIT_CACHE.with(|cell| cell.borrow_mut().clear());
-    JIT_CACHE_HANDLES.with(|store| store.borrow_mut().clear());
+/// S4 introspection (test-only): empty the Vm's JIT cache. Used
+/// between tests that want to measure first-compile vs cache-hit
+/// behaviour in isolation.
+///
+/// v2.0 Track J sub-step J-B Phase D — takes `&mut Vm` since the
+/// cache is now per-`Vm` (was thread-local). Pre-J-B was
+/// `#[cfg(test)]` — see [`cache_entry_count`] for the rationale.
+pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
+    let storage = vm.jit.storage.as_mut().as_any_mut();
+    if let Some(cs) = storage.downcast_mut::<storage::CraneliftJitStorage>() {
+        cs.cache.clear();
+        // v2.0 Track J sub-step J-B Phase E — also drop the cached
+        // handles. Dropping each `JitHandle`'s `JITModule` releases
+        // its mmap; tests that call `cache_clear` then re-eval can
+        // observe the fresh compile.
+        cs.cache_handles.clear();
+    }
 }
 
 /// Stable cache key. The `proto.code` bytes + `num_params` +
@@ -5169,7 +5198,6 @@ mod s2 {
 
     #[test]
     fn second_call_hits_cached_native() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm
             .load(b"local a = 5; local b = 7; return a + b", b"=t")
@@ -5179,7 +5207,7 @@ mod s2 {
         assert!(matches!(v1.first(), Some(Value::Int(12))));
         assert!(matches!(v2.first(), Some(Value::Int(12))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "one compiled Proto"
         );
@@ -5452,7 +5480,6 @@ mod s2c_b {
     fn multiple_calls_share_cache() {
         // The Proto is compiled once; the second call hits the cached
         // entry without recompiling.
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let v = vm
             .eval(
@@ -5463,7 +5490,7 @@ mod s2c_b {
         // 11 + 21 + 31 = 63
         assert!(matches!(v.first(), Some(Value::Int(63))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "Proto compiled exactly once"
         );
@@ -5549,7 +5576,6 @@ mod s2c_c {
 
     #[test]
     fn recursive_one_compile_per_proto() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let v = vm
             .eval(
@@ -5561,7 +5587,7 @@ mod s2c_c {
             .unwrap();
         assert!(matches!(v.first(), Some(Value::Int(55))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "fib's Proto compiled exactly once"
         );
@@ -5576,7 +5602,6 @@ mod s2c_c_perf_check {
 
     #[test]
     fn fib28_bench_source_flips_proto_to_compiled() {
-        crate::jit_backend::cache_clear();
         let src = "local function f(n) \
                      if n < 2 then return n end \
                      return f(n - 1) + f(n - 2) \
@@ -5586,7 +5611,7 @@ mod s2c_c_perf_check {
         let v = vm.eval(src).unwrap();
         assert!(matches!(v.first(), Some(Value::Int(317811))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "fib's Proto should compile exactly once",
         );
@@ -5733,14 +5758,13 @@ mod s3 {
     /// hash, the second proto inherited the first's compiled constant.
     #[test]
     fn cache_key_includes_consts() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let v1 = vm.eval("return 1.5").unwrap();
         assert!(matches!(v1.first(), Some(&Value::Float(f)) if f == 1.5));
         let v2 = vm.eval("return 2.5").unwrap();
         assert!(matches!(v2.first(), Some(&Value::Float(f)) if f == 2.5));
         // Two distinct compiled protos, two cache entries.
-        assert_eq!(crate::jit_backend::cache_entry_count(), 2);
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm), 2);
     }
 
     /// 5.4 Division `a / b` always yields a Float in PUC semantics.
@@ -5875,7 +5899,6 @@ mod s5a {
     #[test]
     fn cache_pre53_post53_distinct() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 100 do s = s + i end return s";
 
         let mut vm55 = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5896,8 +5919,15 @@ mod s5a {
         ));
         assert!(matches!(r53.first(), Some(&Value::Int(5050))));
 
-        // Two cache slots, not one — same source, distinct dialect.
-        assert_eq!(crate::jit_backend::cache_entry_count(), 2);
+        // v2.0 Track J sub-step J-B Phase D — cache is per-`Vm` now,
+        // so each Vm carries exactly one entry for its own dialect.
+        // Pre-J-B this asserted `cache_entry_count() == 2` over the
+        // thread-local cache (both Vms shared the cross-Vm cache and
+        // their distinct dialect bit produced two entries). The
+        // dialect-distinguishing invariant under test is preserved by
+        // asserting each Vm cached its own version exactly once.
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm55), 1);
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm53), 1);
     }
 
     /// A non-immediate step bails out — variable `local step = 2;
@@ -5987,7 +6017,6 @@ mod s5a_b {
     #[test]
     fn loop_int_1m_5_3_jit_state_compiled() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6083,7 +6112,6 @@ mod s5a_c {
     #[test]
     fn loop_int_1m_5_1_jit_state_compiled() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua51);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6098,7 +6126,6 @@ mod s5a_c {
     #[test]
     fn loop_int_1m_5_5_still_jit_int_path() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6197,7 +6224,6 @@ mod s5b {
     /// the result matches `f64::sin` over the same integer range.
     #[test]
     fn math_sin_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let _ = interp_only_float_with;
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.sin(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
@@ -6217,7 +6243,6 @@ mod s5b {
     /// and cos chunks no longer collide).
     #[test]
     fn math_cos_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=100).map(|i| (i as f64).cos()).sum();
@@ -6235,7 +6260,6 @@ mod s5b {
     /// abort compile.
     #[test]
     fn math_sin_cos_product_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 1000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=1000)
@@ -6252,7 +6276,6 @@ mod s5b {
     /// tolerance on 5.5.
     #[test]
     fn math_loop_100k_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
@@ -6273,7 +6296,6 @@ mod s5b {
     /// math fold combination compiles.
     #[test]
     fn math_loop_100k_5_4_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua54, src);
@@ -6287,7 +6309,6 @@ mod s5b {
     /// distinguishes from 5.5's slot.
     #[test]
     fn math_loop_100k_5_3_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua53, src);
@@ -6302,7 +6323,6 @@ mod s5b {
     /// already Float).
     #[test]
     fn math_loop_100k_5_2_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua52, src);
@@ -6316,7 +6336,6 @@ mod s5b {
     /// Float fork in the ForPrep/ForLoop scanner.
     #[test]
     fn math_loop_100k_5_1_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua51, src);
@@ -6330,19 +6349,22 @@ mod s5b {
     /// `math.sin` and `math.cos` chunks land in distinct cache slots
     /// even though their bytecode shape is identical bar the `C`
     /// operand of GetField.
+    ///
+    /// v2.0 Track J sub-step J-B Phase D — refactored to one Vm
+    /// (cache is per-`Vm` now). The invariant under test (distinct
+    /// libcall name → distinct slot) is preserved by asserting the
+    /// cache grew from 1 (after sin) to 2 (after cos) in the same Vm.
     #[test]
     fn math_libcall_distinct_fns_distinct_cache() {
-        crate::jit_backend::cache_clear();
-        let _ = eval_float_with(
-            LuaVersion::Lua55,
-            "local s = 0.0 for i = 1, 4 do s = s + math.sin(i) end return s",
-        );
-        let n_after_sin = crate::jit_backend::cache_entry_count();
-        let _ = eval_float_with(
-            LuaVersion::Lua55,
-            "local s = 0.0 for i = 1, 4 do s = s + math.cos(i) end return s",
-        );
-        let n_after_cos = crate::jit_backend::cache_entry_count();
+        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
+        let _ = vm
+            .eval("local s = 0.0 for i = 1, 4 do s = s + math.sin(i) end return s")
+            .expect("sin eval");
+        let n_after_sin = crate::jit_backend::cache_entry_count(&vm);
+        let _ = vm
+            .eval("local s = 0.0 for i = 1, 4 do s = s + math.cos(i) end return s")
+            .expect("cos eval");
+        let n_after_cos = crate::jit_backend::cache_entry_count(&vm);
         assert!(
             n_after_cos > n_after_sin,
             "sin/cos chunks must hash to distinct cache slots (sin={n_after_sin} cos={n_after_cos})"
@@ -6353,7 +6375,6 @@ mod s5b {
     /// set. Result matches `f64::sqrt`.
     #[test]
     fn math_sqrt_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.sqrt(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=100).map(|i| (i as f64).sqrt()).sum();
@@ -6365,7 +6386,6 @@ mod s5b {
     /// fold pre-scan rejects it and the chunk falls back to interp.
     #[test]
     fn math_constant_access_bails_to_interp() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 4 do s = s + math.pi end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6384,7 +6404,6 @@ mod s5b {
     /// has B=3, the fold pre-scan rejects it.
     #[test]
     fn math_two_arg_atan_bails() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 4 do s = s + math.atan(i, 2) end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6424,7 +6443,6 @@ mod s5c {
     /// path runs end-to-end on the active Vm.
     #[test]
     fn table_alloc_10_matches_interpreter_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6437,7 +6455,6 @@ mod s5c {
     /// Headline cell at full N=10 000. Pinned `JitProtoState`.
     #[test]
     fn table_alloc_10k_5_5_jit_state_compiled() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 10000 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6450,7 +6467,6 @@ mod s5c {
     /// SetTable values).
     #[test]
     fn table_alloc_10k_5_4_matches_interpreter() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua54,
@@ -6463,7 +6479,6 @@ mod s5c {
     /// 5.3 dialect — pre53 ForPrep + Int loop var.
     #[test]
     fn table_alloc_10k_5_3_matches_interpreter() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua53,
@@ -6478,7 +6493,6 @@ mod s5c {
     /// must come back as 100.
     #[test]
     fn table_get_int_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6492,7 +6506,6 @@ mod s5c {
     /// interpreter's `len()`.
     #[test]
     fn table_len_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6526,7 +6539,6 @@ mod s5c {
     }
 
     fn table_alloc_10k_jit_compiles_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 10000 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(ver);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6543,7 +6555,6 @@ mod s5c {
     /// requires R[B] to be Int/Float (numeric loop var Move).
     #[test]
     fn table_with_string_key_bails() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} t['a'] = 1 return t['a']";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6558,7 +6569,6 @@ mod s5c {
     /// both ops are whitelisted.
     #[test]
     fn presized_newtable_now_jits() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {10, 20, 30} return t[2]";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6595,7 +6605,6 @@ mod s5c_b {
     /// returns the correct length after pre-sized fill.
     #[test]
     fn table_alloc_10k_5_5_presized() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 10000 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6608,7 +6617,6 @@ mod s5c_b {
     /// from the LoadI limit window.
     #[test]
     fn table_alloc_10k_5_4_presized() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua54,
@@ -6623,7 +6631,6 @@ mod s5c_b {
     /// agnostic.
     #[test]
     fn table_alloc_10k_5_3_presized() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua53,
@@ -6637,7 +6644,6 @@ mod s5c_b {
     /// in `sbx`, but a larger limit exercises the `LoadK` arm).
     #[test]
     fn table_alloc_loadk_limit_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 65536 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6650,7 +6656,6 @@ mod s5c_b {
     /// tables. Result and JIT state both pin.
     #[test]
     fn table_alloc_4_small_presize() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6665,7 +6670,6 @@ mod s5c_b {
     /// the non-sized helper. Correctness unaffected.
     #[test]
     fn step_ne_1_falls_back_to_empty_helper() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6686,7 +6690,6 @@ mod s5c_b {
     /// fail the assertion; the only way to hit `36` is correct.
     #[test]
     fn inline_aset_payload_round_trip_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6704,7 +6707,6 @@ mod s5c_b {
     /// branch than 5.5 while still hitting the inline aset path.
     #[test]
     fn inline_aset_payload_round_trip_5_3() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua53,
@@ -6736,7 +6738,6 @@ mod s5d_a {
     #[test]
     fn table_param_int_return_round_trip_5_5() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         // Build f's Proto via a chunk that returns the function so we
         // can poke its JIT state. The outer chunk bails (Op::Closure
         // isn't whitelisted); the inner Proto is what we're after.
@@ -6768,7 +6769,6 @@ mod s5d_a {
     /// `function f(t) return #t end` — same shape, Len op.
     #[test]
     fn table_param_len_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function f(t) return #t end
                    local t = {} t[1] = 1 t[2] = 1 t[3] = 1 return f(t)";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -6803,7 +6803,6 @@ mod s5d_b {
     /// b=3 + LoadI×3 + SetList b=3 + Return1.
     #[test]
     fn newtable_b3_setlist_int_5_5() {
-        crate::jit_backend::cache_clear();
         let src = b"local function f() return {10, 20, 30} end return f";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6831,7 +6830,6 @@ mod s5d_b {
     /// in concert with the SetList that built it.
     #[test]
     fn setlist_then_geti_round_trip_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function get(t, i) return t[i] end
                    local function make() return {7, 11, 13} end
                    return get(make(), 2)";
@@ -6847,7 +6845,6 @@ mod s5d_b {
     /// the binary_trees `make` Proto carries (that's S5d.C).
     #[test]
     fn conditional_both_branches_new_table_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function f(flag)
                      if flag == 1 then return {1, 2}
                      else return {3, 4} end
@@ -6870,7 +6867,6 @@ mod s5d_b {
     /// interpreter would.
     #[test]
     fn make_proto_5_5_round_trip() {
-        crate::jit_backend::cache_clear();
         let src = "local function make(d)
                      if d == 0 then return {1, 1}
                      else return {make(d-1), make(d-1)} end
@@ -6886,7 +6882,6 @@ mod s5d_b {
     /// both JIT'd, sum across 16 trees of depth 10 matches interp.
     #[test]
     fn binary_trees_n10_round_trip_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function make(d)
                      if d == 0 then return {1, 1}
                      else return {make(d-1), make(d-1)} end
@@ -6914,7 +6909,6 @@ mod s5d_b {
     /// writer pinned; emit-side `use_var` callers for Table
     /// operands bitcast F64→I64 when the slot is Float-declared.
     fn make_proto_jit_compiles_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = b"local function make(d)
                      if d == 0 then return {1, 1}
                      else return {make(d-1), make(d-1)} end
@@ -6953,7 +6947,6 @@ mod s5d_b {
     /// `{nil, nil}` as the leaf node. LoadNil + SetList must
     /// JIT-compile so `make` stops bailing across all dialects.
     fn make_nil_proto_jit_compiles_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = b"local function make(d)
                      if d == 0 then return {nil, nil}
                      else return {make(d-1), make(d-1)} end
@@ -7004,7 +6997,6 @@ mod s5d_b {
     /// real Nil.
     #[test]
     fn return_nil_does_not_miscompile_5_5() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let r = vm
             .eval("local function f() return nil end return f()")
@@ -7021,7 +7013,6 @@ mod s5d_b {
     /// re-use conflict — all kind unifications converge cleanly.
     #[test]
     fn check_proto_jit_compiles_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function check(t)
                      if t[1] == 1 then return 1 end
                      return 1 + check(t[1]) + check(t[2])
@@ -7044,7 +7035,6 @@ mod s5d_b {
     /// value; the assertion is that the Proto reaches the
     /// Compiled state at all.
     fn get_table_simple_jit_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = b"local function get(t, k) return t[k] end
                    return get";
         let mut vm = crate::jit_backend::test_vm_new(ver);
@@ -7089,7 +7079,6 @@ mod s5d_b {
     /// (no GetI). Reaches `JitProtoState::Compiled` once S5d.E'
     /// whitelists GetTable.
     fn check_proto_jit_compiles_pre53(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = "local function check(t)
                      if t[1] == 1 then return 1 end
                      return 1 + check(t[1]) + check(t[2])
@@ -7134,13 +7123,17 @@ mod s5d_b {
 pub struct CraneliftBackend;
 
 impl IntChunkCompiler for CraneliftBackend {
+    // v2.0 Track J sub-step J-B Phases D/E — pass storage through to
+    // `cache_lookup_or_compile`; the cache lookup + handle park both
+    // operate on `Vm.jit.storage.{cache,cache_handles}`.
     fn try_compile(
         &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
         proto: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
         pre53: bool,
         float_only: bool,
     ) -> CompileResult {
-        match cache_lookup_or_compile(proto, pre53, float_only) {
+        match cache_lookup_or_compile(storage, proto, pre53, float_only) {
             Some((
                 entry,
                 num_args,
@@ -7182,12 +7175,16 @@ impl IntChunkCompiler for CraneliftBackend {
 }
 
 impl TraceCompiler for CraneliftBackend {
+    // v2.0 Track J sub-step J-B Phase F — pass storage through so
+    // `try_compile_trace_with_options` parks the trace's `JITModule`
+    // on the per-`Vm` `storage.trace_handles` Vec.
     fn try_compile_trace(
         &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        trace::try_compile_trace_with_options(record, opts)
+        trace::try_compile_trace_with_options(storage, record, opts)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
