@@ -220,3 +220,136 @@ fn trace_compiled_on_thread_a_remains_dispatchable_on_thread_b() {
         warm_dispatched
     );
 }
+
+/// v2.0 Track J sub-step J-E Phase E — wallclock perf parity bench.
+///
+/// Charter target: cross-thread JIT eval must stay within 5% of
+/// single-thread JIT eval. This measures the steady-state shape
+/// (one long-lived worker thread + N evals on it, joined once at
+/// the end) — NOT the spawn-per-iter shape. Rationale: the
+/// spawn-per-iter shape pays a fixed ~30-100µs thread::spawn cost
+/// every iteration, which is OS overhead, not J-E machinery
+/// overhead. The 5% gate is specifically pinning the cost of the
+/// J-A `SendJitModule` sleeve + J-B per-Vm storage + J-D RAII
+/// rebind, NOT the OS thread startup cost.
+///
+/// Comparison structure:
+///   (a) Single-thread: warm the SendVm, run N evals on the
+///       construct thread, wallclock the inner loop.
+///   (b) Cross-thread steady-state: warm the SendVm, ship to a
+///       worker thread, run N evals on the worker, join once,
+///       wallclock the inner loop only (excluding spawn/join
+///       fixed cost via worker-side timing).
+///
+/// Marked `#[ignore]` so it doesn't run in the default `cargo
+/// test` loop (scheduling variance would make the gate flaky).
+/// Run explicitly:
+/// `cargo test -p luna-jit --features send --test
+/// cv_send_vm_jit_smoke --release -- --ignored --nocapture`.
+///
+/// IF the wallclock delta blows the 5% gate, the answer is NOT
+/// "loosen the gate" — that's the `exec/no-shrink-words` reflex.
+/// The right escalation is to instrument which specific cross-
+/// thread machinery cost grew. J-D's per-dispatch TLS install +
+/// restore is the prime suspect (`scoped_rebind.rs` projected
+/// ~5-10 cycles/dispatch).
+#[test]
+#[ignore]
+fn perf_parity_single_thread_vs_cross_thread() {
+    use std::time::Instant;
+
+    // N=200 iters at ~55µs/iter = ~11ms per measurement, above
+    // macOS QoS scheduling granularity (~1ms). One measurement's
+    // variance band is ~3-5% from observed runs; we take MEDIAN of
+    // K=5 measurements to reject the occasional outlier where the
+    // worker gets scheduled on an efficiency core.
+    //
+    // Median-of-5 reduces single-outlier sensitivity to the 4 normal
+    // observations, while still completing in ~600ms total
+    // (5 × 110ms).
+    const N: usize = 200;
+    const K: usize = 5;
+
+    fn fresh_jit_send_vm() -> SendVm {
+        let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+        vm.open_base();
+        vm.open_math();
+        vm.set_jit_enabled(false);
+        vm.set_trace_jit_enabled(true);
+        SendVm::from_vm(vm)
+    }
+
+    fn measure_single_thread_ns(send: &SendVm) -> f64 {
+        let t0 = Instant::now();
+        for _ in 0..N {
+            let r = send.eval(TRACE_HOT_LOOP).expect("single-thread iter");
+            assert!(matches!(r.first(), Some(Value::Int(EXPECTED_RESULT))));
+        }
+        t0.elapsed().as_nanos() as f64 / N as f64
+    }
+
+    // ── Pair A: single-thread baseline ────────────────────────────
+    let send_st = fresh_jit_send_vm();
+    // Warm-up: first eval compiles the trace; subsequent evals hit
+    // the cached trace dispatch.
+    let _ = send_st.eval(TRACE_HOT_LOOP).expect("warm-up single");
+
+    let mut single_thread_samples: Vec<f64> =
+        (0..K).map(|_| measure_single_thread_ns(&send_st)).collect();
+    single_thread_samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let single_thread_ns = single_thread_samples[K / 2];
+
+    // ── Pair B: cross-thread steady-state ─────────────────────────
+    // Build a fresh JIT-equipped Vm + ship it via SendVm to ONE
+    // worker thread. Worker does its own warm-up then runs K
+    // measurements of N iters each, reports the median for the
+    // inner loop ONLY (so OS thread spawn/join cost stays outside).
+    let send_ct = fresh_jit_send_vm();
+    let handle = thread::spawn(move || {
+        // Worker-thread warm-up (compiles trace on this OS thread).
+        let _ = send_ct.eval(TRACE_HOT_LOOP).expect("warm-up cross");
+        let mut samples: Vec<f64> = (0..K)
+            .map(|_| {
+                let t0 = Instant::now();
+                for _ in 0..N {
+                    let r = send_ct.eval(TRACE_HOT_LOOP).expect("cross-thread iter");
+                    assert!(matches!(r.first(), Some(Value::Int(EXPECTED_RESULT))));
+                }
+                t0.elapsed().as_nanos() as f64 / N as f64
+            })
+            .collect();
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        samples[K / 2]
+    });
+    let cross_thread_ns = handle.join().expect("worker thread panicked");
+
+    let delta_pct = (cross_thread_ns - single_thread_ns) / single_thread_ns * 100.0;
+    println!(
+        "\nJ-E perf parity (N={} iters/sample, K={} samples, median):\n  {:40} = {:>10.0} ns/iter\n  {:40} = {:>10.0} ns/iter\n  delta = {:+.2}%",
+        N,
+        K,
+        "single-thread (no transfer)",
+        single_thread_ns,
+        "cross-thread (steady-state worker)",
+        cross_thread_ns,
+        delta_pct,
+    );
+
+    // 5% gate from the J-E charter. This measures the steady-state
+    // J-E machinery overhead (sleeve + RAII + per-Vm storage) and
+    // excludes OS thread startup cost. Median-of-K rejects single
+    // OS-scheduling outliers without loosening the actual gate.
+    let gate_pct = 5.0;
+    assert!(
+        delta_pct.abs() <= gate_pct,
+        "cross-thread perf parity blew the J-E charter gate of \
+         ±{:.1}%: single-thread (median) = {:.0}ns/iter, cross-thread \
+         (median) = {:.0}ns/iter, delta = {:+.2}% — investigate J-D \
+         RAII or SendJitModule sleeve regressions; DO NOT loosen \
+         the gate (exec/no-shrink-words reflex)",
+        gate_pct,
+        single_thread_ns,
+        cross_thread_ns,
+        delta_pct,
+    );
+}
