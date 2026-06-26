@@ -141,11 +141,20 @@ fn p16_on_fib_3_hot_loop_compiles_trace_with_downrec_link_some() {
     );
 }
 
-/// fib(28) p16-on regression: closes via SelfLink BEFORE DownRec
-/// can fire, so R3b's downrec_link counter does NOT bump on this
-/// shape. Result correctness pin (R1 regression-free).
+/// fib(28) p16-on with R3.3+ sub-0 routing: the SelfLink trip at
+/// `cur_depth >= 2` yields to `downrec_close` (sub-0 lift), so the
+/// trace ROUTES through R3b's lowerer arm — `downrec_link_compiled`
+/// bumps >= 1. Result correctness pin (R1 regression-free).
+///
+/// v2.0 Track-R R3.3+ sub-0 migration: pre-sub-0 this test pinned
+/// the OPPOSITE — that fib(28) closed via SelfLink BEFORE DownRec
+/// fired, so downrec_link_compiled stayed at 0. Sub-0 reroutes the
+/// SelfLink trip to DownRec; R3b's lowerer arm emits the stitch
+/// sentinel + caller-pc guard for fib(28); R3d's single-candidate
+/// guard chain keeps `dispatchable=false`. Net: downrec_link_compiled
+/// bumps >= 1 (the new invariant), R1 result 317_811 unchanged.
 #[test]
-fn p16_on_fib_28_self_link_does_not_bump_downrec_link_compiled() {
+fn p16_on_fib_28_selflink_yields_bumps_downrec_link_compiled() {
     const FIB_28_SRC: &[u8] = b"
         local function fib(n)
             if n < 2 then return n end
@@ -176,11 +185,12 @@ fn p16_on_fib_28_self_link_does_not_bump_downrec_link_compiled() {
     );
 
     let downrec_link_compiled = vm.trace_downrec_link_compiled_count();
-    assert_eq!(
-        downrec_link_compiled, 0,
-        "fib(28) p16-on closes via SelfLink before DownRec catch \
-         can fire — R3b's downrec_link_compiled must NOT bump on \
-         this shape. Got {downrec_link_compiled}."
+    assert!(
+        downrec_link_compiled >= 1,
+        "R3.3+ sub-0 pin — fib(28) p16-on now routes the SelfLink \
+         trip through R3b's DownRec lowerer arm (selflink-yields lift); \
+         downrec_link_compiled must bump >= 1. Got \
+         {downrec_link_compiled}."
     );
 }
 

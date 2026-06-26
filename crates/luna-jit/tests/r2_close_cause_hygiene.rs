@@ -39,13 +39,22 @@ const FIB_SRC: &[u8] = b"
     return fib(28)
 ";
 
-/// Pin: p16-on close-cause bucket contains `self-link-retf-r1` with
-/// a non-zero count. The matching `dispatch_off_reason` is also
-/// non-empty (mirrors R1 test 3, but on the HashMap surface that R2
-/// added). Asserting both surfaces guards against future drift where
-/// the Vec push and HashMap bump diverge.
+/// Pin: p16-on close-cause bucket contains the safety-pin label with
+/// a non-zero count, AND the corresponding `dispatch_off_reasons` Vec
+/// entry matches O(1) on the HashMap (mirrors R1 test 3, but on the
+/// HashMap surface that R2 added). Asserts the HashMap-Vec pairing
+/// invariant holds for whichever label the routing produced.
+///
+/// v2.0 Track-R R3.3+ sub-0 migration: pre-sub-0 the recorder closed
+/// fib(28) via SelfLink → lowerer pinned `"self-link-retf-r1"` on
+/// both surfaces. Sub-0 reroutes the SelfLink trip to `downrec_close`
+/// when `cur_depth >= 2` → lowerer's R3d single-candidate guard chain
+/// pins `"downrec-stitch-pending"`. The test accepts EITHER label,
+/// picks whichever is present, and asserts the HashMap-Vec pairing
+/// invariant for that label so the R2 close-cause hygiene gate stays
+/// effective post-sub-0.
 #[test]
-fn p16_on_fib_28_bumps_self_link_retf_r1_in_close_cause_counts() {
+fn p16_on_fib_28_bumps_safety_pin_label_in_close_cause_counts() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -58,24 +67,33 @@ fn p16_on_fib_28_bumps_self_link_retf_r1_in_close_cause_counts() {
         .expect("runs");
 
     let counts = vm.trace_close_cause_counts();
-    let n = counts.get("self-link-retf-r1").copied().unwrap_or(0);
-    assert!(
-        n >= 1,
-        "expected close_cause_counts[\"self-link-retf-r1\"] >= 1; got {n} \
-         (full counts: {:?}; dispatch_off_reasons: {:?})",
-        counts,
-        vm.trace_dispatch_off_reasons(),
-    );
+    let r1_n = counts.get("self-link-retf-r1").copied().unwrap_or(0);
+    let sub0_n = counts.get("downrec-stitch-pending").copied().unwrap_or(0);
+    let (label, n) = if r1_n >= 1 {
+        ("self-link-retf-r1", r1_n)
+    } else if sub0_n >= 1 {
+        ("downrec-stitch-pending", sub0_n)
+    } else {
+        panic!(
+            "expected close_cause_counts to contain >= 1 of \
+             \"self-link-retf-r1\" (pre-sub-0 SelfLink R1 safety pin) \
+             OR \"downrec-stitch-pending\" (sub-0 DownRec routing R3d \
+             single-candidate fallback); got neither (full counts: {:?}, \
+             dispatch_off_reasons: {:?})",
+            counts,
+            vm.trace_dispatch_off_reasons(),
+        );
+    };
     // Pin the parallel Vec surface: bump_close_cause is invoked
     // alongside the Vec push, so the two surfaces must agree.
     let vec_hits = vm
         .trace_dispatch_off_reasons()
         .iter()
-        .filter(|r| **r == "self-link-retf-r1")
+        .filter(|r| **r == label)
         .count() as u64;
     assert_eq!(
         n, vec_hits,
-        "HashMap count and Vec count for self-link-retf-r1 diverged \
+        "HashMap count and Vec count for {label} diverged \
          — bump_close_cause + dispatch_off_reasons.push must stay paired"
     );
 }
