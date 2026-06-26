@@ -1297,6 +1297,14 @@ impl Heap {
                         // slice, so reassigning is just a pointer move.
                         (*t).slab = Box::new([]);
                         (*t).nodes = Box::new([]);
+                        // C3 — drop SoA Robin Hood parallel arrays too.
+                        // These are Box::new([]) dangling stubs until
+                        // Phase D cuts over (Phase B initial state).
+                        (*t).keys = Box::new([]);
+                        (*t).vals = Box::new([]);
+                        (*t).meta = Box::new([]);
+                        (*t).tombstones = 0;
+                        (*t).iter_depth = 0;
                         (*t).metatable = None;
                         // Stash the raw pointer for future reuse.
                         // SAFETY: t is non-null (came from a live Gc<Table>);
