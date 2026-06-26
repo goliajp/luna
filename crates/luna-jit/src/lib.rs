@@ -75,6 +75,16 @@ pub mod jit {
     // `--test`, which luna's test binaries do today.
     #[cfg(test)]
     pub use crate::jit_backend::{cache_clear, cache_entry_count};
+
+    /// v2.0 Track J sub-step J-A — `Send` wrapper newtype for
+    /// `cranelift_jit::JITModule`. Exposed `#[doc(hidden)]` so
+    /// integration tests under `crates/luna-jit/tests/` can run the
+    /// static-`Send` assertion + cross-thread smoke without a
+    /// `pub(crate)` carve-out. **Not a stable embedder API** — J-B
+    /// consumes this internally and the type will move to
+    /// `Vm.VmJitStorage` when the field migration lands.
+    #[doc(hidden)]
+    pub use crate::jit_backend::SendJitModule as __SendJitModule_for_j_a_test;
     /// `luna_core::jit::trace` (the types) merged with
     /// `luna_jit::jit_backend::trace` (the codegen entry points). Old
     /// `crate::jit::trace::TraceRecord` paths in user code keep
