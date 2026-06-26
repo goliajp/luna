@@ -171,13 +171,15 @@ fn p16_on_fib_3_hot_loop_no_infinite_dispatch_cycle() {
     assert_eq!(returned, EXPECTED_FIB_3_HOT_LOOP_SUM);
 }
 
-/// R3b regression pin: R3c does NOT lift `dispatchable=true`. The
-/// downrec trace stays pinned with `dispatch_off_reason =
-/// "downrec-stitch-pending"` (set by R3b's lowerer arm) — the R3c
-/// admit predicate's OR'd `downrec_link.is_some()` arm is the only
-/// way the trace enters the dispatcher.
+/// R3d post-lift pin (was R3c's "stays dispatchable=false" check,
+/// inverted by R3d). When the multi-way guard collects >= 2 distinct
+/// caller_pc candidates, the lowerer LIFTS `dispatchable = true` and
+/// the `"downrec-stitch-pending"` label is NOT pushed. fib(3)'s body
+/// has 2 distinct call sites (`pc + 1` for each `fib(n-1)` and
+/// `fib(n-2)`) → the recorder collects retfs at both → R3d's lowerer
+/// dedupes into >= 2 candidates → multi-way fires → dispatchable=true.
 #[test]
-fn p16_on_fib_3_hot_loop_downrec_trace_stays_dispatchable_false() {
+fn p16_on_fib_3_hot_loop_downrec_trace_lifted_by_r3d_multi_way() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -185,20 +187,28 @@ fn p16_on_fib_3_hot_loop_downrec_trace_stays_dispatchable_false() {
     vm.open_base();
 
     let cl = vm
-        .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop_r3c_pin")
+        .load(FIB_3_HOT_LOOP_SRC, b"=fib3_loop_r3d_pin")
         .expect("loads");
     let _ = vm
         .call_value(luna_jit::runtime::Value::Closure(cl), &[])
         .expect("runs");
 
-    // The "downrec-stitch-pending" label is set by R3b's lowerer
-    // arm together with `dispatchable=false` on the same trace.
-    // R3c does NOT clear this — the lift is R3d's job.
+    // R3d post-lift: the multi-way guard fired AND lifted, so no
+    // "downrec-stitch-pending" label was pushed (lifted traces have
+    // no dispatch_off reason).
     let reasons = vm.trace_dispatch_off_reasons();
     assert!(
-        reasons.contains(&"downrec-stitch-pending"),
-        "R3c must not clear R3b's downrec-stitch-pending label — \
+        !reasons.contains(&"downrec-stitch-pending"),
+        "R3d post-lift — \"downrec-stitch-pending\" label must NOT \
+         be set when the multi-way guard fired. \
          dispatch_off_reasons = {reasons:?}"
+    );
+    let multi_way = vm.trace_multi_way_guard_emitted_count();
+    assert!(
+        multi_way >= 1,
+        "R3d post-lift — multi_way_guard_emitted must be >= 1 \
+         (got {multi_way}); fib(3) body's 2 call sites should yield \
+         >= 2 distinct candidates per close"
     );
 }
 

@@ -129,13 +129,22 @@ pub struct JitState {
 }
 
 impl JitState {
-    /// v2.0 Track-R R3c — default per-dispatch stitch-back depth.
-    /// `1` means: a downrec trace can re-enter exactly once via
-    /// the dispatcher loop after a DOWNREC sentinel hit; the
-    /// second hit in the same call chain is classified as a deopt.
-    /// Conservative floor; R3d may raise after R3c's miss-rate
-    /// audit.
-    pub const STITCH_DEPTH_DEFAULT: u32 = 1;
+    /// v2.0 Track-R R3c/R3d — default per-dispatch stitch-back depth.
+    /// R3c shipped with `1` as the conservative floor because the
+    /// dispatcher's downrec admit went through the R3b
+    /// `dispatchable=false` fallback arm — a runaway HIT loop would
+    /// have admitted on every interp tick. R3d's multi-way CMP-chain
+    /// is a real runtime guard (not constant-folded), so the only
+    /// way a downrec trace HITs is when `saved_pc` from the parent
+    /// frame matches one of the recorded `caller_pc` candidates;
+    /// each natural admit corresponds to ONE Lua call chain pop, so
+    /// the budget can safely grow to cover ~all consecutive HITs
+    /// expected in a hot loop without infinite-loop risk. `32` lets
+    /// 31 HITs accumulate before a forced-deopt resets the budget;
+    /// fib(3) hot loop's per-outer-iter pattern shows 1 HIT every
+    /// 5 admits, so `32` covers ~32 outer iters before any
+    /// false-classify pressure.
+    pub const STITCH_DEPTH_DEFAULT: u32 = 32;
 }
 
 /// Diagnostic counters and probe lists. All fields here are

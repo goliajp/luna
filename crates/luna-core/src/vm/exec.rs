@@ -6481,21 +6481,24 @@ impl Vm {
                             self.jit.counters.downrec_deopt += 1;
                             self.jit.suppress_downrec_admit_once = true;
                         }
-                    } else if is_downrec_entry {
-                        // v2.0 Track-R R3c — downrec admit returned
-                        // cleanly. The trace's body emit is identical
-                        // to R3a/R3b's safe-deopt shape (R3b's tail
-                        // emits the DOWNREC sentinel on guard HIT or
-                        // R1's safe GLOBAL-sentinel deopt on guard
-                        // MISS). R3c classifies the return shape into
-                        // `downrec_dispatched` (HIT) vs `downrec_deopt`
-                        // (MISS) for miss-rate measurement, applies
-                        // the stitch-cycle checkpoint (depth budget),
-                        // and force-deopts in both cases — the actual
-                        // stitch dispatch into the target trace is
-                        // R3d's job (per task spec: "DO NOT lift
-                        // dispatchable=true"). The suppress flag below
-                        // breaks the otherwise-infinite admit loop.
+                    } else if is_downrec_entry && {
+                        // v2.0 Track-R R3d — only enter the R3c/R3d
+                        // downrec classifier for returns whose shape
+                        // matches the lowerer's `downrec_idx_opt` tail
+                        // emit: either the stitch_blk DOWNREC sentinel
+                        // (HIT) or the deopt_blk GLOBAL-sentinel-with-
+                        // body==head_pc (MISS via guard fail). Any
+                        // other return from a downrec trace (intermediate
+                        // body cmp side-exit, GetField inference fail,
+                        // etc.) carries a different sentinel/body shape
+                        // and means the body exited BEFORE reaching the
+                        // downrec close — classify those through the
+                        // normal decode path (else branch below) so
+                        // reg_state restores + pc advances correctly.
+                        // The pre-R3d behavior (R3c) classified them all
+                        // as MISS and skipped the normal restore, which
+                        // inflated `downrec_deopt` with non-downrec
+                        // events and lost the trace's mid-flight writes.
                         let raw_ret = continuation_pc as u64;
                         let from_side_trace = (raw_ret >> 63) & 1 == 1;
                         let sentinel_code = if from_side_trace {
@@ -6503,19 +6506,29 @@ impl Vm {
                         } else {
                             0
                         };
-                        if from_side_trace
-                            && crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
-                        {
-                            // Guard HIT. Cycle-safety checkpoint:
-                            // decrement the budget; if it would
-                            // underflow, classify the hit as a deopt
-                            // and reset the budget for the next
-                            // natural entry. R3c picks default = 1
-                            // (one HIT allowed per natural admit
-                            // before forced deopt); R3d may raise it
-                            // once the actual stitch dispatch is in
-                            // place and the budget governs real
-                            // re-entry depth rather than just bumps.
+                        let raw_body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
+                        let global_deopt_code = crate::jit::trace_types::encode_side_sentinel(
+                            crate::jit::trace_types::SIDE_SENT_KIND_GLOBAL,
+                            0,
+                        );
+                        from_side_trace
+                            && (crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
+                                || (sentinel_code == global_deopt_code
+                                    && raw_body == head_pc_val as u64))
+                    } {
+                        // R3d downrec event classifier.
+                        let raw_ret = continuation_pc as u64;
+                        let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
+                        if crate::jit::trace_types::is_downrec_sentinel(sentinel_code) {
+                            // Guard HIT — saved_pc matched one of the
+                            // baked candidates and the trace's
+                            // `stitch_blk` arm returned the DOWNREC
+                            // sentinel. Cycle-safety checkpoint:
+                            // decrement budget; on underflow,
+                            // reclassify as deopt + reset budget.
+                            // R3d's `STITCH_DEPTH_DEFAULT = 32` lets
+                            // ~all natural HITs in a hot loop fire
+                            // before reset pressure.
                             if self.jit.stitch_depth_remaining > 0 {
                                 self.jit.stitch_depth_remaining -= 1;
                                 self.jit.counters.downrec_dispatched += 1;
@@ -6525,28 +6538,23 @@ impl Vm {
                                     crate::vm::jit_state::JitState::STITCH_DEPTH_DEFAULT;
                             }
                         } else {
-                            // Guard MISS path — the trace returned
-                            // via the lowerer's `deopt_blk` arm
-                            // (GLOBAL sentinel + `head_pc` body) or
-                            // some other unexpected shape. Either way
-                            // R3c classifies it as a deopt for
-                            // miss-rate measurement.
+                            // Guard MISS via the lowerer's deopt_blk
+                            // arm (GLOBAL sentinel + body == head_pc).
+                            // The deopt_blk emit performs the
+                            // store-back via `emit_store_back_and_return_pc`,
+                            // so the live stack already reflects the
+                            // body's writes; no extra restore needed
+                            // from the dispatcher side.
                             self.jit.counters.downrec_deopt += 1;
                         }
                         self.jit.suppress_downrec_admit_once = true;
-                        // Pop helper-pushed inlined frames mirroring
-                        // the natural deopt path (defensive — current
-                        // R3b body emit is identical to R3a's no-push
-                        // shape, but R3d's frame-setup arm will push
-                        // CallFrames from the RetfRecord chain and
-                        // this site must clean up on deopt).
+                        // Pop helper-pushed inlined frames (defensive —
+                        // R3d's emit shape doesn't push frames in the
+                        // tail, but a body side-exit before reaching
+                        // the tail may have via the materialize helper).
                         while self.frames.len() > pre_frames {
                             frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         }
-                        // Skip the normal decode / restore / pc-set
-                        // path; interp re-runs the op at `head_pc`
-                        // next iteration (with the suppress flag
-                        // blocking re-admit so the loop progresses).
                         self.jit.reg_state_buf = reg_state;
                         self.jit.entry_tags_buf = entry_tags;
                         continue;

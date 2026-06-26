@@ -111,37 +111,33 @@ fn p16_on_fib_3_hot_loop_compiles_trace_with_downrec_link_some() {
          >= 1 (got {downrec_restart}; full counts: {counts:?})"
     );
 
-    // 3. R3b lowerer-side: dispatch_off label flipped from R1's
-    //    "self-link-retf-r1" to R3b's "downrec-stitch-pending" for
-    //    the DownRec arm.
+    // 3. R3d post-lift: when the multi-way guard collected >= 2
+    //    distinct candidates, the lowerer lifts `dispatchable=true`
+    //    and the `"downrec-stitch-pending"` label is NOT pushed.
+    //    Either branch is acceptable for the R3b scaffold smoke —
+    //    the assertion that "the downrec arm fired" is captured by
+    //    `downrec_link_compiled >= 1` below. R3d's
+    //    `r3d_multi_way_guard_dispatch.rs` test pins the post-lift
+    //    side directly.
     let downrec_stitch_pending = counts.get("downrec-stitch-pending").copied().unwrap_or(0);
+    let multi_way = vm.trace_multi_way_guard_emitted_count();
     assert!(
-        downrec_stitch_pending >= 1,
-        "R3b expected downrec-stitch-pending dispatch_off label \
-         >= 1 on fib(3) hot loop, got {downrec_stitch_pending} \
-         (full counts: {counts:?})"
+        downrec_stitch_pending + multi_way >= 1,
+        "R3b/R3d smoke — the downrec lowerer arm must fire at least \
+         once. Either `downrec-stitch-pending` (R3c-shape single-CMP \
+         fallback) or `multi_way_guard_emitted` (R3d-shape lifted) \
+         must be >= 1. Got pending={downrec_stitch_pending} \
+         multi_way={multi_way} (full counts: {counts:?})"
     );
 
     // 4. R3b's main contract: CompiledTrace.downrec_link populated.
+    //    R3d preserves this — the lift only changes dispatchable
+    //    + the dispatch_off_reason label, not the downrec_link field.
     let downrec_link_compiled = vm.trace_downrec_link_compiled_count();
     assert!(
         downrec_link_compiled >= 1,
         "R3b expected at least one compiled trace with \
          downrec_link = Some(_), got {downrec_link_compiled}"
-    );
-
-    // 5. dispatchable = false stays — R3b deliberately does NOT
-    //    lift dispatchable. The dispatch_off_reasons Vec / HashMap
-    //    pairing fires only when `ct.dispatch_off_reason` is
-    //    `Some(_)` (which requires `ct.dispatchable == false` on
-    //    the lowerer's invariant). So `downrec-stitch-pending >= 1`
-    //    above implies `dispatchable == false` on that same trace.
-    //    Pin explicitly here for the R3b -> R3c handoff invariant.
-    let reasons = vm.trace_dispatch_off_reasons();
-    assert!(
-        reasons.contains(&"downrec-stitch-pending"),
-        "R3b expected `dispatch_off_reasons` Vec to contain \
-         'downrec-stitch-pending' at least once, got {reasons:?}"
     );
 }
 
