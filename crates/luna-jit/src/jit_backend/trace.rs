@@ -7039,104 +7039,58 @@ pub fn lower_trace_into_named<M: Module>(
     // leak into the dispatcher's reg_state restore.
     let caller_regs: &[Variable] = &regs_full[..max_stack];
     if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
-        // P16-B — self-link tail: snapshot-restore (copy the deepest-
-        // inlined frame's window into the head frame's window) + branch
-        // back to body_loop. Mirrors LuaJIT's
-        //   `asm_tail_link` (lj_asm.c:2131): asm_stack_restore writes
-        //   the snapshot to vm.stack + emit_addptr bumps BASE +
-        //   `asm_tail_fixup` (lj_asm_arm64.h:1935) emits one A64 `B`
-        //   instruction to traceref(lnk)->mcode (== this trace's own
-        //   mcode head).
+        // v2.0 Track-R R1 — RETF-guards correctness primitive replaces
+        // the previous P16-B snapshot-restore tail.
         //
-        // luna's equivalent in Cranelift IR:
-        //   1. Compute `bump_off` = op_offsets at the close moment —
-        //      the register-window offset for the depth that the
-        //      uncaptured "next" op WOULD have entered. The recorder
-        //      tripped at this depth (cur_depth > RECUNROLL_THRESHOLD).
-        //      Reading from the LAST captured op's offset + its A + 1
-        //      reproduces compute_op_offsets's push for the would-be
-        //      next depth. (compute_op_offsets only emits offsets for
-        //      captured ops, so we synthesise the next-depth offset
-        //      from the last Op::Call's caller_offset + A + 1.)
-        //   2. For each slot `i` in 0..max_stack: write
-        //      `regs_full[i] = regs_full[bump_off + i]`. This is the
-        //      "snapshot restore" — the deepest inlined frame's locals
-        //      become the new head-frame locals for the next iter.
-        //      Cranelift's phi merging at body_loop's entry handles the
-        //      back-edge SSA shape automatically.
-        //   3. `bcx.ins().jump(body_loop, &[])`. Single arm64 `b` insn,
-        //      no marshal-out / decode / re-entry — exactly the
-        //      amortisation P16's perf premise requires.
+        // The legacy P16-B emit was:
+        //   1. Compute `bump_off` from the last captured Op::Call's
+        //      `caller_offset + A + 1`.
+        //   2. Slot-copy `regs_full[i] = regs_full[bump_off + i]` for
+        //      `i in 0..max_stack` (deepest inlined frame → head frame).
+        //   3. `jump(body_loop)` for a tight native back-edge.
         //
-        // Slots [bump_off + max_stack .. window_size_us) are the
-        // deeper-frame scratch slots from the inlined depth (only
-        // populated if the trace inlined past one more level — for
-        // RECUNROLL_THRESHOLD=2 fib, that means depth-2 scratch, which
-        // we DON'T copy because the next iter's deepest frame is fresh
-        // at depth=2 again).
+        // That mirrored LuaJIT's `asm_tail_link` (`lj_asm.c:2131`) only
+        // syntactically. LuaJIT's pre-op snapshots distinguish each
+        // frame's typed-slot mapping; luna's slot-copy assumes deepest
+        // frame layout == head frame layout, which is sound for plain
+        // tail-recursion but not for self-recursion through a
+        // non-tail-call body (fib: `Lt → branch → Sub Call Sub Call Add
+        // Return`, with depth-0 Sub writes polluting head-frame slots
+        // BEFORE the recursive Call, plus a depth>0 base-case Return
+        // whose deeper frame layout doesn't match head's). R0 measured
+        // fib(28) returning 45 (vs 317_811) on the p16-on path.
         //
-        // Edge: if the trace recorded ZERO Op::Call ops (impossible
-        // when self_link_kind is Some — the recorder only trips at
-        // depth > 0, which requires at least one Call), bump_off = 0
-        // and the copies become self-stores; cranelift folds these.
+        // R1 swaps the slot-copy + back-edge for a clean deopt: store
+        // back the caller window, return `head_pc`, and pin
+        // `dispatchable = false`. The trace still compiles (cranelift
+        // accepts a valid back-edge-free fn so the body's mcode and
+        // window_size extension stay sound) but the dispatcher's
+        // pre-invoke `dispatchable` check refuses to enter it, so
+        // interp runs the recursion naturally and produces the correct
+        // result on the p16-on path.
         //
-        // P16-C deferred: RETF-guards on inlined returns. For fib the
-        // inlined-frame topology is fixed (every iter has identical
-        // 3-deep shape recorded once), so the loop body doesn't
-        // actually fire any runtime Return at depth>0 — the captured
-        // depth>0 Returns are consumed at record time. The RETF
-        // correctness layer matters when a side trace stitches back
-        // with a DIFFERENT inlined topology; for fib_28's primary
-        // workload it's deferred without correctness impact. See
-        // commit message for full reasoning.
-        let bump_off: u32 = {
-            // Find the LAST captured Op::Call in the recorded body —
-            // this is the call that "would have" pushed the
-            // tripping next-depth frame. Per compute_op_offsets logic,
-            // that next-depth's offset = caller_offset + A + 1.
-            let mut last_call_idx: Option<usize> = None;
-            for (i, rop) in record.ops.iter().enumerate() {
-                if matches!(rop.inst.op(), Op::Call) {
-                    last_call_idx = Some(i);
-                }
-            }
-            match last_call_idx {
-                Some(idx) => {
-                    let caller_offset = op_offsets[idx];
-                    let caller_a = record.ops[idx].inst.a();
-                    caller_offset + caller_a + 1
-                }
-                // Defensive fallback: no Call captured shouldn't
-                // happen, but if it does treat as one-shot (no bump,
-                // back-edge runs the same body verbatim).
-                None => 0,
-            }
-        };
-        let bump_off_us = bump_off as usize;
-        // Sanity: bump_off + max_stack <= window_size_us, else we'd
-        // read past the regs_full buffer. window_size_us is sized to
-        // the deepest depth used; the bump-target slots must fit. If
-        // not, bail compile rather than miscompile.
-        if bump_off_us + max_stack > window_size_us {
-            checkpoint("bail:self-link-bump-oob");
-            return None;
-        }
-        // Snapshot restore: copy deepest-frame slots → head-frame slots.
-        // current_kinds is parallel; update the head window's kinds
-        // from the deepest window so subsequent iterations' op kinds
-        // stay correct after the back-edge. (The body emit loop
-        // already populated current_kinds[bump_off..bump_off+max_stack]
-        // with the deepest frame's final kinds.)
-        for i in 0..max_stack {
-            if bump_off_us > 0 {
-                let src_val = bcx.use_var(regs_full[bump_off_us + i]);
-                bcx.def_var(regs_full[i], src_val);
-            }
-        }
-        // Back-edge: branch to body_loop. body_loop is not yet sealed
-        // (the entry block jumps to it, this is the 2nd predecessor);
-        // the seal call below at the bottom of compile handles both.
-        bcx.ins().jump(body_loop, &[]);
+        // The `RetfRecord` side-channel populated by the recorder
+        // (exec.rs gate on `p16_self_link_enabled`) captures the
+        // inlined-frame topology that R3's down-rec stitch will consume
+        // to guard a real native back-edge. R1 is the correctness floor;
+        // R3 lifts dispatchable back to true via the stitch.
+        //
+        // `window_size_us` extension above (line ~3350 `record.self_link
+        // _kind.is_some()` arm) stays intact — body emit still writes
+        // depth>0 slots into the extended buffer, the writes are simply
+        // dead until R3 reads them via stitch.
+        emit_store_back_and_return_pc(
+            &mut bcx,
+            caller_regs,
+            reg_state,
+            record.head_pc,
+            flush_ctx.as_ref(),
+            0i64,
+            trace_fn_sig_ref,
+            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+        );
+        dispatchable = false;
+        dispatch_off_reason = dispatch_off_reason.or(Some("self-link-retf-r1"));
     } else if let Some(call_idx) = call_idx_opt {
         emit_store_back_and_return_pc(
             &mut bcx,
