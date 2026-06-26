@@ -75,7 +75,25 @@ pub enum SelfRecKind {
 /// `caller_pc` is the PC the inlined frame returns TO in its caller
 /// (`enclosing_call.pc + 1`), captured at record-time so the R3
 /// stitch can guard equality against the runtime caller PC.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// v2.0 Track-R R3a — extended with `proto: Gc<Proto>`, the proto
+/// the inlined frame is returning *to* (the caller's proto). Mirrors
+/// LuaJIT `IR_RETF.op1 = ir_kgc(IR(ptref))` which carries the target
+/// proto pointer (see `lj_record.c:897 check_downrec_unroll` chain
+/// filter `op1 == ptref`). For luna's fib(28) self-recursion this
+/// equals `TraceRecord.head_proto`, but R3 keeps the field explicit
+/// so future mutual-recursion (`fib_even` ↔ `fib_odd`) closes through
+/// the same code path without a head_proto identity assumption.
+/// GC: `RetfRecord.proto` follows the same transitive-reachability
+/// reasoning as `RecordedOp.proto` — not explicitly enrolled in
+/// `Vm::gc_roots()` because the captured proto is, at record time,
+/// reachable via a running `CallFrame`'s closure.
+///
+/// R3a drops the prior `PartialEq, Eq` derives because `Gc<T>`
+/// intentionally doesn't impl those traits (use `Gc::ptr_eq` for
+/// pointer-identity equality). No call site compared `RetfRecord`
+/// values directly pre-R3a.
+#[derive(Clone, Copy, Debug)]
 pub struct RetfRecord {
     /// Depth this return originated from (>0; the frame about to be
     /// popped).
@@ -90,6 +108,51 @@ pub struct RetfRecord {
     /// (`enclosing_call.pc + 1`). Used by R3 to guard return-target
     /// equality at runtime.
     pub caller_pc: u32,
+    /// v2.0 Track-R R3a — the caller's proto (target of the return).
+    /// LuaJIT `IR_RETF.op1` equivalent. R3b's lowerer reads this to
+    /// emit a proto-identity assertion at the stitch guard; R3c's
+    /// dispatcher consults it when materialising CallFrames for
+    /// stitched re-entry. For fib(28) self-recursion it equals
+    /// `TraceRecord.head_proto`; kept explicit for forward-compat
+    /// with mutual-recursion patterns.
+    pub proto: Gc<Proto>,
+}
+
+/// v2.0 Track-R R3a — recorder-side close marker for the down-rec
+/// stitched-side-trace shape. Set by the recorder when a depth>0
+/// `Op::Return` fires inside an active recording AND the prior
+/// `rec.retfs` chain shows the trace is bouncing in-and-out of a
+/// single proto past [`RECUNROLL_THRESHOLD`] (the LuaJIT
+/// `lj_record.c:912 lj_trace_err(LJ_TRERR_DOWNREC)` trigger
+/// condition). The lowerer's `end_idx` picker reads this BEFORE the
+/// `self_link_kind` arm and routes through the new
+/// `TraceEnd::DownRec` close.
+///
+/// R3a only populates the close marker and adds the variant; the
+/// lowerer reads it but still pins R1's safe `dispatchable=false`
+/// path. R3b lifts that to a real native back-edge by reading
+/// `DownRecClose.target_proto` + `return_pc` and emitting the
+/// `asm_retf`-equivalent guard sequence. R3c wires the dispatcher
+/// to follow the stitch.
+#[derive(Clone, Copy, Debug)]
+pub struct DownRecClose {
+    /// PC the inlined-frame `Return` is unwinding to. Used by R3b's
+    /// lowerer to bake the guard-target into the stitch IR and by
+    /// R3c's dispatcher to resume interp at the correct caller PC
+    /// on stitch-miss.
+    pub return_pc: u32,
+    /// Caller proto the down-rec is unwinding to — mirrors LuaJIT
+    /// `LJ_TRLINK_DOWNREC` parent-proto association. For fib(28)
+    /// self-recursion this equals `TraceRecord.head_proto`; the
+    /// field is kept explicit so the close marker matches the
+    /// shape R3b's guard predicate consumes.
+    pub target_proto: Gc<Proto>,
+    /// Depth delta the close marker observed — `from_depth - to_depth`
+    /// at the moment the recorder tripped the catch. Always `1` for
+    /// today's down-rec catch (depth>0 → depth-1 Return); kept as a
+    /// u8 so R3d's diag rows can surface non-`1` values when future
+    /// multi-level unrolls are wired up.
+    pub depth_delta: u8,
 }
 
 /// A single bytecode op as captured during trace recording, with the
@@ -196,6 +259,15 @@ pub struct TraceRecord {
     /// R1 — the records are infrastructure for R3's down-rec stitch
     /// (see `.dev/rfcs/v2.0-track-r-prep.md` §3).
     pub retfs: Vec<RetfRecord>,
+    /// v2.0 Track-R R3a — close marker set by the recorder when a
+    /// depth>0 `Op::Return` re-trips the down-rec catch (i.e., the
+    /// `rec.retfs` chain shows the current Return targets the same
+    /// proto as a prior Retf AND the count of prior Retfs targeting
+    /// that proto exceeds [`RECUNROLL_THRESHOLD`]). The lowerer's
+    /// `end_idx` picker reads this BEFORE the `self_link_kind` arm
+    /// and routes through `TraceEnd::DownRec`. `None` on the
+    /// ship-default path (p16 off) and on all non-down-rec closes.
+    pub downrec_close: Option<DownRecClose>,
 }
 
 impl TraceRecord {
@@ -223,6 +295,7 @@ impl TraceRecord {
             side_trace_parent: None,
             self_link_kind: None,
             retfs: Vec::new(),
+            downrec_close: None,
         }
     }
 
@@ -258,6 +331,7 @@ impl TraceRecord {
             side_trace_parent: Some((parent_head_proto, parent_head_pc, parent_exit_idx)),
             self_link_kind: None,
             retfs: Vec::new(),
+            downrec_close: None,
         }
     }
 

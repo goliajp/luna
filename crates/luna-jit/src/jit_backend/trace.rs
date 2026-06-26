@@ -1975,6 +1975,19 @@ fn escape_analyze(
                     // window, same as InlineAbort's blanket escape.
                     escape_all_live(&bindings, &mut sites);
                 }
+                TraceEnd::DownRec { .. } => {
+                    // v2.0 Track-R R3a — down-rec close. R3a routes
+                    // the tail emit through R1's safe deopt path
+                    // (dispatchable=false), so every live binding
+                    // at close must be marshalled back into the
+                    // caller window before the deopt return —
+                    // same blanket-escape posture as SelfLink /
+                    // InlineAbort. R3b's lowerer will keep this
+                    // shape when it lifts to a real native back-edge:
+                    // the retf-guard exit also returns through the
+                    // caller window.
+                    escape_all_live(&bindings, &mut sites);
+                }
             }
         }
     }
@@ -2574,6 +2587,42 @@ enum TraceEnd {
     /// `true` (DOES NOT pin `is_inline_abort_close`); the depth>0
     /// ops in the body are intentional inline content.
     SelfLink(SelfRecKind),
+    /// v2.0 Track-R R3a — recorder detected a down-recursion close
+    /// shape: a depth>0 `Op::Return` fired during recording AND the
+    /// `rec.retfs` chain showed the trace bouncing in-and-out of the
+    /// same caller-proto past [`RECUNROLL_THRESHOLD`]. Mirrors
+    /// LuaJIT's `LJ_TRLINK_DOWNREC` close (`lj_record.c:912
+    /// lj_trace_err(LJ_TRERR_DOWNREC)` → `lj_trace.c:570
+    /// trace_downrec` → restart-at-Return-PC). Routed BEFORE the
+    /// `SelfLink` arm in the `end_idx` picker so depth>0 Return
+    /// closes win over depth>0 self-link cycles.
+    ///
+    /// `return_pc` is the PC the inlined frame is unwinding to —
+    /// the future stitch-entry head_pc that R3b's lowerer will bake
+    /// into the retf-guard sequence (`asm_retf` equivalent).
+    /// `target_proto_id` carries the target proto's `Gc::as_ptr()`
+    /// as a raw `usize` so this enum stays `Copy` for the existing
+    /// `end_idx_opt: Option<(usize, TraceEnd)>` plumbing. The
+    /// matching `Gc<Proto>` lives on `TraceRecord.downrec_close.
+    /// target_proto` (not erased); the lowerer cross-references the
+    /// two when emitting the guard.
+    ///
+    /// **R3a constraint**: the lowerer still falls through to R1's
+    /// safe `dispatchable=false` deopt-tail (`"self-link-retf-r1"`
+    /// label retained) when this arm fires. R3b lifts that to a real
+    /// native back-edge by emitting the retf-guard + stitch sentinel.
+    DownRec {
+        /// PC the Return is unwinding to (caller's resume PC).
+        return_pc: u32,
+        /// Caller proto's `Gc::as_ptr()` as `usize` (kept opaque so
+        /// `TraceEnd` stays `Copy`). The lowerer reads
+        /// `TraceRecord.downrec_close.target_proto` for the real
+        /// `Gc<Proto>`.
+        target_proto_id: usize,
+        /// `from_depth - to_depth` at the moment the catch tripped.
+        /// Always `1` today.
+        depth_delta: u8,
+    },
 }
 
 /// Direction the cmp/Jmp pair took in the recording. Both
@@ -3613,7 +3662,22 @@ pub fn lower_trace_into_named<M: Module>(
     // recorder closes the trace cleanly past the return; without
     // this truncation the Return would fail the whitelist check and
     // bail the whole compile.
-    let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(kind) = record.self_link_kind {
+    // v2.0 Track-R R3a — DownRec close wins over SelfLink: a depth>0
+    // `Op::Return` re-trip of the recunroll threshold (captured at
+    // `exec.rs` recorder gate) routes here BEFORE the SelfLink arm.
+    // R3a only adds the variant + picker arm — the tail emit below
+    // still falls through to the R1 safe `dispatchable=false` path
+    // (the `self_link_idx_opt` arm) for now. R3b lifts that.
+    let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
+        Some((
+            record.ops.len(),
+            TraceEnd::DownRec {
+                return_pc: dr.return_pc,
+                target_proto_id: dr.target_proto.as_ptr() as usize,
+                depth_delta: dr.depth_delta,
+            },
+        ))
+    } else if let Some(kind) = record.self_link_kind {
         // P16-A/B — self-link close overrides the natural terminator
         // scan. Recorder stopped capturing AT the head_pc re-entry
         // (about to re-execute the deepest-inlined frame's first op);
@@ -3763,6 +3827,24 @@ pub fn lower_trace_into_named<M: Module>(
     // `do_internal_loop` (the trace is designed to loop).
     let self_link_idx_opt: Option<(usize, SelfRecKind)> = match end_idx_opt {
         Some((i, TraceEnd::SelfLink(kind))) => Some((i, kind)),
+        _ => None,
+    };
+    // v2.0 Track-R R3a — `downrec_idx_opt` = `Some(effective_end, return_pc,
+    // target_proto_id, depth_delta)` when the down-rec catch tripped. R3a
+    // only collects the idx + close marker payload; the tail emit shares
+    // the SelfLink path's R1 safe-deopt code (R3b lifts to a real
+    // back-edge). Diagnostic only for R3a — the dispatch_off label
+    // `"self-link-retf-r1"` stays the same so R2's close-cause counters
+    // see the close-cause taxonomy that R3b will branch off.
+    let downrec_idx_opt: Option<(usize, u32, usize, u8)> = match end_idx_opt {
+        Some((
+            i,
+            TraceEnd::DownRec {
+                return_pc,
+                target_proto_id,
+                depth_delta,
+            },
+        )) => Some((i, return_pc, target_proto_id, depth_delta)),
         _ => None,
     };
 
@@ -7027,18 +7109,55 @@ pub fn lower_trace_into_named<M: Module>(
     // the cmp/ForLoop loop-permission predicates, and (critically)
     // don't trip on inline_abort_idx_opt — the SelfLink close path
     // doesn't go through that arm.
+    // v2.0 Track-R R3a — `downrec_idx_opt` does NOT permit internal
+    // loop (R3a routes through the R1 safe deopt path, single-shot).
+    // R3b's lift to a real native back-edge will introduce its own
+    // tail shape; until then, treat DownRec the same as a hard
+    // truncation marker that forces one-shot dispatch.
     let do_internal_loop = opts.internal_loop
         && (has_cmp || for_loop_idx_opt.is_some() || self_link_idx_opt.is_some())
         && call_idx_opt.is_none()
         && return_idx_opt.is_none()
-        && inline_abort_idx_opt.is_none();
+        && inline_abort_idx_opt.is_none()
+        && downrec_idx_opt.is_none();
     // P12-S4-step3b — every tail `emit_store_back_and_return_pc`
     // passes `&regs_full[..max_stack]` so the store-back ONLY writes
     // the caller's window back to interp stack. Slots at
     // [max_stack..window_size) are inline-frame scratch and must not
     // leak into the dispatcher's reg_state restore.
     let caller_regs: &[Variable] = &regs_full[..max_stack];
-    if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
+    if let Some((_dr_idx, dr_return_pc, _target_proto_id, _depth_delta)) = downrec_idx_opt {
+        // v2.0 Track-R R3a — `TraceEnd::DownRec` close. R3a falls
+        // through to R1's safe deopt-tail (store back caller window,
+        // return head_pc through GLOBAL sentinel, pin
+        // `dispatchable=false`). R3b lifts to a real native
+        // back-edge by replacing this arm with a retf-guard +
+        // stitch sentinel:
+        //   1. Load `[base-8]` (saved caller PC).
+        //   2. CMP against IR-baked `dr_return_pc`.
+        //   3. brif eq → BASE adjust + tail-call into child trace
+        //      via `encode_side_sentinel(SIDE_SENT_KIND_DOWNREC,
+        //      parent_traceno)`.
+        //   4. brif ne → fall through to this deopt path.
+        // Today step 4 IS the whole arm — `dr_return_pc` is recorded
+        // but not yet consumed (kept here for R3b's IR emit).
+        // `_target_proto_id` and `_depth_delta` mirror the same
+        // R3b/R3c-only consumption surface; touched as a no-op so
+        // rustc treats them as live without flagging dead fields.
+        let _ = dr_return_pc;
+        emit_store_back_and_return_pc(
+            &mut bcx,
+            caller_regs,
+            reg_state,
+            record.head_pc,
+            flush_ctx.as_ref(),
+            0i64,
+            trace_fn_sig_ref,
+            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+        );
+        dispatchable = false;
+        dispatch_off_reason = dispatch_off_reason.or(Some("self-link-retf-r1"));
+    } else if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
         // v2.0 Track-R R1 — RETF-guards correctness primitive replaces
         // the previous P16-B snapshot-restore tail.
         //
