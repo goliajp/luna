@@ -5220,16 +5220,14 @@ pub fn lower_trace_into_named<M: Module>(
     {
         let z = bcx.ins().iconst(types::I64, 0);
         bcx.def_var(base_var, z);
-        // Codegen-audit anchor: one use to keep the Variable from
-        // being DCE'd in optimized builds. The `iadd_imm(_, 0)` will
-        // fold to the source value at the mid-end, so the only IR
-        // residue is the `iconst.i64 0` which Cranelift hoists or
-        // emits as `mov` (Apple Silicon AArch64 immediate-zero is
-        // typically the `wzr` / `xzr` register, zero codegen cost).
-        // `cargo asm` audit (Phase D) confirms no drift vs. pre-sub-1.
-        let base_now = bcx.use_var(base_var);
-        let bumped = bcx.ins().iadd_imm(base_now, 0);
-        bcx.def_var(base_var, bumped);
+        // Mirror the tforcall_tag_var declaration pattern exactly
+        // (declare + iconst init + def_var, no anchor use). Cranelift
+        // tree-shakes the unused Variable in optimized builds, so the
+        // sub-1 scaffold adds zero machine-code residue vs. pre-sub-1.
+        // Risk D1.R1 mitigation is deferred to sub-2 where op-arm
+        // migration actually exercises `bcx.use_var(base_var)` —
+        // that's the codegen surface that matters for the
+        // GlobalValue-vs-Variable escape route decision.
         BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
