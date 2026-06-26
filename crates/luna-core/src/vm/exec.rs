@@ -2884,6 +2884,13 @@ impl Vm {
         &self.jit.counters.closed_lens
     }
 
+    /// v2.0 Track-R R2 — see [`crate::vm::jit_state::JitCounters::close_cause_counts`].
+    /// Per-reason close-cause counts (recorder-side abort/discard +
+    /// lowerer-side dispatch_off labels) keyed by `&'static str`.
+    pub fn trace_close_cause_counts(&self) -> &std::collections::HashMap<&'static str, u64> {
+        &self.jit.counters.close_cause_counts
+    }
+
     /// P12-S2.C — number of closed traces the lowerer compiled and
     /// parked on `Proto.traces`. Re-records of the same head_pc are
     /// deduped (the second close finds the head_pc already cached
@@ -5697,6 +5704,16 @@ impl Vm {
                             .counters
                             .closed_lens
                             .push((rec.is_call_triggered, rec.ops.len()));
+                        // v2.0 Track-R R2 — partial-coverage discard
+                        // close path. Pre-R2 this site bumped `closed`
+                        // + `closed_lens` (visibility) but no per-
+                        // reason label, so probes couldn't separate a
+                        // real successful close from a discard tally.
+                        // Tag explicitly to make the recorder-side
+                        // close-cause taxonomy single-source.
+                        self.jit
+                            .counters
+                            .bump_close_cause("partial-coverage-discard");
                         self.jit.active_trace = None;
                         // Continue with interp loop — don't
                         // fall through to compile path.
@@ -5800,6 +5817,16 @@ impl Vm {
                                     }
                                     if let Some(reason) = ct.dispatch_off_reason {
                                         self.jit.counters.dispatch_off_reasons.push(reason);
+                                        // v2.0 Track-R R2 — mirror
+                                        // the ordered Vec push into
+                                        // the per-reason HashMap so
+                                        // probes can answer "how many
+                                        // of each dispatch_off label
+                                        // fired" in O(1) without
+                                        // walking the Vec. Same
+                                        // bucket as the recorder-side
+                                        // abort/discard tags above.
+                                        self.jit.counters.bump_close_cause(reason);
                                     }
                                     // P15-A v2-A — side-trace finalisation.
                                     // Pin `dispatchable=false` so the
@@ -6065,8 +6092,17 @@ impl Vm {
                         });
                     }
                     if !rec.push(op) {
+                        // v2.0 Track-R R2 — recorder overflow
+                        // (MAX_TRACE_LEN). Pre-R2 this site bumped
+                        // `aborted` with no reason label, leaving the
+                        // overflow indistinguishable from any other
+                        // abort cause that might be added later.
+                        // Tag it explicitly under the close-cause
+                        // bucket so probes can tally overflow vs
+                        // other abort causes in O(1).
                         self.jit.active_trace = None;
                         self.jit.counters.aborted += 1;
+                        self.jit.counters.bump_close_cause("trace-overflow");
                     }
                 }
             }
