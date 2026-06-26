@@ -162,7 +162,13 @@ pub fn cache_lookup_or_compile(
     let key = proto_cache_key(&proto, pre53, float_only);
     // v2.0 Track J sub-step J-B Phase D — cache lookups read from the
     // per-`Vm` `storage.cache` field instead of the `JIT_CACHE` TLS.
-    let cs = storage::from_storage(storage);
+    //
+    // v2.0 J-B follow-up — `from_storage` returns `Result`; on
+    // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
+    // skip JIT entirely. The dispatcher already treats `None` as
+    // "this Proto stays on interp", so graceful skip = no JIT for
+    // this Vm, no SIGABRT across any C-ABI boundary.
+    let cs = storage::from_storage(storage).ok()?;
     let cached = cs.cache.get(&key).copied();
     if let Some(hit) = cached {
         return match hit {
@@ -199,7 +205,18 @@ pub fn cache_lookup_or_compile(
             // handle owns holds the mmap. Park the handle on the
             // per-`Vm` storage so the entry_raw pointer stays valid
             // for the lifetime of this `Vm`. Append-only.
-            storage::from_storage(storage).cache_handles.push(handle);
+            //
+            // v2.0 J-B follow-up — `from_storage` is `Result`-shaped
+            // now. The `.ok()?` short-circuit above already verified
+            // the storage was a `CraneliftJitStorage`, so on a sane
+            // call this branch is unreachable. Guard with `match`
+            // for honesty: on the impossible Err arm the compiled
+            // `handle` drops (its `JITModule` releases the mmap) and
+            // we return None — no leaked code page, no crash.
+            match storage::from_storage(storage) {
+                Ok(cs) => cs.cache_handles.push(handle),
+                Err(_) => return None,
+            }
             CacheEntry::Compiled {
                 entry: raw,
                 num_args,
@@ -212,7 +229,11 @@ pub fn cache_lookup_or_compile(
         }
         None => CacheEntry::Failed,
     };
-    storage::from_storage(storage).cache.insert(key, entry);
+    // v2.0 J-B follow-up — same `from_storage` is-Result rationale as
+    // above; on the impossible Err branch we drop the freshly built
+    // `entry` (it was `Copy`, no resource loss) and skip the cache
+    // insert.
+    storage::from_storage(storage).ok()?.cache.insert(key, entry);
     match entry {
         CacheEntry::Failed => None,
         CacheEntry::Compiled {
