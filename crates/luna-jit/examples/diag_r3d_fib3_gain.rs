@@ -58,10 +58,7 @@ fn run(label: &str, p16_on: bool, iters: u64) -> std::time::Duration {
         returned == expected,
         elapsed
     );
-    println!(
-        "  trace_dispatched:       {}",
-        vm.trace_dispatched_count()
-    );
+    println!("  trace_dispatched:       {}", vm.trace_dispatched_count());
     println!("  trace_deopt:            {}", vm.trace_deopt_count());
     println!(
         "  downrec_link_compiled:  {}",
