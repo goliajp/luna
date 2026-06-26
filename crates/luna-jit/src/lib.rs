@@ -90,7 +90,9 @@ pub mod jit {
     /// working; new code can `use luna_jit::jit::trace::try_compile_trace_with_options`.
     pub mod trace {
         pub use crate::jit_backend::trace::{
-            last_compile_checkpoint, try_compile_trace, try_compile_trace_with_options,
+            base_var_scaffold_declared_count, last_compile_checkpoint,
+            reset_base_var_scaffold_declared_count, try_compile_trace,
+            try_compile_trace_with_options,
         };
         pub use luna_core::jit::trace_types::*;
     }
