@@ -7212,11 +7212,34 @@ pub fn lower_trace_into_named<M: Module>(
         let stitch_blk = bcx.create_block();
         let deopt_blk = bcx.create_block();
 
-        // Guard: caller-pc match. `iconst(0)` is the R3c-replace
-        // sentinel; once R3c wires the dispatcher slot the load
-        // becomes `bcx.ins().load(I64, MemFlags::trusted(), reg_state,
-        // <reserved_slot_offset>)`.
-        let saved_pc = bcx.ins().iconst(types::I64, 0);
+        // v2.0 Track-R R3c — saved-PC slot load. R3b had `iconst(0)`
+        // here as the placeholder (cranelift constant-folded the
+        // compare to "always false", deopt arm always taken).
+        // R3c's dispatcher pre-invoke writes the parent (caller)
+        // frame's `pc` into `reg_state[window_size_us]` (the
+        // reserved slot one past the regular window — see
+        // `crates/luna-core/src/vm/exec.rs` `is_downrec_entry`
+        // block) so this load returns the runtime saved caller PC
+        // the trace was entered from. The comparison against the
+        // IR-baked `dr_return_pc` (= recorder's captured
+        // `caller_pc` at the threshold-tripping retf) determines
+        // whether the inlined chain's tail Return matches the
+        // recorded shape: a HIT returns the DOWNREC sentinel and
+        // a MISS falls into the `deopt_blk` arm below.
+        //
+        // Per R3 prep §7.1 risk: this single-CMP guard may miss
+        // heavily until R3d's multi-way fan-out matches every
+        // distinct `caller_pc` the trace's `rec.retfs` captured.
+        // R3c measures miss-rate via `downrec_dispatched` /
+        // `downrec_deopt` counters at the dispatcher arm so R3d
+        // can decide whether to lift `dispatchable = true`.
+        let saved_pc_offset = (window_size_us as i32) * 8;
+        let saved_pc = bcx.ins().load(
+            types::I64,
+            MemFlags::trusted(),
+            reg_state,
+            saved_pc_offset,
+        );
         let imm_pc = bcx.ins().iconst(types::I64, dr_return_pc as i64);
         let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
         bcx.ins().brif(eq, stitch_blk, &[], deopt_blk, &[]);
