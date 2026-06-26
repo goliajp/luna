@@ -691,6 +691,42 @@ pub struct CompiledTrace {
     /// re-read the parent's stale exit value across the child's
     /// internal-loop iters (see s12_step_b bug analysis).
     pub body_writes: Box<[u32]>,
+    /// v2.0 Track-R R3b — down-recursion stitch link populated by
+    /// the lowerer's `downrec_idx_opt` arm
+    /// (`crates/luna-jit/src/jit_backend/trace.rs:7129+`) when a
+    /// trace closes via `TraceEnd::DownRec`. Layout:
+    /// `Some((trace_id_placeholder, target_head_pc))`. R3b emits a
+    /// caller-pc guard at the close site that, on guard hit, returns
+    /// the [`SIDE_SENT_DOWNREC_CODE`] sentinel — and on guard miss,
+    /// falls back to R1's safe deopt-tail (store back caller window +
+    /// return `head_pc` via GLOBAL sentinel, [`Self::dispatchable`]
+    /// pinned to `false`). R3b deliberately keeps
+    /// `dispatchable = false` even when this field is `Some(_)`;
+    /// R3d will lift `dispatchable = true` after R3c wires the
+    /// dispatcher consumer.
+    ///
+    /// Field semantics agreed for R3b -> R3c handoff:
+    /// - `.0` = placeholder trace id. At compile time the trace
+    ///   doesn't know its own index in `head_proto.traces` yet
+    ///   (the index is assigned at the close handler's `traces.push`
+    ///   site after this function returns). R3b writes `0` here as
+    ///   a "this trace, self-stitch" sentinel; R3c interprets a
+    ///   non-`None` value with `.0 == 0` as "stitch target = the
+    ///   trace currently dispatching" and uses [`Self::head_pc`]
+    ///   for resolution. A future R3.2 may carry an explicit
+    ///   `head_proto.traces`-index when mutual-recursion stitch
+    ///   lands.
+    /// - `.1` = `target_head_pc`, copied from `record.head_pc` at
+    ///   compile time. R3c's stitch dispatcher tail-calls into the
+    ///   target trace at this PC (which today = self, the trace
+    ///   currently dispatching).
+    ///
+    /// `None` for every trace that doesn't close via `TraceEnd::
+    /// DownRec`. Tested via R3b's `r3b_lowerer_stitch_sentinel.rs`
+    /// regression: at least 1 trace recorded on a fib(3) hot-loop
+    /// has `downrec_link == Some(_)` after the R3a recorder pushes
+    /// the threshold-tripping retfs.
+    pub downrec_link: Option<(u32, u32)>,
 }
 
 /// P12-S4-step4b-C-2 — per inline cmp@d>0 side-exit record. See
@@ -757,20 +793,69 @@ pub const SIDE_SENT_KIND_INLINE: u8 = 1;
 pub const SIDE_SENT_KIND_TAG: u8 = 2;
 /// Sentinel kind for global-cell side-traces (env-table exits).
 pub const SIDE_SENT_KIND_GLOBAL: u8 = 3;
+/// v2.0 Track-R R3b — sentinel kind for down-recursion stitch
+/// returns. Emitted at the `TraceEnd::DownRec` close arm in
+/// `crates/luna-jit/src/jit_backend/trace.rs` `downrec_idx_opt`
+/// branch when the caller-pc guard hits (saved `[base-8]` matches
+/// the recorded `target_proto`'s expected return PC) so the
+/// dispatcher (R3c) knows to walk the parent trace's RetfRecord
+/// chain to materialise the inlined frames and tail-call into the
+/// stitched child trace rather than falling back to interp at
+/// `head_pc`. R3b only emits the sentinel + populates
+/// `CompiledTrace.downrec_link`; the dispatcher consumer arrives
+/// in R3c. Until R3c lands, the sentinel falls into the existing
+/// dispatcher's "cache miss" fallback path (interp resumes at
+/// `head_pc`) so the trace stays correct.
+pub const SIDE_SENT_KIND_DOWNREC: u8 = 4;
+
+/// v2.0 Track-R R3b — encoded sentinel value reserved for
+/// [`SIDE_SENT_KIND_DOWNREC`]. Picked as `0x10` (= 16) which sits
+/// in the (kind=0, local=0..=31) slice unused by existing kinds
+/// 1..=3 (those occupy encoded ranges 32..=127). DOWNREC has no
+/// `local` (only 1 stitch slot per trace today), so the value is
+/// a single constant rather than a function of `local`. Out-of-band
+/// vs the regular `((kind & 0x3) << 5) | (local & 0x1F)` layout —
+/// keeps existing kinds' encoding (and TAG local cap of 32) intact
+/// without widening the kind bits.
+pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
 
 /// P15-A v2-C-A2 — encode a `(kind, local)` pair into a 7-bit
-/// sentinel code that fits in `raw_ret`'s bits 56..=62. Layout:
-/// upper 2 bits = kind (1..=3), lower 5 bits = local index. A local
-/// index `>= 32` is truncated; the close handler caps tag-cell
-/// allocation at 32 to avoid sentinel collisions. The dispatcher
-/// uses the full 7-bit value as the key into the parent's
-/// `side_trace_cache`.
+/// sentinel code that fits in `raw_ret`'s bits 56..=62. Layout for
+/// kinds 1..=3: upper 2 bits = kind, lower 5 bits = local index.
+/// A local index `>= 32` is truncated; the close handler caps
+/// tag-cell allocation at 32 to avoid sentinel collisions. The
+/// dispatcher uses the full 7-bit value as the key into the
+/// parent's `side_trace_cache`.
+///
+/// v2.0 Track-R R3b adds kind 4 ([`SIDE_SENT_KIND_DOWNREC`]) which
+/// is encoded out-of-band as [`SIDE_SENT_DOWNREC_CODE`] (= 0x10).
+/// DOWNREC has only one slot per trace (the stitch target lives on
+/// `CompiledTrace.downrec_link`, not in the side_trace_cache), so
+/// its `local` is asserted to be 0.
 pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
     debug_assert!(
-        (1..=3).contains(&kind),
-        "kind must be SIDE_SENT_KIND_* (1..=3)"
+        (1..=4).contains(&kind),
+        "kind must be SIDE_SENT_KIND_* (1..=4)"
     );
+    if kind == SIDE_SENT_KIND_DOWNREC {
+        debug_assert!(
+            local == 0,
+            "SIDE_SENT_KIND_DOWNREC requires local == 0 (single stitch slot per trace)"
+        );
+        return SIDE_SENT_DOWNREC_CODE;
+    }
     ((kind as u32 & 0x3) << 5) | (local & 0x1F)
+}
+
+/// v2.0 Track-R R3b — true iff the dispatcher's decoded
+/// `sentinel_code` (`(raw_ret >> 56) & 0x7F` at
+/// `crates/luna-core/src/vm/exec.rs:6355`) marks a down-recursion
+/// stitch return. The dispatcher arm that consumes this is R3c's
+/// job; R3b adds the predicate so the lowerer and any diagnostic
+/// probe share one definition.
+#[inline]
+pub fn is_downrec_sentinel(sentinel_code: u32) -> bool {
+    sentinel_code == SIDE_SENT_DOWNREC_CODE
 }
 
 /// P15-A v2-C-A6 — env-gated probe switch. `LUNA_V2C_PROBE=1` (any
@@ -986,6 +1071,10 @@ impl CompiledTrace {
             materialize_emit_count: 0,
             closure_seen: 0,
             body_writes: Box::new([]),
+            // v2.0 Track-R R3b — AOT-install path never triggers a
+            // down-recursion stitch (no R3a recorder fires on the
+            // deploy-side install). Always `None`.
+            downrec_link: None,
         }
     }
 }

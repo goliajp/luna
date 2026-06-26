@@ -2891,6 +2891,16 @@ impl Vm {
         &self.jit.counters.close_cause_counts
     }
 
+    /// v2.0 Track-R R3b — number of compiled traces whose
+    /// `CompiledTrace.downrec_link` is `Some(_)` (lowerer's
+    /// `downrec_idx_opt` arm emitted the stitch sentinel + caller-pc
+    /// guard scaffold). R3b regression pin checks `>= 1` on a fib(3)
+    /// hot loop with p16-on. R3b keeps `dispatchable = false` even
+    /// when this count bumps; R3d will lift it.
+    pub fn trace_downrec_link_compiled_count(&self) -> u64 {
+        self.jit.counters.downrec_link_compiled
+    }
+
     /// P12-S2.C — number of closed traces the lowerer compiled and
     /// parked on `Proto.traces`. Re-records of the same head_pc are
     /// deduped (the second close finds the head_pc already cached
@@ -5827,6 +5837,19 @@ impl Vm {
                                         // bucket as the recorder-side
                                         // abort/discard tags above.
                                         self.jit.counters.bump_close_cause(reason);
+                                    }
+                                    // v2.0 Track-R R3b — count
+                                    // compiled traces that carry a
+                                    // down-recursion stitch link.
+                                    // Bumped here (not at the lowerer
+                                    // emit site) because the Vm's
+                                    // JitCounters live on the Vm,
+                                    // and the lowerer doesn't have a
+                                    // Vm handle. R3b's regression
+                                    // pin reads this via
+                                    // `Vm::trace_downrec_link_compiled_count`.
+                                    if ct.downrec_link.is_some() {
+                                        self.jit.counters.downrec_link_compiled += 1;
                                     }
                                     // P15-A v2-A — side-trace finalisation.
                                     // Pin `dispatchable=false` so the

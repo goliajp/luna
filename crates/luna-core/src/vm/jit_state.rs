@@ -187,6 +187,17 @@ pub struct JitCounters {
     ///   (every lowerer-side dispatch_off label that already exists
     ///   on `CompiledTrace.dispatch_off_reason`)
     pub close_cause_counts: std::collections::HashMap<&'static str, u64>,
+    /// v2.0 Track-R R3b — number of compiled traces whose
+    /// `CompiledTrace.downrec_link` is `Some(_)`. Bumped at trace
+    /// finalisation alongside the `dispatch_off_reasons.push` site
+    /// (`exec.rs` close handler) when the lowerer's
+    /// `downrec_idx_opt` arm emitted the stitch sentinel + caller-pc
+    /// guard scaffold. Probe surface for the R3b regression test
+    /// (`r3b_lowerer_stitch_sentinel`) and R3d's e2e smoke. R3b
+    /// keeps `CompiledTrace.dispatchable = false` even when this
+    /// counter bumps; R3d will lift `dispatchable` after R3c wires
+    /// the dispatcher consumer.
+    pub downrec_link_compiled: u64,
 }
 
 impl JitCounters {

@@ -55,6 +55,7 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         materialize_emit_count: 0,
         closure_seen: 0,
         body_writes: Box::new([]),
+        downrec_link: None,
     }
 }
 
