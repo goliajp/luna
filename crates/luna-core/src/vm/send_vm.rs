@@ -138,6 +138,58 @@ impl SendVm {
         }
     }
 
+    /// v2.0 Track J sub-step J-E — wrap a caller-constructed `Vm`
+    /// (with any backend / libraries / globals already installed) in
+    /// a `SendVm`. The complement to [`SendVm::new`], which constructs
+    /// an interp-only Vm internally.
+    ///
+    /// The canonical use case is JIT-equipped cross-thread embedding:
+    ///
+    /// ```ignore
+    /// // On thread A: build a JIT-equipped Vm and prepare it.
+    /// let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+    /// vm.open_base();
+    /// vm.open_math();
+    /// // Wrap and ship to a worker thread.
+    /// let send = luna_core::vm::SendVm::from_vm(vm);
+    /// std::thread::spawn(move || {
+    ///     send.eval("for i=1,1000 do end; return 1").unwrap();
+    /// });
+    /// ```
+    ///
+    /// SAFETY contract (same as `SendVm::new`'s outer
+    /// `unsafe impl Send`, plus a caller-side obligation):
+    ///
+    /// 1. The `Vm` passed in must not be reachable from any other
+    ///    thread at the point of the move into this constructor.
+    ///    `pub fn` taking `vm: Vm` by value enforces this at the
+    ///    type system.
+    /// 2. Any thread-local state captured at the `Vm`'s construction
+    ///    (e.g. the std-library RNG seed populated by
+    ///    `rng_auto_seed`) was already produced on the original
+    ///    thread before the move and is just data after that point —
+    ///    the SendVm doesn't re-read TLS for it.
+    /// 3. For JIT-equipped Vms, the J-D `scoped_jit_vm_rebind` RAII
+    ///    means the per-dispatch `JIT_VM` / `JIT_CL` TLS slots are
+    ///    re-armed on every `enter_jit` call on whichever thread
+    ///    holds the write guard, so cross-thread JIT compile +
+    ///    dispatch is sound under the same single-mutator invariant
+    ///    that bare `Vm` relies on.
+    ///
+    /// See `.dev/rfcs/v2.0-track-j-e-verdict.md` for the J-E ship
+    /// notes.
+    pub fn from_vm(vm: Vm) -> Self {
+        // Same arc_with_non_send_sync pattern as `new()` — the outer
+        // `unsafe impl Send for SendVm` is what makes the wrapper
+        // Send-shaped despite `UnsafeCell<Vm>` being `!Send + !Sync`.
+        #[allow(clippy::arc_with_non_send_sync)]
+        let inner = Arc::new(UnsafeCell::new(vm));
+        Self {
+            inner,
+            lock: Arc::new(RwLock::new(())),
+        }
+    }
+
     /// Install the base library on this `SendVm`. Mirror of
     /// [`Vm::open_base`].
     pub fn open_base(&self) {
@@ -227,6 +279,54 @@ impl SendVm {
     /// Release a single pinned root. Mirror of [`Vm::unpin`].
     pub fn unpin(&self, t: HostRootTicket) -> Result<(), HostRootStale> {
         self.with_vm_mut(|vm| vm.unpin(t))
+    }
+
+    /// v2.0 Track J sub-step J-E — snapshot of [`Vm::trace_dispatched_count`]
+    /// through the lock. Used by the J-E cross-thread JIT smoke test
+    /// (`luna-jit/tests/cv_send_vm_jit_smoke.rs`) to confirm the trace
+    /// JIT actually engaged on the worker thread; useful to embedders
+    /// who want to observe whether a script went JIT-hot through the
+    /// SendVm boundary.
+    pub fn trace_dispatched_count(&self) -> u64 {
+        self.with_vm_mut(|vm| vm.trace_dispatched_count())
+    }
+
+    /// v2.0 Track J sub-step J-E — companion accessor for the cache
+    /// entry count when the wrapped Vm has the Cranelift JIT backend
+    /// installed (`luna_jit::new_minimal_with_jit` etc.). Returns 0 for
+    /// JIT-free Vms (the default constructed by [`SendVm::new`]).
+    ///
+    /// The actual count comes from a luna-jit-side helper
+    /// (`luna_jit::jit_backend::cache_entry_count`); luna-core can't
+    /// look at concrete Cranelift types directly without breaking the
+    /// 0-third-party-dep gate, so we expose a closure-shaped accessor
+    /// instead. Use [`Self::with_vm`] for that pattern.
+    #[doc(hidden)]
+    pub fn __j_e_handle_arc_count(&self) -> usize {
+        Arc::strong_count(&self.inner)
+    }
+
+    /// v2.0 Track J sub-step J-E — read-only closure-shaped accessor
+    /// that runs `f` against `&Vm` under the lock. Mirror of
+    /// [`Self::with_vm_mut`] but immutable. Lets embedders read
+    /// arbitrary `Vm` state (counters, globals, dialect, etc.)
+    /// without growing the `SendVm` API one method at a time.
+    ///
+    /// The lock acquired is still the `write` guard because
+    /// `RwLock::read` doesn't compose with `UnsafeCell<Vm>` —
+    /// concurrent readers would risk sharing `&Vm` while a `&mut Vm`
+    /// materializes from elsewhere. Per the module-level safety
+    /// notes, every method takes the write guard for this reason.
+    pub fn with_vm<R>(&self, f: impl FnOnce(&Vm) -> R) -> R {
+        let _guard = self.lock.write().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: the write guard above provides exclusive access to
+        // the wrapped `Vm` for this scope. We materialize `&Vm`
+        // (immutable) with lifetime bounded by `_guard`; no aliasing
+        // `&mut Vm` exists while this borrow lives. Per the
+        // module-level safety contract, this preserves the single-
+        // mutator invariant.
+        let vm: &Vm = unsafe { &*self.inner.get() };
+        f(vm)
     }
 
     /// Internal: take the write guard and run `f` with `&mut Vm`.
