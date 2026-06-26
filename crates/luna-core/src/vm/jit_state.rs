@@ -237,6 +237,13 @@ pub struct JitCounters {
     /// - `"trace-overflow"` (recorder MAX_TRACE_LEN overflow)
     /// - `"partial-coverage-discard"` (recorder S13-I cap-not-reached discard)
     /// - `"self-link-retf-r1"` (lowerer SelfLink-R1 dispatchable=false)
+    /// - `"selflink-yields-to-downrec"` (R3.3+ sub-0 recorder SelfLink
+    ///   trip rerouted to `downrec_close` when `cur_depth >= 2` AND a
+    ///   parent `Op::Call` ancestor exists in `rec.ops`; lifts fib(28)-
+    ///   like shapes off the R1 safety pin onto the R3a/R3b/R3d DownRec
+    ///   lowerer arm — single-candidate guard chain keeps dispatchable=
+    ///   false + `"downrec-stitch-pending"` label until sub-1/2/3/4
+    ///   ship base_var threading)
     /// - `"length-gate"` / `"InlineAbort-gate"` / `"GetI:inference-fail"`
     ///   / `"GetTable:inference-fail"` / `"GetField:inference-fail"`
     ///   / `"GetTabUp:inference-fail"` / `"GetUpval:not-Closure-use"`

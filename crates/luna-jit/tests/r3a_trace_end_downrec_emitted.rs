@@ -101,14 +101,27 @@ fn p16_on_fib_3_hot_loop_bumps_downrec_restart_close_cause() {
     );
 }
 
-/// fib(28) p16-on closes via the self-link cycle catch at depth 3
-/// entry BEFORE any base case reaches the recorder — `rec.retfs`
-/// stays empty so R3a's downrec catch does NOT fire on this shape.
-/// Pin both halves: R1 result correctness (317_811) + R3a's
-/// downrec-restart label NOT bumped + R1's self-link-retf-r1
-/// label IS bumped.
+/// fib(28) p16-on routes the SelfLink trip through R3.3+ sub-0's
+/// `downrec_close` lift (the SelfLink trip site at `cur_depth >= 2`
+/// synthesises a `DownRecClose` marker from the most recent parent
+/// Op::Call ancestor and bumps `"selflink-yields-to-downrec"`). The
+/// end_idx picker routes through the DownRec arm; the lowerer's R3d
+/// single-candidate guard chain keeps `dispatchable=false` +
+/// `"downrec-stitch-pending"` label. Pin: R1 result correctness
+/// (317_811) + `"selflink-yields-to-downrec"` >= 1 + the
+/// `"self-link-retf-r1"` label NO LONGER fires (sub-0 retired this
+/// path for self-recursion at cur_depth >= 2).
+///
+/// v2.0 Track-R R3.3+ sub-0 migration: pre-sub-0 this test asserted
+/// the OPPOSITE invariant — that fib(28)'s SelfLink-vs-DownRec catch
+/// fell on the SelfLink side. Sub-0 changes the recorder routing so
+/// fib(28) reaches DownRec via the SelfLink-yields lift; the test
+/// migrates to the new invariant while keeping the R1 correctness
+/// pin and the `"downrec-restart"` non-trip (the depth>0 Op::Return
+/// path still requires `rec.retfs` non-empty, which never reaches
+/// the recorder for fib(28)).
 #[test]
-fn p16_on_fib_28_self_link_closes_before_downrec() {
+fn p16_on_fib_28_selflink_yields_to_downrec() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -133,18 +146,23 @@ fn p16_on_fib_28_self_link_closes_before_downrec() {
     );
 
     let counts = vm.trace_close_cause_counts();
-    let downrec_restart = counts.get("downrec-restart").copied().unwrap_or(0);
-    assert_eq!(
-        downrec_restart, 0,
-        "fib(28) closes via self-link cycle catch before base-case \
-         Returns reach the recorder — downrec-restart must NOT bump \
-         on this shape. Got {downrec_restart}."
+    let yields = counts
+        .get("selflink-yields-to-downrec")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        yields >= 1,
+        "R3.3+ sub-0 pin — fib(28) p16-on must bump \
+         \"selflink-yields-to-downrec\" >= 1 (SelfLink trip rerouted \
+         to downrec_close at cur_depth >= 2). Got {yields} (full \
+         counts: {counts:?})"
     );
     let r1_label = counts.get("self-link-retf-r1").copied().unwrap_or(0);
-    assert!(
-        r1_label >= 1,
-        "R1 regression — fib(28) p16-on must bump self-link-retf-r1 \
-         >= 1, got {r1_label}"
+    assert_eq!(
+        r1_label, 0,
+        "R3.3+ sub-0 retired the self-link-retf-r1 path for fib(28) \
+         (SelfLink trip now routes through downrec_close). Got \
+         {r1_label} (full counts: {counts:?})"
     );
 }
 

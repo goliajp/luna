@@ -85,13 +85,22 @@ fn fib_28_returns_correct_value_with_p16_self_link_disabled() {
     assert_eq!(returned, EXPECTED_FIB_28);
 }
 
-/// Pin that the R1 dispatch_off_reason label is present when p16-on
-/// fires. The diag harness reports this — surfacing it as a test
-/// keeps the gate label discoverable for future probes (R2 close-cause
-/// hygiene + R3 down-rec stitch will need to disambiguate this from
-/// other dispatch_off reasons).
+/// Pin that the dispatch_off_reason label produced by R1's safety pin
+/// for fib(28) p16-on is visible at the diag-equivalent probe surface.
+///
+/// v2.0 Track-R R3.3+ sub-0 migration: pre-sub-0 the recorder closed
+/// fib(28) via SelfLink → lowerer pinned `dispatch_off_reason =
+/// "self-link-retf-r1"`. Sub-0 reroutes the SelfLink trip to
+/// `downrec_close` when `cur_depth >= 2` → lowerer's R3d single-
+/// candidate guard chain pins `dispatch_off_reason =
+/// "downrec-stitch-pending"`. Both labels reach the SAME functional
+/// outcome (trace compiles non-dispatchable + interp runs naturally
+/// → result 317811). The test accepts EITHER label so it survives
+/// the sub-0 routing flip while still pinning "at least one trace
+/// was prevented from dispatching on p16-on" — which is R1's safety
+/// pin invariant restated in sub-0 vocabulary.
 #[test]
-fn p16_on_fib_28_records_self_link_retf_r1_dispatch_off_reason() {
+fn p16_on_fib_28_records_self_link_safety_pin_dispatch_off_reason() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -104,10 +113,14 @@ fn p16_on_fib_28_records_self_link_retf_r1_dispatch_off_reason() {
         .expect("runs");
 
     let reasons = vm.trace_dispatch_off_reasons();
+    // Accept either the pre-sub-0 SelfLink label OR the sub-0 DownRec
+    // stitch-pending label; both signal R1's safety pin equivalent.
+    let safety_pin_label_fired = reasons.contains(&"self-link-retf-r1")
+        || reasons.contains(&"downrec-stitch-pending");
     assert!(
-        reasons.contains(&"self-link-retf-r1"),
+        safety_pin_label_fired,
         "expected at least one trace pinned dispatch_off via R1 SelfLink \
-         deopt — got reasons: {:?}",
+         deopt OR R3.3+ sub-0 DownRec-stitch-pending — got reasons: {:?}",
         reasons
     );
 }

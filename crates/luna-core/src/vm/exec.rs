@@ -5648,7 +5648,98 @@ impl Vm {
                     }
                 };
                 if let Some(kind) = self_link_trip {
-                    rec.self_link_kind = Some(kind);
+                    // v2.0 Track-R R3.3+ sub-0 — SelfLink relax for
+                    // self-recursive patterns at frame depth >= 2.
+                    //
+                    // Pre sub-0: a SelfLink trip at the head_pc re-entry
+                    // unconditionally stamped `self_link_kind`. The
+                    // R3a `downrec_close` marker can only fire from the
+                    // depth>0 Op::Return path (`rec.retfs` chain),
+                    // which never reaches the recorder for fib(28)-like
+                    // shapes that hit the SelfLink cycle catch BEFORE
+                    // any base-case Return — leaving `downrec_close`
+                    // None and routing the trace through R1's safe
+                    // `dispatchable=false` `"self-link-retf-r1"` path
+                    // (audit measured `trace_dispatched = 0`).
+                    //
+                    // Sub-0 lift: when the SelfLink trip fires AND
+                    // `cur_depth >= 2` (the count > RECUNROLL_THRESHOLD
+                    // gate already requires this — kept explicit as a
+                    // safety floor), route the close through `downrec_
+                    // close` INSTEAD of `self_link_kind`. The recorder
+                    // synthesises the close marker from the most
+                    // recent Op::Call at depth `cur_depth - 1`:
+                    //   - `return_pc` = `call.pc + 1` (caller's resume
+                    //     PC after the recursive call returns; mirror
+                    //     of R3a's `caller_pc` derivation at the
+                    //     depth>0 Op::Return capture path below).
+                    //   - `target_proto` = `call.proto` (caller's
+                    //     proto; equals `rec.head_proto` for self-
+                    //     recursion).
+                    //   - `depth_delta` = `1` (today's recorder always
+                    //     unrolls one level; R3a uses the same
+                    //     constant).
+                    //
+                    // The lowerer's `end_idx` picker (`trace.rs:3729`)
+                    // routes through `TraceEnd::DownRec` ahead of the
+                    // `self_link_kind` arm; the R3b/R3d lowerer arm
+                    // emits the stitch-sentinel + caller-pc-guard
+                    // scaffold. Single-candidate guard chain (sub-0's
+                    // recorder produces 1 caller_pc candidate because
+                    // `rec.retfs` is empty) keeps `dispatchable=false`
+                    // + `"downrec-stitch-pending"` label (per R3d's
+                    // `multi_way_candidate_count >= 2` gate at
+                    // `trace.rs:7385`). Net behaviour: trace compiles
+                    // under DownRec routing; interp runs the
+                    // recursion naturally → result 317811.
+                    //
+                    // The `cur_depth >= 2` gate is automatically
+                    // satisfied by the count > RECUNROLL_THRESHOLD=2
+                    // trip condition (3 ancestor frames sharing
+                    // head_proto implies cur_depth >= 3), kept
+                    // explicit so a future RECUNROLL_THRESHOLD tweak
+                    // doesn't silently flip shallow-recursion
+                    // shapes (cur_depth == 1) onto the DownRec arm.
+                    //
+                    // R3.3+ sub-1/2/3/4 will replace the depth-baked
+                    // op_offsets[] addressing with runtime base_var
+                    // threading so the trace's recorded body is
+                    // depth-relative and the DownRec dispatch
+                    // becomes wall-clock-positive. Sub-0 is the
+                    // routing scaffold; it does not aim for gain.
+                    let _ = kind;
+                    let relaxed_to_downrec = cur_depth >= 2 && rec.downrec_close.is_none() && {
+                        let caller_depth_u8 = (cur_depth - 1) as u8;
+                        if let Some(call_op) = rec.ops.iter().rev().find(|r| {
+                            r.inline_depth == caller_depth_u8
+                                && matches!(r.inst.op(), crate::vm::isa::Op::Call)
+                        }) {
+                            rec.downrec_close = Some(crate::jit::trace::DownRecClose {
+                                return_pc: call_op.pc + 1,
+                                target_proto: call_op.proto,
+                                depth_delta: 1,
+                            });
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if relaxed_to_downrec {
+                        // R2 close-cause taxonomy: tag the lift so
+                        // probes can tally the fire rate. Mirrors
+                        // R3a's `"downrec-restart"` bump for the
+                        // depth>0 Op::Return path (different trip
+                        // origin, same downstream routing). The
+                        // existing `"self-link-retf-r1"` label still
+                        // fires for trips that DON'T relax (no
+                        // candidate Op::Call ancestor in rec.ops, or
+                        // cur_depth < 2) via the lowerer's
+                        // dispatch_off_reason mirror at the close
+                        // handler — kept as a regression safety net.
+                        self.jit.counters.bump_close_cause("selflink-yields-to-downrec");
+                    } else {
+                        rec.self_link_kind = Some(kind);
+                    }
                 }
                 let should_close =
                     at_head_loop || returned_past_head || depth_cap_hit || self_link_trip.is_some();
