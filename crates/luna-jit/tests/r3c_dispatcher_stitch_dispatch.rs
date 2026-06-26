@@ -245,8 +245,5 @@ fn p16_off_fib_28_no_downrec_dispatch_counters_bump() {
         dispatched, 0,
         "p16-off must not bump downrec_dispatched, got {dispatched}"
     );
-    assert_eq!(
-        deopt, 0,
-        "p16-off must not bump downrec_deopt, got {deopt}"
-    );
+    assert_eq!(deopt, 0, "p16-off must not bump downrec_deopt, got {deopt}");
 }
