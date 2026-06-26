@@ -101,6 +101,20 @@ fn run(label: &str, chunk_jit: bool, p16_on: bool) {
             println!("    - {} : {}", r, c);
         }
     }
+    // v2.0 Track-R R2 — surface the close-cause HashMap so probes can
+    // diff against the ordered Vec above. Recorder-side reasons
+    // (`trace-overflow`, `partial-coverage-discard`) only show up
+    // here; lowerer-side reasons mirror both surfaces.
+    let close_cause = vm.trace_close_cause_counts();
+    if !close_cause.is_empty() {
+        // BTreeMap for deterministic diag output ordering.
+        let sorted: std::collections::BTreeMap<&str, u64> =
+            close_cause.iter().map(|(k, v)| (*k, *v)).collect();
+        println!("  close_cause_counts (R2, top):");
+        for (r, c) in sorted.iter().take(8) {
+            println!("    - {} : {}", r, c);
+        }
+    }
     println!();
 }
 
