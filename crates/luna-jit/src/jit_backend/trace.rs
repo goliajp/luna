@@ -2864,6 +2864,55 @@ struct FlushCtx {
     release_ref: cranelift_codegen::ir::FuncRef,
 }
 
+/// v2.0 Track-R R3.3+ sub-1 — depth-relative base address helper.
+///
+/// Given the trace's `base_var` Variable (declared at entry block, see
+/// `lower_trace_into_named` sub-1 scaffold) plus an op's window
+/// offset (`op_offset_bytes` = `op_offsets[i] * 8`) plus a slot index
+/// within that op's window, returns a `(base_value, byte_offset)`
+/// pair suitable for `bcx.ins().load(..., base_value, byte_offset)`
+/// or `bcx.ins().store(..., base_value, byte_offset)`.
+///
+/// Sub-1 caller contract: `base_var` is initialised to `iconst(0)` —
+/// i.e., a depth-0 sentinel placeholder. Calling this helper produces
+/// load/store IR that addresses `[0 + op_offset_bytes + slot * 8]`,
+/// which is NOT a valid reg_state-relative address. Sub-1 op-arms
+/// MUST NOT call this helper (they keep using `regs_full[off + slot]`
+/// via `bcx.use_var` / `bcx.def_var`). The helper exists only as the
+/// threading-shape proof: sub-2 will (a) replace the iconst(0) init
+/// with `reg_state` itself + (b) start migrating Op::Move / Op::LoadK
+/// / Op::LoadNil arms to call this helper instead of indexing
+/// `regs_full`. Sub-3 will insert the R3d stitch_blk base-shift
+/// `iadd_imm(base_var, -8 * recorded_delta)` BETWEEN the cmp brif and
+/// the store-back so the deopt path lands at the caller window
+/// (Risk D1.R2 mitigation in `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §8).
+///
+/// Why a helper (not inline `iadd_imm` at each call site): the
+/// op_offset + slot arithmetic is identical across all op-arms and
+/// the LJ source citation in `.dev/rfcs/v2.0-track-r-r3-3-luajit-
+/// study.md` shows arm64's `ldr Xd, [Xn, #imm]` handles the pattern
+/// in a single addressing mode. Concentrating the math in one helper
+/// keeps the Cranelift mid-end's `iadd_imm` coalescing surface
+/// uniform (Risk D1.R1 mitigation) and lets sub-2 audit codegen at
+/// ONE site instead of ~30.
+// Sub-1 scaffold: no production caller yet (sub-2 will migrate op-arms
+// to call this; sub-1's only consumer is the regression test smoke
+// probe at `r3_3_sub1_base_var_scaffold.rs`). `pub(crate)` so the
+// test crate's hook can dispatch through `try_compile_trace_with_options`
+// — the helper itself stays internal because sub-2 is the place where
+// op-arm rewiring decides the final visibility.
+#[allow(dead_code)]
+pub(crate) fn current_base_addr(
+    bcx: &mut FunctionBuilder<'_>,
+    base_var: Variable,
+    op_offset_bytes: i32,
+    slot: u32,
+) -> (Value, i32) {
+    let base_now = bcx.use_var(base_var);
+    let total_offset = op_offset_bytes.saturating_add((slot as i32).saturating_mul(8));
+    (base_now, total_offset)
+}
+
 fn emit_flush_buf(bcx: &mut FunctionBuilder<'_>, ctx: &FlushCtx, regs: &[Variable]) {
     let buf_ptr = bcx.use_var(ctx.buf_var);
     let call_inst = bcx.ins().call(ctx.intern_ref, &[buf_ptr]);
