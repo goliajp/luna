@@ -6087,9 +6087,7 @@ impl Vm {
                         // right target. Fallback to head_proto when no
                         // enclosing Call op was captured (mirrors
                         // `caller_pc`'s fallback to the Return's own pc).
-                        let caller_proto = caller_call
-                            .map(|r| r.proto)
-                            .unwrap_or(rec.head_proto);
+                        let caller_proto = caller_call.map(|r| r.proto).unwrap_or(rec.head_proto);
                         rec.retfs.push(crate::jit::trace::RetfRecord {
                             from_depth: depth_u8,
                             to_depth: caller_depth,
@@ -6121,20 +6119,17 @@ impl Vm {
                             // LuaJIT `count + J->tailcalled > recunroll`.
                             // The newly-pushed retf is already counted.
                             if prior_match_count > crate::jit::trace::RECUNROLL_THRESHOLD {
-                                rec.downrec_close =
-                                    Some(crate::jit::trace::DownRecClose {
-                                        return_pc: caller_pc,
-                                        target_proto: caller_proto,
-                                        depth_delta: 1,
-                                    });
+                                rec.downrec_close = Some(crate::jit::trace::DownRecClose {
+                                    return_pc: caller_pc,
+                                    target_proto: caller_proto,
+                                    depth_delta: 1,
+                                });
                                 // R2 close-cause taxonomy: tag the
                                 // restart with `"downrec-restart"`. R3b
                                 // adds `"downrec-stitch-failed"` when
                                 // the lifted back-edge falls back to
                                 // deopt.
-                                self.jit
-                                    .counters
-                                    .bump_close_cause("downrec-restart");
+                                self.jit.counters.bump_close_cause("downrec-restart");
                             }
                         }
                     }
