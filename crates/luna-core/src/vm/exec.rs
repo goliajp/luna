@@ -6019,6 +6019,51 @@ impl Vm {
                         inline_depth: depth_u8,
                         var_count,
                     };
+                    // v2.0 Track-R R1 — depth>0 Return0/Return1 mirrors
+                    // LuaJIT's `IR_RETF` (lj_record.c:922+ lj_record_ret).
+                    // Captured as a side-channel `RetfRecord` parallel to
+                    // `ops` when `p16_self_link_enabled` is on. R3's
+                    // down-rec stitch consumes these to guard side-trace
+                    // inlined-frame topology against the recorded shape.
+                    // Gated on the same flag as the cycle catch so the
+                    // ship-default path (p16 off) sees zero behavior
+                    // change. `caller_pc` is the recorded enclosing Call's
+                    // pc + 1 — interp's resume point after the inlined
+                    // frame pops.
+                    if self.jit.p16_self_link_enabled
+                        && depth_u8 > 0
+                        && matches!(
+                            inst.op(),
+                            crate::vm::isa::Op::Return0 | crate::vm::isa::Op::Return1
+                        )
+                    {
+                        let results: u8 = match inst.op() {
+                            crate::vm::isa::Op::Return0 => 0,
+                            crate::vm::isa::Op::Return1 => 1,
+                            _ => 0,
+                        };
+                        // Most recent Op::Call recorded at the caller's
+                        // depth (`depth_u8 - 1`) is the frame this Return
+                        // is unwinding from. Reverse scan stops at the
+                        // first match.
+                        let caller_depth = depth_u8 - 1;
+                        let caller_pc = rec
+                            .ops
+                            .iter()
+                            .rev()
+                            .find(|r| {
+                                r.inline_depth == caller_depth
+                                    && matches!(r.inst.op(), crate::vm::isa::Op::Call)
+                            })
+                            .map(|r| r.pc + 1)
+                            .unwrap_or(pc);
+                        rec.retfs.push(crate::jit::trace::RetfRecord {
+                            from_depth: depth_u8,
+                            to_depth: caller_depth,
+                            results,
+                            caller_pc,
+                        });
+                    }
                     if !rec.push(op) {
                         self.jit.active_trace = None;
                         self.jit.counters.aborted += 1;
