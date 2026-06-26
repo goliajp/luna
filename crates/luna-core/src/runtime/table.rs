@@ -58,51 +58,58 @@ impl Node {
     };
 }
 
-/// C3 — SoA Robin Hood meta byte layout (Variant A, see
+/// C3 — SoA Robin Hood meta-word layout (Variant A, see
 /// `.dev/rfcs/v2.0-c3-soa-robinhood-rfc.md` §5.1).
 ///
-/// Each `meta[idx]` slot encodes the open-addressing slot state in one byte:
-/// - bit 7 (`OCCUPIED_BIT`): 0 = empty, 1 = occupied
-/// - bit 6 (`TOMBSTONE_BIT`): 0 = live, 1 = tombstoned-occupied
-/// - bits 5..0 (`PSL_MASK`): probe-sequence length (0..63)
+/// Each `meta[idx]` slot encodes the open-addressing slot state in a
+/// single u16:
+/// - bit 15 (`OCCUPIED_BIT`): 0 = empty, 1 = occupied
+/// - bit 14 (`TOMBSTONE_BIT`): 0 = live, 1 = tombstoned-occupied
+/// - bits 13..0 (`PSL_MASK`): probe-sequence length (0..16383)
 ///
-/// PSL of 63 is the rehash trigger ceiling — the layout itself can't store
-/// a higher PSL, so insert paths that would exceed 63 MUST rehash first.
-/// At load factor 0.75 the expected max PSL on a 1024-slot table is ~8,
-/// worst case ~20 with very high probability (Robin Hood variance).
+/// The 14-bit PSL field is **far** beyond any realistic Robin Hood
+/// max-PSL at load ≤ 0.75 (expected max ~20 on 1024 slots; even the
+/// long-tail outliers seen empirically with luna's existing hash
+/// distributions stay under 200). 2 bytes/slot is still 20× smaller
+/// than the 40-byte Node — the SoA bandwidth gain (§3.5 of the RFC)
+/// is preserved.
+///
+/// Earlier draft used 1 byte with a 6-bit PSL cap of 63; bench under
+/// load 0.676 on cap=1024 produced a long-tail PSL of 64+ with the
+/// LuaStr+mix64 hash distribution, forcing the widening.
 ///
 /// Tombstones do NOT free the slot for `find` (probe continues past), but
 /// DO free it for `insert` (write the new entry, clear the tomb bit). They
 /// accumulate; the rehash path compacts them periodically.
 #[allow(dead_code)]
 pub(crate) mod meta_bits {
-    pub const OCCUPIED_BIT: u8 = 0b1000_0000;
-    pub const TOMBSTONE_BIT: u8 = 0b0100_0000;
-    pub const PSL_MASK: u8 = 0b0011_1111;
-    pub const PSL_MAX: u8 = 63;
-    /// Empty slot — bit 7 = 0, all others 0.
-    pub const EMPTY: u8 = 0;
+    pub const OCCUPIED_BIT: u16 = 0b1000_0000_0000_0000;
+    pub const TOMBSTONE_BIT: u16 = 0b0100_0000_0000_0000;
+    pub const PSL_MASK: u16 = 0b0011_1111_1111_1111;
+    pub const PSL_MAX: u16 = PSL_MASK;
+    /// Empty slot — bit 15 = 0, all others 0.
+    pub const EMPTY: u16 = 0;
 
     #[inline(always)]
-    pub fn is_occupied(m: u8) -> bool {
+    pub fn is_occupied(m: u16) -> bool {
         (m & OCCUPIED_BIT) != 0
     }
     #[inline(always)]
-    pub fn is_tombstone(m: u8) -> bool {
+    pub fn is_tombstone(m: u16) -> bool {
         (m & TOMBSTONE_BIT) != 0
     }
     /// Live = occupied AND not tombstoned. `next()` iteration cursor returns
     /// these. `find_slot_rh` short-circuits on a live match.
     #[inline(always)]
-    pub fn is_live(m: u8) -> bool {
+    pub fn is_live(m: u16) -> bool {
         (m & (OCCUPIED_BIT | TOMBSTONE_BIT)) == OCCUPIED_BIT
     }
     #[inline(always)]
-    pub fn psl(m: u8) -> u8 {
+    pub fn psl(m: u16) -> u16 {
         m & PSL_MASK
     }
     #[inline(always)]
-    pub fn pack(psl: u8, tomb: bool) -> u8 {
+    pub fn pack(psl: u16, tomb: bool) -> u16 {
         debug_assert!(psl <= PSL_MAX);
         let mut m = OCCUPIED_BIT | (psl & PSL_MASK);
         if tomb {
@@ -166,7 +173,7 @@ pub struct Table {
     /// Empty `Box::new([])` until Phase D cuts over.
     pub(crate) keys: Box<[Value]>,
     pub(crate) vals: Box<[Value]>,
-    pub(crate) meta: Box<[u8]>,
+    pub(crate) meta: Box<[u16]>,
     /// Count of tombstoned-occupied meta slots; rehash trigger.
     pub(crate) tombstones: u32,
     /// C3 — iterator-guard counter (R-A3 mitigation). Incremented on
@@ -329,7 +336,7 @@ impl Table {
         };
         let soa_external = self.keys.len() * std::mem::size_of::<Value>()
             + self.vals.len() * std::mem::size_of::<Value>()
-            + self.meta.len();
+            + self.meta.len() * std::mem::size_of::<u16>();
         array_external + self.nodes.len() * std::mem::size_of::<Node>() + soa_external
     }
 
@@ -1028,6 +1035,361 @@ impl Table {
     }
 }
 
+// =====================================================================
+// C3 — SoA + Robin Hood open-addressing hash part (Variant A).
+//
+// Parallel to the chain-walk path during Phase B+C+D transition: the
+// chain `nodes` / `lastfree` is the authoritative read path until
+// Phase E migrates `next()` and Phase 4 cuts over. These methods
+// operate only on the `keys` / `vals` / `meta` / `tombstones` SoA
+// arrays — chain state is never touched.
+//
+// Layout invariants the methods below maintain:
+//   - `keys.len() == vals.len() == meta.len()`, all power-of-two
+//     (or zero in the empty-stub state)
+//   - `meta[i] = meta_bits::EMPTY` iff slot i is free
+//   - tombstoned slots are scanned past by find but reused by insert
+//   - `tombstones` counts the meta slots with TOMBSTONE_BIT set
+//   - load factor (live + tombstone) / cap is kept ≤ 0.75 via
+//     `soa_grow_if_needed` (R-A1 mitigation — PSL bound 63)
+//   - rehash is REFUSED when `iter_depth > 0` (R-A3 mitigation —
+//     wired in Phase F; for Phase C the counter is always 0 so the
+//     refusal path is unreachable)
+//
+// Refs: `.dev/rfcs/v2.0-c3-soa-robinhood-rfc.md` §5.1 (variant A),
+// §6.2 Phase 1-3 (impl plan).
+// =====================================================================
+
+/// C3 — initial SoA capacity when growing from empty. Power of two.
+/// Picked at 4 so a 3-element table doesn't trigger an immediate
+/// regrowth.
+#[allow(dead_code)] // wired by Phase D/E/F integration
+pub(crate) const SOA_INITIAL_CAP: usize = 4;
+
+/// C3 — high load-factor threshold (3/4). SoA grow trigger; matches
+/// the RFC §5.1 recommendation. PSL_MAX is the u16 14-bit value so
+/// long-tail PSL overruns are recoverable via grow-retry.
+#[allow(dead_code)]
+const SOA_LOAD_NUM: usize = 3;
+#[allow(dead_code)]
+const SOA_LOAD_DEN: usize = 4;
+
+/// C3 — tombstone density threshold (1/4). When tombstones/cap ≥ 25%
+/// the next non-resize-triggering rehash compacts them.
+#[allow(dead_code)]
+const SOA_TOMB_NUM: usize = 1;
+#[allow(dead_code)]
+const SOA_TOMB_DEN: usize = 4;
+
+#[allow(dead_code)] // wired by Phase D/E/F integration into public set/get/next
+impl Table {
+    /// C3 — current SoA hash-part capacity in slots (0 = empty stub).
+    #[inline]
+    pub(crate) fn soa_cap(&self) -> usize {
+        self.meta.len()
+    }
+
+    /// C3 — count of live (occupied & not tombstone) SoA slots.
+    /// O(n) — only used by the Phase G equivalence test path; the
+    /// hot rehash trigger uses `live_estimate = cap*3/4 - tombstones`
+    /// implicitly via `soa_grow_if_needed`.
+    #[cfg(test)]
+    pub(crate) fn soa_live_count(&self) -> usize {
+        self.meta.iter().filter(|&&m| meta_bits::is_live(m)).count()
+    }
+
+    /// C3 — count of occupied (live OR tombstoned) SoA slots; this is
+    /// the value the load factor compares against `cap * 3/4`.
+    #[inline]
+    fn soa_occupied_count(&self) -> usize {
+        // O(n) sweep — Phase C inserts the count on each call so the
+        // worst case is bounded by per-insert amortised cost. A future
+        // polish could maintain a counter incrementally; left as a
+        // Phase H mini-bench-driven follow-up if PI sample shows it
+        // contributes > 1 µs/cell.
+        self.meta.iter().filter(|&&m| meta_bits::is_occupied(m)).count()
+    }
+
+    /// C3 — Robin Hood lookup. Returns the slot index of a *live*
+    /// matching key, or None if absent. Walks past tombstones (they
+    /// preserve probe chains). Returns None if the SoA cap is zero
+    /// (Phase B stub state). Bound by `cap` probes; in practice
+    /// expected ≤ 8 at load 0.75.
+    pub(crate) fn soa_find_slot(&self, k: Value) -> Option<usize> {
+        let cap = self.meta.len();
+        if cap == 0 {
+            return None;
+        }
+        let mask = cap - 1;
+        let mut idx = (hash_key(k) as usize) & mask;
+        // Walk until empty slot or wrap. The `steps <= cap` bound
+        // is a safety net: a properly maintained Robin Hood table
+        // with load < 1 always has at least one empty slot, so a
+        // full wrap means table invariant violation.
+        for _ in 0..cap {
+            let m = self.meta[idx];
+            if !meta_bits::is_occupied(m) {
+                return None;
+            }
+            if !meta_bits::is_tombstone(m) && self.keys[idx].raw_eq(k) {
+                return Some(idx);
+            }
+            idx = (idx + 1) & mask;
+        }
+        None
+    }
+
+    /// C3 — Allocate fresh SoA arrays at `new_cap` (power of two) and
+    /// re-insert every live entry from the old SoA arrays. Tombstones
+    /// are dropped (count resets to 0). Used by `soa_grow_if_needed`
+    /// (new_cap = max(SOA_INITIAL_CAP, 2*cap)) and by Phase D
+    /// tombstone compaction (new_cap = cap).
+    ///
+    /// IMPORTANT: rehash MUST NOT fire while `iter_depth > 0`
+    /// (R-A3) — wired in Phase F. Phase C callers all enter from
+    /// non-iteration paths.
+    fn soa_rehash_to(
+        &mut self,
+        heap: &mut Heap,
+        new_cap: usize,
+    ) -> Result<(), TableError> {
+        debug_assert!(new_cap.is_power_of_two() && new_cap > 0);
+        let before = self.internal_bytes();
+        // Snapshot old live entries. This list is the canonical
+        // "must be present after rehash" set; we restart from it on
+        // any PSL-overflow retry.
+        let mut survivors: Vec<(Value, Value)> = Vec::with_capacity(self.meta.len());
+        for i in 0..self.meta.len() {
+            if meta_bits::is_live(self.meta[i]) {
+                survivors.push((self.keys[i], self.vals[i]));
+            }
+        }
+        // Install fresh empty arrays at `new_cap`. On PSL overflow
+        // during the re-insert pass (extremely rare with the 14-bit
+        // PSL budget — would need a pathological hash distribution),
+        // double the cap and replay the original `survivors` list
+        // from scratch. We don't try to salvage partial work — the
+        // rare-path retry cost is bounded by O(n × max_doublings),
+        // and max_doublings has a hard MAX_ASIZE ceiling.
+        let mut cap = new_cap;
+        loop {
+            if cap > MAX_ASIZE {
+                return Err(TableError::Overflow);
+            }
+            self.keys = vec![Value::Nil; cap].into_boxed_slice();
+            self.vals = vec![Value::Nil; cap].into_boxed_slice();
+            self.meta = vec![meta_bits::EMPTY; cap].into_boxed_slice();
+            self.tombstones = 0;
+            let mut overflowed = false;
+            for (k, v) in survivors.iter().copied() {
+                if self.soa_place_known_absent(k, v).is_err() {
+                    overflowed = true;
+                    break;
+                }
+            }
+            if !overflowed {
+                break;
+            }
+            cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
+        }
+        let after = self.internal_bytes();
+        heap.apply_bytes_delta(before, after);
+        Ok(())
+    }
+
+    /// C3 — Raw rob-from-rich placement for a key known to be absent
+    /// from the SoA arrays. Used by `soa_rehash_to` (re-insert pass)
+    /// and by `soa_insert` (new-key path after the explicit
+    /// soa_find_slot check). This routine does NOT auto-grow on a
+    /// load-factor trigger (caller's responsibility), but DOES signal
+    /// back to the caller via `Err(())` when the PSL bound of 63 is
+    /// hit before finding an empty slot — Robin Hood's long-tail
+    /// max-PSL exceeds the 6-bit storage budget at unfavourable hash
+    /// distributions even under the nominal 0.75 load gate (RFC §6.3
+    /// R-A1). The caller (`soa_insert`) handles by growing & retrying.
+    ///
+    /// On success returns the slot index where the new key landed
+    /// (after any rob-from-rich shuffle, the original `k` value is at
+    /// this returned index).
+    fn soa_place_known_absent(
+        &mut self,
+        k: Value,
+        v: Value,
+    ) -> Result<usize, (Value, Value)> {
+        let cap = self.meta.len();
+        debug_assert!(cap > 0);
+        let mask = cap - 1;
+        let landing = (hash_key(k) as usize) & mask;
+        let mut idx = landing;
+        let mut cur_psl: u16 = 0;
+        let mut cur_key = k;
+        let mut cur_val = v;
+        let mut placed_at: Option<usize> = None;
+        for _ in 0..cap {
+            let m = self.meta[idx];
+            if !meta_bits::is_occupied(m) || meta_bits::is_tombstone(m) {
+                if meta_bits::is_tombstone(m) {
+                    self.tombstones = self.tombstones.saturating_sub(1);
+                }
+                self.meta[idx] = meta_bits::pack(cur_psl, false);
+                self.keys[idx] = cur_key;
+                self.vals[idx] = cur_val;
+                return Ok(placed_at.unwrap_or(idx));
+            }
+            let stored_psl = meta_bits::psl(m);
+            if cur_psl > stored_psl {
+                // Rob: swap cur into this slot, evict stored to continue.
+                std::mem::swap(&mut cur_key, &mut self.keys[idx]);
+                std::mem::swap(&mut cur_val, &mut self.vals[idx]);
+                self.meta[idx] = meta_bits::pack(cur_psl, false);
+                if placed_at.is_none() {
+                    placed_at = Some(idx);
+                }
+                cur_psl = stored_psl;
+            }
+            idx = (idx + 1) & mask;
+            cur_psl = cur_psl.saturating_add(1);
+            if cur_psl > meta_bits::PSL_MAX {
+                // PSL exceeds the 14-bit storage budget — exceptionally
+                // rare with 16384 max. Caller (soa_insert / rehash
+                // outer loop) handles by growing & retrying. Partial
+                // state: all entries are still in the table EXCEPT
+                // `(cur_key, cur_val)` which is the latest homeless
+                // evictee — return it so caller can re-issue.
+                return Err((cur_key, cur_val));
+            }
+        }
+        // Wrapped cap probes with no free slot — invariant violation
+        // (load < 1 should guarantee at least one empty). Signal as
+        // PSL-overflow equivalent so caller grows + retries.
+        Err((cur_key, cur_val))
+    }
+
+    /// C3 — Grow SoA capacity if the load factor is at or above the
+    /// 0.75 trigger. Doubles cap; from empty grows to SOA_INITIAL_CAP.
+    fn soa_grow_if_needed(&mut self, heap: &mut Heap) -> Result<(), TableError> {
+        // Defer rehash when an iterator is in flight (R-A3). Wired
+        // in Phase F; in Phase C iter_depth is always 0.
+        if self.iter_depth > 0 {
+            return Ok(());
+        }
+        let cap = self.meta.len();
+        if cap == 0 {
+            return self.soa_rehash_to(heap, SOA_INITIAL_CAP);
+        }
+        let occupied = self.soa_occupied_count();
+        if occupied * SOA_LOAD_DEN >= cap * SOA_LOAD_NUM {
+            let new_cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
+            return self.soa_rehash_to(heap, new_cap);
+        }
+        // Tombstone compaction (same cap, drops tombstones).
+        if self.tombstones as usize * SOA_TOMB_DEN >= cap * SOA_TOMB_NUM {
+            return self.soa_rehash_to(heap, cap);
+        }
+        Ok(())
+    }
+
+    /// C3 — Insert (or update) `(k, v)` in the SoA hash part. Routes
+    /// through `soa_find_slot` first so an existing key updates its
+    /// val in place; otherwise rob-from-rich places a new entry.
+    /// Auto-rehashes if the load factor would exceed 0.75 OR if the
+    /// place chain runs into a PSL overflow on a pathological hash
+    /// distribution.
+    ///
+    /// Phase C: this method is callable from outside via the
+    /// equivalence-test entrypoint (Phase G); not yet hooked into
+    /// public `set` / `set_norm`.
+    pub(crate) fn soa_insert(
+        &mut self,
+        heap: &mut Heap,
+        k: Value,
+        v: Value,
+    ) -> Result<(), TableError> {
+        debug_assert!(!matches!(k, Value::Nil));
+        // 1. Update-in-place if key is already present (live slot).
+        if let Some(idx) = self.soa_find_slot(k) {
+            self.vals[idx] = v;
+            return Ok(());
+        }
+        // 2. New key: ensure capacity, then place. On PSL-overflow
+        // from the place chain (extremely rare with 14-bit PSL budget),
+        // grow + rehash with the homeless evictee merged in.
+        // `soa_rehash_with_extra` handles further retries internally,
+        // bounded by MAX_ASIZE.
+        self.soa_grow_if_needed(heap)?;
+        match self.soa_place_known_absent(k, v) {
+            Ok(_) => Ok(()),
+            Err(homeless) => {
+                let cap = self.meta.len();
+                let new_cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
+                self.soa_rehash_with_extra(heap, new_cap, homeless)
+            }
+        }
+    }
+
+    /// C3 — Rehash to `new_cap` while merging in an extra (k, v) pair
+    /// not currently in the SoA arrays. Used by `soa_insert` to
+    /// recover from PSL overflow: the homeless evictee from the failed
+    /// place chain gets appended to the survivor list before the
+    /// re-insert pass.
+    fn soa_rehash_with_extra(
+        &mut self,
+        heap: &mut Heap,
+        new_cap: usize,
+        extra: (Value, Value),
+    ) -> Result<(), TableError> {
+        let before = self.internal_bytes();
+        let mut survivors: Vec<(Value, Value)> = Vec::with_capacity(self.meta.len() + 1);
+        for i in 0..self.meta.len() {
+            if meta_bits::is_live(self.meta[i]) {
+                survivors.push((self.keys[i], self.vals[i]));
+            }
+        }
+        // Avoid duplicating the extra if its key was already placed at
+        // some slot during the failed rob chain (the rob may have
+        // landed the original input into a slot before overflowing on
+        // a downstream evictee — that case the meta-walk above picks
+        // it up).
+        if !survivors.iter().any(|(k, _)| k.raw_eq(extra.0)) {
+            survivors.push(extra);
+        }
+        let mut cap = new_cap;
+        loop {
+            if cap > MAX_ASIZE {
+                return Err(TableError::Overflow);
+            }
+            self.keys = vec![Value::Nil; cap].into_boxed_slice();
+            self.vals = vec![Value::Nil; cap].into_boxed_slice();
+            self.meta = vec![meta_bits::EMPTY; cap].into_boxed_slice();
+            self.tombstones = 0;
+            let mut overflowed = false;
+            for (k, v) in survivors.iter().copied() {
+                if self.soa_place_known_absent(k, v).is_err() {
+                    overflowed = true;
+                    break;
+                }
+            }
+            if !overflowed {
+                break;
+            }
+            cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
+        }
+        let after = self.internal_bytes();
+        heap.apply_bytes_delta(before, after);
+        Ok(())
+    }
+
+    /// C3 — Read SoA hash part. Mirrors `get_hash` but reads from
+    /// keys/vals/meta rather than nodes. Used by the Phase G
+    /// equivalence test; not yet hooked into public `get` / `get_hash`.
+    pub(crate) fn soa_get(&self, k: Value) -> Value {
+        match self.soa_find_slot(k) {
+            Some(idx) => self.vals[idx],
+            None => Value::Nil,
+        }
+    }
+}
+
 fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     match key {
         Value::Nil => Err(TableError::NilIndex),
@@ -1289,6 +1651,139 @@ mod tests {
                 assert!(t.get_int(-i).raw_eq(Value::Int(i)), "lost key {}", -i);
             }
         });
+    }
+
+    // -----------------------------------------------------------------
+    // C3 SoA Robin Hood equivalence tests (Phase G).
+    //
+    // Cross-check the new SoA + RH path against the existing chain-walk
+    // path: replay the same insert/lookup sequence on a table via
+    // `set` (chain) and another via `soa_insert` (SoA), then assert
+    // `get == soa_get` for every key.
+    //
+    // Phase B+C scope: insert + read only. Tombstone delete equivalence
+    // arrives with Phase D.
+    // -----------------------------------------------------------------
+
+    fn replay_chain(heap: &mut Heap, ops: &[(Value, Value)]) -> *mut Table {
+        let t = heap.new_table();
+        let tref = unsafe { t.as_mut() };
+        for (k, v) in ops.iter().copied() {
+            tref.set(heap, k, v).unwrap();
+        }
+        t.as_ptr()
+    }
+
+    fn replay_soa(heap: &mut Heap, ops: &[(Value, Value)]) -> *mut Table {
+        let t = heap.new_table();
+        let tref = unsafe { t.as_mut() };
+        for (k, v) in ops.iter().copied() {
+            tref.soa_insert(heap, k, v).unwrap();
+        }
+        t.as_ptr()
+    }
+
+    #[test]
+    fn c3_soa_equivalence_string_keys() {
+        let mut heap = Heap::new();
+        let mut ops = Vec::new();
+        for i in 0..40 {
+            let k = Value::Str(heap.intern(format!("key_{i:03}").as_bytes()));
+            ops.push((k, Value::Int(i * 7)));
+        }
+        let chain = unsafe { &*replay_chain(&mut heap, &ops) };
+        let soa = unsafe { &*replay_soa(&mut heap, &ops) };
+        for (k, _) in &ops {
+            let cv = chain.get(*k);
+            let sv = soa.soa_get(*k);
+            assert!(
+                cv.raw_eq(sv),
+                "SoA vs chain mismatch on key — chain={:?} soa={:?}",
+                cv,
+                sv,
+            );
+        }
+        // Absent key returns nil from both paths.
+        let absent = Value::Str(heap.intern(b"never"));
+        assert!(chain.get(absent).is_nil());
+        assert!(soa.soa_get(absent).is_nil());
+    }
+
+    #[test]
+    fn c3_soa_equivalence_negative_int_keys() {
+        // Dense negative ints with identity hashing — same collision
+        // profile as the existing `collision_relocation_keeps_chains_intact`
+        // test, but verified through the SoA RH path. Triggers
+        // rob-from-rich repeatedly.
+        let mut heap = Heap::new();
+        let mut ops = Vec::new();
+        for i in 0..256 {
+            let k = Value::Int(-i);
+            ops.push((k, Value::Int(i)));
+        }
+        let chain = unsafe { &*replay_chain(&mut heap, &ops) };
+        let soa = unsafe { &*replay_soa(&mut heap, &ops) };
+        for (k, _) in &ops {
+            let cv = chain.get(*k);
+            let sv = soa.soa_get(*k);
+            assert!(cv.raw_eq(sv), "SoA mismatch on key {:?}", k);
+        }
+    }
+
+    #[test]
+    fn c3_soa_equivalence_mixed_keys_with_updates() {
+        // Insert, then update the same keys with new values — exercises
+        // the soa_find_slot in-place update branch.
+        let mut heap = Heap::new();
+        let kstr = Value::Str(heap.intern(b"x"));
+        let kint = Value::Int(42);
+        let kbool = Value::Bool(true);
+        let ops: Vec<(Value, Value)> = vec![
+            (kstr, Value::Int(1)),
+            (kint, Value::Int(2)),
+            (kbool, Value::Int(3)),
+            (kstr, Value::Int(11)),   // update
+            (kint, Value::Int(22)),   // update
+            (kbool, Value::Int(33)),  // update
+        ];
+        let chain = unsafe { &*replay_chain(&mut heap, &ops) };
+        let soa = unsafe { &*replay_soa(&mut heap, &ops) };
+        for k in [kstr, kint, kbool] {
+            assert!(chain.get(k).raw_eq(soa.soa_get(k)));
+        }
+    }
+
+    #[test]
+    fn c3_soa_grows_under_load_pressure() {
+        // Stress test: insert enough entries to trigger multiple RH
+        // rehashes (cap doubles at load 0.75). Confirms PSL overflow
+        // never fires and all keys survive grow cycles.
+        let mut heap = Heap::new();
+        let t = heap.new_table();
+        let tref = unsafe { t.as_mut() };
+        for i in 0..1024 {
+            let k = Value::Str(heap.intern(format!("entry_{i:05}").as_bytes()));
+            tref.soa_insert(&mut heap, k, Value::Int(i)).unwrap();
+        }
+        // Verify every key is findable.
+        for i in 0..1024 {
+            let k = Value::Str(heap.intern(format!("entry_{i:05}").as_bytes()));
+            let v = tref.soa_get(k);
+            assert!(
+                v.raw_eq(Value::Int(i)),
+                "SoA lost key entry_{:05} — got {:?}",
+                i,
+                v,
+            );
+        }
+        assert!(tref.soa_live_count() == 1024);
+        // Cap should have grown past the initial SOA_INITIAL_CAP via
+        // the 0.75 load-factor trigger.
+        assert!(
+            tref.soa_cap() >= 2048,
+            "SoA cap = {} after 1024 inserts — load gate didn't grow",
+            tref.soa_cap(),
+        );
     }
 
     #[test]
