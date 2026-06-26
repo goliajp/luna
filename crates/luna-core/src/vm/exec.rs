@@ -2901,6 +2901,24 @@ impl Vm {
         self.jit.counters.downrec_link_compiled
     }
 
+    /// v2.0 Track-R R3c — see
+    /// [`crate::vm::jit_state::JitCounters::downrec_dispatched`]. Number
+    /// of times the dispatcher's `is_downrec_sentinel` arm fired and
+    /// classified the return as a caller-pc-guard HIT.
+    pub fn trace_downrec_dispatched_count(&self) -> u64 {
+        self.jit.counters.downrec_dispatched
+    }
+
+    /// v2.0 Track-R R3c — see
+    /// [`crate::vm::jit_state::JitCounters::downrec_deopt`]. Number of
+    /// times the dispatcher entered a `downrec_link`-bearing trace and
+    /// the trace returned via the lowerer's deopt block (caller-pc
+    /// guard MISS), or the dispatcher itself force-deopted via the
+    /// stitch-cycle checkpoint.
+    pub fn trace_downrec_deopt_count(&self) -> u64 {
+        self.jit.counters.downrec_deopt
+    }
+
     /// P12-S2.C — number of closed traces the lowerer compiled and
     /// parked on `Proto.traces`. Re-records of the same head_pc are
     /// deduped (the second close finds the head_pc already cached
@@ -6205,12 +6223,39 @@ impl Vm {
             // reads fields via auto-deref. fib_28 saves ~5 Rc::clone
             // operations per dispatch × 434k = ~2.2M Rc atomic ops
             // (~1-2% gain measured separately).
+            // v2.0 Track-R R3c — one-shot consume of the
+            // `suppress_downrec_admit_once` flag. Set by the R3c
+            // downrec post-invoke arm below when it force-deopts the
+            // trace (caller-pc guard miss OR cycle-budget exhausted)
+            // so the NEXT interpreter loop iteration skips the
+            // downrec admit, lets interp run the op at `head_pc`,
+            // advances `pc` past `head_pc`, and breaks the otherwise-
+            // infinite admit loop. Reading + clearing here means a
+            // single dispatch tick consumes the suppression — the
+            // following tick re-admits naturally (with the budget
+            // also reset by the deopt site).
+            let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
+            self.jit.suppress_downrec_admit_once = false;
             if self.jit.trace_enabled
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
                         .iter()
-                        .find(|t| t.head_pc == pc && t.dispatchable)
+                        .find(|t| {
+                            t.head_pc == pc
+                                && (t.dispatchable
+                                    // v2.0 Track-R R3c — admit
+                                    // `downrec_link`-bearing traces
+                                    // even when `dispatchable=false`
+                                    // (R3b's pin per task spec; R3d
+                                    // will lift `dispatchable=true`
+                                    // after R3c proves the consumer
+                                    // works). The one-shot block
+                                    // above prevents infinite re-
+                                    // admit after a force-deopt.
+                                    || (t.downrec_link.is_some()
+                                        && !downrec_admit_blocked))
+                        })
                         .cloned()
                 }
             {
@@ -6244,9 +6289,28 @@ impl Vm {
                 let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
                 entry_tags.clear();
                 entry_tags.reserve(max_stack);
+                // v2.0 Track-R R3c — this trace was admitted via the
+                // `downrec_link.is_some()` arm rather than the normal
+                // `dispatchable=true` arm. The pre-invoke path
+                // populates a reserved saved-PC slot just past the
+                // normal register window so R3b's lowerer guard load
+                // (`reg_state[window_size]`) compares the runtime
+                // saved caller PC against the recorded `dr_return_pc`.
+                let is_downrec_entry = ct.downrec_link.is_some() && !ct.dispatchable;
                 let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
                 reg_state.clear();
-                reg_state.resize(window_size_us, 0i64);
+                // v2.0 Track-R R3c — when admitting a downrec trace,
+                // size the buffer to `window_size + 1` so the lowerer
+                // can `load(I64, ..., reg_state, window_size * 8)`
+                // for the saved caller PC guard input. The extra slot
+                // is the LAST element so cranelift's existing
+                // `0..window_size` accesses are unaffected.
+                let reg_state_len = if is_downrec_entry {
+                    window_size_us + 1
+                } else {
+                    window_size_us
+                };
+                reg_state.resize(reg_state_len, 0i64);
                 let mut dispatch_ok = true;
                 for i in 0..max_stack {
                     let v = self.stack[base_us + i];
@@ -6306,6 +6370,34 @@ impl Vm {
                     // before falling through to the interpreter, else
                     // the stack grows unboundedly per deopted dispatch.
                     let pre_frames = self.frames.len();
+                    // v2.0 Track-R R3c — saved-PC slot population. The
+                    // recorded `dr_return_pc` on the closing trace is
+                    // the caller's resume PC captured at a depth>0
+                    // Return push (recorder push site, see R3a verdict
+                    // §3). The natural runtime analogue for self-
+                    // stitch is the dispatching frame's PARENT frame's
+                    // PC: the trace's head_pc sits inside a Lua frame,
+                    // and the parent (caller) frame's `pc` is what
+                    // luna would observe as `[base-8]` in the LJ
+                    // `asm_retf` shape (`lj_asm_arm64.h:565`). When
+                    // the parent isn't a Lua frame (top-level dispatch
+                    // — first invocation through `call_value`), no
+                    // saved PC exists; we write 0, which always
+                    // mismatches the recorded `dr_return_pc != 0`
+                    // invariant pinned by R3b
+                    // (`crates/luna-jit/src/jit_backend/trace.rs:7206
+                    // debug_assert!(dr_return_pc != 0, ...)`).
+                    if is_downrec_entry {
+                        let saved_pc: i64 = if pre_frames >= 2 {
+                            match &self.frames[pre_frames - 2] {
+                                CallFrame::Lua(parent) => parent.pc as i64,
+                                CallFrame::Cont(_) => 0,
+                            }
+                        } else {
+                            0
+                        };
+                        reg_state[window_size_us] = saved_pc;
+                    }
                     // v1.3 Phase AOT Stage 7 sub-piece 4 — `LUNA_AOT_PROBE`
                     // diagnostic hook. The probe fires once per trace dispatch
                     // (regardless of JIT vs AOT origin — both go through this
@@ -6339,6 +6431,86 @@ impl Vm {
                         while self.frames.len() > pre_frames {
                             frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         }
+                        if is_downrec_entry {
+                            // v2.0 Track-R R3c — pending_err observed
+                            // mid-trace inside a downrec admit. Treat
+                            // it as a guard miss: bump `downrec_deopt`
+                            // and suppress the next downrec admit so
+                            // interp can advance past `head_pc` and
+                            // the same trace doesn't immediately re-
+                            // fire on the next loop iteration.
+                            self.jit.counters.downrec_deopt += 1;
+                            self.jit.suppress_downrec_admit_once = true;
+                        }
+                    } else if is_downrec_entry {
+                        // v2.0 Track-R R3c — downrec admit returned
+                        // cleanly. The trace's body emit is identical
+                        // to R3a/R3b's safe-deopt shape (R3b's tail
+                        // emits the DOWNREC sentinel on guard HIT or
+                        // R1's safe GLOBAL-sentinel deopt on guard
+                        // MISS). R3c classifies the return shape into
+                        // `downrec_dispatched` (HIT) vs `downrec_deopt`
+                        // (MISS) for miss-rate measurement, applies
+                        // the stitch-cycle checkpoint (depth budget),
+                        // and force-deopts in both cases — the actual
+                        // stitch dispatch into the target trace is
+                        // R3d's job (per task spec: "DO NOT lift
+                        // dispatchable=true"). The suppress flag below
+                        // breaks the otherwise-infinite admit loop.
+                        let raw_ret = continuation_pc as u64;
+                        let from_side_trace = (raw_ret >> 63) & 1 == 1;
+                        let sentinel_code = if from_side_trace {
+                            ((raw_ret >> 56) & 0x7F) as u32
+                        } else {
+                            0
+                        };
+                        if from_side_trace
+                            && crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
+                        {
+                            // Guard HIT. Cycle-safety checkpoint:
+                            // decrement the budget; if it would
+                            // underflow, classify the hit as a deopt
+                            // and reset the budget for the next
+                            // natural entry. R3c picks default = 1
+                            // (one HIT allowed per natural admit
+                            // before forced deopt); R3d may raise it
+                            // once the actual stitch dispatch is in
+                            // place and the budget governs real
+                            // re-entry depth rather than just bumps.
+                            if self.jit.stitch_depth_remaining > 0 {
+                                self.jit.stitch_depth_remaining -= 1;
+                                self.jit.counters.downrec_dispatched += 1;
+                            } else {
+                                self.jit.counters.downrec_deopt += 1;
+                                self.jit.stitch_depth_remaining =
+                                    crate::vm::jit_state::JitState::STITCH_DEPTH_DEFAULT;
+                            }
+                        } else {
+                            // Guard MISS path — the trace returned
+                            // via the lowerer's `deopt_blk` arm
+                            // (GLOBAL sentinel + `head_pc` body) or
+                            // some other unexpected shape. Either way
+                            // R3c classifies it as a deopt for
+                            // miss-rate measurement.
+                            self.jit.counters.downrec_deopt += 1;
+                        }
+                        self.jit.suppress_downrec_admit_once = true;
+                        // Pop helper-pushed inlined frames mirroring
+                        // the natural deopt path (defensive — current
+                        // R3b body emit is identical to R3a's no-push
+                        // shape, but R3d's frame-setup arm will push
+                        // CallFrames from the RetfRecord chain and
+                        // this site must clean up on deopt).
+                        while self.frames.len() > pre_frames {
+                            frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                        }
+                        // Skip the normal decode / restore / pc-set
+                        // path; interp re-runs the op at `head_pc`
+                        // next iteration (with the suppress flag
+                        // blocking re-admit so the loop progresses).
+                        self.jit.reg_state_buf = reg_state;
+                        self.jit.entry_tags_buf = entry_tags;
+                        continue;
                     } else {
                         // Restore each slot using the trace's
                         // exit-tag analysis (see ExitTag docs).
