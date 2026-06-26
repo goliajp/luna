@@ -75,8 +75,10 @@ fn int_chunk_compile_mismatch_skips_jit_runs_interp() {
     let r = vm
         .call_value(Value::Closure(cl), &[])
         .expect("call_value returns without panic / abort");
-    assert!(matches!(r.first(), Some(&Value::Int(12))),
-        "result is the interp-computed sum, JIT silently skipped on storage mismatch");
+    assert!(
+        matches!(r.first(), Some(&Value::Int(12))),
+        "result is the interp-computed sum, JIT silently skipped on storage mismatch"
+    );
 }
 
 /// Trace JIT path: a hot loop normally triggers `try_compile_trace`
@@ -94,8 +96,10 @@ fn trace_compile_mismatch_skips_jit_runs_interp() {
     let r = vm
         .eval("local s = 0 for i = 1, 1000 do s = s + i end return s")
         .expect("eval returns without panic / abort");
-    assert!(matches!(r.first(), Some(&Value::Int(500500))),
-        "sum 1..=1000 = 500500, computed under interp fallback");
+    assert!(
+        matches!(r.first(), Some(&Value::Int(500500))),
+        "sum 1..=1000 = 500500, computed under interp fallback"
+    );
 }
 
 /// A second compile attempt on the same Vm continues to skip JIT
@@ -133,8 +137,11 @@ fn capi_zero_result_callback_no_sigabrt_post_fix() {
         luaL_openlibs(l);
         lua_register(l, name.as_ptr(), c_void);
         assert_eq!(luaL_loadstring(l, src.as_ptr()), LUA_OK);
-        assert_eq!(lua_pcall(l, 0, 1, 0), LUA_OK,
-            "pcall completes via interp; pre-fix this aborted with SIGABRT in luaL_newstate's mismatched storage path");
+        assert_eq!(
+            lua_pcall(l, 0, 1, 0),
+            LUA_OK,
+            "pcall completes via interp; pre-fix this aborted with SIGABRT in luaL_newstate's mismatched storage path"
+        );
         assert_eq!(lua_tointeger(l, -1), 0);
         lua_close(l);
     }
