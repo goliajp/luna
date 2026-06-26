@@ -5736,7 +5736,9 @@ impl Vm {
                         // cur_depth < 2) via the lowerer's
                         // dispatch_off_reason mirror at the close
                         // handler — kept as a regression safety net.
-                        self.jit.counters.bump_close_cause("selflink-yields-to-downrec");
+                        self.jit
+                            .counters
+                            .bump_close_cause("selflink-yields-to-downrec");
                     } else {
                         rec.self_link_kind = Some(kind);
                     }

@@ -115,8 +115,8 @@ fn p16_on_fib_28_records_self_link_safety_pin_dispatch_off_reason() {
     let reasons = vm.trace_dispatch_off_reasons();
     // Accept either the pre-sub-0 SelfLink label OR the sub-0 DownRec
     // stitch-pending label; both signal R1's safety pin equivalent.
-    let safety_pin_label_fired = reasons.contains(&"self-link-retf-r1")
-        || reasons.contains(&"downrec-stitch-pending");
+    let safety_pin_label_fired =
+        reasons.contains(&"self-link-retf-r1") || reasons.contains(&"downrec-stitch-pending");
     assert!(
         safety_pin_label_fired,
         "expected at least one trace pinned dispatch_off via R1 SelfLink \
