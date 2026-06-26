@@ -4972,6 +4972,34 @@ pub struct JitHandle {
     ret_is_table: bool,
 }
 
+// v2.0 Track J sub-step J-E — sibling of the always-on
+// `unsafe impl Send for TraceHandle` at `trace.rs:2506`. JitHandle
+// holds the same shape: a `SendJitModule` (Send via J-A's wrapper,
+// see `send_jit_module.rs`) plus an `entry_raw: *const u8` raw
+// fn pointer addressing mcode owned by `_module`. The raw pointer
+// is `!Send` by default — this manual impl is the explicit lift.
+//
+// SAFETY: each field is safely Send:
+//   - `_module: SendJitModule` — Send via J-A's `unsafe impl Send
+//     for SendJitModule` (`send_jit_module.rs:65`). luna only
+//     constructs `JITModule` with `SystemMemoryProvider` (Send,
+//     per cranelift-jit's `memory/system.rs:126`).
+//   - `entry_raw: *const u8` — addresses mcode in `_module`'s
+//     mmap'd page. Because `_module` ships with the handle (the
+//     handle owns it by-value), the pointer remains
+//     dereferenceable on whichever thread the handle lands on.
+//     Read-only on the hot path (transmuted to `extern "C"` fn,
+//     called). No aliasing.
+//   - remaining fields are primitive scalars.
+//
+// Cross-thread dispatch is gated separately on the J-D
+// `scoped_jit_vm_rebind` RAII (per-`enter_jit` TLS install +
+// restore), which works on any OS thread because the TLS slot is
+// captured-and-restored at function scope rather than statically
+// pinned. Track J-E ship doc:
+// `.dev/rfcs/v2.0-track-j-e-verdict.md`.
+unsafe impl Send for JitHandle {}
+
 impl JitHandle {
     /// Invoke the entry with zero args. Panics in debug if the
     /// compiled Proto had `num_args > 0`.
