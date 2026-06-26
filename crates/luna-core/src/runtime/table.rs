@@ -58,6 +58,60 @@ impl Node {
     };
 }
 
+/// C3 — SoA Robin Hood meta byte layout (Variant A, see
+/// `.dev/rfcs/v2.0-c3-soa-robinhood-rfc.md` §5.1).
+///
+/// Each `meta[idx]` slot encodes the open-addressing slot state in one byte:
+/// - bit 7 (`OCCUPIED_BIT`): 0 = empty, 1 = occupied
+/// - bit 6 (`TOMBSTONE_BIT`): 0 = live, 1 = tombstoned-occupied
+/// - bits 5..0 (`PSL_MASK`): probe-sequence length (0..63)
+///
+/// PSL of 63 is the rehash trigger ceiling — the layout itself can't store
+/// a higher PSL, so insert paths that would exceed 63 MUST rehash first.
+/// At load factor 0.75 the expected max PSL on a 1024-slot table is ~8,
+/// worst case ~20 with very high probability (Robin Hood variance).
+///
+/// Tombstones do NOT free the slot for `find` (probe continues past), but
+/// DO free it for `insert` (write the new entry, clear the tomb bit). They
+/// accumulate; the rehash path compacts them periodically.
+#[allow(dead_code)]
+pub(crate) mod meta_bits {
+    pub const OCCUPIED_BIT: u8 = 0b1000_0000;
+    pub const TOMBSTONE_BIT: u8 = 0b0100_0000;
+    pub const PSL_MASK: u8 = 0b0011_1111;
+    pub const PSL_MAX: u8 = 63;
+    /// Empty slot — bit 7 = 0, all others 0.
+    pub const EMPTY: u8 = 0;
+
+    #[inline(always)]
+    pub fn is_occupied(m: u8) -> bool {
+        (m & OCCUPIED_BIT) != 0
+    }
+    #[inline(always)]
+    pub fn is_tombstone(m: u8) -> bool {
+        (m & TOMBSTONE_BIT) != 0
+    }
+    /// Live = occupied AND not tombstoned. `next()` iteration cursor returns
+    /// these. `find_slot_rh` short-circuits on a live match.
+    #[inline(always)]
+    pub fn is_live(m: u8) -> bool {
+        (m & (OCCUPIED_BIT | TOMBSTONE_BIT)) == OCCUPIED_BIT
+    }
+    #[inline(always)]
+    pub fn psl(m: u8) -> u8 {
+        m & PSL_MASK
+    }
+    #[inline(always)]
+    pub fn pack(psl: u8, tomb: bool) -> u8 {
+        debug_assert!(psl <= PSL_MAX);
+        let mut m = OCCUPIED_BIT | (psl & PSL_MASK);
+        if tomb {
+            m |= TOMBSTONE_BIT;
+        }
+        m
+    }
+}
+
 /// P11-S5d.I — inline storage threshold. Tables whose array part has
 /// `asize <= INLINE_ASIZE` keep their atags+avals inside the Table
 /// struct itself (`inline_storage`), skipping the slab Box entirely
@@ -104,6 +158,23 @@ pub struct Table {
     /// free-slot search position, counts down (PUC lastfree).
     /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
     pub(crate) lastfree: u32,
+    /// C3 — SoA Robin Hood hash part (Variant A, parallel to `nodes`
+    /// during Phase B+C transition). After Phase 4 cutover these
+    /// replace `nodes` entirely. Each of `keys` / `vals` / `meta`
+    /// is the same length as `nodes` and is sized in lockstep by
+    /// `resize`. `meta` byte layout per the `meta_bits` module above.
+    /// Empty `Box::new([])` until Phase D cuts over.
+    pub(crate) keys: Box<[Value]>,
+    pub(crate) vals: Box<[Value]>,
+    pub(crate) meta: Box<[u8]>,
+    /// Count of tombstoned-occupied meta slots; rehash trigger.
+    pub(crate) tombstones: u32,
+    /// C3 — iterator-guard counter (R-A3 mitigation). Incremented on
+    /// each `pairs`/`next` entry, decremented on exit. While > 0,
+    /// the SoA path MUST defer rehash (which would rebase slot
+    /// indices and break PUC `nextvar.lua:520-521` invariant).
+    /// Phase F wires this; Phase B initialises to 0.
+    pub(crate) iter_depth: u32,
     /// P11-S5d.K — visibility lifted to `pub(crate)` so the JIT can
     /// take its field offset at compile time and emit an inline
     /// "metatable.is_none()" guard before the inline aget fast path.
@@ -140,6 +211,11 @@ impl Table {
             inline_storage: [0; INLINE_U64S],
             nodes: Box::new([]),
             lastfree: 0,
+            keys: Box::new([]),
+            vals: Box::new([]),
+            meta: Box::new([]),
+            tombstones: 0,
+            iter_depth: 0,
             metatable: None,
             flags: 0,
         }
@@ -251,7 +327,10 @@ impl Table {
         } else {
             0
         };
-        array_external + self.nodes.len() * std::mem::size_of::<Node>()
+        let soa_external = self.keys.len() * std::mem::size_of::<Value>()
+            + self.vals.len() * std::mem::size_of::<Value>()
+            + self.meta.len();
+        array_external + self.nodes.len() * std::mem::size_of::<Node>() + soa_external
     }
 
     fn asize(&self) -> usize {
