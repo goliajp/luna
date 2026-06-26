@@ -3080,6 +3080,20 @@ thread_local! {
         const { std::cell::Cell::new("not-entered") };
     pub(crate) static LAST_OP_ID: std::cell::Cell<u8> =
         const { std::cell::Cell::new(255) };
+    // v2.0 Track-R R3.3+ sub-1 — counter bumped exactly once per
+    // `lower_trace_into_named` invocation that successfully declares
+    // the depth-relative `base_var` scaffold. Used by the sub-1
+    // regression test (`r3_3_sub1_base_var_scaffold.rs`) to assert
+    // the scaffold's declaration ran end-to-end without actually
+    // exercising any op-arm migration (sub-2 territory).
+    //
+    // Probe-only: dispatched + close-cause counters cover production
+    // behaviour; this cell exists solely so the test can pin "scaffold
+    // ran" without scraping Cranelift IR text. The bump happens AFTER
+    // `declare_var` + `def_var(iconst(0))` so a panic earlier in the
+    // entry block leaves the counter at its prior value.
+    pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 fn checkpoint(s: &'static str) {
@@ -3101,6 +3115,29 @@ pub fn last_compile_checkpoint() -> &'static str {
 /// lowerer touched on this thread. Diagnostic-only.
 pub fn last_op_id() -> u8 {
     LAST_OP_ID.with(|c| c.get())
+}
+
+/// v2.0 Track-R R3.3+ sub-1 — count of successful `base_var` scaffold
+/// declarations on this thread. Bumped exactly once per
+/// `lower_trace_into_named` invocation that reaches the post-entry
+/// emit point and runs `declare_var` + `def_var(iconst(0))` for the
+/// depth-relative base address handle. Sub-1 scaffold-only: NO op-arm
+/// migration; the variable is in-scope for the entire lowerer body
+/// but `use_var` only happens once (as an `iadd_imm(0)` cargo-asm
+/// proof-of-life) at the end of the entry block prelude.
+///
+/// Read by `r3_3_sub1_base_var_scaffold.rs`; production paths
+/// (dispatcher / close handler / vm) never read this.
+pub fn base_var_scaffold_declared_count() -> u64 {
+    BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
+}
+
+/// v2.0 Track-R R3.3+ sub-1 — reset the scaffold-declared counter so
+/// a regression test can assert "the next compile bumped it by 1"
+/// without depending on prior tests in the same thread. Test-only;
+/// production paths never call this.
+pub fn reset_base_var_scaffold_declared_count() {
+    BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(0));
 }
 
 /// v1.3 Phase AOT Stage 3 — build a fresh `JITModule` configured with
@@ -5092,6 +5129,59 @@ pub fn lower_trace_into_named<M: Module>(
     {
         let z = bcx.ins().iconst(types::I64, 0);
         bcx.def_var(tforcall_tag_var, z);
+    }
+
+    // v2.0 Track-R R3.3+ sub-1 — depth-relative `base_var` scaffold.
+    //
+    // RFC: `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §6 sub-step 1.
+    //
+    // Sub-1 is SCAFFOLD-ONLY. The Variable is declared at trace head
+    // (here, in the entry block immediately after the reg_state load
+    // prelude) and initialised to `iconst(0)` as the depth-0 sentinel
+    // placeholder. Sub-2 will (a) replace the iconst(0) with a real
+    // `reg_state`-relative base address and (b) migrate Op::Move /
+    // Op::LoadK / Op::LoadNil arms to load/store via `base_var`
+    // instead of `regs_full[off + slot]`. Sub-3 will install the
+    // R3d stitch_blk base-shift sequencing (Risk D1.R2 mitigation).
+    //
+    // Threading: `lower_trace_into_named` is a monolithic function
+    // and every op-arm emit lives in its lexical scope, so `base_var`
+    // is automatically in scope for sub-2 op-arm migration. No struct
+    // refactor needed at this batch — the explicit "compile context"
+    // the RFC names is the lexical closure of this fn body, not a
+    // separate type.
+    //
+    // Codegen audit (Risk D1.R1): an unused Variable initialized via
+    // a single iconst gets DCE'd by Cranelift's mid-end, so this
+    // scaffold has the desired property of being overhead-neutral
+    // vs. the pre-sub-1 build. The single `iadd_imm(base_var, 0)` +
+    // use below intentionally KEEPS one read live so `cargo asm` can
+    // verify the GlobalValue/Variable threading path produces clean
+    // codegen (mitigation §8 D1.R1): if Cranelift fails to fold the
+    // `+ 0` and emits a spurious add, sub-2 needs the GlobalValue
+    // escape route (RFC §8 mitigation) before op-arm migration.
+    //
+    // Probe: `BASE_VAR_SCAFFOLD_DECLARED` bumps exactly once at the
+    // post-def_var point so the regression test
+    // `r3_3_sub1_base_var_scaffold.rs` can assert "scaffold ran" on
+    // an arbitrary fixture trace without scraping IR text. Bump
+    // happens after `def_var` so a `declare_var` panic earlier leaves
+    // the counter unchanged.
+    let base_var = bcx.declare_var(types::I64);
+    {
+        let z = bcx.ins().iconst(types::I64, 0);
+        bcx.def_var(base_var, z);
+        // Codegen-audit anchor: one use to keep the Variable from
+        // being DCE'd in optimized builds. The `iadd_imm(_, 0)` will
+        // fold to the source value at the mid-end, so the only IR
+        // residue is the `iconst.i64 0` which Cranelift hoists or
+        // emits as `mov` (Apple Silicon AArch64 immediate-zero is
+        // typically the `wzr` / `xzr` register, zero codegen cost).
+        // `cargo asm` audit (Phase D) confirms no drift vs. pre-sub-1.
+        let base_now = bcx.use_var(base_var);
+        let bumped = bcx.ins().iadd_imm(base_now, 0);
+        bcx.def_var(base_var, bumped);
+        BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
     // P12-S5-B — allocate virtual `Variable`s for each Sinkable
