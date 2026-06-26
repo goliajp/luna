@@ -62,6 +62,21 @@ fn workspace_root() -> PathBuf {
 
 #[test]
 fn all_27_luna_jit_helpers_are_defined_in_staticlib() {
+    // Windows MSVC produces `luna_runtime_helpers.lib` (COFF archive,
+    // not `libluna_runtime_helpers.a` Mach-O/ELF archive) and inspects
+    // symbols via `dumpbin /symbols` not `nm`. The Stage 7 AOT pipeline
+    // is Unix-floor; v1.3 ships Windows AOT via the MSVC linker path
+    // but the helper-presence smoke test is verified there at the
+    // `luna-aot compile` step's own LNK2019-rejection layer rather
+    // than at the staticlib `nm` layer. Skip cleanly on Windows MSVC
+    // — equivalent coverage exists at compile-and-link time.
+    if cfg!(target_env = "msvc") {
+        eprintln!(
+            "stage7_aot_helpers_in_staticlib: MSVC produces .lib not .a; \
+             helper-presence is verified at the linker layer, skipping"
+        );
+        return;
+    }
     if !have_on_path("nm") {
         eprintln!("stage7_aot_helpers_in_staticlib: `nm` not on PATH, skipping");
         return;
