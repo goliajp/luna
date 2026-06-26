@@ -99,6 +99,43 @@ pub struct JitState {
     /// v1.1 A1 Session A — trace-JIT backend. (Was
     /// `Vm::trace_compiler`.)
     pub trace_compiler: Box<dyn crate::jit::TraceCompiler>,
+
+    /// v2.0 Track-R R3c — bounded stitch-back depth remaining for
+    /// the dispatcher's `is_downrec_sentinel` admit path. Cycle-
+    /// safety checkpoint per R3 prep §7.5: a `downrec_link`-bearing
+    /// trace whose stitch target is itself can in principle keep
+    /// returning the DOWNREC sentinel forever, and the dispatcher
+    /// would forever re-admit it on the next interpreter loop
+    /// iteration. The counter is consulted BEFORE every downrec
+    /// admit; each admit decrements; when it would reach a negative
+    /// value the dispatcher refuses entry and force-deopts via
+    /// [`Self::suppress_downrec_admit_once`]. Reset to
+    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or
+    /// when the suppress flag fires (so a subsequent interp tick
+    /// past `head_pc` re-arms the budget). Default = the constant.
+    pub stitch_depth_remaining: u32,
+
+    /// v2.0 Track-R R3c — one-shot suppression flag for the
+    /// dispatcher's downrec-admit predicate (`t.downrec_link.is_
+    /// some()` arm). Set by the dispatcher when it force-deopts a
+    /// downrec entry (guard miss OR cycle-budget exhausted) so the
+    /// NEXT interpreter loop iteration skips the admit and lets
+    /// interp run the op at `head_pc`, advancing `pc` past
+    /// `head_pc` and breaking the otherwise-infinite admit loop.
+    /// Consumed (cleared) the first time the dispatcher reads it.
+    /// The `dispatchable=true` admit path is untouched by this
+    /// flag — only the R3c-added downrec admit gate respects it.
+    pub suppress_downrec_admit_once: bool,
+}
+
+impl JitState {
+    /// v2.0 Track-R R3c — default per-dispatch stitch-back depth.
+    /// `1` means: a downrec trace can re-enter exactly once via
+    /// the dispatcher loop after a DOWNREC sentinel hit; the
+    /// second hit in the same call chain is classified as a deopt.
+    /// Conservative floor; R3d may raise after R3c's miss-rate
+    /// audit.
+    pub const STITCH_DEPTH_DEFAULT: u32 = 1;
 }
 
 /// Diagnostic counters and probe lists. All fields here are
@@ -198,6 +235,31 @@ pub struct JitCounters {
     /// counter bumps; R3d will lift `dispatchable` after R3c wires
     /// the dispatcher consumer.
     pub downrec_link_compiled: u64,
+    /// v2.0 Track-R R3c — number of times the dispatcher's
+    /// `is_downrec_sentinel` arm in
+    /// `crates/luna-core/src/vm/exec.rs` fired with the caller-pc
+    /// guard reporting a HIT (saved-PC at `reg_state[window_size]`
+    /// matched the recorded `dr_return_pc`). Each bump corresponds
+    /// to one stitch-back round: the trace returned the
+    /// `SIDE_SENT_DOWNREC_CODE` sentinel and the dispatcher fed the
+    /// trace's `head_pc` back to the interpreter loop so the
+    /// admit-by-`downrec_link` gate re-enters the trace (bounded by
+    /// the dispatcher's `stitch_depth_remaining` checkpoint). R3c's
+    /// regression test (`r3c_dispatcher_stitch_dispatch`) gates on
+    /// `downrec_dispatched > 0 OR downrec_deopt > 0`.
+    pub downrec_dispatched: u64,
+    /// v2.0 Track-R R3c — number of times the dispatcher's
+    /// `is_downrec_sentinel` arm observed a guard MISS (the trace
+    /// invocation returned with `downrec_link.is_some()` but the
+    /// returned sentinel was NOT [`SIDE_SENT_DOWNREC_CODE`] — i.e.
+    /// the lowerer's `deopt_blk` arm fired, returning `head_pc` via
+    /// the GLOBAL sentinel). Bumped on the dispatcher side via the
+    /// post-invoke check so R3c can measure caller-pc guard
+    /// miss-rate via `downrec_dispatched + downrec_deopt` without
+    /// lifting `dispatchable = true`. R3d uses this to decide
+    /// whether the lifted `dispatchable = true` would flip perf
+    /// negative (R3 prep §7.1 mitigation).
+    pub downrec_deopt: u64,
 }
 
 impl JitCounters {
@@ -241,6 +303,8 @@ impl JitState {
             entry_tags_buf: Vec::new(),
             chunk_compiler: Box::new(crate::jit::NullJitBackend),
             trace_compiler: Box::new(crate::jit::NullJitBackend),
+            stitch_depth_remaining: JitState::STITCH_DEPTH_DEFAULT,
+            suppress_downrec_admit_once: false,
         }
     }
 }
