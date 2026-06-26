@@ -2486,15 +2486,22 @@ pub fn compute_live_in_slots(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u3
 /// `TRACE_JIT_HANDLES`. Mirrors the method JIT's `JitHandle` /
 /// `storage.cache_handles` pattern (`jit_backend/mod.rs`).
 pub struct TraceHandle {
-    _module: JITModule,
+    // v2.0 Track J sub-step J-D — sleeve `JITModule` in J-A's
+    // `SendJitModule` newtype so the module's `Send` claim is
+    // expressed at the field type, not by an `unsafe impl Send` on
+    // the outer struct. The wrapper is `repr(Rust)` newtype with
+    // `Deref<Target = JITModule>` so any internal call site that
+    // touched `handle._module.<method>` still resolves through Deref.
+    _module: super::SendJitModule,
     _entry_raw: *const u8,
 }
 
-// SAFETY: `JITModule` is not Send by default (the mmap'd code lives
-// at a thread-local address). v2.0 Track J sub-step J-B keeps the
-// handle on the owning `Vm`'s `storage.trace_handles` Vec, which
-// stays on the recording thread; cross-thread Send transfer is J-D /
-// J-E's lift (post-J-A `SendJitModule` wrapper).
+// SAFETY: `SendJitModule` (J-A) is `Send` because luna only ever
+// constructs `JITModule` with the default `SystemMemoryProvider`
+// (which is `Send`). `_entry_raw: *const u8` is `!Send` by default;
+// the manual `unsafe impl Send for TraceHandle` therefore stays
+// load-bearing for the outer struct, but the J-A wrapper localizes
+// the JITModule-side soundness reasoning to one place.
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
@@ -3271,7 +3278,11 @@ pub fn try_compile_trace_with_options(
     crate::jit_backend::storage::from_storage(storage)
         .trace_handles
         .push(TraceHandle {
-            _module: module,
+            // v2.0 Track J sub-step J-D — wrap in `SendJitModule`
+            // sleeve. SAFETY: `build_trace_jit_module` uses the
+            // default `SystemMemoryProvider` path (no
+            // `JITBuilder::memory_provider` call).
+            _module: super::SendJitModule::new(module),
             _entry_raw: ptr,
         });
     Some(compiled)
