@@ -97,7 +97,18 @@ pub trait IntChunkCompiler {
     /// Attempt to compile `proto`. Returns [`CompileResult::Compiled`] on
     /// a whitelist hit or [`CompileResult::Skipped`] when the body is
     /// outside the JIT's supported shape.
-    fn try_compile(&self, proto: Gc<Proto>, pre53: bool, float_only: bool) -> CompileResult;
+    ///
+    /// v2.0 Track J sub-step J-B — `storage` is the per-`Vm` JIT cache
+    /// + handle holder. The Cranelift backend downcasts it to its
+    /// concrete `CraneliftJitStorage`; the no-op [`NullJitBackend`]
+    /// ignores it (returns `Skipped` without touching storage).
+    fn try_compile(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        proto: Gc<Proto>,
+        pre53: bool,
+        float_only: bool,
+    ) -> CompileResult;
 
     /// Install the active `Vm` + closure pointer into the JIT
     /// helpers' thread-local slots; the returned guard restores
@@ -117,8 +128,13 @@ pub trait IntChunkCompiler {
 pub trait TraceCompiler {
     /// Attempt to lower `record` into native code under `opts`. Returns
     /// `None` if the lowerer bailed at any checkpoint.
+    ///
+    /// v2.0 Track J sub-step J-B — `storage` is the per-`Vm` JIT cache
+    /// + handle holder; the Cranelift backend uses it to park each
+    /// compiled trace's `JITModule`. [`NullJitBackend`] ignores it.
     fn try_compile_trace(
         &self,
+        storage: &mut dyn crate::jit::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace>;
@@ -138,7 +154,13 @@ pub trait TraceCompiler {
 pub struct NullJitBackend;
 
 impl IntChunkCompiler for NullJitBackend {
-    fn try_compile(&self, _: Gc<Proto>, _: bool, _: bool) -> CompileResult {
+    fn try_compile(
+        &self,
+        _: &mut dyn crate::jit::JitStorage,
+        _: Gc<Proto>,
+        _: bool,
+        _: bool,
+    ) -> CompileResult {
         CompileResult::Skipped
     }
 
@@ -155,7 +177,12 @@ impl IntChunkCompiler for NullJitBackend {
 }
 
 impl TraceCompiler for NullJitBackend {
-    fn try_compile_trace(&self, _: &TraceRecord, _: CompileOptions) -> Option<CompiledTrace> {
+    fn try_compile_trace(
+        &self,
+        _: &mut dyn crate::jit::JitStorage,
+        _: &TraceRecord,
+        _: CompileOptions,
+    ) -> Option<CompiledTrace> {
         None
     }
 

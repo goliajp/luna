@@ -37,6 +37,12 @@ pub use abi::{
     NullJitBackend, TraceCompiler,
 };
 
+// v2.0 Track J sub-step J-B — per-Vm JIT storage trait. Holds the
+// (formerly thread-local) JIT cache + handle collections so a Vm
+// carries its own JIT state across thread moves (Send-prep for J-D).
+mod storage;
+pub use storage::{JitStorage, NullJitStorage};
+
 // Compatibility re-export so external `use luna::jit::trace::*` paths
 // (and the historical `crate::jit::trace::*` accesses inside this
 // crate) keep resolving even after Session C's physical split. In

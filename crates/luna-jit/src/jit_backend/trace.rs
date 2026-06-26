@@ -2478,31 +2478,30 @@ pub fn compute_live_in_slots(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u3
 }
 
 /// Owner of one compiled trace's mmap'd code. Drop releases the
-/// pages, so we stash these in a thread-local `TRACE_JIT_HANDLES`
-/// to keep entry fn pointers callable for the thread's lifetime.
-/// Mirrors the method JIT's `JitHandle` / `JIT_CACHE_HANDLES`
-/// pattern (`src/jit/mod.rs`).
+/// pages, so the handle is parked on the owning `Vm`'s
+/// `storage.trace_handles` Vec, keeping the entry fn pointer
+/// callable for the lifetime of that `Vm`.
+///
+/// v2.0 Track J sub-step J-B Phase F — was thread-local
+/// `TRACE_JIT_HANDLES`. Mirrors the method JIT's `JitHandle` /
+/// `storage.cache_handles` pattern (`jit_backend/mod.rs`).
 pub struct TraceHandle {
     _module: JITModule,
     _entry_raw: *const u8,
 }
 
 // SAFETY: `JITModule` is not Send by default (the mmap'd code lives
-// at a thread-local address). We never move a `TraceHandle` off the
-// thread that created it — `TRACE_JIT_HANDLES` is `thread_local!`
-// and the dispatcher will only call traces from the thread that
-// recorded them. This marker is just to satisfy
-// `RefCell<Vec<TraceHandle>>` in the `thread_local!` macro context.
+// at a thread-local address). v2.0 Track J sub-step J-B keeps the
+// handle on the owning `Vm`'s `storage.trace_handles` Vec, which
+// stays on the recording thread; cross-thread Send transfer is J-D /
+// J-E's lift (post-J-A `SendJitModule` wrapper).
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
-thread_local! {
-    /// Storage that owns each compiled trace's `JITModule`, keeping
-    /// every fn pointer published in a `CompiledTrace` callable for
-    /// the lifetime of the thread.
-    static TRACE_JIT_HANDLES: std::cell::RefCell<Vec<TraceHandle>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
+// v2.0 Track J sub-step J-B Phase F — `TRACE_JIT_HANDLES` was a
+// `thread_local!<Vec<TraceHandle>>` here. Migrated to
+// `Vm.jit.storage.trace_handles`. Compiled fn pointers stay callable
+// for the lifetime of the owning `Vm` instead of the thread.
 
 /// Step 5 op whitelist. Anything outside this set bails the lowerer
 /// to `None`, leaving the recorder to drop the trace.
@@ -3009,9 +3008,9 @@ fn emit_store_back_and_return_site(
 ///   position,
 /// - cranelift codegen fails.
 ///
-/// On success, the underlying `JITModule` is stashed in
-/// `TRACE_JIT_HANDLES` so the returned `CompiledTrace.entry` stays
-/// callable for the thread's lifetime.
+/// On success, the underlying `JITModule` is parked on
+/// `storage.trace_handles` so the returned `CompiledTrace.entry`
+/// stays callable for the lifetime of the owning `Vm`.
 ///
 /// **Caller contract for table ops** (step 4): before invoking the
 /// returned entry, the caller (a test harness today; the S3
@@ -3030,8 +3029,11 @@ fn emit_store_back_and_return_site(
 /// pick options — it forwards to
 /// [`try_compile_trace_with_options`] with [`CompileOptions::default`]
 /// (one-shot, the shape unit tests assume).
-pub fn try_compile_trace(record: &TraceRecord) -> Option<CompiledTrace> {
-    try_compile_trace_with_options(record, CompileOptions::default())
+pub fn try_compile_trace(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+) -> Option<CompiledTrace> {
+    try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
 // P13-S13-G v2.6 — last-checkpoint instrumentation for trace
@@ -3247,9 +3249,10 @@ unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
 /// [`lower_trace_into`] generic. Constructs a `JITModule`, finalizes
 /// the compiled trace into RWX memory, patches the real entry fn ptr
 /// into the returned [`CompiledTrace`], and stashes the module in
-/// `TRACE_JIT_HANDLES` so the entry stays callable for the thread's
-/// lifetime.
+/// `storage.trace_handles` so the entry stays callable for the
+/// lifetime of the owning `Vm`.
 pub fn try_compile_trace_with_options(
+    storage: &mut dyn luna_core::jit::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
@@ -3259,16 +3262,18 @@ pub fn try_compile_trace_with_options(
     let ptr = module.get_finalized_function(fn_id);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
     // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
-    // is owned by `module`, which we park in `TRACE_JIT_HANDLES`
-    // immediately below.
+    // is owned by `module`, which we park on the per-`Vm` storage's
+    // `trace_handles` Vec immediately below.
+    // v2.0 Track J sub-step J-B Phase F — was `TRACE_JIT_HANDLES` TLS;
+    // now per-`Vm` field on storage.
     let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
     compiled.entry = entry_fn;
-    TRACE_JIT_HANDLES.with(|cell| {
-        cell.borrow_mut().push(TraceHandle {
+    crate::jit_backend::storage::from_storage(storage)
+        .trace_handles
+        .push(TraceHandle {
             _module: module,
             _entry_raw: ptr,
         });
-    });
     Some(compiled)
 }
 
@@ -7670,7 +7675,8 @@ pub fn lower_trace_into_named<M: Module>(
     // generic body emits the function definition and stops at
     // `clear_context`; the JIT wrapper calls `finalize_definitions`
     // + `get_finalized_function`, patches `compiled.entry` with the
-    // real fn pointer, and parks the module in `TRACE_JIT_HANDLES`.
+    // real fn pointer, and parks the module on the Vm's
+    // `storage.trace_handles` Vec.
     // The AOT pipeline (luna-aot) calls `ObjectModule::finish` /
     // `ObjectProduct::emit` to produce a `.o` file instead, and
     // resolves the trace symbol at static link time.
@@ -8128,7 +8134,8 @@ mod s2b_arith {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = make_record(7, &[], p);
-        let ct = try_compile_trace(&rec).expect("empty closed trace must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("empty closed trace must compile");
         assert_eq!(ct.head_pc, 7);
         assert_eq!(ct.n_ops, 0);
 
@@ -8154,7 +8161,7 @@ mod s2b_arith {
         // R[0] = R[1] + R[2]
         let add = Inst::iabc(Op::Add, 0, 1, 2, false);
         let rec = make_record(11, &[add], p);
-        let ct = try_compile_trace(&rec).expect("Add trace must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("Add trace must compile");
         assert_eq!(ct.head_pc, 11);
         assert_eq!(ct.n_ops, 1);
 
@@ -8182,7 +8189,8 @@ mod s2b_arith {
             Inst::iabc(Op::Sub, 0, 0, 3, false),
         ];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("Add/Mul/Sub chain must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Add/Mul/Sub chain must compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 5;
@@ -8207,7 +8215,7 @@ mod s2b_arith {
             Inst::iabc(Op::Mul, 0, 0, 1, false),
         ];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("Move + Mul must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("Move + Mul must compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 999; // overwritten by Move
@@ -8234,7 +8242,8 @@ mod s2b_arith {
             Inst::isj(Op::Jmp, -3),
         ];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("Add + trailing Jmp must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Add + trailing Jmp must compile");
         assert_eq!(ct.n_ops, 2);
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -8250,7 +8259,7 @@ mod s2b_arith {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = TraceRecord::start(p, 0, Vec::new(), false);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8262,7 +8271,7 @@ mod s2b_arith {
         // has no special treatment and falls through to a bail).
         let prog = [Inst::iabc(Op::Concat, 0, 0, 0, false)];
         let rec = make_record(0, &prog, p);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8278,7 +8287,7 @@ mod s2b_arith {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8300,7 +8309,7 @@ mod s2b_arith {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm1.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8317,7 +8326,7 @@ mod s2b_arith {
         // small-chunk max_stack doesn't silently turn the test
         // green via the loose-precondition path.
         assert!((p.max_stack as usize) <= 2, "precondition for this test");
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8326,12 +8335,12 @@ mod s2b_arith {
         let p = load_proto(&mut vm, WIDE_SRC);
         let prog = [Inst::iabc(Op::Add, 0, 1, 2, false)];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // Re-entrancy / mmap-lifetime sanity: each call recomputes
         // R[0] from the inputs, and the fn ptr stays valid because
-        // `TRACE_JIT_HANDLES` keeps `JITModule` alive.
+        // `storage.trace_handles` keeps `JITModule` alive.
         for k in 0..1000 {
             state[1] = k;
             state[2] = 2 * k;
@@ -8389,7 +8398,8 @@ mod s2b_cmp {
         // if (R[1] < R[2]) ~= 1 then pc++   — recorded "1 < 2", matched K=1.
         let lt = Inst::iabc(Op::Lt, 1, 2, 0, true);
         let rec = cmp_jmp_record(p, 5, 10, lt);
-        let ct = try_compile_trace(&rec).expect("Lt + trailing Jmp must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Lt + trailing Jmp must compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 3; // 3 < 7 holds → matches K=true → continue
@@ -8404,7 +8414,7 @@ mod s2b_cmp {
         let p = load_proto(&mut vm, WIDE_SRC);
         let lt = Inst::iabc(Op::Lt, 1, 2, 0, true); // K=1
         let rec = cmp_jmp_record(p, 5, 10, lt);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 9; // 9 < 7 false → mismatch with K=1 → side-exit
@@ -8426,7 +8436,7 @@ mod s2b_cmp {
         // cmp result was false (9 < 7), matched K=0 → took Jmp.
         let lt = Inst::iabc(Op::Lt, 1, 2, 0, false);
         let rec = cmp_jmp_record(p, 3, 8, lt);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 9;
@@ -8449,7 +8459,7 @@ mod s2b_cmp {
         // if (R[1] <= R[2]) ~= 1 then pc++
         let le = Inst::iabc(Op::Le, 1, 2, 0, true);
         let rec = cmp_jmp_record(p, 0, 0, le);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // Equal: 5 <= 5 holds → continue.
@@ -8470,7 +8480,7 @@ mod s2b_cmp {
         // if (R[0] == R[1]) ~= 1 then pc++
         let eq = Inst::iabc(Op::Eq, 0, 1, 0, true);
         let rec = cmp_jmp_record(p, 7, 4, eq);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 42;
@@ -8505,7 +8515,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // R[0] = 10 - 7 = 3; 3 < 5 → continue → return head_pc.
@@ -8542,7 +8552,7 @@ mod s2b_cmp {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8564,7 +8574,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8589,7 +8599,7 @@ mod s2b_cmp {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8614,7 +8624,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8640,7 +8650,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 20;
@@ -8720,7 +8730,7 @@ mod s2b_table_ops {
         // Trace: R[0] = {}. The B/C size hints don't matter — the
         // step-4 lowerer reaches for the unsized helper.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 0, 0, 0, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = run_trace(&mut vm, &ct, &mut state);
@@ -8748,7 +8758,7 @@ mod s2b_table_ops {
                 Inst::iabc(Op::GetI, 3, 0, 1, false),
             ],
         );
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[2] = 42; // value to write
@@ -8778,7 +8788,7 @@ mod s2b_table_ops {
                 Inst::iabc(Op::Len, 2, 0, 0, false),
             ],
         );
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 99;
@@ -8802,7 +8812,7 @@ mod s2b_table_ops {
 
         // Trace: R[0][1] = R[1]. R[0] holds the pre-built table.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 1, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8826,7 +8836,7 @@ mod s2b_table_ops {
 
         // Trace: R[1] = R[0][1].
         let rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8844,7 +8854,7 @@ mod s2b_table_ops {
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
         let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 1, 0, 0, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8876,7 +8886,7 @@ mod s2b_table_ops {
                 Inst::iabc(Op::GetI, 2, 0, 1, false),
             ],
         );
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8896,7 +8906,7 @@ mod s2b_table_ops {
         let p = load_proto(&mut vm, WIDE_SRC);
         // Reg index 200 is way past the proto's max_stack (~5).
         let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 200, 0, 0, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8904,7 +8914,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 0, 200, 1, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8912,7 +8922,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 200, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8920,7 +8930,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 0, 200, 0, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 }
 
@@ -8965,7 +8975,8 @@ mod s2b_call_truncation {
             5,
             &[Inst::iabc(Op::Call, 0, 1, 1, false)], // call R[0], 0 args, 0 results
         );
-        let ct = try_compile_trace(&rec).expect("Op::Call-only trace must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Op::Call-only trace must compile");
 
         let mut state: Vec<i64> = vec![42, 43, 44, 0, 0];
         state.resize(p.max_stack as usize, 0);
@@ -8988,7 +8999,7 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Call, 2, 1, 0, false),
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 100;
@@ -9016,7 +9027,8 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Mul, 0, 200, 200, false), // would-be OOB if validated
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile despite post-truncation OOB");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("compile despite post-truncation OOB");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 30;
@@ -9041,7 +9053,7 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Call, 2, 1, 0, false),
         ];
         let rec = closed_record(p, 0, &prog);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -9050,7 +9062,7 @@ mod s2b_call_truncation {
         let p = load_proto(&mut vm, WIDE_SRC);
         // p.max_stack ≈ 5; A=200 is way past it.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::Call, 200, 1, 0, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -9066,7 +9078,7 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Call, 3, 1, 0, false),
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // R[0]=5, R[1]=10 → 5 < 10 holds → cmp matches K=1 → continue.
@@ -9106,7 +9118,8 @@ mod s2b_call_truncation {
             pre53: false,
             aot: false,
         };
-        let ct = try_compile_trace_with_options(&rec, opts).expect("compile");
+        let ct =
+            try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // R[0] = accumulator, R[3] = step for the body's add.
@@ -9139,7 +9152,8 @@ mod s2b_call_truncation {
         // ForLoop only — empty body, single iter dispatch.
         let prog = [Inst::iabc(Op::ForLoop, 0, 0, 0, false)];
         let rec = closed_record(p, 9, &prog);
-        let ct = try_compile_trace(&rec).expect("compile one-shot ForLoop trace");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("compile one-shot ForLoop trace");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 10;
@@ -9176,7 +9190,7 @@ mod s2b_call_truncation {
             pre53: true,
             aot: false,
         };
-        assert!(try_compile_trace_with_options(&rec, opts).is_none());
+        assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_none());
     }
 
     #[test]
@@ -9186,7 +9200,7 @@ mod s2b_call_truncation {
         // max_stack = 5; A=3 → A+3 = 6 ≥ 5 → bail.
         let prog = [Inst::iabc(Op::ForLoop, 3, 0, 0, false)];
         let rec = closed_record(p, 0, &prog);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -9200,7 +9214,8 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Return0, 0, 0, 0, false), // would bail if validated
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile despite post-truncation Return0");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("compile despite post-truncation Return0");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
@@ -9386,7 +9401,8 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("cmp@d>0 now compiles via inline-cmp emit");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("cmp@d>0 now compiles via inline-cmp emit");
         // One cmp@d>0 site → one per-exit-metas entry.
         assert_eq!(ct.per_exit_inline.len(), 1);
         // Window covers caller + inlined frame's slots.
@@ -9414,7 +9430,7 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     /// First op on a different proto than the trace head also bails
@@ -9434,7 +9450,7 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm1.jit.storage.as_mut(), &rec).is_none());
     }
 }
 
@@ -9485,7 +9501,7 @@ mod s4_step4b_skeleton {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("simple add compiles");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("simple add compiles");
         assert!(
             ct.per_exit_inline.is_empty(),
             "no cmp@d>0 site → per_exit_inline empty"
@@ -9611,7 +9627,7 @@ mod s4_step4b_skeleton {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("compiles via inline-cmp");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compiles via inline-cmp");
         assert_eq!(
             ct.per_exit_inline.len(),
             1,
@@ -9655,7 +9671,7 @@ mod s4_step4b_skeleton {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
