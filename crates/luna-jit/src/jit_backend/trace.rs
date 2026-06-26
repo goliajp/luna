@@ -2505,6 +2505,19 @@ pub struct TraceHandle {
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
+impl TraceHandle {
+    /// v2.0 Track J sub-step J-D — `#[doc(hidden)]` accessor returning
+    /// the parked `_module` borrowed at the `SendJitModule` newtype.
+    /// Mirror of `JitHandle::__j_d_module`; lets
+    /// `tests/j_d_scoped_rebind_and_sleeve.rs` statically assert the
+    /// field type.
+    #[doc(hidden)]
+    #[inline]
+    pub fn __j_d_module(&self) -> &super::SendJitModule {
+        &self._module
+    }
+}
+
 // v2.0 Track J sub-step J-B Phase F — `TRACE_JIT_HANDLES` was a
 // `thread_local!<Vec<TraceHandle>>` here. Migrated to
 // `Vm.jit.storage.trace_handles`. Compiled fn pointers stay callable
