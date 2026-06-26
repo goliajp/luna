@@ -266,12 +266,14 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
          sub-piece 3 contract). nm output:\n{nm_str}"
     );
 
-    // Section walk: verify the dedicated `luna_strkey_idx` section is
-    // present. The deploy-side resolver brackets this section
-    // whole-program via `__start_luna_strkey_idx` (ELF) /
-    // `section$start$__DATA$luna_strkey_idx` (Mach-O), so the
-    // section name on the .o must match exactly. Use `objdump -h` on
-    // ELF, `otool -s __DATA luna_strkey_idx` on Mach-O.
+    // Section walk: verify the dedicated index section is present.
+    // The deploy-side resolver brackets this section whole-program via
+    // `__start_luna_strkey_idx` (ELF) /
+    // `section$start$__DATA$luna_strkey_idx` (Mach-O) /
+    // PE-runtime walker against `.lt_skix` (Windows COFF — link.exe
+    // truncates long section names to the 8-byte short form when
+    // writing the object's string table; runtime walker handles the
+    // short alias). Use `objdump -h` on ELF/PE, `otool -s` on Mach-O.
     let (probe_cmd, probe_args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
         ("otool", vec!["-l"])
     } else {
@@ -284,10 +286,15 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
             .output();
         if let Ok(out) = probe {
             let text = String::from_utf8_lossy(&out.stdout);
+            // Accept either the canonical ELF/Mach-O name
+            // `luna_strkey_idx` OR the COFF short alias `.lt_skix`
+            // (Windows-specific — see `embed.rs` section-name picker).
+            let has_long = text.contains("luna_strkey_idx");
+            let has_short_pe = text.contains(".lt_skix");
             assert!(
-                text.contains("luna_strkey_idx"),
-                "`{probe_cmd}` did not surface section `luna_strkey_idx` on \
-                 sp2 .o (sub-piece 3 expects it as the resolver walk target). \
+                has_long || has_short_pe,
+                "`{probe_cmd}` did not surface section `luna_strkey_idx` or `.lt_skix` on \
+                 sp2 .o (sub-piece 3 expects one as the resolver walk target). \
                  {probe_cmd} output:\n{text}"
             );
         }
