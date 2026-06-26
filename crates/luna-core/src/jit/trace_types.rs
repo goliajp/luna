@@ -59,6 +59,39 @@ pub enum SelfRecKind {
     UpRec,
 }
 
+/// v2.0 Track-R R1 — a recorded return-from-inlined-frame event,
+/// captured by the recorder when a depth>0 `Op::Return0` /
+/// `Op::Return1` fires during active recording with
+/// `p16_self_link_enabled = true`. Mirrors LuaJIT's `IR_RETF`
+/// (`lj_ir.h`) — the IR-level marker that the inlined call frame at
+/// `from_depth` returned to `to_depth` with `results` values.
+///
+/// R1 only collects these records (a side-channel parallel to
+/// [`TraceRecord::ops`]) — the lowerer doesn't consume them yet.
+/// R3's down-rec stitch (see `.dev/rfcs/v2.0-track-r-prep.md` §3)
+/// reads them to verify that a side-trace's inlined-frame topology
+/// matches the recorded shape before stitching.
+///
+/// `caller_pc` is the PC the inlined frame returns TO in its caller
+/// (`enclosing_call.pc + 1`), captured at record-time so the R3
+/// stitch can guard equality against the runtime caller PC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetfRecord {
+    /// Depth this return originated from (>0; the frame about to be
+    /// popped).
+    pub from_depth: u8,
+    /// Depth control returns to (`from_depth - 1`).
+    pub to_depth: u8,
+    /// Number of return values (`0` for `Op::Return0`, `1` for
+    /// `Op::Return1`). Variadic `Op::Return` isn't recorded at
+    /// depth>0 today.
+    pub results: u8,
+    /// PC the caller resumes at after the inlined frame pops
+    /// (`enclosing_call.pc + 1`). Used by R3 to guard return-target
+    /// equality at runtime.
+    pub caller_pc: u32,
+}
+
 /// A single bytecode op as captured during trace recording, with the
 /// runtime context needed to emit cranelift guards (register kinds,
 /// metatable null checks, etc.). Stored in `TraceRecord.ops`.
@@ -156,6 +189,13 @@ pub struct TraceRecord {
     /// body has depth>0 ops. `None` for all non-self-link closes
     /// (Call truncation, ForLoop, Return, InlineAbort).
     pub self_link_kind: Option<SelfRecKind>,
+    /// v2.0 Track-R R1 — side-channel of [`RetfRecord`]s captured
+    /// when a depth>0 `Op::Return0` / `Op::Return1` fires during
+    /// recording with `p16_self_link_enabled = true`. Empty on the
+    /// ship-default path (p16 off). Lowerer doesn't consume this in
+    /// R1 — the records are infrastructure for R3's down-rec stitch
+    /// (see `.dev/rfcs/v2.0-track-r-prep.md` §3).
+    pub retfs: Vec<RetfRecord>,
 }
 
 impl TraceRecord {
@@ -182,6 +222,7 @@ impl TraceRecord {
             tfor_val_tag: None,
             side_trace_parent: None,
             self_link_kind: None,
+            retfs: Vec::new(),
         }
     }
 
@@ -216,6 +257,7 @@ impl TraceRecord {
             tfor_val_tag: None,
             side_trace_parent: Some((parent_head_proto, parent_head_pc, parent_exit_idx)),
             self_link_kind: None,
+            retfs: Vec::new(),
         }
     }
 
