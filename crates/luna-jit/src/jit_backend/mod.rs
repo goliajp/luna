@@ -233,7 +233,10 @@ pub fn cache_lookup_or_compile(
     // above; on the impossible Err branch we drop the freshly built
     // `entry` (it was `Copy`, no resource loss) and skip the cache
     // insert.
-    storage::from_storage(storage).ok()?.cache.insert(key, entry);
+    storage::from_storage(storage)
+        .ok()?
+        .cache
+        .insert(key, entry);
     match entry {
         CacheEntry::Failed => None,
         CacheEntry::Compiled {
