@@ -7159,6 +7159,7 @@ pub fn lower_trace_into_named<M: Module>(
     // downrec_link` at the struct literal below. `None` for every
     // other close shape.
     let mut downrec_link_for_compiled: Option<(u32, u32)> = None;
+    let mut downrec_multi_way_count_for_compiled: u8 = 0;
     if let Some((_dr_idx, dr_return_pc, _target_proto_id, _depth_delta)) = downrec_idx_opt {
         // v2.0 Track-R R3b — `TraceEnd::DownRec` close: emit the
         // stitch-sentinel + caller-pc-guard scaffold.
@@ -7212,34 +7213,69 @@ pub fn lower_trace_into_named<M: Module>(
         let stitch_blk = bcx.create_block();
         let deopt_blk = bcx.create_block();
 
-        // v2.0 Track-R R3c — saved-PC slot load. R3b had `iconst(0)`
-        // here as the placeholder (cranelift constant-folded the
-        // compare to "always false", deopt arm always taken).
-        // R3c's dispatcher pre-invoke writes the parent (caller)
-        // frame's `pc` into `reg_state[window_size_us]` (the
-        // reserved slot one past the regular window — see
-        // `crates/luna-core/src/vm/exec.rs` `is_downrec_entry`
-        // block) so this load returns the runtime saved caller PC
-        // the trace was entered from. The comparison against the
-        // IR-baked `dr_return_pc` (= recorder's captured
-        // `caller_pc` at the threshold-tripping retf) determines
-        // whether the inlined chain's tail Return matches the
-        // recorded shape: a HIT returns the DOWNREC sentinel and
-        // a MISS falls into the `deopt_blk` arm below.
+        // v2.0 Track-R R3d — multi-way caller-pc guard. R3c shipped a
+        // single CMP (`saved_pc == dr_return_pc`) which measured a
+        // 90% miss-rate on fib(3) hot-loop (R3c verdict §3) because
+        // the typical fib body has TWO call sites at distinct
+        // `pc + 1` caller_pcs — only one of them ever matched
+        // `dr_return_pc` (the recorder picks the most-recent
+        // threshold-tripping one). The recorder's `rec.retfs`
+        // side-channel already collected every depth>0 Return's
+        // `caller_pc` + `proto`, so the lowerer here can fan the
+        // single CMP into a chain of `icmp(Equal, saved_pc, iconst
+        // (candidate_pc)) + brif(eq, stitch, next)` predicates and
+        // accept any of them as a HIT. Dedupe over `caller_pc`
+        // (mirrors LuaJIT `lj_record.c:897 check_downrec_unroll`'s
+        // "count IR_RETF entries by op1 == ptref" walk filtered to
+        // the close marker's `target_proto`).
         //
-        // Per R3 prep §7.1 risk: this single-CMP guard may miss
-        // heavily until R3d's multi-way fan-out matches every
-        // distinct `caller_pc` the trace's `rec.retfs` captured.
-        // R3c measures miss-rate via `downrec_dispatched` /
-        // `downrec_deopt` counters at the dispatcher arm so R3d
-        // can decide whether to lift `dispatchable = true`.
+        // Saved-PC slot (`reg_state[window_size_us * 8]`) populated
+        // by R3c's dispatcher pre-invoke (see `crates/luna-core/src/
+        // vm/exec.rs` `is_downrec_entry` block) with the parent
+        // (caller) frame's `pc` — the runtime analogue of LuaJIT's
+        // `[base-8]` in `asm_retf` (`lj_asm_arm64.h:565`).
         let saved_pc_offset = (window_size_us as i32) * 8;
         let saved_pc = bcx
             .ins()
             .load(types::I64, MemFlags::trusted(), reg_state, saved_pc_offset);
-        let imm_pc = bcx.ins().iconst(types::I64, dr_return_pc as i64);
-        let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
-        bcx.ins().brif(eq, stitch_blk, &[], deopt_blk, &[]);
+        // Collect distinct caller_pcs from retfs whose proto matches
+        // the close marker's `_target_proto_id`. Dedupe + bound to
+        // `DOWNREC_MULTI_WAY_GUARD_MAX` so IR size stays predictable
+        // regardless of how many retfs the recorder captured.
+        // `dr_return_pc` (the close marker's most-recent caller_pc) is
+        // inserted first so the chain covers the single-CMP shape's
+        // baseline even when filtering eliminates it.
+        let mut candidates: Vec<u32> = Vec::with_capacity(DOWNREC_MULTI_WAY_GUARD_MAX);
+        candidates.push(dr_return_pc);
+        for retf in &record.retfs {
+            if candidates.len() >= DOWNREC_MULTI_WAY_GUARD_MAX {
+                break;
+            }
+            if retf.proto.as_ptr() as usize == _target_proto_id
+                && !candidates.contains(&retf.caller_pc)
+            {
+                candidates.push(retf.caller_pc);
+            }
+        }
+        // Emit CMP-chain. For each candidate: `icmp(Equal, ...) + brif`.
+        // The last candidate's miss arm branches directly to deopt_blk;
+        // earlier candidates' miss arms branch into a fresh block that
+        // becomes the next CMP's "current block".
+        for (i, candidate_pc) in candidates.iter().enumerate() {
+            let imm_pc = bcx.ins().iconst(types::I64, *candidate_pc as i64);
+            let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
+            let miss_blk = if i + 1 < candidates.len() {
+                bcx.create_block()
+            } else {
+                deopt_blk
+            };
+            bcx.ins().brif(eq, stitch_blk, &[], miss_blk, &[]);
+            if i + 1 < candidates.len() {
+                bcx.switch_to_block(miss_blk);
+                bcx.seal_block(miss_blk);
+            }
+        }
+        let multi_way_candidate_count = candidates.len();
 
         // Hit: return DOWNREC sentinel + `record.head_pc` as the
         // low 32 bits. The full encoded value is
@@ -7278,14 +7314,42 @@ pub fn lower_trace_into_named<M: Module>(
         // resolving the stitch target.
         downrec_link_for_compiled = Some((0, record.head_pc));
 
-        // R3b deliberately keeps dispatchable=false. R3d will lift
-        // it after R3c wires the dispatcher consumer. The
-        // dispatch_off_reason label upgrades from R1's
-        // "self-link-retf-r1" to R3b's "downrec-stitch-pending" so
-        // a probe / Vm::trace_dispatch_off_reason_counts() can
-        // distinguish R1 fallbacks from R3b's scaffold-stage close.
-        dispatchable = false;
-        dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
+        // v2.0 Track-R R3d — lift `dispatchable = true` when the
+        // multi-way guard collected at least 2 distinct caller_pc
+        // candidates. The single-CMP fallback (count == 1) keeps
+        // R3c's `dispatchable = false` + `"downrec-stitch-pending"`
+        // pin because the 90% miss-rate measured at R3c verdict §3
+        // would translate to 90% extra deopt cost if the primary
+        // dispatcher arm admitted the trace unconditionally. The
+        // dispatcher's `is_downrec_entry` arm (see `crates/luna-core/
+        // src/vm/exec.rs`) keys on `ct.downrec_link.is_some()` so
+        // the saved-PC slot is populated + post-invoke classifier is
+        // routed for BOTH the lifted (dispatchable=true) and
+        // unlifted (dispatchable=false) cases — only the find
+        // predicate's admit arm differs.
+        //
+        // `"downrec-stitch-lifted"` is a new close-cause label that
+        // mirrors R3b's `"downrec-stitch-pending"` for the lifted
+        // case (so probes can tally "how many traces took which
+        // R3d branch" via `trace_close_cause_counts`). The
+        // `dispatch_off_reason` only sets in the unlifted branch
+        // because `dispatchable=true` traces have no `dispatch_off`
+        // by definition.
+        if multi_way_candidate_count >= 2 {
+            dispatchable = true;
+            // Surface the lifted shape via a dedicated counter
+            // `multi_way_guard_emitted` (bumped at the close handler
+            // in `crates/luna-core/src/vm/exec.rs` reading
+            // `downrec_multi_way_count_for_compiled` below) rather
+            // than via the close-cause taxonomy — close causes mean
+            // "trace didn't dispatch for reason X" and this branch
+            // DOES dispatch.
+        } else {
+            dispatchable = false;
+            dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
+        }
+        downrec_multi_way_count_for_compiled =
+            multi_way_candidate_count.min(u8::MAX as usize) as u8;
     } else if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
         // v2.0 Track-R R1 — RETF-guards correctness primitive replaces
         // the previous P16-B snapshot-restore tail.
@@ -7859,8 +7923,14 @@ pub fn lower_trace_into_named<M: Module>(
         // emitted a stitch sentinel + caller-pc guard, this carries
         // `Some((0, head_pc))`; otherwise `None`. R3b deliberately
         // keeps `dispatchable = false` even when `Some(_)` — R3d
-        // will lift it after R3c wires the dispatcher consumer.
+        // lifts to `dispatchable = true` when the multi-way candidate
+        // count >= 2 (see `downrec_multi_way_count` below).
         downrec_link: downrec_link_for_compiled,
+        // v2.0 Track-R R3d — multi-way guard candidate count baked
+        // into the IR's CMP-chain. `0` for non-DownRec closes;
+        // `1` for single-CMP-fallback DownRec; `>= 2` for the
+        // lifted `dispatchable = true` path.
+        downrec_multi_way_count: downrec_multi_way_count_for_compiled,
     };
     Some((fn_id, compiled))
 }

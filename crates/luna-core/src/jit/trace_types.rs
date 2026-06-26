@@ -727,6 +727,20 @@ pub struct CompiledTrace {
     /// has `downrec_link == Some(_)` after the R3a recorder pushes
     /// the threshold-tripping retfs.
     pub downrec_link: Option<(u32, u32)>,
+    /// v2.0 Track-R R3d — number of distinct caller_pc candidates the
+    /// lowerer baked into the multi-way guard at the
+    /// `TraceEnd::DownRec` close. `0` for every trace that doesn't
+    /// close via DownRec; `1` for R3c-shape single-CMP guards (the
+    /// `dr_return_pc` alone, no additional retfs matched the close
+    /// marker's `target_proto`); `>= 2` for R3d-shape multi-way
+    /// guards that triggered the `dispatchable = true` lift.
+    /// Capped at [`DOWNREC_MULTI_WAY_GUARD_MAX`].
+    ///
+    /// Read by the close handler in `crates/luna-core/src/vm/exec.rs`
+    /// to bump `JitCounters.multi_way_guard_emitted` (the probe
+    /// surface for R3d's regression test
+    /// `r3d_multi_way_guard_dispatch.rs`).
+    pub downrec_multi_way_count: u8,
 }
 
 /// P12-S4-step4b-C-2 — per inline cmp@d>0 side-exit record. See
@@ -818,6 +832,24 @@ pub const SIDE_SENT_KIND_DOWNREC: u8 = 4;
 /// keeps existing kinds' encoding (and TAG local cap of 32) intact
 /// without widening the kind bits.
 pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
+
+/// v2.0 Track-R R3d — upper bound on the multi-way caller-pc guard
+/// chain emitted at the `TraceEnd::DownRec` close in the lowerer
+/// (`crates/luna-jit/src/jit_backend/trace.rs` `downrec_idx_opt` arm).
+/// The lowerer dedupes `record.retfs` by `caller_pc` (filtered to
+/// retfs whose `proto` matches the close marker's `target_proto`) and
+/// emits up to this many `icmp(Equal, saved_pc, iconst(candidate_pc))
+/// + brif(stitch_blk, next_blk)` chain entries before falling through
+/// to `deopt_blk`. R3c shipped with 1 (single-CMP) and measured a 90%
+/// miss-rate on fib(3) hot-loop; the typical fib body shape captures
+/// 2 distinct caller_pcs (one per call site `pc+1`), so a cap of 4
+/// covers the fib pattern with headroom for slightly deeper closes
+/// without growing IR proportional to retfs.len(). When the candidate
+/// set reaches >= 2 entries, the lowerer also lifts `dispatchable =
+/// true` (was R3c's `false`-pin) so the primary dispatcher arm hits
+/// the trace without going through R3c's `downrec_link.is_some()`
+/// fallback admit clause.
+pub const DOWNREC_MULTI_WAY_GUARD_MAX: usize = 4;
 
 /// P15-A v2-C-A2 — encode a `(kind, local)` pair into a 7-bit
 /// sentinel code that fits in `raw_ret`'s bits 56..=62. Layout for
@@ -1075,6 +1107,10 @@ impl CompiledTrace {
             // down-recursion stitch (no R3a recorder fires on the
             // deploy-side install). Always `None`.
             downrec_link: None,
+            // v2.0 Track-R R3d — AOT-install path doesn't emit a
+            // DownRec close (no R3a recorder fires on the deploy-side
+            // install), so the candidate count is always `0`.
+            downrec_multi_way_count: 0,
         }
     }
 }

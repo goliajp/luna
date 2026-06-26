@@ -260,6 +260,16 @@ pub struct JitCounters {
     /// whether the lifted `dispatchable = true` would flip perf
     /// negative (R3 prep §7.1 mitigation).
     pub downrec_deopt: u64,
+    /// v2.0 Track-R R3d — number of compiled traces whose
+    /// `CompiledTrace.downrec_multi_way_count >= 2`. Bumped at the
+    /// close handler in `crates/luna-core/src/vm/exec.rs` alongside
+    /// `downrec_link_compiled`. Probe surface for R3d's regression
+    /// test (`r3d_multi_way_guard_dispatch`) to assert the lowerer's
+    /// `dispatchable = true` lift triggered at least once. R3c's
+    /// single-CMP shape never bumps this counter; it always reports
+    /// `0`. Independent of the dispatcher's `downrec_dispatched` /
+    /// `downrec_deopt` counters, which measure runtime guard hit-rate.
+    pub multi_way_guard_emitted: u64,
 }
 
 impl JitCounters {
