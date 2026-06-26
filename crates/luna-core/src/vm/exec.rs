@@ -8155,8 +8155,21 @@ impl Vm {
         for _ in 0..MAX_TAG_LOOP {
             let mm = match cur {
                 Value::Table(tb) => {
-                    if !tb.get(key).is_nil() {
-                        self.raw_set(tb, key, v)?;
+                    // PI-A3 single-walk collapse — Table::try_set_existing
+                    // fuses the prior `tb.get(key).is_nil()` gate and
+                    // `raw_set` walk into one chain traversal when the
+                    // key is already present with a non-nil value. The
+                    // __newindex chain semantics are preserved by the
+                    // identity (slot_nil ⇔ fire_newindex); see
+                    // .dev/rfcs/v2.0-pi-phase2-a3-audit.md §4.
+                    //
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the
+                    // heap is single-threaded and the pointer is live as
+                    // long as it is reachable from active roots (see
+                    // heap.rs:5-7). Mirrors the raw_set wrapper below.
+                    if unsafe { tb.as_mut() }.try_set_existing(key, v) {
+                        self.heap
+                            .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
                         return Ok(MmOut::Done(Value::Nil));
                     }
                     let mm = self.get_mm(cur, Mm::NewIndex);

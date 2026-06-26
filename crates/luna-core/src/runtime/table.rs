@@ -369,6 +369,56 @@ impl Table {
         self.set_norm(heap, k, val)
     }
 
+    /// PUC `luaV_fastset` / `luaV_finishfastset` analogue: single-walk
+    /// in-place update for an existing key. Returns `true` iff `key` is
+    /// present with a non-nil value and the slot was overwritten with
+    /// `val`. Returns `false` when the key is absent, the slot holds nil,
+    /// or the key normalisation rejects it — the caller is then expected
+    /// to run the `__newindex` chain or fall back to `set` for the raw
+    /// insert.
+    ///
+    /// Collapses the SetField hot path from two hash-chain walks
+    /// (`get` + `set`) to one. The `__newindex` invariant ("fires iff
+    /// `get` would have returned nil") is preserved because this method
+    /// writes only when the existing slot is non-nil — the exact set the
+    /// prior `tb.get(key).is_nil()` gate already excluded from
+    /// `__newindex` eligibility. See
+    /// `.dev/rfcs/v2.0-pi-phase2-a3-audit.md` §4 for the case-by-case
+    /// semantics check.
+    ///
+    /// The caller is responsible for firing `Heap::barrier_back` after a
+    /// `true` return (same contract as the surrounding `raw_set`
+    /// wrapper).
+    pub fn try_set_existing(&mut self, key: Value, val: Value) -> bool {
+        let k = match normalize_set_key(key) {
+            Ok(k) => k,
+            Err(_) => return false,
+        };
+        if let Value::Int(i) = k
+            && i >= 1
+            && (i as u64) <= self.asize() as u64
+        {
+            let idx = i as usize - 1;
+            // SAFETY: `idx < self.asize()` is guarded by the conditional
+            // above, mirroring the bound on `aget`/`aset`.
+            let tag = unsafe { *self.atags().get_unchecked(idx) };
+            if tag != raw::NIL {
+                self.aset(idx, val);
+                return true;
+            }
+            // Array slot present-but-nil → __newindex eligible: do NOT
+            // write. Caller falls through to the metamethod chain.
+            return false;
+        }
+        if let Some(idx) = self.find_node(k)
+            && !self.nodes[idx].val.is_nil()
+        {
+            self.nodes[idx].val = val;
+            return true;
+        }
+        false
+    }
+
     /// Integer-keyed variant of [`Self::set`].
     pub fn set_int(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError> {
         self.set_norm(heap, Value::Int(i), val)
