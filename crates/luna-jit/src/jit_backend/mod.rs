@@ -22,7 +22,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::jit::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
-    MAX_JIT_ARITY, TraceCompiler, noop_jit_guard,
+    MAX_JIT_ARITY, TraceCompiler,
 };
 use luna_core::runtime::Gc;
 use luna_core::runtime::Value as LuaValue;
@@ -96,6 +96,12 @@ pub mod trace;
 mod send_jit_module;
 #[allow(unused_imports)] // J-B will consume; J-A wires the wrapper only.
 pub use send_jit_module::SendJitModule;
+
+// v2.0 Track J sub-step J-D — scoped RAII rebind for the per-dispatch
+// `JIT_VM` / `JIT_CL` TLS slots. The submodule reads / writes the
+// `thread_local!` cells below and constructs the
+// `JitVmGuard::from_restore(...)` carrying the captured prior values.
+mod scoped_rebind;
 
 // v2.0 Track J sub-step J-B — concrete per-`Vm` JIT storage struct
 // (cache + cache_handles + trace_handles). Installed alongside the
@@ -267,13 +273,25 @@ thread_local! {
 }
 
 /// P11-S5c — install `vm` as the current JIT Vm pointer. Returns a
-/// [`JitVmGuard`] whose drop clears the slot. Must be held across the
-/// JIT entry-fn call so any helper can pick the pointer up.
+/// [`JitVmGuard`] whose drop restores the prior `(JIT_VM, JIT_CL)`
+/// values (J-D RAII rebind). Must be held across the JIT entry-fn
+/// call so any helper can pick the pointer up.
 ///
 /// The guard type itself lives in `luna_core::jit` so the trait
 /// signature in `IntChunkCompiler::enter` doesn't drag Cranelift into
-/// luna-core. `JitVmGuard::drop` is a no-op (TLS slots are overwritten
-/// on the next `enter_jit`; see `luna_core::jit::JitVmGuard`).
+/// luna-core.
+///
+/// # v2.0 Track J sub-step J-D — capture-and-restore
+///
+/// Before J-D the body just overwrote the TLS slots and returned an
+/// inert guard ([`noop_jit_guard`]); the "next `enter_jit` overwrites
+/// anyway" invariant made the elision harmless under single-thread,
+/// single-level dispatch. Cross-thread Vm move plus nested JIT entry
+/// (e.g. JIT'd op → metamethod → Lua-from-Rust → JIT entry again)
+/// makes the no-op-drop variant unsafe: the outer entry would resume
+/// holding the inner Vm's slot. J-D therefore delegates to
+/// [`scoped_rebind::scoped_jit_vm_rebind`], which snapshots the
+/// previous values into the guard and restores them on drop.
 ///
 /// P11-S5d.J — the `cl` parameter is the closure being invoked. The
 /// guard also pins it in `JIT_CL` so `luna_jit_upval_get` can fetch
@@ -284,12 +302,7 @@ pub fn enter_jit(
     vm: &mut luna_core::vm::Vm,
     cl: Option<luna_core::runtime::Gc<luna_core::runtime::LuaClosure>>,
 ) -> JitVmGuard {
-    JIT_VM.with(|cell| cell.set(vm as *mut luna_core::vm::Vm));
-    let cl_ptr = cl
-        .map(|c| c.as_ptr() as *const luna_core::runtime::LuaClosure)
-        .unwrap_or(std::ptr::null());
-    JIT_CL.with(|cell| cell.set(cl_ptr));
-    noop_jit_guard()
+    scoped_rebind::scoped_jit_vm_rebind(vm, cl)
 }
 
 /// P11-S5c — read the active Vm pointer. SAFETY: the caller (always
