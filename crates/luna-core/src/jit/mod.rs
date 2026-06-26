@@ -61,31 +61,44 @@ pub mod trace {
 /// `try_compile` / `try_compile_trace` always skip work, no JIT mcode
 /// ever fires and no helper consults the TLS slots, so the guard only
 /// has to keep the trait method signature symmetric with luna's
-/// `CraneliftBackend::enter`. [`JitVmGuard`]'s drop is itself a no-op
-/// (see `impl Drop for JitVmGuard`).
+/// `CraneliftBackend::enter`. The inert guard carries no restore
+/// callback, so its drop is a no-op.
 #[inline]
 pub fn noop_jit_guard() -> JitVmGuard {
-    JitVmGuard { _private: () }
+    JitVmGuard { restore: None }
 }
 
 /// P11-S5c — RAII guard pinning the active `Vm` (and optional closure)
-/// pointer for JIT-emitted Rust helper calls. The Cranelift backend's
-/// `enter_jit` (in the luna crate) installs the thread-local slots;
-/// drop is a no-op (TLS values are overwritten on the next enter, so
-/// helpers running outside a fresh `enter_jit` would already trip the
-/// debug-assert).
+/// pointer for JIT-emitted Rust helper calls.
 ///
-/// Path C #7 — drop is a no-op. JIT_VM / JIT_CL get overwritten
-/// on next `enter_jit` call. Helpers inside JIT mcode only ever
-/// run while a guard is alive (dispatcher calls `enter_jit` then
-/// the entry_fn, helpers fire inside entry_fn, returns to dispatcher
-/// BEFORE guard drops). Between dispatches the TLS values are
-/// stale but interp loop doesn't read them — only JIT-mcode-
-/// invoked helpers do, and those run only INSIDE a fresh `enter_jit`.
+/// # v2.0 Track J sub-step J-D — real RAII rebind
 ///
-/// Skipping the 2 TLS writes per dispatch (~5-10 cycles each on arm64
-/// thread_local fastpath) saves ~1.5 ms on fib_28 (434k dispatches ×
-/// ~10 cycles).
+/// Prior to J-D, this guard's drop was a deliberate no-op: the
+/// dispatcher always re-installed `JIT_VM` / `JIT_CL` on every
+/// `enter_jit` call, so the previous-dispatch values would simply be
+/// overwritten on the next entry. That trick saved 2 TLS writes per
+/// dispatch (~5-10 cycles each on arm64) — measurable on fib_28's
+/// 434k dispatches (~1.5 ms aggregate).
+///
+/// Track J Option B targets cross-thread Vm move under
+/// `feature = "send"` (J-E flip). Once a Vm parks on thread A, moves
+/// to thread B, and dispatches there, the per-thread `JIT_VM` slot on
+/// thread B is null/stale at entry — `enter_jit` installs it fine on
+/// the way in, but on the way out the no-op drop left stale Vm
+/// pointers behind for any **nested** JIT entry (Lua-from-Rust-from-
+/// JIT call chains, e.g. metamethod dispatch under a JIT'd op). With
+/// nested entries restoring an outer Vm pointer becomes load-bearing.
+///
+/// J-D therefore turns the guard into a real RAII: `enter_jit`
+/// captures the prior `(JIT_VM, JIT_CL)` values into the guard, and
+/// `Drop` restores them. The cost is the 2 TLS writes we previously
+/// elided per dispatch. The single-thread-no-nesting case is
+/// semantically equivalent: prior values restored on exit are the
+/// same null/stale ones the next `enter_jit` would overwrite anyway;
+/// no observable behavior change for existing call sites.
+///
+/// `NullJitBackend::enter` keeps the no-op shape via
+/// [`noop_jit_guard`] — its guard has `restore = None`.
 ///
 /// Debug-mode assertions still catch misuse via `current_jit_vm`'s
 /// is_null check IF a helper runs outside `enter_jit` (would happen
@@ -93,14 +106,61 @@ pub fn noop_jit_guard() -> JitVmGuard {
 /// never happens by design).
 #[must_use = "the guard must outlive the JIT entry call"]
 pub struct JitVmGuard {
-    /// Field is constructed only by the two RAII entry points
-    /// (`noop_jit_guard` here and `enter_jit` in luna). Kept
-    /// `pub(crate)` so luna's `jit_backend` can also build one.
-    pub(crate) _private: (),
+    /// `None` = inert (NullJitBackend's no-op). `Some` = real RAII:
+    /// the dispatcher's prior `(JIT_VM, JIT_CL)` values are captured
+    /// here on entry, and `restore_fn` is the luna-jit-side restorer
+    /// that writes them back on drop.
+    ///
+    /// Field is `pub(crate)` for [`noop_jit_guard`] (this file); the
+    /// other constructor (luna-jit's `enter_jit`) lives in a separate
+    /// crate, so [`JitVmRebindRestore`] itself is the public seam.
+    pub(crate) restore: Option<JitVmRebindRestore>,
+}
+
+impl JitVmGuard {
+    /// Construct a guard from a captured restore record. Called only
+    /// by luna-jit's `enter_jit`; embedders never call this directly.
+    #[doc(hidden)]
+    #[inline]
+    pub fn from_restore(r: JitVmRebindRestore) -> Self {
+        Self { restore: Some(r) }
+    }
+}
+
+/// Capture of the previous `(JIT_VM, JIT_CL)` slot contents at the
+/// moment [`JitVmGuard`] takes ownership, plus a function pointer
+/// that writes them back. The function pointer lets luna-core hold
+/// the drop semantics without referencing Cranelift's TLS storage
+/// (the cells themselves live in `luna_jit::jit_backend` because
+/// that's where the `thread_local!` block is, but the cells hold
+/// luna-core types — `*mut Vm` and `*const LuaClosure`).
+///
+/// Fields are `pub` rather than `pub(crate)` because luna-jit's
+/// `enter_jit` needs to construct an instance, and luna-jit is a
+/// separate crate. The whole type is `#[doc(hidden)]` so it stays
+/// out of the embedder surface.
+#[doc(hidden)]
+pub struct JitVmRebindRestore {
+    pub prev_vm: *mut crate::vm::Vm,
+    pub prev_cl: *const crate::runtime::LuaClosure,
+    /// luna-jit-side function that writes `(prev_vm, prev_cl)` back
+    /// into the TLS cells. Set by `enter_jit`; never null when this
+    /// struct exists.
+    pub restore_fn:
+        unsafe fn(prev_vm: *mut crate::vm::Vm, prev_cl: *const crate::runtime::LuaClosure),
 }
 
 impl Drop for JitVmGuard {
     fn drop(&mut self) {
-        // See struct doc for the rationale: no-op by design.
+        if let Some(r) = self.restore.take() {
+            // SAFETY: `restore_fn` is set only by luna-jit's
+            // `enter_jit`, which threads the prior TLS values into
+            // the guard at construction time. The fn ptr type is
+            // `unsafe fn` because the cells participate in the JIT
+            // helper SAFETY contract (`current_jit_vm` /
+            // `current_jit_closure` rely on slot validity during the
+            // dispatch window).
+            unsafe { (r.restore_fn)(r.prev_vm, r.prev_cl) };
+        }
     }
 }
