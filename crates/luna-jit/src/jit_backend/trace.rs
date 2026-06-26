@@ -7234,12 +7234,9 @@ pub fn lower_trace_into_named<M: Module>(
         // `downrec_deopt` counters at the dispatcher arm so R3d
         // can decide whether to lift `dispatchable = true`.
         let saved_pc_offset = (window_size_us as i32) * 8;
-        let saved_pc = bcx.ins().load(
-            types::I64,
-            MemFlags::trusted(),
-            reg_state,
-            saved_pc_offset,
-        );
+        let saved_pc = bcx
+            .ins()
+            .load(types::I64, MemFlags::trusted(), reg_state, saved_pc_offset);
         let imm_pc = bcx.ins().iconst(types::I64, dr_return_pc as i64);
         let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
         bcx.ins().brif(eq, stitch_blk, &[], deopt_blk, &[]);
