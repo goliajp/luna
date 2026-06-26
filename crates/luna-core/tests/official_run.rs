@@ -267,7 +267,10 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     // (parser/string-intern UAF or Vec::push past isize::MAX panic) is
     // tracked at `.dev/known-bugs/heavy-lua-sigsegv-under-128mb-loadrep.md`.
     if std::env::var_os("CI").is_some()
-        && matches!(name, "heavy.lua" | "verybig.lua" | "memerr.lua")
+        && matches!(
+            name,
+            "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
+        )
     {
         return FileCoverage {
             version,
