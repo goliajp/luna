@@ -1,0 +1,7 @@
+=== Vm::run dispatcher emit summary ===
+Symbol: luna_core::vm::exec::Vm::run (index 0 in cargo-asm)
+Total asm lines:    10325
+Indirect br count: 7
+Indirect blr count: 8
+LJTI568_* jump-tables: 7
+and #0x7f (opcode mask) sites: 5
