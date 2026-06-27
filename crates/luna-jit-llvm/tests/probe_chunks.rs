@@ -48,7 +48,7 @@ fn probe_chunks() {
                 println!("consts: {:?}", proto.consts);
                 for (pc, inst) in proto.code.iter().enumerate() {
                     println!(
-                        "  {:3}: {:?} a={} b={} c={} bx={} sbx={} k={}",
+                        "  {:3}: {:?} a={} b={} c={} bx={} sbx={} sj={} k={}",
                         pc,
                         inst.op(),
                         inst.a(),
@@ -56,6 +56,7 @@ fn probe_chunks() {
                         inst.c(),
                         inst.bx(),
                         inst.sbx(),
+                        inst.sj(),
                         inst.k()
                     );
                 }
