@@ -234,7 +234,14 @@ fn main() {
         ExitTag::Nil,
     ];
     let entry_tags: Vec<u8> = vec![
-        TAG_INT, TAG_FLOAT, TAG_TABLE, TAG_NIL, TAG_INT, TAG_STR, TAG_CLOSURE, TAG_INT,
+        TAG_INT,
+        TAG_FLOAT,
+        TAG_TABLE,
+        TAG_NIL,
+        TAG_INT,
+        TAG_STR,
+        TAG_CLOSURE,
+        TAG_INT,
     ];
     let reg_state: Vec<i64> = vec![100, 200, 300, 400, 500, 600, 700, 800];
     let mut stack_a: Vec<PackedValue> = vec![pack(TAG_NIL, 0); 16];
@@ -250,10 +257,26 @@ fn main() {
 
     // Shape B/B' — sparse SnapEntries (only 4 touched slots out of 8)
     let snap_entries: Vec<SnapEntry> = vec![
-        SnapEntry { slot: 0, flags: FLAG_TAG_INT, ir_ref: 0 },
-        SnapEntry { slot: 2, flags: FLAG_TAG_INT, ir_ref: 2 },
-        SnapEntry { slot: 3, flags: FLAG_TAG_FLOAT, ir_ref: 3 },
-        SnapEntry { slot: 6, flags: FLAG_TAG_CLOSURE, ir_ref: 6 },
+        SnapEntry {
+            slot: 0,
+            flags: FLAG_TAG_INT,
+            ir_ref: 0,
+        },
+        SnapEntry {
+            slot: 2,
+            flags: FLAG_TAG_INT,
+            ir_ref: 2,
+        },
+        SnapEntry {
+            slot: 3,
+            flags: FLAG_TAG_FLOAT,
+            ir_ref: 3,
+        },
+        SnapEntry {
+            slot: 6,
+            flags: FLAG_TAG_CLOSURE,
+            ir_ref: 6,
+        },
     ];
     let mut stack_b: Vec<PackedValue> = vec![pack(TAG_NIL, 0); 16];
     walk_snapshot_style(

@@ -1,103 +1,254 @@
-//! v2.1 Phase 1K.D — LLVM int-chunk codegen.
+//! v2.1 Phase 1K.D / 1K.E — LLVM int-chunk codegen.
 //!
-//! Phase 1K.D.6 lit up `Op::LoadNil` end-to-end (chunk shape
-//! `[LoadNil(_, _), Return0]`); Phase 1K.D.7 extended to
-//! `[(LoadNil | LoadK | Move)*, Return0]`. Phase 1K.D.8 wires the
-//! per-Vm `LlvmJitStorage` cache so a second compile of the same
-//! Proto hits the cache rather than re-emitting LLVM IR.
+//! Two recognised paths land here:
 //!
-//! Phase 1K.E grows out to ops with observable side effects
-//! (`Op::Add`, `Op::Return1`, table ops, etc.); at that point the
-//! JIT entry stops being a constant-zero stub and starts honouring
-//! the per-op semantics.
+//! 1. **Dead-locals path** (Phase 1K.D.6 / 1K.D.7) —
+//!    `[(LoadNil | LoadK | Move)*, Return0, ...]` chunks whose locals
+//!    are unobservable at the `Return0` boundary. Emit shrinks to
+//!    `extern "C" fn() -> i64 { ret 0 }` because no JIT-entry caller
+//!    ever reads the locals (`returns_one = false`). This path covers
+//!    chunks like `local x` / `local y = 'h'; local z = y` — including
+//!    LoadK of *string* / *bool* / *nil* constants whose value the
+//!    interpreter would compute but the JIT entry can elide.
+//!
+//! 2. **Compute path** (Phase 1K.E.2+) — chunks that reach an
+//!    observable `Return1 R[A]`. The lowerer builds an `[N x i64]`
+//!    register file on entry, emits one LLVM IR instruction per
+//!    recognised op, and tails into either `ret i64 0` (Return0) or
+//!    `ret <reg>` (Return1). The op whitelist grows incrementally —
+//!    Phase 1K.E.2 covers `LoadI` + `Return0` + `Return1`; later
+//!    sub-phases add `Move` / `LoadK_int` / `Add` / arith family /
+//!    `Lt|Le|Eq` / `Jmp` / `LoadFalse|LoadTrue|LoadNil`.
+//!
+//! ## Why two paths instead of one
+//!
+//! The 1K.D dead-locals path can lower **chunks containing LoadK of
+//! non-int constants** (string / bool / nil) because the values are
+//! never observed. The 1K.E compute path can only lower ops whose
+//! semantics it actually emits — so it bails on string / bool / nil
+//! LoadK. Keeping both paths preserves the 1K.D.7 smoke coverage and
+//! lets Phase 1K.E grow the whitelist op-by-op without breaking
+//! previously-passing chunk shapes.
 //!
 //! ## Cache key
 //!
-//! Same shape as `luna_jit::jit_backend::proto_cache_key` —
-//! FNV-1a-64 over the bytecode words + the `pre53` dialect bit.
-//! Constants are *not* fed in for Phase 1K.D because the only
-//! constant the recognised shape ever touches is a string referenced
-//! by `LoadK` whose value is unobservable across `Return0`. Phase
-//! 1K.E (which lights up ops with observable consts like `Add R, K`)
-//! will widen the key to include the constant payload.
+//! Both paths share the FNV-1a-64-over-bytecode-words key (see
+//! `proto_cache_key`). Constants are *not* fed in yet — the recognised
+//! shapes either don't touch consts (LoadI/Move/arith on regs) or
+//! treat them as unobservable (dead-locals LoadK). Phase 1K.E that
+//! lights up `Add R, K` (constant operand) will widen the key.
 //!
 //! ## Lifetime path
 //!
 //! See [`super::storage`] module docs for the `'ctx` lifetime
-//! reasoning. Phase 1K.D.8 picks one `Box::leak`-free `Context` per
-//! compile so the resulting `ExecutionEngine<'static>` lands in
-//! `LlvmJitStorage::engines` without lifetime gymnastics.
+//! reasoning. Each compile boxes a fresh `Context` and the engine
+//! borrows it for `'static` via a localised pointer upgrade; the
+//! pair lands in `LlvmJitStorage::engines` and gets dropped together
+//! when the Vm drops.
 
 use crate::storage::{CachedEntry, EnginePair, LlvmJitStorage};
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
+use inkwell::module::Module;
+use inkwell::values::{FunctionValue, PointerValue};
 use luna_core::jit::{CompileResult, JitStorage};
 use luna_core::runtime::{Gc, function::Proto};
-use luna_core::vm::isa::Op;
+use luna_core::vm::isa::{Inst, Op};
 use std::hash::Hasher;
 
-/// v2.1 Phase 1K.D.7 — try to lower `proto` to native code via LLVM.
+/// v2.1 Phase 1K.D.7 / 1K.E.2 — try to lower `proto` to native code
+/// via LLVM. Returns `None` when the body falls outside the recognised
+/// shape (caller turns into `CompileResult::Skipped`).
 ///
-/// Recognised shape: any chunk whose body is a (possibly empty)
-/// prefix of `Op::LoadNil` / `Op::LoadK` / `Op::Move` followed by
-/// `Op::Return0`. Every such chunk lowers to the constant-zero
-/// entry fn: the prefix ops only touch Lua locals that are
-/// discarded when the chunk returns without an observable value,
-/// so the JIT entry can skip them entirely.
+/// Recognised shapes:
+/// - **Dead locals** (Phase 1K.D): a (possibly empty) prefix of
+///   `LoadNil | LoadK | Move` followed by `Return0`. Lowers to
+///   `extern "C" fn() -> i64 { ret 0 }`.
+/// - **Compute** (Phase 1K.E.2): a (possibly empty) prefix of
+///   `LoadI | LoadNil | LoadK(Int) | Move` followed by either
+///   `Return1` or `Return0`. Lowers to a per-op reg-array entry.
 ///
-/// Out-of-shape Protos return `None`, which the trait impl turns
-/// into `CompileResult::Skipped` so the interpreter handles them.
-///
-/// `pre53` is fed into the cache key (matches Cranelift's
-/// `proto_cache_key` for ABI parity) but currently ignored
-/// otherwise — no recognised shape touches the `for`-loop dialect
-/// bit.
+/// `pre53` is fed into the cache key for ABI parity with Cranelift's
+/// `proto_cache_key`; the recognised shapes currently don't touch the
+/// dialect-bit semantics.
 pub(crate) fn try_compile_int_chunk(
     storage: &mut dyn JitStorage,
     proto: Gc<Proto>,
     pre53: bool,
 ) -> Option<CompileResult> {
-    if !is_dead_locals_then_return0(&proto.code) {
+    // Chunks (the only thing 1K.E targets at the moment) always have
+    // zero parameters. Bail anything that takes args — the reg-array
+    // entry signature `fn() -> i64` doesn't match `fn(i64,..) -> i64`
+    // for parameterised chunks.
+    if proto.num_params != 0 {
         return None;
     }
+
+    // Path 1: dead-locals fast path (Phase 1K.D.7). Cheap to recognise
+    // and exercises the existing 1K.D.6/1K.D.7/1K.D.8 smokes.
+    if is_dead_locals_then_return0(&proto.code) {
+        return Some(via_cache(storage, &proto, pre53, false, &|| {
+            compile_constant_zero_chunk()
+        }));
+    }
+
+    // Path 2: compute path (Phase 1K.E.2). Scans for the new
+    // whitelist + the chunk's effective return shape, then lowers
+    // op-by-op into a reg-array entry.
+    if let Some(plan) = ChunkPlan::from_proto(&proto) {
+        return Some(via_cache(storage, &proto, pre53, plan.returns_one, &|| {
+            compile_compute_chunk(&plan)
+        }));
+    }
+
+    None
+}
+
+/// Shared cache+compile wrapper. Looks up the proto in the storage
+/// cache; on a hit returns the cached entry, on a miss invokes
+/// `compile_fn`, parks the resulting `(EngineEntry, EnginePair)` on
+/// the cache, and returns the new entry. `returns_one` is baked into
+/// the `CachedEntry` so a hit on a subsequent compile reproduces the
+/// same dispatcher contract.
+fn via_cache(
+    storage: &mut dyn JitStorage,
+    proto: &Proto,
+    pre53: bool,
+    returns_one: bool,
+    compile_fn: &dyn Fn() -> Option<(*const u8, EnginePair)>,
+) -> CompileResult {
     let store = storage
         .as_any_mut()
         .downcast_mut::<LlvmJitStorage>()
         .expect("LlvmBackend installed without LlvmJitStorage");
-    let key = proto_cache_key(&proto, pre53);
+    let key = proto_cache_key(proto, pre53);
     if let Some(hit) = store.cache.get(&key).copied() {
-        return Some(hit.to_compile_result());
+        return hit.to_compile_result();
     }
-    let (entry_ptr, pair) = compile_constant_zero_chunk()?;
+    let Some((entry_ptr, pair)) = compile_fn() else {
+        return CompileResult::Skipped;
+    };
     let cached = CachedEntry {
         entry: entry_ptr,
         num_args: 0,
-        returns_one: false,
+        returns_one,
         arg_float_mask: 0,
         arg_table_mask: 0,
         ret_is_float: false,
         ret_is_table: false,
     };
     store.insert(key, pair, cached);
-    Some(cached.to_compile_result())
+    cached.to_compile_result()
 }
 
-/// Phase 1K.D.7 — accept `[(LoadNil | LoadK | Move)*, Return0]`.
-fn is_dead_locals_then_return0(code: &[luna_core::vm::isa::Inst]) -> bool {
-    let Some((last, prefix)) = code.split_last() else {
+/// Phase 1K.D.7 — accept `[(LoadNil | LoadK | Move)*, Return0, ...]`.
+///
+/// The dead-locals path eats *any* `LoadK` (including string / bool /
+/// nil constants) because the chunk's locals are unobservable at the
+/// `Return0` boundary. The trailing implicit `Return0` the parser
+/// emits after a `Return1` is not relevant here — we only fire on a
+/// chunk whose *first* reachable return is `Return0`.
+fn is_dead_locals_then_return0(code: &[Inst]) -> bool {
+    let Some(first_ret_pc) = code
+        .iter()
+        .position(|i| matches!(i.op(), Op::Return0 | Op::Return1))
+    else {
         return false;
     };
-    if last.op() != Op::Return0 {
+    if code[first_ret_pc].op() != Op::Return0 {
         return false;
     }
-    prefix
+    code[..first_ret_pc]
         .iter()
         .all(|i| matches!(i.op(), Op::LoadNil | Op::LoadK | Op::Move))
 }
 
-/// Phase 1K.D.8 — stable cache key for a Proto. FNV-1a-64 over the
-/// bytecode words + the dialect bit. See module-level doc for why
-/// constants aren't fed in for Phase 1K.D.
+/// Phase 1K.E.2 — whitelisted op set + chunk-level return shape that
+/// the compute lowerer understands. Built by [`ChunkPlan::from_proto`];
+/// `None` when the proto falls outside the supported whitelist.
+struct ChunkPlan<'a> {
+    /// Instructions to emit. Truncated at the first reachable return
+    /// (no point emitting unreachable trailing ops).
+    code: &'a [Inst],
+    /// Number of i64 register slots to alloca on entry.
+    num_regs: u32,
+    /// True ↔ the chunk's terminator is `Return1`; false ↔ `Return0`.
+    /// Plumbed into the dispatcher contract via the cached entry.
+    returns_one: bool,
+}
+
+impl<'a> ChunkPlan<'a> {
+    fn from_proto(proto: &'a Proto) -> Option<Self> {
+        let code: &'a [Inst] = &proto.code;
+        let n = code.len();
+        if n == 0 {
+            return None;
+        }
+
+        // Find the first reachable return. The Phase 1K.E.2 whitelist
+        // doesn't include any branching op yet, so "reachable" means
+        // "encountered in sequential scan". A Return0 / Return1 is
+        // the terminator.
+        let mut ret_pc: Option<usize> = None;
+        for (pc, ins) in code.iter().enumerate() {
+            if matches!(ins.op(), Op::Return0 | Op::Return1) {
+                ret_pc = Some(pc);
+                break;
+            }
+        }
+        let ret_pc = ret_pc?;
+
+        // Whitelist gate: every prefix op must be one the compute
+        // path can emit.
+        for ins in &code[..ret_pc] {
+            if !is_compute_supported(ins) {
+                return None;
+            }
+        }
+
+        // The terminator itself is always Return0 / Return1 (both
+        // supported in Phase 1K.E.2). The Return1 case requires
+        // `ins.a()` to be a valid register slot; check that the
+        // register fits within the proto's stack budget.
+        let returns_one = code[ret_pc].op() == Op::Return1;
+        if returns_one && code[ret_pc].a() >= proto.max_stack as u32 {
+            // Defensive: an out-of-range A would write past the
+            // alloca'd reg array. Should never happen for a
+            // parser-emitted chunk, but treat as bail rather than
+            // panic.
+            return None;
+        }
+
+        Some(ChunkPlan {
+            code: &code[..=ret_pc],
+            num_regs: (proto.max_stack as u32).max(1),
+            returns_one,
+        })
+    }
+}
+
+/// v2.1 Phase 1K.E.2 — whitelist gate for the compute path. Each
+/// listed op has an `emit_op` arm below; ops outside the list fall
+/// through to `CompileResult::Skipped`.
+///
+/// Sub-phase growth:
+/// - 1K.E.2 (this): `LoadI` + `LoadNil` + `Move`. Cache key over
+///   bytecode words is sufficient — the recognised ops don't touch
+///   `proto.consts`.
+/// - 1K.E.3 (next): `Add`. Still no consts; key stays as-is.
+/// - 1K.E.4: `Sub` / `Mul` / `Div` / `Mod`.
+/// - 1K.E.5: `Lt` / `Le` / `Eq`.
+/// - 1K.E.6: `Jmp` (with the comparison-then-jmp condbr pattern).
+/// - 1K.E.7: `LoadFalse` / `LoadTrue` + `LoadK(Int)` (the
+///   `LoadK(Int)` add widens the cache key to include the constant
+///   table).
+fn is_compute_supported(ins: &Inst) -> bool {
+    matches!(ins.op(), Op::LoadI | Op::LoadNil | Op::Move)
+}
+
+/// Phase 1K.D.8 / 1K.E.2 — stable cache key for a Proto. FNV-1a-64
+/// over the bytecode words + the dialect bit. Constants are not fed
+/// in yet (Phase 1K.E that lights up `Add R, K` will widen the key).
 fn proto_cache_key(proto: &Proto, pre53: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for inst in proto.code.iter() {
@@ -107,19 +258,15 @@ fn proto_cache_key(proto: &Proto, pre53: bool) -> u64 {
     h.finish()
 }
 
-/// Build, JIT-compile, and return the entry pointer + owning
-/// (Context, ExecutionEngine) pair for `extern "C" fn() -> i64 {
-/// ret 0 }`. Caller parks the pair on the storage cache so the JIT
-/// mmap survives the function's stack frame.
+/// Build the dead-locals JIT entry: `extern "C" fn() -> i64 { ret 0 }`.
+/// Returns the entry pointer + owning `(Context, ExecutionEngine)`
+/// pair so the caller can park it on storage. Used by the Phase 1K.D
+/// fast path; the Phase 1K.E compute path uses [`compile_compute_chunk`].
 fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
-    // SAFETY: `ctx_box` is heap-allocated and never moved out of
-    // the `EnginePair` it ends up in; the engine borrows from `*ctx`
-    // through the static reference, and the pair's drop order
-    // (engine then context — declaration order matches that) keeps
-    // the borrow valid for the engine's lifetime. The `'static`
-    // lifetime is a localised lie that holds for the engine's
-    // observable lifetime because the context outlives it.
+    // SAFETY: see `compile_compute_chunk` below for the full lifetime
+    // discussion; the same reasoning applies — ctx_box outlives the
+    // engine via `EnginePair`'s field-order drop discipline.
     let ctx_static: &'static Context = unsafe { &*(ctx_box.as_ref() as *const Context) };
 
     let module = ctx_static.create_module("luna_jit_llvm_dead_locals");
@@ -133,13 +280,187 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     let zero = i64_type.const_int(0, false);
     builder.build_return(Some(&zero)).ok()?;
 
+    finalize_module(ctx_box, module)
+}
+
+/// v2.1 Phase 1K.E.2 — lower a compute-path chunk into a JIT entry.
+///
+/// Emit shape:
+/// ```text
+/// extern "C" fn luna_jit_llvm_entry() -> i64 {
+///     entry:
+///         %regs = alloca [N x i64]      ; N = plan.num_regs
+///         ; one IR sequence per ChunkPlan.code op:
+///         ; LoadI rA, sBx  → store i64 sBx, ptr regs[A]
+///         ; LoadNil rA, B  → store i64 0  for regs[A..=A+B]
+///         ; Move rA, rB    → load regs[B]; store regs[A]
+///         ; Return0        → ret i64 0
+///         ; Return1 rA     → ret regs[A]
+/// }
+/// ```
+fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
+    let ctx_box: Box<Context> = Box::new(Context::create());
+    // SAFETY: `ctx_box` is heap-allocated and never moved out of the
+    // `EnginePair` it lands in via `finalize_module`. The static
+    // lifetime is a localised lie — the inkwell `ExecutionEngine`
+    // borrows from the context via this `&'static Context`, and the
+    // EnginePair's field declaration order (engine first, context
+    // second) ensures Rust drops the engine *before* the context, so
+    // the borrow stays live for the engine's observable lifetime.
+    let ctx_static: &'static Context = unsafe { &*(ctx_box.as_ref() as *const Context) };
+
+    let module = ctx_static.create_module("luna_jit_llvm_compute");
+    let builder = ctx_static.create_builder();
+
+    let i64_type = ctx_static.i64_type();
+    let regs_ty = i64_type.array_type(plan.num_regs);
+    let fn_type = i64_type.fn_type(&[], false);
+    let function = module.add_function("luna_jit_llvm_entry", fn_type, None);
+    let entry_block = ctx_static.append_basic_block(function, "entry");
+    builder.position_at_end(entry_block);
+
+    // Allocate the chunk's register file. LLVM SROA / mem2reg will
+    // promote the slots that get observably used out of memory in
+    // any future optimisation pass. The values held in regs are
+    // i64-bit-pattern Lua values — int chunks treat them as signed
+    // integers; float chunks will reinterpret_cast (Phase 1K.E later
+    // sub-phase when float_only=true).
+    let regs = builder.build_alloca(regs_ty, "regs").ok()?;
+
+    let mut emitter = ComputeEmitter {
+        ctx: ctx_static,
+        builder: &builder,
+        function,
+        i64_type,
+        regs_ty,
+        regs,
+    };
+
+    for ins in plan.code {
+        emitter.emit_op(*ins)?;
+    }
+
+    finalize_module(ctx_box, module)
+}
+
+/// Per-op emit context for the compute path. Holds the LLVM types
+/// and the entry block's register-file alloca; each `emit_op` call
+/// appends the op's IR sequence at the builder's current position.
+struct ComputeEmitter<'ctx, 'a> {
+    #[allow(dead_code)] // Phase 1K.E.6 (Jmp) will need the context to append BBs.
+    ctx: &'ctx Context,
+    builder: &'a inkwell::builder::Builder<'ctx>,
+    #[allow(dead_code)] // Phase 1K.E.6 (Jmp) will need the function to append BBs.
+    function: FunctionValue<'ctx>,
+    i64_type: inkwell::types::IntType<'ctx>,
+    regs_ty: inkwell::types::ArrayType<'ctx>,
+    regs: PointerValue<'ctx>,
+}
+
+impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
+    /// GEP the `idx`-th register slot inside the alloca.
+    fn reg_slot_ptr(&self, idx: u32, name: &str) -> Option<PointerValue<'ctx>> {
+        let zero = self.i64_type.const_zero();
+        let off = self.i64_type.const_int(idx as u64, false);
+        // SAFETY: `[0, idx]` indexes into a `[regs_ty x i64]` alloca
+        // sized `plan.num_regs`. `ChunkPlan::from_proto` checked that
+        // the largest A in the recognised ops fits; the per-op
+        // emitters below all clamp to the alloca's bounds.
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(self.regs_ty, self.regs, &[zero, off], name)
+                .ok()
+        }
+    }
+
+    /// Store an i64 immediate into `regs[idx]`.
+    fn store_imm(&self, idx: u32, imm: i64) -> Option<()> {
+        let slot = self.reg_slot_ptr(idx, "imm_slot")?;
+        let val = self.i64_type.const_int(imm as u64, true);
+        self.builder.build_store(slot, val).ok()?;
+        Some(())
+    }
+
+    /// Load `regs[idx]` as an i64.
+    fn load_reg(&self, idx: u32, name: &str) -> Option<inkwell::values::IntValue<'ctx>> {
+        let slot = self.reg_slot_ptr(idx, name)?;
+        let v = self.builder.build_load(self.i64_type, slot, name).ok()?;
+        Some(v.into_int_value())
+    }
+
+    fn emit_op(&mut self, ins: Inst) -> Option<()> {
+        match ins.op() {
+            Op::LoadI => {
+                let a = ins.a();
+                let sbx = ins.sbx() as i64;
+                self.store_imm(a, sbx)?;
+                Some(())
+            }
+            Op::LoadNil => {
+                // `R[A..=A+B] = nil`. The compute path treats nil as
+                // the i64 bit-pattern 0; that's a sound choice for
+                // chunks that return ints (Return1 reads i64 directly)
+                // because no recognised op observes nil as a distinct
+                // tag. When 1K.E later adds bool/value-tagged ops this
+                // will need to switch to tagged bit patterns.
+                let a = ins.a();
+                let b = ins.b();
+                for off in 0..=b {
+                    self.store_imm(a + off, 0)?;
+                }
+                Some(())
+            }
+            Op::Move => {
+                let a = ins.a();
+                let b = ins.b();
+                let v = self.load_reg(b, "move_src")?;
+                let dst = self.reg_slot_ptr(a, "move_dst")?;
+                self.builder.build_store(dst, v).ok()?;
+                Some(())
+            }
+            Op::Return0 => {
+                let zero = self.i64_type.const_zero();
+                self.builder.build_return(Some(&zero)).ok()?;
+                Some(())
+            }
+            Op::Return1 => {
+                let a = ins.a();
+                let v = self.load_reg(a, "ret_val")?;
+                self.builder.build_return(Some(&v)).ok()?;
+                Some(())
+            }
+            _ => {
+                // Whitelist guarded this in `ChunkPlan::from_proto`;
+                // if we get here something added an op without
+                // updating the emitter. Bail rather than emit junk.
+                None
+            }
+        }
+    }
+}
+
+/// Shared module-finalisation tail. JIT-compiles `module` under the
+/// (heap-pinned) `ctx_box`, resolves the entry symbol, and bundles
+/// both into an [`EnginePair`] for storage.
+fn finalize_module<'ctx>(
+    ctx_box: Box<Context>,
+    module: Module<'ctx>,
+) -> Option<(*const u8, EnginePair)> {
     let engine = module
         .create_jit_execution_engine(OptimizationLevel::None)
         .ok()?;
     let entry_ptr = engine.get_function_address("luna_jit_llvm_entry").ok()? as *const u8;
-
+    // SAFETY: `EnginePair` holds the engine as
+    // `ExecutionEngine<'static>` — see the constructor of
+    // `compile_compute_chunk` for the lifetime upgrade discussion.
+    // The transmute below relabels `EE<'ctx>` to `EE<'static>`; the
+    // `'ctx` borrow stays live for the engine's observable lifetime
+    // because `ctx_box` is moved into the pair on the same line and
+    // pinned by struct field-order drop.
+    let engine_static: inkwell::execution_engine::ExecutionEngine<'static> =
+        unsafe { std::mem::transmute(engine) };
     let pair = EnginePair {
-        engine,
+        engine: engine_static,
         context: ctx_box,
     };
     Some((entry_ptr, pair))
