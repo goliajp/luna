@@ -33,6 +33,34 @@ fn probe_chunks() {
             "local n = 5\nlocal r = 0\nif n < 10 then r = n * 2 else r = n - 1 end\nreturn r",
             "fib_shape_branchy",
         ),
+        // 1K.F probe — self-recursive function for Op::Call + GetUpval
+        // + parametric-chunk emit. Outer chunk has `rec` as local;
+        // inner proto has `rec` as upval[0] (5.5/5.4/5.3/5.2) or
+        // upval[1] (5.1).
+        (
+            "local function rec(a, b) if a < b then return a end return rec(b, b) end; return rec(5, 3)",
+            "self_rec_two_args",
+        ),
+        (
+            "local function id(n) return n end; return id(42)",
+            "id_one_arg",
+        ),
+        (
+            "local function pass(a, b, c) return c end; return pass(1, 2, 3)",
+            "three_args_return_last",
+        ),
+        (
+            "local k = 10; local function f() return k end; return f()",
+            "upval_read_one",
+        ),
+        (
+            "local k = 10; local function f() return k * k end; return f()",
+            "upval_read_two_mul",
+        ),
+        (
+            "local function rec(n) if n < 1 then return n end local r = rec(n) return r end",
+            "self_rec_non_tail_via_local",
+        ),
     ];
     for (src, name) in chunks {
         let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -41,24 +69,10 @@ fn probe_chunks() {
                 println!("=== {} ===", name);
                 println!("src: {}", src);
                 let proto = closure.proto;
-                println!(
-                    "num_params: {}, max_stack: {}",
-                    proto.num_params, proto.max_stack
-                );
-                println!("consts: {:?}", proto.consts);
-                for (pc, inst) in proto.code.iter().enumerate() {
-                    println!(
-                        "  {:3}: {:?} a={} b={} c={} bx={} sbx={} sj={} k={}",
-                        pc,
-                        inst.op(),
-                        inst.a(),
-                        inst.b(),
-                        inst.c(),
-                        inst.bx(),
-                        inst.sbx(),
-                        inst.sj(),
-                        inst.k()
-                    );
+                dump_proto("  ", &proto);
+                for (idx, sub) in proto.protos.iter().enumerate() {
+                    println!("  --- nested proto[{}] ---", idx);
+                    dump_proto("    ", sub);
                 }
             }
             Err(e) => {
@@ -66,5 +80,31 @@ fn probe_chunks() {
             }
         }
         println!();
+    }
+}
+
+fn dump_proto(indent: &str, proto: &luna_core::runtime::function::Proto) {
+    println!(
+        "{}num_params: {}, max_stack: {}, upvals: {}",
+        indent,
+        proto.num_params,
+        proto.max_stack,
+        proto.upvals.len(),
+    );
+    println!("{}consts: {:?}", indent, proto.consts);
+    for (pc, inst) in proto.code.iter().enumerate() {
+        println!(
+            "{}{:3}: {:?} a={} b={} c={} bx={} sbx={} sj={} k={}",
+            indent,
+            pc,
+            inst.op(),
+            inst.a(),
+            inst.b(),
+            inst.c(),
+            inst.bx(),
+            inst.sbx(),
+            inst.sj(),
+            inst.k()
+        );
     }
 }
