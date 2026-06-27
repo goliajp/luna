@@ -191,3 +191,225 @@ fn isle_dse_rule_does_not_fire_with_intervening_load() {
         ctx.func.display()
     );
 }
+
+// -------------------------------------------------------------------------
+// Phase 1G.B.5 — cross-block DSE integration cases.
+//
+// These exercise the Phase 1G.B.2 strict-chain check and Phase 1G.B.3
+// deopt-safe relaxation that ship in vendored cranelift's
+// `AliasAnalysis::find_dead_store_at`. The same-block Phase 1C cases
+// above remain the regression floor.
+// -------------------------------------------------------------------------
+
+/// Positive — linear two-block strict chain. block0 stores `iconst 999`
+/// and falls through (jump) to block1, which stores an `imul` result.
+/// The Phase 1G.B.2 strict-chain check must accept (no can_trap, no
+/// off-chain branches), so the prior store in block0 is dead.
+#[test]
+fn isle_dse_cross_block_strict_chain_fires() {
+    let isa = build_isa();
+
+    let mut sig = Signature::new(CallConv::SystemV);
+    sig.params.push(AbiParam::new(types::I64)); // addr
+    sig.params.push(AbiParam::new(types::I64)); // v_arg
+    sig.returns.push(AbiParam::new(types::I64));
+    let mut func = Function::with_name_signature(UserFuncName::user(0, 100), sig);
+
+    let mut fbctx = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut func, &mut fbctx);
+
+    let block0 = bcx.create_block();
+    let block1 = bcx.create_block();
+    bcx.append_block_params_for_function_params(block0);
+    bcx.switch_to_block(block0);
+    bcx.seal_block(block0);
+
+    let addr = bcx.block_params(block0)[0];
+    let v_arg = bcx.block_params(block0)[1];
+
+    let v_stale = bcx.ins().iconst(types::I64, 999);
+    bcx.ins().store(MemFlags::trusted(), v_stale, addr, 0);
+    bcx.ins().jump(block1, &[]);
+
+    bcx.switch_to_block(block1);
+    bcx.seal_block(block1);
+    let v_six = bcx.ins().iconst(types::I64, 6);
+    let v_mul = bcx.ins().imul(v_arg, v_six);
+    bcx.ins().store(MemFlags::trusted(), v_mul, addr, 0);
+    bcx.ins().return_(&[v_mul]);
+    bcx.finalize();
+
+    let stores_before = count_stores(&func);
+    assert_eq!(
+        stores_before, 2,
+        "fixture should start with 2 cross-block stores; got {stores_before}"
+    );
+
+    let mut ctx = Context::for_function(func);
+    let mut ctrl_plane = ControlPlane::default();
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+
+    let stores_after = count_stores(&ctx.func);
+    assert_eq!(
+        stores_after, 1,
+        "Phase 1G.B.2 strict-chain check should drop the prior store \
+         across the block0 -> block1 fall-through; got {stores_after}.\n\
+         IR after optimize:\n{}",
+        ctx.func.display()
+    );
+}
+
+/// Positive — deopt-safe relaxation. block0 stores prior + brifs into
+/// (block1=continue, block2=deopt). block1 holds the current store;
+/// block2 contains a plain (non-notrap) Store to the same `(addr, 0)`
+/// before returning. Phase 1G.B.3 must accept the off-chain block2 as
+/// deopt-safe, so the prior store is dead.
+#[test]
+fn isle_dse_cross_block_deopt_safe_relaxation_fires() {
+    let isa = build_isa();
+
+    let mut sig = Signature::new(CallConv::SystemV);
+    sig.params.push(AbiParam::new(types::I64)); // addr
+    sig.params.push(AbiParam::new(types::I64)); // v_arg
+    sig.params.push(AbiParam::new(types::I32)); // cond
+    sig.returns.push(AbiParam::new(types::I64));
+    let mut func = Function::with_name_signature(UserFuncName::user(0, 101), sig);
+
+    let mut fbctx = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut func, &mut fbctx);
+
+    let block0 = bcx.create_block();
+    let block1 = bcx.create_block();
+    let block2 = bcx.create_block();
+    bcx.append_block_params_for_function_params(block0);
+    bcx.switch_to_block(block0);
+    bcx.seal_block(block0);
+
+    let addr = bcx.block_params(block0)[0];
+    let v_arg = bcx.block_params(block0)[1];
+    let cond = bcx.block_params(block0)[2];
+
+    // PRIOR store (block0).
+    let v_stale = bcx.ins().iconst(types::I64, 999);
+    bcx.ins().store(MemFlags::trusted(), v_stale, addr, 0);
+    bcx.ins().brif(cond, block1, &[], block2, &[]);
+
+    // continue block (block1) — on dom chain.
+    bcx.switch_to_block(block1);
+    bcx.seal_block(block1);
+    let v_six = bcx.ins().iconst(types::I64, 6);
+    let v_mul = bcx.ins().imul(v_arg, v_six);
+    bcx.ins().store(MemFlags::trusted(), v_mul, addr, 0); // CURRENT
+    bcx.ins().return_(&[v_mul]);
+
+    // deopt block (block2) — off dom chain. Plain Store overwrites
+    // the slot before any external observer (matching luna's
+    // `emit_store_back_and_return_pc` semantics).
+    bcx.switch_to_block(block2);
+    bcx.seal_block(block2);
+    let v_writeback = bcx.ins().iconst(types::I64, 42);
+    bcx.ins().store(MemFlags::new(), v_writeback, addr, 0);
+    bcx.ins().return_(&[v_writeback]);
+
+    bcx.finalize();
+
+    let stores_before = count_stores(&func);
+    assert_eq!(
+        stores_before, 3,
+        "fixture should start with 3 stores (prior + current + deopt); \
+         got {stores_before}"
+    );
+
+    let mut ctx = Context::for_function(func);
+    let mut ctrl_plane = ControlPlane::default();
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+
+    let stores_after = count_stores(&ctx.func);
+    assert_eq!(
+        stores_after, 2,
+        "Phase 1G.B.3 deopt-safe relaxation should drop the prior store \
+         (deopt path overwrites via plain Store); got {stores_after}.\n\
+         IR after optimize:\n{}",
+        ctx.func.display()
+    );
+}
+
+/// Negative — off-chain side exit reads slot via trusted load before
+/// overwriting. The load observes the prior store's memory value, so
+/// `is_deopt_safe_side_exit` must reject and both notrap stores must
+/// survive.
+#[test]
+fn isle_dse_cross_block_rejects_when_side_exit_loads() {
+    let isa = build_isa();
+
+    let mut sig = Signature::new(CallConv::SystemV);
+    sig.params.push(AbiParam::new(types::I64)); // addr
+    sig.params.push(AbiParam::new(types::I64)); // v_arg
+    sig.params.push(AbiParam::new(types::I32)); // cond
+    sig.returns.push(AbiParam::new(types::I64));
+    let mut func = Function::with_name_signature(UserFuncName::user(0, 102), sig);
+
+    let mut fbctx = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut func, &mut fbctx);
+
+    let block0 = bcx.create_block();
+    let block1 = bcx.create_block();
+    let block2 = bcx.create_block();
+    bcx.append_block_params_for_function_params(block0);
+    bcx.switch_to_block(block0);
+    bcx.seal_block(block0);
+
+    let addr = bcx.block_params(block0)[0];
+    let v_arg = bcx.block_params(block0)[1];
+    let cond = bcx.block_params(block0)[2];
+
+    let v_stale = bcx.ins().iconst(types::I64, 999);
+    bcx.ins().store(MemFlags::trusted(), v_stale, addr, 0); // PRIOR
+    bcx.ins().brif(cond, block1, &[], block2, &[]);
+
+    bcx.switch_to_block(block1);
+    bcx.seal_block(block1);
+    let v_six = bcx.ins().iconst(types::I64, 6);
+    let v_mul = bcx.ins().imul(v_arg, v_six);
+    bcx.ins().store(MemFlags::trusted(), v_mul, addr, 0); // CURRENT
+    bcx.ins().return_(&[v_mul]);
+
+    // Side exit reads slot via trusted load — observes prior store.
+    bcx.switch_to_block(block2);
+    bcx.seal_block(block2);
+    let v_observed = bcx
+        .ins()
+        .load(types::I64, MemFlags::trusted(), addr, 0);
+    let v_plus = bcx.ins().iadd_imm(v_observed, 1);
+    bcx.ins().store(MemFlags::new(), v_plus, addr, 0);
+    bcx.ins().return_(&[v_observed]);
+
+    bcx.finalize();
+
+    let mut ctx = Context::for_function(func);
+    let mut ctrl_plane = ControlPlane::default();
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+
+    // Count notrap (trusted) stores — both the prior in block0 AND the
+    // current in block1 must survive. The plain Store in block2 is a
+    // separate slot's overwrite that we leave alone.
+    let trusted_stores: usize = ctx
+        .func
+        .layout
+        .blocks()
+        .flat_map(|b| ctx.func.layout.block_insts(b))
+        .filter(|inst| matches!(ctx.func.dfg.insts[*inst].opcode(), Opcode::Store))
+        .filter(|inst| {
+            ctx.func.dfg.insts[*inst]
+                .memflags()
+                .map(|f| f.notrap())
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        trusted_stores, 2,
+        "side exit's trusted load observes prior store; both trusted stores \
+         must survive. got {trusted_stores}.\nIR after optimize:\n{}",
+        ctx.func.display()
+    );
+}
