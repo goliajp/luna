@@ -1540,18 +1540,15 @@ pub(crate) const TABLE_NODES_LEN_OFFSET: usize = TABLE_NODES_PTR_OFFSET + 8;
 /// key's tag is at `NODE_KEY_OFFSET` (= 0) and the key's raw
 /// 8-byte payload at `NODE_KEY_OFFSET + 8`.
 #[allow(dead_code)]
-pub(crate) const NODE_KEY_OFFSET: usize =
-    luna_core::runtime::table::jit_layout::NODE_KEY_OFFSET;
+pub(crate) const NODE_KEY_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_KEY_OFFSET;
 /// Byte offset of `val: Value` within a `Node`. The val's tag is
 /// at `NODE_VAL_OFFSET` (= 16), payload at `NODE_VAL_OFFSET + 8`.
 #[allow(dead_code)]
-pub(crate) const NODE_VAL_OFFSET: usize =
-    luna_core::runtime::table::jit_layout::NODE_VAL_OFFSET;
+pub(crate) const NODE_VAL_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_VAL_OFFSET;
 /// Total `Node` size in bytes — stride for `node_addr = nodes_ptr +
 /// slot_idx * SIZEOF_NODE`.
 #[allow(dead_code)]
-pub(crate) const SIZEOF_NODE: usize =
-    luna_core::runtime::table::jit_layout::SIZEOF_NODE;
+pub(crate) const SIZEOF_NODE: usize = luna_core::runtime::table::jit_layout::SIZEOF_NODE;
 /// Byte offset of the value's tag byte inside the `val: Value` field
 /// of a `Node`. Value is `#[repr(C, u8)]`, discriminant at byte 0.
 #[allow(dead_code)]
