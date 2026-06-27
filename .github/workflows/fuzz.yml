@@ -31,6 +31,8 @@ jobs:
           - fuzz_aot_meta
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
@@ -70,6 +72,8 @@ jobs:
           - fuzz_aot_meta
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
