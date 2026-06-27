@@ -307,6 +307,16 @@ pub struct Vm {
     /// overflow at `u32::MAX` retires the slot (NOT pushed here).
     pub(crate) host_roots_free: Vec<u32>,
 
+    /// v2.1 — GC-rooted scratch stack for `table.sort` (and any other
+    /// builtin that needs a Rust-side `Vec<Value>` to outlive a user
+    /// callback). Each entry is one in-flight working buffer; `gc_roots`
+    /// extends with every contained `Value` so a `collectgarbage()`
+    /// inside the comparator cannot free strings/tables snapshotted
+    /// here. Nested sorts push a new buffer on entry, pop on exit
+    /// (sort.lua's `load(..)(); collectgarbage()` compare callback
+    /// regression).
+    pub(crate) sort_scratch: Vec<Vec<Value>>,
+
     /// v1.3 Phase ML — MacroLua compile-time macro registry.
     /// Pre-populated with built-in macros (`@quote` / `@unquote` /
     /// `@if` / `@gensym`) at construction time when `version ==
@@ -970,6 +980,7 @@ impl Vm {
                 crate::frontend::macro_expander::MacroRegistry::new()
             },
             host_roots_free: Vec::new(),
+            sort_scratch: Vec::new(),
             // v1.2 Track B — LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),
@@ -2706,6 +2717,14 @@ impl Vm {
         for slot in &self.host_roots {
             // v1.3 SR — free-list slots carry Value::Nil (GC no-op).
             roots.push(slot.value);
+        }
+        // v2.1 — `table.sort` and similar builtins stash their working
+        // `Vec<Value>` here so a `collectgarbage()` invoked inside the
+        // comparator callback doesn't free strings/tables snapshotted
+        // off the live table (sort.lua's `load(..)(); collectgarbage()`
+        // compare regression).
+        for buf in &self.sort_scratch {
+            roots.extend_from_slice(buf);
         }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
