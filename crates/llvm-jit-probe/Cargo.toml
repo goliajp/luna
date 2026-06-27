@@ -1,0 +1,23 @@
+[package]
+name = "llvm-jit-probe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# v2.1 Phase 1K.B — internal validation crate, never published. Setting
+# `publish = false` matches the project convention for non-shipped
+# crates and makes intent grep-able. The crate's sole purpose is to
+# prove that the LLVM 18 + inkwell toolchain selected by Phase 1K.A
+# links + JITs correctly on the dev host before Phase 1K.C+ touches
+# any production luna code.
+publish = false
+
+[dependencies]
+# Phase 1K.B.3 adds the `inkwell` dependency on top of this scaffold.
+
+[lints]
+workspace = true
