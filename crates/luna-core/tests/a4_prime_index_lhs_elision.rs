@@ -126,10 +126,12 @@ fn safe_math_min_rhs_elides_snapshot() {
 #[test]
 fn safe_literal_local_rhs_elides_a4prime_snapshot_only() {
     // `bucket.last = now` (now is a local reg). A4' elides the obj
-    // snapshot (no Move with src=bucket@r0). A4'' is NOT in scope for
-    // this ship — the RHS local force-materialization Move (src=now@r1)
-    // is expected to remain. The test asserts both halves: A4' fires
-    // (0 src=r0 Moves) AND A4'' residual is preserved (1 src=r1 Move).
+    // snapshot (no Move with src=bucket@r0). With the A4'' bundle
+    // shipped (see `.dev/rfcs/v2.1-a4-triple-double-bundle-verdict.md`),
+    // the RHS local force-materialization Move (src=now@r1) is ALSO
+    // elided — the SetField now reads `now` directly. Both halves
+    // assert zero Moves; the SetField uses `now@r1` directly as its
+    // C operand (cross-verified by `eval_int`).
     let src = r#"
         local bucket = { last = 0 }
         local now = 7
@@ -144,8 +146,8 @@ fn safe_literal_local_rhs_elides_a4prime_snapshot_only() {
     );
     assert_eq!(
         count_moves_from_reg(&code, 1),
-        1,
-        "A4'' RHS materialization Move (src=now@r1) is expected to remain (deferred)"
+        0,
+        "A4'' RHS materialization Move (src=now@r1) is now elided by the bundle"
     );
     assert_eq!(eval_int(src), 7);
 }
