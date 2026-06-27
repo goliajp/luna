@@ -22,7 +22,11 @@ use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
 /// Helper: build a synthetic `RecordedOp` at depth=0.
-fn recorded(proto: luna_core::runtime::Gc<luna_core::runtime::function::Proto>, pc: u32, inst: Inst) -> RecordedOp {
+fn recorded(
+    proto: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
+    pc: u32,
+    inst: Inst,
+) -> RecordedOp {
     RecordedOp {
         proto,
         pc,
@@ -84,7 +88,10 @@ fn mvp_trace_compiles_and_runs_clean_tail() {
         )
         .expect("MVP trace should compile to Some(CompiledTrace)");
 
-    assert!(ct.dispatchable, "depth=0 int-only trace must be dispatchable");
+    assert!(
+        ct.dispatchable,
+        "depth=0 int-only trace must be dispatchable"
+    );
     assert_eq!(ct.head_pc, 0, "head_pc round-trip");
     assert_eq!(ct.n_ops, 3, "3 recorded ops");
 
@@ -136,7 +143,10 @@ fn out_of_whitelist_trace_returns_none() {
         luna_core::jit::trace_types::CompileOptions::default(),
     );
 
-    assert!(result.is_none(), "GetUpval trace must return None from MVP lowerer");
+    assert!(
+        result.is_none(),
+        "GetUpval trace must return None from MVP lowerer"
+    );
 }
 
 /// v2.1 Phase 1K.G.5 — unclosed trace (closed=false) returns None.
