@@ -127,13 +127,70 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// fn because the trait orphan rule prevents adding inherent methods
 /// to `luna_core::vm::Vm` from this crate. The `VmExt` extension
 /// trait below restores the dotted-method form.
+///
+/// # v2.1 Phase 1K.D.4 — `LUNA_JIT_BACKEND` env-var override
+///
+/// The chosen backend is normally Cranelift. Set the
+/// `LUNA_JIT_BACKEND` env var to override at Vm-construction time:
+///
+/// | Value | Behaviour |
+/// |---|---|
+/// | unset / `cranelift` | Cranelift (default). |
+/// | `llvm` (with `--features llvm-jit`) | LLVM 18 backend. |
+/// | `llvm` (feature OFF) | `panic!` with a rebuild hint. |
+/// | any other value | `panic!` listing the accepted values. |
+///
+/// The env var is read **once per `install_default_jit` call**; the
+/// selection is then frozen into the Vm. Switching at runtime is
+/// out of scope (see `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md`
+/// § 4.4).
 pub fn install_default_jit(vm: &mut vm::Vm) {
+    let backend = std::env::var("LUNA_JIT_BACKEND").unwrap_or_default();
+    match backend.as_str() {
+        "" | "cranelift" => install_cranelift_jit(vm),
+        "llvm" => install_llvm_jit(vm),
+        other => panic!(
+            "LUNA_JIT_BACKEND={other:?} not recognised; expected one of \
+             {{unset, \"cranelift\", \"llvm\"}}.",
+        ),
+    }
+}
+
+/// v2.1 Phase 1K.D.4 — concrete Cranelift backend installer. Always
+/// available; this is the install path `install_default_jit` lands
+/// on when `LUNA_JIT_BACKEND` is unset or `cranelift`.
+fn install_cranelift_jit(vm: &mut vm::Vm) {
     vm.install_jit_backend(jit_backend::CraneliftBackend, jit_backend::CraneliftBackend);
     // v2.0 Track J sub-step J-B — pair the CraneliftBackend trait
     // impls with a fresh CraneliftJitStorage so the trait impls'
     // `_storage` param downcasts to the right concrete type once
     // Phases D/E/F start using it.
     vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::default());
+}
+
+/// v2.1 Phase 1K.D.4 — concrete LLVM backend installer. Only
+/// compiled when `luna-jit` is built with `--features llvm-jit`.
+/// Selected at runtime via `LUNA_JIT_BACKEND=llvm`.
+#[cfg(feature = "llvm-jit")]
+fn install_llvm_jit(vm: &mut vm::Vm) {
+    vm.install_jit_backend(luna_jit_llvm::LlvmBackend, luna_jit_llvm::LlvmBackend);
+    vm.install_jit_storage(luna_jit_llvm::LlvmJitStorage);
+}
+
+/// v2.1 Phase 1K.D.4 — `LUNA_JIT_BACKEND=llvm` was requested but
+/// the build does not include the LLVM backend. Panic with a
+/// rebuild hint rather than silently falling back to Cranelift
+/// (silent fallback would mask the configuration error and lead
+/// to confusing bench / test results).
+#[cfg(not(feature = "llvm-jit"))]
+fn install_llvm_jit(_vm: &mut vm::Vm) {
+    panic!(
+        "LUNA_JIT_BACKEND=llvm requested but the `llvm-jit` cargo \
+         feature is OFF in this build of luna-jit. Rebuild with \
+         `cargo build -p luna-jit --features llvm-jit` (or add the \
+         feature to your Cargo.toml's luna-jit dep). See \
+         `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3."
+    );
 }
 
 /// Extension trait that exposes the JIT-installing constructors and
