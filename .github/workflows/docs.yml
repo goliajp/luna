@@ -14,8 +14,14 @@ name: docs
 #      + crate READMEs. Allow-list lives in `.lycheeignore`
 #      (regex-per-line, comment-friendly).
 #
-# All three are run with `--all-features` so feature-gated docs
-# (e.g. `#[cfg(feature = "send")]` SendVm doctests) are also covered.
+# Gates 1 + 2 run on default features. Enabling `--all-features`
+# would pull in `luna-jit`'s `llvm-jit` feature → `luna-jit-llvm` →
+# inkwell → system LLVM 18 + Polly, which the hosted ubuntu-latest
+# runner doesn't ship. Feature-gated doc surface (e.g. SendVm under
+# `#[cfg(feature = "send")]`) is currently `ignore`-marked in the
+# rustdoc examples, so default-feature coverage is sufficient. When
+# a real (non-ignored) feature-gated doctest lands, add a dedicated
+# job that enables the specific feature without `--all-features`.
 #
 # Existing partial coverage in ci.yml (`doc` + `cargo test --doc`
 # steps) is intentionally left in place as defense-in-depth — this
@@ -41,8 +47,15 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
-      - name: cargo doc --no-deps --workspace --all-features
-        run: cargo doc --no-deps --workspace --all-features
+      - name: cargo doc --no-deps --workspace
+        # Exclude LLVM-backed crates: they link against system LLVM 18
+        # + Polly, which the hosted ubuntu-latest runner doesn't ship
+        # (`could not find native static library Polly`). They are
+        # dev-only alt-backend audit crates (v2.1 Cranelift alt-backend
+        # RFC); not in the embedder surface and not required for
+        # docs-rot detection on the mainline crates. See header comment
+        # for the `--all-features` removal rationale.
+        run: cargo doc --no-deps --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -57,8 +70,10 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
-      - name: cargo test --doc --workspace --all-features
-        run: cargo test --doc --workspace --all-features
+      - name: cargo test --doc --workspace
+        # See `rustdoc` job above for LLVM exclusion + `--all-features`
+        # removal rationale.
+        run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
   # ─────────────────────────────────────────────────────────────────
   # Gate 3 — markdown link check via lychee.
