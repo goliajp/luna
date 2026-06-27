@@ -412,14 +412,28 @@ fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Err(arg_error(vm, 1, "sort", "array too big"));
     }
     // PUC sort uses lua_geti/lua_seti, honouring __index/__newindex.
-    let mut v: Vec<Value> = Vec::with_capacity(n.max(0) as usize);
-    for i in 1..=n {
-        v.push(vm.index_value(tv, Value::Int(i))?);
-    }
-    sort_slice(vm, &mut v, comp)?;
-    for (i, &val) in v.iter().enumerate() {
-        vm.newindex_value(tv, Value::Int(i as i64 + 1), val)?;
-    }
+    // Snapshot the working set into `vm.sort_scratch`, which `gc_roots`
+    // traces — so a `collectgarbage()` invoked inside the comparator
+    // (sort.lua's `load(..)(); collectgarbage()` callback) cannot free
+    // strings/tables still held by the in-flight quicksort. Operating
+    // on a Rust-local `Vec<Value>` (the pre-v2.1 shape) is UAF here.
+    let cap = n.max(0) as usize;
+    vm.sort_scratch.push(Vec::with_capacity(cap));
+    let result = (|| -> Result<(), LuaError> {
+        for i in 1..=n {
+            let val = vm.index_value(tv, Value::Int(i))?;
+            vm.sort_scratch.last_mut().unwrap().push(val);
+        }
+        sort_scratch_top(vm, comp)?;
+        for i in 0..cap {
+            let val = vm.sort_scratch.last().unwrap()[i];
+            vm.newindex_value(tv, Value::Int(i as i64 + 1), val)?;
+        }
+        Ok(())
+    })();
+    // Pop scratch even on error so the rooted slots don't leak.
+    vm.sort_scratch.pop();
+    result?;
     Ok(0)
 }
 
@@ -436,12 +450,28 @@ fn lt(vm: &mut Vm, comp: Option<Value>, a: Value, b: Value) -> Result<bool, LuaE
     }
 }
 
+#[inline]
+fn scratch_get(vm: &Vm, i: usize) -> Value {
+    vm.sort_scratch.last().unwrap()[i]
+}
+
+#[inline]
+fn scratch_swap(vm: &mut Vm, i: usize, j: usize) {
+    vm.sort_scratch.last_mut().unwrap().swap(i, j);
+}
+
+#[inline]
+fn scratch_len(vm: &Vm) -> usize {
+    vm.sort_scratch.last().unwrap().len()
+}
+
 /// Quicksort with median-of-three and an invalid-order guard (PUC auxsort
-/// shape); the sorted slice is written back to the table by the caller.
-fn sort_slice(vm: &mut Vm, v: &mut [Value], comp: Option<Value>) -> Result<(), LuaError> {
+/// shape), operating on `vm.sort_scratch.last()` so GC sees the working
+/// set as a root and the comparator's `collectgarbage()` can't free
+/// snapshotted entries (sort.lua regression — see `t_sort`).
+fn sort_scratch_top(vm: &mut Vm, comp: Option<Value>) -> Result<(), LuaError> {
     fn quick(
         vm: &mut Vm,
-        v: &mut [Value],
         comp: Option<Value>,
         mut lo: usize,
         mut hi: usize,
@@ -453,37 +483,71 @@ fn sort_slice(vm: &mut Vm, v: &mut [Value], comp: Option<Value>) -> Result<(), L
             if hi - lo < 3 {
                 for i in lo + 1..=hi {
                     let mut j = i;
-                    while j > lo && lt(vm, comp, v[j], v[j - 1])? {
-                        v.swap(j, j - 1);
+                    loop {
+                        if j <= lo {
+                            break;
+                        }
+                        let a = scratch_get(vm, j);
+                        let b = scratch_get(vm, j - 1);
+                        if !lt(vm, comp, a, b)? {
+                            break;
+                        }
+                        scratch_swap(vm, j, j - 1);
                         j -= 1;
                     }
                 }
                 return Ok(());
             }
-            // median of three at lo, mid, hi
+            // median of three at lo, mid, hi — values are re-fetched from
+            // scratch on each compare because the comparator may have
+            // mutated the table or freed Gc temporaries we previously
+            // copied out.
             let mid = lo + (hi - lo) / 2;
-            if lt(vm, comp, v[mid], v[lo])? {
-                v.swap(mid, lo);
-            }
-            if lt(vm, comp, v[hi], v[mid])? {
-                v.swap(hi, mid);
-                if lt(vm, comp, v[mid], v[lo])? {
-                    v.swap(mid, lo);
+            {
+                let a = scratch_get(vm, mid);
+                let b = scratch_get(vm, lo);
+                if lt(vm, comp, a, b)? {
+                    scratch_swap(vm, mid, lo);
                 }
             }
-            let pivot = v[mid];
-            v.swap(mid, hi - 1);
+            {
+                let a = scratch_get(vm, hi);
+                let b = scratch_get(vm, mid);
+                if lt(vm, comp, a, b)? {
+                    scratch_swap(vm, hi, mid);
+                    let c = scratch_get(vm, mid);
+                    let d = scratch_get(vm, lo);
+                    if lt(vm, comp, c, d)? {
+                        scratch_swap(vm, mid, lo);
+                    }
+                }
+            }
+            // Park the pivot at `hi - 1` so future iterations re-read it
+            // from the GC-rooted scratch every compare instead of a
+            // Rust-local copy that the next callback could dangle.
+            scratch_swap(vm, mid, hi - 1);
+            let pivot_idx = hi - 1;
             let (mut i, mut j) = (lo, hi - 1);
             loop {
                 i += 1;
-                while lt(vm, comp, v[i], pivot)? {
+                loop {
+                    let a = scratch_get(vm, i);
+                    let p = scratch_get(vm, pivot_idx);
+                    if !lt(vm, comp, a, p)? {
+                        break;
+                    }
                     if i >= hi {
                         return Err(raise_str(vm, "invalid order function for sorting"));
                     }
                     i += 1;
                 }
                 j -= 1;
-                while lt(vm, comp, pivot, v[j])? {
+                loop {
+                    let p = scratch_get(vm, pivot_idx);
+                    let b = scratch_get(vm, j);
+                    if !lt(vm, comp, p, b)? {
+                        break;
+                    }
                     if j <= lo {
                         return Err(raise_str(vm, "invalid order function for sorting"));
                     }
@@ -492,17 +556,17 @@ fn sort_slice(vm: &mut Vm, v: &mut [Value], comp: Option<Value>) -> Result<(), L
                 if i >= j {
                     break;
                 }
-                v.swap(i, j);
+                scratch_swap(vm, i, j);
             }
-            v.swap(i, hi - 1);
+            scratch_swap(vm, i, hi - 1);
             // recurse on the smaller side, loop on the larger
             if i - lo < hi - i {
                 if i > 0 {
-                    quick(vm, v, comp, lo, i - 1)?;
+                    quick(vm, comp, lo, i - 1)?;
                 }
                 lo = i + 1;
             } else {
-                quick(vm, v, comp, i + 1, hi)?;
+                quick(vm, comp, i + 1, hi)?;
                 if i == 0 {
                     break;
                 }
@@ -511,9 +575,9 @@ fn sort_slice(vm: &mut Vm, v: &mut [Value], comp: Option<Value>) -> Result<(), L
         }
         Ok(())
     }
-    if !v.is_empty() {
-        let hi = v.len() - 1;
-        quick(vm, v, comp, 0, hi)?;
+    let n = scratch_len(vm);
+    if n > 0 {
+        quick(vm, comp, 0, n - 1)?;
     }
     Ok(())
 }
