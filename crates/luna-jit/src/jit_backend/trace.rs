@@ -3119,40 +3119,6 @@ pub fn try_compile_trace(
     try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
-/// v2.1 Phase 1I.B — `LUNA_JIT_FIELD_IC` env gate.
-///
-/// Default OFF (env unset or set to anything other than `1` / `true`).
-/// When ON, the trace lowerer's `Op::GetField` arm replaces the helper
-/// call at the **first** eligible site (single-Table receiver, const
-/// string key, recorder-time `metatable.is_none()`) with an inline
-/// cache: 4 guards (`mt is None`, `nodes.len() == cached`,
-/// `nodes[slot].key == cached_key`, `val.tag == cached_tag`) + 1 load
-/// of the value raw payload. The guards' miss path falls through to
-/// the existing helper.
-///
-/// Scope discipline: this gate exposes the scaffold to Phase 1I.B
-/// probing only. Multi-site expansion + shape ID lifecycle + bench
-/// validation stay in Phase 1I.C.
-///
-/// Cached on the first call per process so the env-OFF path is a
-/// single relaxed atomic load (~1 ns), not a syscall.
-#[allow(dead_code)]
-pub(crate) fn field_ic_enabled() -> bool {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    // 0 = uninitialised, 1 = off, 2 = on. Sentinel encoding lets a
-    // single relaxed load distinguish "decision cached" from "ask
-    // env" without a Mutex.
-    static CACHED: AtomicU8 = AtomicU8::new(0);
-    let v = CACHED.load(Ordering::Relaxed);
-    if v != 0 {
-        return v == 2;
-    }
-    let enabled = std::env::var("LUNA_JIT_FIELD_IC")
-        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    CACHED.store(if enabled { 2 } else { 1 }, Ordering::Relaxed);
-    enabled
-}
 
 // P13-S13-G v2.6 — last-checkpoint instrumentation for trace
 // compile failure diagnosis. `try_compile_trace_with_options`
@@ -6530,10 +6496,134 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                let v = bcx.inst_results(call)[0];
+
+                // v2.1 Phase 1I.B — table-field IC scaffold.
+                //
+                // When `LUNA_JIT_FIELD_IC=1` and this op is the
+                // recorder-captured snapshot site, emit an inline
+                // cache: 4 guards (mt None, nodes.len() == cached,
+                // node[slot].key.raw == cached_key_bits,
+                // node[slot].val.tag == cached_val_tag) + 1 load
+                // of node[slot].val.raw. Guard miss falls through
+                // to the existing helper-call path so no new deopt
+                // edge is introduced (scaffold-safe rollout).
+                //
+                // env-OFF default short-circuits on the cached
+                // atomic load inside `field_ic_enabled()`; the IC
+                // emission produces zero additional IR when the
+                // gate is off.
+                let ic_active = luna_core::jit::trace_types::field_ic_enabled()
+                    && record
+                        .field_ic_snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.op_idx as usize == i);
+
+                let v = if ic_active {
+                    let snap = record
+                        .field_ic_snapshot
+                        .as_ref()
+                        .expect("ic_active implies snapshot present");
+
+                    // --- Guards 1 & 2: metatable + nodes.len() ---
+                    let mt = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_METATABLE_OFFSET as i32,
+                    );
+                    let zero = bcx.ins().iconst(types::I64, 0);
+                    let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
+                    let nodes_len = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_NODES_LEN_OFFSET as i32,
+                    );
+                    let nodes_len_imm =
+                        bcx.ins().iconst(types::I64, snap.nodes_len as i64);
+                    let len_ok = bcx.ins().icmp(IntCC::Equal, nodes_len, nodes_len_imm);
+                    let guards_12 = bcx.ins().band(mt_ok, len_ok);
+
+                    // 3 blocks: fast (guards 3+4 + load), slow
+                    // (helper), merge (def_var dst). slow_blk has 2
+                    // predecessors (mt/len fail + key/tag fail); we
+                    // seal it only after both edges are emitted.
+                    let fast_blk = bcx.create_block();
+                    let slow_blk = bcx.create_block();
+                    let merge_blk = bcx.create_block();
+                    bcx.append_block_param(merge_blk, types::I64);
+
+                    bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
+
+                    // --- fast: load nodes_ptr, compute node_addr,
+                    //     guards 3 & 4, load val_raw ---
+                    bcx.switch_to_block(fast_blk);
+                    bcx.seal_block(fast_blk);
+                    let nodes_ptr = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_NODES_PTR_OFFSET as i32,
+                    );
+                    let node_offset =
+                        (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
+                    let node_addr = bcx.ins().iadd_imm(nodes_ptr, node_offset);
+
+                    let key_raw = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        node_addr,
+                        super::NODE_KEY_RAW_OFFSET as i32,
+                    );
+                    let key_imm =
+                        bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
+                    let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
+
+                    let val_tag_i8 = bcx.ins().load(
+                        types::I8,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        node_addr,
+                        super::NODE_VAL_TAG_OFFSET as i32,
+                    );
+                    let val_tag = bcx.ins().uextend(types::I64, val_tag_i8);
+                    let tag_imm =
+                        bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
+                    let tag_ok = bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
+                    let guards_34 = bcx.ins().band(key_ok, tag_ok);
+
+                    let load_blk = bcx.create_block();
+                    bcx.ins().brif(guards_34, load_blk, &[], slow_blk, &[]);
+
+                    bcx.switch_to_block(load_blk);
+                    bcx.seal_block(load_blk);
+                    let val_raw = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        node_addr,
+                        super::NODE_VAL_RAW_OFFSET as i32,
+                    );
+                    bcx.ins().jump(merge_blk, &[val_raw.into()]);
+
+                    // --- slow: fall back to existing helper ---
+                    bcx.switch_to_block(slow_blk);
+                    bcx.seal_block(slow_blk);
+                    let func_ref =
+                        module.declare_func_in_func(get_field_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                    let v_slow = bcx.inst_results(call)[0];
+                    bcx.ins().jump(merge_blk, &[v_slow.into()]);
+
+                    // --- merge ---
+                    bcx.switch_to_block(merge_blk);
+                    bcx.seal_block(merge_blk);
+                    bcx.block_params(merge_blk)[0]
+                } else {
+                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                    bcx.inst_results(call)[0]
+                };
                 bcx.def_var(regs[ins.a() as usize], v);
+
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {

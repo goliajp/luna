@@ -185,6 +185,81 @@ pub struct RecordedOp {
     pub var_count: Option<u32>,
 }
 
+/// v2.1 Phase 1I.B — `LUNA_JIT_FIELD_IC` env gate.
+///
+/// Default OFF (env unset or set to anything other than `1` / `true`).
+/// When ON, the trace recorder captures a [`FieldIcSnapshot`] at the
+/// first eligible `Op::GetField` site and the trace lowerer replaces
+/// the helper call at that site with an inline cache: 4 guards
+/// (`mt is None`, `nodes.len() == cached`, `nodes[slot].key ==
+/// cached_key_bits`, `val.tag == cached_tag`) + 1 load of the value's
+/// raw payload. Guard miss falls through to the existing helper
+/// (scaffold-safe, no new deopt edges).
+///
+/// Cached on the first call per process so the env-OFF path is a
+/// single relaxed atomic load (~1 ns), not a syscall. Both the
+/// recorder (in `luna-core`'s exec dispatch loop) and the lowerer
+/// (in `luna-jit`'s trace.rs emit) call this; sharing the cache
+/// guarantees they agree on a single env-read decision per process.
+pub fn field_ic_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // 0 = uninitialised, 1 = off, 2 = on. Sentinel encoding lets a
+    // single relaxed load distinguish "decision cached" from "ask
+    // env" without a Mutex.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    let v = CACHED.load(Ordering::Relaxed);
+    if v != 0 {
+        return v == 2;
+    }
+    let enabled = std::env::var("LUNA_JIT_FIELD_IC")
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    CACHED.store(if enabled { 2 } else { 1 }, Ordering::Relaxed);
+    enabled
+}
+
+/// v2.1 Phase 1I.B — table-field IC snapshot captured by the recorder
+/// at the **first** eligible `Op::GetField` site in the trace, when
+/// `LUNA_JIT_FIELD_IC=1` is set.
+///
+/// "Eligible" means the receiver `R[B]` is `Value::Table` with no
+/// metatable at recorder-fire time AND the key resolves to a
+/// `Value::Str` in `head_proto.consts[C]` AND the key actually
+/// occupies a hash slot at recording time. The recorder bakes the
+/// cached `(nodes_len, slot_idx, key_ptr_bits, val_tag)` tuple here so
+/// the lowerer can emit guards against the table's live layout.
+///
+/// Phase 1I.B scaffold ships SINGLE-snapshot support (the first
+/// eligible site only). Phase 1I.C expands to 5+3 sites.
+#[derive(Clone, Copy, Debug)]
+pub struct FieldIcSnapshot {
+    /// Index into `TraceRecord.ops` of the `Op::GetField` this
+    /// snapshot describes. The lowerer matches `op_idx == i` at
+    /// emit time to decide whether to fire the IC path or fall
+    /// through to the original helper-call path.
+    pub op_idx: u32,
+    /// `t.nodes.len()` at recorder-fire time. The IC's shape guard
+    /// (`load high fat-ptr word, icmp Equal, cached_len`) bails to
+    /// the helper on mismatch so a rehash deopts predictably.
+    pub nodes_len: u64,
+    /// Index of the `Node` slot that holds the cached key. The IC
+    /// computes `node_addr = nodes_ptr + slot_idx * SIZEOF_NODE`
+    /// and reads `key`/`val` from that address.
+    pub slot_idx: u64,
+    /// `Gc<LuaStr>` raw pointer bits for the cached key. The IC's
+    /// slot-key guard (`load i64, icmp Equal, cached_key_bits`)
+    /// catches the case where a rehash or insert relocated a
+    /// different key into the cached slot.
+    pub key_ptr_bits: u64,
+    /// Recorder-time tag byte of the slot's value. The IC's val
+    /// guard (`load i8, icmp Equal, cached_val_tag`) catches the
+    /// case where a `SetField` mutated the slot to a different
+    /// type since recording — without this guard the lowerer's
+    /// downstream `current_kinds` propagation could pack stale
+    /// raw bits as the wrong tag → garbage Value on the next op.
+    pub cached_val_tag: u8,
+}
+
 /// A recorded trace: a linear sequence of ops starting at a back-edge
 /// target PC, terminating at either a loop close (back to head) or a
 /// hard exit (return, error).
@@ -269,6 +344,11 @@ pub struct TraceRecord {
     /// and routes through `TraceEnd::DownRec`. `None` on the
     /// ship-default path (p16 off) and on all non-down-rec closes.
     pub downrec_close: Option<DownRecClose>,
+    /// v2.1 Phase 1I.B — table-field IC snapshot for the first
+    /// eligible `Op::GetField` site in the trace. Populated by the
+    /// recorder under `LUNA_JIT_FIELD_IC=1`; `None` on the
+    /// env-default path and on traces where no eligible site fires.
+    pub field_ic_snapshot: Option<FieldIcSnapshot>,
 }
 
 impl TraceRecord {
@@ -297,6 +377,7 @@ impl TraceRecord {
             self_link_kind: None,
             retfs: Vec::new(),
             downrec_close: None,
+            field_ic_snapshot: None,
         }
     }
 
@@ -333,6 +414,7 @@ impl TraceRecord {
             self_link_kind: None,
             retfs: Vec::new(),
             downrec_close: None,
+            field_ic_snapshot: None,
         }
     }
 

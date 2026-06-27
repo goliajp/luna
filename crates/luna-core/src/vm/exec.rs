@@ -6398,6 +6398,47 @@ impl Vm {
                             }
                         }
                     }
+                    // v2.1 Phase 1I.B — capture FieldIcSnapshot for the
+                    // FIRST eligible Op::GetField site under env-gate
+                    // LUNA_JIT_FIELD_IC=1. "Eligible" means:
+                    //   - R[B] is Value::Table with metatable.is_none()
+                    //   - K[C] is Value::Str
+                    //   - The string key actually occupies a hash slot
+                    //     (so the IC's slot_idx is a real index, not
+                    //     a probe sentinel).
+                    // Once captured, subsequent GetFields skip this
+                    // logic (rec.field_ic_snapshot.is_some() short-
+                    // circuits). Env-OFF short-circuits on the cached
+                    // atomic check inside field_ic_enabled().
+                    if rec.field_ic_snapshot.is_none()
+                        && matches!(inst.op(), crate::vm::isa::Op::GetField)
+                        && crate::jit::trace_types::field_ic_enabled()
+                    {
+                        let b = inst.b();
+                        let c_idx = inst.c() as usize;
+                        let r_b = self.stack[(base + b) as usize];
+                        if let Value::Table(g) = r_b
+                            && g.metatable().is_none()
+                            && c_idx < cl.proto.consts.len()
+                            && let Value::Str(s) = cl.proto.consts[c_idx]
+                        {
+                            let key = Value::Str(s);
+                            let tbl_ref = &*g;
+                            if let Some(slot_idx) = tbl_ref.find_node_idx(key)
+                                && let Some(val) = tbl_ref.node_val_at(slot_idx)
+                            {
+                                let op_idx = rec.ops.len() as u32;
+                                rec.field_ic_snapshot =
+                                    Some(crate::jit::trace_types::FieldIcSnapshot {
+                                        op_idx,
+                                        nodes_len: tbl_ref.nodes_capacity() as u64,
+                                        slot_idx: slot_idx as u64,
+                                        key_ptr_bits: s.as_ptr() as u64,
+                                        cached_val_tag: val.tag_byte(),
+                                    });
+                            }
+                        }
+                    }
                     if !rec.push(op) {
                         // v2.0 Track-R R2 — recorder overflow
                         // (MAX_TRACE_LEN). Pre-R2 this site bumped
