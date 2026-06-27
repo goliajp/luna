@@ -5751,6 +5751,14 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     _ => unreachable!("pre-emit gates Int / Float consts"),
                 };
+                // v2.1 Path D Phase 1F sub-2A dual-write (Op::LoadK).
+                let (dst_base, dst_off) = current_base_addr(
+                    &mut bcx,
+                    base_var,
+                    (op_offsets[i] as i32).saturating_mul(8),
+                    ins.a() as u32,
+                );
+                bcx.ins().store(MemFlags::trusted(), v, dst_base, dst_off);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = k;
             }
