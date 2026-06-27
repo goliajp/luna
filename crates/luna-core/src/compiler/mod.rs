@@ -60,6 +60,50 @@ pub fn compile_chunk(
     Ok(c.heap.adopt_proto(lvl.into_proto(source, 0, 0)))
 }
 
+/// Diagnostic version of [`compile_chunk`] that also returns the main
+/// proto's final `last_target` value (the highest pc recorded as a jump
+/// destination — PUC `fs->lasttarget` equivalent). Used by the A4'''
+/// jump-target tracker prereq unit tests at
+/// `crates/luna-core/tests/a4_triple_prime_jump_target.rs`.
+///
+/// This entry point is intentionally separate from `compile_chunk` so
+/// production callers do not pay the destructure cost; it exists purely
+/// to expose the tracker subsystem for verification.
+pub fn compile_chunk_with_last_target(
+    ast: &Chunk,
+    version: LuaVersion,
+    source_name: &[u8],
+    heap: &mut Heap,
+) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
+    let source = heap.intern(source_name);
+    let mut c = Compiler {
+        ast,
+        heap,
+        version,
+        source,
+        levels: Vec::new(),
+        last_line: 0,
+        force_line: None,
+        str_cache: HashMap::new(),
+    };
+    let mut main = Level::new(0, true, 0);
+    main.upvals.push(UpvalDesc {
+        in_stack: false,
+        index: 0,
+        name: "_ENV".into(),
+        read_only: false,
+    });
+    c.levels.push(main);
+    c.enter_block(false);
+    c.stat_block(&ast.block)?;
+    c.leave_block()?;
+    c.last_line = ast.end_line;
+    c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
+    let lvl = c.levels.pop().expect("main level");
+    let last_target = lvl.last_target;
+    Ok((c.heap.adopt_proto(lvl.into_proto(source, 0, 0)), last_target))
+}
+
 const MAX_REGS: u32 = 254;
 /// PUC `LUAI_MAXUPVAL`: the per-function upvalue cap. 5.1 set this to 60;
 /// 5.2+ raised it to 255 because the bytecode encoding gained the room.
