@@ -142,13 +142,24 @@ fn via_cache(
     cached.to_compile_result()
 }
 
-/// Phase 1K.D.7 — accept `[(LoadNil | LoadK | Move)*, Return0, ...]`.
+/// Phase 1K.D.7 / 1K.E.7 — accept
+/// `[(LoadNil | LoadK | Move | LoadFalse | LoadTrue)*, Return0, ...]`.
 ///
-/// The dead-locals path eats *any* `LoadK` (including string / bool /
-/// nil constants) because the chunk's locals are unobservable at the
-/// `Return0` boundary. The trailing implicit `Return0` the parser
-/// emits after a `Return1` is not relevant here — we only fire on a
-/// chunk whose *first* reachable return is `Return0`.
+/// The dead-locals path eats every load op whose effect is invisible
+/// at the `Return0` boundary, regardless of what value the load
+/// produces — strings, booleans, nils, and any LoadK constant kind
+/// all qualify because the chunk returns no value. The trailing
+/// implicit `Return0` the parser emits after a `Return1` is not
+/// relevant here — we only fire on a chunk whose *first* reachable
+/// return is `Return0`.
+///
+/// `LoadFalse` / `LoadTrue` are accepted on the dead-locals path
+/// **only**; the compute path needs a dispatcher widening
+/// (`ret_is_bool` bit) before `return true` / `return false` can
+/// flow through the JIT-entry → caller contract without misreading
+/// the i64 as an integer. That widening is part of a future
+/// sub-phase (paired with `LoadF` / float-return support); until
+/// then a chunk like `return true` falls through to the interpreter.
 fn is_dead_locals_then_return0(code: &[Inst]) -> bool {
     let Some(first_ret_pc) = code
         .iter()
@@ -159,9 +170,12 @@ fn is_dead_locals_then_return0(code: &[Inst]) -> bool {
     if code[first_ret_pc].op() != Op::Return0 {
         return false;
     }
-    code[..first_ret_pc]
-        .iter()
-        .all(|i| matches!(i.op(), Op::LoadNil | Op::LoadK | Op::Move))
+    code[..first_ret_pc].iter().all(|i| {
+        matches!(
+            i.op(),
+            Op::LoadNil | Op::LoadK | Op::Move | Op::LoadFalse | Op::LoadTrue
+        )
+    })
 }
 
 /// Phase 1K.E.2+ — whitelisted op set + control-flow plan that the
