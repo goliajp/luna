@@ -999,7 +999,7 @@ pub mod aot_inline_chain_resolver {
                         nresults,
                     });
                 }
-                let rc: std::rc::Rc<[FrameMaterializeInfo]> = vec.into();
+                let rc: luna_core::jit::send_compat::TArc<[FrameMaterializeInfo]> = vec.into();
                 // `Rc<[T]>::as_ptr` returns a fat `*const [T]`; the
                 // first-element address is what the IR's
                 // `luna_jit_trace_materialize_frames` consumes. For a
@@ -1255,15 +1255,15 @@ pub mod aot_trace_registry {
                     }
                     continue;
                 }
-                let entry_tags_rc: std::rc::Rc<[u8]> = decoded.entry_tags.into();
-                let exit_tags_rc: std::rc::Rc<[ExitTag]> = exit_tags_vec.into();
+                let entry_tags_rc: luna_core::jit::send_compat::TArc<[u8]> = decoded.entry_tags.into();
+                let exit_tags_rc: luna_core::jit::send_compat::TArc<[ExitTag]> = exit_tags_vec.into();
                 // v2 per_exit_tags decode: reconstruct
                 // `Vec<(cont_pc, Rc<[ExitTag]>)>` matching the
                 // dispatcher's `decode_exit_shape` shape lookup. Each
                 // entry's packed-byte `ExitTag` array unpacks via
                 // [`unpack_exit_tag`]; an invalid byte = skip the
                 // whole trace (matches the existing exit-tag handling).
-                let mut per_exit_tags_decoded: Vec<(u32, std::rc::Rc<[ExitTag]>)> =
+                let mut per_exit_tags_decoded: Vec<(u32, luna_core::jit::send_compat::TArc<[ExitTag]>)> =
                     Vec::with_capacity(decoded.per_exit_tags.len());
                 let mut per_exit_tags_ok = true;
                 for ent in &decoded.per_exit_tags {
@@ -1346,7 +1346,7 @@ pub mod aot_trace_registry {
                         head_resume_pc: ent.head_resume_pc,
                         exit_tags: tags.into(),
                         chain: chain_vec.into(),
-                        side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
+                        side_trace_ptr: Box::new(luna_core::jit::send_compat::TCellPtr::null()),
                     });
                 }
                 if !inline_ok {

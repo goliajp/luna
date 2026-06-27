@@ -464,7 +464,7 @@ fn read_function(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
-        traces: std::cell::RefCell::new(Vec::new()),
+        traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
     }))
 }
 

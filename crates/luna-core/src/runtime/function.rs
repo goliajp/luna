@@ -366,7 +366,9 @@ pub struct Proto {
     /// back-edge target visit. `RefCell` because compile is invoked
     /// from inside `Vm::run` and may need to push while another op
     /// is mid-dispatch in the same Proto. Empty `Vec` until S2 lands.
-    pub traces: std::cell::RefCell<Vec<std::rc::Rc<crate::jit::trace::CompiledTrace>>>,
+    pub traces: crate::jit::send_compat::TRefLock<
+        Vec<crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>>,
+    >,
 }
 
 /// P11-S2 / S2c — per-Proto JIT cache state. Copy so it fits a plain
