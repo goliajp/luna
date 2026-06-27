@@ -3119,7 +3119,6 @@ pub fn try_compile_trace(
     try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
-
 // P13-S13-G v2.6 — last-checkpoint instrumentation for trace
 // compile failure diagnosis. `try_compile_trace_with_options`
 // updates the thread-local at each major phase; if the function
@@ -6539,8 +6538,7 @@ pub fn lower_trace_into_named<M: Module>(
                         t,
                         super::TABLE_NODES_LEN_OFFSET as i32,
                     );
-                    let nodes_len_imm =
-                        bcx.ins().iconst(types::I64, snap.nodes_len as i64);
+                    let nodes_len_imm = bcx.ins().iconst(types::I64, snap.nodes_len as i64);
                     let len_ok = bcx.ins().icmp(IntCC::Equal, nodes_len, nodes_len_imm);
                     let guards_12 = bcx.ins().band(mt_ok, len_ok);
 
@@ -6565,8 +6563,7 @@ pub fn lower_trace_into_named<M: Module>(
                         t,
                         super::TABLE_NODES_PTR_OFFSET as i32,
                     );
-                    let node_offset =
-                        (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
+                    let node_offset = (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
                     let node_addr = bcx.ins().iadd_imm(nodes_ptr, node_offset);
 
                     let key_raw = bcx.ins().load(
@@ -6575,8 +6572,7 @@ pub fn lower_trace_into_named<M: Module>(
                         node_addr,
                         super::NODE_KEY_RAW_OFFSET as i32,
                     );
-                    let key_imm =
-                        bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
+                    let key_imm = bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
                     let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
 
                     let val_tag_i8 = bcx.ins().load(
@@ -6586,8 +6582,7 @@ pub fn lower_trace_into_named<M: Module>(
                         super::NODE_VAL_TAG_OFFSET as i32,
                     );
                     let val_tag = bcx.ins().uextend(types::I64, val_tag_i8);
-                    let tag_imm =
-                        bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
+                    let tag_imm = bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
                     let tag_ok = bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
                     let guards_34 = bcx.ins().band(key_ok, tag_ok);
 
@@ -6607,8 +6602,7 @@ pub fn lower_trace_into_named<M: Module>(
                     // --- slow: fall back to existing helper ---
                     bcx.switch_to_block(slow_blk);
                     bcx.seal_block(slow_blk);
-                    let func_ref =
-                        module.declare_func_in_func(get_field_id, bcx.func);
+                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
                     let call = bcx.ins().call(func_ref, &[t, key_arg]);
                     let v_slow = bcx.inst_results(call)[0];
                     bcx.ins().jump(merge_blk, &[v_slow.into()]);
