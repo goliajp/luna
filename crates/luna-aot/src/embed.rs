@@ -1765,6 +1765,12 @@ fn harvest_and_emit_aot_traces(
         },
     );
     vm.set_trace_jit_enabled(true);
+    // Chunk JIT short-circuits recursive `Op::Call` at exec.rs:1567 before
+    // push_frame, hiding the helper body from the trace recorder and
+    // suppressing the Stage 7 polish 6 inline side-exit chain. Trace JIT
+    // subsumes chunk JIT's coverage and adds the inline-side-exit support
+    // chunk JIT lacks entirely, so harvest skips chunk JIT.
+    vm.set_jit_enabled(false);
     vm.set_bytecode_loading(true);
 
     // Load + call the root closure. Errors here are **non-fatal** —
