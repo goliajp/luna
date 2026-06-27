@@ -194,6 +194,18 @@ pub struct Vm {
     /// (Phase LB Wave 2 — currently returns "not yet implemented" stubs).
     /// Embedder toggles via `set_puc_bytecode_loading`.
     pub(crate) puc_bytecode_loading: bool,
+    /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`.
+    /// Default [`Vm::DEFAULT_LOADER_INPUT_BUDGET`] (256 MiB). When the
+    /// accumulated reader output (`load(f, ...)`) or a one-shot `&[u8]`
+    /// source exceeds this, the loader returns the PUC-shaped
+    /// `not enough memory` error before the host allocator is asked to
+    /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
+    /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
+    /// crosses `isize::MAX` or the host runs out of RAM. Tracked at
+    /// `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
+    /// Embedders that genuinely need to load > 256 MiB sources widen the
+    /// cap via [`Vm::set_loader_input_budget`].
+    pub(crate) loader_input_budget: usize,
     /// In-process log of fully-emitted warnings (each entry = one flushed
     /// message, sans the "Lua warning: " prefix and trailing newline). Lets
     /// tests assert what was warned without scraping stderr.
@@ -924,6 +936,7 @@ impl Vm {
             instr_budget: None,
             bytecode_loading: true,
             puc_bytecode_loading: false,
+            loader_input_budget: Vm::DEFAULT_LOADER_INPUT_BUDGET,
             registry: None,
             file_mt: None,
             io_input: None,
@@ -1290,6 +1303,18 @@ impl Vm {
 
     /// Parse + compile a chunk and close it over the globals table.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
+        // Reject oversize input *before* handing the parser/lexer a
+        // potentially multi-GB slice. The PUC-shaped `not enough memory`
+        // message keeps `heavy.lua::loadrep` compatibility: that test
+        // accepts either `string length overflow` or `not enough memory`
+        // as the failure mode for a feeder loop that outruns the host
+        // allocator. See `set_loader_input_budget`.
+        if src.len() > self.loader_input_budget {
+            return Err(SyntaxError {
+                line: 0,
+                msg: b"not enough memory".to_vec(),
+            });
+        }
         // a precompiled (binary) chunk is undumped; source is parsed + compiled
         let is_bytecode = crate::vm::dump::is_binary_chunk(src);
         if is_bytecode && !self.bytecode_loading {
@@ -3645,6 +3670,27 @@ impl Vm {
     /// Current PUC bytecode-loading gate state.
     pub fn puc_bytecode_loading(&self) -> bool {
         self.puc_bytecode_loading
+    }
+
+    /// Default loader input budget — 256 MiB.
+    ///
+    /// `Vm::load` and the Lua-level `load(reader, ...)` both refuse
+    /// sources whose byte length crosses this cap, returning the
+    /// PUC-shaped `not enough memory` error rather than letting the
+    /// host allocator try (and crash) to hold the next chunk.
+    pub const DEFAULT_LOADER_INPUT_BUDGET: usize = 256 * 1024 * 1024;
+
+    /// Set the loader input byte budget (see
+    /// [`Vm::DEFAULT_LOADER_INPUT_BUDGET`]). Pass `usize::MAX` to
+    /// effectively disable. Smaller caps are honored verbatim — a 0
+    /// cap rejects every non-empty source.
+    pub fn set_loader_input_budget(&mut self, bytes: usize) {
+        self.loader_input_budget = bytes;
+    }
+
+    /// Current loader input byte budget.
+    pub fn loader_input_budget(&self) -> usize {
+        self.loader_input_budget
     }
 
     /// Take the error traceback captured at the latest error point and
