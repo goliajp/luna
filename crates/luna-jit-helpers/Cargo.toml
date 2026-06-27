@@ -1,6 +1,6 @@
 [package]
 name = "luna-jit-helpers"
-description = "Shared `luna_jit_*` extern-C runtime helpers + per-thread JIT_VM/JIT_CL TLS slots + `enter_jit` RAII rebind. Used by both `luna-jit` (Cranelift) and `luna-jit-llvm` (v2.1 alt backend) so the helper symbol table and TLS discipline stay single-source-of-truth across JIT backends. Internal infrastructure crate; not a public embedder surface."
+description = "Shared `luna_jit_*` extern-C runtime helpers + per-thread JIT_VM/JIT_CL TLS slots + `enter_jit` RAII rebind for the goliajp/luna Lua runtime. Used by both `luna-jit` (Cranelift backend) and `luna-jit-llvm` (LLVM alt backend) so the helper symbol table and TLS discipline stay single-source-of-truth across JIT backends. Internal infrastructure crate — embedders should depend on `luna-jit`, not this crate directly."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-publish = false
+readme = "../../README.md"
 
 [lints]
 workspace = true
@@ -20,4 +20,9 @@ workspace = true
 # `pub use` them. The 0-third-party-dep contract on luna-core is
 # unaffected because luna-jit-helpers is downstream of luna-core, not
 # upstream.
-luna-core = { path = "../luna-core", version = "= 1.3.0" }
+#
+# `version = "= 2.1.0"` pin matches the workspace version so the
+# crates.io resolver picks the exact matching luna-core release when
+# embedders bypass the `path` fallback (i.e. when this crate is pulled
+# transitively from a published luna-jit).
+luna-core = { path = "../luna-core", version = "= 2.1.0" }
