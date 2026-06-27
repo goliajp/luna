@@ -3179,6 +3179,24 @@ impl Vm {
         self.jit.counters.closure_emit
     }
 
+    /// v2.0 Stage 7 polish 6 fire experiment — see
+    /// [`crate::vm::jit_state::JitCounters::per_exit_inline_compiled`].
+    /// Number of compiled traces whose `per_exit_inline.len() > 0`
+    /// (depth>0 inlined cmp side-exits emitted).
+    pub fn trace_per_exit_inline_compiled_count(&self) -> u64 {
+        self.jit.counters.per_exit_inline_compiled
+    }
+
+    /// v2.0 Stage 7 polish 6 fire experiment — see
+    /// [`crate::vm::jit_state::JitCounters::per_exit_inline_dispatchable`].
+    /// Number of compiled traces with `per_exit_inline.len() > 0` AND
+    /// `dispatchable == true` — i.e. the count of compiled traces
+    /// that would actually exercise the AOT polish 6 chain-reloc +
+    /// deploy-resolver path.
+    pub fn trace_per_exit_inline_dispatchable_count(&self) -> u64 {
+        self.jit.counters.per_exit_inline_dispatchable
+    }
+
     /// P12-S4-step1 diagnostic — max `inline_depth` ever seen on any
     /// `RecordedOp` pushed by the recorder. Tells tests + tuning
     /// whether a self-recursive function actually walked the depth
@@ -6017,6 +6035,25 @@ impl Vm {
                                     self.jit.counters.closure_emit += ct.closure_seen as u64;
                                     if ct.is_inline_abort_close {
                                         self.jit.counters.inline_abort += 1;
+                                    }
+                                    // v2.0 Stage 7 polish 6 fire
+                                    // experiment — split tally so a
+                                    // probe can answer the AOT
+                                    // `accepted_with_per_exit_inline`
+                                    // gate's question at the JIT
+                                    // surface too: how many compiled
+                                    // traces emitted depth>0 cmp
+                                    // side-exits, and how many of
+                                    // those survived all the
+                                    // `dispatchable = false` pins
+                                    // (`InlineAbort-gate`,
+                                    // `self-link-retf-r1`,
+                                    // `downrec-stitch-pending`, etc.).
+                                    if !ct.per_exit_inline.is_empty() {
+                                        self.jit.counters.per_exit_inline_compiled += 1;
+                                        if ct.dispatchable {
+                                            self.jit.counters.per_exit_inline_dispatchable += 1;
+                                        }
                                     }
                                     if let Some(reason) = ct.dispatch_off_reason {
                                         self.jit.counters.dispatch_off_reasons.push(reason);
