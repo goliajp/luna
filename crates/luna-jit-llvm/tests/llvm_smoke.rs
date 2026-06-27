@@ -727,6 +727,78 @@ fn branchy_chunk_else_path() {
     assert_eq!(unsafe { entry_fn() }, 19);
 }
 
+/// v2.1 Phase 1K.E.7 — dead-locals `local b = true` compiles
+/// (`LoadTrue + Return0`).
+#[test]
+fn dead_locals_load_true_then_return0() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local b = true", b"=load_true_dead")
+        .expect("compile");
+    let proto = closure.proto;
+    assert!(proto.code.iter().any(|i| i.op() == Op::LoadTrue));
+    assert_eq!(proto.code.last().map(|i| i.op()), Some(Op::Return0));
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let result = backend.try_compile(&mut storage, proto, false, false);
+    let CompileResult::Compiled {
+        entry, returns_one, ..
+    } = result
+    else {
+        panic!("Phase 1K.E.7 dead-locals LoadTrue chunk must compile; got {result:?}");
+    };
+    assert!(!returns_one, "Return0 chunks report returns_one=false");
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    // The chunk's `b = true` is dead at Return0; entry returns 0.
+    assert_eq!(unsafe { entry_fn() }, 0);
+}
+
+/// v2.1 Phase 1K.E.7 — dead-locals `local b = false`.
+#[test]
+fn dead_locals_load_false_then_return0() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local b = false", b"=load_false_dead")
+        .expect("compile");
+    let proto = closure.proto;
+    assert!(proto.code.iter().any(|i| i.op() == Op::LoadFalse));
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.7 dead-locals LoadFalse chunk must compile");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    assert_eq!(unsafe { entry_fn() }, 0);
+}
+
+/// v2.1 Phase 1K.E.7 — `return true` is **out of scope** until the
+/// dispatcher contract grows a `ret_is_bool` bit. The chunk must
+/// bail rather than mis-encoding `true` as `i64(1)` (the dispatcher
+/// would interpret that as `Value::Int(1)`).
+#[test]
+fn return_true_bails_until_bool_ret_widening() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm.load(b"return true", b"=return_true").expect("compile");
+    let proto = closure.proto;
+    assert!(proto.code.iter().any(|i| i.op() == Op::LoadTrue));
+    assert!(proto.code.iter().any(|i| i.op() == Op::Return1));
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let result = backend.try_compile(&mut storage, proto, false, false);
+    assert!(
+        matches!(result, CompileResult::Skipped),
+        "Op::LoadTrue + Return1 must bail until dispatcher widening \
+         (got {result:?})",
+    );
+}
+
 /// v2.1 Phase 1K.E.2 — `Move`-through-the-return-slot smoke.
 ///
 /// `local x = 9; return x` compiles to `[LoadI(R0,9), Return1(R0)]`
