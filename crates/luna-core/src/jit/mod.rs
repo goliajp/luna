@@ -43,6 +43,14 @@ pub use abi::{
 mod storage;
 pub use storage::{JitStorage, NullJitStorage};
 
+// v2.1 Track J-C — cfg-gated Send-friendly aliases & wrappers for
+// the trace IR interior-mutability types. Default-feature path is
+// 0-cost (`Rc` / `Cell` / `RefCell`); `feature = "send"` flips to
+// `Arc` / `AtomicU32` / `AtomicBool` / `AtomicPtr<u8>` / `RwLock` so
+// `CompiledTrace` + `Proto::traces` become structurally Send + Sync.
+pub mod send_compat;
+pub use send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
+
 // Compatibility re-export so external `use luna::jit::trace::*` paths
 // (and the historical `crate::jit::trace::*` accesses inside this
 // crate) keep resolving even after Session C's physical split. In
