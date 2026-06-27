@@ -7957,7 +7957,28 @@ pub fn lower_trace_into_named<M: Module>(
             ctx.func.display()
         );
     }
+    // v2.1 Phase 1I.D — `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
+    // emit the post-regalloc machine-code disassembly (vcode) and dumps
+    // it to stderr after `define_function`. Used for the cargo-asm
+    // decomposition of the table-field IC under env-OFF vs env-ON.
+    let want_asm_dump = std::env::var("LUNA_TRACE_ASM_DUMP")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if want_asm_dump {
+        ctx.set_disasm(true);
+    }
     module.define_function(fn_id, &mut ctx).ok()?;
+    if want_asm_dump
+        && let Some(cc) = ctx.compiled_code()
+        && let Some(vcode) = cc.vcode.as_ref()
+    {
+        eprintln!(
+            "=== TRACE ASM DUMP head_pc={} n_recorded_ops={} ===\n{}\n=== END ===",
+            record.head_pc,
+            record.ops.len(),
+            vcode
+        );
+    }
     module.clear_context(&mut ctx);
     // v1.3 Phase AOT Stage 3 — module finalization is the JIT-specific
     // wrapper's job (see [`try_compile_trace_with_options`]). The
