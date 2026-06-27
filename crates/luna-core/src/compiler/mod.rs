@@ -467,10 +467,9 @@ impl<'a> Compiler<'a> {
     /// been emitted yet (vacuous), or when the just-emitted pc is itself a
     /// recorded jump destination.
     ///
-    /// Currently unused at codegen sites — exposed so the deferred A4'''
-    /// Reloc-landing attack (see `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md`
-    /// §4) can wire its gate without touching the tracker subsystem again.
-    #[allow(dead_code)]
+    /// Consumed by the A4''' Reloc-landing peephole at `assign_name` (see
+    /// `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4) and the A4'' single-
+    /// RHS materialization elision at `assign_stat`.
     fn prev_emit_is_safe_peephole_site(&self) -> bool {
         let here = self.here();
         if here == 0 {
@@ -480,6 +479,37 @@ impl<'a> Compiler<'a> {
             None => true,
             Some(t) => t < here - 1,
         }
+    }
+
+    /// A4''' Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
+    /// instruction at `here() - 1` is a retargetable producer whose A field
+    /// equals `vreg` AND that pc is NOT a jump destination. The caller can
+    /// then `patch_dest(prev_pc, local_reg)` to retarget the A field
+    /// directly and skip the otherwise-required `Move local_reg, vreg`.
+    ///
+    /// The "retargetable producer" set is the closed list of ops produced
+    /// by paths that yield `Exp::Reloc(pc)`: arith / bitwise / unop / Len /
+    /// Get{Field,I,Table,TabUp}. Concat / SelfOp / Move are NOT in the set
+    /// (Concat reads A as operand base, SelfOp writes A+1 too, Move's A is
+    /// a sink). LoadK / LoadI / LoadF / LoadNil are excluded because they
+    /// are already discharged to their final register by `exp_to_reg` —
+    /// no Reloc landing happens through assign_name for them.
+    ///
+    /// See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4 and
+    /// `.dev/rfcs/v2.1-a4-triple-prime-prereq-verdict.md` §4.2.
+    fn assign_name_can_retarget_reloc(&self, vreg: u32) -> Option<usize> {
+        if !self.prev_emit_is_safe_peephole_site() {
+            return None;
+        }
+        let prev_pc = self.here() - 1;
+        let prev = self.lr().code[prev_pc];
+        if !is_retargetable_op(prev.op()) {
+            return None;
+        }
+        if prev.a() != vreg {
+            return None;
+        }
+        Some(prev_pc)
     }
 
     /// PUC `errorlimit`: render the "too many … (limit is …) in <where>"
@@ -2729,7 +2759,18 @@ impl<'a> Compiler<'a> {
                     ));
                 }
                 if reg != vreg {
-                    self.emit(Inst::iabc(Op::Move, reg, vreg, 0, false));
+                    // A4''' Reloc-landing peephole: when the just-emitted
+                    // instruction is a retargetable producer (Add / GetField
+                    // / Unm / Len / etc.) that wrote into `vreg` and is not
+                    // itself a jump destination, retarget its A field to
+                    // `reg` and skip the Move. Mirrors PUC `discharge2reg`'s
+                    // A-field rewrite at lcode.c:luaK_dischargevars / setoneret.
+                    // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4.
+                    if let Some(prev_pc) = self.assign_name_can_retarget_reloc(vreg) {
+                        self.patch_dest(prev_pc, reg);
+                    } else {
+                        self.emit(Inst::iabc(Op::Move, reg, vreg, 0, false));
+                    }
                 }
                 Ok(())
             }
@@ -3283,4 +3324,60 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
         Int(i) => Exp::Int(i),
         Float(f) => Exp::Float(f),
     })
+}
+
+/// Closed set of opcodes whose A field is a pure destination produced by an
+/// `Exp::Reloc(pc)` discharge. The A4''' Reloc-landing peephole at
+/// `assign_name` retargets one of these in place to a local register, skipping
+/// the otherwise-required Move. The set is hand-derived from every `arith` /
+/// `unop` / `index_expr` / `global_access` / `name_expr` (upvalue path) call
+/// site that yields `Exp::Reloc(pc)`.
+///
+/// Excluded opcodes and why:
+///   - `Concat`: `R[A] := R[A] .. ... .. R[A+B-1]` — A is the operand range
+///     base, retargeting would reread from a different start.
+///   - `SelfOp`: writes both `R[A+1]` (object copy) and `R[A]` (method
+///     handle); A is part of a pair, not a free destination.
+///   - `Move` / `LoadK` / `LoadI` / `LoadF` / `LoadNil` / `LoadTrue` /
+///     `LoadFalse` / `LFalseSkip`: discharged to their final register
+///     directly by `exp_to_reg`'s typed arms, so a Move-from-temp shape
+///     never appears for them.
+///   - `Closure`: also a Reloc-bearing producer (`exp_to_reg` patches its
+///     A via `patch_dest`). Retargeting Closure's A is semantically fine
+///     (the prototype index sits in Bx, not A) and PUC `discharge2reg`
+///     handles it identically — included.
+///   - `NewTable`: same shape as Closure (A is destination, Bx carries
+///     hash/array hints) — included.
+///   - `GetUpval`: A is destination, B is upvalue idx — included.
+///   - `Not`: `R[A] := not R[B]` — A is destination — included.
+///   - Comparison / call / store ops are never produced via Exp::Reloc
+///     in luna's compiler (`Cmp`-shape goes through `Exp::Cmp`, calls via
+///     `Exp::Open`, stores never become a "value" expression).
+fn is_retargetable_op(op: Op) -> bool {
+    use Op::*;
+    matches!(
+        op,
+        Add | Sub
+            | Mul
+            | Mod
+            | Pow
+            | Div
+            | IDiv
+            | BAnd
+            | BOr
+            | BXor
+            | Shl
+            | Shr
+            | Unm
+            | BNot
+            | Not
+            | Len
+            | GetUpval
+            | GetTabUp
+            | GetTable
+            | GetI
+            | GetField
+            | NewTable
+            | Closure
+    )
 }
