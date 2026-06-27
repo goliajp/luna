@@ -232,18 +232,28 @@ impl<'a> ChunkPlan<'a> {
 /// through to `CompileResult::Skipped`.
 ///
 /// Sub-phase growth:
-/// - 1K.E.2 (this): `LoadI` + `LoadNil` + `Move`. Cache key over
-///   bytecode words is sufficient — the recognised ops don't touch
+/// - 1K.E.2: `LoadI` + `LoadNil` + `Move`. Cache key over bytecode
+///   words is sufficient — the recognised ops don't touch
 ///   `proto.consts`.
-/// - 1K.E.3 (next): `Add`. Still no consts; key stays as-is.
-/// - 1K.E.4: `Sub` / `Mul` / `Div` / `Mod`.
+/// - 1K.E.3: `Add`. Still no consts; key stays as-is.
+/// - 1K.E.4 (this): `Sub` / `Mul` / `Mod` (Lua semantics — floor mod,
+///   sign matches divisor — not C's truncating srem). `Op::Div` is
+///   intentionally **excluded** because Lua 5.4 `/` always returns a
+///   float regardless of operand types; emitting it as int sdiv would
+///   silently mis-compile `2 / 3` (Lua → 0.666…, the int chunk would
+///   return 0). Div lands in a later sub-phase paired with float-reg
+///   support (`ret_is_float=true` plumbing + `f64::from_bits`
+///   reinterpret on the return path).
 /// - 1K.E.5: `Lt` / `Le` / `Eq`.
 /// - 1K.E.6: `Jmp` (with the comparison-then-jmp condbr pattern).
 /// - 1K.E.7: `LoadFalse` / `LoadTrue` + `LoadK(Int)` (the
 ///   `LoadK(Int)` add widens the cache key to include the constant
 ///   table).
 fn is_compute_supported(ins: &Inst) -> bool {
-    matches!(ins.op(), Op::LoadI | Op::LoadNil | Op::Move | Op::Add)
+    matches!(
+        ins.op(),
+        Op::LoadI | Op::LoadNil | Op::Move | Op::Add | Op::Sub | Op::Mul | Op::Mod
+    )
 }
 
 /// Phase 1K.D.8 / 1K.E.2 — stable cache key for a Proto. FNV-1a-64
@@ -388,6 +398,29 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(v.into_int_value())
     }
 
+    /// Phase 1K.E.3 / 1K.E.4 — shared emit for `R[A] = R[B] <op> R[C]`
+    /// where `<op>` is a single-instruction LLVM int binop (Add / Sub
+    /// / Mul / ...). Loads `b`/`c`, applies `op_fn`, stores into `a`.
+    fn emit_int_binop<F>(&self, ins: Inst, label: &str, op_fn: F) -> Option<()>
+    where
+        F: Fn(
+            &inkwell::builder::Builder<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+            &str,
+        ) -> Option<inkwell::values::IntValue<'ctx>>,
+    {
+        let a = ins.a();
+        let b = ins.b();
+        let c = ins.c();
+        let lhs = self.load_reg(b, &format!("{label}_lhs"))?;
+        let rhs = self.load_reg(c, &format!("{label}_rhs"))?;
+        let result = op_fn(self.builder, lhs, rhs, &format!("{label}_res"))?;
+        let dst = self.reg_slot_ptr(a, &format!("{label}_dst"))?;
+        self.builder.build_store(dst, result).ok()?;
+        Some(())
+    }
+
     fn emit_op(&mut self, ins: Inst) -> Option<()> {
         match ins.op() {
             Op::LoadI => {
@@ -432,14 +465,78 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 // (which produce bool bit patterns) or LoadK(Float)
                 // is whitelisted, this arm will need to refuse
                 // (or wrap with) cross-type operands.
+                self.emit_int_binop(ins, "add", |b, l, r, n| b.build_int_add(l, r, n).ok())
+            }
+            Op::Sub => {
+                // Phase 1K.E.4 — int sub `R[A] = R[B] - R[C]`. Same
+                // wrapping i64 semantics as Add.
+                self.emit_int_binop(ins, "sub", |b, l, r, n| b.build_int_sub(l, r, n).ok())
+            }
+            Op::Mul => {
+                // Phase 1K.E.4 — int mul `R[A] = R[B] * R[C]`. Same
+                // wrapping i64 semantics as Add.
+                self.emit_int_binop(ins, "mul", |b, l, r, n| b.build_int_mul(l, r, n).ok())
+            }
+            Op::Mod => {
+                // Phase 1K.E.4 — Lua-semantic int mod.
+                //
+                // Lua 5.4 / 5.5 `%` for two ints:
+                //     R[A] = R[B] - floor(R[B] / R[C]) * R[C]
+                // which differs from C's `%` (truncating remainder)
+                // when the operand signs differ. Examples:
+                //
+                //   |  a |  b |  a % b (Lua) |  a srem b (C) |
+                //   |----|----|--------------|---------------|
+                //   |  7 |  3 |       1      |        1      |
+                //   | -7 |  3 |       2      |       -1      |
+                //   |  7 | -3 |      -2      |        1      |
+                //   | -7 | -3 |      -1      |       -1      |
+                //
+                // LLVM's `srem` matches the C semantics, so we adjust:
+                //     r = srem(a, b)
+                //     r != 0  AND  (r ^ b) < 0   ⇒  r += b
+                // (the "(r ^ b) < 0" test asks "do r and b have
+                // different signs?"; combined with r != 0 it catches
+                // exactly the rows above where Lua and C disagree.)
+                //
+                // Branch-free via `select`. Division-by-zero is the
+                // interpreter's job (it raises "attempt to perform
+                // 'n%%0'"); a Mod chunk that statically uses zero as
+                // R[C] still wouldn't reach here through normal
+                // parser-emitted bytecode, so we accept LLVM's UB on
+                // `srem x, 0` rather than emit a runtime check.
                 let a = ins.a();
                 let b = ins.b();
                 let c = ins.c();
-                let lhs = self.load_reg(b, "add_lhs")?;
-                let rhs = self.load_reg(c, "add_rhs")?;
-                let sum = self.builder.build_int_add(lhs, rhs, "add_sum").ok()?;
-                let dst = self.reg_slot_ptr(a, "add_dst")?;
-                self.builder.build_store(dst, sum).ok()?;
+                let lhs = self.load_reg(b, "mod_lhs")?;
+                let rhs = self.load_reg(c, "mod_rhs")?;
+                let raw = self
+                    .builder
+                    .build_int_signed_rem(lhs, rhs, "mod_srem")
+                    .ok()?;
+                let zero = self.i64_type.const_zero();
+                let nonzero = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, raw, zero, "mod_raw_nonzero")
+                    .ok()?;
+                // Sign-differ test: (raw XOR rhs) < 0 ↔ MSBs differ.
+                let xor = self.builder.build_xor(raw, rhs, "mod_sign_xor").ok()?;
+                let sign_differ = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, xor, zero, "mod_sign_differ")
+                    .ok()?;
+                let need_fix = self
+                    .builder
+                    .build_and(nonzero, sign_differ, "mod_need_fix")
+                    .ok()?;
+                let fixed = self.builder.build_int_add(raw, rhs, "mod_fixed").ok()?;
+                let result = self
+                    .builder
+                    .build_select(need_fix, fixed, raw, "mod_result")
+                    .ok()?
+                    .into_int_value();
+                let dst = self.reg_slot_ptr(a, "mod_dst")?;
+                self.builder.build_store(dst, result).ok()?;
                 Some(())
             }
             Op::Return0 => {

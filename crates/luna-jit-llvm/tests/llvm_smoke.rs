@@ -381,6 +381,143 @@ fn add_negative_and_positive() {
     assert_eq!(returned, -6);
 }
 
+/// v2.1 Phase 1K.E.4 — int Sub / Mul smoke.
+#[test]
+fn sub_two_loaded_ints() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = 7; local y = 5; return x - y", b"=sub_xy")
+        .expect("compile");
+    let proto = closure.proto;
+    assert!(proto.code.iter().any(|i| i.op() == Op::Sub));
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.4 must compile the Sub chunk");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    assert_eq!(unsafe { entry_fn() }, 2);
+}
+
+#[test]
+fn mul_two_loaded_ints() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = 6; local y = 7; return x * y", b"=mul_xy")
+        .expect("compile");
+    let proto = closure.proto;
+    assert!(proto.code.iter().any(|i| i.op() == Op::Mul));
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.4 must compile the Mul chunk");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    assert_eq!(unsafe { entry_fn() }, 42);
+}
+
+/// v2.1 Phase 1K.E.4 — Lua-semantic Mod, positive operands.
+/// Lua: `17 % 5 == 2`. Matches C srem too.
+#[test]
+fn mod_positive_operands() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = 17; local y = 5; return x % y", b"=mod_pos")
+        .expect("compile");
+    let proto = closure.proto;
+    assert!(proto.code.iter().any(|i| i.op() == Op::Mod));
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.4 must compile the Mod chunk");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    assert_eq!(unsafe { entry_fn() }, 2);
+}
+
+/// v2.1 Phase 1K.E.4 — Lua Mod with cross-sign operands. This is the
+/// case where Lua's floor-mod differs from C's srem. Lua: `(-7) % 3
+/// == 2`, C srem(-7, 3) == -1. The JIT emit's sign-fixup must apply.
+///
+/// Parser-fold-tolerant: if `-7` is parsed as `LoadI(7) + Unm`
+/// (Unm not in the 1K.E.4 whitelist) the chunk falls outside the
+/// recognised shape and the test skips. The bytecode probe at
+/// Phase 1K.E.1 confirmed luna 5.5 emits a direct LoadI(-7).
+#[test]
+fn mod_negative_dividend_lua_semantics() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = -7; local y = 3; return x % y", b"=mod_neg_div")
+        .expect("compile");
+    let proto = closure.proto;
+    let has_neg_loadi = proto
+        .code
+        .iter()
+        .any(|i| i.op() == Op::LoadI && i.sbx() == -7);
+    let has_mod = proto.code.iter().any(|i| i.op() == Op::Mod);
+    if !has_neg_loadi || !has_mod {
+        eprintln!(
+            "[mod_negative_dividend] parser shape differs from \
+             Phase 1K.E.4 target; chunk = {:?}",
+            proto.code
+        );
+        return;
+    }
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.4 must compile the neg-dividend Mod chunk");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    let returned = unsafe { entry_fn() };
+    assert_eq!(
+        returned, 2,
+        "Lua `(-7) %% 3` must equal 2 (floor-mod, sign of divisor); \
+         got {returned} (C srem would be -1)",
+    );
+}
+
+/// v2.1 Phase 1K.E.4 — Div is deliberately NOT in the compute
+/// whitelist (Lua semantics returns float). Confirm the chunk bails
+/// to interpreter rather than being mis-compiled as int sdiv.
+#[test]
+fn div_chunk_bails_until_float_support() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = 8; local y = 3; return x / y", b"=div_xy")
+        .expect("compile");
+    let proto = closure.proto;
+    assert!(
+        proto.code.iter().any(|i| i.op() == Op::Div),
+        "test source must emit a Div op (got {:?})",
+        proto.code
+    );
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let result = backend.try_compile(&mut storage, proto, false, false);
+    assert!(
+        matches!(result, CompileResult::Skipped),
+        "Op::Div must bail until float support lands (got {result:?})",
+    );
+}
+
 /// v2.1 Phase 1K.E.2 — `Move`-through-the-return-slot smoke.
 ///
 /// `local x = 9; return x` compiles to `[LoadI(R0,9), Return1(R0)]`
