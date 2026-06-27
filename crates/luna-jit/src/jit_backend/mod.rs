@@ -275,23 +275,6 @@ pub(crate) enum CacheEntry {
     },
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /// P11-S5d.J — classify every `Op::GetUpval` in `proto` as either the
 /// existing **SelfMarker** role (the loaded value is used only as a
 /// `Op::Call` func slot — S2c.C lowers that as a direct cranelift call
@@ -412,23 +395,6 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
         _ => false,
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /// S4 introspection (test-only): number of *Compiled* entries in
 /// the given Vm's JIT cache (Failed cache slots are excluded so test
