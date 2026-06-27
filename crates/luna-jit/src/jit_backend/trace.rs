@@ -5730,10 +5730,24 @@ pub fn lower_trace_into_named<M: Module>(
                 // target slot, marking current_kinds = Nil so the
                 // exit-tag derivation (kinds_to_exit_tags, S6-A1)
                 // produces ExitTag::Nil for slots the trace touched.
+                //
+                // v2.1 Path D Phase 1F sub-2A dual-write — per-slot
+                // trusted store + def_var. Phase 1C ISLE rule DCEs
+                // the redundant prior stores when a later migrated
+                // arm writes the same slot.
                 let a_us = ins.a() as usize;
                 let b_us = ins.b() as usize;
                 let zero = bcx.ins().iconst(types::I64, 0);
+                let op_off_bytes = (op_offsets[i] as i32).saturating_mul(8);
                 for k in 0..=b_us {
+                    let (dst_base, dst_off) = current_base_addr(
+                        &mut bcx,
+                        base_var,
+                        op_off_bytes,
+                        (a_us + k) as u32,
+                    );
+                    bcx.ins()
+                        .store(MemFlags::trusted(), zero, dst_base, dst_off);
                     bcx.def_var(regs[a_us + k], zero);
                     current_kinds[off + a_us + k] = RegKind::Nil;
                 }
