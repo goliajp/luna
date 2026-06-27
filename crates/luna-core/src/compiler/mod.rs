@@ -2711,23 +2711,21 @@ impl<'a> Compiler<'a> {
         // Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
         // so a jump landing at the Move's pc is preserved.
         // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §3.
-        let alt_vreg = if targets.len() == 1
-            && exprs.len() == 1
-            && self.prev_emit_is_safe_peephole_site()
-        {
-            let last_pc = self.here() - 1;
-            let last = self.lr().code[last_pc];
-            if last.op() == Op::Move && last.a() == base {
-                let src = last.b();
-                self.l().code.pop();
-                self.l().lines.pop();
-                Some(src)
+        let alt_vreg =
+            if targets.len() == 1 && exprs.len() == 1 && self.prev_emit_is_safe_peephole_site() {
+                let last_pc = self.here() - 1;
+                let last = self.lr().code[last_pc];
+                if last.op() == Op::Move && last.a() == base {
+                    let src = last.b();
+                    self.l().code.pop();
+                    self.l().lines.pop();
+                    Some(src)
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
         for (i, plan) in plans.into_iter().enumerate() {
             let vreg = alt_vreg.unwrap_or(base + i as u32);
             match plan {
