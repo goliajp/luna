@@ -3119,6 +3119,41 @@ pub fn try_compile_trace(
     try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
+/// v2.1 Phase 1I.B — `LUNA_JIT_FIELD_IC` env gate.
+///
+/// Default OFF (env unset or set to anything other than `1` / `true`).
+/// When ON, the trace lowerer's `Op::GetField` arm replaces the helper
+/// call at the **first** eligible site (single-Table receiver, const
+/// string key, recorder-time `metatable.is_none()`) with an inline
+/// cache: 4 guards (`mt is None`, `nodes.len() == cached`,
+/// `nodes[slot].key == cached_key`, `val.tag == cached_tag`) + 1 load
+/// of the value raw payload. The guards' miss path falls through to
+/// the existing helper.
+///
+/// Scope discipline: this gate exposes the scaffold to Phase 1I.B
+/// probing only. Multi-site expansion + shape ID lifecycle + bench
+/// validation stay in Phase 1I.C.
+///
+/// Cached on the first call per process so the env-OFF path is a
+/// single relaxed atomic load (~1 ns), not a syscall.
+#[allow(dead_code)]
+pub(crate) fn field_ic_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // 0 = uninitialised, 1 = off, 2 = on. Sentinel encoding lets a
+    // single relaxed load distinguish "decision cached" from "ask
+    // env" without a Mutex.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    let v = CACHED.load(Ordering::Relaxed);
+    if v != 0 {
+        return v == 2;
+    }
+    let enabled = std::env::var("LUNA_JIT_FIELD_IC")
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    CACHED.store(if enabled { 2 } else { 1 }, Ordering::Relaxed);
+    enabled
+}
+
 // P13-S13-G v2.6 — last-checkpoint instrumentation for trace
 // compile failure diagnosis. `try_compile_trace_with_options`
 // updates the thread-local at each major phase; if the function
