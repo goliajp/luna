@@ -570,7 +570,8 @@ fn table_field_uses_vararg(chunk: &Chunk, f: &TableField) -> bool {
 /// of the gate may distinguish between the two safe variants (e.g. to count
 /// the third bucket for diagnostics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RhsCallScan {
+#[doc(hidden)]
+pub enum RhsCallScan {
     /// No `Call` or `MethodCall` AST nodes anywhere in the walked tree.
     /// Pure arith, literals, names, indices, paren and unary/binary chains.
     None,
@@ -622,8 +623,9 @@ fn is_known_pure_stdlib_root(text: &str) -> bool {
 ///
 /// O(n) in expression tree size — n is bounded by the source-character
 /// count of the statement RHS. No allocation.
+#[doc(hidden)]
 #[allow(dead_code)] // wired by the future A4' attack; pure additive in this batch.
-pub(crate) fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
+pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
     use RhsCallScan::*;
     match chunk.expr(eid) {
         // Leaves — no calls.
@@ -749,12 +751,9 @@ fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
 ///   is treated as unsafe. Variable-tracking is a separate subsystem.
 /// - `obj` that is itself an Index (e.g. `t.a.b = v`) is rejected —
 ///   only direct local Index-LHS is in scope for A4' v1.
+#[doc(hidden)]
 #[allow(dead_code)] // wired by the future A4' attack; pure additive in this batch.
-pub(crate) fn metamethod_safe_for_index_lhs(
-    chunk: &Chunk,
-    obj_eid: ExprId,
-    rhs_eid: ExprId,
-) -> bool {
+pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: ExprId) -> bool {
     if !matches!(chunk.expr(obj_eid), Expr::Name(_)) {
         return false;
     }
