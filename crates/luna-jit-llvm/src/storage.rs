@@ -141,6 +141,16 @@ impl LlvmJitStorage {
         self.engines.push(boxed);
         self.cache.insert(key, entry);
     }
+
+    /// v2.1 Phase 1K.G — park a trace `EnginePair` so the JIT mmap
+    /// stays alive for the Vm's lifetime. Unlike [`Self::insert`] there
+    /// is no cache-key association — the `TraceFn` pointer embedded in
+    /// `CompiledTrace::entry` is the caller's handle; storage just owns
+    /// the lifetime.
+    pub(crate) fn park_engine(&mut self, pair: EnginePair) {
+        let boxed = Box::into_raw(Box::new(pair));
+        self.engines.push(boxed);
+    }
 }
 
 impl Drop for LlvmJitStorage {

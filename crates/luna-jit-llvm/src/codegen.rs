@@ -260,7 +260,8 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
 /// `Module::get_function` per call. Pairs with [`bind_helper_symbols`]
 /// which fires after `create_jit_execution_engine` to wire the IR
 /// declarations to their actual Rust function addresses.
-fn declare_jit_helpers<'ctx>(
+/// v2.1 Phase 1K.G — also used by the trace JIT (`trace.rs`).
+pub(crate) fn declare_jit_helpers<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
 ) -> HashMap<&'static str, FunctionValue<'ctx>> {
@@ -289,7 +290,8 @@ fn declare_jit_helpers<'ctx>(
 /// so they ARE dlsym-able when luna is loaded as a `dylib`/`cdylib`
 /// — but the rlib link path strips them, exactly mirroring Cranelift's
 /// `JITBuilder::symbol` rationale in `build_jit_module_with_helpers`).
-fn bind_helper_symbols<'ctx>(
+/// v2.1 Phase 1K.G — also used by the trace JIT (`trace.rs`).
+pub(crate) fn bind_helper_symbols<'ctx>(
     engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
     helpers: &HashMap<&'static str, FunctionValue<'ctx>>,
 ) {
@@ -471,6 +473,11 @@ struct ChunkPlan<'a> {
     /// SelfMarker role). The Call lowerer emits a direct `build_call`
     /// to the current entry `FunctionValue` for these PCs.
     self_call_pcs: Vec<bool>,
+    /// v2.1 Phase 1K.G — `true` at every `Op::TailCall` PC the scanner
+    /// classified as a self-recursive tail call. Emit: `build_call
+    /// (function, args) → ret result` (Op::Call + Op::Return1 fused).
+    /// Treated as a terminator: no BB successor, implies returns_one.
+    tail_call_pcs: Vec<bool>,
     /// v2.1 Phase 1K.F.4 — `true` at every `Op::GetUpval` PC whose
     /// destination register is consumed as a runtime value (i.e. NOT
     /// used as the function slot of a subsequent `Op::Call`). Emitter
@@ -538,6 +545,15 @@ impl<'a> ChunkPlan<'a> {
                         return None;
                     }
                 }
+                Op::TailCall => {
+                    // 1K.G — TailCall has B-1 args, no explicit nresults
+                    // (it returns whatever the called fn returns to OUR
+                    // caller). Same nargs bound as Op::Call.
+                    let nargs = ins.b().checked_sub(1)?;
+                    if nargs > MAX_JIT_ARITY {
+                        return None;
+                    }
+                }
                 Op::Lt | Op::Le | Op::Eq => {
                     let peer = code.get(pc + 1)?;
                     if peer.op() != Op::Jmp {
@@ -569,6 +585,7 @@ impl<'a> ChunkPlan<'a> {
         let max_stack = (proto.max_stack as usize).max(proto.num_params as usize);
         let mut self_upval: Vec<bool> = vec![false; max_stack];
         let mut self_call_pcs: Vec<bool> = vec![false; n];
+        let mut tail_call_pcs: Vec<bool> = vec![false; n];
         for (pc, ins) in code.iter().enumerate() {
             // Apply writes: any op that writes R[A] clears
             // `self_upval[A]` unless it's the SelfMarker GetUpval (which
@@ -624,6 +641,22 @@ impl<'a> ChunkPlan<'a> {
                         *slot = false;
                     }
                 }
+                Op::TailCall => {
+                    // 1K.G — same self-recursion gate as Op::Call.
+                    // TailCall R[A] is the function slot; it must be
+                    // tagged as the self-upval closure for our direct
+                    // `build_call` to be sound (otherwise we'd need a
+                    // general call ABI which is out of scope here).
+                    let a = ins.a() as usize;
+                    if self_upval.get(a).copied().unwrap_or(false) {
+                        tail_call_pcs[pc] = true;
+                    } else {
+                        return None;
+                    }
+                    // TailCall is a tail return — it does NOT write R[A]
+                    // (there's no subsequent op that would read the
+                    // result). No tag update needed for self_upval.
+                }
                 Op::Return1 => {
                     // Returning a self_upval-tagged register would
                     // ship the closure pointer back to the caller,
@@ -673,7 +706,7 @@ impl<'a> ChunkPlan<'a> {
             reachable[pc] = true;
             let ins = code[pc];
             match ins.op() {
-                Op::Return0 | Op::Return1 => {} // terminator, no successor
+                Op::Return0 | Op::Return1 | Op::TailCall => {} // terminator, no successor
                 Op::Jmp => {
                     if consumed_jmp[pc] {
                         // Consumed by the preceding Lt|Le|Eq; the
@@ -700,7 +733,8 @@ impl<'a> ChunkPlan<'a> {
 
         // Pass 3: returns_one analysis. Every reachable Return* must
         // agree on shape (Return0 or Return1) so the dispatcher
-        // contract has a single answer.
+        // contract has a single answer. Op::TailCall is treated as
+        // Return1 (it returns the called function's result = one value).
         let mut found: Option<bool> = None;
         for (pc, ins) in code.iter().enumerate() {
             if !reachable[pc] {
@@ -711,7 +745,7 @@ impl<'a> ChunkPlan<'a> {
                     Some(true) => return None,
                     _ => found = Some(false),
                 },
-                Op::Return1 => match found {
+                Op::Return1 | Op::TailCall => match found {
                     Some(false) => return None,
                     _ => found = Some(true),
                 },
@@ -750,7 +784,7 @@ impl<'a> ChunkPlan<'a> {
                         bb_starts[pc + 1] = true;
                     }
                 }
-                Op::Return0 | Op::Return1 if pc + 1 < n => {
+                Op::Return0 | Op::Return1 | Op::TailCall if pc + 1 < n => {
                     bb_starts[pc + 1] = true;
                 }
                 _ => {}
@@ -771,8 +805,9 @@ impl<'a> ChunkPlan<'a> {
                 Op::LoadNil => ins.a() + ins.b(),
                 Op::Add | Op::Sub | Op::Mul | Op::Mod => ins.a().max(ins.b()).max(ins.c()),
                 Op::Lt | Op::Le | Op::Eq => ins.a().max(ins.b()),
-                Op::Call => {
-                    // Op::Call writes R[A] and reads R[A+1..A+1+nargs].
+                Op::Call | Op::TailCall => {
+                    // Op::Call/TailCall read R[A] (function) and
+                    // R[A+1..A+nargs] (args); A is the max slot.
                     let nargs = ins.b().saturating_sub(1);
                     if nargs == 0 { ins.a() } else { ins.a() + nargs }
                 }
@@ -792,6 +827,7 @@ impl<'a> ChunkPlan<'a> {
             consumed_jmp,
             reachable,
             self_call_pcs,
+            tail_call_pcs,
             is_upval_value_read,
         })
     }
@@ -878,8 +914,8 @@ fn uses_register_as_value(ins: &Inst, tagged: &[bool]) -> bool {
         Op::Return1 => is_tagged(ins.a()),
         Op::Add | Op::Sub | Op::Mul | Op::Mod => is_tagged(ins.b()) || is_tagged(ins.c()),
         Op::Lt | Op::Le | Op::Eq => is_tagged(ins.a()) || is_tagged(ins.b()),
-        // Op::Call args (R[A+1..A+1+nargs]) — args ARE value uses.
-        Op::Call => {
+        // Op::Call / Op::TailCall args (R[A+1..A+nargs]) are value uses.
+        Op::Call | Op::TailCall => {
             let nargs = ins.b().saturating_sub(1);
             for off in 1..=nargs {
                 if is_tagged(ins.a() + off) {
@@ -1230,6 +1266,34 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 let slot = emitter.reg_slot_ptr(a, "call_dst")?;
                 builder.build_store(slot, v).ok()?;
             }
+            Op::TailCall => {
+                // 1K.G — self-recursive tail call (tracker gated).
+                // Semantics: call function(R[A+1..A+nargs]) and return
+                // its result directly to our caller. Emits as
+                // build_call + ret, equivalent to Op::Call + Return1.
+                debug_assert!(
+                    plan.tail_call_pcs[pc],
+                    "scanner accepts only self-recursive Op::TailCall PCs"
+                );
+                let a = ins.a();
+                let nargs = ins.b().saturating_sub(1);
+                let mut arg_vals: Vec<inkwell::values::BasicMetadataValueEnum<'static>> =
+                    Vec::with_capacity(nargs as usize);
+                for off in 1..=nargs {
+                    let v = emitter.load_reg(a + off, "tail_arg")?;
+                    arg_vals.push(v.into());
+                }
+                let call_inst = builder
+                    .build_call(emitter.function, &arg_vals, "tail_call")
+                    .ok()?;
+                let v = match call_inst.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(bv) => bv.into_int_value(),
+                    inkwell::values::ValueKind::Instruction(_) => return None,
+                };
+                // Return the tail call result directly — no regs[A] store.
+                builder.build_return(Some(&v)).ok()?;
+                bb_terminated = true;
+            }
             _ => {
                 emitter.emit_op(ins)?;
             }
@@ -1469,7 +1533,8 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
 /// its real Rust function address via `add_global_mapping`. The
 /// Phase 1K.D dead-locals path passes `None` because its IR makes no
 /// helper calls and skipping the map keeps that fast-path tight.
-fn finalize_module<'ctx>(
+/// v2.1 Phase 1K.G — also used by the trace JIT (`trace.rs`).
+pub(crate) fn finalize_module<'ctx>(
     ctx_box: Box<Context>,
     module: Module<'ctx>,
     helpers: Option<&HashMap<&'static str, FunctionValue<'ctx>>>,
