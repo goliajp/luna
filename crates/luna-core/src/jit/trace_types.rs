@@ -9,6 +9,7 @@
 //! `mod.rs` + a `pub use super::trace_types::*;` in `trace.rs`
 //! so `crate::jit::trace::*` paths remain compatible.
 
+use crate::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 use crate::runtime::Gc;
 use crate::runtime::function::Proto;
 use crate::vm::isa::Inst;
@@ -499,7 +500,7 @@ pub struct CompiledTrace {
     /// `Rc<[]>` so the dispatcher's per-dispatch lookup is a cheap
     /// refcount bump, not a Vec heap clone (fib_28 dispatches 1M×
     /// — clone cost dominates without this).
-    pub exit_tags: std::rc::Rc<[ExitTag]>,
+    pub exit_tags: TArc<[ExitTag]>,
     /// P13-S13-E — classification of the global `exit_tags` for
     /// the dispatcher's restore-loop fast path. The dispatcher
     /// dispatches on this when `site_id == 0` AND
@@ -519,7 +520,7 @@ pub struct CompiledTrace {
     /// interp) — otherwise the trace would treat e.g. a Str ptr
     /// slot as Int and produce garbage. `Rc<[]>` to match the
     /// other tag arrays' cheap-clone idiom.
-    pub entry_tags: std::rc::Rc<[u8]>,
+    pub entry_tags: TArc<[u8]>,
     /// P12-S4-step2c — per side-exit `exit_tags`. Each entry is
     /// `(continuation_pc, exit_tags)`; when the trace returns a PC
     /// matching an entry, the dispatcher uses that vector instead of
@@ -529,7 +530,7 @@ pub struct CompiledTrace {
     /// rather than pack with a tag the slot hasn't actually become.
     /// Empty when no side-exit needs a different vector than the
     /// clean tail (e.g. plain numeric loops with no GetUpval).
-    pub per_exit_tags: std::rc::Rc<[(u32, std::rc::Rc<[ExitTag]>)]>,
+    pub per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]>,
     /// P12-S4-step4b-C-2 — per inline side-exit metadata, indexed by
     /// `site_idx`. Each entry carries the side-exit's `cont_pc`,
     /// the per-slot `exit_tags` snapshot (sized to `window_size` so
@@ -547,7 +548,7 @@ pub struct CompiledTrace {
     /// each `chain`'s raw pointer (`Rc::as_ptr`) at compile time;
     /// the `Rc` clones in this field keep the slice alive for the
     /// trace's mmap lifetime (Proto.traces owns the CompiledTrace).
-    pub per_exit_inline: std::rc::Rc<[InlineSideExit]>,
+    pub per_exit_inline: TArc<[InlineSideExit]>,
     /// P15-prep — per-exit hit counter (LuaJIT-study foundation for
     /// future side trace work). Length and layout:
     /// - `[0..per_exit_inline.len())`: parallel to per_exit_inline
@@ -560,7 +561,7 @@ pub struct CompiledTrace {
     /// `Rc<[Cell<u32>]>` so the dispatcher can increment without a
     /// mutable borrow on the CompiledTrace. Vm's
     /// `trace_exit_hit_distribution()` aggregates this for probe use.
-    pub exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]>,
+    pub exit_hit_counts: TArc<[TCellU32]>,
     /// P15-A v2-A — per-exit raw side-trace function pointer. Same
     /// length / layout as [`Self::exit_hit_counts`]. `null` means
     /// "no side trace compiled for this exit yet"; non-null means a
@@ -577,14 +578,14 @@ pub struct CompiledTrace {
     /// `CompiledTrace` was never required to be Sync (it lives in
     /// `Proto.traces: RefCell<Vec<CompiledTrace>>` on the runtime
     /// path). Adding this field doesn't tighten that.
-    pub exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]>,
+    pub exit_side_trace_ptrs: TArc<[TCellPtr]>,
     /// P15-A v2-C-A2 — per-`per_exit_tags`-entry side-trace cell.
     /// Same length as `per_exit_tags`; the IR at the corresponding
     /// `emit_store_back_and_return_pc` callsite (immediately after
     /// `per_exit_kinds.push`) bakes this cell's heap address. Same
     /// semantics as [`InlineSideExit::side_trace_ptr`] but with
     /// `kind = SIDE_SENT_KIND_TAG` and `local = tag_idx`.
-    pub tags_side_trace_ptrs: std::rc::Rc<[Box<std::cell::Cell<*const u8>>]>,
+    pub tags_side_trace_ptrs: TArc<[Box<TCellPtr>]>,
     /// P15-A v2-C-A2 — singleton cell shared by every GLOBAL-kind
     /// callsite (clean-tail return, Call truncation, ForLoop /
     /// TForLoop exits, generic err deopts, etc.). All such sites'
@@ -592,7 +593,7 @@ pub struct CompiledTrace {
     /// the child entry ptr here for `parent_exit_idx ==
     /// per_exit_inline.len() + per_exit_tags.len()` (the
     /// `exit_hit_counts` layout's last slot).
-    pub global_side_trace_ptr: Box<std::cell::Cell<*const u8>>,
+    pub global_side_trace_ptr: Box<TCellPtr>,
     /// P15-A v2-C-A1 — when a child side trace compiles for any
     /// of this trace's hot exits, the close handler inserts
     /// `(child.head_pc, child_traces_idx)` here. v2-C-A3's
@@ -615,7 +616,7 @@ pub struct CompiledTrace {
     /// `RefCell<HashMap<u32, u32>>` because the close handler
     /// holds only `&CompiledTrace` (the parent's traces borrow is
     /// immutable while we're walking it to find the parent_ct).
-    pub side_trace_cache: std::cell::RefCell<std::collections::HashMap<u32, u32>>,
+    pub side_trace_cache: TRefLock<std::collections::HashMap<u32, u32>>,
     /// P15-A v2-D-A8 — fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when ANY of this trace's
@@ -634,7 +635,7 @@ pub struct CompiledTrace {
     /// `Cell<bool>` so the close handler can flip the flag through
     /// only an `&CompiledTrace` borrow (the parent's `traces`
     /// borrow is immutable while the close handler walks).
-    pub has_any_side_wired: std::cell::Cell<bool>,
+    pub has_any_side_wired: TCellBool,
     /// P13-S13-G v2 — `true` iff this trace closes at a
     /// `TraceEnd::InlineAbort` (depth>0 op the lowerer can't
     /// continue past: depth past `MAX_INLINE_DEPTH`, non-self
@@ -783,12 +784,12 @@ pub struct InlineSideExit {
     /// Slot-by-slot `ExitTag` snapshot at the side-exit moment.
     /// Length = `window_size` — covers caller + every inlined
     /// frame's register window.
-    pub exit_tags: std::rc::Rc<[ExitTag]>,
+    pub exit_tags: TArc<[ExitTag]>,
     /// Frames to push onto `vm.frames` (outermost = depth 1 first,
     /// innermost = depth `len()` last). The innermost frame's `pc`
     /// is overwritten to the side-exit PC at compile time so the
     /// helper stays PC-agnostic.
-    pub chain: std::rc::Rc<[FrameMaterializeInfo]>,
+    pub chain: TArc<[FrameMaterializeInfo]>,
     /// P15-A v2-C-A2 — raw `*const u8` (entry fn pointer of a child
     /// side trace) for THIS inline cmp@d>0 side-exit. The IR at the
     /// `emit_store_back_and_return_site` call site loads this cell
@@ -801,7 +802,7 @@ pub struct InlineSideExit {
     /// address is stable for the IR's `iconst`-baked load. Moving
     /// the Box (e.g. into `Rc<[]>` via `.collect`) doesn't move the
     /// cell. Single-threaded Vm so `Cell` is sound.
-    pub side_trace_ptr: Box<std::cell::Cell<*const u8>>,
+    pub side_trace_ptr: Box<TCellPtr>,
 }
 
 /// P15-A v0 — hot side-exit detection threshold. Exits whose hit
@@ -970,7 +971,7 @@ pub struct HotExitInfo {
     /// `window_size` (caller + inlined frames); per_exit_tags
     /// entries cover only the caller's `max_stack`; the global
     /// slot exposes the clean-tail `exit_tags` (caller window only).
-    pub exit_tags: std::rc::Rc<[ExitTag]>,
+    pub exit_tags: TArc<[ExitTag]>,
 }
 
 /// P12-S4-step4b — one Lua frame to push when a depth>0 side-exit
@@ -1055,10 +1056,10 @@ impl CompiledTrace {
         n_ops: u32,
         dispatchable: bool,
         window_size: u32,
-        entry_tags: std::rc::Rc<[u8]>,
-        exit_tags: std::rc::Rc<[ExitTag]>,
+        entry_tags: TArc<[u8]>,
+        exit_tags: TArc<[ExitTag]>,
         global_tag_res_kind: TagResKind,
-        per_exit_tags: Vec<(u32, std::rc::Rc<[ExitTag]>)>,
+        per_exit_tags: Vec<(u32, TArc<[ExitTag]>)>,
         per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
         // v1.3 Phase AOT Stage 7 polish 6 — `inline_n` non-zero when
@@ -1076,15 +1077,12 @@ impl CompiledTrace {
         // `hot_exit_iter` invariant).
         let inline_n = per_exit_inline.len();
         let total_slots = inline_n + per_exit_tags.len() + 1;
-        let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
-            let v: Vec<std::cell::Cell<u32>> =
-                (0..total_slots).map(|_| std::cell::Cell::new(0)).collect();
+        let exit_hit_counts: TArc<[TCellU32]> = {
+            let v: Vec<TCellU32> = (0..total_slots).map(|_| TCellU32::new(0)).collect();
             v.into()
         };
-        let exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]> = {
-            let v: Vec<std::cell::Cell<*const u8>> = (0..total_slots)
-                .map(|_| std::cell::Cell::new(std::ptr::null()))
-                .collect();
+        let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
+            let v: Vec<TCellPtr> = (0..total_slots).map(|_| TCellPtr::null()).collect();
             v.into()
         };
         // Parallel `tags_side_trace_ptrs` slice — one Box per
@@ -1093,9 +1091,9 @@ impl CompiledTrace {
         // cells stay null for the binary's lifetime; sizing matches
         // the dispatcher's `per_exit_kinds.len() == tags_side_trace
         // _ptrs.len()` invariant the close handler asserts.
-        let tags_side_trace_ptrs: std::rc::Rc<[Box<std::cell::Cell<*const u8>>]> = {
-            let v: Vec<Box<std::cell::Cell<*const u8>>> = (0..per_exit_tags.len())
-                .map(|_| Box::new(std::cell::Cell::new(std::ptr::null())))
+        let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = {
+            let v: Vec<Box<TCellPtr>> = (0..per_exit_tags.len())
+                .map(|_| Box::new(TCellPtr::null()))
                 .collect();
             v.into()
         };
@@ -1108,14 +1106,14 @@ impl CompiledTrace {
             exit_tags,
             global_tag_res_kind,
             entry_tags,
-            per_exit_tags: std::rc::Rc::from(per_exit_tags),
-            per_exit_inline: std::rc::Rc::from(per_exit_inline),
+            per_exit_tags: TArc::from(per_exit_tags),
+            per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
             exit_side_trace_ptrs,
             tags_side_trace_ptrs,
-            global_side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
-            side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-            has_any_side_wired: std::cell::Cell::new(false),
+            global_side_trace_ptr: Box::new(TCellPtr::null()),
+            side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
+            has_any_side_wired: TCellBool::new(false),
             is_inline_abort_close: false,
             dispatch_off_reason: None,
             sinkable_sites_seen: 0,
@@ -1251,7 +1249,7 @@ pub struct DecodedExit<'a> {
 pub fn decode_exit_shape<'a>(
     raw_ret: u64,
     per_exit_inline: &'a [InlineSideExit],
-    per_exit_tags: &'a [(u32, std::rc::Rc<[ExitTag]>)],
+    per_exit_tags: &'a [(u32, TArc<[ExitTag]>)],
     exit_tags: &'a [ExitTag],
 ) -> DecodedExit<'a> {
     let site_id = (raw_ret >> 32) as u32;

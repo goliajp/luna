@@ -9,6 +9,7 @@
 
 use crate::compiler::compile_chunk;
 use crate::frontend::{SyntaxError, parse};
+use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
 use crate::runtime::heap::GcHeader;
 use crate::runtime::{
@@ -6241,7 +6242,7 @@ impl Vm {
                                         }
                                         drop(parent_traces);
                                     }
-                                    head_proto.traces.borrow_mut().push(std::rc::Rc::new(ct));
+                                    head_proto.traces.borrow_mut().push(TArc::new(ct));
                                     self.jit.counters.compiled += 1;
                                 }
                                 None => {
@@ -10318,7 +10319,7 @@ impl Vm {
         let _ = self; // resolver passes &mut Vm for symmetry with future
         // pending-install + hash-walk variants; nothing on `self` to
         // mutate today because the install target lives on the Proto.
-        proto.traces.borrow_mut().push(std::rc::Rc::new(trace));
+        proto.traces.borrow_mut().push(TArc::new(trace));
     }
 
     /// v1.3 Phase AOT Stage 7 sub-piece 4 — walk the proto tree

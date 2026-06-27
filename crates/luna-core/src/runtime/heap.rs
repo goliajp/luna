@@ -1530,7 +1530,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
-            traces: std::cell::RefCell::new(Vec::new()),
+            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let inner = heap.adopt_proto(inner);
         let outer = Proto {
@@ -1556,7 +1556,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
-            traces: std::cell::RefCell::new(Vec::new()),
+            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let outer = heap.adopt_proto(outer);
         let captured = heap.intern(b"captured-value-string-xxxxxxxxxxxxxxxxxxxxxxxxx");

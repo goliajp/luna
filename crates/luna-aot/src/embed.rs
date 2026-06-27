@@ -1827,7 +1827,7 @@ fn harvest_and_emit_aot_traces(
         [u8; 16],
         u32,
         TraceRecord,
-        std::rc::Rc<CompiledTrace>,
+        luna_core::jit::send_compat::TArc<CompiledTrace>,
     )> = Vec::new();
     let mut filter_stats = (0usize, 0usize, 0usize, 0usize);
     for (i, (hash, head_pc, record)) in captured.into_iter().enumerate() {
