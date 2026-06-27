@@ -67,13 +67,58 @@ exceptions = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# v2.1 Phase 1K.D.2 — `luna-jit-llvm` has a `[dev-dependencies]
+# luna-jit = { path = "../luna-jit" }` to drive integration tests that
+# need luna-jit's parser. cargo-deny classifies path-only deps as
+# wildcards (`version = "*"`), but the lockfile-pinned workspace path
+# is the safest possible reference — there is no version-range surface
+# for a supply-chain attack to target. Setting this flag tells deny to
+# only complain about wildcards that point at the registry, which is
+# what "wildcards = deny" is actually meant to catch.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 
 allow = []
 deny = []
-skip = []
+# v2.1 Path D Phase 1A — vendored cranelift / wasmtime fork pulls
+# `wasmtime-internal-jit-icache-coherence v37.0.3` (Cargo.lock new
+# entry) which transitively depends on `windows-sys 0.60.2` →
+# `windows-targets 0.53.5` → `windows_x86_64_msvc 0.53.1` and the
+# matching per-arch sibling crates. The pre-existing `region 3.0.2`
+# chain (under cranelift-jit) still resolves the older `windows-sys
+# 0.52.0` → `windows-targets 0.52.6` set. This is a transitional
+# duplication that goes away once cranelift / wasmtime themselves
+# bump `region` (upstream issue, not actionable from luna).
+# `multiple-versions = "warn"` keeps the duplication visible without
+# failing CI; the explicit skip list documents the known set we accept.
+skip = [
+    # Windows per-architecture stub crates pulled in two versions
+    # via the region / wasmtime split above.
+    "windows_x86_64_msvc",
+    "windows_x86_64_gnu",
+    "windows_x86_64_gnullvm",
+    "windows_i686_msvc",
+    "windows_i686_gnu",
+    "windows_i686_gnullvm",
+    "windows_aarch64_msvc",
+    "windows_aarch64_gnullvm",
+    "windows-sys",
+    "windows-targets",
+    # `object` is pulled at v0.36 by luna-aot / luna-tools (the
+    # downstream object-write surface luna pins) and at v0.37 via
+    # backtrace → dhat (luna-core dev-dep) and via cranelift-codegen
+    # → wasmtime-internal-jit-icache-coherence. backtrace's bump
+    # tracks upstream; luna's direct dep stays on 0.36 for the v2.1
+    # ship surface.
+    "object",
+    # `bitflags` and `hashbrown` are both pulled in two versions by
+    # the cranelift / wasmtime split (older inside region/windows-sys,
+    # newer inside the vendored wasmtime tree).
+    "bitflags",
+    "hashbrown",
+]
 skip-tree = []
 
 # ─────────────────────────────────────────────────────────────────────
