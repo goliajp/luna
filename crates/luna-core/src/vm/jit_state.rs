@@ -208,6 +208,21 @@ pub struct JitCounters {
     /// P12-S5-C — tally of materialise-helper emit sites. (Was
     /// `Vm::trace_materialize_emit_count`.)
     pub materialize_emit: u64,
+    /// v2.0 Stage 7 polish 6 fire experiment — number of compiled
+    /// traces whose `CompiledTrace.per_exit_inline.len() > 0` (depth>0
+    /// inlined cmp side-exits were emitted). Probed via
+    /// `Vm::trace_per_exit_inline_compiled_count`. Together with
+    /// `per_exit_inline_dispatchable`, lets a diag distinguish
+    /// "recorder + lowerer can produce inline side-exits" from
+    /// "compiled trace is dispatchable enough to exercise the AOT
+    /// polish 6 chain-reloc + deploy-resolver path".
+    pub per_exit_inline_compiled: u64,
+    /// v2.0 Stage 7 polish 6 fire experiment — subset of
+    /// `per_exit_inline_compiled` that ALSO has `dispatchable == true`.
+    /// This is the count of traces that would actually exercise the
+    /// AOT polish 6 inline-chain reloc + deploy-resolver path. Probed
+    /// via `Vm::trace_per_exit_inline_dispatchable_count`.
+    pub per_exit_inline_dispatchable: u64,
     /// P12-S7-A — total `Op::Closure` ops the trace JIT lowered to
     /// `luna_jit_op_closure` helper calls. (Was
     /// `Vm::trace_closure_emit_count`.)
