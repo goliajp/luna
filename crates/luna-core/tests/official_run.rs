@@ -256,31 +256,6 @@ const SUITES: &[Suite] = &[
 ];
 
 fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
-    // CI memory cap: heavy.lua / verybig.lua / memerr.lua exercise PUC's
-    // `loadrep` (parser fed 128 MB+ string streams) and `bench-large-
-    // allocations` paths. On GitHub Actions' 7 GB ubuntu runner the
-    // second loadrep pass intermittently SIGSEGVs at the second 128 M
-    // marker (peak resident ≥ 1 GB + parser working set + allocator
-    // fragmentation). Locally on macOS aarch64 (M-series, 32-64 GB) the
-    // same tests pass reliably — gating on `CI` env preserves the local
-    // run while unblocking GitHub Actions. Root cause investigation
-    // (parser/string-intern UAF or Vec::push past isize::MAX panic) is
-    // tracked at `.dev/known-bugs/heavy-lua-sigsegv-under-128mb-loadrep.md`.
-    if std::env::var_os("CI").is_some()
-        && matches!(
-            name,
-            "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
-        )
-    {
-        return FileCoverage {
-            version,
-            file: name.to_string(),
-            total: 0,
-            hit: 0,
-            error: None,
-            wrapper_skipped: true,
-        };
-    }
     // cwd is the suite dir (set by the caller) so require's ./?.lua finds siblings
     let raw = match std::fs::read(name) {
         Ok(b) => b,
@@ -344,6 +319,34 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
         .stack_size(16 << 20)
         .spawn(move || {
             let mut vm = Vm::new(version);
+            // Runtime memory cap for the four stress files PUC's outer driver
+            // gates behind a host wall-clock budget. heavy.lua's `toomanyidx`
+            // fills `a[i] = i` until the array part reaches `MAX_ASIZE = 1 <<
+            // 27` (~134 M slots × 9 B ≈ 1.2 GB) at which point `rehash`
+            // returns `TableError::Overflow`. On a 7 GB GitHub Actions ubuntu
+            // runner the *peak* during the final doubling (old slab + new
+            // slab + temporary `old_pairs` Vec ≈ 2.4 GB + assorted Rust /
+            // cargo overhead) walked the host allocator off a cliff and
+            // SIGSEGV'd before the Overflow check could fire. Arming the soft
+            // cap at 1 GiB lets the run loop notice between dispatch turns,
+            // run a full collect (which can't reclaim the growing `a` — it's
+            // reachable), and raise a catchable `"memory cap exceeded"` Lua
+            // error. heavy.lua's `pcall(function () ... end)` catches it and
+            // the rest of the chunk (`print "OK"`) runs to completion. Cap
+            // is fire-once + disarms after firing, so the post-pcall tail
+            // sees no further pressure. For verybig/memerr/sort the cap is
+            // pure headroom — none of them push net live bytes anywhere near
+            // 1 GiB (verybig has `_soft=true` set below, memerr early-returns
+            // when `T` is nil, sort's working set is ~50k Values ≈ 1.2 MB) —
+            // but pinning it here is defense-in-depth against future
+            // additions to the same stress family. Tracked under
+            // `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
+            if matches!(
+                label.as_str(),
+                "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
+            ) {
+                vm.set_memory_cap(Some(1usize << 30));
+            }
             vm.set_global("_U", Value::Bool(true)).unwrap();
             // attrib.lua's lines 79-356 exercise dynamic C-library loading
             // (`package.loadlib`) which luna does not ship; `_port=true` is the
