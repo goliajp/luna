@@ -5221,16 +5221,16 @@ pub fn lower_trace_into_named<M: Module>(
     // the counter unchanged.
     let base_var = bcx.declare_var(types::I64);
     {
-        let z = bcx.ins().iconst(types::I64, 0);
-        bcx.def_var(base_var, z);
-        // Mirror the tforcall_tag_var declaration pattern exactly
-        // (declare + iconst init + def_var, no anchor use). Cranelift
-        // tree-shakes the unused Variable in optimized builds, so the
-        // sub-1 scaffold adds zero machine-code residue vs. pre-sub-1.
-        // Risk D1.R1 mitigation is deferred to sub-2 where op-arm
-        // migration actually exercises `bcx.use_var(base_var)` —
-        // that's the codegen surface that matters for the
-        // GlobalValue-vs-Variable escape route decision.
+        // v2.1 Path D Phase 1F (sub-2A re-apply) — `base_var` now
+        // holds the real `reg_state` ptr (depth-0 frame base). The
+        // helper `current_base_addr(_, base_var, op_off_bytes, slot)`
+        // returns `(reg_state, op_off_bytes + slot * 8)` so migrated
+        // op-arms can emit `MemFlags::trusted()` stores at the same
+        // address the deopt store-back path uses. Phase 1C ISLE rule
+        // (`dse_consecutive_trusted_stores_no_load`) DCEs the
+        // redundant prior store on the sub-2B Phase F shape so the
+        // dual-write costs ~0 in steady state.
+        bcx.def_var(base_var, reg_state);
         BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
@@ -5689,7 +5689,24 @@ pub fn lower_trace_into_named<M: Module>(
                 // carries the control transfer.
             }
             Op::Move => {
+                // v2.1 Path D Phase 1F sub-2A dual-write — preserve
+                // Variable shadow (def_var keeps downstream non-
+                // migrated arms' use_var paths intact) AND emit a
+                // trusted store at the depth-aware reg_state slot
+                // address. The store is DCE-able by the Phase 1C
+                // ISLE rule (`dse_consecutive_trusted_stores_no_load`)
+                // when a later trusted store to the same slot
+                // precedes any load (sub-2B Phase F shape) — observed
+                // savings ~6-7 µs/trace on token_bucket_1k.
                 let src = bcx.use_var(regs[ins.b() as usize]);
+                let (dst_base, dst_off) = current_base_addr(
+                    &mut bcx,
+                    base_var,
+                    (op_offsets[i] as i32).saturating_mul(8),
+                    ins.a() as u32,
+                );
+                bcx.ins()
+                    .store(MemFlags::trusted(), src, dst_base, dst_off);
                 bcx.def_var(regs[ins.a() as usize], src);
                 current_kinds[off + ins.a() as usize] = k_op(&current_kinds, off as u32 + ins.b());
             }
