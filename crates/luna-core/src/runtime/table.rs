@@ -489,7 +489,16 @@ impl Table {
             // above, mirroring the bound on `aget`/`aset`.
             let tag = unsafe { *self.atags().get_unchecked(idx) };
             if tag != raw::NIL {
-                self.aset(idx, val);
+                // Nil-val on a live slot must follow the same tombstone
+                // discipline as `set_norm` — routed through
+                // `clear_existing_slot` so chain-world / future
+                // data-layout cutovers (Phase E SoA) stay aligned.
+                // See `.dev/known-bugs/fixed/`.
+                if val.is_nil() {
+                    self.clear_existing_slot(k);
+                } else {
+                    self.aset(idx, val);
+                }
                 return true;
             }
             // Array slot present-but-nil → __newindex eligible: do NOT
@@ -499,10 +508,46 @@ impl Table {
         if let Some(idx) = self.find_node(k)
             && !self.nodes[idx].val.is_nil()
         {
-            self.nodes[idx].val = val;
+            if val.is_nil() {
+                self.clear_existing_slot(k);
+            } else {
+                self.nodes[idx].val = val;
+            }
             return true;
         }
         false
+    }
+
+    /// Shared "live with val=Nil is illegal" tombstone routine for the
+    /// two write entry points (`set_norm` and `try_set_existing`). The
+    /// slot must already be known live (array slot inside `asize()` /
+    /// node returned by `find_node`).
+    ///
+    /// Chain-world today:
+    ///   - array slot → `aset(_, Nil)` clears the atag, so `next()`'s
+    ///     `tag != raw::NIL` filter skips the slot.
+    ///   - node slot  → soft tombstone (key kept, `val = Nil`); chain
+    ///     `next()` filter `!n.val.is_nil()` skips it, and `find_node`
+    ///     still routes a future re-insert into the same slot without
+    ///     a rehash.
+    ///
+    /// Centralising the discipline here lets a future Phase E SoA
+    /// cutover (Variant B linear probe, or any non-Robin-Hood layout
+    /// attack that switches `next()`'s filter to `meta_bits::is_live`)
+    /// migrate both entry points in lockstep — exactly the divergence
+    /// that surfaced as `(key, nil)` zombies in `pairs()` on the C3
+    /// Session 2 cutover branch.
+    fn clear_existing_slot(&mut self, k: Value) {
+        if let Value::Int(i) = k
+            && i >= 1
+            && (i as u64) <= self.asize() as u64
+        {
+            self.aset(i as usize - 1, Value::Nil);
+            return;
+        }
+        if let Some(idx) = self.find_node(k) {
+            self.nodes[idx].val = Value::Nil;
+        }
     }
 
     /// Integer-keyed variant of [`Self::set`].
@@ -516,11 +561,23 @@ impl Table {
             && i >= 1
             && (i as u64) <= self.asize() as u64
         {
-            self.aset(i as usize - 1, v);
+            // Live array slot + Nil write goes through the shared
+            // tombstone routine (see `clear_existing_slot` for the
+            // chain ↔ future-SoA rationale). The non-Nil branch is
+            // identical to a bare `aset` today.
+            if v.is_nil() {
+                self.clear_existing_slot(k);
+            } else {
+                self.aset(i as usize - 1, v);
+            }
             return Ok(());
         }
         if let Some(idx) = self.find_node(k) {
-            self.nodes[idx].val = v;
+            if v.is_nil() {
+                self.clear_existing_slot(k);
+            } else {
+                self.nodes[idx].val = v;
+            }
             return Ok(());
         }
         if v.is_nil() {
