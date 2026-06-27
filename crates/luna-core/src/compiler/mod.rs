@@ -101,7 +101,10 @@ pub fn compile_chunk_with_last_target(
     c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
     let lvl = c.levels.pop().expect("main level");
     let last_target = lvl.last_target;
-    Ok((c.heap.adopt_proto(lvl.into_proto(source, 0, 0)), last_target))
+    Ok((
+        c.heap.adopt_proto(lvl.into_proto(source, 0, 0)),
+        last_target,
+    ))
 }
 
 const MAX_REGS: u32 = 254;
