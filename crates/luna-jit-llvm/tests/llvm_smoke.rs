@@ -306,6 +306,81 @@ fn return_i_handles_negative_immediate() {
     assert_eq!(returned, -7);
 }
 
+/// v2.1 Phase 1K.E.3 — int Add smoke.
+///
+/// `local x = 2; local y = 3; return x + y` compiles to
+/// `[LoadI(R0,2), LoadI(R1,3), Add(R2,R0,R1), Return1(R2), Return0]`.
+/// The compute path's Add emit lowers to `regs[2] = regs[0] +
+/// regs[1]` (i64 add), and the Return1 reads back the i64 to deliver
+/// `5` through the dispatcher contract.
+#[test]
+fn add_two_loaded_ints() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = 2; local y = 3; return x + y", b"=add_xy")
+        .expect("compile");
+    let proto = closure.proto;
+
+    // Confirm the parser shape — if it ever folds the `2 + 3` at
+    // parse time into `return 5`, this test guards the change.
+    let code: &[_] = &proto.code;
+    assert!(
+        code.iter().any(|i| i.op() == Op::Add),
+        "test source must emit an Add to exercise Phase 1K.E.3 \
+         (got {code:?})",
+    );
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.3 must compile `local x=2; local y=3; return x+y`");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    let returned = unsafe { entry_fn() };
+    assert_eq!(returned, 5, "2 + 3 must equal 5 through the JIT entry");
+}
+
+/// v2.1 Phase 1K.E.3 — Add with negative + positive operands. Pins
+/// signed-i64 semantics (no wrap surprise for small inputs).
+#[test]
+fn add_negative_and_positive() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = -10; local y = 4; return x + y", b"=add_neg_pos")
+        .expect("compile");
+    let proto = closure.proto;
+    // Parser may fold -10 or use Unm; require LoadI(-10) prefix to
+    // stay in Phase 1K.E.3 scope.
+    let has_neg_loadi = proto
+        .code
+        .iter()
+        .any(|i| i.op() == Op::LoadI && i.sbx() == -10);
+    let has_add = proto.code.iter().any(|i| i.op() == Op::Add);
+    if !has_neg_loadi || !has_add {
+        eprintln!(
+            "[add_negative_and_positive] parser shape differs from \
+             Phase 1K.E.3 target; chunk = {:?}",
+            proto.code
+        );
+        return;
+    }
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("Phase 1K.E.3 must compile the neg+pos add chunk");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    let returned = unsafe { entry_fn() };
+    assert_eq!(returned, -6);
+}
+
 /// v2.1 Phase 1K.E.2 — `Move`-through-the-return-slot smoke.
 ///
 /// `local x = 9; return x` compiles to `[LoadI(R0,9), Return1(R0)]`

@@ -243,7 +243,7 @@ impl<'a> ChunkPlan<'a> {
 ///   `LoadK(Int)` add widens the cache key to include the constant
 ///   table).
 fn is_compute_supported(ins: &Inst) -> bool {
-    matches!(ins.op(), Op::LoadI | Op::LoadNil | Op::Move)
+    matches!(ins.op(), Op::LoadI | Op::LoadNil | Op::Move | Op::Add)
 }
 
 /// Phase 1K.D.8 / 1K.E.2 — stable cache key for a Proto. FNV-1a-64
@@ -416,6 +416,30 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 let v = self.load_reg(b, "move_src")?;
                 let dst = self.reg_slot_ptr(a, "move_dst")?;
                 self.builder.build_store(dst, v).ok()?;
+                Some(())
+            }
+            Op::Add => {
+                // Phase 1K.E.3 — int add `R[A] = R[B] + R[C]`. Pure
+                // signed-i64 add; no overflow check (the int-chunk
+                // ABI silently wraps, matching Lua 5.4's integer
+                // arithmetic semantics for the `+` operator on two
+                // ints — `math.maxinteger + 1 == math.mininteger`).
+                //
+                // No type-tag inspection: the compute whitelist
+                // currently has no op that produces a non-int value
+                // into a reg (LoadNil → 0, LoadI/Move → ints, this
+                // Add → int). When 1K.E.7 adds LoadFalse/LoadTrue
+                // (which produce bool bit patterns) or LoadK(Float)
+                // is whitelisted, this arm will need to refuse
+                // (or wrap with) cross-type operands.
+                let a = ins.a();
+                let b = ins.b();
+                let c = ins.c();
+                let lhs = self.load_reg(b, "add_lhs")?;
+                let rhs = self.load_reg(c, "add_rhs")?;
+                let sum = self.builder.build_int_add(lhs, rhs, "add_sum").ok()?;
+                let dst = self.reg_slot_ptr(a, "add_dst")?;
+                self.builder.build_store(dst, sum).ok()?;
                 Some(())
             }
             Op::Return0 => {
