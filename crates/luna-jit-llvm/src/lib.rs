@@ -41,8 +41,8 @@ use luna_core::jit::{
 use luna_core::runtime::{Gc, LuaClosure, function::Proto};
 use luna_core::vm::Vm;
 
-mod storage;
 mod codegen;
+mod storage;
 
 pub use storage::LlvmJitStorage;
 

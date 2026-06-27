@@ -31,19 +31,23 @@ use luna_core::jit::{CompileResult, JitStorage};
 use luna_core::runtime::{Gc, function::Proto};
 use luna_core::vm::isa::Op;
 
-/// v2.1 Phase 1K.D.6 — try to lower `proto` to native code via LLVM.
+/// v2.1 Phase 1K.D.6 → 1K.D.7 — try to lower `proto` to native
+/// code via LLVM.
 ///
-/// Recognised shapes (cumulative across 1K.D.6 → 1K.D.7):
-///
-/// - `[Op::LoadNil(_, _), Op::Return0]` — emit
-///   `extern "C" fn() -> i64 { ret 0 }`. The destination register
-///   write is a no-op at the JIT level: there's no value to return
-///   from the chunk, and the only Lua-observable side-effect (the
-///   register `nil`-fill) is irrelevant once the chunk returns
-///   without exposing its locals.
+/// Recognised shape (1K.D.7): any chunk whose body is a (possibly
+/// empty) prefix of `Op::LoadNil` / `Op::LoadK` / `Op::Move`
+/// followed by `Op::Return0`. Every such chunk lowers to the
+/// constant-zero entry fn: the prefix ops only touch Lua locals
+/// that are discarded when the chunk returns without an
+/// observable value, so the JIT entry can skip them entirely.
 ///
 /// Out-of-shape Protos return `None`, which the trait impl turns
 /// into `CompileResult::Skipped` so the interpreter handles them.
+///
+/// Phase 1K.E grows out to operands with observable side effects
+/// (`Op::Add`, `Op::Return1`, table ops, etc.); at that point the
+/// JIT entry stops being a constant-zero stub and starts honouring
+/// the per-op semantics.
 ///
 /// `pre53` is accepted for API symmetry with the Cranelift backend
 /// but currently ignored: no recognised shape touches the
@@ -57,7 +61,7 @@ pub(crate) fn try_compile_int_chunk(
     // `proto` was passed by the dispatcher via the trait; the Gc is
     // rooted for the duration of this call. `Gc<T>: Deref<Target=T>`
     // so `&proto.code` reaches the bytecode slice directly.
-    if !is_load_nil_then_return0(&proto.code) {
+    if !is_dead_locals_then_return0(&proto.code) {
         return None;
     }
     let entry = compile_constant_zero_chunk()?;
@@ -72,14 +76,20 @@ pub(crate) fn try_compile_int_chunk(
     })
 }
 
-/// Pattern-match the Phase 1K.D.6 chunk shape: `[LoadNil(_, _),
-/// Return0]`. Future phases (1K.D.7+) layer additional shapes on
-/// top of this.
-fn is_load_nil_then_return0(code: &[luna_core::vm::isa::Inst]) -> bool {
-    match code {
-        [a, b] => a.op() == Op::LoadNil && b.op() == Op::Return0,
-        _ => false,
+/// Phase 1K.D.7 — accept `[(LoadNil | LoadK | Move)*, Return0]`.
+/// All three ops only mutate locals; locals are unobservable across
+/// the `Return0` boundary, so the JIT entry can elide the prefix
+/// and just `ret 0`.
+fn is_dead_locals_then_return0(code: &[luna_core::vm::isa::Inst]) -> bool {
+    let Some((last, prefix)) = code.split_last() else {
+        return false;
+    };
+    if last.op() != Op::Return0 {
+        return false;
     }
+    prefix
+        .iter()
+        .all(|i| matches!(i.op(), Op::LoadNil | Op::LoadK | Op::Move))
 }
 
 /// Build, JIT-compile, and return the entry pointer for
