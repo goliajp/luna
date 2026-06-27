@@ -53,7 +53,7 @@ fn load_nil_then_return0_compiles_and_runs() {
 
     // Drive the LLVM backend directly with a fresh storage.
     let backend = LlvmBackend;
-    let mut storage = LlvmJitStorage;
+    let mut storage = LlvmJitStorage::default();
     let result = backend.try_compile(&mut storage, proto, false, false);
 
     let (entry, num_args, returns_one, arg_float_mask, arg_table_mask, ret_is_float, ret_is_table) =
@@ -136,7 +136,7 @@ fn three_op_dead_locals_chunk_compiles_and_runs() {
     assert_eq!(code[3].op(), Op::Return0);
 
     let backend = LlvmBackend;
-    let mut storage = LlvmJitStorage;
+    let mut storage = LlvmJitStorage::default();
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
@@ -151,6 +151,44 @@ fn three_op_dead_locals_chunk_compiles_and_runs() {
     assert_eq!(returned, 0);
 }
 
+/// v2.1 Phase 1K.D.8 — verify the per-`Vm` `LlvmJitStorage` cache
+/// serves a second compile of the same Proto from cache rather than
+/// re-emitting LLVM IR.
+///
+/// The cache_entry_count probe goes from 0 → 1 after the first
+/// compile and stays at 1 after the second. Both compiles return
+/// the same entry pointer.
+#[test]
+fn storage_cache_reuses_compiled_entry() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm.load(b"local x", b"=cache_reuse").expect("compile");
+    let proto = closure.proto;
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    assert_eq!(storage.cache_entry_count(), 0);
+
+    let first = backend.try_compile(&mut storage, proto, false, false);
+    let CompileResult::Compiled { entry: e1, .. } = first else {
+        panic!("first compile must succeed");
+    };
+    assert_eq!(storage.cache_entry_count(), 1);
+
+    let second = backend.try_compile(&mut storage, proto, false, false);
+    let CompileResult::Compiled { entry: e2, .. } = second else {
+        panic!("second compile must hit cache and succeed");
+    };
+    assert_eq!(
+        storage.cache_entry_count(),
+        1,
+        "cache hit must NOT grow cache_entry_count",
+    );
+    assert!(
+        std::ptr::eq(e1, e2),
+        "cache hit must return the SAME entry pointer ({e1:?} vs {e2:?})",
+    );
+}
+
 /// Phase 1K.D.7 — sanity check that out-of-shape chunks bail back
 /// to the interpreter rather than being mis-compiled. `return 1`
 /// emits `LoadI` + `Return1`, neither of which is in the recognised
@@ -160,7 +198,7 @@ fn out_of_shape_chunk_returns_skipped() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
     let closure = vm.load(b"return 1", b"=out_of_shape").expect("compile");
     let backend = LlvmBackend;
-    let mut storage = LlvmJitStorage;
+    let mut storage = LlvmJitStorage::default();
     let result = backend.try_compile(&mut storage, closure.proto, false, false);
     assert!(
         matches!(result, CompileResult::Skipped),

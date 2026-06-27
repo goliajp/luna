@@ -174,7 +174,7 @@ fn install_cranelift_jit(vm: &mut vm::Vm) {
 #[cfg(feature = "llvm-jit")]
 fn install_llvm_jit(vm: &mut vm::Vm) {
     vm.install_jit_backend(luna_jit_llvm::LlvmBackend, luna_jit_llvm::LlvmBackend);
-    vm.install_jit_storage(luna_jit_llvm::LlvmJitStorage);
+    vm.install_jit_storage(luna_jit_llvm::LlvmJitStorage::default());
 }
 
 /// v2.1 Phase 1K.D.4 — `LUNA_JIT_BACKEND=llvm` was requested but
