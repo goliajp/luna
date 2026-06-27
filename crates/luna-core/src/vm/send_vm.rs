@@ -307,8 +307,8 @@ impl SendVm {
     }
 
     /// v2.0 Track J sub-step J-E — read-only closure-shaped accessor
-    /// that runs `f` against `&Vm` under the lock. Mirror of
-    /// [`Self::with_vm_mut`] but immutable. Lets embedders read
+    /// that runs `f` against `&Vm` under the lock. Mirror of the
+    /// internal `with_vm_mut` but immutable. Lets embedders read
     /// arbitrary `Vm` state (counters, globals, dialect, etc.)
     /// without growing the `SendVm` API one method at a time.
     ///

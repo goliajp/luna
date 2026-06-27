@@ -283,8 +283,8 @@ impl TCellPtr {
     }
 }
 
-/// Clone mirrors `Cell<*const u8>: Clone` (Cell<T> is Clone whenever
-/// T: Copy). Produces a new cell at a different heap location with
+/// Clone mirrors `Cell<*const u8>: Clone` (`Cell<T>` is Clone whenever
+/// `T: Copy`). Produces a new cell at a different heap location with
 /// the same pointer bits. Callers that rely on heap-address stability
 /// (Cranelift IR loads of side-trace ptr cells) must NOT clone the
 /// containing `Box<TCellPtr>` once the IR has baked the original's
