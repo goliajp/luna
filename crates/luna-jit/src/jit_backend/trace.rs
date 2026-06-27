@@ -5144,10 +5144,8 @@ pub fn lower_trace_into_named<M: Module>(
     // such callsite bakes this Box's heap address into its IR.
     // Transported into [`CompiledTrace::global_side_trace_ptr`] at
     // emit end without moving (Box's heap allocation stays put).
-    let global_side_trace_box: Box<TCellPtr> =
-        Box::new(TCellPtr::null());
-    let _global_side_trace_cell_addr =
-        (&*global_side_trace_box) as *const TCellPtr as i64;
+    let global_side_trace_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+    let _global_side_trace_cell_addr = (&*global_side_trace_box) as *const TCellPtr as i64;
 
     // P12-S4-step3b — `regs_full` is sized to `window_size_us`, big
     // enough for every inlined frame's register window. Slots
@@ -5924,8 +5922,7 @@ pub fn lower_trace_into_named<M: Module>(
                         last.pc = side_exit_pc;
                     }
                     let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-                    let chain_ptr =
-                        TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
                     // P12-S10-B — materialise live Sinkable sites
@@ -5950,10 +5947,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let inline_side_box_0: Box<TCellPtr> =
-                        Box::new(TCellPtr::null());
-                    let _inline_side_cell_addr_0 =
-                        (&*inline_side_box_0) as *const TCellPtr as i64;
+                    let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
                     let chain_for_helper = chain_rc.clone();
                     per_exit_inline_vec.push((
                         side_exit_pc,
@@ -6007,10 +6002,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let tag_side_box_0: Box<TCellPtr> =
-                        Box::new(TCellPtr::null());
-                    let _tag_side_cell_addr_0 =
-                        (&*tag_side_box_0) as *const TCellPtr as i64;
+                    let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
                     let tag_side_local_0 = per_exit_kinds.len() as u32;
                     per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_0));
                     // store_back only writes caller window — depth>0 scratch
@@ -6249,8 +6242,7 @@ pub fn lower_trace_into_named<M: Module>(
                         last.pc = side_exit_pc;
                     }
                     let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-                    let chain_ptr =
-                        TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
                     // P12-S10-B — materialise live Sinkable sites
@@ -6273,10 +6265,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let inline_side_box_1: Box<TCellPtr> =
-                        Box::new(TCellPtr::null());
-                    let _inline_side_cell_addr_1 =
-                        (&*inline_side_box_1) as *const TCellPtr as i64;
+                    let inline_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _inline_side_cell_addr_1 = (&*inline_side_box_1) as *const TCellPtr as i64;
                     let chain_for_helper = chain_rc.clone();
                     per_exit_inline_vec.push((
                         side_exit_pc,
@@ -6326,10 +6316,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let tag_side_box_1: Box<TCellPtr> =
-                        Box::new(TCellPtr::null());
-                    let _tag_side_cell_addr_1 =
-                        (&*tag_side_box_1) as *const TCellPtr as i64;
+                    let tag_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _tag_side_cell_addr_1 = (&*tag_side_box_1) as *const TCellPtr as i64;
                     let tag_side_local_1 = per_exit_kinds.len() as u32;
                     per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_1));
                     emit_store_back_and_return_pc(
@@ -7752,10 +7740,8 @@ pub fn lower_trace_into_named<M: Module>(
                 if a + 4 < nil_snapshot.len() {
                     nil_snapshot[a + 4] = RegKind::Nil;
                 }
-                let tag_side_box_2: Box<TCellPtr> =
-                    Box::new(TCellPtr::null());
-                let _tag_side_cell_addr_2 =
-                    (&*tag_side_box_2) as *const TCellPtr as i64;
+                let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
                 let tag_side_local_2 = per_exit_kinds.len() as u32;
                 per_exit_kinds.push((rop.pc + 1, nil_snapshot, tag_side_box_2));
                 emit_store_back_and_return_pc(
@@ -7995,8 +7981,7 @@ pub fn lower_trace_into_named<M: Module>(
     // The Box transports the cell's heap address (baked into the
     // IR's `iconst` at each callsite) through this move without
     // moving the cell itself.
-    let mut tags_side_boxes: Vec<Box<TCellPtr>> =
-        Vec::with_capacity(per_exit_kinds.len());
+    let mut tags_side_boxes: Vec<Box<TCellPtr>> = Vec::with_capacity(per_exit_kinds.len());
     let per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]> = per_exit_kinds
         .into_iter()
         .map(|(pc, kinds, side_box)| {
@@ -8011,8 +7996,7 @@ pub fn lower_trace_into_named<M: Module>(
         })
         .collect::<Vec<_>>()
         .into();
-    let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> =
-        tags_side_boxes.into();
+    let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = tags_side_boxes.into();
     let per_exit_inline: TArc<[InlineSideExit]> = per_exit_inline_vec
         .into_iter()
         .map(

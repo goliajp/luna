@@ -105,8 +105,7 @@ impl TCellU32 {
         }
         #[cfg(feature = "send")]
         {
-            self.inner
-                .store(v, std::sync::atomic::Ordering::Relaxed);
+            self.inner.store(v, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
@@ -178,8 +177,7 @@ impl TCellBool {
         }
         #[cfg(feature = "send")]
         {
-            self.inner
-                .store(v, std::sync::atomic::Ordering::Relaxed);
+            self.inner.store(v, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

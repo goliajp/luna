@@ -268,9 +268,7 @@ fn jit_aware_send_vm_ir_walks_cross_thread() {
     // `traces` field wrapper instead:
     const fn require_send<T: Send>() {}
     require_send::<
-        luna_jit::jit::send_compat::TRefLock<
-            Vec<luna_jit::jit::send_compat::TArc<CompiledTrace>>,
-        >,
+        luna_jit::jit::send_compat::TRefLock<Vec<luna_jit::jit::send_compat::TArc<CompiledTrace>>>,
     >();
     // Probe that we can actually name `Proto` (otherwise the dead
     // import lint would fire).

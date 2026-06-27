@@ -1255,16 +1255,20 @@ pub mod aot_trace_registry {
                     }
                     continue;
                 }
-                let entry_tags_rc: luna_core::jit::send_compat::TArc<[u8]> = decoded.entry_tags.into();
-                let exit_tags_rc: luna_core::jit::send_compat::TArc<[ExitTag]> = exit_tags_vec.into();
+                let entry_tags_rc: luna_core::jit::send_compat::TArc<[u8]> =
+                    decoded.entry_tags.into();
+                let exit_tags_rc: luna_core::jit::send_compat::TArc<[ExitTag]> =
+                    exit_tags_vec.into();
                 // v2 per_exit_tags decode: reconstruct
                 // `Vec<(cont_pc, Rc<[ExitTag]>)>` matching the
                 // dispatcher's `decode_exit_shape` shape lookup. Each
                 // entry's packed-byte `ExitTag` array unpacks via
                 // [`unpack_exit_tag`]; an invalid byte = skip the
                 // whole trace (matches the existing exit-tag handling).
-                let mut per_exit_tags_decoded: Vec<(u32, luna_core::jit::send_compat::TArc<[ExitTag]>)> =
-                    Vec::with_capacity(decoded.per_exit_tags.len());
+                let mut per_exit_tags_decoded: Vec<(
+                    u32,
+                    luna_core::jit::send_compat::TArc<[ExitTag]>,
+                )> = Vec::with_capacity(decoded.per_exit_tags.len());
                 let mut per_exit_tags_ok = true;
                 for ent in &decoded.per_exit_tags {
                     let mut tags: Vec<ExitTag> = Vec::with_capacity(ent.tags_packed.len());
