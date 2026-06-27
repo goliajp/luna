@@ -48,6 +48,7 @@
 
 use crate::storage::{CachedEntry, EnginePair, LlvmJitStorage};
 use inkwell::OptimizationLevel;
+use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::values::{FunctionValue, PointerValue};
@@ -163,18 +164,41 @@ fn is_dead_locals_then_return0(code: &[Inst]) -> bool {
         .all(|i| matches!(i.op(), Op::LoadNil | Op::LoadK | Op::Move))
 }
 
-/// Phase 1K.E.2 — whitelisted op set + chunk-level return shape that
-/// the compute lowerer understands. Built by [`ChunkPlan::from_proto`];
+/// Phase 1K.E.2+ — whitelisted op set + control-flow plan that the
+/// compute lowerer understands. Built by [`ChunkPlan::from_proto`];
 /// `None` when the proto falls outside the supported whitelist.
+///
+/// The plan is the full reach-analysed bytecode + a per-PC vector of
+/// basic-block start markers (every entry PC, every jump target, every
+/// PC immediately following a terminator). With branching ops in scope
+/// (Phase 1K.E.5+6) "reachable" is no longer "sequential prefix"; we
+/// trace edges from PC 0 and mark every visited PC for emit.
 struct ChunkPlan<'a> {
-    /// Instructions to emit. Truncated at the first reachable return
-    /// (no point emitting unreachable trailing ops).
+    /// Full chunk code (not truncated). The reach map (`reachable`)
+    /// tells the lowerer which PCs to emit; unreachable PCs are
+    /// skipped entirely.
     code: &'a [Inst],
     /// Number of i64 register slots to alloca on entry.
     num_regs: u32,
-    /// True ↔ the chunk's terminator is `Return1`; false ↔ `Return0`.
-    /// Plumbed into the dispatcher contract via the cached entry.
+    /// True ↔ all reachable returns are `Return1`; false ↔ all are
+    /// `Return0`. A proto whose reachable set mixes the two bails
+    /// (would need a polymorphic dispatcher contract — out of scope).
     returns_one: bool,
+    /// `true` at every PC that starts a new basic block. PC 0 always
+    /// starts a BB; jump targets, the PC immediately after every
+    /// terminator (`Return0|Return1|Jmp`), and the fall-through PC
+    /// after a `Lt|Le|Eq` (which is `pc+2` because the paired Jmp at
+    /// `pc+1` is consumed by the condbr) all start BBs too.
+    bb_starts: Vec<bool>,
+    /// `true` at every PC that holds a `Jmp` consumed by a preceding
+    /// `Lt|Le|Eq` (i.e. the Jmp is folded into the condbr emit and
+    /// must not be lowered as a separate op).
+    consumed_jmp: Vec<bool>,
+    /// `true` at every PC reachable via the control-flow trace from
+    /// PC 0. Unreachable PCs (e.g. the trailing implicit `Return0`
+    /// after every reachable path has already returned) are skipped
+    /// during emit so LLVM doesn't see dead BBs without predecessors.
+    reachable: Vec<bool>,
 }
 
 impl<'a> ChunkPlan<'a> {
@@ -185,76 +209,191 @@ impl<'a> ChunkPlan<'a> {
             return None;
         }
 
-        // Find the first reachable return. The Phase 1K.E.2 whitelist
-        // doesn't include any branching op yet, so "reachable" means
-        // "encountered in sequential scan". A Return0 / Return1 is
-        // the terminator.
-        let mut ret_pc: Option<usize> = None;
+        // Pass 1: per-op whitelist gate + structural validation.
+        // `Lt|Le|Eq` must be followed by a `Jmp`; mark the Jmp as
+        // consumed by the condbr.
+        let mut consumed_jmp = vec![false; n];
         for (pc, ins) in code.iter().enumerate() {
-            if matches!(ins.op(), Op::Return0 | Op::Return1) {
-                ret_pc = Some(pc);
-                break;
+            match ins.op() {
+                Op::LoadI
+                | Op::LoadNil
+                | Op::Move
+                | Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Mod
+                | Op::Jmp
+                | Op::Return0
+                | Op::Return1 => {}
+                Op::Lt | Op::Le | Op::Eq => {
+                    let peer = code.get(pc + 1)?;
+                    if peer.op() != Op::Jmp {
+                        return None;
+                    }
+                    consumed_jmp[pc + 1] = true;
+                }
+                _ => return None,
             }
         }
-        let ret_pc = ret_pc?;
 
-        // Whitelist gate: every prefix op must be one the compute
-        // path can emit.
-        for ins in &code[..ret_pc] {
-            if !is_compute_supported(ins) {
+        // Pass 2: reach analysis from PC 0. A worklist trace
+        // following the control-flow edges; terminators have no
+        // successor.
+        let mut reachable = vec![false; n];
+        let mut worklist = vec![0usize];
+        while let Some(pc) = worklist.pop() {
+            if pc >= n || reachable[pc] {
+                continue;
+            }
+            reachable[pc] = true;
+            let ins = code[pc];
+            match ins.op() {
+                Op::Return0 | Op::Return1 => {} // terminator, no successor
+                Op::Jmp => {
+                    if consumed_jmp[pc] {
+                        // Consumed by the preceding Lt|Le|Eq; the
+                        // edges from this Jmp are folded into the
+                        // comparison's condbr. Visiting it again
+                        // here would mark it reachable as a
+                        // standalone op, which is wrong (the emit
+                        // loop skips consumed Jmps).
+                        continue;
+                    }
+                    worklist.push(jmp_target(pc, ins));
+                }
+                Op::Lt | Op::Le | Op::Eq => {
+                    // The peer Jmp at pc+1 supplies the false-edge
+                    // target; pc+2 is the true-edge (skip-next) fall.
+                    worklist.push(pc + 2);
+                    if let Some(jmp) = code.get(pc + 1) {
+                        worklist.push(jmp_target(pc + 1, *jmp));
+                    }
+                }
+                _ => worklist.push(pc + 1),
+            }
+        }
+
+        // Pass 3: returns_one analysis. Every reachable Return* must
+        // agree on shape (Return0 or Return1) so the dispatcher
+        // contract has a single answer.
+        let mut found: Option<bool> = None;
+        for (pc, ins) in code.iter().enumerate() {
+            if !reachable[pc] {
+                continue;
+            }
+            match ins.op() {
+                Op::Return0 => match found {
+                    Some(true) => return None,
+                    _ => found = Some(false),
+                },
+                Op::Return1 => match found {
+                    Some(false) => return None,
+                    _ => found = Some(true),
+                },
+                _ => {}
+            }
+        }
+        let returns_one = found?;
+
+        // Pass 4: BB starts. PC 0 always; jump targets; every PC
+        // immediately after a terminator; the fall-through PC after
+        // a `Lt|Le|Eq` (pc+2 — the consumed Jmp at pc+1 is folded).
+        let mut bb_starts = vec![false; n];
+        bb_starts[0] = true;
+        for (pc, ins) in code.iter().enumerate() {
+            if !reachable[pc] {
+                continue;
+            }
+            match ins.op() {
+                Op::Lt | Op::Le | Op::Eq => {
+                    if pc + 2 < n {
+                        bb_starts[pc + 2] = true;
+                    }
+                    if let Some(jmp) = code.get(pc + 1) {
+                        let tgt = jmp_target(pc + 1, *jmp);
+                        if tgt < n {
+                            bb_starts[tgt] = true;
+                        }
+                    }
+                }
+                Op::Jmp if !consumed_jmp[pc] => {
+                    let tgt = jmp_target(pc, *ins);
+                    if tgt < n {
+                        bb_starts[tgt] = true;
+                    }
+                    if pc + 1 < n {
+                        bb_starts[pc + 1] = true;
+                    }
+                }
+                Op::Return0 | Op::Return1 if pc + 1 < n => {
+                    bb_starts[pc + 1] = true;
+                }
+                _ => {}
+            }
+        }
+
+        // Register-bounds sanity check on every reachable op that
+        // names a slot. `proto.max_stack` is the upper bound the
+        // parser guarantees; an out-of-range A would write past the
+        // alloca, so bail rather than corrupt memory.
+        let regs = (proto.max_stack as u32).max(1);
+        for (pc, ins) in code.iter().enumerate() {
+            if !reachable[pc] {
+                continue;
+            }
+            let max_slot = match ins.op() {
+                Op::LoadI | Op::Move | Op::Return1 => ins.a(),
+                Op::LoadNil => ins.a() + ins.b(),
+                Op::Add | Op::Sub | Op::Mul | Op::Mod => ins.a().max(ins.b()).max(ins.c()),
+                Op::Lt | Op::Le | Op::Eq => ins.a().max(ins.b()),
+                _ => 0,
+            };
+            if max_slot >= regs {
                 return None;
             }
         }
 
-        // The terminator itself is always Return0 / Return1 (both
-        // supported in Phase 1K.E.2). The Return1 case requires
-        // `ins.a()` to be a valid register slot; check that the
-        // register fits within the proto's stack budget.
-        let returns_one = code[ret_pc].op() == Op::Return1;
-        if returns_one && code[ret_pc].a() >= proto.max_stack as u32 {
-            // Defensive: an out-of-range A would write past the
-            // alloca'd reg array. Should never happen for a
-            // parser-emitted chunk, but treat as bail rather than
-            // panic.
-            return None;
-        }
-
         Some(ChunkPlan {
-            code: &code[..=ret_pc],
-            num_regs: (proto.max_stack as u32).max(1),
+            code,
+            num_regs: regs,
             returns_one,
+            bb_starts,
+            consumed_jmp,
+            reachable,
         })
     }
 }
 
-/// v2.1 Phase 1K.E.2 — whitelist gate for the compute path. Each
-/// listed op has an `emit_op` arm below; ops outside the list fall
-/// through to `CompileResult::Skipped`.
-///
-/// Sub-phase growth:
-/// - 1K.E.2: `LoadI` + `LoadNil` + `Move`. Cache key over bytecode
-///   words is sufficient — the recognised ops don't touch
-///   `proto.consts`.
-/// - 1K.E.3: `Add`. Still no consts; key stays as-is.
-/// - 1K.E.4 (this): `Sub` / `Mul` / `Mod` (Lua semantics — floor mod,
-///   sign matches divisor — not C's truncating srem). `Op::Div` is
-///   intentionally **excluded** because Lua 5.4 `/` always returns a
-///   float regardless of operand types; emitting it as int sdiv would
-///   silently mis-compile `2 / 3` (Lua → 0.666…, the int chunk would
-///   return 0). Div lands in a later sub-phase paired with float-reg
-///   support (`ret_is_float=true` plumbing + `f64::from_bits`
-///   reinterpret on the return path).
-/// - 1K.E.5: `Lt` / `Le` / `Eq`.
-/// - 1K.E.6: `Jmp` (with the comparison-then-jmp condbr pattern).
-/// - 1K.E.7: `LoadFalse` / `LoadTrue` + `LoadK(Int)` (the
-///   `LoadK(Int)` add widens the cache key to include the constant
-///   table).
-fn is_compute_supported(ins: &Inst) -> bool {
-    matches!(
-        ins.op(),
-        Op::LoadI | Op::LoadNil | Op::Move | Op::Add | Op::Sub | Op::Mul | Op::Mod
-    )
+/// Lua `Jmp` target: `(pc + 1) + sj`. Matches
+/// `luna_jit::jit_backend::jmp_target`. Returns a `usize` — the caller
+/// (ChunkPlan / compile_compute_chunk) bounds-checks against `n`
+/// before using it as an index.
+fn jmp_target(pc: usize, ins: Inst) -> usize {
+    (pc as i64 + 1 + ins.sj() as i64) as usize
 }
+
+// Compute-path whitelist roadmap (consumption itself happens inside
+// `ChunkPlan::from_proto`):
+//
+// - 1K.E.2: `LoadI` + `LoadNil` + `Move`. Cache key over bytecode
+//   words is sufficient — the recognised ops don't touch
+//   `proto.consts`.
+// - 1K.E.3: `Add`. Still no consts; key stays as-is.
+// - 1K.E.4: `Sub` / `Mul` / `Mod` (Lua semantics — floor mod, sign
+//   matches divisor — not C's truncating srem). `Op::Div` is
+//   intentionally **excluded** because Lua 5.4 `/` always returns a
+//   float regardless of operand types; emitting it as int sdiv would
+//   silently mis-compile `2 / 3` (Lua → 0.666…, the int chunk would
+//   return 0). Div lands paired with float-reg support
+//   (`ret_is_float=true` + `f64::from_bits` reinterpret).
+// - 1K.E.5+6: `Lt` / `Le` / `Eq` + `Jmp`. Comparison-then-jmp becomes
+//   a single LLVM `condbr`; bare `Jmp` becomes `br`. Multiple
+//   reachable returns are tolerated (must agree on
+//   `Return0`-vs-`Return1` shape).
+// - 1K.E.7: `LoadFalse` / `LoadTrue` + `LoadK(Int)` (the `LoadK(Int)`
+//   add widens the cache key to include the constant table).
+// - 1K.E.7+: float support — `LoadF` / `Op::Div` / float-only chunks
+//   (`ret_is_float=true`).
 
 /// Phase 1K.D.8 / 1K.E.2 — stable cache key for a Proto. FNV-1a-64
 /// over the bytecode words + the dialect bit. Constants are not fed
@@ -293,21 +432,33 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     finalize_module(ctx_box, module)
 }
 
-/// v2.1 Phase 1K.E.2 — lower a compute-path chunk into a JIT entry.
+/// v2.1 Phase 1K.E.2+ — lower a compute-path chunk into a JIT entry.
 ///
-/// Emit shape:
+/// Emit shape (Phase 1K.E.5+6 with control flow):
 /// ```text
 /// extern "C" fn luna_jit_llvm_entry() -> i64 {
-///     entry:
-///         %regs = alloca [N x i64]      ; N = plan.num_regs
-///         ; one IR sequence per ChunkPlan.code op:
-///         ; LoadI rA, sBx  → store i64 sBx, ptr regs[A]
-///         ; LoadNil rA, B  → store i64 0  for regs[A..=A+B]
-///         ; Move rA, rB    → load regs[B]; store regs[A]
-///         ; Return0        → ret i64 0
-///         ; Return1 rA     → ret regs[A]
+///     bb_0:                              ; entry — alloca + sequential IR
+///         %regs = alloca [N x i64]       ; N = plan.num_regs
+///         ; per-op IR for each reachable PC in BB 0
+///         br bb_<jump-target>            ; or condbr / ret
+///     bb_<pc>:                           ; one LLVM BB per ChunkPlan::bb_starts[pc]
+///         ; per-op IR for each reachable PC in this BB
+///         br / condbr / ret              ; terminator
+///     ...
 /// }
 /// ```
+///
+/// Per-PC emit:
+/// - `LoadI rA, sBx`     → store i64 sBx, regs[A]
+/// - `LoadNil rA, B`     → store i64 0 for regs[A..=A+B]
+/// - `Move rA, rB`       → load regs[B]; store regs[A]
+/// - `Add|Sub|Mul rA,rB,rC` → load regs[B]; load regs[C]; <iop>; store
+/// - `Mod rA, rB, rC`    → load, srem, sign-fixup select, store
+/// - `Return0`           → ret i64 0
+/// - `Return1 rA`        → load regs[A]; ret
+/// - `Jmp`               → br bb_<target>
+/// - `Lt|Le|Eq rA,rB,k`  → load, icmp, condbr (k flips arms; pc+1 Jmp
+///                          provides the false-edge target)
 fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
     // SAFETY: `ctx_box` is heap-allocated and never moved out of the
@@ -326,15 +477,24 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     let regs_ty = i64_type.array_type(plan.num_regs);
     let fn_type = i64_type.fn_type(&[], false);
     let function = module.add_function("luna_jit_llvm_entry", fn_type, None);
-    let entry_block = ctx_static.append_basic_block(function, "entry");
-    builder.position_at_end(entry_block);
 
-    // Allocate the chunk's register file. LLVM SROA / mem2reg will
-    // promote the slots that get observably used out of memory in
-    // any future optimisation pass. The values held in regs are
-    // i64-bit-pattern Lua values — int chunks treat them as signed
-    // integers; float chunks will reinterpret_cast (Phase 1K.E later
-    // sub-phase when float_only=true).
+    // Pre-create one LLVM BB per source BB. The PC-keyed map gives
+    // O(1) lookup for branch targets.
+    let n = plan.code.len();
+    let mut bb_of_pc: Vec<Option<BasicBlock<'static>>> = vec![None; n];
+    for (pc, start) in plan.bb_starts.iter().enumerate() {
+        if *start && plan.reachable[pc] {
+            bb_of_pc[pc] = Some(ctx_static.append_basic_block(function, &format!("bb_{pc}")));
+        }
+    }
+    let entry_bb = bb_of_pc[0]?;
+    builder.position_at_end(entry_bb);
+
+    // Allocate the chunk's register file in the entry BB. All other
+    // BBs read/write via the same alloca pointer; LLVM mem2reg /
+    // SROA will promote scalar slots out of memory at higher opt
+    // levels (currently OptimizationLevel::None — promotion lands
+    // when 1K.E benches start measuring).
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
     let mut emitter = ComputeEmitter {
@@ -346,8 +506,108 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
         regs,
     };
 
-    for ins in plan.code {
-        emitter.emit_op(*ins)?;
+    // Walk PCs; switch BB on bb_starts boundaries; terminators
+    // (Return*/Jmp/Lt|Le|Eq) handled here; non-CF ops delegated to
+    // `emitter.emit_op`.
+    let mut bb_terminated = false;
+    let mut current_bb = Some(entry_bb);
+    let mut pc = 0usize;
+    while pc < n {
+        // Skip unreachable ops — they have no BB and would not be
+        // valid emit targets.
+        if !plan.reachable[pc] {
+            pc += 1;
+            continue;
+        }
+
+        // Entering a new BB? Either we just emitted a terminator (in
+        // which case we MUST switch) or the prev BB fell through to
+        // a BB-start (insert an unconditional br).
+        if plan.bb_starts[pc] && current_bb != bb_of_pc[pc] {
+            let next_bb = bb_of_pc[pc]?;
+            if !bb_terminated {
+                builder.build_unconditional_branch(next_bb).ok()?;
+            }
+            builder.position_at_end(next_bb);
+            current_bb = Some(next_bb);
+            bb_terminated = false;
+        }
+
+        // Consumed Jmp (folded into a preceding Lt|Le|Eq condbr) —
+        // skip emit entirely. The condbr already wrote the
+        // terminator for this BB.
+        if plan.consumed_jmp[pc] {
+            pc += 1;
+            continue;
+        }
+
+        let ins = plan.code[pc];
+        match ins.op() {
+            Op::Return0 => {
+                let zero = i64_type.const_zero();
+                builder.build_return(Some(&zero)).ok()?;
+                bb_terminated = true;
+            }
+            Op::Return1 => {
+                let v = emitter.load_reg(ins.a(), "ret_val")?;
+                builder.build_return(Some(&v)).ok()?;
+                bb_terminated = true;
+            }
+            Op::Jmp => {
+                let tgt = jmp_target(pc, ins);
+                let tgt_bb = bb_of_pc.get(tgt).copied().flatten()?;
+                builder.build_unconditional_branch(tgt_bb).ok()?;
+                bb_terminated = true;
+            }
+            Op::Lt | Op::Le | Op::Eq => {
+                // Lua predicate semantics:
+                //   if ((R[A] <op> R[B]) ~= k) then pc++
+                // i.e. SKIP the next Jmp when the comparison's truth
+                // value differs from k. Mapped to a single LLVM
+                // condbr by picking the (then/else) branches per k:
+                //   k = true  → then = jmp_bb, else = fall_bb
+                //   k = false → then = fall_bb, else = jmp_bb
+                // because:
+                //   cmp == k  ↔ DON'T skip ↔ take the Jmp
+                //   cmp != k  ↔ SKIP       ↔ take the fall-through
+                let pred = match ins.op() {
+                    Op::Lt => inkwell::IntPredicate::SLT,
+                    Op::Le => inkwell::IntPredicate::SLE,
+                    Op::Eq => inkwell::IntPredicate::EQ,
+                    _ => unreachable!(),
+                };
+                let lhs = emitter.load_reg(ins.a(), "cmp_lhs")?;
+                let rhs = emitter.load_reg(ins.b(), "cmp_rhs")?;
+                let cmp = builder.build_int_compare(pred, lhs, rhs, "cmp_res").ok()?;
+                let jmp_ins = plan.code.get(pc + 1)?;
+                let jmp_pc = pc + 1;
+                let jmp_target_pc = jmp_target(jmp_pc, *jmp_ins);
+                let fall_pc = pc + 2;
+                let fall_bb = bb_of_pc.get(fall_pc).copied().flatten()?;
+                let jmp_bb = bb_of_pc.get(jmp_target_pc).copied().flatten()?;
+                let (then_bb, else_bb) = if ins.k() {
+                    (jmp_bb, fall_bb)
+                } else {
+                    (fall_bb, jmp_bb)
+                };
+                builder
+                    .build_conditional_branch(cmp, then_bb, else_bb)
+                    .ok()?;
+                bb_terminated = true;
+            }
+            _ => {
+                emitter.emit_op(ins)?;
+            }
+        }
+        pc += 1;
+    }
+
+    // Sanity: a well-formed chunk's last reachable BB ends with a
+    // terminator (every parser-emitted chunk ends with `Return*`).
+    // If we somehow exited the loop with an unterminated BB, the
+    // resulting LLVM IR would be malformed — bail rather than emit it.
+    if !bb_terminated {
+        return None;
     }
 
     finalize_module(ctx_box, module)
@@ -356,11 +616,16 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
 /// Per-op emit context for the compute path. Holds the LLVM types
 /// and the entry block's register-file alloca; each `emit_op` call
 /// appends the op's IR sequence at the builder's current position.
+///
+/// `emit_op` handles non-control-flow ops (LoadI / LoadNil / Move /
+/// Add / Sub / Mul / Mod). Control-flow ops (`Return0|Return1|Jmp|
+/// Lt|Le|Eq`) are handled in [`compile_compute_chunk`] directly so
+/// the outer loop can switch BBs around the emitted terminator.
 struct ComputeEmitter<'ctx, 'a> {
-    #[allow(dead_code)] // Phase 1K.E.6 (Jmp) will need the context to append BBs.
+    #[allow(dead_code)] // Held for future per-op IR (intrinsics / strings).
     ctx: &'ctx Context,
     builder: &'a inkwell::builder::Builder<'ctx>,
-    #[allow(dead_code)] // Phase 1K.E.6 (Jmp) will need the function to append BBs.
+    #[allow(dead_code)] // Held for future per-op IR (append BBs / global mappings).
     function: FunctionValue<'ctx>,
     i64_type: inkwell::types::IntType<'ctx>,
     regs_ty: inkwell::types::ArrayType<'ctx>,
@@ -539,21 +804,13 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 self.builder.build_store(dst, result).ok()?;
                 Some(())
             }
-            Op::Return0 => {
-                let zero = self.i64_type.const_zero();
-                self.builder.build_return(Some(&zero)).ok()?;
-                Some(())
-            }
-            Op::Return1 => {
-                let a = ins.a();
-                let v = self.load_reg(a, "ret_val")?;
-                self.builder.build_return(Some(&v)).ok()?;
-                Some(())
-            }
             _ => {
                 // Whitelist guarded this in `ChunkPlan::from_proto`;
-                // if we get here something added an op without
-                // updating the emitter. Bail rather than emit junk.
+                // control-flow ops (Return0/Return1/Jmp/Lt/Le/Eq)
+                // are handled in `compile_compute_chunk`'s outer
+                // loop, not here. Any other op slipping through =
+                // someone added it to the whitelist without an
+                // emit arm; bail rather than emit junk.
                 None
             }
         }
