@@ -43,6 +43,7 @@ use luna_core::vm::Vm;
 
 mod codegen;
 mod storage;
+mod trace;
 
 pub use storage::LlvmJitStorage;
 
@@ -89,18 +90,18 @@ impl IntChunkCompiler for LlvmBackend {
 impl TraceCompiler for LlvmBackend {
     fn try_compile_trace(
         &self,
-        _storage: &mut dyn JitStorage,
-        _record: &TraceRecord,
-        _opts: CompileOptions,
+        storage: &mut dyn JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        // Phase 1K.D ships method-JIT-only LLVM. Trace-JIT lowering
-        // lands in Phase 1K.F (one-shape, no side-exits) and 1K.G
-        // (side-exits + helper-call emit). Until then traces always
-        // bail back to the interpreter, matching the trait contract.
-        None
+        // v2.1 Phase 1K.G — delegate to the LLVM trace lowerer.
+        // Down-cast `dyn JitStorage` to the concrete `LlvmJitStorage` so
+        // `trace::try_compile_trace` can park the engine pair.
+        let llvm_storage = storage.as_any_mut().downcast_mut::<LlvmJitStorage>()?;
+        trace::try_compile_trace(llvm_storage, record, opts)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
-        "llvm-stub"
+        "llvm-1k-g"
     }
 }
