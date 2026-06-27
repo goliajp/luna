@@ -2487,7 +2487,23 @@ impl<'a> Compiler<'a> {
                 Expr::Index { obj, key } => {
                     let (obj, key) = (*obj, *key);
                     let oe = self.expr(obj)?;
-                    let o_pinned = self.exp_to_nextreg(oe)?;
+                    // A4' (`.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2 +
+                    // `.dev/rfcs/v2.1-a4-prime-prereq-verdict.md` §3): when
+                    // the prereq gate certifies the obj is a non-captured
+                    // bare-Name local AND the single RHS contains no
+                    // UserOrUnknown call, the unconditional snapshot Move
+                    // is provably redundant — reuse the local's register
+                    // directly. Otherwise fall back to the snapshot.
+                    let o_pinned = if self.assign_stat_can_skip_obj_snapshot(targets, exprs)
+                        && matches!(oe, Exp::Reg(_))
+                    {
+                        match oe {
+                            Exp::Reg(r) => r,
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        self.exp_to_nextreg(oe)?
+                    };
                     // Capture the key the same way `assign_to` does: a small
                     // string or int constant rides inline in OP_SetField /
                     // OP_SetI (so it never depends on a register that could
@@ -3060,9 +3076,8 @@ impl<'a> Compiler<'a> {
     ///    over `(obj, exprs[0])` returns true (no UserOrUnknown RHS
     ///    calls; obj is a bare Name).
     ///
-    /// PURE ADDITIVE — no current site in `assign_stat` calls this.
-    /// Wired by the A4' attack proper in a subsequent v2.1 sprint.
-    #[allow(dead_code)] // consumer = v2.1 Phase 11 A4' attack
+    /// Wired by the A4' attack at `assign_stat` line 2487-2522
+    /// Index-LHS branch (v2.1 PI Phase 11 ship).
     pub(crate) fn assign_stat_can_skip_obj_snapshot(
         &self,
         targets: &[ExprId],
