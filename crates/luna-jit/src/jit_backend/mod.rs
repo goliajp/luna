@@ -1514,6 +1514,63 @@ pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::run
 /// rather than always going through the helper's metatable check.
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
+
+/// v2.1 Phase 1I.B — table-field IC scaffold.
+///
+/// Byte offset of the `nodes: Box<[Node]>` field's low fat-pointer
+/// word (the data pointer). luna-core's `runtime::table::jit_layout`
+/// module computes this against the live `Table` struct, then we
+/// re-export it here so trace.rs can refer to it locally.
+///
+/// Fat-pointer layout: `(data_ptr, len)` — the data ptr is at
+/// `TABLE_NODES_PTR_OFFSET`, length at `TABLE_NODES_LEN_OFFSET`
+/// (= `..PTR_OFFSET + 8`). See
+/// `runtime/table.rs::phase_1i_b_node_layout_pinned` for the runtime
+/// assertion that pins this ABI.
+#[allow(dead_code)]
+pub(crate) const TABLE_NODES_PTR_OFFSET: usize =
+    luna_core::runtime::table::jit_layout::TABLE_NODES_OFFSET;
+/// High fat-pointer word — the `len` (in `Node` slots) of the
+/// `nodes: Box<[Node]>`. The IC's shape-stability guard compares
+/// this load against the recorder's cached length.
+#[allow(dead_code)]
+pub(crate) const TABLE_NODES_LEN_OFFSET: usize = TABLE_NODES_PTR_OFFSET + 8;
+/// Within one `Node`, the byte offset of `key: Value`. Value's tag
+/// byte (`#[repr(C, u8)]`) lives at offset 0 of the Value, so the
+/// key's tag is at `NODE_KEY_OFFSET` (= 0) and the key's raw
+/// 8-byte payload at `NODE_KEY_OFFSET + 8`.
+#[allow(dead_code)]
+pub(crate) const NODE_KEY_OFFSET: usize =
+    luna_core::runtime::table::jit_layout::NODE_KEY_OFFSET;
+/// Byte offset of `val: Value` within a `Node`. The val's tag is
+/// at `NODE_VAL_OFFSET` (= 16), payload at `NODE_VAL_OFFSET + 8`.
+#[allow(dead_code)]
+pub(crate) const NODE_VAL_OFFSET: usize =
+    luna_core::runtime::table::jit_layout::NODE_VAL_OFFSET;
+/// Total `Node` size in bytes — stride for `node_addr = nodes_ptr +
+/// slot_idx * SIZEOF_NODE`.
+#[allow(dead_code)]
+pub(crate) const SIZEOF_NODE: usize =
+    luna_core::runtime::table::jit_layout::SIZEOF_NODE;
+/// Byte offset of the value's tag byte inside the `val: Value` field
+/// of a `Node`. Value is `#[repr(C, u8)]`, discriminant at byte 0.
+#[allow(dead_code)]
+pub(crate) const NODE_VAL_TAG_OFFSET: usize = NODE_VAL_OFFSET;
+/// Byte offset of the value's 8-byte raw payload inside `val: Value`.
+/// 7 bytes of alignment padding sit between the tag and the payload.
+#[allow(dead_code)]
+pub(crate) const NODE_VAL_RAW_OFFSET: usize = NODE_VAL_OFFSET + 8;
+/// Byte offset of the key's 8-byte raw payload inside `key: Value`.
+/// IC's "slot key still matches" guard reads 8 bytes here and
+/// compares against the recorder-cached `Gc<LuaStr>` pointer bits.
+#[allow(dead_code)]
+pub(crate) const NODE_KEY_RAW_OFFSET: usize = NODE_KEY_OFFSET + 8;
+/// Byte offset of the key's tag byte (`#[repr(C, u8)]`). The IC
+/// also guards `key.tag == raw::STR` so a recycled slot that happens
+/// to hold a non-string key with matching raw bits would deopt.
+#[allow(dead_code)]
+pub(crate) const NODE_KEY_TAG_OFFSET: usize = NODE_KEY_OFFSET;
+
 const RAW_TAG_INT: i64 = luna_core::runtime::value::raw::INT as i64;
 const RAW_TAG_FLOAT: i64 = luna_core::runtime::value::raw::FLOAT as i64;
 const RAW_TAG_TABLE: i64 = luna_core::runtime::value::raw::TABLE as i64;
