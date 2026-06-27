@@ -30,9 +30,7 @@
 use cranelift_codegen::{
     Context,
     control::ControlPlane,
-    ir::{
-        AbiParam, Function, InstBuilder, MemFlags, Opcode, Signature, UserFuncName, types,
-    },
+    ir::{AbiParam, Function, InstBuilder, MemFlags, Opcode, Signature, UserFuncName, types},
     isa::CallConv,
     settings::{self, Configurable},
 };
@@ -101,18 +99,21 @@ fn isle_dse_rule_fires_on_move_then_mul_shape() {
 
     let stores_before = count_stores(&func);
     assert_eq!(
-        stores_before, 2,
+        stores_before,
+        2,
         "fixture should start with exactly 2 stores; got {stores_before}\nIR:\n{}",
         func.display()
     );
 
     let mut ctx = Context::for_function(func);
     let mut ctrl_plane = ControlPlane::default();
-    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane)
+        .expect("optimize");
 
     let stores_after = count_stores(&ctx.func);
     assert_eq!(
-        stores_after, 1,
+        stores_after,
+        1,
         "Phase 1C ISLE rule should have removed the prior (dead) store; \
          got {stores_after} stores remaining.\nIR after optimize:\n{}",
         ctx.func.display()
@@ -171,9 +172,7 @@ fn isle_dse_rule_does_not_fire_with_intervening_load() {
     let v_a = bcx.ins().iconst(types::I64, 7);
     bcx.ins().store(MemFlags::trusted(), v_a, addr_ptr, 0);
     // Intervening load forwards from the prior store -> flips observed bit.
-    let v_forwarded = bcx
-        .ins()
-        .load(types::I64, MemFlags::trusted(), addr_ptr, 0);
+    let v_forwarded = bcx.ins().load(types::I64, MemFlags::trusted(), addr_ptr, 0);
     let v_b = bcx.ins().iadd_imm(v_forwarded, 1);
     bcx.ins().store(MemFlags::trusted(), v_b, addr_ptr, 0);
     bcx.ins().return_(&[v_b]);
@@ -181,11 +180,13 @@ fn isle_dse_rule_does_not_fire_with_intervening_load() {
 
     let mut ctx = Context::for_function(func);
     let mut ctrl_plane = ControlPlane::default();
-    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane)
+        .expect("optimize");
 
     let stores_after = count_stores(&ctx.func);
     assert_eq!(
-        stores_after, 2,
+        stores_after,
+        2,
         "intervening must-aliased load should mark prior store observed; \
          both stores must survive. IR after optimize:\n{}",
         ctx.func.display()
@@ -247,11 +248,13 @@ fn isle_dse_cross_block_strict_chain_fires() {
 
     let mut ctx = Context::for_function(func);
     let mut ctrl_plane = ControlPlane::default();
-    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane)
+        .expect("optimize");
 
     let stores_after = count_stores(&ctx.func);
     assert_eq!(
-        stores_after, 1,
+        stores_after,
+        1,
         "Phase 1G.B.2 strict-chain check should drop the prior store \
          across the block0 -> block1 fall-through; got {stores_after}.\n\
          IR after optimize:\n{}",
@@ -322,11 +325,13 @@ fn isle_dse_cross_block_deopt_safe_relaxation_fires() {
 
     let mut ctx = Context::for_function(func);
     let mut ctrl_plane = ControlPlane::default();
-    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane)
+        .expect("optimize");
 
     let stores_after = count_stores(&ctx.func);
     assert_eq!(
-        stores_after, 2,
+        stores_after,
+        2,
         "Phase 1G.B.3 deopt-safe relaxation should drop the prior store \
          (deopt path overwrites via plain Store); got {stores_after}.\n\
          IR after optimize:\n{}",
@@ -377,9 +382,7 @@ fn isle_dse_cross_block_rejects_when_side_exit_loads() {
     // Side exit reads slot via trusted load — observes prior store.
     bcx.switch_to_block(block2);
     bcx.seal_block(block2);
-    let v_observed = bcx
-        .ins()
-        .load(types::I64, MemFlags::trusted(), addr, 0);
+    let v_observed = bcx.ins().load(types::I64, MemFlags::trusted(), addr, 0);
     let v_plus = bcx.ins().iadd_imm(v_observed, 1);
     bcx.ins().store(MemFlags::new(), v_plus, addr, 0);
     bcx.ins().return_(&[v_observed]);
@@ -388,7 +391,8 @@ fn isle_dse_cross_block_rejects_when_side_exit_loads() {
 
     let mut ctx = Context::for_function(func);
     let mut ctrl_plane = ControlPlane::default();
-    ctx.optimize(isa.as_ref(), &mut ctrl_plane).expect("optimize");
+    ctx.optimize(isa.as_ref(), &mut ctrl_plane)
+        .expect("optimize");
 
     // Count notrap (trusted) stores — both the prior in block0 AND the
     // current in block1 must survive. The plain Store in block2 is a
@@ -407,7 +411,8 @@ fn isle_dse_cross_block_rejects_when_side_exit_loads() {
         })
         .count();
     assert_eq!(
-        trusted_stores, 2,
+        trusted_stores,
+        2,
         "side exit's trusted load observes prior store; both trusted stores \
          must survive. got {trusted_stores}.\nIR after optimize:\n{}",
         ctx.func.display()

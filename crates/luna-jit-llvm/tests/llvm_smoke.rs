@@ -189,19 +189,160 @@ fn storage_cache_reuses_compiled_entry() {
     );
 }
 
-/// Phase 1K.D.7 — sanity check that out-of-shape chunks bail back
-/// to the interpreter rather than being mis-compiled. `return 1`
-/// emits `LoadI` + `Return1`, neither of which is in the recognised
-/// prefix set; the backend must report `Skipped`.
+/// Phase 1K.D.7 / Phase 1K.E.2 — sanity check that out-of-shape
+/// chunks bail back to the interpreter rather than being mis-compiled.
+///
+/// At Phase 1K.D the recognised shape was the dead-locals path only,
+/// so `return 1` (LoadI + Return1) bailed. Phase 1K.E.2 added the
+/// compute path which now handles `LoadI` + `Return1` — so we need a
+/// chunk whose op set falls outside *both* paths to retain
+/// `Skipped` coverage. `local t = {}` emits `NewTable` + `Return0`;
+/// `NewTable` is in neither whitelist, so the backend bails.
 #[test]
 fn out_of_shape_chunk_returns_skipped() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    let closure = vm.load(b"return 1", b"=out_of_shape").expect("compile");
+    let closure = vm.load(b"local t = {}", b"=out_of_shape").expect("compile");
+    let proto = closure.proto;
+    // Sanity: confirm the parser still emits NewTable here. If it
+    // ever folds to something the whitelists do recognise, swap the
+    // test source to a chunk that exercises a confirmed out-of-shape
+    // op (e.g. `local s = #t` → Len, or `local _ = io.write` → GetUpval).
+    let code: &[_] = &proto.code;
+    assert!(
+        code.iter().any(|i| i.op() == Op::NewTable),
+        "test source must emit a NewTable to keep the out-of-shape gate \
+         meaningful (got {code:?})",
+    );
     let backend = LlvmBackend;
     let mut storage = LlvmJitStorage::default();
-    let result = backend.try_compile(&mut storage, closure.proto, false, false);
+    let result = backend.try_compile(&mut storage, proto, false, false);
     assert!(
         matches!(result, CompileResult::Skipped),
         "out-of-whitelist chunk must bail (got {result:?})",
+    );
+}
+
+/// v2.1 Phase 1K.E.2 — first observable-value chunk JIT.
+///
+/// `return 42` compiles to `[LoadI(R0, 42), Return1(R0), Return0]`.
+/// The compute path's recognised prefix is `(LoadI|LoadNil|Move)*`
+/// terminated by `Return1`. The JIT entry returns the i64 stored in
+/// `regs[0]`, which is the immediate `42`.
+#[test]
+fn return_i_compiles_and_returns_immediate() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm.load(b"return 42", b"=return_42").expect("compile");
+    let proto = closure.proto;
+
+    let code: &[_] = &proto.code;
+    assert!(
+        code.len() >= 2,
+        "expected at least LoadI + Return1; got {code:?}"
+    );
+    assert_eq!(code[0].op(), Op::LoadI);
+    assert_eq!(code[0].sbx(), 42);
+    assert_eq!(code[1].op(), Op::Return1);
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let result = backend.try_compile(&mut storage, proto, false, false);
+    let CompileResult::Compiled {
+        entry,
+        returns_one,
+        ret_is_float,
+        ..
+    } = result
+    else {
+        panic!("Phase 1K.E.2 must compile `return 42`; got {result:?}");
+    };
+    assert!(
+        returns_one,
+        "Return1 chunk must report returns_one=true (got {returns_one})",
+    );
+    assert!(!ret_is_float, "int-immediate chunk returns i64, not f64");
+    assert!(!entry.is_null(), "compute path must yield a non-null entry");
+
+    // SAFETY: matches the 1K.D smoke's calling convention; the
+    // compute path emits the same `fn() -> i64` shape.
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    let returned = unsafe { entry_fn() };
+    assert_eq!(
+        returned, 42,
+        "Return1 chunk's JIT entry must return the loaded immediate"
+    );
+}
+
+/// v2.1 Phase 1K.E.2 — negative immediate path. `return -7` lowers
+/// to `[LoadI(R0, -7), Return1(R0)]`; verify the sign-extension is
+/// preserved through the IR `const_int(i64, signed=true)` cast.
+#[test]
+fn return_i_handles_negative_immediate() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm.load(b"return -7", b"=return_neg7").expect("compile");
+    let proto = closure.proto;
+    // The parser may fold `-7` to a LoadI of -7, or to a LoadI of 7
+    // + a unary `Unm` (Phase 1K.E later sub-phase). Skip if it's the
+    // latter — Phase 1K.E.2 doesn't cover Unm.
+    if !matches!(proto.code.first().map(|i| i.op()), Some(Op::LoadI))
+        || proto.code.first().map(|i| i.sbx()) != Some(-7)
+    {
+        // Parser folded differently; the negative-immediate smoke is
+        // not exercised by this source on this dialect. Bail rather
+        // than assert against a parser shape we don't control.
+        return;
+    }
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("`return -7` must compile via Phase 1K.E.2");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    let returned = unsafe { entry_fn() };
+    assert_eq!(returned, -7);
+}
+
+/// v2.1 Phase 1K.E.2 — `Move`-through-the-return-slot smoke.
+///
+/// `local x = 9; return x` compiles to `[LoadI(R0,9), Return1(R0)]`
+/// in luna's 5.4/5.5 parser (the return reads the local in place,
+/// no Move needed). But `local x = 9; local y = x; return y` exercises
+/// the Move emit — `[LoadI(R0,9), Move(R1,R0), Return1(R1)]`.
+#[test]
+fn move_then_return_propagates_through_reg() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let closure = vm
+        .load(b"local x = 9; local y = x; return y", b"=move_then_return")
+        .expect("compile");
+    let proto = closure.proto;
+    // Confirm the Move path is exercised; if the parser folds it away
+    // skip rather than assert.
+    let has_move = proto.code.iter().any(|i| i.op() == Op::Move);
+    if !has_move {
+        eprintln!(
+            "[move_then_return smoke] parser folded out the Move; \
+             chunk = {:?}",
+            proto.code
+        );
+        return;
+    }
+
+    let backend = LlvmBackend;
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        backend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("`local x = 9; local y = x; return y` must compile via Phase 1K.E.2");
+    };
+    let entry_fn: unsafe extern "C" fn() -> i64 =
+        unsafe { std::mem::transmute::<*const u8, _>(entry) };
+    let returned = unsafe { entry_fn() };
+    assert_eq!(
+        returned, 9,
+        "Move must propagate the value to the return reg"
     );
 }

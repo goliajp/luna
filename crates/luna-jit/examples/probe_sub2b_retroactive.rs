@@ -54,9 +54,7 @@
 use cranelift_codegen::{
     Context,
     control::ControlPlane,
-    ir::{
-        AbiParam, Function, InstBuilder, MemFlags, Opcode, Signature, UserFuncName, types,
-    },
+    ir::{AbiParam, Function, InstBuilder, MemFlags, Opcode, Signature, UserFuncName, types},
     isa::CallConv,
     settings::{self, Configurable},
 };
@@ -186,9 +184,7 @@ fn main() {
 
     let stores_after = count_stores(&ctx.func);
     println!("Stores after optimize: {stores_after}");
-    println!(
-        "Expected: 5 (PRIOR store DCE'd; CURRENT + 4 deopt store-backs survive)"
-    );
+    println!("Expected: 5 (PRIOR store DCE'd; CURRENT + 4 deopt store-backs survive)");
 
     // Stronger check: the SURVIVING store to reg_state+0 must carry the
     // imul result, not the load-of-+24 result. If the rule fires backward
@@ -234,7 +230,9 @@ fn main() {
 
         if matches!(def_op, Opcode::Imul) {
             println!("\n*** SUCCESS: Phase 1C rule FIRED on sub-2B Phase F shape ***");
-            println!("PRIOR (Op::Move STORE) DCE'd; CURRENT (Op::Mul STORE with Imul value) survives.");
+            println!(
+                "PRIOR (Op::Move STORE) DCE'd; CURRENT (Op::Mul STORE with Imul value) survives."
+            );
             println!("R3.3+ sub-2B is RETROACTIVELY VIABLE under the vendored fork.");
             std::process::exit(0);
         } else {
@@ -250,7 +248,9 @@ fn main() {
             stores_to_offset0.len()
         );
         eprintln!("Sub-2B retroactive viability: NEGATIVE on the multi-block + deopt-tail shape.");
-        eprintln!("Investigate: is the rule blocked by the trailing deopt stores' alias-budget consumption, or by the multi-block layout?");
+        eprintln!(
+            "Investigate: is the rule blocked by the trailing deopt stores' alias-budget consumption, or by the multi-block layout?"
+        );
         std::process::exit(1);
     }
 }

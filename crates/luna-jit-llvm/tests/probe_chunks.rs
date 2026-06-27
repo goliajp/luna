@@ -17,8 +17,14 @@ fn probe_chunks() {
         ("local x = 6; local y = 7; return x * y", "mul_xy"),
         ("local x = 20; local y = 4; return x // y", "idiv_xy"),
         ("local x = 17; local y = 5; return x % y", "mod_xy"),
-        ("local x = 3; local y = 2; if x < y then return x else return y end", "lt_xy"),
-        ("local x = 5; if x < 10 then return 1 else return 0 end", "if_lt"),
+        (
+            "local x = 3; local y = 2; if x < y then return x else return y end",
+            "lt_xy",
+        ),
+        (
+            "local x = 5; if x < 10 then return 1 else return 0 end",
+            "if_lt",
+        ),
         ("return true", "return_true"),
         ("return false", "return_false"),
         ("return nil", "return_nil"),
