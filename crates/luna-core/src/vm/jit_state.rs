@@ -265,6 +265,14 @@ pub struct JitCounters {
     ///   (every lowerer-side dispatch_off label that already exists
     ///   on `CompiledTrace.dispatch_off_reason`)
     pub close_cause_counts: std::collections::HashMap<&'static str, u64>,
+    /// v2.1 Phase 1I.B — number of times the trace recorder captured
+    /// a [`crate::jit::trace_types::FieldIcSnapshot`] for the first
+    /// eligible `Op::GetField` site under `LUNA_JIT_FIELD_IC=1`.
+    /// Bumped exactly once per recording (the snapshot field is
+    /// `Option<_>` so subsequent GetFields short-circuit). 0 on the
+    /// env-default path. Probed by the Phase 1I.B opt-in fire test
+    /// (`tests/phase_1i_b_ic_scaffold.rs`).
+    pub field_ic_snapshot_captured: u64,
     /// v2.0 Track-R R3b — number of compiled traces whose
     /// `CompiledTrace.downrec_link` is `Some(_)`. Bumped at trace
     /// finalisation alongside the `dispatch_off_reasons.push` site

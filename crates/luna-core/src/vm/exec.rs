@@ -2985,6 +2985,16 @@ impl Vm {
         self.jit.counters.compiled
     }
 
+    /// v2.1 Phase 1I.B — number of times the recorder captured a
+    /// [`crate::jit::trace_types::FieldIcSnapshot`] under
+    /// `LUNA_JIT_FIELD_IC=1`. Stays 0 on the env-default path. Used
+    /// by the Phase 1I.B opt-in fire test to verify the env gate
+    /// wiring round-trips end-to-end (env -> recorder -> snapshot
+    /// -> counter -> getter -> assertion).
+    pub fn trace_field_ic_snapshot_count(&self) -> u64 {
+        self.jit.counters.field_ic_snapshot_captured
+    }
+
     /// P12-S2.C — number of closed traces the lowerer rejected
     /// (any of the bail conditions in
     /// `crate::jit::trace::try_compile_trace`).
@@ -6436,6 +6446,7 @@ impl Vm {
                                         key_ptr_bits: s.as_ptr() as u64,
                                         cached_val_tag: val.tag_byte(),
                                     });
+                                self.jit.counters.field_ic_snapshot_captured += 1;
                             }
                         }
                     }
