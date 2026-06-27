@@ -2702,8 +2702,34 @@ impl<'a> Compiler<'a> {
             }
         }
         let base = self.explist_adjust(exprs, want)?;
+        // A4'' bundle (rides on A4''' once Reloc-landing peephole shipped):
+        // when explist_adjust ended with a trivial `Move base, src`
+        // materialization of a local-register read AND we have a single
+        // store, the store can take `src` directly and the Move is dead.
+        // Only catches `Exp::Reg(r)` RHS — Reloc RHS is already handled by
+        // A4''' inside assign_name, literal/Open RHS never emit a tail
+        // Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
+        // so a jump landing at the Move's pc is preserved.
+        // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §3.
+        let alt_vreg = if targets.len() == 1
+            && exprs.len() == 1
+            && self.prev_emit_is_safe_peephole_site()
+        {
+            let last_pc = self.here() - 1;
+            let last = self.lr().code[last_pc];
+            if last.op() == Op::Move && last.a() == base {
+                let src = last.b();
+                self.l().code.pop();
+                self.l().lines.pop();
+                Some(src)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         for (i, plan) in plans.into_iter().enumerate() {
-            let vreg = base + i as u32;
+            let vreg = alt_vreg.unwrap_or(base + i as u32);
             match plan {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
                 LhsPlan::Indexed { obj, key } => match key {
@@ -3327,11 +3353,10 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
 }
 
 /// Closed set of opcodes whose A field is a pure destination produced by an
-/// `Exp::Reloc(pc)` discharge. The A4''' Reloc-landing peephole at
-/// `assign_name` retargets one of these in place to a local register, skipping
-/// the otherwise-required Move. The set is hand-derived from every `arith` /
-/// `unop` / `index_expr` / `global_access` / `name_expr` (upvalue path) call
-/// site that yields `Exp::Reloc(pc)`.
+/// `Exp::Reloc(pc)` discharge AND whose runtime body does NOT trigger a GC
+/// step keyed off `base + A + 1` as the live-stack-top. The A4''' Reloc-
+/// landing peephole at `assign_name` retargets one of these in place to a
+/// local register, skipping the otherwise-required Move.
 ///
 /// Excluded opcodes and why:
 ///   - `Concat`: `R[A] := R[A] .. ... .. R[A+B-1]` — A is the operand range
@@ -3342,14 +3367,23 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
 ///     `LoadFalse` / `LFalseSkip`: discharged to their final register
 ///     directly by `exp_to_reg`'s typed arms, so a Move-from-temp shape
 ///     never appears for them.
-///   - `Closure`: also a Reloc-bearing producer (`exp_to_reg` patches its
-///     A via `patch_dest`). Retargeting Closure's A is semantically fine
-///     (the prototype index sits in Bx, not A) and PUC `discharge2reg`
-///     handles it identically — included.
-///   - `NewTable`: same shape as Closure (A is destination, Bx carries
-///     hash/array hints) — included.
-///   - `GetUpval`: A is destination, B is upvalue idx — included.
-///   - `Not`: `R[A] := not R[B]` — A is destination — included.
+///   - `NewTable` / `Closure`: BOTH allocate and then call
+///     `maybe_collect_garbage(base + A + 1)` immediately after writing to
+///     `R[A]` (see `vm/exec.rs` Op::NewTable / Op::Closure arms). The
+///     `base + A + 1` is interpreted as the live-stack-top for GC roots:
+///     retargeting A to a register BELOW some other still-live local
+///     would let GC sweep the higher local during that step. Excluded
+///     unconditionally — PUC sidesteps this because `L->top` is bumped
+///     past every live local before luaC_step, but luna's per-op live_top
+///     computation does not have that headroom.
+///   - `GetUpval`: A is destination, B is upvalue idx, no GC side effect
+///     — included.
+///   - `Not`: `R[A] := not R[B]` — A is destination, no GC — included.
+///   - Arithmetic / bitwise / Len / Get* may dispatch to Lua metamethods,
+///     but the call-out is routed through `begin_meta_call` which captures
+///     `self.top` as the stack high-water, not `base + A + 1`. GC steps
+///     during the metamethod run use that captured `top`, so retargeting
+///     A is safe.
 ///   - Comparison / call / store ops are never produced via Exp::Reloc
 ///     in luna's compiler (`Cmp`-shape goes through `Exp::Cmp`, calls via
 ///     `Exp::Open`, stores never become a "value" expression).
@@ -3377,7 +3411,5 @@ fn is_retargetable_op(op: Op) -> bool {
             | GetTable
             | GetI
             | GetField
-            | NewTable
-            | Closure
     )
 }
