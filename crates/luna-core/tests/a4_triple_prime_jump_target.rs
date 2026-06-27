@@ -33,9 +33,8 @@ use luna_core::version::LuaVersion;
 fn compile_last_target(src: &str) -> (Vec<luna_core::vm::isa::Inst>, Option<usize>) {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
     let mut heap = Heap::new();
-    let (proto, lt) =
-        compile_chunk_with_last_target(&ast, LuaVersion::Lua55, b"=a4ppp", &mut heap)
-            .expect("compile");
+    let (proto, lt) = compile_chunk_with_last_target(&ast, LuaVersion::Lua55, b"=a4ppp", &mut heap)
+        .expect("compile");
     (proto.code.to_vec(), lt)
 }
 
@@ -48,7 +47,10 @@ fn straight_line_no_jumps_leaves_tracker_none() {
     let (code, lt) = compile_last_target("local x = 1 local y = 2 return x + y");
     // Straight-line code: no jumps at all. last_target stays at the
     // PUC `-1` sentinel (luna's `None`).
-    assert_eq!(lt, None, "straight-line chunk should leave last_target=None");
+    assert_eq!(
+        lt, None,
+        "straight-line chunk should leave last_target=None"
+    );
     // sanity: there really are no jump-shaped ops in the proto
     let has_jmp = code.iter().any(|i| {
         matches!(
@@ -60,7 +62,10 @@ fn straight_line_no_jumps_leaves_tracker_none() {
                 | luna_core::vm::isa::Op::TForLoop
         )
     });
-    assert!(!has_jmp, "straight-line code unexpectedly contains a jump op");
+    assert!(
+        !has_jmp,
+        "straight-line code unexpectedly contains a jump op"
+    );
 }
 
 #[test]
@@ -119,7 +124,10 @@ fn while_loop_records_back_edge_and_exit() {
     assert!(lt < code.len());
     // The exit-jump patch lands at the post-loop pc; that's strictly
     // after the loop body, so it should be near the chunk's tail.
-    assert!(lt >= 3, "exit-jump should land past the loop body (lt={lt})");
+    assert!(
+        lt >= 3,
+        "exit-jump should land past the loop body (lt={lt})"
+    );
 }
 
 #[test]
@@ -237,7 +245,10 @@ fn comparison_materialization_records_loadtrue_pad() {
     let has_load_true = code
         .iter()
         .any(|i| matches!(i.op(), luna_core::vm::isa::Op::LoadTrue));
-    assert!(has_load_true, "materialized comparison did not emit LoadTrue");
+    assert!(
+        has_load_true,
+        "materialized comparison did not emit LoadTrue"
+    );
 }
 
 // ---------------------------------------------------------------------
