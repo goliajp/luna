@@ -5370,103 +5370,6 @@ pub fn lower_trace_into_named<M: Module>(
         });
     }
 
-    // v2.1 Phase 1I.D — IC LICM hoist: pre-load the IC's three
-    // loop-invariant fields (metatable, nodes_len, nodes_ptr) into
-    // Variables defined in the entry block, so the IC emit at the
-    // per-op site can read them via `use_var` instead of re-loading
-    // every iteration. The asm decomp in
-    // `.dev/baselines/perf-2026-06-27-ic-phase-1i-d/asm-env-on.txt`
-    // shows cranelift's egraph fails to LICM these three loads under
-    // the default `opt_level=speed` for the trace IR shape. Manual
-    // hoist eliminates 3 per-iter L1 hits (~3 ns each) on the IC
-    // hot path. Correctness gate: only fire when (a) IC will fire at
-    // all, (b) the IC site is at `inline_depth == 0` (head proto
-    // frame, so `regs_full[B]` resolves without window-shift), and
-    // (c) no op in `record.ops` writes to the IC's table register
-    // slot anywhere in the trace body — that guarantees the
-    // back-edge phi for `regs_full[ic_b]` carries the same value as
-    // the entry def, so the prefetched mt/nodes_len/nodes_ptr stay
-    // accurate every iter. Falls back to per-iter loads when any
-    // condition fails (no correctness risk; the cold path runs).
-    let (ic_mt_var, ic_nodes_len_var, ic_nodes_ptr_var) = if let Some(snap) =
-        record.field_ic_snapshot
-        && luna_core::jit::trace_types::field_ic_enabled()
-        && (snap.op_idx as usize) < record.ops.len()
-        && record.ops[snap.op_idx as usize].inline_depth == 0
-    {
-        let ic_op = &record.ops[snap.op_idx as usize];
-        let ic_b = ic_op.inst.b() as usize;
-        // Conservative writer scan: any op whose `a` field equals
-        // `ic_b` writes to that register slot (this catches the
-        // common arith/load/Move/GetField writers; multi-dest ops
-        // like ForLoop/TForCall that write A+1..A+k are also caught
-        // when their A happens to equal ic_b, and skipped via the
-        // wider window check below). False positives cost a missed
-        // hoist (no correctness risk); false negatives must be
-        // impossible (= safety risk). Add the multi-dest window
-        // check defensively for ForLoop (writes A, A+1, A+3) /
-        // TForLoop (writes A+2) / TForCall (writes A+3..) / Call
-        // (writes A..A+ret-1) so the prefetched value never
-        // diverges from the runtime regs[ic_b].
-        let mut hoist_safe = ic_b < regs_full.len();
-        if hoist_safe {
-            for rop in record.ops.iter() {
-                let a = rop.inst.a() as usize;
-                let writes_a = a == ic_b;
-                let writes_window = match rop.inst.op() {
-                    Op::ForLoop => a == ic_b || a + 1 == ic_b || a + 3 == ic_b,
-                    Op::TForLoop => a + 2 == ic_b,
-                    Op::TForCall => a + 3 <= ic_b && ic_b <= a + 4,
-                    Op::Call => a <= ic_b && ic_b <= a + 2,
-                    _ => false,
-                };
-                if writes_a || writes_window {
-                    hoist_safe = false;
-                    break;
-                }
-            }
-        }
-        if hoist_safe {
-            // Still in the entry block here — `regs_full[ic_b]` was
-            // def_var'd above with the load-from-reg_state, so
-            // `use_var` returns the entry-time table pointer.
-            let t_entry = bcx.use_var(regs_full[ic_b]);
-            let mt = bcx.ins().load(
-                types::I64,
-                cranelift_codegen::ir::MemFlags::trusted(),
-                t_entry,
-                super::TABLE_METATABLE_OFFSET as i32,
-            );
-            let nodes_len = bcx.ins().load(
-                types::I64,
-                cranelift_codegen::ir::MemFlags::trusted(),
-                t_entry,
-                super::TABLE_NODES_LEN_OFFSET as i32,
-            );
-            let nodes_ptr = bcx.ins().load(
-                types::I64,
-                cranelift_codegen::ir::MemFlags::trusted(),
-                t_entry,
-                super::TABLE_NODES_PTR_OFFSET as i32,
-            );
-            let mt_var = bcx.declare_var(types::I64);
-            let nodes_len_var = bcx.declare_var(types::I64);
-            let nodes_ptr_var = bcx.declare_var(types::I64);
-            bcx.def_var(mt_var, mt);
-            bcx.def_var(nodes_len_var, nodes_len);
-            bcx.def_var(nodes_ptr_var, nodes_ptr);
-            (Some(mt_var), Some(nodes_len_var), Some(nodes_ptr_var))
-        } else {
-            (None, None, None)
-        }
-    } else {
-        (None, None, None)
-    };
-    // Acknowledge to the variable-unused lint when the snapshot is
-    // absent — the three options are read by the IC emit further
-    // down at the matching op_idx site.
-    let _ = (ic_mt_var, ic_nodes_len_var, ic_nodes_ptr_var);
-
     let body_loop = bcx.create_block();
     bcx.ins().jump(body_loop, &[]);
     bcx.switch_to_block(body_loop);
@@ -6621,35 +6524,20 @@ pub fn lower_trace_into_named<M: Module>(
                         .expect("ic_active implies snapshot present");
 
                     // --- Guards 1 & 2: metatable + nodes.len() ---
-                    // v2.1 Phase 1I.D — when `ic_mt_var` / `ic_nodes_len_var`
-                    // are populated (LICM hoist active), read the
-                    // entry-block prefetched values via use_var
-                    // instead of re-loading every iter. When the
-                    // prefetch was inhibited (writer-scan caught a
-                    // regs[ic_b] write, depth>0 site, etc.), load
-                    // per-iter as the pre-1I.D scaffold did.
-                    let mt = if let Some(v) = ic_mt_var {
-                        bcx.use_var(v)
-                    } else {
-                        bcx.ins().load(
-                            types::I64,
-                            cranelift_codegen::ir::MemFlags::trusted(),
-                            t,
-                            super::TABLE_METATABLE_OFFSET as i32,
-                        )
-                    };
+                    let mt = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_METATABLE_OFFSET as i32,
+                    );
                     let zero = bcx.ins().iconst(types::I64, 0);
                     let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
-                    let nodes_len = if let Some(v) = ic_nodes_len_var {
-                        bcx.use_var(v)
-                    } else {
-                        bcx.ins().load(
-                            types::I64,
-                            cranelift_codegen::ir::MemFlags::trusted(),
-                            t,
-                            super::TABLE_NODES_LEN_OFFSET as i32,
-                        )
-                    };
+                    let nodes_len = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_NODES_LEN_OFFSET as i32,
+                    );
                     let nodes_len_imm = bcx.ins().iconst(types::I64, snap.nodes_len as i64);
                     let len_ok = bcx.ins().icmp(IntCC::Equal, nodes_len, nodes_len_imm);
                     let guards_12 = bcx.ins().band(mt_ok, len_ok);
@@ -6669,16 +6557,12 @@ pub fn lower_trace_into_named<M: Module>(
                     //     guards 3 & 4, load val_raw ---
                     bcx.switch_to_block(fast_blk);
                     bcx.seal_block(fast_blk);
-                    let nodes_ptr = if let Some(v) = ic_nodes_ptr_var {
-                        bcx.use_var(v)
-                    } else {
-                        bcx.ins().load(
-                            types::I64,
-                            cranelift_codegen::ir::MemFlags::trusted(),
-                            t,
-                            super::TABLE_NODES_PTR_OFFSET as i32,
-                        )
-                    };
+                    let nodes_ptr = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_NODES_PTR_OFFSET as i32,
+                    );
                     let node_offset = (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
                     let node_addr = bcx.ins().iadd_imm(nodes_ptr, node_offset);
 
