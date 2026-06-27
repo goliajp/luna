@@ -80,8 +80,15 @@ pub mod jit_layout {
     /// Static guard: pin the assumptions luna-jit relies on at compile
     /// time. Layout drift here breaks IR emit, so trap it at compile
     /// time rather than at trace-fire time.
+    ///
+    /// `Box<[T]>` is a fat pointer of `2 * usize` — 16 bytes on 64-bit
+    /// targets, 8 bytes on 32-bit (e.g. `wasm32`). Use a width-aware
+    /// expected size so the wasm32-unknown-unknown CI build does not
+    /// trip the assertion. The runtime layout still matters for luna-jit
+    /// IR emit on 64-bit hosts (the only platforms where Cranelift JIT
+    /// runs); the 32-bit branch documents the size in passing.
     const _: () = {
-        assert!(std::mem::size_of::<Box<[Node]>>() == 16);
+        assert!(std::mem::size_of::<Box<[Node]>>() == 2 * std::mem::size_of::<usize>());
         assert!(NODE_KEY_OFFSET == 0);
         assert!(NODE_VAL_OFFSET == 16);
         assert!(SIZEOF_NODE >= 32);
@@ -1652,6 +1659,7 @@ mod tests {
     /// at runtime.
     #[test]
     #[allow(clippy::assertions_on_constants)]
+    #[cfg(target_pointer_width = "64")]
     fn phase_1i_b_node_layout_pinned() {
         use jit_layout::*;
         assert_eq!(std::mem::size_of::<Box<[Node]>>(), 16);
