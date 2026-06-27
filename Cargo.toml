@@ -30,6 +30,15 @@ members = [
     # surface but NOT into `luna-core`'s tree. The 0-third-party-dep
     # contract on `luna-core` is unaffected.
     "crates/luna-tools",
+    # v2.1 Phase 1K.B — `llvm-jit-probe` standalone validation crate
+    # for the LLVM 18 + inkwell 0.9.0 toolchain selected by Phase 1K.A
+    # (see `.dev/rfcs/v2.1-phase-1k-a-llvm-jit-selection.md`). Crate is
+    # `publish = false` and never enters the luna-core / luna-jit /
+    # luna-aot dep graph — its sole purpose is to prove that the LLVM
+    # JIT toolchain links + runs on the dev host before Phase 1K.C+
+    # touches any production luna code. The 0-third-party-dep contract
+    # on luna-core is unaffected.
+    "crates/llvm-jit-probe",
 ]
 # v2.0 Track CV — `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
 # `libfuzzer-sys` and requires nightly rustc; excluding it from the
