@@ -89,7 +89,12 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
         luna_jit_upval_get,
     };
     vec![
-        ("luna_jit_new_table", luna_jit_new_table as *const () as usize, 0, true),
+        (
+            "luna_jit_new_table",
+            luna_jit_new_table as *const () as usize,
+            0,
+            true,
+        ),
         (
             "luna_jit_new_table_sized",
             luna_jit_new_table_sized as *const () as usize,
@@ -156,15 +161,30 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
             2,
             true,
         ),
-        ("luna_jit_upval_get", luna_jit_upval_get as *const () as usize, 1, true),
-        ("luna_jit_op_close", luna_jit_op_close as *const () as usize, 1, true),
+        (
+            "luna_jit_upval_get",
+            luna_jit_upval_get as *const () as usize,
+            1,
+            true,
+        ),
+        (
+            "luna_jit_op_close",
+            luna_jit_op_close as *const () as usize,
+            1,
+            true,
+        ),
         (
             "luna_jit_stack_update_raw",
             luna_jit_stack_update_raw as *const () as usize,
             2,
             false,
         ),
-        ("luna_jit_op_concat", luna_jit_op_concat as *const () as usize, 2, true),
+        (
+            "luna_jit_op_concat",
+            luna_jit_op_concat as *const () as usize,
+            2,
+            true,
+        ),
         (
             "luna_jit_str_buf_acquire",
             luna_jit_str_buf_acquire as *const () as usize,
@@ -195,22 +215,42 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
             5,
             true,
         ),
-        ("luna_jit_stack_load", luna_jit_stack_load as *const () as usize, 1, true),
-        ("luna_jit_stack_tag", luna_jit_stack_tag as *const () as usize, 1, true),
+        (
+            "luna_jit_stack_load",
+            luna_jit_stack_load as *const () as usize,
+            1,
+            true,
+        ),
+        (
+            "luna_jit_stack_tag",
+            luna_jit_stack_tag as *const () as usize,
+            1,
+            true,
+        ),
         (
             "luna_jit_spill_to_stack",
             luna_jit_spill_to_stack as *const () as usize,
             3,
             false,
         ),
-        ("luna_jit_op_closure", luna_jit_op_closure as *const () as usize, 1, true),
+        (
+            "luna_jit_op_closure",
+            luna_jit_op_closure as *const () as usize,
+            1,
+            true,
+        ),
         (
             "luna_jit_trace_materialize_frames",
             luna_jit_trace_materialize_frames as *const () as usize,
             2,
             true,
         ),
-        ("luna_jit_table_len", luna_jit_table_len as *const () as usize, 1, true),
+        (
+            "luna_jit_table_len",
+            luna_jit_table_len as *const () as usize,
+            1,
+            true,
+        ),
     ]
 }
 
@@ -280,29 +320,31 @@ pub(crate) fn try_compile_int_chunk(
     proto: Gc<Proto>,
     pre53: bool,
 ) -> Option<CompileResult> {
-    // Chunks (the only thing 1K.E targets at the moment) always have
-    // zero parameters. Bail anything that takes args — the reg-array
-    // entry signature `fn() -> i64` doesn't match `fn(i64,..) -> i64`
-    // for parameterised chunks.
-    if proto.num_params != 0 {
-        return None;
-    }
-
-    // Path 1: dead-locals fast path (Phase 1K.D.7). Cheap to recognise
-    // and exercises the existing 1K.D.6/1K.D.7/1K.D.8 smokes.
-    if is_dead_locals_then_return0(&proto.code) {
-        return Some(via_cache(storage, &proto, pre53, false, &|| {
+    // Path 1: dead-locals fast path (Phase 1K.D.7). Restricted to
+    // zero-param chunks because its `extern "C" fn() -> i64` emit
+    // signature doesn't accept positional args.
+    if proto.num_params == 0 && is_dead_locals_then_return0(&proto.code) {
+        return Some(via_cache(storage, &proto, pre53, 0, false, &|| {
             compile_constant_zero_chunk()
         }));
     }
 
-    // Path 2: compute path (Phase 1K.E.2). Scans for the new
+    // Path 2: compute path (Phase 1K.E.2+). Scans for the cumulative
     // whitelist + the chunk's effective return shape, then lowers
-    // op-by-op into a reg-array entry.
+    // op-by-op into a reg-array entry. Phase 1K.F lifted the
+    // `num_params == 0` gate; parametric chunks land as
+    // `extern "C" fn(i64, …, i64) -> i64` with arg-load shims in the
+    // entry BB.
     if let Some(plan) = ChunkPlan::from_proto(&proto) {
-        return Some(via_cache(storage, &proto, pre53, plan.returns_one, &|| {
-            compile_compute_chunk(&plan)
-        }));
+        let num_params = plan.num_params as u8;
+        return Some(via_cache(
+            storage,
+            &proto,
+            pre53,
+            num_params,
+            plan.returns_one,
+            &|| compile_compute_chunk(&plan),
+        ));
     }
 
     None
@@ -318,6 +360,7 @@ fn via_cache(
     storage: &mut dyn JitStorage,
     proto: &Proto,
     pre53: bool,
+    num_args: u8,
     returns_one: bool,
     compile_fn: &dyn Fn() -> Option<(*const u8, EnginePair)>,
 ) -> CompileResult {
@@ -334,7 +377,7 @@ fn via_cache(
     };
     let cached = CachedEntry {
         entry: entry_ptr,
-        num_args: 0,
+        num_args,
         returns_one,
         arg_float_mask: 0,
         arg_table_mask: 0,
@@ -397,6 +440,12 @@ struct ChunkPlan<'a> {
     code: &'a [Inst],
     /// Number of i64 register slots to alloca on entry.
     num_regs: u32,
+    /// v2.1 Phase 1K.F.6 — number of positional i64 args the JIT entry
+    /// accepts. `0` keeps the historical `extern "C" fn() -> i64`
+    /// signature; `> 0` widens to `fn(i64, …, i64) -> i64` and the
+    /// entry BB loads each `function.get_nth_param(i)` into `regs[i]`
+    /// so the lowerer sees param 0..N-1 as live register sources.
+    num_params: u32,
     /// True ↔ all reachable returns are `Return1`; false ↔ all are
     /// `Return0`. A proto whose reachable set mixes the two bails
     /// (would need a polymorphic dispatcher contract — out of scope).
@@ -416,6 +465,20 @@ struct ChunkPlan<'a> {
     /// after every reachable path has already returned) are skipped
     /// during emit so LLVM doesn't see dead BBs without predecessors.
     reachable: Vec<bool>,
+    /// v2.1 Phase 1K.F.3 — `true` at every `Op::Call` PC the scanner
+    /// classified as a self-recursive call (R[A] tagged as a
+    /// self-upval-loaded closure via a prior `Op::GetUpval` in the
+    /// SelfMarker role). The Call lowerer emits a direct `build_call`
+    /// to the current entry `FunctionValue` for these PCs.
+    self_call_pcs: Vec<bool>,
+    /// v2.1 Phase 1K.F.4 — `true` at every `Op::GetUpval` PC whose
+    /// destination register is consumed as a runtime value (i.e. NOT
+    /// used as the function slot of a subsequent `Op::Call`). Emitter
+    /// lowers these as `luna_jit_upval_get(b as i64) -> i64`.
+    /// `false` at GetUpval PCs whose role is SelfMarker — emitter
+    /// writes a placeholder 0 because the matching Call rewrites
+    /// straight to `build_call(function, …)` without reading R[A].
+    is_upval_value_read: Vec<bool>,
 }
 
 impl<'a> ChunkPlan<'a> {
@@ -425,10 +488,22 @@ impl<'a> ChunkPlan<'a> {
         if n == 0 {
             return None;
         }
+        // Parametric chunks need a stable fn signature. Cap at the
+        // Cranelift `MAX_JIT_ARITY` (16) so the dispatcher's
+        // `JitHandle` codepath stays interchangeable across backends.
+        const MAX_JIT_ARITY: u32 = 16;
+        if proto.num_params as u32 > MAX_JIT_ARITY {
+            return None;
+        }
 
         // Pass 1: per-op whitelist gate + structural validation.
         // `Lt|Le|Eq` must be followed by a `Jmp`; mark the Jmp as
         // consumed by the condbr.
+        //
+        // 1K.F additions: `Op::GetUpval` (both SelfMarker + ValueRead
+        // roles, classified in a subsequent pass) and `Op::Call`
+        // restricted to self-recursive shapes (validated in the
+        // self_upval tracking pass below).
         let mut consumed_jmp = vec![false; n];
         for (pc, ins) in code.iter().enumerate() {
             match ins.op() {
@@ -442,6 +517,27 @@ impl<'a> ChunkPlan<'a> {
                 | Op::Jmp
                 | Op::Return0
                 | Op::Return1 => {}
+                Op::GetUpval => {
+                    // Upval idx must be in bounds. The self-rec /
+                    // value-read classification + Float-tag concerns
+                    // are handled by the later
+                    // `determine_getupval_roles` + tracking pass.
+                    if (ins.b() as usize) >= proto.upvals.len() {
+                        return None;
+                    }
+                }
+                Op::Call => {
+                    // The structural gate enforced here mirrors
+                    // Cranelift's `Op::Call` admission: nargs / nresults
+                    // bounds. The "self-recursive" classification
+                    // (mandatory in 1K.F) needs the SelfMarker upval
+                    // tracking; done in the dedicated pass below.
+                    let nargs = ins.b().checked_sub(1)?;
+                    let nresults = ins.c().checked_sub(1)?;
+                    if nargs > MAX_JIT_ARITY || nresults != 1 {
+                        return None;
+                    }
+                }
                 Op::Lt | Op::Le | Op::Eq => {
                     let peer = code.get(pc + 1)?;
                     if peer.op() != Op::Jmp {
@@ -450,6 +546,118 @@ impl<'a> ChunkPlan<'a> {
                     consumed_jmp[pc + 1] = true;
                 }
                 _ => return None,
+            }
+        }
+
+        // Pre-pass — classify each `Op::GetUpval` PC as ValueRead vs
+        // SelfMarker. Mirrors Cranelift's `determine_getupval_roles`:
+        // a SelfMarker is one whose destination register is consumed
+        // ONLY as the function slot of a subsequent `Op::Call` (within
+        // a short lookahead window, with Moves carrying the tag).
+        // Anything else (arith / cmp / Return / table-access read of
+        // R[A]) is a ValueRead.
+        let is_upval_value_read = determine_getupval_roles(code);
+
+        // Self-recursion tracking pass: walk PCs in order, maintain
+        // `self_upval[reg]` (cleared on any write that doesn't carry
+        // the tag), gate each `Op::Call` to the self-recursive shape.
+        // Also pins `self_upval_idx` to the SelfMarker GetUpval's
+        // upval slot — subsequent SelfMarker GetUpvals must read the
+        // same slot, else bail. Mirrors Cranelift's S2c.C tracker.
+        let allows_self_recursion = !proto.upvals.is_empty() && proto.upvals.len() <= 4;
+        let mut self_upval_idx: Option<u32> = None;
+        let max_stack = (proto.max_stack as usize).max(proto.num_params as usize);
+        let mut self_upval: Vec<bool> = vec![false; max_stack];
+        let mut self_call_pcs: Vec<bool> = vec![false; n];
+        for (pc, ins) in code.iter().enumerate() {
+            // Apply writes: any op that writes R[A] clears
+            // `self_upval[A]` unless it's the SelfMarker GetUpval (which
+            // sets the tag) or a Move from another self_upval-tagged
+            // slot (which carries the tag).
+            match ins.op() {
+                Op::GetUpval => {
+                    if is_upval_value_read[pc] {
+                        // ValueRead clears the dest tag — the loaded
+                        // value is consumed as a real upvalue value,
+                        // not a self-recursion call target.
+                        if let Some(slot) = self_upval.get_mut(ins.a() as usize) {
+                            *slot = false;
+                        }
+                    } else {
+                        // SelfMarker — must agree with any prior
+                        // SelfMarker on the upval index.
+                        if !allows_self_recursion {
+                            return None;
+                        }
+                        match self_upval_idx {
+                            Some(idx) if idx != ins.b() => return None,
+                            Some(_) => {}
+                            None => self_upval_idx = Some(ins.b()),
+                        }
+                        if let Some(slot) = self_upval.get_mut(ins.a() as usize) {
+                            *slot = true;
+                        }
+                    }
+                }
+                Op::Move => {
+                    let src = ins.b() as usize;
+                    let dst = ins.a() as usize;
+                    let carry = self_upval.get(src).copied().unwrap_or(false);
+                    if let Some(slot) = self_upval.get_mut(dst) {
+                        *slot = carry;
+                    }
+                }
+                Op::Call => {
+                    let a = ins.a() as usize;
+                    if self_upval.get(a).copied().unwrap_or(false) {
+                        self_call_pcs[pc] = true;
+                    } else {
+                        // 1K.F restricts Op::Call to self-recursive
+                        // shapes; non-self calls would need a general
+                        // ABI marshalling shim (Cranelift bails the
+                        // same way at this layer).
+                        return None;
+                    }
+                    // The Call writes R[A] = result; result is the
+                    // self-rec return value, not a closure handle.
+                    if let Some(slot) = self_upval.get_mut(a) {
+                        *slot = false;
+                    }
+                }
+                Op::Return1 => {
+                    // Returning a self_upval-tagged register would
+                    // ship the closure pointer back to the caller,
+                    // which our int-only dispatcher would misread as
+                    // an integer; bail.
+                    if self_upval.get(ins.a() as usize).copied().unwrap_or(false) {
+                        return None;
+                    }
+                }
+                _ => {
+                    // Other ops clear the tag for any register they
+                    // write. For the present whitelist that's: LoadI
+                    // / LoadNil / Add / Sub / Mul / Mod — all write
+                    // arithmetic / immediate values that can't be a
+                    // closure pointer.
+                    let writes: &[u32] = match ins.op() {
+                        Op::LoadI | Op::Add | Op::Sub | Op::Mul | Op::Mod => &[ins.a()],
+                        // LoadNil writes R[A..=A+B]; clear them.
+                        Op::LoadNil => {
+                            for off in 0..=ins.b() {
+                                if let Some(slot) = self_upval.get_mut((ins.a() + off) as usize) {
+                                    *slot = false;
+                                }
+                            }
+                            &[]
+                        }
+                        _ => &[],
+                    };
+                    for &w in writes {
+                        if let Some(slot) = self_upval.get_mut(w as usize) {
+                            *slot = false;
+                        }
+                    }
+                }
             }
         }
 
@@ -553,16 +761,21 @@ impl<'a> ChunkPlan<'a> {
         // names a slot. `proto.max_stack` is the upper bound the
         // parser guarantees; an out-of-range A would write past the
         // alloca, so bail rather than corrupt memory.
-        let regs = (proto.max_stack as u32).max(1);
+        let regs = (proto.max_stack as u32).max(proto.num_params as u32).max(1);
         for (pc, ins) in code.iter().enumerate() {
             if !reachable[pc] {
                 continue;
             }
             let max_slot = match ins.op() {
-                Op::LoadI | Op::Move | Op::Return1 => ins.a(),
+                Op::LoadI | Op::Move | Op::Return1 | Op::GetUpval => ins.a(),
                 Op::LoadNil => ins.a() + ins.b(),
                 Op::Add | Op::Sub | Op::Mul | Op::Mod => ins.a().max(ins.b()).max(ins.c()),
                 Op::Lt | Op::Le | Op::Eq => ins.a().max(ins.b()),
+                Op::Call => {
+                    // Op::Call writes R[A] and reads R[A+1..A+1+nargs].
+                    let nargs = ins.b().saturating_sub(1);
+                    if nargs == 0 { ins.a() } else { ins.a() + nargs }
+                }
                 _ => 0,
             };
             if max_slot >= regs {
@@ -573,11 +786,130 @@ impl<'a> ChunkPlan<'a> {
         Some(ChunkPlan {
             code,
             num_regs: regs,
+            num_params: proto.num_params as u32,
             returns_one,
             bb_starts,
             consumed_jmp,
             reachable,
+            self_call_pcs,
+            is_upval_value_read,
         })
+    }
+}
+
+/// v2.1 Phase 1K.F.4 — classify every `Op::GetUpval` in `code` as
+/// either a SelfMarker (its destination register is consumed only as
+/// the function slot of a subsequent `Op::Call`) or a ValueRead (the
+/// register is consumed as a real value — arith, comparison, return,
+/// etc.). Mirrors Cranelift's `determine_getupval_roles` algorithm.
+///
+/// The classifier walks an 8-PC lookahead from each `GetUpval`,
+/// tracking `Move`-carrying tags on each register. If the destination
+/// register reaches an `Op::Call` whose function-slot register is the
+/// tagged one, it's SelfMarker. Any other consuming op flips it to
+/// ValueRead. The lookahead is bounded to keep the scanner O(N).
+fn determine_getupval_roles(code: &[Inst]) -> Vec<bool> {
+    let n = code.len();
+    let mut roles = vec![false; n];
+    // 8-PC lookahead window, matching Cranelift S2c.C scanner.
+    const LOOKAHEAD: usize = 8;
+    for (pc, ins) in code.iter().enumerate() {
+        if !matches!(ins.op(), Op::GetUpval) {
+            continue;
+        }
+        let target_a = ins.a() as usize;
+        // Per-register "carries the marker" map for this lookahead.
+        let max_reg = code
+            .iter()
+            .map(|i| i.a().max(i.b()).max(i.c()))
+            .max()
+            .unwrap_or(0) as usize
+            + 1;
+        let mut tagged: Vec<bool> = vec![false; max_reg.max(target_a + 1)];
+        tagged[target_a] = true;
+        let end = (pc + 1 + LOOKAHEAD).min(n);
+        let mut value_read = false;
+        for q in (pc + 1)..end {
+            let q_ins = code[q];
+            // Op::Call with R[A] as the function slot — confirmed SelfMarker.
+            if matches!(q_ins.op(), Op::Call)
+                && tagged.get(q_ins.a() as usize).copied().unwrap_or(false)
+            {
+                // SelfMarker: leave roles[pc] = false.
+                value_read = false;
+                break;
+            }
+            // Move from tagged src to dst: carry the tag.
+            if matches!(q_ins.op(), Op::Move) {
+                let src = q_ins.b() as usize;
+                let dst = q_ins.a() as usize;
+                if dst >= tagged.len() {
+                    tagged.resize(dst + 1, false);
+                }
+                let carry = tagged.get(src).copied().unwrap_or(false);
+                tagged[dst] = carry;
+                continue;
+            }
+            // Any op that reads a tagged register in a non-Call /
+            // non-Move context confirms ValueRead.
+            if uses_register_as_value(&q_ins, &tagged) {
+                value_read = true;
+                break;
+            }
+            // Any write to a tagged register clears the tag (the
+            // dest no longer carries the marker).
+            if let Some(write_reg) = primary_write_reg(&q_ins) {
+                if let Some(slot) = tagged.get_mut(write_reg as usize) {
+                    *slot = false;
+                }
+            }
+        }
+        roles[pc] = value_read;
+    }
+    roles
+}
+
+/// Helper for `determine_getupval_roles`: returns `true` if `ins`
+/// reads any register currently flagged in `tagged` as a value-use
+/// (NOT as the function slot of an `Op::Call`).
+fn uses_register_as_value(ins: &Inst, tagged: &[bool]) -> bool {
+    let is_tagged = |idx: u32| tagged.get(idx as usize).copied().unwrap_or(false);
+    match ins.op() {
+        Op::Return1 => is_tagged(ins.a()),
+        Op::Add | Op::Sub | Op::Mul | Op::Mod => is_tagged(ins.b()) || is_tagged(ins.c()),
+        Op::Lt | Op::Le | Op::Eq => is_tagged(ins.a()) || is_tagged(ins.b()),
+        // Op::Call args (R[A+1..A+1+nargs]) — args ARE value uses.
+        Op::Call => {
+            let nargs = ins.b().saturating_sub(1);
+            for off in 1..=nargs {
+                if is_tagged(ins.a() + off) {
+                    return true;
+                }
+            }
+            false
+        }
+        // Move is handled separately by the caller (it carries the
+        // tag rather than confirming ValueRead).
+        Op::Move => false,
+        _ => false,
+    }
+}
+
+/// Helper for `determine_getupval_roles`: returns the primary write
+/// destination register for the supported op set. Used to clear the
+/// tagged marker when a register is overwritten.
+fn primary_write_reg(ins: &Inst) -> Option<u32> {
+    match ins.op() {
+        Op::LoadI
+        | Op::LoadNil
+        | Op::Move
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Mod
+        | Op::GetUpval
+        | Op::Call => Some(ins.a()),
+        _ => None,
     }
 }
 
@@ -692,15 +1024,19 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
 
     let i64_type = ctx_static.i64_type();
     let regs_ty = i64_type.array_type(plan.num_regs);
-    let fn_type = i64_type.fn_type(&[], false);
+    // v2.1 Phase 1K.F.6 — parametric chunks. The fn signature widens
+    // from `fn() -> i64` to `fn(i64, …, i64) -> i64` with one i64 per
+    // declared positional param, then the entry BB stores each
+    // function arg into the matching `regs[i]` slot so the lowerer
+    // sees param 0..N-1 as live register sources.
+    let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+        (0..plan.num_params).map(|_| i64_type.into()).collect();
+    let fn_type = i64_type.fn_type(&param_types, false);
     let function = module.add_function("luna_jit_llvm_entry", fn_type, None);
 
     // v2.1 Phase 1K.F.2 — declare every `luna_jit_*` helper as an
-    // external IR function. The map is unused on the compute path
-    // until Phase 1K.F.3+ adds Op::Call / Op::GetUpval emit; declaring
-    // now keeps the registration path orthogonal to the per-op
-    // whitelist and pairs with `finalize_module`'s
-    // `bind_helper_symbols` step below.
+    // external IR function. Used by Op::GetUpval / Op::Call emit
+    // below; the dead-locals path skips this step.
     let helpers = declare_jit_helpers(ctx_static, &module);
 
     // Pre-create one LLVM BB per source BB. The PC-keyed map gives
@@ -722,6 +1058,24 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     // when 1K.E benches start measuring).
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
+    // v2.1 Phase 1K.F.6 — populate `regs[0..num_params]` from the fn
+    // arg list. After this prologue the lowerer sees param 0..N-1 as
+    // ordinary live register sources, identical to a chunk that
+    // bound them with `LoadI` / `Move`.
+    {
+        let zero_i64 = i64_type.const_zero();
+        for i in 0..plan.num_params {
+            let off = i64_type.const_int(i as u64, false);
+            let slot = unsafe {
+                builder
+                    .build_in_bounds_gep(regs_ty, regs, &[zero_i64, off], "param_slot")
+                    .ok()?
+            };
+            let arg = function.get_nth_param(i)?.into_int_value();
+            builder.build_store(slot, arg).ok()?;
+        }
+    }
+
     let mut emitter = ComputeEmitter {
         ctx: ctx_static,
         builder: &builder,
@@ -729,6 +1083,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
         i64_type,
         regs_ty,
         regs,
+        helpers: &helpers,
     };
 
     // Walk PCs; switch BB on bb_starts boundaries; terminators
@@ -820,6 +1175,61 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                     .ok()?;
                 bb_terminated = true;
             }
+            Op::GetUpval => {
+                let dst = ins.a();
+                if plan.is_upval_value_read[pc] {
+                    // 1K.F.4 ValueRead — call luna_jit_upval_get(b);
+                    // store result into regs[A].
+                    let helper = emitter.helpers.get("luna_jit_upval_get").copied()?;
+                    let idx_arg = i64_type.const_int(ins.b() as u64, false);
+                    let call_inst = builder
+                        .build_call(helper, &[idx_arg.into()], "upv_val")
+                        .ok()?;
+                    let v = match call_inst.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(bv) => bv.into_int_value(),
+                        inkwell::values::ValueKind::Instruction(_) => return None,
+                    };
+                    let slot = emitter.reg_slot_ptr(dst, "upv_dst")?;
+                    builder.build_store(slot, v).ok()?;
+                } else {
+                    // 1K.F.4 SelfMarker — destination register is never
+                    // read as a value (its only consumer is a
+                    // subsequent Op::Call which lowers as a direct
+                    // self-call). Store a placeholder 0 so the alloca
+                    // slot is initialised in case any path leaks a
+                    // read; mirrors Cranelift's `aligned_def(..., 0)`.
+                    let zero = i64_type.const_zero();
+                    let slot = emitter.reg_slot_ptr(dst, "upv_self_marker")?;
+                    builder.build_store(slot, zero).ok()?;
+                }
+            }
+            Op::Call => {
+                // 1K.F.3 — only the self-recursive shape lands here
+                // (whitelist + tracker gated). Emit a direct
+                // `build_call` against the current entry function and
+                // store the i64 result into regs[A].
+                debug_assert!(
+                    plan.self_call_pcs[pc],
+                    "scanner accepts only self-recursive Op::Call PCs"
+                );
+                let a = ins.a();
+                let nargs = ins.b().saturating_sub(1);
+                let mut arg_vals: Vec<inkwell::values::BasicMetadataValueEnum<'static>> =
+                    Vec::with_capacity(nargs as usize);
+                for off in 1..=nargs {
+                    let v = emitter.load_reg(a + off, "call_arg")?;
+                    arg_vals.push(v.into());
+                }
+                let call_inst = builder
+                    .build_call(emitter.function, &arg_vals, "self_call")
+                    .ok()?;
+                let v = match call_inst.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(bv) => bv.into_int_value(),
+                    inkwell::values::ValueKind::Instruction(_) => return None,
+                };
+                let slot = emitter.reg_slot_ptr(a, "call_dst")?;
+                builder.build_store(slot, v).ok()?;
+            }
             _ => {
                 emitter.emit_op(ins)?;
             }
@@ -850,11 +1260,19 @@ struct ComputeEmitter<'ctx, 'a> {
     #[allow(dead_code)] // Held for future per-op IR (intrinsics / strings).
     ctx: &'ctx Context,
     builder: &'a inkwell::builder::Builder<'ctx>,
-    #[allow(dead_code)] // Held for future per-op IR (append BBs / global mappings).
+    /// v2.1 Phase 1K.F.3 — held so the Op::Call lowerer can emit a
+    /// `build_call` against the current entry `FunctionValue` for
+    /// self-recursive shapes. Mirrors Cranelift's
+    /// `module.declare_func_in_func(fn_id, bcx.func)` pattern.
     function: FunctionValue<'ctx>,
     i64_type: inkwell::types::IntType<'ctx>,
     regs_ty: inkwell::types::ArrayType<'ctx>,
     regs: PointerValue<'ctx>,
+    /// v2.1 Phase 1K.F.4 — `luna_jit_*` helper declarations.
+    /// Op::GetUpval (ValueRead role) reaches for
+    /// `helpers["luna_jit_upval_get"]`; future ops widen the call sites
+    /// without per-op registration boilerplate.
+    helpers: &'a HashMap<&'static str, FunctionValue<'ctx>>,
 }
 
 impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
