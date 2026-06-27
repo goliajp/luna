@@ -32,3 +32,10 @@ luna-jit-helpers = { path = "../luna-jit-helpers" }
 # (e.g. `brew install llvm@18` → `/opt/homebrew/opt/llvm@18`). See
 # `.dev/rfcs/v2.1-phase-1k-b-llvm-hello-world.md` for repro details.
 inkwell = { version = "0.9", features = ["llvm18-1"] }
+
+[dev-dependencies]
+# Integration tests need luna-jit's parser (to materialise real
+# Proto bytecode) for the Phase 1K.D.6 smoke. luna-jit pulls Cranelift
+# but only at test build-time; the lib's runtime dep graph stays
+# Cranelift-free.
+luna-jit = { path = "../luna-jit" }
