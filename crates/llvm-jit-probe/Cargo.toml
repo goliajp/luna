@@ -17,7 +17,20 @@ categories.workspace = true
 publish = false
 
 [dependencies]
-# Phase 1K.B.3 adds the `inkwell` dependency on top of this scaffold.
+# v2.1 Phase 1K.B.3 — inkwell 0.9.0 pinned by Phase 1K.A selection.
+#
+# Feature flag note: the task brief said `llvm18-0`, but inkwell 0.9.0
+# only ships `llvm18-1` (verified via
+# `cargo add --dry-run -p llvm-jit-probe inkwell --features llvm18-1`).
+# `llvm18-1` pulls `llvm-sys = "181.x"` underneath, which requires LLVM
+# 18.1.x. Dev host has LLVM 18.1.8 from
+# `brew install llvm@18`, located at `/opt/homebrew/opt/llvm@18`.
+#
+# `llvm-sys`'s build script reads `LLVM_SYS_181_PREFIX` (note the
+# version-major-minor in the var name) to locate `llvm-config`. The
+# probe's RFC (`.dev/rfcs/v2.1-phase-1k-b-llvm-hello-world.md`) records
+# the exact env var + install path for Phase 1K.C+ reproducibility.
+inkwell = { version = "0.9", features = ["llvm18-1"] }
 
 [lints]
 workspace = true
