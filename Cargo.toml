@@ -39,6 +39,15 @@ members = [
     # touches any production luna code. The 0-third-party-dep contract
     # on luna-core is unaffected.
     "crates/llvm-jit-probe",
+    # v2.1 Phase 1K.D.1 — `luna-jit-helpers` shared `luna_jit_*`
+    # extern-C runtime helpers + `JIT_VM` / `JIT_CL` per-thread TLS
+    # slots + `enter_jit` RAII rebind, extracted from
+    # `luna-jit/src/jit_backend/mod.rs`. Both `luna-jit` (Cranelift)
+    # and `luna-jit-llvm` (v2.1 alt backend, Phase 1K.D.2+) depend on
+    # this crate so the helper symbol table + TLS discipline stay
+    # single-source-of-truth. Only depends on luna-core; the
+    # 0-third-party-dep contract on luna-core is unaffected.
+    "crates/luna-jit-helpers",
 ]
 # v2.0 Track CV — `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
 # `libfuzzer-sys` and requires nightly rustc; excluding it from the

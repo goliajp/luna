@@ -36,6 +36,14 @@ luna-core = { path = "../luna-core", version = "= 1.3.0" }
 # build-time supply chain ONLY; luna-core stays 0-dep.
 luna-jit-derive = { path = "../luna-jit-derive", version = "= 1.3.0" }
 
+# v2.1 Phase 1K.D.1 — extracted `luna_jit_*` helper / TLS / enter_jit
+# crate. luna-jit re-exports `pub use luna_jit_helpers::*;` from
+# `jit_backend/mod.rs` so existing `crate::jit_backend::luna_jit_*` /
+# `super::luna_jit_*` paths resolve unchanged. luna-jit-llvm (Phase
+# 1K.D.2+) depends on this crate directly without pulling Cranelift.
+# `publish = false`, so no `version = ...` pin needed for crates.io.
+luna-jit-helpers = { path = "../luna-jit-helpers" }
+
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
 # mature regalloc + opt. luna lowers Lua bytecode → Cranelift IR →
