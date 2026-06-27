@@ -48,6 +48,14 @@ members = [
     # single-source-of-truth. Only depends on luna-core; the
     # 0-third-party-dep contract on luna-core is unaffected.
     "crates/luna-jit-helpers",
+    # v2.1 Phase 1K.D.2 — `luna-jit-llvm` LLVM 18 + inkwell 0.9 alt
+    # backend. Sibling of `luna-jit` (Cranelift); both implement the
+    # `luna_core::jit` trait surface. `publish = false` — embedders
+    # opt in via `luna-jit`'s `llvm-jit` cargo feature (default OFF).
+    # Depends on `luna-core` + `luna-jit-helpers` + `inkwell`. The
+    # 0-third-party-dep contract on `luna-core` is unaffected because
+    # this crate is downstream of `luna-core`.
+    "crates/luna-jit-llvm",
 ]
 # v2.0 Track CV — `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
 # `libfuzzer-sys` and requires nightly rustc; excluding it from the
