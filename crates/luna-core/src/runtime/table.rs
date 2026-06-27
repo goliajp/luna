@@ -1164,7 +1164,10 @@ impl Table {
         // polish could maintain a counter incrementally; left as a
         // Phase H mini-bench-driven follow-up if PI sample shows it
         // contributes > 1 µs/cell.
-        self.meta.iter().filter(|&&m| meta_bits::is_occupied(m)).count()
+        self.meta
+            .iter()
+            .filter(|&&m| meta_bits::is_occupied(m))
+            .count()
     }
 
     /// C3 — Robin Hood lookup. Returns the slot index of a *live*
@@ -1205,11 +1208,7 @@ impl Table {
     /// IMPORTANT: rehash MUST NOT fire while `iter_depth > 0`
     /// (R-A3) — wired in Phase F. Phase C callers all enter from
     /// non-iteration paths.
-    fn soa_rehash_to(
-        &mut self,
-        heap: &mut Heap,
-        new_cap: usize,
-    ) -> Result<(), TableError> {
+    fn soa_rehash_to(&mut self, heap: &mut Heap, new_cap: usize) -> Result<(), TableError> {
         debug_assert!(new_cap.is_power_of_two() && new_cap > 0);
         let before = self.internal_bytes();
         // Snapshot old live entries. This list is the canonical
@@ -1268,11 +1267,7 @@ impl Table {
     /// On success returns the slot index where the new key landed
     /// (after any rob-from-rich shuffle, the original `k` value is at
     /// this returned index).
-    fn soa_place_known_absent(
-        &mut self,
-        k: Value,
-        v: Value,
-    ) -> Result<usize, (Value, Value)> {
+    fn soa_place_known_absent(&mut self, k: Value, v: Value) -> Result<usize, (Value, Value)> {
         let cap = self.meta.len();
         debug_assert!(cap > 0);
         let mask = cap - 1;
@@ -1828,9 +1823,9 @@ mod tests {
             (kstr, Value::Int(1)),
             (kint, Value::Int(2)),
             (kbool, Value::Int(3)),
-            (kstr, Value::Int(11)),   // update
-            (kint, Value::Int(22)),   // update
-            (kbool, Value::Int(33)),  // update
+            (kstr, Value::Int(11)),  // update
+            (kint, Value::Int(22)),  // update
+            (kbool, Value::Int(33)), // update
         ];
         let chain = unsafe { &*replay_chain(&mut heap, &ops) };
         let soa = unsafe { &*replay_soa(&mut heap, &ops) };

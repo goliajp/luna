@@ -76,7 +76,10 @@ fn array_keys_nil_write_via_setfield_clears_iteration() {
         for k in pairs(t) do t[k] = nil end
         return next(t) == nil
     "#;
-    assert!(eval_bool(src), "next(t) should be nil after array Nil-writes");
+    assert!(
+        eval_bool(src),
+        "next(t) should be nil after array Nil-writes"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -108,7 +111,10 @@ fn hash_string_keys_full_clear_leaves_next_empty() {
         for k in pairs(t) do t[k] = nil end
         return next(t) == nil
     "#;
-    assert!(eval_bool(src), "next(t) should be nil after hash Nil-writes");
+    assert!(
+        eval_bool(src),
+        "next(t) should be nil after hash Nil-writes"
+    );
 }
 
 // ---------------------------------------------------------------------
