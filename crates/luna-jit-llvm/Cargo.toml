@@ -1,0 +1,34 @@
+[package]
+name = "luna-jit-llvm"
+description = "v2.1 Phase 1K — LLVM-backed alternative JIT backend for luna. Lives alongside `luna-jit` (Cranelift); selection at runtime via the `LUNA_JIT_BACKEND` env var. Internal alt-backend crate; not a public embedder surface (use `luna-jit` and enable the `llvm-jit` feature)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# v2.1 Phase 1K.D.2 — alt-backend crate, never published. luna-jit
+# (the `llvm-jit` feature) wraps this for embedder consumption.
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# v2.1 Phase 1K.D.2 — backend implements the luna-core `IntChunkCompiler`
+# / `TraceCompiler` / `JitStorage` traits over LLVM-emitted mcode.
+luna-core = { path = "../luna-core", version = "= 1.3.0" }
+
+# v2.1 Phase 1K.D.2 — extracted `luna_jit_*` runtime helpers + `JIT_VM`
+# TLS shared with luna-jit (Cranelift). Both backends register the
+# same symbol table with their respective JIT execution engines.
+luna-jit-helpers = { path = "../luna-jit-helpers" }
+
+# v2.1 Phase 1K.B / 1K.D.2 — LLVM 18.1.x via inkwell 0.9.0. Same
+# feature flag as `llvm-jit-probe` (`llvm18-1`); requires
+# `LLVM_SYS_181_PREFIX` env var pointing at an LLVM 18.1.x install
+# (e.g. `brew install llvm@18` → `/opt/homebrew/opt/llvm@18`). See
+# `.dev/rfcs/v2.1-phase-1k-b-llvm-hello-world.md` for repro details.
+inkwell = { version = "0.9", features = ["llvm18-1"] }
