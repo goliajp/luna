@@ -31,6 +31,63 @@ pub enum TableError {
 /// effective ceiling). Beyond this `rehash` returns `TableError::Overflow`.
 pub(crate) const MAX_ASIZE: usize = 1 << 27;
 
+/// v2.1 Phase 1I.B — JIT layout constants for table-field IC.
+///
+/// luna-jit's trace lowerer needs to emit direct loads against
+/// `Table.nodes` (the hash part) without paying the helper-call ABI
+/// for each `Op::GetField` / `Op::SetField`. These constants expose
+/// the field offsets so the cranelift IR can be parameterised at
+/// compile time. The `Node` struct itself remains `pub(crate)` — only
+/// the offsets cross the crate boundary.
+///
+/// Layout assumptions:
+/// - `Box<[Node]>` is a fat pointer `(data_ptr, len)` on 64-bit
+///   targets (16 bytes total). The data pointer occupies the low 8
+///   bytes, length the high 8. This is the de-facto Rust ABI for
+///   `Box<[T]>` / `&[T]` but isn't formally guaranteed; the unit
+///   test `phase_1i_b_node_layout_pinned` and the const assertion
+///   on `size_of::<Box<[Node]>>()` catch drift.
+/// - `Value` is `#[repr(C, u8)]` so the discriminant byte sits at
+///   offset 0 and the payload starts at offset 8 (after 7 bytes of
+///   alignment padding). Total size 16 bytes per the existing
+///   `value_is_16_bytes` test in `runtime/value.rs`.
+/// - `Node` is `#[derive(Clone, Copy)]` with field order
+///   `(key: Value, val: Value, next: i32, dead_key: bool)`, so
+///   `key` lives at offset 0 and `val` at offset 16. The trailing
+///   `next + dead_key` fields are not read by the IC.
+pub mod jit_layout {
+    use super::Node;
+    use crate::runtime::Table;
+
+    /// Byte offset of the `nodes: Box<[Node]>` field within `Table`.
+    /// The fat-ptr low word (data ptr) lives at this offset; the
+    /// high word (length) at `TABLE_NODES_OFFSET + 8`. luna-jit
+    /// adds `TABLE_NODES_PTR_OFFSET` / `TABLE_NODES_LEN_OFFSET`
+    /// constants in `jit_backend/mod.rs` to express that split.
+    pub const TABLE_NODES_OFFSET: usize = std::mem::offset_of!(Table, nodes);
+
+    /// Byte offset of `key: Value` within `Node` (= 0).
+    pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key);
+
+    /// Byte offset of `val: Value` within `Node` (= 16 — `key` is 16-byte
+    /// `Value`, no inner padding).
+    pub const NODE_VAL_OFFSET: usize = std::mem::offset_of!(Node, val);
+
+    /// Total `Node` size in bytes (= 40 on 64-bit). Used as the stride
+    /// in `node_addr = nodes_ptr + slot_idx * SIZEOF_NODE`.
+    pub const SIZEOF_NODE: usize = std::mem::size_of::<Node>();
+
+    /// Static guard: pin the assumptions luna-jit relies on at compile
+    /// time. Layout drift here breaks IR emit, so trap it at compile
+    /// time rather than at trace-fire time.
+    const _: () = {
+        assert!(std::mem::size_of::<Box<[Node]>>() == 16);
+        assert!(NODE_KEY_OFFSET == 0);
+        assert!(NODE_VAL_OFFSET == 16);
+        assert!(SIZEOF_NODE >= 32);
+    };
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Node {
     key: Value,
@@ -1556,6 +1613,37 @@ mod tests {
                 n + 1
             );
         }
+    }
+
+    /// v2.1 Phase 1I.B — pin `Box<[Node]>` fat-ptr layout at runtime.
+    /// The luna-jit table-field IC reads `(ptr, len)` directly out of
+    /// the `nodes` field assuming the data pointer occupies the low 8
+    /// bytes and the length the high 8 bytes (de-facto Rust ABI on
+    /// 64-bit targets but not formally guaranteed). If a future Rust
+    /// release reorders the fat-ptr, this test fails before IC fires
+    /// at runtime.
+    #[test]
+    fn phase_1i_b_node_layout_pinned() {
+        use jit_layout::*;
+        assert_eq!(std::mem::size_of::<Box<[Node]>>(), 16);
+        assert_eq!(NODE_KEY_OFFSET, 0);
+        assert_eq!(NODE_VAL_OFFSET, 16);
+        assert!(SIZEOF_NODE >= 32);
+
+        // Construct a real Box<[Node]> with a known length, then
+        // peek at the fat-pointer's two halves to confirm the
+        // (data_ptr, len) order. Use a 4-slot box so the length is
+        // non-zero and the data pointer is heap-allocated.
+        let b: Box<[Node]> = vec![Node::EMPTY; 4].into_boxed_slice();
+        let raw_ptr = b.as_ptr();
+        let raw_len = b.len();
+        // SAFETY: reading the fat pointer's two words is exactly the
+        // layout luna-jit's IR assumes; it's the safest possible test
+        // of that assumption.
+        let words: [usize; 2] = unsafe { std::mem::transmute_copy(&b) };
+        assert_eq!(words[0], raw_ptr as usize, "fat-ptr low word = data ptr");
+        assert_eq!(words[1], raw_len, "fat-ptr high word = len");
+        drop(b);
     }
 
     #[test]
