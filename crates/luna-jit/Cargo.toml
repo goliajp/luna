@@ -44,6 +44,15 @@ luna-jit-derive = { path = "../luna-jit-derive", version = "= 1.3.0" }
 # `publish = false`, so no `version = ...` pin needed for crates.io.
 luna-jit-helpers = { path = "../luna-jit-helpers" }
 
+# v2.1 Phase 1K.D — LLVM 18 + inkwell 0.9 alternative JIT backend
+# crate. Optional behind the `llvm-jit` cargo feature (default OFF)
+# so the standard install path keeps Cranelift as the only JIT
+# backend and the LLVM toolchain (~1 GB system deps) is not pulled
+# into default builds. Embedders flip the backend at runtime via
+# the `LUNA_JIT_BACKEND=llvm` env var (1K.D.4). See
+# `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3.
+luna-jit-llvm = { path = "../luna-jit-llvm", optional = true }
+
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,
 # mature regalloc + opt. luna lowers Lua bytecode → Cranelift IR →
@@ -72,6 +81,20 @@ rustyline = { version = "14", optional = true }
 # CI builds both with and without this feature (see .github/workflows/ci.yml
 # `repl-line-editor` job) so the default-feature surface keeps verifying.
 repl-line-editor = ["dep:rustyline"]
+
+# v2.1 Phase 1K.D.3 — opt-in LLVM 18 alt JIT backend. Default OFF;
+# Cranelift remains the default backend. With this feature enabled,
+# the `LUNA_JIT_BACKEND=llvm` env var (read by
+# `install_default_jit` at Vm-construction time, Phase 1K.D.4)
+# selects the LLVM backend; unset / `cranelift` keeps Cranelift.
+# A `panic!` with a helpful hint fires at install time when the env
+# var is `llvm` but the feature is OFF.
+#
+# Local dev requires `LLVM_SYS_181_PREFIX` pointing at an LLVM 18.1.x
+# install (e.g. `brew install llvm@18` →
+# `/opt/homebrew/opt/llvm@18`). CI matrix gate lands in Phase 1K.D
+# follow-up — see `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3.
+llvm-jit = ["dep:luna-jit-llvm"]
 
 # v1.3 Phase SS-B — forward the `send` feature to luna-core so embedders
 # pulling `luna-jit --features send` automatically get
