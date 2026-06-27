@@ -40,8 +40,16 @@ jobs:
       - name: install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: run coverage
+        # Exclude LLVM-backed alt-backend crates: they link system LLVM 18
+        # + Polly, which the hosted ubuntu-latest runner doesn't ship
+        # (`could not find native static library Polly`). The mainline
+        # crates (luna-core, luna-jit, luna-jit-helpers, luna-aot,
+        # luna-runtime-helpers) are the contract we maintain; the
+        # alt-backend crates are dev-only audit artefacts (v2.1
+        # Cranelift alt-backend RFC) outside the regression band.
         run: |
           cargo llvm-cov --workspace --lib --json \
+            --exclude llvm-jit-probe --exclude luna-jit-llvm \
             --output-path coverage-current.json --summary-only
       - name: compare per-crate vs baseline
         id: gate

@@ -24,19 +24,28 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+      # v2.1 CI blocker fix: exclude LLVM-backed alt-backend crates.
+      # `llvm-jit-probe` + `luna-jit-llvm` unconditionally link inkwell
+      # → llvm-sys → system LLVM 18 + Polly; none of the hosted runners
+      # (ubuntu-latest / macos-latest / windows-latest) ship LLVM 18 +
+      # Polly out of the box (`could not find native static library
+      # Polly`). They are dev-only alt-backend audit crates (v2.1
+      # Cranelift alt-backend RFC) outside the embedder surface; their
+      # build/test gating lives in a dedicated developer-host workflow
+      # to be added when the alt-backend lands real production code.
       - name: cargo build --workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm
       - name: cargo test --workspace --lib
-        run: cargo test --workspace --lib
+        run: cargo test --workspace --lib --exclude llvm-jit-probe --exclude luna-jit-llvm
       - name: cargo test --workspace --release
         # `--nocapture` propagates test-side eprintln + println straight
         # to the CI log so a process-level abort (SIGSEGV / SIGILL / signal:
         # N) leaves the `[official_run] starting Lua5X/file.lua` trail
         # visible — without it, cargo test buffers per-test output and a
         # hard abort drops the buffer.
-        run: cargo test --workspace --release -- --nocapture
+        run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
       - name: cargo test --doc --workspace
-        run: cargo test --doc --workspace
+        run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
   # ─────────────────────────────────────────────────────────────────
   # wasm32 build of luna-core only (luna pulls Cranelift, which has
@@ -104,7 +113,8 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo doc --workspace --no-deps
-        run: cargo doc --workspace --no-deps
+        # See the `native` job comment for the LLVM exclusion rationale.
+        run: cargo doc --workspace --no-deps --exclude llvm-jit-probe --exclude luna-jit-llvm
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -127,7 +137,8 @@ jobs:
       - name: cargo fmt --all -- --check
         run: cargo fmt --all -- --check
       - name: cargo clippy --workspace --all-targets -- -D warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # See the `native` job comment for the LLVM exclusion rationale.
+        run: cargo clippy --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────
   # v1.2 D2 (P-A1 audit): perf-gate bench job. Linux runner + taskset
