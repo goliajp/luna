@@ -66,13 +66,14 @@ thread_local! {
 /// # v2.0 Track J sub-step J-D — capture-and-restore
 ///
 /// Before J-D the body just overwrote the TLS slots and returned an
-/// inert guard ([`noop_jit_guard`]); the "next `enter_jit` overwrites
-/// anyway" invariant made the elision harmless under single-thread,
-/// single-level dispatch. Cross-thread Vm move plus nested JIT entry
-/// (e.g. JIT'd op → metamethod → Lua-from-Rust → JIT entry again)
-/// makes the no-op-drop variant unsafe: the outer entry would resume
-/// holding the inner Vm's slot. J-D therefore delegates to
-/// [`scoped_rebind::scoped_jit_vm_rebind`], which snapshots the
+/// inert guard (a historical `noop_jit_guard` helper, since removed);
+/// the "next `enter_jit` overwrites anyway" invariant made the
+/// elision harmless under single-thread, single-level dispatch.
+/// Cross-thread Vm move plus nested JIT entry (e.g. JIT'd op →
+/// metamethod → Lua-from-Rust → JIT entry again) makes the no-op-drop
+/// variant unsafe: the outer entry would resume holding the inner
+/// Vm's slot. J-D therefore delegates to a crate-private
+/// `scoped_rebind::scoped_jit_vm_rebind`, which snapshots the
 /// previous values into the guard and restores them on drop.
 ///
 /// P11-S5d.J — the `cl` parameter is the closure being invoked. The
