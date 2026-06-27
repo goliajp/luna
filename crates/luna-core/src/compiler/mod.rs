@@ -223,6 +223,23 @@ struct Level {
     has_compat_vararg_arg: bool,
     #[allow(dead_code)]
     line_defined: u32,
+    /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
+    /// of any patched jump (forward jump landing here, backward jump-back to a
+    /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
+    /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
+    ///
+    /// Read by peephole passes (see `prev_emit_is_safe_peephole_site`) that
+    /// want to know whether the just-emitted instruction at pc `here() - 1`
+    /// can be modified in place: it is safe only when that pc is NOT itself a
+    /// jump destination, i.e. `last_target < here() - 1` or `last_target ==
+    /// None`. The A4''' Reloc-landing peephole (deferred follow-up) is the
+    /// first planned consumer; this field is currently exposed but never read
+    /// for code generation, so its addition is behaviour-neutral.
+    ///
+    /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
+    /// called from every code path that turns some `pc` into a jump landing
+    /// point.
+    last_target: Option<usize>,
 }
 
 impl Level {
@@ -245,6 +262,7 @@ impl Level {
             has_vararg_table_pseudo: false,
             has_compat_vararg_arg: false,
             line_defined,
+            last_target: None,
         }
     }
 
@@ -352,13 +370,23 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn patch_jump(&mut self, pc: usize) -> Result<(), SyntaxError> {
+    /// Patch a pending forward jump emitted earlier at `pc` so that it lands
+    /// at the current `here()` position, and mark `here()` as a jump target
+    /// (see `Level::last_target`). Mirrors PUC `luaK_patchtohere`.
+    ///
+    /// This is the canonical "this jump lands at the next instruction we are
+    /// about to emit" hook; every patch-pending-forward-jump call site routes
+    /// through it so that the jump-target tracker stays consistent. There is
+    /// no separate `patch_jump` variant that elides the mark — patching a
+    /// forward jump to a position that is not yet a target is meaningless.
+    fn patch_to_here(&mut self, pc: usize) -> Result<(), SyntaxError> {
         let target = self.here();
         let off = target as i64 - pc as i64 - 1;
         if off.unsigned_abs() > self.jump_cap() {
             return Err(self.err(self.last_line, "control structure too long"));
         }
         self.l().code[pc].set_sj(off as i32);
+        self.mark_target(target);
         Ok(())
     }
 
@@ -368,7 +396,43 @@ impl<'a> Compiler<'a> {
             return Err(self.err(self.last_line, "control structure too long"));
         }
         self.emit(Inst::isj(Op::Jmp, off as i32));
+        // The back-edge lands at `target`, which was captured upstream
+        // (typically `let top = self.here()` before a loop header). Mark it
+        // so a future peephole pass sees that pc as occupied.
+        self.mark_target(target);
         Ok(())
+    }
+
+    /// Record that `pc` is now a jump destination. Monotonic; advances
+    /// `last_target` only when `pc` exceeds the recorded maximum. Mirrors the
+    /// effect of PUC `luaK_getlabel` (which sets `fs->lasttarget = fs->pc`).
+    fn mark_target(&mut self, pc: usize) {
+        let l = self.l();
+        match l.last_target {
+            None => l.last_target = Some(pc),
+            Some(t) if pc > t => l.last_target = Some(pc),
+            _ => {}
+        }
+    }
+
+    /// PUC-equivalent query for "is the instruction at `here() - 1` safe to
+    /// peephole-retarget?". Returns `false` either when no instruction has
+    /// been emitted yet (vacuous), or when the just-emitted pc is itself a
+    /// recorded jump destination.
+    ///
+    /// Currently unused at codegen sites — exposed so the deferred A4'''
+    /// Reloc-landing attack (see `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md`
+    /// §4) can wire its gate without touching the tracker subsystem again.
+    #[allow(dead_code)]
+    fn prev_emit_is_safe_peephole_site(&self) -> bool {
+        let here = self.here();
+        if here == 0 {
+            return false;
+        }
+        match self.lr().last_target {
+            None => true,
+            Some(t) => t < here - 1,
+        }
     }
 
     /// PUC `errorlimit`: render the "too many … (limit is …) in <where>"
@@ -510,7 +574,7 @@ impl<'a> Compiler<'a> {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         for pc in b.breaks {
-            self.patch_jump(pc)?;
+            self.patch_to_here(pc)?;
         }
         // propagate unmatched gotos to the enclosing block (the label may
         // appear after this block); a goto leaving a block with captured or
@@ -539,6 +603,9 @@ impl<'a> Compiler<'a> {
                         }
                         self.l().code[g.jmp_pc].set_sj(off as i32);
                     }
+                    // every goto in this batch lands at `tramp` (start of the
+                    // per-name close trampoline)
+                    self.mark_target(tramp);
                     let line = gotos
                         .iter()
                         .find(|g| g.name == name)
@@ -551,7 +618,7 @@ impl<'a> Compiler<'a> {
                         nactive: b.first_avar,
                     });
                 }
-                self.patch_jump(skip)?;
+                self.patch_to_here(skip)?;
                 gotos = routed;
             }
             let cap = self.lr().avars.len();
@@ -592,7 +659,7 @@ impl<'a> Compiler<'a> {
                                 return Err(self.err(g.line, "control structure too long"));
                             }
                             self.emit(Inst::isj(Op::Jmp, to_label as i32));
-                            self.patch_jump(skip)?;
+                            self.patch_to_here(skip)?;
                             tramp as i64
                         } else {
                             pc as i64
@@ -602,6 +669,9 @@ impl<'a> Compiler<'a> {
                             return Err(self.err(g.line, "control structure too long"));
                         }
                         self.l().code[g.jmp_pc].set_sj(off as i32);
+                        // dest is either a backward label.pc or a trampoline
+                        // pc — both are jump destinations.
+                        self.mark_target(dest as usize);
                     }
                     None => unresolved.push(g),
                 }
@@ -715,6 +785,10 @@ impl<'a> Compiler<'a> {
             line,
             nactive: nactive.max(first_avar),
         });
+        // every defined label is a jump destination: pending gotos just got
+        // patched to land at `here`, AND backward gotos resolved by
+        // `goto_stat` lookup against this label will jump here too.
+        self.mark_target(here);
         Ok(())
     }
 
@@ -1548,7 +1622,11 @@ impl<'a> Compiler<'a> {
                 self.emit(Inst::iabc(op, l, r, 0, true));
                 self.emit(Inst::isj(Op::Jmp, 1));
                 self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
+                let tpad = self.here();
                 self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+                // Jmp(1) above skips the LFalseSkip and lands on the LoadTrue
+                // pad — that pc is a jump destination.
+                self.mark_target(tpad);
             }
             Exp::Open { pc, base } => {
                 self.patch_wanted(pc, 2);
@@ -1712,7 +1790,10 @@ impl<'a> Compiler<'a> {
         self.emit(Inst::iabc(op, l, r, 0, false));
         self.emit(Inst::isj(Op::Jmp, 1));
         self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
+        let tpad = self.here();
         self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+        // Jmp(1) lands on tpad — mark.
+        self.mark_target(tpad);
         Ok(Exp::Reg(reg))
     }
 
@@ -1765,6 +1846,10 @@ impl<'a> Compiler<'a> {
                     self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                     let tpad = self.here();
                     self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+                    // Jmp(1) skips LFalseSkip → tpad; LHS short-circuit will
+                    // also patch into one of these pads below.
+                    self.mark_target(tpad);
+                    self.mark_target(fpad);
                     (fpad, tpad)
                 }
                 _ => {
@@ -1778,7 +1863,10 @@ impl<'a> Compiler<'a> {
                     self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                     let tpad = self.here();
                     self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-                    self.patch_jump(jmp_over)?;
+                    self.patch_to_here(jmp_over)?;
+                    // LHS short-circuit patches into fpad or tpad below.
+                    self.mark_target(fpad);
+                    self.mark_target(tpad);
                     (fpad, tpad)
                 }
             };
@@ -1801,7 +1889,7 @@ impl<'a> Compiler<'a> {
         self.set_freereg(reg);
         let got = self.exp_to_nextreg(re)?;
         debug_assert_eq!(got, reg);
-        self.patch_jump(jmp)?;
+        self.patch_to_here(jmp)?;
         Ok(Exp::Reg(reg))
     }
 
@@ -2730,13 +2818,13 @@ impl<'a> Compiler<'a> {
             if !is_last {
                 end_jumps.push(self.emit_jump());
             }
-            self.patch_jump(skip)?;
+            self.patch_to_here(skip)?;
         }
         if let Some(eb) = else_body {
             self.block_scoped(eb)?;
         }
         for j in end_jumps {
-            self.patch_jump(j)?;
+            self.patch_to_here(j)?;
         }
         Ok(())
     }
@@ -2752,7 +2840,7 @@ impl<'a> Compiler<'a> {
         }
         self.jump_back(top)?;
         self.leave_block()?;
-        self.patch_jump(exit)?;
+        self.patch_to_here(exit)?;
         Ok(())
     }
 
@@ -2784,10 +2872,10 @@ impl<'a> Compiler<'a> {
             let floor = self.block_floor();
             let cont = self.emit_jump(); // cond FALSE -> close & loop
             let exit = self.emit_jump(); // cond TRUE  -> normal exit
-            self.patch_jump(cont)?;
+            self.patch_to_here(cont)?;
             self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
             self.jump_back(top)?;
-            self.patch_jump(exit)?;
+            self.patch_to_here(exit)?;
         } else {
             self.jump_back(top)?;
         }
@@ -2853,6 +2941,11 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "control structure too long"));
         }
         self.l().code[prep] = Inst::iabx(Op::ForPrep, base, skip as u32);
+        // ForLoop's back-edge lands at `body_top`; ForPrep's forward-skip
+        // lands at the post-loop pc (= `here()` after the ForLoop emit).
+        self.mark_target(body_top);
+        let post_loop = self.here();
+        self.mark_target(post_loop);
         self.leave_block()?;
         self.set_freereg(base);
         Ok(())
@@ -2904,6 +2997,9 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "control structure too long"));
         }
         self.l().code[prep] = Inst::iabx(Op::TForPrep, base, skip as u32);
+        // TForPrep's forward-skip lands at `tforcall_pc` (the upcoming TForCall
+        // emit position). Mark before the TForCall emit advances `here()`.
+        self.mark_target(tforcall_pc);
         // PUC `forbody` fixes TFORCALL/TFORLOOP to the line of the first token
         // after `in` (the EXPR's source line). A non-callable iterator
         // (`for k,v in 3 do ...`) then raises on the EXPR's line, not the
@@ -2915,6 +3011,8 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "control structure too long"));
         }
         self.emit(Inst::iabx(Op::TForLoop, base, back as u32));
+        // TForLoop's back-edge lands at `body_top` (per-iteration restart).
+        self.mark_target(body_top);
         // Override the body block's reg_floor to `base` so trampoline OP_Close
         // emitted for a `goto` leaving the loop closes the iterator's closing
         // value at `base + 3` (which sits BELOW the for-body's user-locals
