@@ -5221,17 +5221,16 @@ pub fn lower_trace_into_named<M: Module>(
     // the counter unchanged.
     let base_var = bcx.declare_var(types::I64);
     {
-        // v2.1 Path D Phase 1G.C (sub-2A re-apply) — `base_var` now
-        // holds the real `reg_state` ptr (depth-0 frame base). The
-        // helper `current_base_addr(_, base_var, op_off_bytes, slot)`
-        // returns `(reg_state, op_off_bytes + slot * 8)` so migrated
-        // op-arms can emit `MemFlags::trusted()` stores at the same
-        // address the deopt store-back path uses. Phase 1G.B's
-        // cross-block DSE (strict-chain + deopt-safe relaxation)
-        // DCEs the redundant prior store when a later trusted store
-        // to the same slot dominates and either chains cleanly or
-        // hits a deopt-safe side exit.
-        bcx.def_var(base_var, reg_state);
+        let z = bcx.ins().iconst(types::I64, 0);
+        bcx.def_var(base_var, z);
+        // Mirror the tforcall_tag_var declaration pattern exactly
+        // (declare + iconst init + def_var, no anchor use). Cranelift
+        // tree-shakes the unused Variable in optimized builds, so the
+        // sub-1 scaffold adds zero machine-code residue vs. pre-sub-1.
+        // Risk D1.R1 mitigation is deferred to sub-2 where op-arm
+        // migration actually exercises `bcx.use_var(base_var)` —
+        // that's the codegen surface that matters for the
+        // GlobalValue-vs-Variable escape route decision.
         BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
@@ -5690,25 +5689,7 @@ pub fn lower_trace_into_named<M: Module>(
                 // carries the control transfer.
             }
             Op::Move => {
-                // v2.1 Path D Phase 1G.C sub-2A dual-write — preserve
-                // Variable shadow (def_var keeps downstream non-
-                // migrated arms' use_var paths intact) AND emit a
-                // trusted store at the depth-aware reg_state slot
-                // address. The store is DCE-able by Phase 1G.B's
-                // cross-block DSE rule when a later trusted store
-                // to the same slot dominates and either (a) the
-                // strict-chain check passes, or (b) any off-chain
-                // side exit overwrites the slot via a plain
-                // (non-notrap) Store before any load.
                 let src = bcx.use_var(regs[ins.b() as usize]);
-                let (dst_base, dst_off) = current_base_addr(
-                    &mut bcx,
-                    base_var,
-                    (op_offsets[i] as i32).saturating_mul(8),
-                    ins.a() as u32,
-                );
-                bcx.ins()
-                    .store(MemFlags::trusted(), src, dst_base, dst_off);
                 bcx.def_var(regs[ins.a() as usize], src);
                 current_kinds[off + ins.a() as usize] = k_op(&current_kinds, off as u32 + ins.b());
             }
@@ -5732,24 +5713,10 @@ pub fn lower_trace_into_named<M: Module>(
                 // target slot, marking current_kinds = Nil so the
                 // exit-tag derivation (kinds_to_exit_tags, S6-A1)
                 // produces ExitTag::Nil for slots the trace touched.
-                //
-                // v2.1 Path D Phase 1G.C sub-2A dual-write — per-slot
-                // trusted store + def_var. Phase 1G.B's cross-block
-                // DSE rule DCEs the redundant prior stores when a
-                // later migrated arm writes the same slot.
                 let a_us = ins.a() as usize;
                 let b_us = ins.b() as usize;
                 let zero = bcx.ins().iconst(types::I64, 0);
-                let op_off_bytes = (op_offsets[i] as i32).saturating_mul(8);
                 for k in 0..=b_us {
-                    let (dst_base, dst_off) = current_base_addr(
-                        &mut bcx,
-                        base_var,
-                        op_off_bytes,
-                        (a_us + k) as u32,
-                    );
-                    bcx.ins()
-                        .store(MemFlags::trusted(), zero, dst_base, dst_off);
                     bcx.def_var(regs[a_us + k], zero);
                     current_kinds[off + a_us + k] = RegKind::Nil;
                 }
@@ -5767,14 +5734,6 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     _ => unreachable!("pre-emit gates Int / Float consts"),
                 };
-                // v2.1 Path D Phase 1G.C sub-2A dual-write (Op::LoadK).
-                let (dst_base, dst_off) = current_base_addr(
-                    &mut bcx,
-                    base_var,
-                    (op_offsets[i] as i32).saturating_mul(8),
-                    ins.a() as u32,
-                );
-                bcx.ins().store(MemFlags::trusted(), v, dst_base, dst_off);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = k;
             }
