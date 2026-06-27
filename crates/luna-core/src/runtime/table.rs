@@ -476,6 +476,34 @@ impl Table {
         }
     }
 
+    /// v2.1 Phase 1I.B — same logic as [`find_node`] but exposed
+    /// to luna-core's recorder so it can capture the slot index for
+    /// the table-field IC snapshot. luna-jit reads neither the
+    /// `nodes` field nor `Node` directly; only the slot index
+    /// crosses the crate boundary (baked into the IR as a `iconst`).
+    #[allow(dead_code)]
+    pub(crate) fn find_node_idx(&self, k: Value) -> Option<usize> {
+        self.find_node(k)
+    }
+
+    /// v2.1 Phase 1I.B — accessor for the recorder's
+    /// `FieldIcSnapshot` capture: read the slot's value's tag byte
+    /// for the cached_val_tag field. The recorder needs this to
+    /// match the runtime guard the IC emits. Returns None when
+    /// `idx >= nodes.len()`.
+    #[allow(dead_code)]
+    pub(crate) fn node_val_at(&self, idx: usize) -> Option<Value> {
+        self.nodes.get(idx).map(|n| n.val)
+    }
+
+    /// v2.1 Phase 1I.B — accessor for `nodes.len()` so the recorder
+    /// can capture the shape-guard's `nodes_len` field without
+    /// reaching into the private `nodes` member.
+    #[allow(dead_code)]
+    pub(crate) fn nodes_capacity(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Walk the chain rooted at the key's main position.
     fn find_node(&self, k: Value) -> Option<usize> {
         if self.nodes.is_empty() {
@@ -1623,6 +1651,7 @@ mod tests {
     /// release reorders the fat-ptr, this test fails before IC fires
     /// at runtime.
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn phase_1i_b_node_layout_pinned() {
         use jit_layout::*;
         assert_eq!(std::mem::size_of::<Box<[Node]>>(), 16);
