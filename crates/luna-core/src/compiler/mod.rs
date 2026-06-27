@@ -3030,6 +3030,69 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
+
+    // -----------------------------------------------------------------
+    // v2.1 Phase 11 — A4' prerequisite: compiler-side snapshot gate.
+    // -----------------------------------------------------------------
+
+    /// Compiler-side metamethod-safety gate for the future A4' Index-LHS
+    /// object snapshot elision attack (see
+    /// `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2.3 and
+    /// `.dev/rfcs/v2.1-a4-prime-prereq-verdict.md`).
+    ///
+    /// Returns `true` when, for a single-target Index-LHS assignment
+    /// `obj.key = rhs` (or `obj[key] = rhs`), the unconditional
+    /// `exp_to_nextreg(oe)` snapshot at `assign_stat` line 2490 is
+    /// provably redundant.
+    ///
+    /// The four conditions enforced (mirroring RFC §2.3):
+    ///
+    /// 1. `targets.len() == 1` and `exprs.len() == 1` — no inter-target
+    ///    or multi-RHS conflict possible.
+    /// 2. The single target is `Expr::Index { obj: Name(local), .. }`
+    ///    where the name resolves to a real local in the current level
+    ///    (not an upvalue / global / read-only / vararg-virtual).
+    /// 3. `locals[reg].captured == false` — no closure has captured
+    ///    this local's slot, so no metatable-stored Lua closure can
+    ///    rebind it through the upvalue.
+    /// 4. AST-side
+    ///    [`ast::metamethod_safe_for_index_lhs`][crate::frontend::ast::metamethod_safe_for_index_lhs]
+    ///    over `(obj, exprs[0])` returns true (no UserOrUnknown RHS
+    ///    calls; obj is a bare Name).
+    ///
+    /// PURE ADDITIVE — no current site in `assign_stat` calls this.
+    /// Wired by the A4' attack proper in a subsequent v2.1 sprint.
+    #[allow(dead_code)] // consumer = v2.1 Phase 11 A4' attack
+    pub(crate) fn assign_stat_can_skip_obj_snapshot(
+        &self,
+        targets: &[ExprId],
+        exprs: &[ExprId],
+    ) -> bool {
+        if targets.len() != 1 || exprs.len() != 1 {
+            return false;
+        }
+        let (obj_eid, _key_eid) = match self.ast.expr(targets[0]) {
+            Expr::Index { obj, key } => (*obj, *key),
+            _ => return false,
+        };
+        let name_text = match self.ast.expr(obj_eid) {
+            Expr::Name(n) => &*n.text,
+            _ => return false,
+        };
+        // Resolve the name against the *current* level only — we
+        // intentionally do not chase upvalues here because A4' only
+        // elides snapshots for owner-level locals.
+        let level = self.lr();
+        let local = match level.locals.iter().find(|l| &*l.name == name_text) {
+            Some(l) => l,
+            None => return false,
+        };
+        if local.captured || local.vararg_virtual {
+            return false;
+        }
+        // AST-side gate (call walker + obj-is-name check).
+        ast::metamethod_safe_for_index_lhs(self.ast, obj_eid, exprs[0])
+    }
 }
 
 /// Constant-fold arithmetic over two numeric literals where Lua semantics
