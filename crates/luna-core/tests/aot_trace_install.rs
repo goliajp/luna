@@ -9,6 +9,7 @@
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
+use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 use luna_core::jit::trace::{CompiledTrace, ExitTag, TagResKind, classify_exit_tags};
 use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
@@ -24,12 +25,12 @@ unsafe extern "C" fn dummy_entry(_reg_state: *mut i64) -> i64 {
 }
 
 fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
-    let exit_tags: std::rc::Rc<[ExitTag]> = (0..max_stack)
+    let exit_tags: TArc<[ExitTag]> = (0..max_stack)
         .map(|_| ExitTag::Untouched)
         .collect::<Vec<_>>()
         .into();
     let global_kind: TagResKind = classify_exit_tags(&exit_tags);
-    let entry_tags: std::rc::Rc<[u8]> = vec![0u8; max_stack as usize].into();
+    let entry_tags: TArc<[u8]> = vec![0u8; max_stack as usize].into();
     CompiledTrace {
         head_pc,
         entry: dummy_entry,
@@ -39,14 +40,14 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         exit_tags,
         global_tag_res_kind: global_kind,
         entry_tags,
-        per_exit_tags: std::rc::Rc::from(Vec::<(u32, std::rc::Rc<[ExitTag]>)>::new()),
-        per_exit_inline: std::rc::Rc::from(Vec::new()),
-        exit_hit_counts: std::rc::Rc::from(vec![std::cell::Cell::new(0u32)]),
-        exit_side_trace_ptrs: std::rc::Rc::from(vec![std::cell::Cell::new(std::ptr::null())]),
-        tags_side_trace_ptrs: std::rc::Rc::from(Vec::new()),
-        global_side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
-        side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-        has_any_side_wired: std::cell::Cell::new(false),
+        per_exit_tags: TArc::from(Vec::<(u32, TArc<[ExitTag]>)>::new()),
+        per_exit_inline: TArc::from(Vec::new()),
+        exit_hit_counts: TArc::from(vec![TCellU32::new(0u32)]),
+        exit_side_trace_ptrs: TArc::from(vec![TCellPtr::null()]),
+        tags_side_trace_ptrs: TArc::from(Vec::new()),
+        global_side_trace_ptr: Box::new(TCellPtr::null()),
+        side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
+        has_any_side_wired: TCellBool::new(false),
         is_inline_abort_close: false,
         dispatch_off_reason: None,
         sinkable_sites_seen: 0,
@@ -55,6 +56,8 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         materialize_emit_count: 0,
         closure_seen: 0,
         body_writes: Box::new([]),
+        downrec_link: None,
+        downrec_multi_way_count: 0,
     }
 }
 

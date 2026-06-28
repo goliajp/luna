@@ -811,11 +811,11 @@ mod tests {
         let live = InlineSideExit {
             cont_pc: 42,
             head_resume_pc: 50,
-            exit_tags: std::rc::Rc::from(
+            exit_tags: crate::jit::send_compat::TArc::from(
                 vec![ExitTag::Int, ExitTag::Float, ExitTag::Untouched].into_boxed_slice(),
             ),
-            chain: std::rc::Rc::from(chain.into_boxed_slice()),
-            side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
+            chain: crate::jit::send_compat::TArc::from(chain.into_boxed_slice()),
+            side_trace_ptr: Box::new(crate::jit::send_compat::TCellPtr::null()),
         };
         let entry = PerExitInlineEntry::from_inline_side_exit(&live);
         assert_eq!(entry.cont_pc, 42);

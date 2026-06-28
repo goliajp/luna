@@ -1,0 +1,66 @@
+name: coverage
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # v2.0 Track CV-infra: workspace-wide line/region coverage via
+  # `cargo llvm-cov`. Self-hosted JSON baseline at
+  # `.github/coverage-baselines/coverage-2026-06-25.json` (Phase 2
+  # audit decision — no SaaS coverage backend; baseline rolls forward
+  # on explicit commits).
+  #
+  # Gate semantics:
+  #   * fail if any first-party crate drops > 2 percentage points in
+  #     line coverage vs the committed baseline (regression band),
+  #   * warn (do not fail) if a crate is below its audit budget — the
+  #     budget gates only flip to hard-fail once per-track CV-content
+  #     fills bring each crate into its budget (multi-week sprint).
+  #
+  # Branch coverage is reported as 0/0 on stable rustc (LLVM stable
+  # only emits region-level data; branch needs nightly's
+  # `-Z coverage-options=branch`). The gate uses **regions** as the
+  # branch-style proxy.
+  # ─────────────────────────────────────────────────────────────────
+  coverage:
+    name: cargo llvm-cov vs baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: run coverage
+        # Exclude LLVM-backed alt-backend crates: they link system LLVM 18
+        # + Polly, which the hosted ubuntu-latest runner doesn't ship
+        # (`could not find native static library Polly`). The mainline
+        # crates (luna-core, luna-jit, luna-jit-helpers, luna-aot,
+        # luna-runtime-helpers) are the contract we maintain; the
+        # alt-backend crates are dev-only audit artefacts (v2.1
+        # Cranelift alt-backend RFC) outside the regression band.
+        run: |
+          cargo llvm-cov --workspace --lib --json \
+            --exclude llvm-jit-probe --exclude luna-jit-llvm \
+            --output-path coverage-current.json --summary-only
+      - name: compare per-crate vs baseline
+        id: gate
+        run: |
+          python3 .github/coverage-baselines/compare.py \
+            .github/coverage-baselines/coverage-2026-06-25.json \
+            coverage-current.json
+      - name: upload current coverage as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-current
+          path: coverage-current.json
+          retention-days: 90

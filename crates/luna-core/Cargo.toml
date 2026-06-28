@@ -37,3 +37,16 @@ send = []
 [dependencies]
 # v1.1 F1 acceptance: this list must remain empty so
 # `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` == 1.
+
+[dev-dependencies]
+# v2.0 Phase 5 Track MM (memory budget) — `dhat` is a dev-only heap
+# profiler used by the `mem_baseline` bench. It is gated to
+# `[dev-dependencies]` so prod `cargo tree -p luna-core` still reports
+# exactly 1 crate (luna-core itself), preserving the F1 0-dep contract.
+# See `.dev/baselines/mem-2026-06-25/` for measurement output and
+# `docs/contributing-mem.md` for the workflow.
+dhat = "0.3"
+
+[[bench]]
+name = "mem_baseline"
+harness = false

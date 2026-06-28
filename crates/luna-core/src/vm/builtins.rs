@@ -623,6 +623,9 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             // pins `i == 2`.
             let mut buf = Vec::new();
             let mut try_early = true;
+            // Snapshot the loader budget once — embedders are not
+            // expected to widen the cap mid-`load`.
+            let input_budget = vm.loader_input_budget();
             loop {
                 // the reader runs in a protected context (PUC protectedparser):
                 // an error it raises becomes a soft load failure
@@ -633,7 +636,22 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                 match r.first() {
                     None | Some(Value::Nil) => break,
                     Some(Value::Str(s)) if s.as_bytes().is_empty() => break,
-                    Some(Value::Str(s)) => buf.extend_from_slice(s.as_bytes()),
+                    Some(Value::Str(s)) => {
+                        let bytes = s.as_bytes();
+                        // Gate the next chunk *before* we extend the
+                        // buffer: PUC's `loadrep` feeder returns a 1 MiB
+                        // string every iteration and runs forever; with
+                        // the default 256 MiB cap we error out after the
+                        // first quarter-gig instead of letting the host
+                        // allocator crawl past 7 GB then SIGSEGV.
+                        // Matches the PUC `not enough memory` failure
+                        // shape that `heavy.lua::loadrep` asserts on.
+                        if bytes.len() > input_budget.saturating_sub(buf.len()) {
+                            let m = Value::Str(vm.heap.intern(b"not enough memory"));
+                            return Ok(vm.nat_return(fs, &[Value::Nil, m]));
+                        }
+                        buf.extend_from_slice(bytes);
+                    }
                     Some(_) => {
                         // a non-string from the reader is a soft load failure
                         let m = Value::Str(vm.heap.intern(b"reader function must return a string"));

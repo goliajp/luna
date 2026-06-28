@@ -26,6 +26,7 @@
 //! - **S5**: escape analysis on `Op::NewTable` results.
 //!
 
+use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 use luna_core::runtime::Gc;
 use luna_core::runtime::function::Proto;
 use luna_core::vm::isa::{Inst, Op};
@@ -1975,6 +1976,19 @@ fn escape_analyze(
                     // window, same as InlineAbort's blanket escape.
                     escape_all_live(&bindings, &mut sites);
                 }
+                TraceEnd::DownRec { .. } => {
+                    // v2.0 Track-R R3a — down-rec close. R3a routes
+                    // the tail emit through R1's safe deopt path
+                    // (dispatchable=false), so every live binding
+                    // at close must be marshalled back into the
+                    // caller window before the deopt return —
+                    // same blanket-escape posture as SelfLink /
+                    // InlineAbort. R3b's lowerer will keep this
+                    // shape when it lifts to a real native back-edge:
+                    // the retf-guard exit also returns through the
+                    // caller window.
+                    escape_all_live(&bindings, &mut sites);
+                }
             }
         }
     }
@@ -2465,31 +2479,63 @@ pub fn compute_live_in_slots(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u3
 }
 
 /// Owner of one compiled trace's mmap'd code. Drop releases the
-/// pages, so we stash these in a thread-local `TRACE_JIT_HANDLES`
-/// to keep entry fn pointers callable for the thread's lifetime.
-/// Mirrors the method JIT's `JitHandle` / `JIT_CACHE_HANDLES`
-/// pattern (`src/jit/mod.rs`).
+/// pages, so the handle is parked on the owning `Vm`'s
+/// `storage.trace_handles` Vec, keeping the entry fn pointer
+/// callable for the lifetime of that `Vm`.
+///
+/// v2.0 Track J sub-step J-B Phase F — was thread-local
+/// `TRACE_JIT_HANDLES`. Mirrors the method JIT's `JitHandle` /
+/// `storage.cache_handles` pattern (`jit_backend/mod.rs`).
 pub struct TraceHandle {
-    _module: JITModule,
+    // v2.0 Track J sub-step J-D — sleeve `JITModule` in J-A's
+    // `SendJitModule` newtype so the module's `Send` claim is
+    // expressed at the field type, not by an `unsafe impl Send` on
+    // the outer struct. The wrapper is `repr(Rust)` newtype with
+    // `Deref<Target = JITModule>` so any internal call site that
+    // touched `handle._module.<method>` still resolves through Deref.
+    _module: super::SendJitModule,
     _entry_raw: *const u8,
 }
 
-// SAFETY: `JITModule` is not Send by default (the mmap'd code lives
-// at a thread-local address). We never move a `TraceHandle` off the
-// thread that created it — `TRACE_JIT_HANDLES` is `thread_local!`
-// and the dispatcher will only call traces from the thread that
-// recorded them. This marker is just to satisfy
-// `RefCell<Vec<TraceHandle>>` in the `thread_local!` macro context.
+// SAFETY: `SendJitModule` (J-A) is `Send` because luna only ever
+// constructs `JITModule` with the default `SystemMemoryProvider`
+// (which is `Send`). `_entry_raw: *const u8` is `!Send` by default;
+// the manual `unsafe impl Send for TraceHandle` therefore stays
+// load-bearing for the outer struct, but the J-A wrapper localizes
+// the JITModule-side soundness reasoning to one place.
+//
+// v2.0 Track J sub-step J-E (audit): `_entry_raw` addresses mcode
+// in `_module`'s mmap'd page. Because `_module` ships with the
+// handle (the handle owns it by-value as a `SendJitModule`), the
+// pointer remains dereferenceable on whichever OS thread the
+// handle lands on after a Vm move. The pointer is read-only on
+// the dispatch hot path (transmuted to an `extern "C"` fn and
+// called); no aliasing concerns. Per-dispatch `JIT_VM` / `JIT_CL`
+// TLS slots are scoped via J-D's `scoped_jit_vm_rebind` RAII so
+// any thread that calls into the dispatcher re-arms its own slot.
+// Mirror impl: `unsafe impl Send for JitHandle` at
+// `jit_backend/mod.rs` just after the `JitHandle` struct.
+//
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
 unsafe impl Send for TraceHandle {}
 
-thread_local! {
-    /// Storage that owns each compiled trace's `JITModule`, keeping
-    /// every fn pointer published in a `CompiledTrace` callable for
-    /// the lifetime of the thread.
-    static TRACE_JIT_HANDLES: std::cell::RefCell<Vec<TraceHandle>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+impl TraceHandle {
+    /// v2.0 Track J sub-step J-D — `#[doc(hidden)]` accessor returning
+    /// the parked `_module` borrowed at the `SendJitModule` newtype.
+    /// Mirror of `JitHandle::__j_d_module`; lets
+    /// `tests/j_d_scoped_rebind_and_sleeve.rs` statically assert the
+    /// field type.
+    #[doc(hidden)]
+    #[inline]
+    pub fn __j_d_module(&self) -> &super::SendJitModule {
+        &self._module
+    }
 }
+
+// v2.0 Track J sub-step J-B Phase F — `TRACE_JIT_HANDLES` was a
+// `thread_local!<Vec<TraceHandle>>` here. Migrated to
+// `Vm.jit.storage.trace_handles`. Compiled fn pointers stay callable
+// for the lifetime of the owning `Vm` instead of the thread.
 
 /// Step 5 op whitelist. Anything outside this set bails the lowerer
 /// to `None`, leaving the recorder to drop the trace.
@@ -2574,6 +2620,42 @@ enum TraceEnd {
     /// `true` (DOES NOT pin `is_inline_abort_close`); the depth>0
     /// ops in the body are intentional inline content.
     SelfLink(SelfRecKind),
+    /// v2.0 Track-R R3a — recorder detected a down-recursion close
+    /// shape: a depth>0 `Op::Return` fired during recording AND the
+    /// `rec.retfs` chain showed the trace bouncing in-and-out of the
+    /// same caller-proto past [`RECUNROLL_THRESHOLD`]. Mirrors
+    /// LuaJIT's `LJ_TRLINK_DOWNREC` close (`lj_record.c:912
+    /// lj_trace_err(LJ_TRERR_DOWNREC)` → `lj_trace.c:570
+    /// trace_downrec` → restart-at-Return-PC). Routed BEFORE the
+    /// `SelfLink` arm in the `end_idx` picker so depth>0 Return
+    /// closes win over depth>0 self-link cycles.
+    ///
+    /// `return_pc` is the PC the inlined frame is unwinding to —
+    /// the future stitch-entry head_pc that R3b's lowerer will bake
+    /// into the retf-guard sequence (`asm_retf` equivalent).
+    /// `target_proto_id` carries the target proto's `Gc::as_ptr()`
+    /// as a raw `usize` so this enum stays `Copy` for the existing
+    /// `end_idx_opt: Option<(usize, TraceEnd)>` plumbing. The
+    /// matching `Gc<Proto>` lives on `TraceRecord.downrec_close.
+    /// target_proto` (not erased); the lowerer cross-references the
+    /// two when emitting the guard.
+    ///
+    /// **R3a constraint**: the lowerer still falls through to R1's
+    /// safe `dispatchable=false` deopt-tail (`"self-link-retf-r1"`
+    /// label retained) when this arm fires. R3b lifts that to a real
+    /// native back-edge by emitting the retf-guard + stitch sentinel.
+    DownRec {
+        /// PC the Return is unwinding to (caller's resume PC).
+        return_pc: u32,
+        /// Caller proto's `Gc::as_ptr()` as `usize` (kept opaque so
+        /// `TraceEnd` stays `Copy`). The lowerer reads
+        /// `TraceRecord.downrec_close.target_proto` for the real
+        /// `Gc<Proto>`.
+        target_proto_id: usize,
+        /// `from_depth - to_depth` at the moment the catch tripped.
+        /// Always `1` today.
+        depth_delta: u8,
+    },
 }
 
 /// Direction the cmp/Jmp pair took in the recording. Both
@@ -2783,6 +2865,55 @@ struct FlushCtx {
     release_ref: cranelift_codegen::ir::FuncRef,
 }
 
+/// v2.0 Track-R R3.3+ sub-1 — depth-relative base address helper.
+///
+/// Given the trace's `base_var` Variable (declared at entry block, see
+/// `lower_trace_into_named` sub-1 scaffold) plus an op's window
+/// offset (`op_offset_bytes` = `op_offsets[i] * 8`) plus a slot index
+/// within that op's window, returns a `(base_value, byte_offset)`
+/// pair suitable for `bcx.ins().load(..., base_value, byte_offset)`
+/// or `bcx.ins().store(..., base_value, byte_offset)`.
+///
+/// Sub-1 caller contract: `base_var` is initialised to `iconst(0)` —
+/// i.e., a depth-0 sentinel placeholder. Calling this helper produces
+/// load/store IR that addresses `[0 + op_offset_bytes + slot * 8]`,
+/// which is NOT a valid reg_state-relative address. Sub-1 op-arms
+/// MUST NOT call this helper (they keep using `regs_full[off + slot]`
+/// via `bcx.use_var` / `bcx.def_var`). The helper exists only as the
+/// threading-shape proof: sub-2 will (a) replace the iconst(0) init
+/// with `reg_state` itself + (b) start migrating Op::Move / Op::LoadK
+/// / Op::LoadNil arms to call this helper instead of indexing
+/// `regs_full`. Sub-3 will insert the R3d stitch_blk base-shift
+/// `iadd_imm(base_var, -8 * recorded_delta)` BETWEEN the cmp brif and
+/// the store-back so the deopt path lands at the caller window
+/// (Risk D1.R2 mitigation in `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §8).
+///
+/// Why a helper (not inline `iadd_imm` at each call site): the
+/// op_offset + slot arithmetic is identical across all op-arms and
+/// the LJ source citation in `.dev/rfcs/v2.0-track-r-r3-3-luajit-
+/// study.md` shows arm64's `ldr Xd, [Xn, #imm]` handles the pattern
+/// in a single addressing mode. Concentrating the math in one helper
+/// keeps the Cranelift mid-end's `iadd_imm` coalescing surface
+/// uniform (Risk D1.R1 mitigation) and lets sub-2 audit codegen at
+/// ONE site instead of ~30.
+// Sub-1 scaffold: no production caller yet (sub-2 will migrate op-arms
+// to call this; sub-1's only consumer is the regression test smoke
+// probe at `r3_3_sub1_base_var_scaffold.rs`). `pub(crate)` so the
+// test crate's hook can dispatch through `try_compile_trace_with_options`
+// — the helper itself stays internal because sub-2 is the place where
+// op-arm rewiring decides the final visibility.
+#[allow(dead_code)]
+pub(crate) fn current_base_addr(
+    bcx: &mut FunctionBuilder<'_>,
+    base_var: Variable,
+    op_offset_bytes: i32,
+    slot: u32,
+) -> (Value, i32) {
+    let base_now = bcx.use_var(base_var);
+    let total_offset = op_offset_bytes.saturating_add((slot as i32).saturating_mul(8));
+    (base_now, total_offset)
+}
+
 fn emit_flush_buf(bcx: &mut FunctionBuilder<'_>, ctx: &FlushCtx, regs: &[Variable]) {
     let buf_ptr = bcx.use_var(ctx.buf_var);
     let call_inst = bcx.ins().call(ctx.intern_ref, &[buf_ptr]);
@@ -2960,9 +3091,9 @@ fn emit_store_back_and_return_site(
 ///   position,
 /// - cranelift codegen fails.
 ///
-/// On success, the underlying `JITModule` is stashed in
-/// `TRACE_JIT_HANDLES` so the returned `CompiledTrace.entry` stays
-/// callable for the thread's lifetime.
+/// On success, the underlying `JITModule` is parked on
+/// `storage.trace_handles` so the returned `CompiledTrace.entry`
+/// stays callable for the lifetime of the owning `Vm`.
 ///
 /// **Caller contract for table ops** (step 4): before invoking the
 /// returned entry, the caller (a test harness today; the S3
@@ -2981,8 +3112,11 @@ fn emit_store_back_and_return_site(
 /// pick options — it forwards to
 /// [`try_compile_trace_with_options`] with [`CompileOptions::default`]
 /// (one-shot, the shape unit tests assume).
-pub fn try_compile_trace(record: &TraceRecord) -> Option<CompiledTrace> {
-    try_compile_trace_with_options(record, CompileOptions::default())
+pub fn try_compile_trace(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+) -> Option<CompiledTrace> {
+    try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
 // P13-S13-G v2.6 — last-checkpoint instrumentation for trace
@@ -2996,6 +3130,20 @@ thread_local! {
         const { std::cell::Cell::new("not-entered") };
     pub(crate) static LAST_OP_ID: std::cell::Cell<u8> =
         const { std::cell::Cell::new(255) };
+    // v2.0 Track-R R3.3+ sub-1 — counter bumped exactly once per
+    // `lower_trace_into_named` invocation that successfully declares
+    // the depth-relative `base_var` scaffold. Used by the sub-1
+    // regression test (`r3_3_sub1_base_var_scaffold.rs`) to assert
+    // the scaffold's declaration ran end-to-end without actually
+    // exercising any op-arm migration (sub-2 territory).
+    //
+    // Probe-only: dispatched + close-cause counters cover production
+    // behaviour; this cell exists solely so the test can pin "scaffold
+    // ran" without scraping Cranelift IR text. The bump happens AFTER
+    // `declare_var` + `def_var(iconst(0))` so a panic earlier in the
+    // entry block leaves the counter at its prior value.
+    pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 fn checkpoint(s: &'static str) {
@@ -3017,6 +3165,33 @@ pub fn last_compile_checkpoint() -> &'static str {
 /// lowerer touched on this thread. Diagnostic-only.
 pub fn last_op_id() -> u8 {
     LAST_OP_ID.with(|c| c.get())
+}
+
+/// v2.0 Track-R R3.3+ sub-1 — count of successful `base_var` scaffold
+/// declarations on this thread. Bumped exactly once per
+/// `lower_trace_into_named` invocation that reaches the post-entry
+/// emit point and runs `declare_var` + `def_var(iconst(0))` for the
+/// depth-relative base address handle. Sub-1 scaffold-only: NO op-arm
+/// migration (sub-2 territory); the Variable is in-scope for the
+/// entire lowerer body but `use_var(base_var)` doesn't happen yet.
+///
+/// Read by `r3_3_sub1_base_var_scaffold.rs`; production paths
+/// (dispatcher / close handler / vm) never read this.
+///
+/// See `.dev/rfcs/v2.0-track-r-r3-3-sub1-verdict.md` for the scaffold
+/// shape decision (single-def_var, no audit anchor) + sub-2 handoff
+/// (replace `iconst(0)` init with `reg_state` + migrate Op::Move /
+/// Op::LoadK / Op::LoadNil arms to call `current_base_addr`).
+pub fn base_var_scaffold_declared_count() -> u64 {
+    BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
+}
+
+/// v2.0 Track-R R3.3+ sub-1 — reset the scaffold-declared counter so
+/// a regression test can assert "the next compile bumped it by 1"
+/// without depending on prior tests in the same thread. Test-only;
+/// production paths never call this.
+pub fn reset_base_var_scaffold_declared_count() {
+    BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(0));
 }
 
 /// v1.3 Phase AOT Stage 3 — build a fresh `JITModule` configured with
@@ -3198,9 +3373,10 @@ unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
 /// [`lower_trace_into`] generic. Constructs a `JITModule`, finalizes
 /// the compiled trace into RWX memory, patches the real entry fn ptr
 /// into the returned [`CompiledTrace`], and stashes the module in
-/// `TRACE_JIT_HANDLES` so the entry stays callable for the thread's
-/// lifetime.
+/// `storage.trace_handles` so the entry stays callable for the
+/// lifetime of the owning `Vm`.
 pub fn try_compile_trace_with_options(
+    storage: &mut dyn luna_core::jit::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
@@ -3210,15 +3386,26 @@ pub fn try_compile_trace_with_options(
     let ptr = module.get_finalized_function(fn_id);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
     // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
-    // is owned by `module`, which we park in `TRACE_JIT_HANDLES`
-    // immediately below.
+    // is owned by `module`, which we park on the per-`Vm` storage's
+    // `trace_handles` Vec immediately below.
+    // v2.0 Track J sub-step J-B Phase F — was `TRACE_JIT_HANDLES` TLS;
+    // now per-`Vm` field on storage.
     let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
     compiled.entry = entry_fn;
-    TRACE_JIT_HANDLES.with(|cell| {
-        cell.borrow_mut().push(TraceHandle {
-            _module: module,
-            _entry_raw: ptr,
-        });
+    // v2.0 J-B follow-up — `from_storage` is `Result`-shaped now. On
+    // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
+    // skip parking the handle and return `None` — the freshly built
+    // `module` drops here and releases its mmap pages; the trace
+    // recorder sees `None` and gives up on this trace, falling back
+    // to interp dispatch. No SIGABRT across the C-ABI boundary.
+    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
+    cs.trace_handles.push(TraceHandle {
+        // v2.0 Track J sub-step J-D — wrap in `SendJitModule`
+        // sleeve. SAFETY: `build_trace_jit_module` uses the
+        // default `SystemMemoryProvider` path (no
+        // `JITBuilder::memory_provider` call).
+        _module: super::SendJitModule::new(module),
+        _entry_raw: ptr,
     });
     Some(compiled)
 }
@@ -3613,7 +3800,50 @@ pub fn lower_trace_into_named<M: Module>(
     // recorder closes the trace cleanly past the return; without
     // this truncation the Return would fail the whitelist check and
     // bail the whole compile.
-    let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(kind) = record.self_link_kind {
+    // v2.0 Track-R R3a — DownRec close wins over SelfLink: a depth>0
+    // `Op::Return` re-trip of the recunroll threshold (captured at
+    // `exec.rs` recorder gate) routes here BEFORE the SelfLink arm.
+    // R3a only adds the variant + picker arm — the tail emit below
+    // still falls through to the R1 safe `dispatchable=false` path
+    // (the `self_link_idx_opt` arm) for now. R3b lifts that.
+    //
+    // R3b — effective_end for DownRec is the index of the natural
+    // terminator (depth-0 Return/Call/ForLoop) so the body emit's
+    // whitelist gate doesn't bail on the final op. R3a's effective_
+    // end = `record.ops.len()` walked the natural close op as a body
+    // op, which fails the `is_whitelisted_step5` check (Op::Return at
+    // depth 0 is end-shape, not body) and aborted compile before the
+    // DownRec tail arm could fire. R3b scans for the first natural
+    // terminator and uses that idx (mirrors TraceEnd::Return / Call's
+    // picker shape). Falls back to `record.ops.len()` only when no
+    // natural terminator is present (R3a behaviour).
+    let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
+        let mut natural_end = record.ops.len();
+        for (i, r) in record.ops.iter().enumerate() {
+            if folded_ops[i] {
+                continue;
+            }
+            let depth = r.inline_depth as usize;
+            if depth != 0 {
+                continue;
+            }
+            match r.inst.op() {
+                Op::Call | Op::ForLoop | Op::TForLoop | Op::Return0 | Op::Return1 => {
+                    natural_end = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        Some((
+            natural_end,
+            TraceEnd::DownRec {
+                return_pc: dr.return_pc,
+                target_proto_id: dr.target_proto.as_ptr() as usize,
+                depth_delta: dr.depth_delta,
+            },
+        ))
+    } else if let Some(kind) = record.self_link_kind {
         // P16-A/B — self-link close overrides the natural terminator
         // scan. Recorder stopped capturing AT the head_pc re-entry
         // (about to re-execute the deepest-inlined frame's first op);
@@ -3763,6 +3993,24 @@ pub fn lower_trace_into_named<M: Module>(
     // `do_internal_loop` (the trace is designed to loop).
     let self_link_idx_opt: Option<(usize, SelfRecKind)> = match end_idx_opt {
         Some((i, TraceEnd::SelfLink(kind))) => Some((i, kind)),
+        _ => None,
+    };
+    // v2.0 Track-R R3a — `downrec_idx_opt` = `Some(effective_end, return_pc,
+    // target_proto_id, depth_delta)` when the down-rec catch tripped. R3a
+    // only collects the idx + close marker payload; the tail emit shares
+    // the SelfLink path's R1 safe-deopt code (R3b lifts to a real
+    // back-edge). Diagnostic only for R3a — the dispatch_off label
+    // `"self-link-retf-r1"` stays the same so R2's close-cause counters
+    // see the close-cause taxonomy that R3b will branch off.
+    let downrec_idx_opt: Option<(usize, u32, usize, u8)> = match end_idx_opt {
+        Some((
+            i,
+            TraceEnd::DownRec {
+                return_pc,
+                target_proto_id,
+                depth_delta,
+            },
+        )) => Some((i, return_pc, target_proto_id, depth_delta)),
         _ => None,
     };
 
@@ -4896,10 +5144,8 @@ pub fn lower_trace_into_named<M: Module>(
     // such callsite bakes this Box's heap address into its IR.
     // Transported into [`CompiledTrace::global_side_trace_ptr`] at
     // emit end without moving (Box's heap allocation stays put).
-    let global_side_trace_box: Box<std::cell::Cell<*const u8>> =
-        Box::new(std::cell::Cell::new(std::ptr::null()));
-    let _global_side_trace_cell_addr =
-        (&*global_side_trace_box) as *const std::cell::Cell<*const u8> as i64;
+    let global_side_trace_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+    let _global_side_trace_cell_addr = (&*global_side_trace_box) as *const TCellPtr as i64;
 
     // P12-S4-step3b — `regs_full` is sized to `window_size_us`, big
     // enough for every inlined frame's register window. Slots
@@ -4935,6 +5181,57 @@ pub fn lower_trace_into_named<M: Module>(
     {
         let z = bcx.ins().iconst(types::I64, 0);
         bcx.def_var(tforcall_tag_var, z);
+    }
+
+    // v2.0 Track-R R3.3+ sub-1 — depth-relative `base_var` scaffold.
+    //
+    // RFC: `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §6 sub-step 1.
+    //
+    // Sub-1 is SCAFFOLD-ONLY. The Variable is declared at trace head
+    // (here, in the entry block immediately after the reg_state load
+    // prelude) and initialised to `iconst(0)` as the depth-0 sentinel
+    // placeholder. Sub-2 will (a) replace the iconst(0) with a real
+    // `reg_state`-relative base address and (b) migrate Op::Move /
+    // Op::LoadK / Op::LoadNil arms to load/store via `base_var`
+    // instead of `regs_full[off + slot]`. Sub-3 will install the
+    // R3d stitch_blk base-shift sequencing (Risk D1.R2 mitigation).
+    //
+    // Threading: `lower_trace_into_named` is a monolithic function
+    // and every op-arm emit lives in its lexical scope, so `base_var`
+    // is automatically in scope for sub-2 op-arm migration. No struct
+    // refactor needed at this batch — the explicit "compile context"
+    // the RFC names is the lexical closure of this fn body, not a
+    // separate type.
+    //
+    // Codegen audit (Risk D1.R1): an unused Variable initialized via
+    // a single iconst gets DCE'd by Cranelift's mid-end, so this
+    // scaffold has the desired property of being overhead-neutral
+    // vs. the pre-sub-1 build. The single `iadd_imm(base_var, 0)` +
+    // use below intentionally KEEPS one read live so `cargo asm` can
+    // verify the GlobalValue/Variable threading path produces clean
+    // codegen (mitigation §8 D1.R1): if Cranelift fails to fold the
+    // `+ 0` and emits a spurious add, sub-2 needs the GlobalValue
+    // escape route (RFC §8 mitigation) before op-arm migration.
+    //
+    // Probe: `BASE_VAR_SCAFFOLD_DECLARED` bumps exactly once at the
+    // post-def_var point so the regression test
+    // `r3_3_sub1_base_var_scaffold.rs` can assert "scaffold ran" on
+    // an arbitrary fixture trace without scraping IR text. Bump
+    // happens after `def_var` so a `declare_var` panic earlier leaves
+    // the counter unchanged.
+    let base_var = bcx.declare_var(types::I64);
+    {
+        let z = bcx.ins().iconst(types::I64, 0);
+        bcx.def_var(base_var, z);
+        // Mirror the tforcall_tag_var declaration pattern exactly
+        // (declare + iconst init + def_var, no anchor use). Cranelift
+        // tree-shakes the unused Variable in optimized builds, so the
+        // sub-1 scaffold adds zero machine-code residue vs. pre-sub-1.
+        // Risk D1.R1 mitigation is deferred to sub-2 where op-arm
+        // migration actually exercises `bcx.use_var(base_var)` —
+        // that's the codegen surface that matters for the
+        // GlobalValue-vs-Variable escape route decision.
+        BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
     // P12-S5-B — allocate virtual `Variable`s for each Sinkable
@@ -5114,7 +5411,7 @@ pub fn lower_trace_into_named<M: Module>(
     // site BEFORE the helper call so the IR's `iconst`-baked address
     // exists. Transported through into `tags_side_trace_ptrs` at the
     // end of emit (the cell never moves).
-    let mut per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<std::cell::Cell<*const u8>>)> = Vec::new();
+    let mut per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)> = Vec::new();
     // P12-S4-step4b-C-2 — per inline cmp@d>0 side-exit. Each entry
     // is built at the cmp emit site and includes the side-exit PC,
     // a window-sized exit-tag snapshot, and the frame-mat chain. The
@@ -5132,8 +5429,8 @@ pub fn lower_trace_into_named<M: Module>(
         u32,
         u32,
         Vec<RegKind>,
-        std::rc::Rc<[FrameMaterializeInfo]>,
-        Box<std::cell::Cell<*const u8>>,
+        TArc<[FrameMaterializeInfo]>,
+        Box<TCellPtr>,
     )> = Vec::new();
     // Live call stack mirror — push on self-recursive `Op::Call`,
     // pop on `Op::Return0/1` at depth>0. Each frame's `base_offset`
@@ -5624,9 +5921,8 @@ pub fn lower_trace_into_named<M: Module>(
                     if let Some(last) = snapshot.last_mut() {
                         last.pc = side_exit_pc;
                     }
-                    let chain_rc: std::rc::Rc<[FrameMaterializeInfo]> = snapshot.into();
-                    let chain_ptr =
-                        std::rc::Rc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                    let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
                     // P12-S10-B — materialise live Sinkable sites
@@ -5651,10 +5947,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let inline_side_box_0: Box<std::cell::Cell<*const u8>> =
-                        Box::new(std::cell::Cell::new(std::ptr::null()));
-                    let _inline_side_cell_addr_0 =
-                        (&*inline_side_box_0) as *const std::cell::Cell<*const u8> as i64;
+                    let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
                     let chain_for_helper = chain_rc.clone();
                     per_exit_inline_vec.push((
                         side_exit_pc,
@@ -5708,10 +6002,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let tag_side_box_0: Box<std::cell::Cell<*const u8>> =
-                        Box::new(std::cell::Cell::new(std::ptr::null()));
-                    let _tag_side_cell_addr_0 =
-                        (&*tag_side_box_0) as *const std::cell::Cell<*const u8> as i64;
+                    let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
                     let tag_side_local_0 = per_exit_kinds.len() as u32;
                     per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_0));
                     // store_back only writes caller window — depth>0 scratch
@@ -5949,9 +6241,8 @@ pub fn lower_trace_into_named<M: Module>(
                     if let Some(last) = snapshot.last_mut() {
                         last.pc = side_exit_pc;
                     }
-                    let chain_rc: std::rc::Rc<[FrameMaterializeInfo]> = snapshot.into();
-                    let chain_ptr =
-                        std::rc::Rc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                    let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
                     // P12-S10-B — materialise live Sinkable sites
@@ -5974,10 +6265,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let inline_side_box_1: Box<std::cell::Cell<*const u8>> =
-                        Box::new(std::cell::Cell::new(std::ptr::null()));
-                    let _inline_side_cell_addr_1 =
-                        (&*inline_side_box_1) as *const std::cell::Cell<*const u8> as i64;
+                    let inline_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _inline_side_cell_addr_1 = (&*inline_side_box_1) as *const TCellPtr as i64;
                     let chain_for_helper = chain_rc.clone();
                     per_exit_inline_vec.push((
                         side_exit_pc,
@@ -6027,10 +6316,8 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut defined_aot_data,
                     );
                     materialize_emit_count += mat_count;
-                    let tag_side_box_1: Box<std::cell::Cell<*const u8>> =
-                        Box::new(std::cell::Cell::new(std::ptr::null()));
-                    let _tag_side_cell_addr_1 =
-                        (&*tag_side_box_1) as *const std::cell::Cell<*const u8> as i64;
+                    let tag_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _tag_side_cell_addr_1 = (&*tag_side_box_1) as *const TCellPtr as i64;
                     let tag_side_local_1 = per_exit_kinds.len() as u32;
                     per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_1));
                     emit_store_back_and_return_pc(
@@ -6208,10 +6495,129 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                let v = bcx.inst_results(call)[0];
+
+                // v2.1 Phase 1I.B — table-field IC scaffold.
+                //
+                // When `LUNA_JIT_FIELD_IC=1` and this op is the
+                // recorder-captured snapshot site, emit an inline
+                // cache: 4 guards (mt None, nodes.len() == cached,
+                // node[slot].key.raw == cached_key_bits,
+                // node[slot].val.tag == cached_val_tag) + 1 load
+                // of node[slot].val.raw. Guard miss falls through
+                // to the existing helper-call path so no new deopt
+                // edge is introduced (scaffold-safe rollout).
+                //
+                // env-OFF default short-circuits on the cached
+                // atomic load inside `field_ic_enabled()`; the IC
+                // emission produces zero additional IR when the
+                // gate is off.
+                let ic_active = luna_core::jit::trace_types::field_ic_enabled()
+                    && record
+                        .field_ic_snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.op_idx as usize == i);
+
+                let v = if ic_active {
+                    let snap = record
+                        .field_ic_snapshot
+                        .as_ref()
+                        .expect("ic_active implies snapshot present");
+
+                    // --- Guards 1 & 2: metatable + nodes.len() ---
+                    let mt = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_METATABLE_OFFSET as i32,
+                    );
+                    let zero = bcx.ins().iconst(types::I64, 0);
+                    let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
+                    let nodes_len = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_NODES_LEN_OFFSET as i32,
+                    );
+                    let nodes_len_imm = bcx.ins().iconst(types::I64, snap.nodes_len as i64);
+                    let len_ok = bcx.ins().icmp(IntCC::Equal, nodes_len, nodes_len_imm);
+                    let guards_12 = bcx.ins().band(mt_ok, len_ok);
+
+                    // 3 blocks: fast (guards 3+4 + load), slow
+                    // (helper), merge (def_var dst). slow_blk has 2
+                    // predecessors (mt/len fail + key/tag fail); we
+                    // seal it only after both edges are emitted.
+                    let fast_blk = bcx.create_block();
+                    let slow_blk = bcx.create_block();
+                    let merge_blk = bcx.create_block();
+                    bcx.append_block_param(merge_blk, types::I64);
+
+                    bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
+
+                    // --- fast: load nodes_ptr, compute node_addr,
+                    //     guards 3 & 4, load val_raw ---
+                    bcx.switch_to_block(fast_blk);
+                    bcx.seal_block(fast_blk);
+                    let nodes_ptr = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        t,
+                        super::TABLE_NODES_PTR_OFFSET as i32,
+                    );
+                    let node_offset = (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
+                    let node_addr = bcx.ins().iadd_imm(nodes_ptr, node_offset);
+
+                    let key_raw = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        node_addr,
+                        super::NODE_KEY_RAW_OFFSET as i32,
+                    );
+                    let key_imm = bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
+                    let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
+
+                    let val_tag_i8 = bcx.ins().load(
+                        types::I8,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        node_addr,
+                        super::NODE_VAL_TAG_OFFSET as i32,
+                    );
+                    let val_tag = bcx.ins().uextend(types::I64, val_tag_i8);
+                    let tag_imm = bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
+                    let tag_ok = bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
+                    let guards_34 = bcx.ins().band(key_ok, tag_ok);
+
+                    let load_blk = bcx.create_block();
+                    bcx.ins().brif(guards_34, load_blk, &[], slow_blk, &[]);
+
+                    bcx.switch_to_block(load_blk);
+                    bcx.seal_block(load_blk);
+                    let val_raw = bcx.ins().load(
+                        types::I64,
+                        cranelift_codegen::ir::MemFlags::trusted(),
+                        node_addr,
+                        super::NODE_VAL_RAW_OFFSET as i32,
+                    );
+                    bcx.ins().jump(merge_blk, &[val_raw.into()]);
+
+                    // --- slow: fall back to existing helper ---
+                    bcx.switch_to_block(slow_blk);
+                    bcx.seal_block(slow_blk);
+                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                    let v_slow = bcx.inst_results(call)[0];
+                    bcx.ins().jump(merge_blk, &[v_slow.into()]);
+
+                    // --- merge ---
+                    bcx.switch_to_block(merge_blk);
+                    bcx.seal_block(merge_blk);
+                    bcx.block_params(merge_blk)[0]
+                } else {
+                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                    bcx.inst_results(call)[0]
+                };
                 bcx.def_var(regs[ins.a() as usize], v);
+
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
@@ -7027,116 +7433,272 @@ pub fn lower_trace_into_named<M: Module>(
     // the cmp/ForLoop loop-permission predicates, and (critically)
     // don't trip on inline_abort_idx_opt — the SelfLink close path
     // doesn't go through that arm.
+    // v2.0 Track-R R3a — `downrec_idx_opt` does NOT permit internal
+    // loop (R3a routes through the R1 safe deopt path, single-shot).
+    // R3b's lift to a real native back-edge will introduce its own
+    // tail shape; until then, treat DownRec the same as a hard
+    // truncation marker that forces one-shot dispatch.
     let do_internal_loop = opts.internal_loop
         && (has_cmp || for_loop_idx_opt.is_some() || self_link_idx_opt.is_some())
         && call_idx_opt.is_none()
         && return_idx_opt.is_none()
-        && inline_abort_idx_opt.is_none();
+        && inline_abort_idx_opt.is_none()
+        && downrec_idx_opt.is_none();
     // P12-S4-step3b — every tail `emit_store_back_and_return_pc`
     // passes `&regs_full[..max_stack]` so the store-back ONLY writes
     // the caller's window back to interp stack. Slots at
     // [max_stack..window_size) are inline-frame scratch and must not
     // leak into the dispatcher's reg_state restore.
     let caller_regs: &[Variable] = &regs_full[..max_stack];
-    if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
-        // P16-B — self-link tail: snapshot-restore (copy the deepest-
-        // inlined frame's window into the head frame's window) + branch
-        // back to body_loop. Mirrors LuaJIT's
-        //   `asm_tail_link` (lj_asm.c:2131): asm_stack_restore writes
-        //   the snapshot to vm.stack + emit_addptr bumps BASE +
-        //   `asm_tail_fixup` (lj_asm_arm64.h:1935) emits one A64 `B`
-        //   instruction to traceref(lnk)->mcode (== this trace's own
-        //   mcode head).
+    // v2.0 Track-R R3b — populated by the `downrec_idx_opt` arm when
+    // it emits the stitch sentinel. Flows into `CompiledTrace.
+    // downrec_link` at the struct literal below. `None` for every
+    // other close shape.
+    let mut downrec_link_for_compiled: Option<(u32, u32)> = None;
+    let mut downrec_multi_way_count_for_compiled: u8 = 0;
+    if let Some((_dr_idx, dr_return_pc, _target_proto_id, _depth_delta)) = downrec_idx_opt {
+        // v2.0 Track-R R3b — `TraceEnd::DownRec` close: emit the
+        // stitch-sentinel + caller-pc-guard scaffold.
         //
-        // luna's equivalent in Cranelift IR:
-        //   1. Compute `bump_off` = op_offsets at the close moment —
-        //      the register-window offset for the depth that the
-        //      uncaptured "next" op WOULD have entered. The recorder
-        //      tripped at this depth (cur_depth > RECUNROLL_THRESHOLD).
-        //      Reading from the LAST captured op's offset + its A + 1
-        //      reproduces compute_op_offsets's push for the would-be
-        //      next depth. (compute_op_offsets only emits offsets for
-        //      captured ops, so we synthesise the next-depth offset
-        //      from the last Op::Call's caller_offset + A + 1.)
-        //   2. For each slot `i` in 0..max_stack: write
-        //      `regs_full[i] = regs_full[bump_off + i]`. This is the
-        //      "snapshot restore" — the deepest inlined frame's locals
-        //      become the new head-frame locals for the next iter.
-        //      Cranelift's phi merging at body_loop's entry handles the
-        //      back-edge SSA shape automatically.
-        //   3. `bcx.ins().jump(body_loop, &[])`. Single arm64 `b` insn,
-        //      no marshal-out / decode / re-entry — exactly the
-        //      amortisation P16's perf premise requires.
+        // Shape mirrors LuaJIT's `asm_retf` (`lj_asm_arm64.h:565`):
+        //   1. Load saved caller PC stand-in.
+        //   2. CMP against IR-baked `dr_return_pc`.
+        //   3. brif eq → stitch_blk: return DOWNREC sentinel +
+        //      `record.head_pc` so the dispatcher (R3c) can walk
+        //      `downrec_link` + RetfRecord chain to materialise the
+        //      inlined frame and tail-call into the stitched child
+        //      trace.
+        //   4. brif ne → deopt_blk: R1's safe deopt-tail — store
+        //      back caller window + return `head_pc` through the
+        //      GLOBAL sentinel; the dispatcher resumes interp at
+        //      head_pc with the trace's `dispatchable = false` gate
+        //      blocking re-entry.
         //
-        // Slots [bump_off + max_stack .. window_size_us) are the
-        // deeper-frame scratch slots from the inlined depth (only
-        // populated if the trace inlined past one more level — for
-        // RECUNROLL_THRESHOLD=2 fib, that means depth-2 scratch, which
-        // we DON'T copy because the next iter's deepest frame is fresh
-        // at depth=2 again).
+        // Why the guard's load operand is `iconst(0)` today (NOT a
+        // real `[reg_state + reserved_slot * 8]` load): luna's
+        // trace ABI is `fn(reg_state: *mut i64) -> i64` — there is
+        // no slot in the current `reg_state` buffer that the
+        // dispatcher populates with the runtime saved caller PC.
+        // Wiring that slot is R3c's job (it must touch the
+        // dispatcher pre-trace-invoke path in `exec.rs` to write the
+        // saved PC into a reserved position). Until then, the
+        // immediate `iconst(0)` makes the guard's runtime
+        // comparison `0 == dr_return_pc`; cranelift constant-folds
+        // this to "always false" at codegen time (`dr_return_pc !=
+        // 0` for every valid recording — Op::Return's PC is past
+        // the prologue), so the emitted machine code unconditionally
+        // jumps to `deopt_blk`. Net behaviour identical to R3a's
+        // safe fall-through; both R3b's `downrec_link = Some(_)`
+        // scaffold AND the safe deopt land in this commit, ready
+        // for R3c to swap the `iconst(0)` for a real saved-PC load
+        // once the dispatcher exposes the slot.
         //
-        // Edge: if the trace recorded ZERO Op::Call ops (impossible
-        // when self_link_kind is Some — the recorder only trips at
-        // depth > 0, which requires at least one Call), bump_off = 0
-        // and the copies become self-stores; cranelift folds these.
+        // `_target_proto_id` / `_depth_delta` consumed in IR by R3c
+        // (target_proto_id becomes the helper-call argument that
+        // walks `parent_ct.downrec_close.target_proto`; depth_delta
+        // tunes how many CallFrames to push). R3b leaves them
+        // touched as `let _ = ...` to keep rustc seeing the fields
+        // as live for the next sub-step's hookup.
+        debug_assert!(
+            dr_return_pc != 0,
+            "DownRec recorder should never trip on a PC=0 Op::Return — Op::Return's PC is past the prologue"
+        );
+        let _ = _target_proto_id;
+        let _ = _depth_delta;
+
+        let stitch_blk = bcx.create_block();
+        let deopt_blk = bcx.create_block();
+
+        // v2.0 Track-R R3d — multi-way caller-pc guard. R3c shipped a
+        // single CMP (`saved_pc == dr_return_pc`) which measured a
+        // 90% miss-rate on fib(3) hot-loop (R3c verdict §3) because
+        // the typical fib body has TWO call sites at distinct
+        // `pc + 1` caller_pcs — only one of them ever matched
+        // `dr_return_pc` (the recorder picks the most-recent
+        // threshold-tripping one). The recorder's `rec.retfs`
+        // side-channel already collected every depth>0 Return's
+        // `caller_pc` + `proto`, so the lowerer here can fan the
+        // single CMP into a chain of `icmp(Equal, saved_pc, iconst
+        // (candidate_pc)) + brif(eq, stitch, next)` predicates and
+        // accept any of them as a HIT. Dedupe over `caller_pc`
+        // (mirrors LuaJIT `lj_record.c:897 check_downrec_unroll`'s
+        // "count IR_RETF entries by op1 == ptref" walk filtered to
+        // the close marker's `target_proto`).
         //
-        // P16-C deferred: RETF-guards on inlined returns. For fib the
-        // inlined-frame topology is fixed (every iter has identical
-        // 3-deep shape recorded once), so the loop body doesn't
-        // actually fire any runtime Return at depth>0 — the captured
-        // depth>0 Returns are consumed at record time. The RETF
-        // correctness layer matters when a side trace stitches back
-        // with a DIFFERENT inlined topology; for fib_28's primary
-        // workload it's deferred without correctness impact. See
-        // commit message for full reasoning.
-        let bump_off: u32 = {
-            // Find the LAST captured Op::Call in the recorded body —
-            // this is the call that "would have" pushed the
-            // tripping next-depth frame. Per compute_op_offsets logic,
-            // that next-depth's offset = caller_offset + A + 1.
-            let mut last_call_idx: Option<usize> = None;
-            for (i, rop) in record.ops.iter().enumerate() {
-                if matches!(rop.inst.op(), Op::Call) {
-                    last_call_idx = Some(i);
-                }
+        // Saved-PC slot (`reg_state[window_size_us * 8]`) populated
+        // by R3c's dispatcher pre-invoke (see `crates/luna-core/src/
+        // vm/exec.rs` `is_downrec_entry` block) with the parent
+        // (caller) frame's `pc` — the runtime analogue of LuaJIT's
+        // `[base-8]` in `asm_retf` (`lj_asm_arm64.h:565`).
+        let saved_pc_offset = (window_size_us as i32) * 8;
+        let saved_pc = bcx
+            .ins()
+            .load(types::I64, MemFlags::trusted(), reg_state, saved_pc_offset);
+        // Collect distinct caller_pcs from retfs whose proto matches
+        // the close marker's `_target_proto_id`. Dedupe + bound to
+        // `DOWNREC_MULTI_WAY_GUARD_MAX` so IR size stays predictable
+        // regardless of how many retfs the recorder captured.
+        // `dr_return_pc` (the close marker's most-recent caller_pc) is
+        // inserted first so the chain covers the single-CMP shape's
+        // baseline even when filtering eliminates it.
+        let mut candidates: Vec<u32> = Vec::with_capacity(DOWNREC_MULTI_WAY_GUARD_MAX);
+        candidates.push(dr_return_pc);
+        for retf in &record.retfs {
+            if candidates.len() >= DOWNREC_MULTI_WAY_GUARD_MAX {
+                break;
             }
-            match last_call_idx {
-                Some(idx) => {
-                    let caller_offset = op_offsets[idx];
-                    let caller_a = record.ops[idx].inst.a();
-                    caller_offset + caller_a + 1
-                }
-                // Defensive fallback: no Call captured shouldn't
-                // happen, but if it does treat as one-shot (no bump,
-                // back-edge runs the same body verbatim).
-                None => 0,
+            if retf.proto.as_ptr() as usize == _target_proto_id
+                && !candidates.contains(&retf.caller_pc)
+            {
+                candidates.push(retf.caller_pc);
             }
-        };
-        let bump_off_us = bump_off as usize;
-        // Sanity: bump_off + max_stack <= window_size_us, else we'd
-        // read past the regs_full buffer. window_size_us is sized to
-        // the deepest depth used; the bump-target slots must fit. If
-        // not, bail compile rather than miscompile.
-        if bump_off_us + max_stack > window_size_us {
-            checkpoint("bail:self-link-bump-oob");
-            return None;
         }
-        // Snapshot restore: copy deepest-frame slots → head-frame slots.
-        // current_kinds is parallel; update the head window's kinds
-        // from the deepest window so subsequent iterations' op kinds
-        // stay correct after the back-edge. (The body emit loop
-        // already populated current_kinds[bump_off..bump_off+max_stack]
-        // with the deepest frame's final kinds.)
-        for i in 0..max_stack {
-            if bump_off_us > 0 {
-                let src_val = bcx.use_var(regs_full[bump_off_us + i]);
-                bcx.def_var(regs_full[i], src_val);
+        // Emit CMP-chain. For each candidate: `icmp(Equal, ...) + brif`.
+        // The last candidate's miss arm branches directly to deopt_blk;
+        // earlier candidates' miss arms branch into a fresh block that
+        // becomes the next CMP's "current block".
+        for (i, candidate_pc) in candidates.iter().enumerate() {
+            let imm_pc = bcx.ins().iconst(types::I64, *candidate_pc as i64);
+            let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
+            let miss_blk = if i + 1 < candidates.len() {
+                bcx.create_block()
+            } else {
+                deopt_blk
+            };
+            bcx.ins().brif(eq, stitch_blk, &[], miss_blk, &[]);
+            if i + 1 < candidates.len() {
+                bcx.switch_to_block(miss_blk);
+                bcx.seal_block(miss_blk);
             }
         }
-        // Back-edge: branch to body_loop. body_loop is not yet sealed
-        // (the entry block jumps to it, this is the 2nd predecessor);
-        // the seal call below at the bottom of compile handles both.
-        bcx.ins().jump(body_loop, &[]);
+        let multi_way_candidate_count = candidates.len();
+
+        // Hit: return DOWNREC sentinel + `record.head_pc` as the
+        // low 32 bits. The full encoded value is
+        //   raw_ret = (1u64 << 63)             // side-trace marker
+        //           | ((DOWNREC_CODE as u64) << 56)
+        //           | (record.head_pc as u64)
+        // (bit 63 set so the dispatcher's `from_side_trace` branch
+        // at `exec.rs:6354+` decodes through the sentinel switch).
+        // R3c's stitch arm reads `parent_ct.downrec_link` for the
+        // stitch target rather than looking up via `side_trace_cache`.
+        bcx.switch_to_block(stitch_blk);
+        bcx.seal_block(stitch_blk);
+        let raw_ret =
+            (1u64 << 63) | ((SIDE_SENT_DOWNREC_CODE as u64) << 56) | (record.head_pc as u64);
+        let stitch_ret = bcx.ins().iconst(types::I64, raw_ret as i64);
+        bcx.ins().return_(&[stitch_ret]);
+
+        // Miss: R1's safe deopt-tail (identical to R3a's emit).
+        bcx.switch_to_block(deopt_blk);
+        bcx.seal_block(deopt_blk);
+        emit_store_back_and_return_pc(
+            &mut bcx,
+            caller_regs,
+            reg_state,
+            record.head_pc,
+            flush_ctx.as_ref(),
+            0i64,
+            trace_fn_sig_ref,
+            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+        );
+
+        // R3b populates downrec_link with the placeholder
+        // (trace_id=0, target_head_pc=record.head_pc). The
+        // `trace_id=0` sentinel means "self-stitch — target is the
+        // trace currently dispatching"; R3c interprets this when
+        // resolving the stitch target.
+        downrec_link_for_compiled = Some((0, record.head_pc));
+
+        // v2.0 Track-R R3d — lift `dispatchable = true` when the
+        // multi-way guard collected at least 2 distinct caller_pc
+        // candidates. The single-CMP fallback (count == 1) keeps
+        // R3c's `dispatchable = false` + `"downrec-stitch-pending"`
+        // pin because the 90% miss-rate measured at R3c verdict §3
+        // would translate to 90% extra deopt cost if the primary
+        // dispatcher arm admitted the trace unconditionally. The
+        // dispatcher's `is_downrec_entry` arm (see `crates/luna-core/
+        // src/vm/exec.rs`) keys on `ct.downrec_link.is_some()` so
+        // the saved-PC slot is populated + post-invoke classifier is
+        // routed for BOTH the lifted (dispatchable=true) and
+        // unlifted (dispatchable=false) cases — only the find
+        // predicate's admit arm differs.
+        //
+        // `"downrec-stitch-lifted"` is a new close-cause label that
+        // mirrors R3b's `"downrec-stitch-pending"` for the lifted
+        // case (so probes can tally "how many traces took which
+        // R3d branch" via `trace_close_cause_counts`). The
+        // `dispatch_off_reason` only sets in the unlifted branch
+        // because `dispatchable=true` traces have no `dispatch_off`
+        // by definition.
+        if multi_way_candidate_count >= 2 {
+            dispatchable = true;
+            // Surface the lifted shape via a dedicated counter
+            // `multi_way_guard_emitted` (bumped at the close handler
+            // in `crates/luna-core/src/vm/exec.rs` reading
+            // `downrec_multi_way_count_for_compiled` below) rather
+            // than via the close-cause taxonomy — close causes mean
+            // "trace didn't dispatch for reason X" and this branch
+            // DOES dispatch.
+        } else {
+            dispatchable = false;
+            dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
+        }
+        downrec_multi_way_count_for_compiled =
+            multi_way_candidate_count.min(u8::MAX as usize) as u8;
+    } else if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
+        // v2.0 Track-R R1 — RETF-guards correctness primitive replaces
+        // the previous P16-B snapshot-restore tail.
+        //
+        // The legacy P16-B emit was:
+        //   1. Compute `bump_off` from the last captured Op::Call's
+        //      `caller_offset + A + 1`.
+        //   2. Slot-copy `regs_full[i] = regs_full[bump_off + i]` for
+        //      `i in 0..max_stack` (deepest inlined frame → head frame).
+        //   3. `jump(body_loop)` for a tight native back-edge.
+        //
+        // That mirrored LuaJIT's `asm_tail_link` (`lj_asm.c:2131`) only
+        // syntactically. LuaJIT's pre-op snapshots distinguish each
+        // frame's typed-slot mapping; luna's slot-copy assumes deepest
+        // frame layout == head frame layout, which is sound for plain
+        // tail-recursion but not for self-recursion through a
+        // non-tail-call body (fib: `Lt → branch → Sub Call Sub Call Add
+        // Return`, with depth-0 Sub writes polluting head-frame slots
+        // BEFORE the recursive Call, plus a depth>0 base-case Return
+        // whose deeper frame layout doesn't match head's). R0 measured
+        // fib(28) returning 45 (vs 317_811) on the p16-on path.
+        //
+        // R1 swaps the slot-copy + back-edge for a clean deopt: store
+        // back the caller window, return `head_pc`, and pin
+        // `dispatchable = false`. The trace still compiles (cranelift
+        // accepts a valid back-edge-free fn so the body's mcode and
+        // window_size extension stay sound) but the dispatcher's
+        // pre-invoke `dispatchable` check refuses to enter it, so
+        // interp runs the recursion naturally and produces the correct
+        // result on the p16-on path.
+        //
+        // The `RetfRecord` side-channel populated by the recorder
+        // (exec.rs gate on `p16_self_link_enabled`) captures the
+        // inlined-frame topology that R3's down-rec stitch will consume
+        // to guard a real native back-edge. R1 is the correctness floor;
+        // R3 lifts dispatchable back to true via the stitch.
+        //
+        // `window_size_us` extension above (line ~3350 `record.self_link
+        // _kind.is_some()` arm) stays intact — body emit still writes
+        // depth>0 slots into the extended buffer, the writes are simply
+        // dead until R3 reads them via stitch.
+        emit_store_back_and_return_pc(
+            &mut bcx,
+            caller_regs,
+            reg_state,
+            record.head_pc,
+            flush_ctx.as_ref(),
+            0i64,
+            trace_fn_sig_ref,
+            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
+        );
+        dispatchable = false;
+        dispatch_off_reason = dispatch_off_reason.or(Some("self-link-retf-r1"));
     } else if let Some(call_idx) = call_idx_opt {
         emit_store_back_and_return_pc(
             &mut bcx,
@@ -7297,10 +7859,8 @@ pub fn lower_trace_into_named<M: Module>(
                 if a + 4 < nil_snapshot.len() {
                     nil_snapshot[a + 4] = RegKind::Nil;
                 }
-                let tag_side_box_2: Box<std::cell::Cell<*const u8>> =
-                    Box::new(std::cell::Cell::new(std::ptr::null()));
-                let _tag_side_cell_addr_2 =
-                    (&*tag_side_box_2) as *const std::cell::Cell<*const u8> as i64;
+                let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
                 let tag_side_local_2 = per_exit_kinds.len() as u32;
                 per_exit_kinds.push((rop.pc + 1, nil_snapshot, tag_side_box_2));
                 emit_store_back_and_return_pc(
@@ -7397,14 +7957,36 @@ pub fn lower_trace_into_named<M: Module>(
             ctx.func.display()
         );
     }
+    // v2.1 Phase 1I.D — `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
+    // emit the post-regalloc machine-code disassembly (vcode) and dumps
+    // it to stderr after `define_function`. Used for the cargo-asm
+    // decomposition of the table-field IC under env-OFF vs env-ON.
+    let want_asm_dump = std::env::var("LUNA_TRACE_ASM_DUMP")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if want_asm_dump {
+        ctx.set_disasm(true);
+    }
     module.define_function(fn_id, &mut ctx).ok()?;
+    if want_asm_dump
+        && let Some(cc) = ctx.compiled_code()
+        && let Some(vcode) = cc.vcode.as_ref()
+    {
+        eprintln!(
+            "=== TRACE ASM DUMP head_pc={} n_recorded_ops={} ===\n{}\n=== END ===",
+            record.head_pc,
+            record.ops.len(),
+            vcode
+        );
+    }
     module.clear_context(&mut ctx);
     // v1.3 Phase AOT Stage 3 — module finalization is the JIT-specific
     // wrapper's job (see [`try_compile_trace_with_options`]). The
     // generic body emits the function definition and stops at
     // `clear_context`; the JIT wrapper calls `finalize_definitions`
     // + `get_finalized_function`, patches `compiled.entry` with the
-    // real fn pointer, and parks the module in `TRACE_JIT_HANDLES`.
+    // real fn pointer, and parks the module on the Vm's
+    // `storage.trace_handles` Vec.
     // The AOT pipeline (luna-aot) calls `ObjectModule::finish` /
     // `ObjectProduct::emit` to produce a `.o` file instead, and
     // resolves the trace symbol at static link time.
@@ -7532,16 +8114,15 @@ pub fn lower_trace_into_named<M: Module>(
         }
     }
     let global_tag_res_kind = classify_exit_tags(&exit_tags_vec);
-    let exit_tags: std::rc::Rc<[ExitTag]> = exit_tags_vec.into();
+    let exit_tags: TArc<[ExitTag]> = exit_tags_vec.into();
     // P15-A v2-C-A2 — split per_exit_kinds's 3-tuple into the
     // 2-tuple `per_exit_tags` for the dispatcher AND the parallel
     // `tags_side_trace_ptrs` Box slice the close handler writes to.
     // The Box transports the cell's heap address (baked into the
     // IR's `iconst` at each callsite) through this move without
     // moving the cell itself.
-    let mut tags_side_boxes: Vec<Box<std::cell::Cell<*const u8>>> =
-        Vec::with_capacity(per_exit_kinds.len());
-    let per_exit_tags: std::rc::Rc<[(u32, std::rc::Rc<[ExitTag]>)]> = per_exit_kinds
+    let mut tags_side_boxes: Vec<Box<TCellPtr>> = Vec::with_capacity(per_exit_kinds.len());
+    let per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]> = per_exit_kinds
         .into_iter()
         .map(|(pc, kinds, side_box)| {
             // step4b-C-2 — the cmp emit site pushed the right slice
@@ -7549,15 +8130,14 @@ pub fn lower_trace_into_named<M: Module>(
             // depth>0). Hand it through verbatim — the dispatcher
             // iterates `exit_tags_for_pc.len()` and walks both
             // shapes uniformly.
-            let tags: std::rc::Rc<[ExitTag]> = kinds_to_exit_tags(&kinds).into();
+            let tags: TArc<[ExitTag]> = kinds_to_exit_tags(&kinds).into();
             tags_side_boxes.push(side_box);
             (pc, tags)
         })
         .collect::<Vec<_>>()
         .into();
-    let tags_side_trace_ptrs: std::rc::Rc<[Box<std::cell::Cell<*const u8>>]> =
-        tags_side_boxes.into();
-    let per_exit_inline: std::rc::Rc<[InlineSideExit]> = per_exit_inline_vec
+    let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = tags_side_boxes.into();
+    let per_exit_inline: TArc<[InlineSideExit]> = per_exit_inline_vec
         .into_iter()
         .map(
             |(cont_pc, head_resume_pc, kinds, chain, side_trace_ptr)| InlineSideExit {
@@ -7574,19 +8154,17 @@ pub fn lower_trace_into_named<M: Module>(
     checkpoint("post:emit-pass-done");
     // P15-prep — pre-compute exit_hit_counts before the struct
     // init so per_exit_tags's len is still accessible.
-    let exit_hit_counts: std::rc::Rc<[std::cell::Cell<u32>]> = {
+    let exit_hit_counts: TArc<[TCellU32]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        let v: Vec<std::cell::Cell<u32>> = (0..total).map(|_| std::cell::Cell::new(0)).collect();
+        let v: Vec<TCellU32> = (0..total).map(|_| TCellU32::new(0)).collect();
         v.into()
     };
     // P15-A v2-A — parallel per-exit raw fn-ptr slots, all null
     // until a child side trace compiles for the slot. Same length
     // as exit_hit_counts; v2-B/C will read these from IR.
-    let exit_side_trace_ptrs: std::rc::Rc<[std::cell::Cell<*const u8>]> = {
+    let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        let v: Vec<std::cell::Cell<*const u8>> = (0..total)
-            .map(|_| std::cell::Cell::new(std::ptr::null()))
-            .collect();
+        let v: Vec<TCellPtr> = (0..total).map(|_| TCellPtr::null()).collect();
         v.into()
     };
     let compiled = CompiledTrace {
@@ -7626,8 +8204,8 @@ pub fn lower_trace_into_named<M: Module>(
         // P15-A v2-C-A1 — empty at compile; close handler fills
         // it as child side traces compile for this trace's hot
         // exits.
-        side_trace_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-        has_any_side_wired: std::cell::Cell::new(false),
+        side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
+        has_any_side_wired: TCellBool::new(false),
         per_exit_inline,
         // P12-S5-A — diagnostic only; counts Sinkable sites from the
         // pre-emit sweep. Vm sums these into `trace_sinkable_seen_count`
@@ -7652,6 +8230,19 @@ pub fn lower_trace_into_named<M: Module>(
         // gate. Uses op_offsets (already computed above) to apply
         // inline-depth offsets per op.
         body_writes: compute_body_writes(record, &op_offsets).into(),
+        // v2.0 Track-R R3b — populated by the `downrec_idx_opt` arm
+        // above into `downrec_link_for_compiled`. When the arm
+        // emitted a stitch sentinel + caller-pc guard, this carries
+        // `Some((0, head_pc))`; otherwise `None`. R3b deliberately
+        // keeps `dispatchable = false` even when `Some(_)` — R3d
+        // lifts to `dispatchable = true` when the multi-way candidate
+        // count >= 2 (see `downrec_multi_way_count` below).
+        downrec_link: downrec_link_for_compiled,
+        // v2.0 Track-R R3d — multi-way guard candidate count baked
+        // into the IR's CMP-chain. `0` for non-DownRec closes;
+        // `1` for single-CMP-fallback DownRec; `>= 2` for the
+        // lifted `dispatchable = true` path.
+        downrec_multi_way_count: downrec_multi_way_count_for_compiled,
     };
     Some((fn_id, compiled))
 }
@@ -7849,7 +8440,8 @@ mod s2b_arith {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = make_record(7, &[], p);
-        let ct = try_compile_trace(&rec).expect("empty closed trace must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("empty closed trace must compile");
         assert_eq!(ct.head_pc, 7);
         assert_eq!(ct.n_ops, 0);
 
@@ -7875,7 +8467,7 @@ mod s2b_arith {
         // R[0] = R[1] + R[2]
         let add = Inst::iabc(Op::Add, 0, 1, 2, false);
         let rec = make_record(11, &[add], p);
-        let ct = try_compile_trace(&rec).expect("Add trace must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("Add trace must compile");
         assert_eq!(ct.head_pc, 11);
         assert_eq!(ct.n_ops, 1);
 
@@ -7903,7 +8495,8 @@ mod s2b_arith {
             Inst::iabc(Op::Sub, 0, 0, 3, false),
         ];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("Add/Mul/Sub chain must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Add/Mul/Sub chain must compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 5;
@@ -7928,7 +8521,7 @@ mod s2b_arith {
             Inst::iabc(Op::Mul, 0, 0, 1, false),
         ];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("Move + Mul must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("Move + Mul must compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 999; // overwritten by Move
@@ -7955,7 +8548,8 @@ mod s2b_arith {
             Inst::isj(Op::Jmp, -3),
         ];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("Add + trailing Jmp must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Add + trailing Jmp must compile");
         assert_eq!(ct.n_ops, 2);
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -7971,7 +8565,7 @@ mod s2b_arith {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = TraceRecord::start(p, 0, Vec::new(), false);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -7983,7 +8577,7 @@ mod s2b_arith {
         // has no special treatment and falls through to a bail).
         let prog = [Inst::iabc(Op::Concat, 0, 0, 0, false)];
         let rec = make_record(0, &prog, p);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -7999,7 +8593,7 @@ mod s2b_arith {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8021,7 +8615,7 @@ mod s2b_arith {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm1.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8038,7 +8632,7 @@ mod s2b_arith {
         // small-chunk max_stack doesn't silently turn the test
         // green via the loose-precondition path.
         assert!((p.max_stack as usize) <= 2, "precondition for this test");
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8047,12 +8641,12 @@ mod s2b_arith {
         let p = load_proto(&mut vm, WIDE_SRC);
         let prog = [Inst::iabc(Op::Add, 0, 1, 2, false)];
         let rec = make_record(0, &prog, p);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // Re-entrancy / mmap-lifetime sanity: each call recomputes
         // R[0] from the inputs, and the fn ptr stays valid because
-        // `TRACE_JIT_HANDLES` keeps `JITModule` alive.
+        // `storage.trace_handles` keeps `JITModule` alive.
         for k in 0..1000 {
             state[1] = k;
             state[2] = 2 * k;
@@ -8110,7 +8704,8 @@ mod s2b_cmp {
         // if (R[1] < R[2]) ~= 1 then pc++   — recorded "1 < 2", matched K=1.
         let lt = Inst::iabc(Op::Lt, 1, 2, 0, true);
         let rec = cmp_jmp_record(p, 5, 10, lt);
-        let ct = try_compile_trace(&rec).expect("Lt + trailing Jmp must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Lt + trailing Jmp must compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 3; // 3 < 7 holds → matches K=true → continue
@@ -8125,7 +8720,7 @@ mod s2b_cmp {
         let p = load_proto(&mut vm, WIDE_SRC);
         let lt = Inst::iabc(Op::Lt, 1, 2, 0, true); // K=1
         let rec = cmp_jmp_record(p, 5, 10, lt);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 9; // 9 < 7 false → mismatch with K=1 → side-exit
@@ -8147,7 +8742,7 @@ mod s2b_cmp {
         // cmp result was false (9 < 7), matched K=0 → took Jmp.
         let lt = Inst::iabc(Op::Lt, 1, 2, 0, false);
         let rec = cmp_jmp_record(p, 3, 8, lt);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 9;
@@ -8170,7 +8765,7 @@ mod s2b_cmp {
         // if (R[1] <= R[2]) ~= 1 then pc++
         let le = Inst::iabc(Op::Le, 1, 2, 0, true);
         let rec = cmp_jmp_record(p, 0, 0, le);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // Equal: 5 <= 5 holds → continue.
@@ -8191,7 +8786,7 @@ mod s2b_cmp {
         // if (R[0] == R[1]) ~= 1 then pc++
         let eq = Inst::iabc(Op::Eq, 0, 1, 0, true);
         let rec = cmp_jmp_record(p, 7, 4, eq);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 42;
@@ -8226,7 +8821,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // R[0] = 10 - 7 = 3; 3 < 5 → continue → return head_pc.
@@ -8263,7 +8858,7 @@ mod s2b_cmp {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8285,7 +8880,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8310,7 +8905,7 @@ mod s2b_cmp {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8335,7 +8930,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8361,7 +8956,7 @@ mod s2b_cmp {
             });
         }
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 20;
@@ -8441,7 +9036,7 @@ mod s2b_table_ops {
         // Trace: R[0] = {}. The B/C size hints don't matter — the
         // step-4 lowerer reaches for the unsized helper.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 0, 0, 0, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = run_trace(&mut vm, &ct, &mut state);
@@ -8469,7 +9064,7 @@ mod s2b_table_ops {
                 Inst::iabc(Op::GetI, 3, 0, 1, false),
             ],
         );
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[2] = 42; // value to write
@@ -8499,7 +9094,7 @@ mod s2b_table_ops {
                 Inst::iabc(Op::Len, 2, 0, 0, false),
             ],
         );
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 99;
@@ -8523,7 +9118,7 @@ mod s2b_table_ops {
 
         // Trace: R[0][1] = R[1]. R[0] holds the pre-built table.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 1, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8547,7 +9142,7 @@ mod s2b_table_ops {
 
         // Trace: R[1] = R[0][1].
         let rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8565,7 +9160,7 @@ mod s2b_table_ops {
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
         let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 1, 0, 0, false)]);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8597,7 +9192,7 @@ mod s2b_table_ops {
                 Inst::iabc(Op::GetI, 2, 0, 1, false),
             ],
         );
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = t.as_ptr() as i64;
@@ -8617,7 +9212,7 @@ mod s2b_table_ops {
         let p = load_proto(&mut vm, WIDE_SRC);
         // Reg index 200 is way past the proto's max_stack (~5).
         let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 200, 0, 0, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8625,7 +9220,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 0, 200, 1, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8633,7 +9228,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 200, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8641,7 +9236,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 0, 200, 0, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 }
 
@@ -8686,7 +9281,8 @@ mod s2b_call_truncation {
             5,
             &[Inst::iabc(Op::Call, 0, 1, 1, false)], // call R[0], 0 args, 0 results
         );
-        let ct = try_compile_trace(&rec).expect("Op::Call-only trace must compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("Op::Call-only trace must compile");
 
         let mut state: Vec<i64> = vec![42, 43, 44, 0, 0];
         state.resize(p.max_stack as usize, 0);
@@ -8709,7 +9305,7 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Call, 2, 1, 0, false),
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 100;
@@ -8737,7 +9333,8 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Mul, 0, 200, 200, false), // would-be OOB if validated
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile despite post-truncation OOB");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("compile despite post-truncation OOB");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 30;
@@ -8762,7 +9359,7 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Call, 2, 1, 0, false),
         ];
         let rec = closed_record(p, 0, &prog);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8771,7 +9368,7 @@ mod s2b_call_truncation {
         let p = load_proto(&mut vm, WIDE_SRC);
         // p.max_stack ≈ 5; A=200 is way past it.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::Call, 200, 1, 0, false)]);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8787,7 +9384,7 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Call, 3, 1, 0, false),
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // R[0]=5, R[1]=10 → 5 < 10 holds → cmp matches K=1 → continue.
@@ -8827,7 +9424,8 @@ mod s2b_call_truncation {
             pre53: false,
             aot: false,
         };
-        let ct = try_compile_trace_with_options(&rec, opts).expect("compile");
+        let ct =
+            try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         // R[0] = accumulator, R[3] = step for the body's add.
@@ -8860,7 +9458,8 @@ mod s2b_call_truncation {
         // ForLoop only — empty body, single iter dispatch.
         let prog = [Inst::iabc(Op::ForLoop, 0, 0, 0, false)];
         let rec = closed_record(p, 9, &prog);
-        let ct = try_compile_trace(&rec).expect("compile one-shot ForLoop trace");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("compile one-shot ForLoop trace");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 10;
@@ -8897,7 +9496,7 @@ mod s2b_call_truncation {
             pre53: true,
             aot: false,
         };
-        assert!(try_compile_trace_with_options(&rec, opts).is_none());
+        assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_none());
     }
 
     #[test]
@@ -8907,7 +9506,7 @@ mod s2b_call_truncation {
         // max_stack = 5; A=3 → A+3 = 6 ≥ 5 → bail.
         let prog = [Inst::iabc(Op::ForLoop, 3, 0, 0, false)];
         let rec = closed_record(p, 0, &prog);
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]
@@ -8921,7 +9520,8 @@ mod s2b_call_truncation {
             Inst::iabc(Op::Return0, 0, 0, 0, false), // would bail if validated
         ];
         let rec = closed_record(p, 0, &prog);
-        let ct = try_compile_trace(&rec).expect("compile despite post-truncation Return0");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("compile despite post-truncation Return0");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
@@ -9107,7 +9707,8 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("cmp@d>0 now compiles via inline-cmp emit");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+            .expect("cmp@d>0 now compiles via inline-cmp emit");
         // One cmp@d>0 site → one per-exit-metas entry.
         assert_eq!(ct.per_exit_inline.len(), 1);
         // Window covers caller + inlined frame's slots.
@@ -9135,7 +9736,7 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     /// First op on a different proto than the trace head also bails
@@ -9155,7 +9756,7 @@ mod s4_step3b_inline_emit {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm1.jit.storage.as_mut(), &rec).is_none());
     }
 }
 
@@ -9206,7 +9807,7 @@ mod s4_step4b_skeleton {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("simple add compiles");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("simple add compiles");
         assert!(
             ct.per_exit_inline.is_empty(),
             "no cmp@d>0 site → per_exit_inline empty"
@@ -9332,7 +9933,7 @@ mod s4_step4b_skeleton {
             var_count: None,
         });
         rec.closed = true;
-        let ct = try_compile_trace(&rec).expect("compiles via inline-cmp");
+        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compiles via inline-cmp");
         assert_eq!(
             ct.per_exit_inline.len(),
             1,
@@ -9376,7 +9977,7 @@ mod s4_step4b_skeleton {
             var_count: None,
         });
         rec.closed = true;
-        assert!(try_compile_trace(&rec).is_none());
+        assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
     #[test]

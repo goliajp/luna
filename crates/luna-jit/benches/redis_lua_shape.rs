@@ -116,6 +116,36 @@ const BENCHES: &[Bench] = &[
             return last
         "#,
     },
+    // ── Dict 5k lookup (string-keyed registry) ────────────────────
+    //
+    // C3-redux primary workload — per `.dev/rfcs/v2.1-c3-redux-workload-rfc.md`.
+    // 5000 string-keyed entries (AoS working set 327 KB = 2.55× P-core L1d),
+    // then 32000 lookups via an LCG-stride sequence (coprime to 5000 so the
+    // sequence covers all keys evenly). Cache-spill signal 2.41× per-lookup
+    // cost vs token_bucket_1k, where the C3 SoA bandwidth attack has signal
+    // to capture. token_bucket_1k stays as the L1-resident sanity check.
+    Bench {
+        name: "dict_5k_lookup",
+        source: r#"
+            local t = {}
+            for i = 1, 5000 do
+                t[string.format("k%04d", i)] = i
+            end
+            local keys = {}
+            local idx = 1
+            for i = 1, 32000 do
+                idx = ((idx * 4099) % 5000) + 1
+                keys[i] = string.format("k%04d", idx)
+            end
+            collectgarbage("collect")
+            local sum = 0
+            for i = 1, 32000 do
+                local v = t[keys[i]]
+                if v then sum = sum + v end
+            end
+            return sum
+        "#,
+    },
     // ── String ops (KEYS / ARGV concat + parse) ───────────────────
     //
     // Real Redis-Lua scripts spend cycles in string.format /

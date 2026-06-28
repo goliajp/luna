@@ -595,6 +595,40 @@ impl Heap {
         self.bytes
     }
 
+    /// v2.0 Track TL — pure-read walk over the intrusive `all`
+    /// objects list, invoking `visit(tag)` once per live (or
+    /// not-yet-swept) GC-managed object. Used by `luna-tools`'s
+    /// `luna-heap-dump` to build a per-type histogram; embedders
+    /// can reuse it for ad-hoc heap introspection.
+    ///
+    /// # Read-only contract
+    ///
+    /// The callback receives only the [`ObjTag`] discriminant and
+    /// is invoked under a `&self` borrow on the heap: no pointer
+    /// to the GC payload escapes, no `as_mut`-style aliasing is
+    /// available, and the walk performs zero allocation in the
+    /// loop. Safe to call between dispatch ticks (the only allocs
+    /// happen in the caller's bookkeeping).
+    ///
+    /// The walk visits both the live `all` list and the
+    /// `sweep_cur` detached list so a mid-cycle invocation reports
+    /// the same total as [`Heap::live_objects`].
+    pub fn walk_objects(&self, mut visit: impl FnMut(ObjTag)) {
+        for head in [self.all, self.sweep_cur] {
+            let mut cur = head;
+            while !cur.is_null() {
+                // SAFETY: pointers come from the runtime's
+                // intrusive all-objects list. `&self` borrow on
+                // the heap prevents concurrent mutation; the GC
+                // cannot run while this walk holds the borrow,
+                // so every `next` link is valid until consumed.
+                let (tag, next) = unsafe { ((*cur).tag, (*cur).next) };
+                visit(tag);
+                cur = next;
+            }
+        }
+    }
+
     /// Whether allocation has crossed the auto-GC threshold (cheap safe-point
     /// check for the interpreter loop).
     #[inline(always)]
@@ -1263,6 +1297,14 @@ impl Heap {
                         // slice, so reassigning is just a pointer move.
                         (*t).slab = Box::new([]);
                         (*t).nodes = Box::new([]);
+                        // C3 — drop SoA Robin Hood parallel arrays too.
+                        // These are Box::new([]) dangling stubs until
+                        // Phase D cuts over (Phase B initial state).
+                        (*t).keys = Box::new([]);
+                        (*t).vals = Box::new([]);
+                        (*t).meta = Box::new([]);
+                        (*t).tombstones = 0;
+                        (*t).iter_depth = 0;
                         (*t).metatable = None;
                         // Stash the raw pointer for future reuse.
                         // SAFETY: t is non-null (came from a live Gc<Table>);
@@ -1488,7 +1530,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
-            traces: std::cell::RefCell::new(Vec::new()),
+            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let inner = heap.adopt_proto(inner);
         let outer = Proto {
@@ -1514,7 +1556,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
-            traces: std::cell::RefCell::new(Vec::new()),
+            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let outer = heap.adopt_proto(outer);
         let captured = heap.intern(b"captured-value-string-xxxxxxxxxxxxxxxxxxxxxxxxx");

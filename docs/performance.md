@@ -1,155 +1,175 @@
 # Performance
 
-Cross-dialect microbench snapshot at v1.0.0 (2026-06-23). Bench:
-`cargo bench --bench cross_dialect` on M-series macOS, release +
-LTO. `vs.X = luna_time / X_time` (lower = luna faster).
+This document tracks luna's performance discipline, methodology, and
+what's measured at the current ship. It does **not** publish a
+headline `vs LuaJIT 1.21×` or `vs PUC 41/42 green` ratio — both shapes
+are perf-methodology anti-patterns (see §1 "trigger words" in
+`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`,
+the project-wide perf attack methodology):
 
-PUC and LuaJIT times include subprocess startup overhead
-(~50-200 µs per cell); luna numbers are stable in-process.
+- "vs subprocess-launched reference" inflates the reference's
+  measured time by 50–200 µs of subprocess startup,
+  making luna's in-process numbers look better than they are.
+- "design ceiling" framing converts unmeasured optimization
+  headroom into a permanent excuse.
+- "41/42 green" cherry-picks the wins; the one outlier is the
+  signal, not the noise.
+
+Public bench numbers ship with the v2.0 release per Track BM
+(`.dev/rfcs/v2.0-plan-state.md` §Track BM summary). The matrix
+will compare luna_jit / luna_interp / luna_aot vs LuaJIT 2.1 +
+PUC 5.4 + mlua across 13 workloads × 3 host targets, with
+in-process measurement boundaries and ±err bars on every cell.
+**BM is sequenced LAST** in the v2.0 phase order specifically to
+prevent baseline lock-in around currently-suboptimal attack
+surfaces.
 
 ---
 
-## Master gate
+## 1. Methodology
 
-luna's master gate is `vs.X ≤ 0.50` — luna at least 2× faster than
-the reference — on every cell × dialect × reference pair:
+luna's perf attack methodology is documented in
+`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
+and applied across the v2.0 sprint. Key principles:
 
-| | cells | pass | fail |
+- **Decomposition before polish.** Any gap > 1.5× a reference impl
+  triggers a side-by-side 18-stage decomposition of the workload,
+  not surface-level polish iterations. The v2.0 Track PI audit
+  (`.dev/rfcs/v2.0-audit-perf-interp-gap.md`, full 26 KB body
+  preserved) walks the methodology explicitly for the interp gap
+  close work.
+- **Measure both axes.** `luna_jit vs LuaJIT_jit` and `luna_interp
+  vs LuaJIT_interp` are independent dimensions. Conflating them
+  hides the attack surface.
+- **Don't punish the workload.** If a gap exists, it's an
+  optimization opportunity, not a "workload not amenable" verdict.
+  See methodology §1 trigger-word list for the full set of
+  rationalizations that get flagged in code review.
+
+## 2. What's measured today (v1.3 ship)
+
+### 2.1 Memory baselines
+
+`.dev/baselines/mem-2026-06-25/` (reproducible via
+[`contributing-mem.md`](contributing-mem.md)). Five workloads measured
+under dhat on macOS aarch64:
+
+| Workload | Peak | Steady | Allocs |
 |---|---:|---:|---:|
-| vs PUC 5.1-5.5 (7 cells × 5 dialects) | 35 | **35** ✓ | 0 |
-| vs LuaJIT 2.1 (7 cells) | 7 | 6 ✓ | 1 |
-| **Total** | **42** | **41** | **1** |
+| cold_start (empty Vm) | 33 KB | 31 KB | 435 |
+| repl_idle (100 evals) | 71 KB | 69 KB | 2,515 |
+| host_roots_churn (1k cycles) | 30 KB | 30 KB | 414 |
+| alloc_collect (1M alloc + 10 GC) | 1.0 MB | 523 KB | 555,072 |
+| userdata_lifecycle (200 + finalizers) | 73 KB | 63 KB | 1,004 |
 
-The single sub-gate cell is `binary_trees_n10` vs LuaJIT 2.1 (0.83×).
-luna is still 1.21× faster than LuaJIT on this workload — just not
-2× faster.
+Use these as v1.3 regression sentinels — a > 5% steady-state
+increase on any workload signals an unintended layout change.
 
-## Per-dialect cell numbers
+### 2.2 Disk + binary size baselines
 
-### vs PUC 5.1
+`.dev/baselines/disk-2026-06-25/` (reproducible via
+[`contributing-disk.md`](contributing-disk.md)). Per-crate publish
+sizes:
 
-| cell | luna (µs) | PUC (µs) | vs.puc |
+| Crate | Files | Raw | Compressed |
 |---|---:|---:|---:|
-| fib_28 | 1616 | 19000 | 0.08 ✓ |
-| loop_int_1m | 755 | 4779 | 0.16 ✓ |
-| table_alloc_10k | 337 | 2694 | 0.13 ✓ |
-| string_concat_5k | 846 | 3242 | 0.26 ✓ |
-| math_loop_100k | 648 | 6697 | 0.10 ✓ |
-| closure_alloc_10k | 972 | 2915 | 0.33 ✓ |
-| binary_trees_n10 | 2714 | 6437 | 0.42 ✓ |
+| luna-core | 285 | 4.4 MiB | 1.6 MiB |
+| luna-jit | 175 | 1.2 MiB | 286 KiB |
+| luna-aot | 47 | 268 KiB | 76 KiB |
+| luna-runtime-helpers | 32 | 107 KiB | 31 KiB |
+| luna-jit-derive | 6 | 28 KiB | 10 KiB |
 
-### vs PUC 5.2
+AOT output binary sizes:
 
-| cell | luna (µs) | PUC (µs) | vs.puc |
+| Script | Dev | Release | Release-stripped |
 |---|---:|---:|---:|
-| fib_28 | 1619 | 16000 | 0.10 ✓ |
-| loop_int_1m | 743 | 4982 | 0.15 ✓ |
-| table_alloc_10k | 344 | 2911 | 0.12 ✓ |
-| string_concat_5k | 903 | 3208 | 0.28 ✓ |
-| math_loop_100k | 651 | 6459 | 0.10 ✓ |
-| closure_alloc_10k | 932 | 2930 | 0.32 ✓ |
-| binary_trees_n10 | 2746 | 5858 | 0.47 ✓ |
+| `hello.lua` (1 line) | 12.4 MiB | 6.0 MiB | 4.5 MiB |
+| `fib.lua` (fib_28) | 12.4 MiB | 6.0 MiB | 4.5 MiB |
+| `production_like.lua` (~1.5k LOC) | 12.5 MiB | 6.1 MiB | 4.6 MiB |
 
-### vs PUC 5.3
+Mach-O section breakdown for `production_like.lua` release-stripped
+at `.dev/baselines/disk-2026-06-25/macho-sections.md`.
 
-| cell | luna (µs) | PUC (µs) | vs.puc |
-|---|---:|---:|---:|
-| fib_28 | 1087 | 16000 | 0.07 ✓ |
-| loop_int_1m | 508 | 5294 | 0.10 ✓ |
-| table_alloc_10k | 189 | 2865 | 0.07 ✓ |
-| string_concat_5k | 463 | 2654 | 0.17 ✓ |
-| math_loop_100k | 643 | 6062 | 0.11 ✓ |
-| closure_alloc_10k | 986 | 2908 | 0.34 ✓ |
-| binary_trees_n10 | 2371 | 5768 | 0.41 ✓ |
+### 2.3 Compile-time perf
 
-### vs PUC 5.4
+luna-core (interp-only) builds in seconds on a stock laptop. The
+0-third-party-dep contract is the dominant cost driver here:
+embedders pulling only `luna-core` skip ~30 transitive Cranelift
+crates, and the `cargo deny check` CI gate enforces the contract
+on every PR.
 
-| cell | luna (µs) | PUC (µs) | vs.puc |
-|---|---:|---:|---:|
-| fib_28 | 1091 | 12000 | 0.09 ✓ |
-| loop_int_1m | 259 | 5474 | 0.05 ✓ |
-| table_alloc_10k | 193 | 2992 | 0.06 ✓ |
-| string_concat_5k | 466 | 2756 | 0.17 ✓ |
-| math_loop_100k | 627 | 6313 | 0.10 ✓ |
-| closure_alloc_10k | 1037 | 3110 | 0.33 ✓ |
-| binary_trees_n10 | 2423 | 6208 | 0.39 ✓ |
+### 2.4 Runtime hot-path counters
 
-### vs PUC 5.5
+Not headline numbers, but useful for diagnosing whether a workload
+is getting JIT speedup:
 
-| cell | luna (µs) | PUC (µs) | vs.puc |
-|---|---:|---:|---:|
-| fib_28 | 1107 | 13000 | 0.08 ✓ |
-| loop_int_1m | 260 | 5144 | 0.05 ✓ |
-| table_alloc_10k | 190 | 2928 | 0.07 ✓ |
-| string_concat_5k | 460 | 2641 | 0.17 ✓ |
-| math_loop_100k | 596 | 6097 | 0.10 ✓ |
-| closure_alloc_10k | 984 | 2957 | 0.33 ✓ |
-| binary_trees_n10 | 2447 | 5894 | 0.42 ✓ |
+```rust
+let count = vm.trace_compiled_count();
+let dispatches = vm.trace_dispatched_count();
+let aborts = vm.trace_aborted_count();
+let deopts = vm.trace_deopt_count();
+```
 
-### vs LuaJIT 2.1
+A workload where `trace_dispatched_count` stays low while
+`trace_aborted_count` climbs is hitting a recorder limit
+(e.g. inline depth or trace length). See `crates/luna-jit/src/jit_backend/`
+for the limits and `.dev/rfcs/v2.0-audit-perf-interp-gap.md` for
+the methodology used to find them.
 
-| cell | luna5.1 (µs) | LuaJIT (µs) | vs.ljit |
-|---|---:|---:|---:|
-| fib_28 | 1607 | 3381 | 0.48 ✓ |
-| loop_int_1m | 752 | 2495 | 0.30 ✓ |
-| table_alloc_10k | 333 | 2101 | 0.16 ✓ |
-| string_concat_5k | 862 | 2222 | 0.39 ✓ |
-| math_loop_100k | 629 | 2145 | 0.29 ✓ |
-| closure_alloc_10k | 951 | 2622 | 0.36 ✓ |
-| binary_trees_n10 | 2679 | 3240 | **0.83 ❌** |
+## 3. Tuning knobs
 
-## Design ceiling note
+For workload-shape-specific tuning, see
+[`deploy.md`](deploy.md) §3. Briefly:
 
-`binary_trees_n10` is luna's hardest cell because of the table-
-allocation density. luna's `Value` is a 16-byte tagged enum
-(`#[repr(C, u8)]`) — chosen for hot-path arithmetic performance
-(NaN-boxing the 8-byte alternative regresses arith 24-98% on
-realistic VM loops). The Lua bytecode layout is also preserved for
-PUC binary compatibility.
+| Knob | Default | Effect |
+|---|---|---|
+| `vm.set_jit_enabled(false)` | `true` (luna-jit) | Disable for predictable latency / debug repro |
+| `vm.set_trace_jit_enabled(false)` | `true` (v1.3 TA3 default) | Disable to A/B trace JIT vs interpreter |
+| `vm.set_hot_threshold(n)` | (recorder constant) | Lower for hot-immediately workloads; raise for cold-data services |
+| `vm.set_max_trace_len(n)` | (recorder constant) | Raise for long unrolled loops; lower for diverse-shape recording |
 
-Closing the `binary_trees` gap to LuaJIT's 2× ratio would require
-breaking either:
+## 4. v1.x → v2.0 perf evolution
 
-- The 16-byte Value layout (NaN-box → lose arith)
-- PUC bytecode binary compat (introduce a different layout that
-  packs frame metadata into stack memory)
+v1.x perf headlines were historically published as "`vs.X = luna_time
+/ X_time` ≤ 0.50 on 41/42 cells" — this framing is the cherry-pick
+optics + subprocess-startup-inflation pair flagged above. v2.0
+replaces it with the BM matrix described in
+`.dev/rfcs/v2.0-plan-state.md` §Track BM (13 workloads × 6 VMs × 3
+host targets, in-process measurement, ±err bars).
 
-Both are explicit project constraints. luna's 1.21× speedup over
-LuaJIT 2.1 on this single workload is therefore the design ceiling,
-not an optimization gap.
+The historical `cross_dialect` + `redis_lua_shape` bench harnesses
+in `crates/luna-jit/benches/` still run (`cargo bench --bench
+cross_dialect` / `cargo bench --bench redis_lua_shape`), but their
+numbers should be interpreted in light of:
 
-## Redis-Lua shapes (D1)
+- PUC reference times include subprocess startup; treat them as
+  upper bounds, not as the actual VM cost.
+- The cells were originally chosen to surface luna's wins, not to
+  span the workload-shape space. The v2.0 BM matrix corrects this.
 
-Cross-dialect runs above use academic shapes (`fib_28`, `loop_int_1m`,
-etc.). Real embedder workloads — Redis-Lua scripts, BullMQ
-token-bucket limiters, sliding-window guards, method dispatch
-through metatables — exercise a different mix of opcodes. The
-`redis_lua_shape` bench (`cargo bench --bench redis_lua_shape`)
-ships four representative shapes the v1.0 dogfood report flagged:
+For the v2.0 sprint's perf attack on the interp gap specifically, see
+`.dev/rfcs/v2.0-audit-perf-interp-gap.md` for the file:line attack
+targets (`vm/exec.rs:7739-7773` newindex double-walk / `:6706-6709`
+Move opcode / `:6705` dispatcher) and the 18-stage decomposition
+scaffold for `token_bucket_1k`.
 
-| name | shape | luna median |
-|---|---|---:|
-| `token_bucket_1k` | Bucket struct + per-tick refill check; the canonical real-world rate limiter | **0.20 ms** |
-| `sliding_window_500` | Rolling-array horizon eviction; zset-without-zset | **0.60 ms** |
-| `method_dispatch_5k` | `cls.__index` method calls — every `obj:method(...)` chain in a Redis script | **1.46 ms** |
-| `string_ops_2k` | `string.format` + linear-scan parse of KEYS/ARGV-style keys | **4.95 ms** |
+## 5. See also
 
-These numbers are luna's interpreter+JIT-on baseline as of v1.1.
-D2 (criterion + CPU pin + n=1000+ infra upgrade) and D3 (per-cell
-decomposition vs PUC 5.1) refine the methodology; D7 wires the
-ratio comparison into the README headline.
+- `~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
+  — full perf attack methodology (§1 trigger words / §3 sprint
+  structure / §7 luna v2-J Chain A实证 lessons)
+- [`contributing-mem.md`](contributing-mem.md) — memory baseline
+  reproduction
+- [`contributing-disk.md`](contributing-disk.md) — disk + binary
+  size baseline reproduction
+- [`architecture.md`](architecture.md) — steel/cement/stone
+  classification + crate layout
+- [`deploy.md`](deploy.md) — runtime tuning knobs
+- [`binary-size.md`](binary-size.md) — per-crate + AOT-output budget
+  + reduction levers
 
-The `string_ops_2k` cell is the current outlier — `string.format` +
-`string.sub` linear-scan opcodes dominate, and the JIT doesn't
-specialise on string operations the way it does for numeric loops.
-This is a known target for v1.2+ trace JIT work.
+---
 
-## Test environment
-
-- macOS 25.5 / aarch64 (M-series, Apple Silicon)
-- rustc 1.86+
-- cranelift 0.124
-- PUC binaries: Lua 5.1.5, 5.2.4, 5.3.6 (built from PUC source);
-  Lua 5.4.8, 5.5.0 + LuaJIT 2.1.1781602682 (via brew)
-- Bench: `cargo bench --bench cross_dialect` (median of N iters
-  per cell)
+*v1.0 perf table archived in git history at commit
+[`262c705`'s `docs/performance.md`](https://github.com/goliajp/luna/blob/262c705/docs/performance.md).
+Live numbers ship with v2.0 release per Track BM.*

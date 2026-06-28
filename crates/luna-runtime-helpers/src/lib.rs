@@ -289,7 +289,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         }
     }
 
-    match vm.call_value(Value::Closure(closure), &[]) {
+    let rc = match vm.call_value(Value::Closure(closure), &[]) {
         Ok(_results) => 0,
         Err(err) => {
             let msg = vm.error_text(&err);
@@ -299,7 +299,23 @@ fn run_inner(bytecode: &[u8]) -> i32 {
             }
             1
         }
+    };
+
+    // v2.0 Phase 5 Track AO sub-track AO-PF — post-run probe for the
+    // Stage 7 polish 6 inline-chain reloc fire path. Counts every
+    // entry to `luna_jit_trace_materialize_frames` from trace mcode
+    // (JIT-baked OR AOT polish-6 slot-loaded). In an AOT-only binary
+    // any non-zero value is direct evidence that the polish-6 chain
+    // reloc path actually fires at runtime — the resolver-side probe
+    // (`aot_inline_chains_resolved`) only confirms the slot got
+    // populated, not that any AOT mcode dispatch ever loaded it.
+    #[cfg(feature = "jit-helpers")]
+    if std::env::var_os("LUNA_AOT_PROBE").is_some() {
+        let fires = luna_jit::jit_backend::trace_materialize_frames_fires();
+        eprintln!("luna-runtime-helpers: trace_materialize_frames_fires = {fires}");
     }
+
+    rc
 }
 
 /// Best-effort extraction of a panic payload's display text. Matches
@@ -983,7 +999,7 @@ pub mod aot_inline_chain_resolver {
                         nresults,
                     });
                 }
-                let rc: std::rc::Rc<[FrameMaterializeInfo]> = vec.into();
+                let rc: luna_core::jit::send_compat::TArc<[FrameMaterializeInfo]> = vec.into();
                 // `Rc<[T]>::as_ptr` returns a fat `*const [T]`; the
                 // first-element address is what the IR's
                 // `luna_jit_trace_materialize_frames` consumes. For a
@@ -1239,16 +1255,20 @@ pub mod aot_trace_registry {
                     }
                     continue;
                 }
-                let entry_tags_rc: std::rc::Rc<[u8]> = decoded.entry_tags.into();
-                let exit_tags_rc: std::rc::Rc<[ExitTag]> = exit_tags_vec.into();
+                let entry_tags_rc: luna_core::jit::send_compat::TArc<[u8]> =
+                    decoded.entry_tags.into();
+                let exit_tags_rc: luna_core::jit::send_compat::TArc<[ExitTag]> =
+                    exit_tags_vec.into();
                 // v2 per_exit_tags decode: reconstruct
                 // `Vec<(cont_pc, Rc<[ExitTag]>)>` matching the
                 // dispatcher's `decode_exit_shape` shape lookup. Each
                 // entry's packed-byte `ExitTag` array unpacks via
                 // [`unpack_exit_tag`]; an invalid byte = skip the
                 // whole trace (matches the existing exit-tag handling).
-                let mut per_exit_tags_decoded: Vec<(u32, std::rc::Rc<[ExitTag]>)> =
-                    Vec::with_capacity(decoded.per_exit_tags.len());
+                let mut per_exit_tags_decoded: Vec<(
+                    u32,
+                    luna_core::jit::send_compat::TArc<[ExitTag]>,
+                )> = Vec::with_capacity(decoded.per_exit_tags.len());
                 let mut per_exit_tags_ok = true;
                 for ent in &decoded.per_exit_tags {
                     let mut tags: Vec<ExitTag> = Vec::with_capacity(ent.tags_packed.len());
@@ -1330,7 +1350,7 @@ pub mod aot_trace_registry {
                         head_resume_pc: ent.head_resume_pc,
                         exit_tags: tags.into(),
                         chain: chain_vec.into(),
-                        side_trace_ptr: Box::new(std::cell::Cell::new(std::ptr::null())),
+                        side_trace_ptr: Box::new(luna_core::jit::send_compat::TCellPtr::null()),
                     });
                 }
                 if !inline_ok {

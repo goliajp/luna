@@ -99,6 +99,62 @@ pub struct JitState {
     /// v1.1 A1 Session A — trace-JIT backend. (Was
     /// `Vm::trace_compiler`.)
     pub trace_compiler: Box<dyn crate::jit::TraceCompiler>,
+
+    /// v2.0 Track-R R3c — bounded stitch-back depth remaining for
+    /// the dispatcher's `is_downrec_sentinel` admit path. Cycle-
+    /// safety checkpoint per R3 prep §7.5: a `downrec_link`-bearing
+    /// trace whose stitch target is itself can in principle keep
+    /// returning the DOWNREC sentinel forever, and the dispatcher
+    /// would forever re-admit it on the next interpreter loop
+    /// iteration. The counter is consulted BEFORE every downrec
+    /// admit; each admit decrements; when it would reach a negative
+    /// value the dispatcher refuses entry and force-deopts via
+    /// [`Self::suppress_downrec_admit_once`]. Reset to
+    /// [`JitState::STITCH_DEPTH_DEFAULT`] each natural deopt or
+    /// when the suppress flag fires (so a subsequent interp tick
+    /// past `head_pc` re-arms the budget). Default = the constant.
+    pub stitch_depth_remaining: u32,
+
+    /// v2.0 Track-R R3c — one-shot suppression flag for the
+    /// dispatcher's downrec-admit predicate (`t.downrec_link.is_
+    /// some()` arm). Set by the dispatcher when it force-deopts a
+    /// downrec entry (guard miss OR cycle-budget exhausted) so the
+    /// NEXT interpreter loop iteration skips the admit and lets
+    /// interp run the op at `head_pc`, advancing `pc` past
+    /// `head_pc` and breaking the otherwise-infinite admit loop.
+    /// Consumed (cleared) the first time the dispatcher reads it.
+    /// The `dispatchable=true` admit path is untouched by this
+    /// flag — only the R3c-added downrec admit gate respects it.
+    pub suppress_downrec_admit_once: bool,
+
+    /// v2.0 Track J sub-step J-B — per-`Vm` JIT storage holder.
+    /// Default is [`crate::jit::NullJitStorage`]; the `luna_jit`
+    /// crate's `install_default_jit` swaps in a
+    /// `CraneliftJitStorage` carrying the cache + compiled-handle
+    /// collections that used to live in `thread_local!`s on
+    /// `luna_jit::jit_backend::{mod,trace}`. Accessed via downcast
+    /// from the `CraneliftBackend` trait impls. See
+    /// `.dev/rfcs/v2.0-track-j-b-design.md`.
+    pub storage: Box<dyn crate::jit::JitStorage>,
+}
+
+impl JitState {
+    /// v2.0 Track-R R3c/R3d — default per-dispatch stitch-back depth.
+    /// R3c shipped with `1` as the conservative floor because the
+    /// dispatcher's downrec admit went through the R3b
+    /// `dispatchable=false` fallback arm — a runaway HIT loop would
+    /// have admitted on every interp tick. R3d's multi-way CMP-chain
+    /// is a real runtime guard (not constant-folded), so the only
+    /// way a downrec trace HITs is when `saved_pc` from the parent
+    /// frame matches one of the recorded `caller_pc` candidates;
+    /// each natural admit corresponds to ONE Lua call chain pop, so
+    /// the budget can safely grow to cover ~all consecutive HITs
+    /// expected in a hot loop without infinite-loop risk. `32` lets
+    /// 31 HITs accumulate before a forced-deopt resets the budget;
+    /// fib(3) hot loop's per-outer-iter pattern shows 1 HIT every
+    /// 5 admits, so `32` covers ~32 outer iters before any
+    /// false-classify pressure.
+    pub const STITCH_DEPTH_DEFAULT: u32 = 32;
 }
 
 /// Diagnostic counters and probe lists. All fields here are
@@ -152,6 +208,21 @@ pub struct JitCounters {
     /// P12-S5-C — tally of materialise-helper emit sites. (Was
     /// `Vm::trace_materialize_emit_count`.)
     pub materialize_emit: u64,
+    /// v2.0 Stage 7 polish 6 fire experiment — number of compiled
+    /// traces whose `CompiledTrace.per_exit_inline.len() > 0` (depth>0
+    /// inlined cmp side-exits were emitted). Probed via
+    /// `Vm::trace_per_exit_inline_compiled_count`. Together with
+    /// `per_exit_inline_dispatchable`, lets a diag distinguish
+    /// "recorder + lowerer can produce inline side-exits" from
+    /// "compiled trace is dispatchable enough to exercise the AOT
+    /// polish 6 chain-reloc + deploy-resolver path".
+    pub per_exit_inline_compiled: u64,
+    /// v2.0 Stage 7 polish 6 fire experiment — subset of
+    /// `per_exit_inline_compiled` that ALSO has `dispatchable == true`.
+    /// This is the count of traces that would actually exercise the
+    /// AOT polish 6 inline-chain reloc + deploy-resolver path. Probed
+    /// via `Vm::trace_per_exit_inline_dispatchable_count`.
+    pub per_exit_inline_dispatchable: u64,
     /// P12-S7-A — total `Op::Closure` ops the trace JIT lowered to
     /// `luna_jit_op_closure` helper calls. (Was
     /// `Vm::trace_closure_emit_count`.)
@@ -166,6 +237,101 @@ pub struct JitCounters {
     /// P13-S13-H — every closed trace's `(is_call_triggered, ops_len)`.
     /// (Was `Vm::trace_closed_lens`.)
     pub closed_lens: Vec<(bool, usize)>,
+    /// v2.0 Track-R R2 — close-cause hygiene. Single per-reason bucket
+    /// that covers BOTH recorder-side abort/discard outcomes AND
+    /// lowerer-side dispatch_off (`dispatchable=false` post-compile)
+    /// outcomes. Pre-R2 the close-cause taxonomy was split across
+    /// `aborted` (u64, no reason label), `closed_lens` (mixes real
+    /// closes and partial-coverage discards), and
+    /// `dispatch_off_reasons` (Vec ordered append, O(N) to count by
+    /// reason). R2 lifts the four known recorder/lowerer close sites
+    /// into this single HashMap via `bump_close_cause` so probes can
+    /// answer "how many of each reason fired" in O(1).
+    ///
+    /// Labels currently bumped (see `bump_close_cause` callers):
+    /// - `"trace-overflow"` (recorder MAX_TRACE_LEN overflow)
+    /// - `"partial-coverage-discard"` (recorder S13-I cap-not-reached discard)
+    /// - `"self-link-retf-r1"` (lowerer SelfLink-R1 dispatchable=false)
+    /// - `"selflink-yields-to-downrec"` (R3.3+ sub-0 recorder SelfLink
+    ///   trip rerouted to `downrec_close` when `cur_depth >= 2` AND a
+    ///   parent `Op::Call` ancestor exists in `rec.ops`; lifts fib(28)-
+    ///   like shapes off the R1 safety pin onto the R3a/R3b/R3d DownRec
+    ///   lowerer arm — single-candidate guard chain keeps dispatchable=
+    ///   false + `"downrec-stitch-pending"` label until sub-1/2/3/4
+    ///   ship base_var threading)
+    /// - `"length-gate"` / `"InlineAbort-gate"` / `"GetI:inference-fail"`
+    ///   / `"GetTable:inference-fail"` / `"GetField:inference-fail"`
+    ///   / `"GetTabUp:inference-fail"` / `"GetUpval:not-Closure-use"`
+    ///   (every lowerer-side dispatch_off label that already exists
+    ///   on `CompiledTrace.dispatch_off_reason`)
+    pub close_cause_counts: std::collections::HashMap<&'static str, u64>,
+    /// v2.1 Phase 1I.B — number of times the trace recorder captured
+    /// a [`crate::jit::trace_types::FieldIcSnapshot`] for the first
+    /// eligible `Op::GetField` site under `LUNA_JIT_FIELD_IC=1`.
+    /// Bumped exactly once per recording (the snapshot field is
+    /// `Option<_>` so subsequent GetFields short-circuit). 0 on the
+    /// env-default path. Probed by the Phase 1I.B opt-in fire test
+    /// (`tests/phase_1i_b_ic_scaffold.rs`).
+    pub field_ic_snapshot_captured: u64,
+    /// v2.0 Track-R R3b — number of compiled traces whose
+    /// `CompiledTrace.downrec_link` is `Some(_)`. Bumped at trace
+    /// finalisation alongside the `dispatch_off_reasons.push` site
+    /// (`exec.rs` close handler) when the lowerer's
+    /// `downrec_idx_opt` arm emitted the stitch sentinel + caller-pc
+    /// guard scaffold. Probe surface for the R3b regression test
+    /// (`r3b_lowerer_stitch_sentinel`) and R3d's e2e smoke. R3b
+    /// keeps `CompiledTrace.dispatchable = false` even when this
+    /// counter bumps; R3d will lift `dispatchable` after R3c wires
+    /// the dispatcher consumer.
+    pub downrec_link_compiled: u64,
+    /// v2.0 Track-R R3c — number of times the dispatcher's
+    /// `is_downrec_sentinel` arm in
+    /// `crates/luna-core/src/vm/exec.rs` fired with the caller-pc
+    /// guard reporting a HIT (saved-PC at `reg_state[window_size]`
+    /// matched the recorded `dr_return_pc`). Each bump corresponds
+    /// to one stitch-back round: the trace returned the
+    /// `SIDE_SENT_DOWNREC_CODE` sentinel and the dispatcher fed the
+    /// trace's `head_pc` back to the interpreter loop so the
+    /// admit-by-`downrec_link` gate re-enters the trace (bounded by
+    /// the dispatcher's `stitch_depth_remaining` checkpoint). R3c's
+    /// regression test (`r3c_dispatcher_stitch_dispatch`) gates on
+    /// `downrec_dispatched > 0 OR downrec_deopt > 0`.
+    pub downrec_dispatched: u64,
+    /// v2.0 Track-R R3c — number of times the dispatcher's
+    /// `is_downrec_sentinel` arm observed a guard MISS (the trace
+    /// invocation returned with `downrec_link.is_some()` but the
+    /// returned sentinel was NOT [`SIDE_SENT_DOWNREC_CODE`] — i.e.
+    /// the lowerer's `deopt_blk` arm fired, returning `head_pc` via
+    /// the GLOBAL sentinel). Bumped on the dispatcher side via the
+    /// post-invoke check so R3c can measure caller-pc guard
+    /// miss-rate via `downrec_dispatched + downrec_deopt` without
+    /// lifting `dispatchable = true`. R3d uses this to decide
+    /// whether the lifted `dispatchable = true` would flip perf
+    /// negative (R3 prep §7.1 mitigation).
+    pub downrec_deopt: u64,
+    /// v2.0 Track-R R3d — number of compiled traces whose
+    /// `CompiledTrace.downrec_multi_way_count >= 2`. Bumped at the
+    /// close handler in `crates/luna-core/src/vm/exec.rs` alongside
+    /// `downrec_link_compiled`. Probe surface for R3d's regression
+    /// test (`r3d_multi_way_guard_dispatch`) to assert the lowerer's
+    /// `dispatchable = true` lift triggered at least once. R3c's
+    /// single-CMP shape never bumps this counter; it always reports
+    /// `0`. Independent of the dispatcher's `downrec_dispatched` /
+    /// `downrec_deopt` counters, which measure runtime guard hit-rate.
+    pub multi_way_guard_emitted: u64,
+}
+
+impl JitCounters {
+    /// v2.0 Track-R R2 — bump the close-cause bucket for `reason`.
+    /// Mirrors the existing per-site pattern (`aborted += 1`,
+    /// `dispatch_off_reasons.push(reason)`) but with O(1) per-reason
+    /// access via a `HashMap`. Single source of truth for the
+    /// close-cause taxonomy probe surface
+    /// (`Vm::trace_close_cause_counts`).
+    #[inline]
+    pub fn bump_close_cause(&mut self, reason: &'static str) {
+        *self.close_cause_counts.entry(reason).or_insert(0) += 1;
+    }
 }
 
 impl JitState {
@@ -196,6 +362,9 @@ impl JitState {
             entry_tags_buf: Vec::new(),
             chunk_compiler: Box::new(crate::jit::NullJitBackend),
             trace_compiler: Box::new(crate::jit::NullJitBackend),
+            stitch_depth_remaining: JitState::STITCH_DEPTH_DEFAULT,
+            suppress_downrec_admit_once: false,
+            storage: Box::new(crate::jit::NullJitStorage),
         }
     }
 }

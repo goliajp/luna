@@ -1089,7 +1089,7 @@ impl TargetSpec {
 
     /// v1.3 Phase AOT Stage 7 polish 4 — resolve the Cranelift
     /// `TargetIsa` builder for this target. Used by
-    /// [`harvest_and_emit_aot_traces`] so the offline trace lowerer
+    /// `harvest_and_emit_aot_traces` so the offline trace lowerer
     /// codegens for the deploy ABI rather than the build host's.
     ///
     /// Two layers:
@@ -1701,8 +1701,11 @@ thread_local! {
 }
 
 impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
+    // v2.0 Track J sub-step J-B — `storage` passthrough; the inner
+    // CraneliftBackend ignores it today (Phase F will consume).
     fn try_compile_trace(
         &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
@@ -1714,7 +1717,7 @@ impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
             cell.borrow_mut()
                 .push((hash, record.head_pc, record.clone()));
         });
-        self.inner.try_compile_trace(record, opts)
+        self.inner.try_compile_trace(storage, record, opts)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
@@ -1762,6 +1765,12 @@ fn harvest_and_emit_aot_traces(
         },
     );
     vm.set_trace_jit_enabled(true);
+    // Chunk JIT short-circuits recursive `Op::Call` at exec.rs:1567 before
+    // push_frame, hiding the helper body from the trace recorder and
+    // suppressing the Stage 7 polish 6 inline side-exit chain. Trace JIT
+    // subsumes chunk JIT's coverage and adds the inline-side-exit support
+    // chunk JIT lacks entirely, so harvest skips chunk JIT.
+    vm.set_jit_enabled(false);
     vm.set_bytecode_loading(true);
 
     // Load + call the root closure. Errors here are **non-fatal** —
@@ -1824,7 +1833,7 @@ fn harvest_and_emit_aot_traces(
         [u8; 16],
         u32,
         TraceRecord,
-        std::rc::Rc<CompiledTrace>,
+        luna_core::jit::send_compat::TArc<CompiledTrace>,
     )> = Vec::new();
     let mut filter_stats = (0usize, 0usize, 0usize, 0usize);
     for (i, (hash, head_pc, record)) in captured.into_iter().enumerate() {

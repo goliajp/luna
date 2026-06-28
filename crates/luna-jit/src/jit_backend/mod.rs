@@ -22,7 +22,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::jit::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
-    MAX_JIT_ARITY, TraceCompiler, noop_jit_guard,
+    MAX_JIT_ARITY, TraceCompiler,
 };
 use luna_core::runtime::Gc;
 use luna_core::runtime::Value as LuaValue;
@@ -88,6 +88,29 @@ impl RegKind {
 // who depend on luna-core alone never link Cranelift.
 pub mod trace;
 
+// v2.0 Track J sub-step J-A — `Send` wrapper newtype for
+// `cranelift_jit::JITModule`. Pre-positioned for J-B's field
+// migration of `JIT_CACHE` / `JIT_CACHE_HANDLES` /
+// `TRACE_JIT_HANDLES` from `thread_local!` onto `Vm.VmJitStorage`.
+// Scoped `pub(crate)` — no embedder surface.
+mod send_jit_module;
+#[allow(unused_imports)] // J-B will consume; J-A wires the wrapper only.
+pub use send_jit_module::SendJitModule;
+
+// v2.1 Phase 1K.D.1 — `JIT_VM` / `JIT_CL` TLS slots, the helper
+// extern "C" fns, `enter_jit`, and `scoped_rebind` all moved to
+// the sibling `luna-jit-helpers` crate so `luna-jit-llvm`
+// (v2.1 alt backend) can reuse them without dragging Cranelift in.
+// Star-re-export preserves every existing `super::luna_jit_*` /
+// `crate::jit_backend::*` call path inside this crate.
+pub use luna_jit_helpers::*;
+
+// v2.0 Track J sub-step J-B — concrete per-`Vm` JIT storage struct
+// (cache + cache_handles + trace_handles). Installed alongside the
+// `CraneliftBackend` by `crate::install_default_jit`. luna-core sees
+// it through the opaque `JitStorage` trait only.
+pub(crate) mod storage;
+
 // v1.1 A1 Session C — inline `#[cfg(test)] mod xx { ... }` blocks
 // throughout this file call `crate::jit_backend::test_vm_new(version)` / `crate::jit_backend::test_vm_new_minimal(version)`
 // and historically expected the Cranelift backend to be installed
@@ -98,6 +121,9 @@ pub mod trace;
 fn test_vm_new(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
     let mut vm = luna_core::vm::Vm::new(version);
     vm.install_jit_backend(CraneliftBackend, CraneliftBackend);
+    // v2.0 Track J sub-step J-B — pair the backend install with the
+    // CraneliftJitStorage so cache lookups can downcast.
+    vm.install_jit_storage(storage::CraneliftJitStorage::default());
     vm
 }
 #[cfg(test)]
@@ -105,6 +131,7 @@ fn test_vm_new(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
 fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
     let mut vm = luna_core::vm::Vm::new_minimal(version);
     vm.install_jit_backend(CraneliftBackend, CraneliftBackend);
+    vm.install_jit_storage(storage::CraneliftJitStorage::default());
     vm
 }
 
@@ -129,12 +156,22 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
 /// S5d — adds `arg_table_mask` (per-arg `Gc<Table>` indicator) and
 /// `ret_is_table` (true ↔ Return1 yields a `Gc<Table>` ptr).
 pub fn cache_lookup_or_compile(
+    storage: &mut dyn luna_core::jit::JitStorage,
     proto: luna_core::runtime::Gc<Proto>,
     pre53: bool,
     float_only: bool,
 ) -> Option<(*const u8, u8, bool, u8, u8, bool, bool)> {
     let key = proto_cache_key(&proto, pre53, float_only);
-    let cached = JIT_CACHE.with(|cell| cell.borrow().get(&key).copied());
+    // v2.0 Track J sub-step J-B Phase D — cache lookups read from the
+    // per-`Vm` `storage.cache` field instead of the `JIT_CACHE` TLS.
+    //
+    // v2.0 J-B follow-up — `from_storage` returns `Result`; on
+    // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
+    // skip JIT entirely. The dispatcher already treats `None` as
+    // "this Proto stays on interp", so graceful skip = no JIT for
+    // this Vm, no SIGABRT across any C-ABI boundary.
+    let cs = storage::from_storage(storage).ok()?;
+    let cached = cs.cache.get(&key).copied();
     if let Some(hit) = cached {
         return match hit {
             CacheEntry::Failed => None,
@@ -166,11 +203,22 @@ pub fn cache_lookup_or_compile(
             let arg_table_mask = handle.arg_table_mask();
             let ret_is_float = handle.ret_is_float();
             let ret_is_table = handle.ret_is_table();
-            // Drop only the handle's bookkeeping side — the JITModule
-            // it owns is the one that holds the mmap. Keep the handle
-            // alive in the thread-local store so the entry_raw pointer
-            // stays valid for every Vm on this thread.
-            JIT_CACHE_HANDLES.with(|store| store.borrow_mut().push(handle));
+            // v2.0 Track J sub-step J-B Phase E — the JITModule the
+            // handle owns holds the mmap. Park the handle on the
+            // per-`Vm` storage so the entry_raw pointer stays valid
+            // for the lifetime of this `Vm`. Append-only.
+            //
+            // v2.0 J-B follow-up — `from_storage` is `Result`-shaped
+            // now. The `.ok()?` short-circuit above already verified
+            // the storage was a `CraneliftJitStorage`, so on a sane
+            // call this branch is unreachable. Guard with `match`
+            // for honesty: on the impossible Err arm the compiled
+            // `handle` drops (its `JITModule` releases the mmap) and
+            // we return None — no leaked code page, no crash.
+            match storage::from_storage(storage) {
+                Ok(cs) => cs.cache_handles.push(handle),
+                Err(_) => return None,
+            }
             CacheEntry::Compiled {
                 entry: raw,
                 num_args,
@@ -183,7 +231,14 @@ pub fn cache_lookup_or_compile(
         }
         None => CacheEntry::Failed,
     };
-    JIT_CACHE.with(|cell| cell.borrow_mut().insert(key, entry));
+    // v2.0 J-B follow-up — same `from_storage` is-Result rationale as
+    // above; on the impossible Err branch we drop the freshly built
+    // `entry` (it was `Copy`, no resource loss) and skip the cache
+    // insert.
+    storage::from_storage(storage)
+        .ok()?
+        .cache
+        .insert(key, entry);
     match entry {
         CacheEntry::Failed => None,
         CacheEntry::Compiled {
@@ -207,7 +262,7 @@ pub fn cache_lookup_or_compile(
 }
 
 #[derive(Clone, Copy)]
-enum CacheEntry {
+pub(crate) enum CacheEntry {
     Failed,
     Compiled {
         entry: *const u8,
@@ -218,502 +273,6 @@ enum CacheEntry {
         ret_is_float: bool,
         ret_is_table: bool,
     },
-}
-
-thread_local! {
-    /// Compiled-fn cache, keyed by bytecode hash + ABI shape.
-    static JIT_CACHE: std::cell::RefCell<std::collections::HashMap<u64, CacheEntry>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Storage for the `JitHandle`s that own each cached fn's mmap.
-    /// Append-only — cached pointers stay valid for the thread's
-    /// lifetime.
-    static JIT_CACHE_HANDLES: std::cell::RefCell<Vec<JitHandle>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    /// P11-S5c — current `Vm` pointer for Rust helpers called from
-    /// JIT'd code. Set by [`enter_jit`] just before invoking the
-    /// entry fn; cleared (RAII via [`JitVmGuard`]) on return. Helpers
-    /// (`luna_jit_new_table`, `luna_jit_table_set_int`, etc.) read
-    /// this to reach `Vm.heap`. Null when no JIT call is in flight.
-    static JIT_VM: std::cell::Cell<*mut luna_core::vm::Vm> =
-        const { std::cell::Cell::new(std::ptr::null_mut()) };
-    /// P11-S5d.J — current `LuaClosure` pointer for `Op::GetUpval`
-    /// value-read helpers. Set alongside `JIT_VM` by [`enter_jit`].
-    /// Null when no JIT call is in flight, or when the active call
-    /// has no upvalues (zero-upval Protos never reach
-    /// `luna_jit_upval_get`).
-    static JIT_CL: std::cell::Cell<*const luna_core::runtime::LuaClosure> =
-        const { std::cell::Cell::new(std::ptr::null()) };
-}
-
-/// P11-S5c — install `vm` as the current JIT Vm pointer. Returns a
-/// [`JitVmGuard`] whose drop clears the slot. Must be held across the
-/// JIT entry-fn call so any helper can pick the pointer up.
-///
-/// The guard type itself lives in `luna_core::jit` so the trait
-/// signature in `IntChunkCompiler::enter` doesn't drag Cranelift into
-/// luna-core. `JitVmGuard::drop` is a no-op (TLS slots are overwritten
-/// on the next `enter_jit`; see `luna_core::jit::JitVmGuard`).
-///
-/// P11-S5d.J — the `cl` parameter is the closure being invoked. The
-/// guard also pins it in `JIT_CL` so `luna_jit_upval_get` can fetch
-/// `cl.upvals[idx]` at runtime. Callers that don't need upvalues (the
-/// zero-arg host-call path before `Op::GetUpval` was JIT'd) can pass
-/// `None`; helpers will hit the debug-assert if they fire.
-pub fn enter_jit(
-    vm: &mut luna_core::vm::Vm,
-    cl: Option<luna_core::runtime::Gc<luna_core::runtime::LuaClosure>>,
-) -> JitVmGuard {
-    JIT_VM.with(|cell| cell.set(vm as *mut luna_core::vm::Vm));
-    let cl_ptr = cl
-        .map(|c| c.as_ptr() as *const luna_core::runtime::LuaClosure)
-        .unwrap_or(std::ptr::null());
-    JIT_CL.with(|cell| cell.set(cl_ptr));
-    noop_jit_guard()
-}
-
-/// P11-S5c — read the active Vm pointer. SAFETY: the caller (always
-/// a Rust helper invoked from inside JIT'd code) must be running
-/// under an active [`enter_jit`] guard.
-#[inline]
-unsafe fn current_jit_vm<'a>() -> &'a mut luna_core::vm::Vm {
-    let p = JIT_VM.with(|cell| cell.get());
-    debug_assert!(!p.is_null(), "JIT helper called outside enter_jit scope");
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { &mut *p }
-}
-
-/// P11-S5d.J — read the active LuaClosure pointer. SAFETY: caller is
-/// a JIT helper running under an `enter_jit` guard whose closure
-/// argument was non-None.
-#[inline]
-unsafe fn current_jit_closure() -> luna_core::runtime::Gc<luna_core::runtime::LuaClosure> {
-    let p = JIT_CL.with(|cell| cell.get());
-    debug_assert!(
-        !p.is_null(),
-        "luna_jit_upval_get called outside an upval-aware enter_jit scope"
-    );
-    luna_core::runtime::Gc::from_ptr(p as *mut luna_core::runtime::LuaClosure)
-}
-
-/// P11-S5c — allocate an empty `Gc<Table>` on the active Vm's heap.
-/// Returns the Gc pointer pun'd to `i64`. The fresh table is rooted
-/// only through the Cranelift Variable the JIT writes it into; no
-/// `maybe_collect_garbage` runs inside the helper so the SSA-only
-/// rooting suffices for the duration of the JIT entry.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    // P11-S5d.E' — a prior helper in this JIT entry parked a deopt
-    // request; short-circuit so we don't touch the heap unnecessarily.
-    // Returning a NULL ptr is safe because subsequent helpers also
-    // early-return on `jit_pending_err`, and the dispatcher will deopt
-    // to the interpreter as soon as the JIT entry returns.
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let g = vm.heap.new_table();
-    g.as_ptr() as i64
-}
-
-/// P11-S5c.B — `Heap::new_table_sized(n)` variant. JIT emit reaches
-/// for this when the `NewTable` window is immediately followed by a
-/// counted `for i = 1, N do … end` with a compile-time-known
-/// `N` — pre-allocating the array part skips ~13 intermediate
-/// `rehash` rounds for N=10000, which dominates the hot loop's
-/// wall-clock on `table_alloc_10k`. Negative or zero hints
-/// degrade to an empty table (matches `new_table`).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_new_table_sized(asize: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let n = if asize > 0 { asize as usize } else { 0 };
-    let g = vm.heap.new_table_sized(n);
-    g.as_ptr() as i64
-}
-
-/// P12-S5-C — materialize a Sinkable site's virtual array slots into
-/// a heap `Gc<Table>` at a side-exit emit point. The JIT emit lays
-/// out two parallel stack buffers per site per exit (`raws_ptr` of
-/// `cap` × u64 and `kinds_ptr` of `cap` × u8, one entry per virt
-/// slot) and calls this helper. The caller writes the returned
-/// `Value::Table` raw bits into the slot's `reg_state` cell + sets
-/// the per-exit-tags entry to `ExitTag::Table` so the dispatcher
-/// repacks correctly on deopt.
-///
-/// `kind` byte uses the same `luna_core::runtime::value::raw::*` tag
-/// space as `Value::pack`. Unset slots in `virt_kinds` map to
-/// `raw::NIL` at emit time so the table sees a NIL fill — matches
-/// Lua's "table created with array part, slot unwritten" semantics.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
-    cap: i64,
-    raws_ptr: *const u64,
-    kinds_ptr: *const u8,
-    n_hash: i64,
-    hash_keys_ptr: *const u64,
-    hash_raws_ptr: *const u64,
-    hash_kinds_ptr: *const u8,
-) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let cap_u = if cap > 0 { cap as usize } else { 0 };
-    let n_hash_u = if n_hash > 0 { n_hash as usize } else { 0 };
-    let g = vm.heap.new_table_sized(cap_u);
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let table = unsafe { g.as_mut() };
-    // Array slots.
-    if cap_u > 0 {
-        for i in 0..cap_u {
-            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
-            let raw_bits = unsafe { *raws_ptr.add(i) };
-            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
-            let kind = unsafe { *kinds_ptr.add(i) };
-            let raw = luna_core::runtime::value::RawVal { zero: raw_bits };
-            // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
-            let v = unsafe { luna_core::runtime::Value::pack(kind, raw) };
-            let _ = table.set_int(&mut vm.heap, (i + 1) as i64, v);
-        }
-    }
-    // P12-S11-B-v2 — hash slots. Each entry is a
-    // (key_ptr: *const LuaStr, raw_bits, kind_byte) triple from
-    // the trace IR's stack-allocated buffers. The IR baked the
-    // const-string ptr at compile time from head_proto.consts.
-    if n_hash_u > 0 {
-        for i in 0..n_hash_u {
-            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
-            let key_ptr_bits = unsafe { *hash_keys_ptr.add(i) };
-            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
-            let raw_bits = unsafe { *hash_raws_ptr.add(i) };
-            // SAFETY: the index is bounded by the buffer length passed as an argument by Cranelift-emitted code, which computes it from the IR's compile-time-known site shape (`n_array_slots` / `n_hash_pairs`).
-            let kind = unsafe { *hash_kinds_ptr.add(i) };
-            let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
-                luna_core::runtime::Gc::from_ptr(key_ptr_bits as *mut luna_core::runtime::LuaStr);
-            let raw = luna_core::runtime::value::RawVal { zero: raw_bits };
-            // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
-            let v = unsafe { luna_core::runtime::Value::pack(kind, raw) };
-            let _ = table.set(&mut vm.heap, luna_core::runtime::Value::Str(key_gc), v);
-        }
-    }
-    g.as_ptr() as i64
-}
-
-/// P11-S5c — `t[key] = val` where `t` is a Table Gc (i64 pun), `key`
-/// is an Int and `val` is an Int. Wraps `Table::set_int(&mut Heap,
-/// i64, Value)`. Returns nothing (errors swallowed — luna's
-/// `set_int` only returns `Err` on table-size pathology that the
-/// interpreter would also surface; JIT'd workloads bounded by N=10k
-/// don't reach it). Future caller-visible error reporting would
-/// route through a deopt return path.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    // P11-S5d.E' — a metatable on the target table means PUC would route
-    // this write through __newindex; the JIT helper would bypass it. Park
-    // a deopt request and let the dispatcher re-run the call through the
-    // interpreter so __newindex / raw-set semantics are honoured.
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let table = unsafe { g.as_mut() };
-    let _ = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
-}
-
-/// P12-S7-C — write an arbitrary `Value::pack(tag, raw_bits)` to
-/// `t[key]` (Int key). Generalises `_table_set_int` / `_table_set_nil`:
-/// trace JIT emit dispatches Int/Nil to their specialized helpers
-/// (slightly less overhead) and Closure/Table/Float/etc. to this
-/// helper. Without it, a SetTable whose src is a Closure (post-S7
-/// Op::Closure trace JIT) silently wraps the closure pointer as
-/// `Value::Int(ptr_bits)` — a number that later calls fail with
-/// "attempt to call a number value".
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64, tag: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let table = unsafe { g.as_mut() };
-    // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
-    let v = unsafe {
-        luna_core::runtime::Value::pack(
-            tag as u8,
-            luna_core::runtime::value::RawVal {
-                zero: raw_bits as u64,
-            },
-        )
-    };
-    let _ = table.set_int(&mut vm.heap, key, v);
-}
-
-/// P12-S11-A — write `Value::pack(tag, raw)` to `t[key_ptr_as_str]`.
-/// String key is a `Gc<LuaStr>` raw pointer (baked into IR at
-/// emit time from `head_proto.consts[ins.b()]`); value goes
-/// through the standard tag/raw round-trip. Used for Op::SetField
-/// trace JIT support (helper path; sunk emit is S11-B).
-///
-/// Same metatable / pending_err short-circuit as the other table
-/// helpers — `__newindex` cases deopt to interp.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_table_set_field(
-    t: i64,
-    key_ptr: i64,
-    val_raw: i64,
-    val_tag: i64,
-) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
-    }
-    let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
-        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
-    let key = luna_core::runtime::Value::Str(key_gc);
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let table = unsafe { g.as_mut() };
-    // SAFETY: `kind` was loaded from the IR-emitted `kinds` buffer in lockstep with the matching raw payload, so the tag byte agrees with the `RawVal` discriminator (see `runtime::value::raw`).
-    let v = unsafe {
-        luna_core::runtime::Value::pack(
-            val_tag as u8,
-            luna_core::runtime::value::RawVal {
-                zero: val_raw as u64,
-            },
-        )
-    };
-    let _ = table.set(&mut vm.heap, key, v);
-}
-
-/// P12-S11-A — read `t[key_ptr_as_str]` and return raw payload bits.
-/// String key is a `Gc<LuaStr>` raw pointer baked into IR. Caller
-/// (trace JIT GetField emit) infers exit_tag for the dst slot via
-/// `infer_getx_exit`; absent inference, dispatchable=false.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return 0;
-    }
-    let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
-        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
-    let v = g.get(luna_core::runtime::Value::Str(key_gc));
-    let (_tag, raw) = v.unpack();
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { raw.zero as i64 }
-}
-
-/// v1.2 D3 Path B — read `upvals[upval_idx][key_str]` and return raw
-/// payload bits. Mirrors `luna_jit_table_get_field` but resolves the
-/// table via the trace head closure's upvalue list first (the trace
-/// dispatcher's `enter_jit(vm, Some(cl))` pins `JIT_CL`).
-///
-/// Used by the trace JIT lowerer's `Op::GetTabUp` arm for upvalue-
-/// table accesses outside the recognised math-fold pattern. The
-/// canonical case is `math.min(a, b)` whose 2-arg shape doesn't
-/// match `try_match_trace_math_fold`'s single-arg libm catalog;
-/// without this helper the entire trace bails at the `cmp-dirs`
-/// pre-emit pass and the workload runs interp-only (P3a diag finding
-/// 2026-06-24: `bail:cmp-dirs-GetTabUp` × 200/200 on `token_bucket_1k`).
-///
-/// Deopt cases: upval isn't a Table (corrupted upval list) or has
-/// a metatable (`__index` could shadow the lookup — interp-only).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code; `enter_jit(vm, Some(cl))` pinned JIT_CL for the dispatch window.
-    let cl = unsafe { current_jit_closure() };
-    let env = vm.upval_get(cl, upval_idx as u32);
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> = match env {
-        luna_core::runtime::Value::Table(t) => t,
-        _ => {
-            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: GetTabUp upval not Table"));
-            return 0;
-        }
-    };
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: GetTabUp env has metatable"));
-        return 0;
-    }
-    let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
-        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
-    let v = g.get(luna_core::runtime::Value::Str(key_gc));
-    let (_tag, raw) = v.unpack();
-    // SAFETY: pulled from `RawVal` of a freshly unpacked Value above.
-    unsafe { raw.zero as i64 }
-}
-
-/// P12-S6-A2 — write `Value::Nil` to `t[key]` (Int key). Used by
-/// trace JIT when a SetList/SetI/SetTable's source register is a
-/// `RegKind::Nil` (e.g. Lua's `local t = {nil, nil}` table
-/// constructor expands to `NewTable; LoadNil×N; SetList` and
-/// without a Nil-specific helper the existing `_table_set_int`
-/// would silently coerce the Nil to `Value::Int(0)`).
-///
-/// Same metatable / `jit_pending_err` short-circuit as the other
-/// `_table_set_*` helpers — caller deopts on `pending_err` and
-/// the interpreter re-runs the op to honour `__newindex`.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let table = unsafe { g.as_mut() };
-    let _ = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Nil);
-}
-
-/// P11-S5c — Float-key, Float-value variant. luna 5.1 / 5.2 lower
-/// `for i = 1, N do t[i] = i end` with a Float loop var (no Int
-/// subtype in those dialects), so the SetTable's key and value
-/// arguments arrive as f64 bit-patterns. `Table::set` normalizes
-/// integral Float keys back to Int slots so `#t` still reports the
-/// array length we'd expect — same shape PUC produces.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, val_bits: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let table = unsafe { g.as_mut() };
-    let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
-    let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
-    let _ = table.set(&mut vm.heap, k, v);
-}
-
-/// P11-S5c — `t[key]` where the JIT statically expects an Int
-/// result. Pulls the raw `Value` from the table and unpacks
-/// the Int payload. If the slot is anything but Int (Nil, Float,
-/// Str, …) the helper returns 0 — the JIT scan only admits
-/// chunks that store Ints, so the divergence is observable only
-/// when the user-facing semantics violate the static expectation.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    // P11-S5d.E' — metatable on the source table means PUC would route
-    // a missing entry through __index; the helper bypasses that. Park a
-    // deopt request and bail; the dispatcher re-runs the call through
-    // the interpreter, which walks __index correctly (including the
-    // infinite-loop error events.lua relies on).
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return 0;
-    }
-    // P11-S5d.B — return the raw 8-byte payload of the stored
-    // Value, regardless of tag. The JIT-emitted caller interprets
-    // the bit pattern according to the GetI result's RegKind:
-    // Int → i64, Float → f64::from_bits, Table → Gc<Table>::from_ptr.
-    // A previous variant unconditionally returned 0 on non-Int /
-    // non-Float — that fed NULL into subsequent helpers when the
-    // table actually stored Gc objects (binary_trees' `check`
-    // chain calling itself on `t[1]`).
-    let v = g.get_int(key);
-    let (_tag, raw) = v.unpack();
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { raw.zero as i64 }
-}
-
-/// P11-S5d.E' — `t[k]` where `k` is a Float key. luna 5.1 / 5.2's
-/// `OP_GETTABLE` typically loads the key via `LoadF` (no Int subtype
-/// in those dialects); the emit hands `k` as `f64::to_bits` so the
-/// helper can reconstruct the Float value before calling `Table::get`.
-/// `Table::get` normalises integral Floats back to the Int slot, so
-/// `t[1.0]` lands on `t[1]` exactly like PUC does. Returns the raw
-/// 8-byte payload (same convention as `luna_jit_table_get_int`).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return 0;
-    }
-    let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
-    let v = g.get(k);
-    let (_tag, raw) = v.unpack();
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { raw.zero as i64 }
 }
 
 /// P11-S5d.J — classify every `Op::GetUpval` in `proto` as either the
@@ -837,453 +396,44 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
     }
 }
 
-/// P11-S5d.J — `R[A] = upvals[idx]` value-read variant. Reads the
-/// active closure's upvalue cell, dispatching open/closed via the
-/// interpreter's `Vm::upval_get` (so an open upvalue resolves to its
-/// current stack slot — matters when a closure is called from inside
-/// an enclosing function whose upvalues are still open). Returns the
-/// raw 8-byte payload (same convention as the table helpers): the
-/// JIT-emitted caller bitcasts to F64 if the slot's declared kind is
-/// Float, leaves as I64 otherwise.
-///
-/// Scope: only invoked for `Op::GetUpval` PCs the scan classified as
-/// `ValueRead` (not the self-recursion call-target marker). The
-/// dispatcher pins `JIT_CL` at entry; helper safety relies on that.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let cl = unsafe { current_jit_closure() };
-    let v = vm.upval_get(cl, idx as u32);
-    let (_tag, raw) = v.unpack();
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { raw.zero as i64 }
-}
-
-/// P12-S7-C — trace JIT helper for `Op::Close A`. Wraps
-/// `Vm::jit_op_close` which does the predict-and-deopt logic:
-/// returns 0 to continue the trace, 1 to deopt (handler would run
-/// or pre-existing pending_err).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_op_close(start_offset as u32)
-}
-
-/// P12-S12-C v1 — update only the raw payload of
-/// `vm.stack[base + slot_offset]`, preserving its existing tag.
-/// Used by `Op::Concat` body emit to spill trace-IR Variables
-/// back to vm.stack for operands whose `current_kinds` is
-/// `Unset` (e.g. Str slots that round-trip as pointer raw bits
-/// but have no `RegKind::Str` variant). The interp's previous
-/// execution of the same op already wrote the right `tag` to
-/// that slot — the trace just needs to refresh the raw bits.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    vm.jit_stack_update_raw(slot_offset as u32, raw_bits as u64);
-}
-
-/// P12-S12-C v1 — trace JIT helper for `Op::Concat A B`.
-///
-/// Wraps `Vm::jit_op_concat` which mirrors the interp arm: sets
-/// `self.top = base + a + n`, then runs `concat_run(base + a)`.
-/// Detects metamethod-path (which would push a Lua frame mid-trace)
-/// via pre/post `frames.len()` comparison and deopts cleanly via
-/// `pending_err` + frame unwind.
-///
-/// Returns `0` on success (result lives at `vm.stack[base + a]`),
-/// `-1` on deopt (pending_err set; metamethod path, type error,
-/// length overflow, or pre-existing pending_err).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_op_concat(slot_offset as u32, n as i32)
-}
-
-/// P14-S14-B v2 — trace JIT helper:acquire a fresh accumulator
-/// buffer from the Vm's pool. Returns a `*mut Vec<u8>` boxed-leaked
-/// pointer that the trace fn keeps in a stack slot through the loop.
-///
-/// Safety: caller must be inside `enter_jit` and must eventually call
-/// `luna_jit_str_buf_release` with the returned pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_str_buf_acquire() -> i64 {
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_str_buf_acquire() as i64
-}
-
-/// P14-S14-B v2 — trace JIT helper:release a buffer back to the
-/// Vm's pool.
-///
-/// Safety: `buf` must have been returned by a prior
-/// `luna_jit_str_buf_acquire` on the same Vm.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_str_buf_release(buf as *mut Vec<u8>);
-}
-
-/// P14-S14-B v2 — trace JIT helper:append a LuaStr's bytes to a
-/// previously-acquired accumulator buffer. The trace IR calls this
-/// at each loop iter inside the `s = s .. v` idiom.
-///
-/// Returns 0 on success, -1 if `str_ptr` isn't a valid LuaStr (deopt
-/// to interp, which will hit the __concat metamethod path).
-///
-/// Safety: `buf` from prior `acquire`; `str_ptr` from the piece slot.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_str_buf_extend(buf: i64, str_ptr: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_str_buf_extend(buf as *mut Vec<u8>, str_ptr)
-}
-
-/// P14-S14-B v2 — trace JIT helper:drain the accumulator buffer
-/// into a fresh `LuaStr` via `heap.intern`, returning the raw ptr
-/// bits for the trace to write into the accumulator slot.
-///
-/// Returns the LuaStr ptr as i64 on success, 0 on overflow (the v2
-/// hard cap = 256KB; trace deopts).
-///
-/// Safety: `buf` from prior `acquire`. The buffer is drained and
-/// ready for `release`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_str_buf_intern(buf: i64) -> i64 {
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_str_buf_intern(buf as *mut Vec<u8>)
-}
-
-/// P12-S12-B-v2 — trace JIT helper for `Op::TForCall A 0 C`.
-///
-/// Mirrors `exec.rs:5316` Op::TForCall semantics:
-/// - copies `R[A..=A+2]` (iter / state / control) to `R[A+4..=A+6]`,
-///   resizing `vm.stack` if needed
-/// - calls `vm.begin_call(abs+4, Some(2), nvars, false)` to dispatch
-///   the iterator function
-///
-/// v2 restriction: the iterator at `R[A]` must be `Value::Native`. A
-/// Lua-closure iter would push a Lua frame mid-trace, breaking the
-/// trace head's `recording_frame_base` invariant; we deopt instead
-/// (sets `jit_pending_err`, returns sentinel). The expected v3
-/// follow-up inlines `inext` directly so the helper path is gone.
-///
-/// Returns `0` on success, `-1` on deopt (pending_err set OR
-/// pre-existing pending_err).
-///
-/// Safety: caller (trace JIT IR) runs under `enter_jit` so
-/// `current_jit_vm()` is live.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_tforcall(
-    abs_offset: i64,
-    nvars: i64,
-    ctrl_out: *mut i64,
-    key_out: *mut i64,
-    val_out: *mut i64,
-) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl_out, key_out, val_out)
-}
-
-/// P12-S12-B-v2 — load the raw `i64` payload of `vm.stack[base + slot_offset]`
-/// for the active trace's head frame. Used to reload trace IR
-/// `Variable`s after a helper (e.g. `luna_jit_op_tforcall`) has
-/// mutated `vm.stack` directly.
-///
-/// Safety: caller (trace JIT IR) runs under `enter_jit` so
-/// `current_jit_vm()` is live. Returns `0` if the slot is out of
-/// stack range (defensive — emit-time bounds check should make this
-/// unreachable).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_stack_load(slot_offset: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_stack_load(slot_offset as u32)
-}
-
-/// P12-S12-B-v2 — read the tag byte of `vm.stack[base + slot_offset]`
-/// for the active trace's head frame. Used by `Op::TForLoop` emit
-/// to dispatch on the iterator's return-key tag (Nil → loop end,
-/// Int → continue for ipairs, other → deopt for v2).
-///
-/// Safety: caller (trace JIT IR) runs under `enter_jit`. Returns
-/// `raw::NIL` (0) if slot out of range.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_stack_tag(slot_offset: i64) -> i64 {
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_stack_tag(slot_offset as u32) as i64
-}
-
-/// P12-S7-B — spill a trace's per-register live value into the
-/// caller frame's `vm.stack[base + slot_offset]`. Always called
-/// just before `luna_jit_op_closure` for each `in_stack: true`
-/// upval in the inner proto, so the open upval the helper creates
-/// points to a slot holding the right value.
-///
-/// Parameters: `slot_offset` is the caller-frame register index
-/// (`u32`, depth=0 only — S7-B doesn't support depth>0 Closure).
-/// `tag` is the `raw::*` byte for the register's RegKind at this
-/// emit point (Int / Float / Table / Closure / Nil). `raw_bits` is
-/// the trace IR's i64 payload for the register (Float held as
-/// `f64::to_bits`, Table/Closure as raw `Gc::as_ptr` cast).
-///
-/// Safety: caller (trace JIT IR) runs under `enter_jit` so
-/// `current_jit_vm()` is live; the (tag, raw_bits) pair is
-/// generated by the same emit path that proves the kind, so
-/// `Value::pack` round-trips correctly.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw_bits: i64) {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return;
-    }
-    vm.jit_spill_stack(slot_offset as u32, tag as u8, raw_bits as u64);
-}
-
-/// P12-S7-A — trace JIT helper for `Op::Closure A Bx`.
-///
-/// Looks up `cl.proto.protos[bx]` (the inner Proto) and builds a
-/// new `Gc<LuaClosure>` for it. Each upval is captured either from
-/// the trace head closure's `upvals()` slice (`in_stack=false`)
-/// or from the caller frame's stack via `find_or_create_upval`
-/// (`in_stack=true`, P12-S7-B). v51 dialect clones the `_ENV` cell
-/// to match interp semantics (per-closure `_ENV`). v52+ honours
-/// the Proto cache.
-///
-/// **Pre-condition for in_stack upvals**: the trace IR has already
-/// emitted `luna_jit_spill_to_stack(d.index, tag, raw)` for every
-/// `d.in_stack == true` upval BEFORE this call, so the underlying
-/// `vm.stack[base + d.index]` holds the trace's current value at
-/// helper time. Without that spill the open upval would point at
-/// a stale entry-tag value.
-///
-/// Returns the raw `Gc<LuaClosure>` ptr as i64 (Value::Closure's
-/// payload). On error (`pending_err` already set) returns 0
-/// sentinel so the dispatcher deopts.
-///
-/// Safety: caller runs under `enter_jit(vm, Some(cl))` guard so
-/// `current_jit_vm()` / `current_jit_closure()` return live
-/// references. `proto_idx` is in-bounds by the emit pre-check.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
-    use luna_core::runtime::function::{INLINE_UPVALS_N, UpvalState, Upvalue};
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let cl = unsafe { current_jit_closure() };
-    let inner = cl.proto.protos[proto_idx as usize];
-    let n_ups = inner.upvals.len();
-    // Determine the caller frame's base for in_stack captures. The
-    // helper runs MID-trace, before any frame writeback — the trace
-    // head's frame is the topmost Lua frame here (S7-B restricts
-    // Op::Closure emit to inline_depth=0 only, so no deeper frame
-    // exists).
-    let base = match vm.jit_last_lua_frame() {
-        Some(f) => f.base,
-        None => {
-            vm.jit.pending_err = Some(vm.rt_err("JIT op_closure: no Lua frame"));
-            return 0;
-        }
-    };
-    // Build the upval slice — small (0..2 typical) so use a stack
-    // array up to INLINE_UPVALS_N like the interp does, else heap.
-    let mut stack_buf: [std::mem::MaybeUninit<luna_core::runtime::Gc<Upvalue>>; INLINE_UPVALS_N] =
-        [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-    let mut heap_buf: Vec<luna_core::runtime::Gc<Upvalue>> = Vec::new();
-    let use_inline = n_ups <= INLINE_UPVALS_N;
-    if !use_inline {
-        heap_buf.reserve_exact(n_ups);
-    }
-    for (i, d) in inner.upvals.iter().enumerate() {
-        let uv = if d.in_stack {
-            // P12-S7-B — `find_or_create_upval` points the open
-            // upval at vm.stack[base + d.index]. The trace IR
-            // emitted a spill before this call, so the slot holds
-            // the right value at capture time.
-            vm.find_or_create_upval(base + d.index as u32)
-        } else {
-            cl.upvals()[d.index as usize]
-        };
-        if use_inline {
-            stack_buf[i] = std::mem::MaybeUninit::new(uv);
-        } else {
-            heap_buf.push(uv);
-        }
-    }
-    let ups: &mut [luna_core::runtime::Gc<Upvalue>] = if use_inline {
-        // SAFETY: first n_ups slots of stack_buf were initialised
-        // by the loop above; we expose exactly that range.
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                stack_buf.as_mut_ptr() as *mut luna_core::runtime::Gc<Upvalue>,
-                n_ups,
-            )
-        }
-    } else {
-        &mut heap_buf[..]
-    };
-    // v51 per-closure `_ENV` clone — matches interp Op::Closure.
-    let v51 = vm.version() <= luna_core::version::LuaVersion::Lua51;
-    if v51 && inner.env_upval_idx != u8::MAX {
-        let i = inner.env_upval_idx as usize;
-        let cur = match ups[i].state() {
-            UpvalState::Open { slot, thread } => vm.read_slot(slot, thread),
-            UpvalState::Closed(v) => v,
-        };
-        ups[i] = vm.heap.new_upvalue(UpvalState::Closed(cur));
-    }
-    let ups_slice: &[luna_core::runtime::Gc<Upvalue>] = ups;
-    let nc = if v51 {
-        vm.heap.new_closure_inline(inner, ups_slice)
-    } else {
-        // PUC 5.2+ getcached: reuse the last LuaClosure built for
-        // this Proto if every upval slot points to the same
-        // Upvalue object (typical for `function() return outer end`
-        // captured inside a hot loop).
-        let cached = inner.cache.get().filter(|c| {
-            c.upvals().len() == ups_slice.len()
-                && c.upvals()
-                    .iter()
-                    .zip(ups_slice.iter())
-                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
-        });
-        match cached {
-            Some(c) => c,
-            None => {
-                let n = vm.heap.new_closure_inline(inner, ups_slice);
-                inner.cache.set(Some(n));
-                n
-            }
-        }
-    };
-    let (_tag, raw) = luna_core::runtime::Value::Closure(nc).unpack();
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    unsafe { raw.zero as i64 }
-}
-
-/// P12-S4-step4b — frame materialization helper.
-///
-/// step4b-B body: walks `metas[0..n]` and pushes one
-/// `CallFrame::Lua` per entry onto `vm.frames` so the interp can
-/// resume at a depth>0 continuation PC after the trace side-exits.
-/// Returns `0` on success, non-zero to force the dispatcher into
-/// the deopt path. The lowerer (step4b-C) will emit the call site
-/// from cmp@d>0 side-exit blocks.
-///
-/// Invariants the caller (lowerer) enforces at compile time:
-/// - All inlined frames are the same `LuaClosure` (self-recursion
-///   only), so `current_jit_closure()` matches every frame's
-///   closure pointer.
-/// - The chain is non-vararg (`!cl.proto.is_vararg`) — helper does
-///   NOT reconstruct the vararg rotation that `push_frame` does.
-/// - Every inlined `Op::Call` has `C == 2` (one return value);
-///   `m.nresults` is therefore always 1. The helper writes whatever
-///   the metadata says, no validation.
-///
-/// Safety:
-/// - Caller runs under an `enter_jit(vm, Some(cl))` guard so
-///   `current_jit_vm()` / `current_jit_closure()` return live
-///   references.
-/// - `metas` points to a valid array of length `n` of
-///   `FrameMaterializeInfo`, alive for the duration of the call —
-///   today it's a pointer into the owning `CompiledTrace.frame_metas`
-///   `Box`, which lives at least as long as the trace's mmap.
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
-    n: u64,
-    metas: *const luna_core::jit::trace::FrameMaterializeInfo,
-) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    // Honour the existing deopt protocol: if any earlier helper in
-    // this JIT entry parked a deopt, don't push frames — the
-    // dispatcher will unwind via the deopt path.
-    if vm.jit.pending_err.is_some() {
-        return -1;
-    }
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let cl = unsafe { current_jit_closure() };
-    let head_frame = match vm.jit_last_lua_frame() {
-        Some(f) => f,
-        // No live Lua frame at trace head — shouldn't happen under
-        // any current dispatcher path, but treat as deopt rather
-        // than panic from the JIT.
-        None => return -1,
-    };
-    let max_stack = cl.proto.max_stack as u32;
-    for i in 0..n as usize {
-        // SAFETY: caller-supplied `metas` points to a valid array of
-        // length `n` per the contract above.
-        let m = unsafe { *metas.add(i) };
-        let new_base = head_frame.base + m.base_offset;
-        vm.jit_ensure_stack((new_base + max_stack) as usize);
-        vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults);
-    }
-    0
-}
-
-/// P11-S5c — `#t` (table length).
-// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
-    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
-        return 0;
-    }
-    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
-        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
-    // P11-S5d.E' — 5.4+ honours __len on tables; the helper bypasses it.
-    // Park a deopt request and let the interpreter compute the length.
-    if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
-        return 0;
-    }
-    g.len()
-}
-
 /// S4 introspection (test-only): number of *Compiled* entries in
-/// this thread's JIT cache (Failed cache slots are excluded so test
+/// the given Vm's JIT cache (Failed cache slots are excluded so test
 /// assertions over "compiled exactly once" don't drift when the
 /// outer chunk's bail also occupies a slot).
-#[cfg(test)]
-pub fn cache_entry_count() -> usize {
-    JIT_CACHE.with(|cell| {
-        cell.borrow()
-            .values()
-            .filter(|e| matches!(e, CacheEntry::Compiled { .. }))
-            .count()
-    })
+///
+/// v2.0 Track J sub-step J-B Phase D — takes `&Vm` since the cache
+/// is now per-`Vm` (was thread-local). Pre-J-B was `#[cfg(test)]` —
+/// lifted to pub so the J-B integration test (external binary, not
+/// cfg(test) from this crate's POV) can probe per-`Vm` cache size
+/// without a downcast. Harmless utility for any embedder.
+pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
+    let storage = vm.jit.storage.as_ref().as_any();
+    let cs = storage
+        .downcast_ref::<storage::CraneliftJitStorage>()
+        .expect("vm storage not CraneliftJitStorage");
+    cs.cache
+        .values()
+        .filter(|e| matches!(e, CacheEntry::Compiled { .. }))
+        .count()
 }
 
-/// S4 introspection (test-only): empty the JIT cache. Used between
-/// tests that want to measure first-compile vs cache-hit behaviour
-/// in isolation.
-#[cfg(test)]
-pub fn cache_clear() {
-    JIT_CACHE.with(|cell| cell.borrow_mut().clear());
-    JIT_CACHE_HANDLES.with(|store| store.borrow_mut().clear());
+/// S4 introspection (test-only): empty the Vm's JIT cache. Used
+/// between tests that want to measure first-compile vs cache-hit
+/// behaviour in isolation.
+///
+/// v2.0 Track J sub-step J-B Phase D — takes `&mut Vm` since the
+/// cache is now per-`Vm` (was thread-local). Pre-J-B was
+/// `#[cfg(test)]` — see [`cache_entry_count`] for the rationale.
+pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
+    let storage = vm.jit.storage.as_mut().as_any_mut();
+    if let Some(cs) = storage.downcast_mut::<storage::CraneliftJitStorage>() {
+        cs.cache.clear();
+        // v2.0 Track J sub-step J-B Phase E — also drop the cached
+        // handles. Dropping each `JitHandle`'s `JITModule` releases
+        // its mmap; tests that call `cache_clear` then re-eval can
+        // observe the fresh compile.
+        cs.cache_handles.clear();
+    }
 }
 
 /// Stable cache key. The `proto.code` bytes + `num_params` +
@@ -1401,6 +551,60 @@ pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::run
 /// rather than always going through the helper's metatable check.
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
+
+/// v2.1 Phase 1I.B — table-field IC scaffold.
+///
+/// Byte offset of the `nodes: Box<[Node]>` field's low fat-pointer
+/// word (the data pointer). luna-core's `runtime::table::jit_layout`
+/// module computes this against the live `Table` struct, then we
+/// re-export it here so trace.rs can refer to it locally.
+///
+/// Fat-pointer layout: `(data_ptr, len)` — the data ptr is at
+/// `TABLE_NODES_PTR_OFFSET`, length at `TABLE_NODES_LEN_OFFSET`
+/// (= `..PTR_OFFSET + 8`). See
+/// `runtime/table.rs::phase_1i_b_node_layout_pinned` for the runtime
+/// assertion that pins this ABI.
+#[allow(dead_code)]
+pub(crate) const TABLE_NODES_PTR_OFFSET: usize =
+    luna_core::runtime::table::jit_layout::TABLE_NODES_OFFSET;
+/// High fat-pointer word — the `len` (in `Node` slots) of the
+/// `nodes: Box<[Node]>`. The IC's shape-stability guard compares
+/// this load against the recorder's cached length.
+#[allow(dead_code)]
+pub(crate) const TABLE_NODES_LEN_OFFSET: usize = TABLE_NODES_PTR_OFFSET + 8;
+/// Within one `Node`, the byte offset of `key: Value`. Value's tag
+/// byte (`#[repr(C, u8)]`) lives at offset 0 of the Value, so the
+/// key's tag is at `NODE_KEY_OFFSET` (= 0) and the key's raw
+/// 8-byte payload at `NODE_KEY_OFFSET + 8`.
+#[allow(dead_code)]
+pub(crate) const NODE_KEY_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_KEY_OFFSET;
+/// Byte offset of `val: Value` within a `Node`. The val's tag is
+/// at `NODE_VAL_OFFSET` (= 16), payload at `NODE_VAL_OFFSET + 8`.
+#[allow(dead_code)]
+pub(crate) const NODE_VAL_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_VAL_OFFSET;
+/// Total `Node` size in bytes — stride for `node_addr = nodes_ptr +
+/// slot_idx * SIZEOF_NODE`.
+#[allow(dead_code)]
+pub(crate) const SIZEOF_NODE: usize = luna_core::runtime::table::jit_layout::SIZEOF_NODE;
+/// Byte offset of the value's tag byte inside the `val: Value` field
+/// of a `Node`. Value is `#[repr(C, u8)]`, discriminant at byte 0.
+#[allow(dead_code)]
+pub(crate) const NODE_VAL_TAG_OFFSET: usize = NODE_VAL_OFFSET;
+/// Byte offset of the value's 8-byte raw payload inside `val: Value`.
+/// 7 bytes of alignment padding sit between the tag and the payload.
+#[allow(dead_code)]
+pub(crate) const NODE_VAL_RAW_OFFSET: usize = NODE_VAL_OFFSET + 8;
+/// Byte offset of the key's 8-byte raw payload inside `key: Value`.
+/// IC's "slot key still matches" guard reads 8 bytes here and
+/// compares against the recorder-cached `Gc<LuaStr>` pointer bits.
+#[allow(dead_code)]
+pub(crate) const NODE_KEY_RAW_OFFSET: usize = NODE_KEY_OFFSET + 8;
+/// Byte offset of the key's tag byte (`#[repr(C, u8)]`). The IC
+/// also guards `key.tag == raw::STR` so a recycled slot that happens
+/// to hold a non-string key with matching raw bits would deopt.
+#[allow(dead_code)]
+pub(crate) const NODE_KEY_TAG_OFFSET: usize = NODE_KEY_OFFSET;
+
 const RAW_TAG_INT: i64 = luna_core::runtime::value::raw::INT as i64;
 const RAW_TAG_FLOAT: i64 = luna_core::runtime::value::raw::FLOAT as i64;
 const RAW_TAG_TABLE: i64 = luna_core::runtime::value::raw::TABLE as i64;
@@ -1549,7 +753,11 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
 
     let ptr = module.get_finalized_function(fn_id);
     Some(JitHandle {
-        _module: module,
+        // v2.0 Track J sub-step J-D — wrap with the `SendJitModule`
+        // sleeve. SAFETY criterion (default `SystemMemoryProvider`) is
+        // satisfied by `build_jit_module_with_helpers` which never
+        // calls `JITBuilder::memory_provider`; see send_jit_module.rs.
+        _module: SendJitModule::new(module),
         entry_raw: ptr,
         num_args: meta.num_args,
         returns_one: meta.returns_one,
@@ -4842,8 +4050,19 @@ fn jmp_target(pc: usize, inst: Inst) -> usize {
 
 /// Owns the JIT module + holds the entry fn ptr alive for the
 /// lifetime of the executable mmap. Drop deallocates the mmap.
+///
+/// v2.0 Track J sub-step J-D — `_module` is typed as
+/// [`SendJitModule`] (J-A's sleeve newtype) so the module's
+/// `Send` story stays type-system-asserted at this field. The
+/// wrapper is a `#[repr(Rust)]` newtype with `Deref<Target = JITModule>`
+/// + `DerefMut`, so existing call sites that touched
+/// `handle._module.<method>` keep working transparently. The wrapper
+/// also gates `Send` for any future container that wants to hold a
+/// `JitHandle`; today the handle itself stays `!Send` because
+/// `entry_raw: *const u8` is `!Send`, but the module sleeve is the
+/// J-A/J-E join point.
 pub struct JitHandle {
-    _module: JITModule,
+    _module: SendJitModule,
     entry_raw: *const u8,
     /// Number of i64 args the entry expects (0..=MAX_JIT_ARITY).
     /// Picks the right `extern "C"` fn-type to transmute to at the
@@ -4867,6 +4086,34 @@ pub struct JitHandle {
     /// `Gc<Table>` raw ptr. Mutually exclusive with `ret_is_float`.
     ret_is_table: bool,
 }
+
+// v2.0 Track J sub-step J-E — sibling of the always-on
+// `unsafe impl Send for TraceHandle` at `trace.rs:2506`. JitHandle
+// holds the same shape: a `SendJitModule` (Send via J-A's wrapper,
+// see `send_jit_module.rs`) plus an `entry_raw: *const u8` raw
+// fn pointer addressing mcode owned by `_module`. The raw pointer
+// is `!Send` by default — this manual impl is the explicit lift.
+//
+// SAFETY: each field is safely Send:
+//   - `_module: SendJitModule` — Send via J-A's `unsafe impl Send
+//     for SendJitModule` (`send_jit_module.rs:65`). luna only
+//     constructs `JITModule` with `SystemMemoryProvider` (Send,
+//     per cranelift-jit's `memory/system.rs:126`).
+//   - `entry_raw: *const u8` — addresses mcode in `_module`'s
+//     mmap'd page. Because `_module` ships with the handle (the
+//     handle owns it by-value), the pointer remains
+//     dereferenceable on whichever thread the handle lands on.
+//     Read-only on the hot path (transmuted to `extern "C"` fn,
+//     called). No aliasing.
+//   - remaining fields are primitive scalars.
+//
+// Cross-thread dispatch is gated separately on the J-D
+// `scoped_jit_vm_rebind` RAII (per-`enter_jit` TLS install +
+// restore), which works on any OS thread because the TLS slot is
+// captured-and-restored at function scope rather than statically
+// pinned. Track J-E ship doc:
+// `.dev/rfcs/v2.0-track-j-e-verdict.md`.
+unsafe impl Send for JitHandle {}
 
 impl JitHandle {
     /// Invoke the entry with zero args. Panics in debug if the
@@ -4912,6 +4159,19 @@ impl JitHandle {
     #[inline]
     pub fn entry_raw(&self) -> *const u8 {
         self.entry_raw
+    }
+
+    /// v2.0 Track J sub-step J-D — `#[doc(hidden)]` accessor returning
+    /// the parked `_module` borrowed at the `SendJitModule` newtype.
+    /// Lets the J-D regression test
+    /// (`tests/j_d_scoped_rebind_and_sleeve.rs`) statically assert the
+    /// field type is the J-A sleeve. The borrow checker enforces the
+    /// type match at this fn's signature — if `_module` ever degrades
+    /// to bare `JITModule` again, this signature stops compiling.
+    #[doc(hidden)]
+    #[inline]
+    pub fn __j_d_module(&self) -> &SendJitModule {
+        &self._module
     }
 
     /// Number of i64 args the entry expects (0..=MAX_JIT_ARITY).
@@ -5137,7 +4397,6 @@ mod s2 {
 
     #[test]
     fn second_call_hits_cached_native() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm
             .load(b"local a = 5; local b = 7; return a + b", b"=t")
@@ -5147,7 +4406,7 @@ mod s2 {
         assert!(matches!(v1.first(), Some(Value::Int(12))));
         assert!(matches!(v2.first(), Some(Value::Int(12))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "one compiled Proto"
         );
@@ -5420,7 +4679,6 @@ mod s2c_b {
     fn multiple_calls_share_cache() {
         // The Proto is compiled once; the second call hits the cached
         // entry without recompiling.
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let v = vm
             .eval(
@@ -5431,7 +4689,7 @@ mod s2c_b {
         // 11 + 21 + 31 = 63
         assert!(matches!(v.first(), Some(Value::Int(63))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "Proto compiled exactly once"
         );
@@ -5517,7 +4775,6 @@ mod s2c_c {
 
     #[test]
     fn recursive_one_compile_per_proto() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let v = vm
             .eval(
@@ -5529,7 +4786,7 @@ mod s2c_c {
             .unwrap();
         assert!(matches!(v.first(), Some(Value::Int(55))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "fib's Proto compiled exactly once"
         );
@@ -5544,7 +4801,6 @@ mod s2c_c_perf_check {
 
     #[test]
     fn fib28_bench_source_flips_proto_to_compiled() {
-        crate::jit_backend::cache_clear();
         let src = "local function f(n) \
                      if n < 2 then return n end \
                      return f(n - 1) + f(n - 2) \
@@ -5554,7 +4810,7 @@ mod s2c_c_perf_check {
         let v = vm.eval(src).unwrap();
         assert!(matches!(v.first(), Some(Value::Int(317811))));
         assert_eq!(
-            crate::jit_backend::cache_entry_count(),
+            crate::jit_backend::cache_entry_count(&vm),
             1,
             "fib's Proto should compile exactly once",
         );
@@ -5701,14 +4957,13 @@ mod s3 {
     /// hash, the second proto inherited the first's compiled constant.
     #[test]
     fn cache_key_includes_consts() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let v1 = vm.eval("return 1.5").unwrap();
         assert!(matches!(v1.first(), Some(&Value::Float(f)) if f == 1.5));
         let v2 = vm.eval("return 2.5").unwrap();
         assert!(matches!(v2.first(), Some(&Value::Float(f)) if f == 2.5));
         // Two distinct compiled protos, two cache entries.
-        assert_eq!(crate::jit_backend::cache_entry_count(), 2);
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm), 2);
     }
 
     /// 5.4 Division `a / b` always yields a Float in PUC semantics.
@@ -5843,7 +5098,6 @@ mod s5a {
     #[test]
     fn cache_pre53_post53_distinct() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 100 do s = s + i end return s";
 
         let mut vm55 = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5864,8 +5118,15 @@ mod s5a {
         ));
         assert!(matches!(r53.first(), Some(&Value::Int(5050))));
 
-        // Two cache slots, not one — same source, distinct dialect.
-        assert_eq!(crate::jit_backend::cache_entry_count(), 2);
+        // v2.0 Track J sub-step J-B Phase D — cache is per-`Vm` now,
+        // so each Vm carries exactly one entry for its own dialect.
+        // Pre-J-B this asserted `cache_entry_count() == 2` over the
+        // thread-local cache (both Vms shared the cross-Vm cache and
+        // their distinct dialect bit produced two entries). The
+        // dialect-distinguishing invariant under test is preserved by
+        // asserting each Vm cached its own version exactly once.
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm55), 1);
+        assert_eq!(crate::jit_backend::cache_entry_count(&vm53), 1);
     }
 
     /// A non-immediate step bails out — variable `local step = 2;
@@ -5955,7 +5216,6 @@ mod s5a_b {
     #[test]
     fn loop_int_1m_5_3_jit_state_compiled() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6051,7 +5311,6 @@ mod s5a_c {
     #[test]
     fn loop_int_1m_5_1_jit_state_compiled() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua51);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6066,7 +5325,6 @@ mod s5a_c {
     #[test]
     fn loop_int_1m_5_5_still_jit_int_path() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6165,7 +5423,6 @@ mod s5b {
     /// the result matches `f64::sin` over the same integer range.
     #[test]
     fn math_sin_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let _ = interp_only_float_with;
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.sin(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
@@ -6185,7 +5442,6 @@ mod s5b {
     /// and cos chunks no longer collide).
     #[test]
     fn math_cos_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=100).map(|i| (i as f64).cos()).sum();
@@ -6203,7 +5459,6 @@ mod s5b {
     /// abort compile.
     #[test]
     fn math_sin_cos_product_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 1000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=1000)
@@ -6220,7 +5475,6 @@ mod s5b {
     /// tolerance on 5.5.
     #[test]
     fn math_loop_100k_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
@@ -6241,7 +5495,6 @@ mod s5b {
     /// math fold combination compiles.
     #[test]
     fn math_loop_100k_5_4_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua54, src);
@@ -6255,7 +5508,6 @@ mod s5b {
     /// distinguishes from 5.5's slot.
     #[test]
     fn math_loop_100k_5_3_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua53, src);
@@ -6270,7 +5522,6 @@ mod s5b {
     /// already Float).
     #[test]
     fn math_loop_100k_5_2_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua52, src);
@@ -6284,7 +5535,6 @@ mod s5b {
     /// Float fork in the ForPrep/ForLoop scanner.
     #[test]
     fn math_loop_100k_5_1_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src =
             "local s = 0.0 for i = 1, 100000 do s = s + math.sin(i) * math.cos(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua51, src);
@@ -6298,19 +5548,22 @@ mod s5b {
     /// `math.sin` and `math.cos` chunks land in distinct cache slots
     /// even though their bytecode shape is identical bar the `C`
     /// operand of GetField.
+    ///
+    /// v2.0 Track J sub-step J-B Phase D — refactored to one Vm
+    /// (cache is per-`Vm` now). The invariant under test (distinct
+    /// libcall name → distinct slot) is preserved by asserting the
+    /// cache grew from 1 (after sin) to 2 (after cos) in the same Vm.
     #[test]
     fn math_libcall_distinct_fns_distinct_cache() {
-        crate::jit_backend::cache_clear();
-        let _ = eval_float_with(
-            LuaVersion::Lua55,
-            "local s = 0.0 for i = 1, 4 do s = s + math.sin(i) end return s",
-        );
-        let n_after_sin = crate::jit_backend::cache_entry_count();
-        let _ = eval_float_with(
-            LuaVersion::Lua55,
-            "local s = 0.0 for i = 1, 4 do s = s + math.cos(i) end return s",
-        );
-        let n_after_cos = crate::jit_backend::cache_entry_count();
+        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
+        let _ = vm
+            .eval("local s = 0.0 for i = 1, 4 do s = s + math.sin(i) end return s")
+            .expect("sin eval");
+        let n_after_sin = crate::jit_backend::cache_entry_count(&vm);
+        let _ = vm
+            .eval("local s = 0.0 for i = 1, 4 do s = s + math.cos(i) end return s")
+            .expect("cos eval");
+        let n_after_cos = crate::jit_backend::cache_entry_count(&vm);
         assert!(
             n_after_cos > n_after_sin,
             "sin/cos chunks must hash to distinct cache slots (sin={n_after_sin} cos={n_after_cos})"
@@ -6321,7 +5574,6 @@ mod s5b {
     /// set. Result matches `f64::sqrt`.
     #[test]
     fn math_sqrt_5_5_matches_libm() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.sqrt(i) end return s";
         let r_jit = eval_float_with(LuaVersion::Lua55, src);
         let r_ref: f64 = (1..=100).map(|i| (i as f64).sqrt()).sum();
@@ -6333,7 +5585,6 @@ mod s5b {
     /// fold pre-scan rejects it and the chunk falls back to interp.
     #[test]
     fn math_constant_access_bails_to_interp() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 4 do s = s + math.pi end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6352,7 +5603,6 @@ mod s5b {
     /// has B=3, the fold pre-scan rejects it.
     #[test]
     fn math_two_arg_atan_bails() {
-        crate::jit_backend::cache_clear();
         let src = "local s = 0.0 for i = 1, 4 do s = s + math.atan(i, 2) end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6392,7 +5642,6 @@ mod s5c {
     /// path runs end-to-end on the active Vm.
     #[test]
     fn table_alloc_10_matches_interpreter_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6405,7 +5654,6 @@ mod s5c {
     /// Headline cell at full N=10 000. Pinned `JitProtoState`.
     #[test]
     fn table_alloc_10k_5_5_jit_state_compiled() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 10000 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6418,7 +5666,6 @@ mod s5c {
     /// SetTable values).
     #[test]
     fn table_alloc_10k_5_4_matches_interpreter() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua54,
@@ -6431,7 +5678,6 @@ mod s5c {
     /// 5.3 dialect — pre53 ForPrep + Int loop var.
     #[test]
     fn table_alloc_10k_5_3_matches_interpreter() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua53,
@@ -6446,7 +5692,6 @@ mod s5c {
     /// must come back as 100.
     #[test]
     fn table_get_int_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6460,7 +5705,6 @@ mod s5c {
     /// interpreter's `len()`.
     #[test]
     fn table_len_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6494,7 +5738,6 @@ mod s5c {
     }
 
     fn table_alloc_10k_jit_compiles_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 10000 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(ver);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6511,7 +5754,6 @@ mod s5c {
     /// requires R[B] to be Int/Float (numeric loop var Move).
     #[test]
     fn table_with_string_key_bails() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} t['a'] = 1 return t['a']";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6526,7 +5768,6 @@ mod s5c {
     /// both ops are whitelisted.
     #[test]
     fn presized_newtable_now_jits() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {10, 20, 30} return t[2]";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6563,7 +5804,6 @@ mod s5c_b {
     /// returns the correct length after pre-sized fill.
     #[test]
     fn table_alloc_10k_5_5_presized() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 10000 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6576,7 +5816,6 @@ mod s5c_b {
     /// from the LoadI limit window.
     #[test]
     fn table_alloc_10k_5_4_presized() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua54,
@@ -6591,7 +5830,6 @@ mod s5c_b {
     /// agnostic.
     #[test]
     fn table_alloc_10k_5_3_presized() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua53,
@@ -6605,7 +5843,6 @@ mod s5c_b {
     /// in `sbx`, but a larger limit exercises the `LoadK` arm).
     #[test]
     fn table_alloc_loadk_limit_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local t = {} for i = 1, 65536 do t[i] = i end return #t";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
@@ -6618,7 +5855,6 @@ mod s5c_b {
     /// tables. Result and JIT state both pin.
     #[test]
     fn table_alloc_4_small_presize() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6633,7 +5869,6 @@ mod s5c_b {
     /// the non-sized helper. Correctness unaffected.
     #[test]
     fn step_ne_1_falls_back_to_empty_helper() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6654,7 +5889,6 @@ mod s5c_b {
     /// fail the assertion; the only way to hit `36` is correct.
     #[test]
     fn inline_aset_payload_round_trip_5_5() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua55,
@@ -6672,7 +5906,6 @@ mod s5c_b {
     /// branch than 5.5 while still hitting the inline aset path.
     #[test]
     fn inline_aset_payload_round_trip_5_3() {
-        crate::jit_backend::cache_clear();
         assert_eq!(
             eval_int_with(
                 LuaVersion::Lua53,
@@ -6704,7 +5937,6 @@ mod s5d_a {
     #[test]
     fn table_param_int_return_round_trip_5_5() {
         use luna_core::runtime::function::JitProtoState;
-        crate::jit_backend::cache_clear();
         // Build f's Proto via a chunk that returns the function so we
         // can poke its JIT state. The outer chunk bails (Op::Closure
         // isn't whitelisted); the inner Proto is what we're after.
@@ -6736,7 +5968,6 @@ mod s5d_a {
     /// `function f(t) return #t end` — same shape, Len op.
     #[test]
     fn table_param_len_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function f(t) return #t end
                    local t = {} t[1] = 1 t[2] = 1 t[3] = 1 return f(t)";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -6771,7 +6002,6 @@ mod s5d_b {
     /// b=3 + LoadI×3 + SetList b=3 + Return1.
     #[test]
     fn newtable_b3_setlist_int_5_5() {
-        crate::jit_backend::cache_clear();
         let src = b"local function f() return {10, 20, 30} end return f";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src, b"=t").expect("compile");
@@ -6799,7 +6029,6 @@ mod s5d_b {
     /// in concert with the SetList that built it.
     #[test]
     fn setlist_then_geti_round_trip_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function get(t, i) return t[i] end
                    local function make() return {7, 11, 13} end
                    return get(make(), 2)";
@@ -6815,7 +6044,6 @@ mod s5d_b {
     /// the binary_trees `make` Proto carries (that's S5d.C).
     #[test]
     fn conditional_both_branches_new_table_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function f(flag)
                      if flag == 1 then return {1, 2}
                      else return {3, 4} end
@@ -6838,7 +6066,6 @@ mod s5d_b {
     /// interpreter would.
     #[test]
     fn make_proto_5_5_round_trip() {
-        crate::jit_backend::cache_clear();
         let src = "local function make(d)
                      if d == 0 then return {1, 1}
                      else return {make(d-1), make(d-1)} end
@@ -6854,7 +6081,6 @@ mod s5d_b {
     /// both JIT'd, sum across 16 trees of depth 10 matches interp.
     #[test]
     fn binary_trees_n10_round_trip_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function make(d)
                      if d == 0 then return {1, 1}
                      else return {make(d-1), make(d-1)} end
@@ -6882,7 +6108,6 @@ mod s5d_b {
     /// writer pinned; emit-side `use_var` callers for Table
     /// operands bitcast F64→I64 when the slot is Float-declared.
     fn make_proto_jit_compiles_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = b"local function make(d)
                      if d == 0 then return {1, 1}
                      else return {make(d-1), make(d-1)} end
@@ -6921,7 +6146,6 @@ mod s5d_b {
     /// `{nil, nil}` as the leaf node. LoadNil + SetList must
     /// JIT-compile so `make` stops bailing across all dialects.
     fn make_nil_proto_jit_compiles_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = b"local function make(d)
                      if d == 0 then return {nil, nil}
                      else return {make(d-1), make(d-1)} end
@@ -6972,7 +6196,6 @@ mod s5d_b {
     /// real Nil.
     #[test]
     fn return_nil_does_not_miscompile_5_5() {
-        crate::jit_backend::cache_clear();
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let r = vm
             .eval("local function f() return nil end return f()")
@@ -6989,7 +6212,6 @@ mod s5d_b {
     /// re-use conflict — all kind unifications converge cleanly.
     #[test]
     fn check_proto_jit_compiles_5_5() {
-        crate::jit_backend::cache_clear();
         let src = "local function check(t)
                      if t[1] == 1 then return 1 end
                      return 1 + check(t[1]) + check(t[2])
@@ -7012,7 +6234,6 @@ mod s5d_b {
     /// value; the assertion is that the Proto reaches the
     /// Compiled state at all.
     fn get_table_simple_jit_for_version(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = b"local function get(t, k) return t[k] end
                    return get";
         let mut vm = crate::jit_backend::test_vm_new(ver);
@@ -7057,7 +6278,6 @@ mod s5d_b {
     /// (no GetI). Reaches `JitProtoState::Compiled` once S5d.E'
     /// whitelists GetTable.
     fn check_proto_jit_compiles_pre53(ver: LuaVersion) {
-        crate::jit_backend::cache_clear();
         let src = "local function check(t)
                      if t[1] == 1 then return 1 end
                      return 1 + check(t[1]) + check(t[2])
@@ -7102,13 +6322,17 @@ mod s5d_b {
 pub struct CraneliftBackend;
 
 impl IntChunkCompiler for CraneliftBackend {
+    // v2.0 Track J sub-step J-B Phases D/E — pass storage through to
+    // `cache_lookup_or_compile`; the cache lookup + handle park both
+    // operate on `Vm.jit.storage.{cache,cache_handles}`.
     fn try_compile(
         &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
         proto: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
         pre53: bool,
         float_only: bool,
     ) -> CompileResult {
-        match cache_lookup_or_compile(proto, pre53, float_only) {
+        match cache_lookup_or_compile(storage, proto, pre53, float_only) {
             Some((
                 entry,
                 num_args,
@@ -7150,12 +6374,16 @@ impl IntChunkCompiler for CraneliftBackend {
 }
 
 impl TraceCompiler for CraneliftBackend {
+    // v2.0 Track J sub-step J-B Phase F — pass storage through so
+    // `try_compile_trace_with_options` parks the trace's `JITModule`
+    // on the per-`Vm` `storage.trace_handles` Vec.
     fn try_compile_trace(
         &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        trace::try_compile_trace_with_options(record, opts)
+        trace::try_compile_trace_with_options(storage, record, opts)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
