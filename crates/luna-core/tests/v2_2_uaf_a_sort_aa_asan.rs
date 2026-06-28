@@ -17,13 +17,10 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
-/// Ignored on Linux until v2.2 Phase 1.B closes the residual gc_roots
-/// gap. macOS / Apple-malloc currently passes; Docker linux/amd64
-/// SIGSEGV's with the in-tree Phase 1.A fix (slot 84 is past both
-/// `live_top` and `self.top` at safe-point GC inside the loaded fn).
-/// The ASAN nightly job runs this explicitly via `--include-ignored`.
-/// See `.dev/known-bugs/sort-aa-load-collectgarbage-segv-uaf-a-partial.md`.
-#[cfg_attr(any(target_os = "linux", target_os = "windows"), ignore)]
+/// v2.3 P1B-D: the cfg-gated `#[ignore]` is gone — the underlying
+/// UAF-A/C is closed by `finish_results` slot-clear discipline in
+/// v2.3. Runs unconditionally on all platforms now.
+/// See `.dev/known-bugs/fixed/sort-aa-load-collectgarbage-segv-uaf-a.md`.
 #[test]
 fn sort_lua_full_file_under_assert_wrapper() {
     const PREAMBLE: &[u8] = b"do _G.__luna_assert_total=0 _G.__luna_assert_hit=0 _G.assert=function(v,msg,...) _G.__luna_assert_total=_G.__luna_assert_total+1 if v then _G.__luna_assert_hit=_G.__luna_assert_hit+1 return v,msg,... end if msg==nil then msg='assertion failed!' end error(msg,2) end end ";
