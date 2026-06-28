@@ -42,7 +42,13 @@ jobs:
         # to the CI log so a process-level abort (SIGSEGV / SIGILL / signal:
         # N) leaves the `[official_run] starting Lua5X/file.lua` trail
         # visible — without it, cargo test buffers per-test output and a
-        # hard abort drops the buffer.
+        # hard abort drops the buffer. RUST_BACKTRACE=full prints the
+        # panic stack so we can see WHICH builtin returned to the
+        # corrupted self.stack when sort.lua trips the Linux glibc heap
+        # corruption pattern (`nat_return` sentinel panic with
+        # pointer-sized `len` field).
+        env:
+          RUST_BACKTRACE: full
         run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
