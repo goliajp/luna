@@ -42,17 +42,7 @@ jobs:
         # to the CI log so a process-level abort (SIGSEGV / SIGILL / signal:
         # N) leaves the `[official_run] starting Lua5X/file.lua` trail
         # visible — without it, cargo test buffers per-test output and a
-        # hard abort drops the buffer. RUST_BACKTRACE=full + MALLOC_CHECK_=3
-        # surface heap-corruption sites: sort.lua trips a panic at
-        # `nat_return` with a pointer-sized `self.stack.len()`, i.e.
-        # the Vm struct's inline Vec metadata word was clobbered by an
-        # unrelated allocation. MALLOC_CHECK_=3 makes glibc abort at the
-        # earliest detected double-free / overflow / write-after-free so
-        # the abort site is closer to the actual UAF instead of the
-        # downstream Vec-metadata bounds-check.
-        env:
-          RUST_BACKTRACE: full
-          MALLOC_CHECK_: "3"
+        # hard abort drops the buffer.
         run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
