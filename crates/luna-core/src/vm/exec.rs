@@ -2648,7 +2648,18 @@ impl Vm {
         if !self.heap.gc_due() {
             return;
         }
-        self.gc_top = live_top;
+        // v2.2 UAF-A fix: the historical `gc_top = live_top` narrowed
+        // past slots that prior bytecode left holding Gc-bearing
+        // Values (slots are never auto-cleared on frame pop, only
+        // overwritten). The narrow GC swept the closure, the slot
+        // kept the stale `Value::Closure`, and a later wider GC
+        // OOB'd in `Marker::header`. Use `max(live_top, self.top)`
+        // — `self.top` is the multi-result top maintained across
+        // calls/returns, so it leads the live frontier closely
+        // enough to cover stale closure refs without over-rooting
+        // the whole `Vec` (which broke gc.lua / db.lua weak-table
+        // semantics).
+        self.gc_top = live_top.max(self.top);
         // PUC stepmul: % of allocation rate. Higher = more GC work per
         // safe-point (lower memory, more CPU). Default 100 = `live / 4` per
         // step (~4 safe-points per cycle). stepmul=200 → `live / 2`, etc.
@@ -5533,9 +5544,19 @@ impl Vm {
                     // by short-lived frames, intermediate strings). Only
                     // disarm + raise if the cap is still breached after
                     // collection. PUC's `LUA_GCEMERGENCY` path matches.
-                    // gc_top must include `self.top` so the running frame's
-                    // live locals (e.g. a growing table) are not freed.
-                    self.gc_top = self.top;
+                    //
+                    // v2.2 UAF-B fix: the historical `gc_top = self.top`
+                    // under-rooted a Lua-level `a[i] = i` loop's `a`
+                    // table — `a` sits at a slot above the multi-result
+                    // `self.top`, so cap-fire collect swept `a`'s
+                    // internal buckets and the next bytecode read them
+                    // → heap-use-after-free in `Table::try_set_existing`.
+                    // Use `self.stack.len()` here (full over-root) — the
+                    // cap-fire path is rare + a memory cap takes priority
+                    // over weak-table precision (the fire-once semantics
+                    // means a wrong-collected weak ref is recoverable;
+                    // a UAF in a table mutation is not).
+                    self.gc_top = self.stack.len() as u32;
                     self.collect_garbage();
                     if self.heap.bytes() > cap {
                         self.heap.mem_cap = None;

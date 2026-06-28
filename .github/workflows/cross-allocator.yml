@@ -1,0 +1,100 @@
+# v2.2 Phase 4 (CA) — cross-allocator matrix.
+#
+# The v2.1 → v2.2 UAFs were both Linux-glibc-only — macOS
+# (Apple-malloc) and Linux + jemalloc passed the same Lua test.
+# Different allocators expose different UAF shapes because their
+# free-list / quarantine / coalescing behavior decides whether a
+# freed object's bytes get reused for an adjacent-sized
+# allocation vs sit quarantined.
+#
+# Approach: LD_PRELOAD-swap the global allocator under each
+# matrix entry, run the full official_run + the v2.2 sprint's
+# regression tests. No code change in luna-* crates: keeps the
+# 0-third-party-dep luna-core contract intact. Each allocator is
+# system-installed via apt-get; the LD_PRELOAD wire-up replaces
+# `malloc` / `free` / etc. for the cargo-test child process.
+#
+# Why this catches things ASAN doesn't: ASAN's quarantine model
+# is uniform (not glibc / jemalloc / mimalloc shapes), so a UAF
+# that surfaces under glibc but is silently masked under jemalloc
+# would still pass ASAN. Running the actual production allocators
+# end-to-end is the only way to catch this class.
+
+name: cross-allocator
+
+on:
+  schedule:
+    # Nightly at 05:00 UTC — staggered after asan.yml (03:00) +
+    # miri.yml (04:00) so the runners aren't queued behind each
+    # other.
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+jobs:
+  cross-allocator:
+    name: ${{ matrix.allocator }} (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [glibc, jemalloc, mimalloc]
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+      CI: 1  # Match the CI byte-strip sort.lua AA gate in
+             # official_run.rs (Phase 1.B residual).
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install allocator library
+        run: |
+          case "${{ matrix.allocator }}" in
+            glibc)
+              # Default. No-op.
+              ;;
+            jemalloc)
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq libjemalloc2
+              echo "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2" >> "$GITHUB_ENV"
+              ;;
+            mimalloc)
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq libmimalloc2.0
+              echo "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libmimalloc.so.2" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Show active allocator
+        run: |
+          echo "matrix=${{ matrix.allocator }}"
+          echo "LD_PRELOAD=$LD_PRELOAD"
+          # Confirm preload is plumbed: a tiny C program runs malloc
+          # and we check via mallinfo or symbol export. Cheaper:
+          # invoke `LD_DEBUG=libs ls` and grep for the lib.
+          if [[ -n "$LD_PRELOAD" ]]; then
+            LD_DEBUG=libs ls /dev/null 2>&1 | grep -E "(jemalloc|mimalloc)" | head -3 || true
+          fi
+
+      - name: cargo build --workspace
+        run: cargo build --workspace --all-targets
+
+      - name: cargo test --workspace --release (official_run + regressions)
+        # Cap the scope to luna-core for the matrix (where the UAFs
+        # surfaced); other crates can move into a follow-up matrix
+        # entry once the per-allocator baseline is established. The
+        # official_run integration test exercises the full PUC
+        # suite per dialect, which is the broadest end-to-end
+        # signal we have.
+        run: |
+          cargo test --release -p luna-core \
+            --test official_run \
+            --test toomanyidx_memory_cap \
+            --test sort_gc_during_compare \
+            --test cb_edge_gc_finalizer \
+            --test host_roots_slot_recycling \
+            -- --nocapture
