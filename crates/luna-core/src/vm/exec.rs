@@ -2726,6 +2726,16 @@ impl Vm {
         for buf in &self.sort_scratch {
             roots.extend_from_slice(buf);
         }
+        // v2.1 — the running-natives chain holds Gc<NativeClosure>s
+        // mid-execution. Without rooting them here, a `collectgarbage()`
+        // invoked inside the running native (sort.lua AA `load(..)();
+        // collectgarbage()` compare callback regression) sweeps the
+        // closure that's actively executing, leaving `nc.upvals`
+        // dangling and the Rust local `nc` pointing at recycled memory
+        // — the SIGSEGV pops on the very next field access or pop.
+        for &nc in &self.running_natives {
+            roots.push(Value::Native(nc));
+        }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
         if let Some(h) = self.hook.func {
@@ -9007,33 +9017,6 @@ impl Vm {
     /// (analogous to pushing N values then `return N` from a C function).
     /// Public so embedders can author their own natives.
     pub fn nat_return(&mut self, func_slot: u32, vals: &[Value]) -> u32 {
-        // v2.1 — guard against the Linux glibc heap-corruption pattern
-        // first surfaced by sort.lua under CI: an upstream UAF clobbers
-        // `self.stack`'s Vec metadata word so `len` becomes a pointer
-        // value, the resize check below sees "enough room" against a
-        // sentinel-sized length, and the index write below blows up with
-        // an indistinguishable "len is huge, index is huge" panic that
-        // hides the real call site. Fail loud at the boundary so the
-        // CI log captures stack/vals/func_slot diagnostics first. Only
-        // meaningful on 64-bit targets — on 32-bit (wasm) `usize` can't
-        // hold a sentinel pointer value anyway.
-        #[cfg(target_pointer_width = "64")]
-        {
-            let len = self.stack.len();
-            if len > (1usize << 40) {
-                eprintln!(
-                    "[nat_return] stack metadata corruption: func_slot={} vals.len={} stack.len={:#x} stack.cap={:#x} stack.ptr={:p} top={} gc_top={}",
-                    func_slot,
-                    vals.len(),
-                    len,
-                    self.stack.capacity(),
-                    self.stack.as_ptr(),
-                    self.top,
-                    self.gc_top,
-                );
-                std::process::abort();
-            }
-        }
         let need = func_slot as usize + vals.len();
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
