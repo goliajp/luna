@@ -9014,20 +9014,25 @@ impl Vm {
         // sentinel-sized length, and the index write below blows up with
         // an indistinguishable "len is huge, index is huge" panic that
         // hides the real call site. Fail loud at the boundary so the
-        // CI log captures stack/vals/func_slot diagnostics first.
-        let len = self.stack.len();
-        if len > (1usize << 40) {
-            eprintln!(
-                "[nat_return] stack metadata corruption: func_slot={} vals.len={} stack.len={:#x} stack.cap={:#x} stack.ptr={:p} top={} gc_top={}",
-                func_slot,
-                vals.len(),
-                len,
-                self.stack.capacity(),
-                self.stack.as_ptr(),
-                self.top,
-                self.gc_top,
-            );
-            std::process::abort();
+        // CI log captures stack/vals/func_slot diagnostics first. Only
+        // meaningful on 64-bit targets — on 32-bit (wasm) `usize` can't
+        // hold a sentinel pointer value anyway.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let len = self.stack.len();
+            if len > (1usize << 40) {
+                eprintln!(
+                    "[nat_return] stack metadata corruption: func_slot={} vals.len={} stack.len={:#x} stack.cap={:#x} stack.ptr={:p} top={} gc_top={}",
+                    func_slot,
+                    vals.len(),
+                    len,
+                    self.stack.capacity(),
+                    self.stack.as_ptr(),
+                    self.top,
+                    self.gc_top,
+                );
+                std::process::abort();
+            }
         }
         let need = func_slot as usize + vals.len();
         if self.stack.len() < need {
