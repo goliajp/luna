@@ -1,0 +1,70 @@
+# v2.2 Phase 3 (MI) — Miri nightly CI.
+#
+# Miri = stricter than ASAN: catches UB (uninitialized reads,
+# aliasing violations, integer overflow under SB/TB models) +
+# leaks. Way slower (10-100× wall-clock vs ASAN, which is itself
+# slower than vanilla `cargo test`). Nightly-only.
+#
+# Scope is intentionally narrow (luna-core --lib only at first):
+# - JIT / AOT crates use Cranelift / inkwell which call into
+#   native code that Miri can't model.
+# - I/O tests (popen, files.lua) hit syscalls Miri doesn't
+#   shim.
+# - Integration tests that fork/exec processes (db.lua) won't
+#   run under Miri.
+#
+# v2.2.1 expands per MI-D as Miri-compatibility of each
+# integration test is established + the incompatible ones get
+# explicit `#[cfg_attr(miri, ignore)]` gates with citation
+# comments (MI-C).
+#
+# See v2.x-test-infra-charter.md §2.1 for the Miri-as-mandatory
+# decision; this workflow is the runtime gate.
+
+name: miri
+
+on:
+  schedule:
+    # Nightly at 04:00 UTC — staggered after asan.yml (03:00) so
+    # the runners aren't queued behind each other.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  miri:
+    name: Miri (nightly)
+    runs-on: ubuntu-latest
+    # 4h budget per charter §MI-A.2. Miri's stack-borrow model
+    # makes some loops O(N²) — keep a generous ceiling.
+    timeout-minutes: 240
+    env:
+      # Strict Stacked Borrows (more aggressive UB detection
+      # than the default Tree Borrows). luna-core's `Gc<T> =
+      # NonNull<T>` over an intrusive heap is the place Miri
+      # is most likely to catch a bug — opt into the strictest
+      # model so we hear about violations early.
+      MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-disable-isolation
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install nightly + miri
+        run: |
+          rustup toolchain install nightly --profile minimal --component miri
+          cargo +nightly miri setup
+          rustc +nightly --version
+          cargo +nightly miri --version
+
+      - name: Miri — luna-core --lib (no default features)
+        # `--no-default-features` keeps the run focused on the
+        # 0-third-party-dep core. Send feature opt-in (B12 host
+        # roots Arc<RwLock<Vm>>) lands in a separate matrix
+        # entry once MI-C closes that surface's Miri compat.
+        run: |
+          cargo +nightly miri test \
+            -p luna-core --lib \
+            --no-default-features \
+            -- --nocapture
