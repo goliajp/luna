@@ -256,30 +256,11 @@ const SUITES: &[Suite] = &[
 ];
 
 fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
-    // v2.2 Phase 1.B residual: gc.lua's weak-table + step-GC stress
-    // intermittently STATUS_ACCESS_VIOLATION's on windows-latest under
-    // the v2.2 Phase 1.A `gc_top = max(live_top, self.top)` tightening
-    // — the same gc_top under-coverage family as sort.lua AA, but
-    // surfacing on Windows allocator timing instead of Linux glibc.
-    // The full close (per-frame `[base, base + max_stack)` gc_roots
-    // walk or slot-clear on `Op::Return*`) lands in v2.2.1; both
-    // sort.lua AA and gc.lua share the same Phase 1.B fix. Skip on
-    // Windows-CI to unblock the v2.2.0 ship; Linux + macOS still
-    // exercise gc.lua unmodified.
-    if std::env::var_os("CI").is_some()
-        && cfg!(target_os = "windows")
-        && matches!(name, "gc.lua" | "gengc.lua" | "tracegc.lua")
-    {
-        return FileCoverage {
-            version,
-            file: name.to_string(),
-            total: 0,
-            hit: 0,
-            error: None,
-            wrapper_skipped: true,
-        };
-    }
-    // cwd is the suite dir (set by the caller) so require's ./?.lua finds siblings
+    // cwd is the suite dir (set by the caller) so require's ./?.lua finds siblings.
+    // v2.3 P1B-D: the v2.2.0 sort.lua byte-strip + gc.lua/gengc.lua/
+    // tracegc.lua Windows-CI skip are gone — both were workarounds for
+    // the UAF-A/C family closed in v2.3 by `finish_results` slot-clear.
+    // See `.dev/known-bugs/fixed/sort-aa-load-collectgarbage-segv-uaf-a.md`.
     let raw = match std::fs::read(name) {
         Ok(b) => b,
         Err(e) => {
@@ -295,68 +276,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     };
     // File chunks get the same BOM/shebang strip PUC's `luaL_loadfilex` applies.
     let stripped = luna_core::frontend::lexer::Lexer::strip_shebang_bom(&raw);
-    // v2.2 UAF-A.1 partial close: the `gc_top = max(live_top, self.top)`
-    // tightening in `Vm::maybe_collect_garbage` covers most of the
-    // stranded-stale-Closure cases this byte-strip used to gate, but
-    // not all — Docker linux/amd64 still hits the sort.lua AA pattern
-    // because slot 84 is past both fronts at the moment of safe-point
-    // GC. Full UAF-A.2 close lands in v2.2.1 with a per-frame [base,
-    // top) gc_roots walk (or slot-clear on Op::Return). Keep the CI
-    // gate until then; macOS doesn't reproduce so local dev still
-    // exercises the section.
-    // See `.dev/known-bugs/sort-aa-load-collectgarbage-segv.md`.
-    let ci_flag = std::env::var_os("CI").is_some();
-    let stripped: Vec<u8> = if matches!(name, "sort.lua") && ci_flag {
-        let needle: &[u8] = b"collectgarbage()";
-        let ret_a: &[u8] = b"return x<y";
-        let ret_b: &[u8] = b"return x < y";
-        fn rfind_bytes(hay: &[u8], pat: &[u8]) -> Option<usize> {
-            if pat.len() > hay.len() {
-                return None;
-            }
-            (0..=hay.len() - pat.len())
-                .rev()
-                .find(|&i| &hay[i..i + pat.len()] == pat)
-        }
-        fn find_bytes(hay: &[u8], pat: &[u8]) -> Option<usize> {
-            if pat.len() > hay.len() {
-                return None;
-            }
-            (0..=hay.len() - pat.len()).find(|&i| &hay[i..i + pat.len()] == pat)
-        }
-        let mut start_opt: Option<usize> = None;
-        let mut cut_end_opt: Option<usize> = None;
-        let mut search = 0usize;
-        while let Some(rel) = find_bytes(&stripped[search..], needle) {
-            let abs = search + rel;
-            let after = abs + needle.len();
-            let tail_start = stripped[after..]
-                .iter()
-                .position(|&b| !b.is_ascii_whitespace())
-                .map(|p| after + p)
-                .unwrap_or(stripped.len());
-            let tail = &stripped[tail_start..];
-            if tail.starts_with(ret_a) || tail.starts_with(ret_b) {
-                start_opt = rfind_bytes(&stripped[..abs], b"table.sort");
-                cut_end_opt =
-                    find_bytes(&stripped[abs..], b"end)").map(|r| abs + r + b"end)".len());
-                break;
-            }
-            search = after;
-        }
-        if let (Some(start), Some(cut_end)) = (start_opt, cut_end_opt) {
-            let mut out = Vec::with_capacity(stripped.len());
-            out.extend_from_slice(&stripped[..start]);
-            out.extend_from_slice(b"-- [luna v2.2 CI skip: sort compare with collectgarbage, see .dev/known-bugs/sort-aa-load-collectgarbage-segv.md] ");
-            out.extend_from_slice(&stripped[cut_end..]);
-            out
-        } else {
-            stripped.to_vec()
-        }
-    } else {
-        stripped.to_vec()
-    };
-    let stripped = stripped.as_slice();
+    let stripped = stripped.as_ref();
     // 5.1 main.lua never grew the `if _port then return end` sentinel that 5.2+
     // added at the top of their main.lua, so just setting `_port=true` in the
     // env doesn't short-circuit the chunk. Inject the same guard the later
