@@ -1,0 +1,144 @@
+# v2.2 Phase 2 (AS) — AddressSanitizer nightly CI.
+#
+# Catches heap-use-after-free + heap-buffer-overflow + double-free
+# at write/read time instead of at the downstream symptom that
+# `cargo test --release` exposes (the v2.1 sort.lua AA + v2.2
+# toomanyidx_memory_cap UAFs both showed this pattern: a real UAF
+# in the GC root path surfaced as an unrelated panic in a later
+# bytecode handler).
+#
+# Why nightly schedule + manual trigger:
+# - Build-std with sanitizer = full rebuild of the standard library
+#   per job, ~30-40 min before tests even run.
+# - Per-PR is too slow; nightly cron catches drift quickly enough.
+# - workflow_dispatch lets us trigger on-demand when investigating
+#   a specific UAF (the v2.1 → v2.2 investigation used the
+#   .dev/asan-docker/ local repro for the same reason).
+#
+# Required-status promotion: after 30 consecutive nightly greens
+# post-Phase-1-close, this job moves to a required PR check (see
+# .dev/rfcs/v2.2-plan-state.md AS-D).
+
+name: asan
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC — outside US/EU business hours so retries
+    # land before workday starts. matches docs.yml convention.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  asan:
+    name: AddressSanitizer (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # See .dev/asan-docker/Dockerfile for the matching dev env.
+      # detect_leaks=0: leak detection on `-Zbuild-std` builds is
+      # noisy under emulated linux/amd64 (OrbStack on darwin/arm64)
+      # and the same suppressions apply on real linux runners.
+      # Miri (the sibling miri.yml in Phase 3) covers the leak
+      # class with stricter UB detection anyway.
+      ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install nightly + rust-src + llvm-tools
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src \
+            --component llvm-tools-preview
+          rustc +nightly --version
+          cargo +nightly --version
+
+      - name: Install llvm-symbolizer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm
+          echo "ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)" >> "$GITHUB_ENV"
+
+      - name: cargo +nightly build -Zsanitizer=address -Zbuild-std (warm cache)
+        # Pre-build all the workspace once with sanitizer flags so the
+        # subsequent `test` invocations don't each rebuild std.
+        run: |
+          cargo +nightly build \
+            -p luna-core \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      - name: ASAN — luna-core --lib
+        run: |
+          cargo +nightly test \
+            -p luna-core --lib \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      # Integration tests added one-by-one per AS-A.4 in the
+      # plan-state. Start narrow (the regressions that found the
+      # v2.1 → v2.2 UAFs); v2.2.1 expands once the workflow's
+      # stable timing is established. Each test runs in its own
+      # invocation so a single hang doesn't masks subsequent runs.
+      - name: ASAN — sort_gc_during_compare regression
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test sort_gc_during_compare \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      - name: ASAN — toomanyidx_memory_cap regression
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test toomanyidx_memory_cap \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      - name: ASAN — cb_edge_gc_finalizer regression
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test cb_edge_gc_finalizer \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      - name: ASAN — host_roots_slot_recycling regression
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test host_roots_slot_recycling \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      - name: ASAN — io_popen_double_close regression
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test io_popen_double_close \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
