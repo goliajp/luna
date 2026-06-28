@@ -1,0 +1,88 @@
+# v2.2 Phase 5 (DP) — differential vs PUC lua-5.5 harness.
+#
+# luna's official_run test is "luna alone runs PUC's chunk to
+# completion under our wrapper". This is necessary but not
+# sufficient: luna could be silently producing different output
+# (different number formatting, different error message text,
+# different print order) and still "pass". The next quality
+# layer is end-to-end byte-diff against PUC's own lua-5.5
+# binary executing the same source.
+#
+# v2.2 ships the harness on 5 deterministic programs (no
+# os.time / math.random / io non-determinism). v2.3+ expands
+# to fuzz-driven inputs and the full PUC official suite.
+#
+# Why nightly + workflow_dispatch only: PUC builds from source
+# each run (~30s) + the lua-5.5 source tarball needs to be
+# downloaded. Acceptable for nightly; too expensive for per-PR.
+# Once v2.3 lands fuzz infrastructure that ALSO needs PUC, the
+# build step can be cached + the diff job can move to per-PR.
+
+name: diff-puc
+
+on:
+  schedule:
+    # Nightly at 06:00 UTC — staggered after the earlier nightly
+    # jobs.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  diff-puc:
+    name: luna-vs-PUC 5.5 byte-diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install PUC lua-5.5 (apt or build-from-source)
+        # Ubuntu LTS may pin to 5.4; build PUC 5.5 from source if
+        # apt's `lua5.5` package isn't available. The 5.5.0
+        # tarball is what `tests/official/lua-5.5.0-tests/` is
+        # already aligned with, so the source pin is internally
+        # consistent.
+        run: |
+          if apt-cache show lua5.5 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lua5.5
+            echo "PUC_LUA=/usr/bin/lua5.5" >> "$GITHUB_ENV"
+          else
+            # apt has no lua5.5 — build from source per the
+            # already-vendored test suite version.
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq build-essential libreadline-dev
+            mkdir -p /tmp/puc-build
+            cd /tmp/puc-build
+            curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
+            tar -xzf lua.tar.gz
+            cd lua-5.5.0
+            make linux-readline
+            sudo make install INSTALL_TOP=/usr/local
+            echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
+          fi
+
+      - name: Show PUC version
+        run: $PUC_LUA -v
+
+      - name: Build luna-tools (luna binary for diff runs)
+        # diff_puc invokes luna via cargo test, NOT via a
+        # standalone binary — the luna-side harness uses the
+        # in-process Vm::eval API. PUC side uses $PUC_LUA.
+        # luna-tools build is just to confirm the workspace
+        # compiles cleanly under the diff job env.
+        run: cargo build --workspace --release
+
+      - name: cargo test --release -p luna-core --test diff_puc
+        # The diff_puc integration test reads each fixture from
+        # tests/diff_puc/*.lua, runs it on $PUC_LUA, runs it
+        # via luna's Vm::eval, normalizes both outputs, and
+        # asserts byte-equality. Failures dump both outputs +
+        # the normalized diff for triage.
+        run: cargo test --release -p luna-core --test diff_puc -- --nocapture
