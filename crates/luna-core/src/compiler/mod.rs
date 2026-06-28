@@ -60,6 +60,53 @@ pub fn compile_chunk(
     Ok(c.heap.adopt_proto(lvl.into_proto(source, 0, 0)))
 }
 
+/// Diagnostic version of [`compile_chunk`] that also returns the main
+/// proto's final `last_target` value (the highest pc recorded as a jump
+/// destination — PUC `fs->lasttarget` equivalent). Used by the A4'''
+/// jump-target tracker prereq unit tests at
+/// `crates/luna-core/tests/a4_triple_prime_jump_target.rs`.
+///
+/// This entry point is intentionally separate from `compile_chunk` so
+/// production callers do not pay the destructure cost; it exists purely
+/// to expose the tracker subsystem for verification.
+pub fn compile_chunk_with_last_target(
+    ast: &Chunk,
+    version: LuaVersion,
+    source_name: &[u8],
+    heap: &mut Heap,
+) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
+    let source = heap.intern(source_name);
+    let mut c = Compiler {
+        ast,
+        heap,
+        version,
+        source,
+        levels: Vec::new(),
+        last_line: 0,
+        force_line: None,
+        str_cache: HashMap::new(),
+    };
+    let mut main = Level::new(0, true, 0);
+    main.upvals.push(UpvalDesc {
+        in_stack: false,
+        index: 0,
+        name: "_ENV".into(),
+        read_only: false,
+    });
+    c.levels.push(main);
+    c.enter_block(false);
+    c.stat_block(&ast.block)?;
+    c.leave_block()?;
+    c.last_line = ast.end_line;
+    c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
+    let lvl = c.levels.pop().expect("main level");
+    let last_target = lvl.last_target;
+    Ok((
+        c.heap.adopt_proto(lvl.into_proto(source, 0, 0)),
+        last_target,
+    ))
+}
+
 const MAX_REGS: u32 = 254;
 /// PUC `LUAI_MAXUPVAL`: the per-function upvalue cap. 5.1 set this to 60;
 /// 5.2+ raised it to 255 because the bytecode encoding gained the room.
@@ -223,6 +270,23 @@ struct Level {
     has_compat_vararg_arg: bool,
     #[allow(dead_code)]
     line_defined: u32,
+    /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
+    /// of any patched jump (forward jump landing here, backward jump-back to a
+    /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
+    /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
+    ///
+    /// Read by peephole passes (see `prev_emit_is_safe_peephole_site`) that
+    /// want to know whether the just-emitted instruction at pc `here() - 1`
+    /// can be modified in place: it is safe only when that pc is NOT itself a
+    /// jump destination, i.e. `last_target < here() - 1` or `last_target ==
+    /// None`. The A4''' Reloc-landing peephole (deferred follow-up) is the
+    /// first planned consumer; this field is currently exposed but never read
+    /// for code generation, so its addition is behaviour-neutral.
+    ///
+    /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
+    /// called from every code path that turns some `pc` into a jump landing
+    /// point.
+    last_target: Option<usize>,
 }
 
 impl Level {
@@ -245,6 +309,7 @@ impl Level {
             has_vararg_table_pseudo: false,
             has_compat_vararg_arg: false,
             line_defined,
+            last_target: None,
         }
     }
 
@@ -278,7 +343,7 @@ impl Level {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
-            traces: std::cell::RefCell::new(Vec::new()),
+            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         }
     }
 }
@@ -352,13 +417,23 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn patch_jump(&mut self, pc: usize) -> Result<(), SyntaxError> {
+    /// Patch a pending forward jump emitted earlier at `pc` so that it lands
+    /// at the current `here()` position, and mark `here()` as a jump target
+    /// (see `Level::last_target`). Mirrors PUC `luaK_patchtohere`.
+    ///
+    /// This is the canonical "this jump lands at the next instruction we are
+    /// about to emit" hook; every patch-pending-forward-jump call site routes
+    /// through it so that the jump-target tracker stays consistent. There is
+    /// no separate `patch_jump` variant that elides the mark — patching a
+    /// forward jump to a position that is not yet a target is meaningless.
+    fn patch_to_here(&mut self, pc: usize) -> Result<(), SyntaxError> {
         let target = self.here();
         let off = target as i64 - pc as i64 - 1;
         if off.unsigned_abs() > self.jump_cap() {
             return Err(self.err(self.last_line, "control structure too long"));
         }
         self.l().code[pc].set_sj(off as i32);
+        self.mark_target(target);
         Ok(())
     }
 
@@ -368,7 +443,73 @@ impl<'a> Compiler<'a> {
             return Err(self.err(self.last_line, "control structure too long"));
         }
         self.emit(Inst::isj(Op::Jmp, off as i32));
+        // The back-edge lands at `target`, which was captured upstream
+        // (typically `let top = self.here()` before a loop header). Mark it
+        // so a future peephole pass sees that pc as occupied.
+        self.mark_target(target);
         Ok(())
+    }
+
+    /// Record that `pc` is now a jump destination. Monotonic; advances
+    /// `last_target` only when `pc` exceeds the recorded maximum. Mirrors the
+    /// effect of PUC `luaK_getlabel` (which sets `fs->lasttarget = fs->pc`).
+    fn mark_target(&mut self, pc: usize) {
+        let l = self.l();
+        match l.last_target {
+            None => l.last_target = Some(pc),
+            Some(t) if pc > t => l.last_target = Some(pc),
+            _ => {}
+        }
+    }
+
+    /// PUC-equivalent query for "is the instruction at `here() - 1` safe to
+    /// peephole-retarget?". Returns `false` either when no instruction has
+    /// been emitted yet (vacuous), or when the just-emitted pc is itself a
+    /// recorded jump destination.
+    ///
+    /// Consumed by the A4''' Reloc-landing peephole at `assign_name` (see
+    /// `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4) and the A4'' single-
+    /// RHS materialization elision at `assign_stat`.
+    fn prev_emit_is_safe_peephole_site(&self) -> bool {
+        let here = self.here();
+        if here == 0 {
+            return false;
+        }
+        match self.lr().last_target {
+            None => true,
+            Some(t) => t < here - 1,
+        }
+    }
+
+    /// A4''' Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
+    /// instruction at `here() - 1` is a retargetable producer whose A field
+    /// equals `vreg` AND that pc is NOT a jump destination. The caller can
+    /// then `patch_dest(prev_pc, local_reg)` to retarget the A field
+    /// directly and skip the otherwise-required `Move local_reg, vreg`.
+    ///
+    /// The "retargetable producer" set is the closed list of ops produced
+    /// by paths that yield `Exp::Reloc(pc)`: arith / bitwise / unop / Len /
+    /// Get{Field,I,Table,TabUp}. Concat / SelfOp / Move are NOT in the set
+    /// (Concat reads A as operand base, SelfOp writes A+1 too, Move's A is
+    /// a sink). LoadK / LoadI / LoadF / LoadNil are excluded because they
+    /// are already discharged to their final register by `exp_to_reg` —
+    /// no Reloc landing happens through assign_name for them.
+    ///
+    /// See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4 and
+    /// `.dev/rfcs/v2.1-a4-triple-prime-prereq-verdict.md` §4.2.
+    fn assign_name_can_retarget_reloc(&self, vreg: u32) -> Option<usize> {
+        if !self.prev_emit_is_safe_peephole_site() {
+            return None;
+        }
+        let prev_pc = self.here() - 1;
+        let prev = self.lr().code[prev_pc];
+        if !is_retargetable_op(prev.op()) {
+            return None;
+        }
+        if prev.a() != vreg {
+            return None;
+        }
+        Some(prev_pc)
     }
 
     /// PUC `errorlimit`: render the "too many … (limit is …) in <where>"
@@ -510,7 +651,7 @@ impl<'a> Compiler<'a> {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         for pc in b.breaks {
-            self.patch_jump(pc)?;
+            self.patch_to_here(pc)?;
         }
         // propagate unmatched gotos to the enclosing block (the label may
         // appear after this block); a goto leaving a block with captured or
@@ -539,6 +680,9 @@ impl<'a> Compiler<'a> {
                         }
                         self.l().code[g.jmp_pc].set_sj(off as i32);
                     }
+                    // every goto in this batch lands at `tramp` (start of the
+                    // per-name close trampoline)
+                    self.mark_target(tramp);
                     let line = gotos
                         .iter()
                         .find(|g| g.name == name)
@@ -551,7 +695,7 @@ impl<'a> Compiler<'a> {
                         nactive: b.first_avar,
                     });
                 }
-                self.patch_jump(skip)?;
+                self.patch_to_here(skip)?;
                 gotos = routed;
             }
             let cap = self.lr().avars.len();
@@ -592,7 +736,7 @@ impl<'a> Compiler<'a> {
                                 return Err(self.err(g.line, "control structure too long"));
                             }
                             self.emit(Inst::isj(Op::Jmp, to_label as i32));
-                            self.patch_jump(skip)?;
+                            self.patch_to_here(skip)?;
                             tramp as i64
                         } else {
                             pc as i64
@@ -602,6 +746,9 @@ impl<'a> Compiler<'a> {
                             return Err(self.err(g.line, "control structure too long"));
                         }
                         self.l().code[g.jmp_pc].set_sj(off as i32);
+                        // dest is either a backward label.pc or a trampoline
+                        // pc — both are jump destinations.
+                        self.mark_target(dest as usize);
                     }
                     None => unresolved.push(g),
                 }
@@ -715,6 +862,10 @@ impl<'a> Compiler<'a> {
             line,
             nactive: nactive.max(first_avar),
         });
+        // every defined label is a jump destination: pending gotos just got
+        // patched to land at `here`, AND backward gotos resolved by
+        // `goto_stat` lookup against this label will jump here too.
+        self.mark_target(here);
         Ok(())
     }
 
@@ -1548,7 +1699,11 @@ impl<'a> Compiler<'a> {
                 self.emit(Inst::iabc(op, l, r, 0, true));
                 self.emit(Inst::isj(Op::Jmp, 1));
                 self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
+                let tpad = self.here();
                 self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+                // Jmp(1) above skips the LFalseSkip and lands on the LoadTrue
+                // pad — that pc is a jump destination.
+                self.mark_target(tpad);
             }
             Exp::Open { pc, base } => {
                 self.patch_wanted(pc, 2);
@@ -1712,7 +1867,10 @@ impl<'a> Compiler<'a> {
         self.emit(Inst::iabc(op, l, r, 0, false));
         self.emit(Inst::isj(Op::Jmp, 1));
         self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
+        let tpad = self.here();
         self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+        // Jmp(1) lands on tpad — mark.
+        self.mark_target(tpad);
         Ok(Exp::Reg(reg))
     }
 
@@ -1765,6 +1923,10 @@ impl<'a> Compiler<'a> {
                     self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                     let tpad = self.here();
                     self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
+                    // Jmp(1) skips LFalseSkip → tpad; LHS short-circuit will
+                    // also patch into one of these pads below.
+                    self.mark_target(tpad);
+                    self.mark_target(fpad);
                     (fpad, tpad)
                 }
                 _ => {
@@ -1778,7 +1940,10 @@ impl<'a> Compiler<'a> {
                     self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                     let tpad = self.here();
                     self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-                    self.patch_jump(jmp_over)?;
+                    self.patch_to_here(jmp_over)?;
+                    // LHS short-circuit patches into fpad or tpad below.
+                    self.mark_target(fpad);
+                    self.mark_target(tpad);
                     (fpad, tpad)
                 }
             };
@@ -1801,7 +1966,7 @@ impl<'a> Compiler<'a> {
         self.set_freereg(reg);
         let got = self.exp_to_nextreg(re)?;
         debug_assert_eq!(got, reg);
-        self.patch_jump(jmp)?;
+        self.patch_to_here(jmp)?;
         Ok(Exp::Reg(reg))
     }
 
@@ -2487,7 +2652,23 @@ impl<'a> Compiler<'a> {
                 Expr::Index { obj, key } => {
                     let (obj, key) = (*obj, *key);
                     let oe = self.expr(obj)?;
-                    let o_pinned = self.exp_to_nextreg(oe)?;
+                    // A4' (`.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2 +
+                    // `.dev/rfcs/v2.1-a4-prime-prereq-verdict.md` §3): when
+                    // the prereq gate certifies the obj is a non-captured
+                    // bare-Name local AND the single RHS contains no
+                    // UserOrUnknown call, the unconditional snapshot Move
+                    // is provably redundant — reuse the local's register
+                    // directly. Otherwise fall back to the snapshot.
+                    let o_pinned = if self.assign_stat_can_skip_obj_snapshot(targets, exprs)
+                        && matches!(oe, Exp::Reg(_))
+                    {
+                        match oe {
+                            Exp::Reg(r) => r,
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        self.exp_to_nextreg(oe)?
+                    };
                     // Capture the key the same way `assign_to` does: a small
                     // string or int constant rides inline in OP_SetField /
                     // OP_SetI (so it never depends on a register that could
@@ -2521,8 +2702,32 @@ impl<'a> Compiler<'a> {
             }
         }
         let base = self.explist_adjust(exprs, want)?;
+        // A4'' bundle (rides on A4''' once Reloc-landing peephole shipped):
+        // when explist_adjust ended with a trivial `Move base, src`
+        // materialization of a local-register read AND we have a single
+        // store, the store can take `src` directly and the Move is dead.
+        // Only catches `Exp::Reg(r)` RHS — Reloc RHS is already handled by
+        // A4''' inside assign_name, literal/Open RHS never emit a tail
+        // Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
+        // so a jump landing at the Move's pc is preserved.
+        // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §3.
+        let alt_vreg =
+            if targets.len() == 1 && exprs.len() == 1 && self.prev_emit_is_safe_peephole_site() {
+                let last_pc = self.here() - 1;
+                let last = self.lr().code[last_pc];
+                if last.op() == Op::Move && last.a() == base {
+                    let src = last.b();
+                    self.l().code.pop();
+                    self.l().lines.pop();
+                    Some(src)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
         for (i, plan) in plans.into_iter().enumerate() {
-            let vreg = base + i as u32;
+            let vreg = alt_vreg.unwrap_or(base + i as u32);
             match plan {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
                 LhsPlan::Indexed { obj, key } => match key {
@@ -2578,7 +2783,18 @@ impl<'a> Compiler<'a> {
                     ));
                 }
                 if reg != vreg {
-                    self.emit(Inst::iabc(Op::Move, reg, vreg, 0, false));
+                    // A4''' Reloc-landing peephole: when the just-emitted
+                    // instruction is a retargetable producer (Add / GetField
+                    // / Unm / Len / etc.) that wrote into `vreg` and is not
+                    // itself a jump destination, retarget its A field to
+                    // `reg` and skip the Move. Mirrors PUC `discharge2reg`'s
+                    // A-field rewrite at lcode.c:luaK_dischargevars / setoneret.
+                    // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4.
+                    if let Some(prev_pc) = self.assign_name_can_retarget_reloc(vreg) {
+                        self.patch_dest(prev_pc, reg);
+                    } else {
+                        self.emit(Inst::iabc(Op::Move, reg, vreg, 0, false));
+                    }
                 }
                 Ok(())
             }
@@ -2714,13 +2930,13 @@ impl<'a> Compiler<'a> {
             if !is_last {
                 end_jumps.push(self.emit_jump());
             }
-            self.patch_jump(skip)?;
+            self.patch_to_here(skip)?;
         }
         if let Some(eb) = else_body {
             self.block_scoped(eb)?;
         }
         for j in end_jumps {
-            self.patch_jump(j)?;
+            self.patch_to_here(j)?;
         }
         Ok(())
     }
@@ -2736,7 +2952,7 @@ impl<'a> Compiler<'a> {
         }
         self.jump_back(top)?;
         self.leave_block()?;
-        self.patch_jump(exit)?;
+        self.patch_to_here(exit)?;
         Ok(())
     }
 
@@ -2768,10 +2984,10 @@ impl<'a> Compiler<'a> {
             let floor = self.block_floor();
             let cont = self.emit_jump(); // cond FALSE -> close & loop
             let exit = self.emit_jump(); // cond TRUE  -> normal exit
-            self.patch_jump(cont)?;
+            self.patch_to_here(cont)?;
             self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
             self.jump_back(top)?;
-            self.patch_jump(exit)?;
+            self.patch_to_here(exit)?;
         } else {
             self.jump_back(top)?;
         }
@@ -2837,6 +3053,11 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "control structure too long"));
         }
         self.l().code[prep] = Inst::iabx(Op::ForPrep, base, skip as u32);
+        // ForLoop's back-edge lands at `body_top`; ForPrep's forward-skip
+        // lands at the post-loop pc (= `here()` after the ForLoop emit).
+        self.mark_target(body_top);
+        let post_loop = self.here();
+        self.mark_target(post_loop);
         self.leave_block()?;
         self.set_freereg(base);
         Ok(())
@@ -2888,6 +3109,9 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "control structure too long"));
         }
         self.l().code[prep] = Inst::iabx(Op::TForPrep, base, skip as u32);
+        // TForPrep's forward-skip lands at `tforcall_pc` (the upcoming TForCall
+        // emit position). Mark before the TForCall emit advances `here()`.
+        self.mark_target(tforcall_pc);
         // PUC `forbody` fixes TFORCALL/TFORLOOP to the line of the first token
         // after `in` (the EXPR's source line). A non-callable iterator
         // (`for k,v in 3 do ...`) then raises on the EXPR's line, not the
@@ -2899,6 +3123,8 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "control structure too long"));
         }
         self.emit(Inst::iabx(Op::TForLoop, base, back as u32));
+        // TForLoop's back-edge lands at `body_top` (per-iteration restart).
+        self.mark_target(body_top);
         // Override the body block's reg_floor to `base` so trampoline OP_Close
         // emitted for a `goto` leaving the loop closes the iterator's closing
         // value at `base + 3` (which sits BELOW the for-body's user-locals
@@ -3030,6 +3256,68 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
+
+    // -----------------------------------------------------------------
+    // v2.1 Phase 11 — A4' prerequisite: compiler-side snapshot gate.
+    // -----------------------------------------------------------------
+
+    /// Compiler-side metamethod-safety gate for the future A4' Index-LHS
+    /// object snapshot elision attack (see
+    /// `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2.3 and
+    /// `.dev/rfcs/v2.1-a4-prime-prereq-verdict.md`).
+    ///
+    /// Returns `true` when, for a single-target Index-LHS assignment
+    /// `obj.key = rhs` (or `obj[key] = rhs`), the unconditional
+    /// `exp_to_nextreg(oe)` snapshot at `assign_stat` line 2490 is
+    /// provably redundant.
+    ///
+    /// The four conditions enforced (mirroring RFC §2.3):
+    ///
+    /// 1. `targets.len() == 1` and `exprs.len() == 1` — no inter-target
+    ///    or multi-RHS conflict possible.
+    /// 2. The single target is `Expr::Index { obj: Name(local), .. }`
+    ///    where the name resolves to a real local in the current level
+    ///    (not an upvalue / global / read-only / vararg-virtual).
+    /// 3. `locals[reg].captured == false` — no closure has captured
+    ///    this local's slot, so no metatable-stored Lua closure can
+    ///    rebind it through the upvalue.
+    /// 4. AST-side
+    ///    [`ast::metamethod_safe_for_index_lhs`][crate::frontend::ast::metamethod_safe_for_index_lhs]
+    ///    over `(obj, exprs[0])` returns true (no UserOrUnknown RHS
+    ///    calls; obj is a bare Name).
+    ///
+    /// Wired by the A4' attack at `assign_stat` line 2487-2522
+    /// Index-LHS branch (v2.1 PI Phase 11 ship).
+    pub(crate) fn assign_stat_can_skip_obj_snapshot(
+        &self,
+        targets: &[ExprId],
+        exprs: &[ExprId],
+    ) -> bool {
+        if targets.len() != 1 || exprs.len() != 1 {
+            return false;
+        }
+        let (obj_eid, _key_eid) = match self.ast.expr(targets[0]) {
+            Expr::Index { obj, key } => (*obj, *key),
+            _ => return false,
+        };
+        let name_text = match self.ast.expr(obj_eid) {
+            Expr::Name(n) => &*n.text,
+            _ => return false,
+        };
+        // Resolve the name against the *current* level only — we
+        // intentionally do not chase upvalues here because A4' only
+        // elides snapshots for owner-level locals.
+        let level = self.lr();
+        let local = match level.locals.iter().find(|l| &*l.name == name_text) {
+            Some(l) => l,
+            None => return false,
+        };
+        if local.captured || local.vararg_virtual {
+            return false;
+        }
+        // AST-side gate (call walker + obj-is-name check).
+        ast::metamethod_safe_for_index_lhs(self.ast, obj_eid, exprs[0])
+    }
 }
 
 /// Constant-fold arithmetic over two numeric literals where Lua semantics
@@ -3060,4 +3348,66 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
         Int(i) => Exp::Int(i),
         Float(f) => Exp::Float(f),
     })
+}
+
+/// Closed set of opcodes whose A field is a pure destination produced by an
+/// `Exp::Reloc(pc)` discharge AND whose runtime body does NOT trigger a GC
+/// step keyed off `base + A + 1` as the live-stack-top. The A4''' Reloc-
+/// landing peephole at `assign_name` retargets one of these in place to a
+/// local register, skipping the otherwise-required Move.
+///
+/// Excluded opcodes and why:
+///   - `Concat`: `R[A] := R[A] .. ... .. R[A+B-1]` — A is the operand range
+///     base, retargeting would reread from a different start.
+///   - `SelfOp`: writes both `R[A+1]` (object copy) and `R[A]` (method
+///     handle); A is part of a pair, not a free destination.
+///   - `Move` / `LoadK` / `LoadI` / `LoadF` / `LoadNil` / `LoadTrue` /
+///     `LoadFalse` / `LFalseSkip`: discharged to their final register
+///     directly by `exp_to_reg`'s typed arms, so a Move-from-temp shape
+///     never appears for them.
+///   - `NewTable` / `Closure`: BOTH allocate and then call
+///     `maybe_collect_garbage(base + A + 1)` immediately after writing to
+///     `R[A]` (see `vm/exec.rs` Op::NewTable / Op::Closure arms). The
+///     `base + A + 1` is interpreted as the live-stack-top for GC roots:
+///     retargeting A to a register BELOW some other still-live local
+///     would let GC sweep the higher local during that step. Excluded
+///     unconditionally — PUC sidesteps this because `L->top` is bumped
+///     past every live local before luaC_step, but luna's per-op live_top
+///     computation does not have that headroom.
+///   - `GetUpval`: A is destination, B is upvalue idx, no GC side effect
+///     — included.
+///   - `Not`: `R[A] := not R[B]` — A is destination, no GC — included.
+///   - Arithmetic / bitwise / Len / Get* may dispatch to Lua metamethods,
+///     but the call-out is routed through `begin_meta_call` which captures
+///     `self.top` as the stack high-water, not `base + A + 1`. GC steps
+///     during the metamethod run use that captured `top`, so retargeting
+///     A is safe.
+///   - Comparison / call / store ops are never produced via Exp::Reloc
+///     in luna's compiler (`Cmp`-shape goes through `Exp::Cmp`, calls via
+///     `Exp::Open`, stores never become a "value" expression).
+fn is_retargetable_op(op: Op) -> bool {
+    use Op::*;
+    matches!(
+        op,
+        Add | Sub
+            | Mul
+            | Mod
+            | Pow
+            | Div
+            | IDiv
+            | BAnd
+            | BOr
+            | BXor
+            | Shl
+            | Shr
+            | Unm
+            | BNot
+            | Not
+            | Len
+            | GetUpval
+            | GetTabUp
+            | GetTable
+            | GetI
+            | GetField
+    )
 }

@@ -185,6 +185,10 @@ sandbox surface).
 - [`docs/compatibility.md`](docs/compatibility.md) — per-dialect
   feature matrix
 - [`docs/performance.md`](docs/performance.md) — bench numbers
+- [`docs/security.md`](docs/security.md) — sandbox boundaries +
+  threat model
+- [`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md) —
+  v1.x → v2.0 migration (in progress)
 - [`CHANGELOG.md`](CHANGELOG.md) — release notes
 - `cargo doc --open` — full API reference
 

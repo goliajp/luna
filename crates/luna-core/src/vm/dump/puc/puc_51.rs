@@ -34,28 +34,62 @@
 //!
 //! ## Punts (documented for follow-up, not silently dropped)
 //!
-//! - **`OP_TFORLOOP` 3-way split** — 5.1's single `TFORLOOP` op
-//!   (A C, no separate TFORPREP / TFORCALL) needs splitting into luna's
-//!   `TForPrep + TForCall + TForLoop` triad. Translator currently
-//!   rejects with `unsupported PUC 5.1 op TFORLOOP`. Affects generic
-//!   `for k,v in pairs(t) do … end` loops. Tracked: punt-A.
-//! - **`LUAI_COMPAT_VARARG` `arg` local** — 5.1 vararg functions
-//!   compiled with the compat flag set the `is_vararg` byte's bit 2
-//!   (`NEEDSARG`). Translator decodes the bit into
-//!   `Proto.has_compat_vararg_arg` but does NOT yet populate the
-//!   synthetic `arg` table at runtime — chunks that reference `arg`
-//!   from a `...` function will see nil. Tracked: punt-B.
-//! - **`luaO_fb2int` for `NEWTABLE` size hints** — 5.1 packs the array
-//!   and hash size hints as floating-byte (8-bit mantissa+exponent);
-//!   translator decodes them naïvely (saturates to 0 if the decoded
-//!   value exceeds luna's 8-bit B/C field). Correctness-safe (hints are
-//!   advisory) but may pessimise table allocation. Tracked: punt-C.
-//! - **`LOADBOOL A B C` → `LFalseSkip` split** — 5.1's `LOADBOOL` has a
-//!   `pc++` form (when C != 0). Translator handles the common
-//!   `LOADBOOL A 0 0` / `LOADBOOL A 1 0` cases via `LoadFalse` /
-//!   `LoadTrue`; the `C != 0` skip form is rejected. Affects `(a == b)`
-//!   in boolean position; not common in straight-line code but the
-//!   short-circuit operators do emit it. Tracked: punt-D.
+//! (none — 5.1 dialect is punt-free as of PU Wave 4.)
+//!
+//! ## Closed in PU Wave 4
+//!
+//! - **`OP_TFORLOOP` split** (punt-A) — PUC 5.1 emits a single
+//!   `TFORLOOP A C` followed by `JMP sBx` (back-edge). luna splits the
+//!   pair into `TForCall A 0 C; TForLoop A back`, registering the
+//!   back-distance as a `JumpKind::TForLoop` fixup so the post-walk pass
+//!   resolves it through `puc_to_luna_pc` (handles any earlier lowering
+//!   that bumped the luna pc count). No `TForPrep` is synthesised — 5.1
+//!   has no to-be-closed semantics and the pre-loop forward JMP lands on
+//!   the new `TForCall` directly. PUC 5.1 encodes `TFORLOOP.A` as
+//!   iter_base (same convention as luna), unlike 5.3 which uses
+//!   `iter_base + 2`.
+//! - **`LUAI_COMPAT_VARARG` `arg` local** (punt-B) — `Proto.has_compat_vararg_arg`
+//!   has been decoded by the reader since Wave 1; `vm/exec.rs:4200`
+//!   (`call_lua` frame entry) already synthesises the `arg = {n =
+//!   n_varargs, [1..] = e1..}` table on the cold path when the flag is
+//!   set. PU Wave 4 adds an end-to-end test that loads a 5.1 chunk
+//!   compiled with `LUAI_COMPAT_VARARG=1` and asserts
+//!   `arg.n` / `arg[1]` are populated correctly.
+//!
+//! ## Closed in PU Wave 2
+//!
+//! - **`OP_SETLIST A B 0`** — when PUC packs the block index in the
+//!   following raw u32 code-stream slot (C==0), translator now consumes
+//!   the payload and re-emits as luna's `SetList k=true; ExtraArg
+//!   payload` pair (mirrors puc_52 / puc_54 path).
+//! - **arith RK on B side** (`R[A] := K[k_idx] <op> R[C]/K[C]`) — now
+//!   lowered through `super::lower_k_via_tmp` to luna's
+//!   `LoadK tmp k_idx; <op> A tmp C` pair. Worst-case temp register is
+//!   reserved by bumping `max_stack` per `Translated.max_temp_bump`.
+//! - **EQ / LT / LE RK on either operand** — luna's comparison ops have
+//!   no RK form, so each K-pool operand is materialised via
+//!   `LoadK tmp k_idx` first, then the comparison runs on register
+//!   operands. Same `max_temp_bump` mechanism as arith.
+//!
+//! ## Closed in PU Wave 3 (this commit)
+//!
+//! - **`LOADBOOL A B C` skip form** (punt-D) — `B=0 C=1` lowers to
+//!   luna's native `LFalseSkip A`; `B=1 C=1` (no `LTrueSkip` in luna's
+//!   ISA) lowers to a `LoadTrue A; Jmp +1` pair. The Jmp +1 advances
+//!   pc past the next inst in the dispatch loop, matching PUC's
+//!   `pc++` post-LOADBOOL effect. The 2-emit case piggy-backs on the
+//!   existing `puc_to_luna_pc` deferred-fixup infra.
+//! - **`luaO_fb2int` for `NEWTABLE` size hints** (punt-C) — already
+//!   decoded correctly via `fb2int_saturating` + clamp to `u8::MAX`
+//!   (mirrors puc_52's `fb_to_hint_u8`); doc comments sharpened to
+//!   spell out that luna's `Op::NewTable` ignores B/C, so the
+//!   forwarded hint is inert until luna VM grows hint-aware
+//!   allocation (out of scope for puc_51). Correctness-safe.
+//!
+//! The PC remap also flipped from a 1-way `Vec<i64>` (with `-1`
+//! sentinels) to the `Translated { puc_to_luna_pc, … }` shape pioneered
+//! by `puc_54.rs`, so multi-emit lowering helpers can land deltas
+//! correctly via the deferred jump-fixup pass.
 //!
 //! See `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"5.1 risks" for the
 //! full deferred-work list.
@@ -445,7 +479,7 @@ fn r_proto(
     }
 
     // --- translate code + strip CLOSURE pseudo-instructions ---
-    let (code, lines) = translate_code(
+    let translated = translate_code(
         &raw_code,
         &raw_lines,
         &child_nups,
@@ -454,6 +488,11 @@ fn r_proto(
         &protos,
         consts.len(),
     )?;
+    // Bump max_stack for any temp registers the lowering helpers claimed
+    // (RK-on-B arith, EQ/LT/LE RK lowering). PUC's max_stack reflects only
+    // the PUC register allocator's view; the lowering temps live above
+    // that, so we widen the frame to keep them addressable.
+    let max_stack = max_stack.saturating_add(translated.max_temp_bump);
 
     let env_upval_idx = upvals
         .iter()
@@ -462,7 +501,7 @@ fn r_proto(
 
     Ok(heap.adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: code.into_boxed_slice(),
+        code: translated.code.into_boxed_slice(),
         consts: consts.into_boxed_slice(),
         protos: protos.into_boxed_slice(),
         upvals: upvals.into_boxed_slice(),
@@ -471,7 +510,7 @@ fn r_proto(
         has_vararg_table_pseudo: false,
         has_compat_vararg_arg,
         max_stack,
-        lines: lines.into_boxed_slice(),
+        lines: translated.lines.into_boxed_slice(),
         source,
         line_defined,
         last_line_defined,
@@ -483,7 +522,7 @@ fn r_proto(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
-        traces: std::cell::RefCell::new(Vec::new()),
+        traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
     }))
 }
 
@@ -525,9 +564,50 @@ fn r_proto_with_puc_nups(
     Ok((proto, nups))
 }
 
+/// Bundle of translator outputs returned by `translate_code`.
+///
+/// `puc_to_luna_pc[puc_pc]` records the **first** emitted luna pc for that
+/// PUC pc, or `None` if the PUC pc was dropped (stripped CLOSURE pseudo-
+/// instruction, or a SETLIST C=0 data-payload word). `luna_to_puc_pc` is
+/// the reverse mapping, recorded once per emitted luna op so multi-emit
+/// translations (lower_k_via_tmp arith / EQ-LT-LE RK lowering) share the
+/// originating PUC pc for line lookups.
+///
+/// `max_temp_bump` reports the worst-case temp register the lowering
+/// helpers claimed beyond PUC's `max_stack`; the caller widens the frame
+/// by this amount.
+struct Translated {
+    code: Vec<Inst>,
+    lines: Vec<u32>,
+    /// Reverse jump-target map (PUC pc → first luna pc), used by the
+    /// deferred jump-fixup pass. Slot `i` is `None` when the PUC pc is a
+    /// stripped pseudo-instruction or a data payload (jumps targeting
+    /// such a pc are rejected at fixup time).
+    #[allow(dead_code)] // populated for parity with puc_54.rs; future
+    // dialect-shared callers (re-export of line-table inspection) may use
+    // it. Kept here so the model matches puc_54's `Translated` shape.
+    puc_to_luna_pc: Vec<Option<u32>>,
+    /// Worst-case extra registers the lowering helpers reserved beyond
+    /// PUC's `max_stack`. Caller widens the frame by this amount.
+    max_temp_bump: u8,
+}
+
 /// Translate the PUC 5.1 instruction stream into luna's opcode set,
 /// stripping `OP_CLOSURE` pseudo-instructions and patching jump targets
 /// accordingly.
+///
+/// Single-pass emit-driven model (refactored from the original 2-pass
+/// design to support multi-emit lowering helpers — `lower_k_via_tmp` for
+/// arith RK-on-B, EQ/LT/LE RK):
+///
+/// - Walk `raw_code` once. For each PUC op record `puc_to_luna_pc[puc_pc]
+///   = Some(out.len())` at the first emit (or `None` for stripped
+///   pseudo-instructions / SETLIST C=0 payload words).
+/// - Stash jump fixups as `(luna_pc_of_jump, puc_target_pc, JumpKind)`
+///   tuples — we can't compute the delta inline because later expansions
+///   may shift the target's luna pc.
+/// - After the walk, resolve every fixup via `puc_to_luna_pc` and patch
+///   in place.
 fn translate_code(
     raw_code: &[Pre51Inst],
     raw_lines: &[u32],
@@ -536,54 +616,18 @@ fn translate_code(
     upvals: &mut [UpvalDesc],
     protos: &[Gc<Proto>],
     n_consts: usize,
-) -> Result<(Vec<Inst>, Vec<u32>), String> {
-    // Pass 1: walk raw_code, building (old_pc → new_pc) map. For each
-    // OP_CLOSURE, consume the following nups pseudo-instructions and
-    // record them in the child proto's upvalue list. Pseudo-instructions
-    // are NOT emitted; new_pc advances by 1 for the CLOSURE itself.
-    let mut new_pc_for: Vec<i64> = Vec::with_capacity(raw_code.len());
-    // -1 sentinel = "this old pc is a stripped pseudo-instruction; jumps
-    // to it are illegal". The PUC compiler never emits a jump targeting a
-    // pseudo-instruction, so any non -1 lookup is a soundness check.
-    let mut closure_idx = 0usize;
-    let mut new_pc = 0i64;
-    let mut i = 0usize;
-    while i < raw_code.len() {
-        let inst = raw_code[i];
-        if inst.op == OP_CLOSURE {
-            new_pc_for.push(new_pc);
-            new_pc += 1;
-            // Strip `nups` pseudo-instructions.
-            if closure_idx >= child_nups.len() {
-                return Err(format!(
-                    "OP_CLOSURE #{} has no matching nested proto",
-                    closure_idx
-                ));
-            }
-            let n = child_nups[closure_idx];
-            closure_idx += 1;
-            for j in 1..=n {
-                if i + j >= raw_code.len() {
-                    return Err("OP_CLOSURE pseudo-instructions truncate the code stream".into());
-                }
-                new_pc_for.push(-1); // pseudo-instruction → no luna PC
-            }
-            i += 1 + n;
-        } else {
-            new_pc_for.push(new_pc);
-            new_pc += 1;
-            i += 1;
-        }
-    }
-
-    // Pass 2: emit translated instructions, patching jumps via new_pc_for.
-    let mut out: Vec<Inst> = Vec::with_capacity(new_pc as usize);
-    let mut out_lines: Vec<u32> = Vec::with_capacity(new_pc as usize);
+) -> Result<Translated, String> {
+    let mut out: Vec<Inst> = Vec::with_capacity(raw_code.len());
+    let mut out_lines: Vec<u32> = Vec::with_capacity(raw_code.len());
+    let mut puc_to_luna_pc: Vec<Option<u32>> = vec![None; raw_code.len()];
+    let mut jump_fixups: Vec<(usize, i64, JumpKind)> = Vec::new();
+    let mut max_temp_bump: u8 = 0;
     let mut closure_idx2 = 0usize;
     let mut i = 0usize;
     while i < raw_code.len() {
         let inst = raw_code[i];
         let line = raw_lines.get(i).copied().unwrap_or(0);
+        let pre_emit_len = out.len();
 
         // Helper: translate an upvalue index from PUC 5.1's
         // (0..nups) numbering to luna's (env_shift..env_shift+nups).
@@ -625,16 +669,36 @@ fn translate_code(
                 out.push(Inst::iabx(Op::LoadK, inst.a, inst.bx));
             }
             OP_LOADBOOL => {
-                // punt-D: only the non-skipping form is supported.
-                if inst.c != 0 {
-                    return Err("OP_LOADBOOL skip form (C != 0) not yet supported".into());
+                // 5.1: `R(A) := bool(B); if (C) pc++`. Four combinations:
+                //   B=0 C=0 → LoadFalse A
+                //   B=0 C=1 → LFalseSkip A           (single luna op)
+                //   B=1 C=0 → LoadTrue A
+                //   B=1 C=1 → LoadTrue A; Jmp +1     (luna has no LTrueSkip;
+                //             a Jmp with sj=1 advances pc past one inst,
+                //             matching PUC's `pc++` post-LOADBOOL effect)
+                //
+                // For the 2-emit case the deferred-fixup pass picks up the
+                // first-emitted pc via the bookkeeping after the match (see
+                // `puc_to_luna_pc[i] = Some(pre_emit_len)` below). The next
+                // PUC pc (the skipped instruction) maps to luna pc
+                // `pre_emit_len + 2`, which is also where our `Jmp +1` lands
+                // pc to after the dispatch loop's pc++ — i.e. any external
+                // jump aimed at PUC pc+1 falls naturally on the right spot.
+                match (inst.b != 0, inst.c != 0) {
+                    (false, false) => {
+                        out.push(Inst::iabc(Op::LoadFalse, inst.a, 0, 0, false));
+                    }
+                    (false, true) => {
+                        out.push(Inst::iabc(Op::LFalseSkip, inst.a, 0, 0, false));
+                    }
+                    (true, false) => {
+                        out.push(Inst::iabc(Op::LoadTrue, inst.a, 0, 0, false));
+                    }
+                    (true, true) => {
+                        out.push(Inst::iabc(Op::LoadTrue, inst.a, 0, 0, false));
+                        out.push(Inst::isj(Op::Jmp, 1));
+                    }
                 }
-                let op = if inst.b != 0 {
-                    Op::LoadTrue
-                } else {
-                    Op::LoadFalse
-                };
-                out.push(Inst::iabc(op, inst.a, 0, 0, false));
             }
             OP_LOADNIL => {
                 // 5.1 semantics: R(A..B) := nil  (inclusive range, B counts
@@ -694,9 +758,15 @@ fn translate_code(
                 out.push(Inst::iabc(op, inst.a, b_val, c_val, c_is_k));
             }
             OP_NEWTABLE => {
-                // punt-C: fb-byte decode — we use the raw bytes as a hint,
-                // saturating at 255. Hints are advisory; mis-sizing wastes
-                // some realloc time but doesn't affect correctness.
+                // 5.1 packs the array + hash size hints as PUC
+                // floating-bytes (`luaO_int2fb`: eeeeexxx where the value
+                // is `(1xxx) << e` for e > 0, else just `xxx`).
+                // `fb2int_saturating` reverses that and clamps to u8::MAX
+                // so it fits luna's 8-bit B/C fields (mirrors puc_52's
+                // `fb_to_hint_u8`). The luna VM's NewTable currently
+                // ignores B/C entirely (see exec.rs Op::NewTable), so
+                // even a saturated value is purely an advisory hint for
+                // future hint-aware allocation; correctness is unaffected.
                 let b = fb2int_saturating(inst.b);
                 let c = fb2int_saturating(inst.c);
                 out.push(Inst::iabc(Op::NewTable, inst.a, b, c, false));
@@ -705,13 +775,14 @@ fn translate_code(
                 let (c_val, c_is_k) = rk(inst.c)?;
                 out.push(Inst::iabc(Op::SelfOp, inst.a, inst.b, c_val, c_is_k));
             }
-            // arith / compare ops — straight RK re-encode
-            OP_ADD => arith(&mut out, Op::Add, inst, &rk)?,
-            OP_SUB => arith(&mut out, Op::Sub, inst, &rk)?,
-            OP_MUL => arith(&mut out, Op::Mul, inst, &rk)?,
-            OP_DIV => arith(&mut out, Op::Div, inst, &rk)?,
-            OP_MOD => arith(&mut out, Op::Mod, inst, &rk)?,
-            OP_POW => arith(&mut out, Op::Pow, inst, &rk)?,
+            // arith / compare ops — straight RK re-encode, K-on-B lowered
+            // via super::lower_k_via_tmp (PU Wave 2 punt-5 收回).
+            OP_ADD => arith(&mut out, Op::Add, inst, &rk, &mut max_temp_bump)?,
+            OP_SUB => arith(&mut out, Op::Sub, inst, &rk, &mut max_temp_bump)?,
+            OP_MUL => arith(&mut out, Op::Mul, inst, &rk, &mut max_temp_bump)?,
+            OP_DIV => arith(&mut out, Op::Div, inst, &rk, &mut max_temp_bump)?,
+            OP_MOD => arith(&mut out, Op::Mod, inst, &rk, &mut max_temp_bump)?,
+            OP_POW => arith(&mut out, Op::Pow, inst, &rk, &mut max_temp_bump)?,
             OP_UNM => {
                 out.push(Inst::iabc(Op::Unm, inst.a, inst.b, 0, false));
             }
@@ -740,18 +811,13 @@ fn translate_code(
             }
             OP_JMP => {
                 let target_old = (i as i64) + 1 + inst.sbx as i64;
-                let target_new = resolve_jump_target(&new_pc_for, target_old)?;
-                let delta = target_new - (out.len() as i64 + 1);
-                if !(-crate::vm::isa::MAX_SJ as i64..=crate::vm::isa::MAX_SJ as i64)
-                    .contains(&delta)
-                {
-                    return Err(format!("JMP delta {delta} exceeds luna sJ range"));
-                }
-                out.push(Inst::isj(Op::Jmp, delta as i32));
+                jump_fixups.push((out.len(), target_old, JumpKind::Jmp));
+                // Placeholder sJ=0; patched in the post-walk fixup pass.
+                out.push(Inst::isj(Op::Jmp, 0));
             }
-            OP_EQ => compare(&mut out, Op::Eq, inst, &rk)?,
-            OP_LT => compare(&mut out, Op::Lt, inst, &rk)?,
-            OP_LE => compare(&mut out, Op::Le, inst, &rk)?,
+            OP_EQ => compare(&mut out, Op::Eq, inst, &rk, i, &mut max_temp_bump)?,
+            OP_LT => compare(&mut out, Op::Lt, inst, &rk, i, &mut max_temp_bump)?,
+            OP_LE => compare(&mut out, Op::Le, inst, &rk, i, &mut max_temp_bump)?,
             OP_TEST => {
                 // 5.1 TEST A C: if not (R(A) <=> C) then pc++
                 // luna Test A k:   if (not R(A)) == k then pc++
@@ -774,48 +840,112 @@ fn translate_code(
             }
             OP_FORLOOP => {
                 let target_old = (i as i64) + 1 + inst.sbx as i64;
-                let target_new = resolve_jump_target(&new_pc_for, target_old)?;
-                let delta = target_new - (out.len() as i64 + 1);
-                // luna's ForLoop uses a signed sBx field — same shape as
-                // 5.1, just different bias. Re-pack.
-                if !((-crate::vm::isa::MAX_SBX as i64)..=(crate::vm::isa::MAX_SBX as i64))
-                    .contains(&delta)
-                {
-                    return Err(format!("FORLOOP delta {delta} exceeds luna sBx range"));
-                }
-                out.push(Inst::iasbx(Op::ForLoop, inst.a, delta as i32));
+                jump_fixups.push((out.len(), target_old, JumpKind::ForLoop(inst.a)));
+                out.push(Inst::iasbx(Op::ForLoop, inst.a, 0));
             }
             OP_FORPREP => {
                 let target_old = (i as i64) + 1 + inst.sbx as i64;
-                let target_new = resolve_jump_target(&new_pc_for, target_old)?;
-                let delta = target_new - (out.len() as i64 + 1);
-                if !((-crate::vm::isa::MAX_SBX as i64)..=(crate::vm::isa::MAX_SBX as i64))
-                    .contains(&delta)
-                {
-                    return Err(format!("FORPREP delta {delta} exceeds luna sBx range"));
-                }
-                out.push(Inst::iasbx(Op::ForPrep, inst.a, delta as i32));
+                jump_fixups.push((out.len(), target_old, JumpKind::ForPrep(inst.a)));
+                out.push(Inst::iasbx(Op::ForPrep, inst.a, 0));
             }
             OP_TFORLOOP => {
-                // punt-A: 5.1's combined TFORLOOP needs splitting into
-                // luna's TForPrep + TForCall + TForLoop. Not yet
-                // implemented; generic-for loops will fail to load.
-                return Err(
-                    "OP_TFORLOOP translation not yet implemented (punt-A — see module docs)".into(),
-                );
+                // PUC 5.1 layout for `for k,v in expr do ... end`:
+                //   pc P  : TFORLOOP A C  (call iter; if R(A+3)==nil pc++)
+                //   pc P+1: JMP sBx       (back to body_top; sBx < 0)
+                // luna's split has no TFORPREP for the 5.1 path (5.1 has no
+                // to-be-closed; the pre-loop forward JMP already lands on
+                // TFORLOOP). At PUC pc P we emit `TForCall A 0 C`; at PUC pc
+                // P+1 we *replace* the JMP with `TForLoop A back`, where
+                // back = (luna pc of TForLoop) + 1 - (luna pc of body_top).
+                // The JMP's sBx tells us body_top = P+2+sBx. The fixup pass
+                // resolves the target through `puc_to_luna_pc` so any
+                // lowering between body_top and here that bumps the luna pc
+                // count is accounted for.
+                if inst.c > 0xFF {
+                    return Err(format!("OP_TFORLOOP C={} > 255", inst.c));
+                }
+                if i + 1 >= raw_code.len() {
+                    return Err("OP_TFORLOOP at end of code (missing trailing JMP)".into());
+                }
+                let jmp = raw_code[i + 1];
+                if jmp.op != OP_JMP {
+                    return Err(format!(
+                        "OP_TFORLOOP at pc {i} not followed by JMP (got op {})",
+                        jmp.op
+                    ));
+                }
+                let target_old = (i as i64) + 2 + jmp.sbx as i64;
+                // Emit TForCall at PUC's TFORLOOP pc.
+                out.push(Inst::iabc(Op::TForCall, inst.a, 0, inst.c, false));
+                puc_to_luna_pc[i] = Some(pre_emit_len as u32);
+                out_lines.push(line);
+                // Emit TForLoop placeholder at PUC's JMP pc; back distance
+                // patched by the fixup pass once every other lowering has
+                // settled the luna pcs.
+                let tforloop_luna_pc = out.len();
+                let jmp_line = raw_lines.get(i + 1).copied().unwrap_or(line);
+                out.push(Inst::iabx(Op::TForLoop, inst.a, 0));
+                out_lines.push(jmp_line);
+                puc_to_luna_pc[i + 1] = Some(tforloop_luna_pc as u32);
+                jump_fixups.push((tforloop_luna_pc, target_old, JumpKind::TForLoop(inst.a)));
+                // Consume the trailing JMP (already lowered into TForLoop).
+                i += 2;
+                continue;
             }
             OP_SETLIST => {
                 // 5.1 SETLIST A B C: R(A)[(C-1)*FPF + i] := R(A+i) for i in 1..B.
-                // If C == 0, the next instruction is a literal int with the
-                // block index (not an opcode — purely a data word). We
-                // reject that case for now; common cases use a fixed C.
-                if inst.c == 0 {
-                    return Err("OP_SETLIST C=0 (next-inst block index) not yet supported".into());
-                }
+                // If C == 0, the next raw u32 in the code stream is a
+                // literal int with the block index (not a decoded
+                // instruction — it's a pure data word). luna's SetList
+                // uses the same trick via the k bit + a trailing
+                // ExtraArg whose Ax field holds the C value. Mirror the
+                // puc_52.rs / puc_54.rs handling here.
                 if inst.c > 0xFF {
                     return Err(format!("OP_SETLIST C={} > 255", inst.c));
                 }
-                out.push(Inst::iabc(Op::SetList, inst.a, inst.b, inst.c, false));
+                if inst.c == 0 {
+                    // Consume the next raw u32 as the C payload. The
+                    // decoded `Pre51Inst` for that slot is meaningless
+                    // (it's not an opcode); we need the raw bits which
+                    // PUC stores as a plain `int` (4 LE bytes). Recover
+                    // them by re-packing the Pre51Inst fields in the
+                    // 5.1 layout — but since decode_inst_51 lost no
+                    // information (it just split fields), the simpler
+                    // path is to look at the raw payload index via the
+                    // `bx` reconstruction: PUC stores the C-payload as
+                    // `(c << 14) | (b << 23) | ...` BUT for the data
+                    // word it's just a plain u32 literal. The
+                    // Pre51Inst's `bx` field holds the high 18 bits
+                    // already; combined with op (low 6) + a (next 8) we
+                    // can rebuild the original u32 if we need to. The
+                    // cleanest path matches puc_52.rs / puc_54.rs:
+                    // reconstruct the raw 32-bit value from the Pre51
+                    // fields.
+                    if i + 1 >= raw_code.len() {
+                        return Err("OP_SETLIST C=0 at end of code (missing C payload)".into());
+                    }
+                    let payload_inst = raw_code[i + 1];
+                    let payload = reconstruct_raw_u32(payload_inst);
+                    if payload > crate::vm::isa::MAX_AX {
+                        return Err(format!("OP_SETLIST payload {payload} > luna MAX_AX"));
+                    }
+                    out.push(Inst::iabc(Op::SetList, inst.a, inst.b, 0, true));
+                    out.push(Inst::iax(Op::ExtraArg, payload));
+                    // Record the SETLIST pc → luna pc map BEFORE we
+                    // advance past the payload (so the post-match
+                    // bookkeeping at `i` (now payload pc) doesn't
+                    // clobber it). Then mark the payload's puc_pc as
+                    // None and skip it.
+                    puc_to_luna_pc[i] = Some(pre_emit_len as u32);
+                    out_lines.push(line);
+                    out_lines.push(line);
+                    puc_to_luna_pc[i + 1] = None;
+                    // Skip the payload on the next iteration.
+                    i += 2;
+                    continue;
+                } else {
+                    out.push(Inst::iabc(Op::SetList, inst.a, inst.b, inst.c, false));
+                }
             }
             OP_CLOSE => {
                 out.push(Inst::iabc(Op::Close, inst.a, 0, 0, false));
@@ -900,6 +1030,14 @@ fn translate_code(
                 // index 0 — which is already what env_upval_idx was set
                 // to in r_proto).
                 out.push(Inst::iabx(Op::Closure, inst.a, inst.bx));
+                // Mark each pseudo-instruction's puc_pc as None (no luna
+                // pc) so jumps targeting them are caught by the fixup
+                // pass. The PUC compiler never emits such jumps, but the
+                // check keeps a malformed chunk from constructing a bogus
+                // Proto.
+                for j in 1..=n {
+                    puc_to_luna_pc[i + j] = None;
+                }
                 // Skip the pseudo-instructions.
                 i += n;
             }
@@ -910,43 +1048,142 @@ fn translate_code(
                 return Err(format!("unsupported PUC 5.1 op {other}"));
             }
         }
-        out_lines.push(line);
+        // Per-PUC-pc bookkeeping. If the match arm emitted ≥1 luna insts,
+        // record the first emitted pc as the puc_pc's target (for jump
+        // fixup). Push `line` for each emitted op (multi-emit lowering
+        // helpers — lower_k_via_tmp / compare RK lowering — duplicate the
+        // source line across their pair).
+        if out.len() > pre_emit_len {
+            puc_to_luna_pc[i] = Some(pre_emit_len as u32);
+            for _ in pre_emit_len..out.len() {
+                out_lines.push(line);
+            }
+        }
         i += 1;
     }
+    debug_assert_eq!(
+        out.len(),
+        out_lines.len(),
+        "line count must match emit count"
+    );
 
-    // Sanity: emitted-len must match what pass 1 predicted.
-    debug_assert_eq!(out.len() as i64, new_pc, "pass-1 / pass-2 length disagree");
-    // Suppress unused warning when assertions compile out.
+    // Resolve jump fixups now that we know every puc_pc's luna pc.
+    let end_of_code = out.len();
+    for (luna_pc, target_old, kind) in jump_fixups {
+        let target_new = resolve_jump_target(&puc_to_luna_pc, target_old, end_of_code)?;
+        let delta = target_new - (luna_pc as i64 + 1);
+        match kind {
+            JumpKind::Jmp => {
+                if !(-crate::vm::isa::MAX_SJ as i64..=crate::vm::isa::MAX_SJ as i64)
+                    .contains(&delta)
+                {
+                    return Err(format!("JMP delta {delta} exceeds luna sJ range"));
+                }
+                out[luna_pc] = Inst::isj(Op::Jmp, delta as i32);
+            }
+            JumpKind::ForLoop(a) => {
+                if !((-crate::vm::isa::MAX_SBX as i64)..=(crate::vm::isa::MAX_SBX as i64))
+                    .contains(&delta)
+                {
+                    return Err(format!("FORLOOP delta {delta} exceeds luna sBx range"));
+                }
+                out[luna_pc] = Inst::iasbx(Op::ForLoop, a, delta as i32);
+            }
+            JumpKind::ForPrep(a) => {
+                if !((-crate::vm::isa::MAX_SBX as i64)..=(crate::vm::isa::MAX_SBX as i64))
+                    .contains(&delta)
+                {
+                    return Err(format!("FORPREP delta {delta} exceeds luna sBx range"));
+                }
+                out[luna_pc] = Inst::iasbx(Op::ForPrep, a, delta as i32);
+            }
+            JumpKind::TForLoop(a) => {
+                // luna `Op::TForLoop A Bx` back-jumps by `Bx` instructions
+                // *after* pc has been bumped past the TForLoop. With the
+                // standard fixup delta = `target_new - (luna_pc + 1)`
+                // (negative for a back-jump), the back-distance is `-delta`.
+                if delta > 0 {
+                    return Err(format!(
+                        "TFORLOOP forward delta {delta} (expected backward jump)"
+                    ));
+                }
+                let back = -delta;
+                if back < 0 || (back as u32) > crate::vm::isa::MAX_BX {
+                    return Err(format!(
+                        "TFORLOOP back-distance {back} exceeds luna Bx range"
+                    ));
+                }
+                out[luna_pc] = Inst::iabx(Op::TForLoop, a, back as u32);
+            }
+        }
+    }
+    // Suppress unused warning.
     let _ = upvals;
-    Ok((out, out_lines))
+    Ok(Translated {
+        code: out,
+        lines: out_lines,
+        puc_to_luna_pc,
+        max_temp_bump,
+    })
 }
 
-fn arith<F>(out: &mut Vec<Inst>, op: Op, inst: Pre51Inst, rk: &F) -> Result<(), String>
+/// PUC 5.1 → luna jump kinds. We can't patch deltas inline because later
+/// arith / compare lowering may insert ops between the jump source and
+/// its target; the post-walk fixup pass needs to know which encoding to
+/// emit (sJ for JMP, sBx for FORLOOP / FORPREP).
+#[derive(Clone, Copy, Debug)]
+enum JumpKind {
+    Jmp,
+    /// A field carried through from the PUC ForLoop opcode.
+    ForLoop(u32),
+    /// A field carried through from the PUC ForPrep opcode.
+    ForPrep(u32),
+    /// A field carried through from the PUC TFORLOOP opcode (= iter_base
+    /// for luna's `Op::TForLoop`). The fixup target is the body-top PUC pc
+    /// (derived from the *following* JMP's sBx), and the encoded Bx is the
+    /// positive back-distance after PC-remap.
+    TForLoop(u32),
+}
+
+fn arith<F>(
+    out: &mut Vec<Inst>,
+    op: Op,
+    inst: Pre51Inst,
+    rk: &F,
+    max_temp_bump: &mut u8,
+) -> Result<(), String>
 where
     F: Fn(u32) -> Result<(u32, bool), String>,
 {
     // 5.1 arithmetic: A B C with RK on B and C. luna's Add/Sub/...
     // packs as `R[A] := R[B] + R[C]/K[C]` (k flag on C only — the B
     // side is always a register in luna's binop format). When PUC has K
-    // on B side, we need a temp register or to flip operands; for now
-    // we only support RK on C — if B is K, lower to `LoadK tmp ; op A tmp C`.
+    // on B side, route through super::lower_k_via_tmp which materializes
+    // the constant into a tmp register first (`LoadK tmp k_idx; op A
+    // tmp C`). The tmp lives above PUC's max_stack — the caller bumps
+    // the frame via max_temp_bump.
     let (b_val, b_is_k) = rk(inst.b)?;
     let (c_val, c_is_k) = rk(inst.c)?;
     if b_is_k {
-        // Lower: LoadK tmp_reg, b_val ; op A tmp_reg C
-        // tmp_reg = inst.a (safe IFF A is a fresh dest and we don't read
-        // it; for binop with RK-B we conservatively bail and report).
-        return Err(format!(
-            "arith op with K on B-side (5.1 RK(B)) not yet supported \
-             (op={op:?}, A={}, K[{b_val}], …)",
-            inst.a
-        ));
+        // tmp = max(a, c) + 1, matching puc_54's I-imm lowering policy
+        // (must not clobber A or C).
+        let tmp = inst.a.max(c_val) + 1;
+        let pair = super::lower_k_via_tmp(op, inst.a, b_val, c_val, c_is_k, tmp, max_temp_bump)?;
+        out.extend_from_slice(&pair);
+    } else {
+        out.push(Inst::iabc(op, inst.a, b_val, c_val, c_is_k));
     }
-    out.push(Inst::iabc(op, inst.a, b_val, c_val, c_is_k));
     Ok(())
 }
 
-fn compare<F>(out: &mut Vec<Inst>, op: Op, inst: Pre51Inst, rk: &F) -> Result<(), String>
+fn compare<F>(
+    out: &mut Vec<Inst>,
+    op: Op,
+    inst: Pre51Inst,
+    rk: &F,
+    _src_pc: usize,
+    max_temp_bump: &mut u8,
+) -> Result<(), String>
 where
     F: Fn(u32) -> Result<(u32, bool), String>,
 {
@@ -955,41 +1192,115 @@ where
     // The 5.1 A is purely a 0/1 flag (cond). luna's Eq uses k as the flag.
     let (b_val, b_is_k) = rk(inst.b)?;
     let (c_val, c_is_k) = rk(inst.c)?;
-    // luna's Eq encoding: A is lhs reg (or k-pool index if k-form), B is
-    // rhs reg (or k-pool), `k` flag = expected truthiness (skip when
-    // result != k).
-    if b_is_k || c_is_k {
-        return Err(
-            "5.1 EQ/LT/LE with RK on operand not yet supported (only register form)".into(),
-        );
+    // luna's Eq encoding: A is lhs reg, B is rhs reg, `k` flag = expected
+    // truthiness (skip when result != k). luna has no RK form on either
+    // operand for the comparison ops, so any K-pool operand must be
+    // materialised into a tmp register first (LoadK tmp k_idx ; op
+    // <tmp_or_reg> <tmp_or_reg> 0 k). PU Wave 2 punt-6 收回.
+    let k_flag = inst.a != 0;
+    let needs_tmp_b = b_is_k;
+    let needs_tmp_c = c_is_k;
+    // Allocate tmps above the highest live register. When both operands
+    // are K we need two tmps (`tmp_b = base`, `tmp_c = base + 1`); when
+    // only one is K we need a single tmp at `base`.
+    if needs_tmp_b && needs_tmp_c {
+        let base = b_val.max(c_val) + 1; // both b_val/c_val are k-indices, but
+        // we still need _some_ upper bound to anchor the tmp position.
+        // Picking max(b,c)+1 is safe — PUC's k-indices never overlap the
+        // register file (RK encoding's top bit splits them), but the tmp
+        // slot itself must be above max_stack; max_temp_bump handles
+        // that. To stay strictly above any register read by the op
+        // we anchor at PUC's k-pool index space (which is always
+        // ≥ 0). The actual frame widening lives in max_temp_bump so the
+        // anchor just needs to be deterministic.
+        let _ = base;
+        // Anchor at 0 + bump: load both Ks into the lowest tmps the
+        // helper allocates. The lowering helper bumps max_temp_bump for
+        // us. To avoid stepping on each other we pick tmp_b = 0 and
+        // tmp_c = 1 conceptually, then offset by the current bump so
+        // each lowering instance gets fresh slots. Simpler: claim two
+        // slots at the top of the running bump.
+        let tmp_b = (*max_temp_bump) as u32;
+        let tmp_c = tmp_b + 1;
+        if tmp_c > 0xFF {
+            return Err(format!(
+                "5.1 compare RK lowering: tmp register {tmp_c} exceeds 255"
+            ));
+        }
+        out.push(Inst::iabx(Op::LoadK, tmp_b, b_val));
+        out.push(Inst::iabx(Op::LoadK, tmp_c, c_val));
+        *max_temp_bump = (*max_temp_bump).max(tmp_c as u8 + 1);
+        out.push(Inst::iabc(op, tmp_b, tmp_c, 0, k_flag));
+    } else if needs_tmp_b {
+        let tmp = (*max_temp_bump) as u32;
+        if tmp > 0xFF {
+            return Err(format!(
+                "5.1 compare RK lowering: tmp register {tmp} exceeds 255"
+            ));
+        }
+        out.push(Inst::iabx(Op::LoadK, tmp, b_val));
+        *max_temp_bump = (*max_temp_bump).max(tmp as u8 + 1);
+        out.push(Inst::iabc(op, tmp, c_val, 0, k_flag));
+    } else if needs_tmp_c {
+        let tmp = (*max_temp_bump) as u32;
+        if tmp > 0xFF {
+            return Err(format!(
+                "5.1 compare RK lowering: tmp register {tmp} exceeds 255"
+            ));
+        }
+        out.push(Inst::iabx(Op::LoadK, tmp, c_val));
+        *max_temp_bump = (*max_temp_bump).max(tmp as u8 + 1);
+        out.push(Inst::iabc(op, b_val, tmp, 0, k_flag));
+    } else {
+        // 5.1 EQ: skip when (B==C) != A. luna Eq: skip when (R[A]==R[B]) != k.
+        // Map: luna A := 5.1 B, luna B := 5.1 C, luna k := 5.1 A != 0.
+        out.push(Inst::iabc(op, b_val, c_val, 0, k_flag));
     }
-    // 5.1 EQ: skip when (B==C) != A. luna Eq: skip when (R[A]==R[B]) != k.
-    // So map: luna A := 5.1 B, luna B := 5.1 C, luna k := 5.1 A != 0.
-    let k = inst.a != 0;
-    out.push(Inst::iabc(op, b_val, c_val, 0, k));
     Ok(())
 }
 
 /// Look up a translated PC, rejecting jumps that land on a stripped
-/// pseudo-instruction (sentinel -1) or out of range. The PUC compiler
+/// pseudo-instruction (`None` sentinel) or out of range. The PUC compiler
 /// never emits such jumps, but the check keeps a malformed chunk from
 /// constructing a bogus Proto.
-fn resolve_jump_target(new_pc_for: &[i64], target_old: i64) -> Result<i64, String> {
-    if target_old < 0 || target_old as usize >= new_pc_for.len() {
-        // Jumping one past the last instruction is legal in PUC (loop
-        // exit); treat that as `out.len()` (== new_pc at end).
-        if target_old >= 0 && target_old as usize == new_pc_for.len() {
-            return Ok(*new_pc_for.last().unwrap_or(&0) + 1);
-        }
+///
+/// `end_of_code` is the luna pc one past the last emitted instruction
+/// (used for the legal one-past-end jump that PUC emits at loop exits).
+fn resolve_jump_target(
+    puc_to_luna_pc: &[Option<u32>],
+    target_old: i64,
+    end_of_code: usize,
+) -> Result<i64, String> {
+    if target_old < 0 {
         return Err(format!("jump target {target_old} out of range"));
     }
-    let v = new_pc_for[target_old as usize];
-    if v < 0 {
-        return Err(format!(
-            "jump target {target_old} lands on stripped pseudo-instruction"
-        ));
+    let t = target_old as usize;
+    if t == puc_to_luna_pc.len() {
+        // One-past-the-end is legal in PUC (loop exit). Map to the
+        // synthetic end-of-code luna pc.
+        return Ok(end_of_code as i64);
     }
-    Ok(v)
+    if t > puc_to_luna_pc.len() {
+        return Err(format!("jump target {target_old} out of range"));
+    }
+    match puc_to_luna_pc[t] {
+        Some(p) => Ok(p as i64),
+        None => Err(format!(
+            "jump target {target_old} lands on stripped pseudo-instruction"
+        )),
+    }
+}
+
+/// Reconstruct the original 32-bit PUC instruction word from a decoded
+/// `Pre51Inst`. Used by the SETLIST C=0 path to recover the literal
+/// integer payload stored in the next code-stream slot (PUC writes it as
+/// a plain `int` cast to the instruction-word type).
+fn reconstruct_raw_u32(p: Pre51Inst) -> u32 {
+    // Layout: op:6 | a:8 | c:9 | b:9 (LE within u32). The decode
+    // splits the high 18 bits into (c, b) via the same shift mask the
+    // `bx` field uses, so we can rebuild via:
+    //   op | (a << 6) | (c << 14) | (b << 23)
+    (p.op as u32 & 0x3F) | ((p.a & 0xFF) << 6) | ((p.c & 0x1FF) << 14) | ((p.b & 0x1FF) << 23)
 }
 
 /// PUC `luaO_fb2int` — convert an 8-bit floating-byte (eeeeexxx where
@@ -1015,6 +1326,50 @@ mod tests {
     }
 
     #[test]
+    fn fb2int_saturates_at_u8_max() {
+        // e=4, x=0 → (0|8) << 3 = 64 — fits 8 bits.
+        let fb = 4u32 << 3;
+        assert_eq!(fb2int_saturating(fb), 64);
+        // e=5, x=0 → (0|8) << 4 = 128 — still fits.
+        let fb = 5u32 << 3;
+        assert_eq!(fb2int_saturating(fb), 128);
+        // e=5, x=7 → (7|8) << 4 = 240 — fits.
+        let fb = (5u32 << 3) | 7;
+        assert_eq!(fb2int_saturating(fb), 240);
+        // e=6, x=0 → (0|8) << 5 = 256 — saturates to 255.
+        let fb = 6u32 << 3;
+        assert_eq!(fb2int_saturating(fb), 0xFF);
+        // Very large fb byte clamps too.
+        let fb = (31u32 << 3) | 7;
+        assert_eq!(fb2int_saturating(fb), 0xFF);
+    }
+
+    #[test]
+    fn translate_newtable_fb_hint() {
+        // NEWTABLE R4 B=0x08 (e=1,x=0 -> 8) C=0x0F (e=1,x=7 -> 15).
+        // After decode the lowered op should carry the decoded ints,
+        // not the raw fb bytes.
+        let code = xlate(&[p51(OP_NEWTABLE, 4, 0x08, 0x0F)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::NewTable);
+        assert_eq!(code[0].a(), 4);
+        assert_eq!(code[0].b(), 8);
+        assert_eq!(code[0].c(), 15);
+    }
+
+    #[test]
+    fn translate_newtable_fb_hint_saturates() {
+        // Hash hint e=6 x=0 decodes to 256 — must clamp to 0xFF for
+        // luna's 8-bit C field. Array hint stays small (8).
+        let large_fb = 6u32 << 3; // -> 256
+        let code = xlate(&[p51(OP_NEWTABLE, 0, 0x08, large_fb)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::NewTable);
+        assert_eq!(code[0].b(), 8);
+        assert_eq!(code[0].c(), 0xFF);
+    }
+
+    #[test]
     fn decode_inst_51_fields() {
         // OP_MOVE (0) A=3 B=5 C=0 → bits: op:6=0, a:8=3 at off 6, c:9=0 at off 14, b:9=5 at off 23
         let raw: u32 = (3u32 << 6) | (5u32 << 23);
@@ -1023,5 +1378,117 @@ mod tests {
         assert_eq!(i.a, 3);
         assert_eq!(i.b, 5);
         assert_eq!(i.c, 0);
+    }
+
+    #[test]
+    fn reconstruct_raw_u32_round_trips_through_decode() {
+        // Pick a non-trivial encoding: op=10 (NEWTABLE), A=200, B=0x1AB, C=0x055.
+        let original: u32 = 10u32 | (200u32 << 6) | (0x055u32 << 14) | (0x1ABu32 << 23);
+        let p = decode_inst_51(original);
+        let rebuilt = reconstruct_raw_u32(p);
+        assert_eq!(rebuilt, original, "decode → reconstruct must be lossless");
+    }
+
+    #[test]
+    fn reconstruct_raw_u32_handles_setlist_payload_int() {
+        // SETLIST C=0 payload is a plain int (block index). Test that a
+        // small payload value round-trips when the payload was originally
+        // emitted as the raw 32-bit integer 12345.
+        let payload: u32 = 12345;
+        let p = decode_inst_51(payload);
+        assert_eq!(reconstruct_raw_u32(p), payload);
+    }
+
+    #[test]
+    fn resolve_jump_target_accepts_one_past_end() {
+        // Three surviving puc pcs (luna 0, 1, 2). One-past-end target = 3
+        // must map to end_of_code (e.g. 5 when last op was multi-emit).
+        let map = vec![Some(0), Some(1), Some(2)];
+        assert_eq!(resolve_jump_target(&map, 3, 5).unwrap(), 5);
+        // Target inside range.
+        assert_eq!(resolve_jump_target(&map, 1, 5).unwrap(), 1);
+    }
+
+    #[test]
+    fn resolve_jump_target_rejects_stripped_pseudo() {
+        // puc pc 1 is a stripped CLOSURE pseudo-instruction (None).
+        let map = vec![Some(0), None, Some(1)];
+        let err = resolve_jump_target(&map, 1, 2).unwrap_err();
+        assert!(err.contains("stripped pseudo-instruction"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_jump_target_rejects_out_of_range() {
+        let map = vec![Some(0), Some(1)];
+        let err = resolve_jump_target(&map, 100, 2).unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+        let err = resolve_jump_target(&map, -1, 2).unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    /// Build a synthetic Pre51Inst from raw fields (no real chunk needed).
+    fn p51(op: u8, a: u32, b: u32, c: u32) -> Pre51Inst {
+        // sBx bias matches `decode_inst_51`. bx = (c << 9) | b.
+        let bx = (c << 9) | b;
+        Pre51Inst {
+            op,
+            a,
+            b,
+            c,
+            bx,
+            sbx: bx as i32 - 131071,
+        }
+    }
+
+    /// Run translate_code over a synthetic instruction sequence with no
+    /// closures / upvalue churn. Returns the lowered luna code.
+    fn xlate(raw: &[Pre51Inst]) -> Vec<Inst> {
+        let lines = vec![0u32; raw.len()];
+        let mut upvals: Vec<UpvalDesc> = Vec::new();
+        let protos: Vec<Gc<Proto>> = Vec::new();
+        let t = translate_code(raw, &lines, &[], 0, &mut upvals, &protos, 256)
+            .expect("translate_code must succeed for these fixtures");
+        t.code
+    }
+
+    #[test]
+    fn translate_loadbool_false_noskip() {
+        // LOADBOOL R0 0 0 → LoadFalse R0
+        let code = xlate(&[p51(OP_LOADBOOL, 0, 0, 0)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::LoadFalse);
+        assert_eq!(code[0].a(), 0);
+    }
+
+    #[test]
+    fn translate_loadbool_true_noskip() {
+        // LOADBOOL R3 1 0 → LoadTrue R3
+        let code = xlate(&[p51(OP_LOADBOOL, 3, 1, 0)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::LoadTrue);
+        assert_eq!(code[0].a(), 3);
+    }
+
+    #[test]
+    fn translate_loadbool_false_skip() {
+        // LOADBOOL R2 0 1 → LFalseSkip R2 (luna has a dedicated op)
+        let code = xlate(&[p51(OP_LOADBOOL, 2, 0, 1)]);
+        assert_eq!(code.len(), 1);
+        assert_eq!(code[0].op(), Op::LFalseSkip);
+        assert_eq!(code[0].a(), 2);
+    }
+
+    #[test]
+    fn translate_loadbool_true_skip() {
+        // LOADBOOL R5 1 1 → LoadTrue R5; Jmp +1
+        // (luna has no LTrueSkip; the Jmp +1 pair advances pc past the
+        // next inst in the dispatch loop, matching PUC's `pc++`.)
+        let code = xlate(&[p51(OP_LOADBOOL, 5, 1, 1), p51(OP_MOVE, 0, 0, 0)]);
+        assert_eq!(code.len(), 3, "true+skip lowers to 2 insts then MOVE");
+        assert_eq!(code[0].op(), Op::LoadTrue);
+        assert_eq!(code[0].a(), 5);
+        assert_eq!(code[1].op(), Op::Jmp);
+        assert_eq!(code[1].sj(), 1);
+        assert_eq!(code[2].op(), Op::Move);
     }
 }

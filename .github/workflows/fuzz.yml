@@ -1,0 +1,94 @@
+name: fuzz
+
+on:
+  pull_request:
+    branches: [master, develop]
+  schedule:
+    # Weekly Monday 04:00 UTC — 60 min per target deeper campaign.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # v2.0 Track CV-infra: PR-gate fuzz smoke. 5 min per target,
+  # non-blocking (any crash uploads as artifact, gate doesn't fail
+  # the PR). The point at PR time is to catch regressions that an
+  # incoming change immediately reproduces from scratch; deeper
+  # coverage lives in the weekly cron below.
+  # ─────────────────────────────────────────────────────────────────
+  fuzz-pr-smoke:
+    name: fuzz 5-min smoke (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_parser
+          - fuzz_dump_reader
+          - fuzz_vm_dispatch
+          - fuzz_aot_meta
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: build fuzz target
+        working-directory: crates/luna-fuzz
+        run: cargo +nightly fuzz build ${{ matrix.target }}
+      - name: run fuzz target 5 min
+        working-directory: crates/luna-fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
+      - name: upload artifacts on crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 90
+
+  # ─────────────────────────────────────────────────────────────────
+  # Weekly 60-min deeper campaign. Non-blocking. Any crashes upload
+  # for triage; a per-track CV-content sprint converts them to
+  # regression tests in `crates/<x>/tests/regressions/`.
+  # ─────────────────────────────────────────────────────────────────
+  fuzz-weekly:
+    name: fuzz 60-min weekly (cron)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_parser
+          - fuzz_dump_reader
+          - fuzz_vm_dispatch
+          - fuzz_aot_meta
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: build fuzz target
+        working-directory: crates/luna-fuzz
+        run: cargo +nightly fuzz build ${{ matrix.target }}
+      - name: run fuzz target 60 min
+        working-directory: crates/luna-fuzz
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
+      - name: upload artifacts on crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-weekly-${{ matrix.target }}
+          path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 365

@@ -1,0 +1,3 @@
+[submodule "crates/vendored/wasmtime"]
+	path = crates/vendored/wasmtime
+	url = https://github.com/goliajp/wasmtime.git

@@ -21,15 +21,31 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+      # v2.1 CI blocker fix: exclude LLVM-backed alt-backend crates.
+      # `llvm-jit-probe` + `luna-jit-llvm` unconditionally link inkwell
+      # → llvm-sys → system LLVM 18 + Polly; none of the hosted runners
+      # (ubuntu-latest / macos-latest / windows-latest) ship LLVM 18 +
+      # Polly out of the box (`could not find native static library
+      # Polly`). They are dev-only alt-backend audit crates (v2.1
+      # Cranelift alt-backend RFC) outside the embedder surface; their
+      # build/test gating lives in a dedicated developer-host workflow
+      # to be added when the alt-backend lands real production code.
       - name: cargo build --workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm
       - name: cargo test --workspace --lib
-        run: cargo test --workspace --lib
+        run: cargo test --workspace --lib --exclude llvm-jit-probe --exclude luna-jit-llvm
       - name: cargo test --workspace --release
-        run: cargo test --workspace --release
+        # `--nocapture` propagates test-side eprintln + println straight
+        # to the CI log so a process-level abort (SIGSEGV / SIGILL / signal:
+        # N) leaves the `[official_run] starting Lua5X/file.lua` trail
+        # visible — without it, cargo test buffers per-test output and a
+        # hard abort drops the buffer.
+        run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
       - name: cargo test --doc --workspace
-        run: cargo test --doc --workspace
+        run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
   # ─────────────────────────────────────────────────────────────────
   # wasm32 build of luna-core only (luna pulls Cranelift, which has
@@ -41,6 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -71,6 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
@@ -89,9 +109,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo doc --workspace --no-deps
-        run: cargo doc --workspace --no-deps
+        # See the `native` job comment for the LLVM exclusion rationale.
+        run: cargo doc --workspace --no-deps --exclude llvm-jit-probe --exclude luna-jit-llvm
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -106,13 +129,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: cargo fmt --all -- --check
         run: cargo fmt --all -- --check
       - name: cargo clippy --workspace --all-targets -- -D warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # See the `native` job comment for the LLVM exclusion rationale.
+        run: cargo clippy --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────
   # v1.2 D2 (P-A1 audit): perf-gate bench job. Linux runner + taskset
@@ -130,29 +156,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo bench --bench redis_lua_shape (taskset -c 1)
         run: taskset -c 1 cargo bench --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
 
   # ─────────────────────────────────────────────────────────────────
   # v1.1 F1 + v1.2 G: luna-core's 0 third-party dep contract.
-  # `cargo tree -p luna-core --prefix none` lists exactly one crate
-  # (luna-core itself); anything else is a regression. CI fails fast.
+  # `cargo tree -p luna-core --prefix none --edges normal` lists exactly
+  # one crate (luna-core itself); anything else is a prod-dep regression.
+  # `--edges normal` excludes dev-dependencies (e.g. `dhat`, used by the
+  # v2.0 Track MM `mem_baseline` bench) and build-dependencies — those
+  # never link into the published crate, so the F1 0-third-party-dep
+  # contract is preserved. CI fails fast on regression.
   # ─────────────────────────────────────────────────────────────────
   zero-dep:
     name: luna-core zero-third-party-dep contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo tree -p luna-core
         run: |
-          count=$(cargo tree -p luna-core --prefix none --no-default-features 2>/dev/null \
+          count=$(cargo tree -p luna-core --prefix none --no-default-features --edges normal 2>/dev/null \
                   | grep -cE ' v[0-9]')
-          echo "luna-core dep count = $count"
+          echo "luna-core prod dep count = $count"
           if [ "$count" != "1" ]; then
-            echo "::error::luna-core gained a third-party dependency (count=$count, expected 1)"
-            cargo tree -p luna-core --prefix none --no-default-features
+            echo "::error::luna-core gained a third-party prod dependency (count=$count, expected 1)"
+            cargo tree -p luna-core --prefix none --no-default-features --edges normal
             exit 1
           fi
 
@@ -171,6 +205,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -178,6 +214,34 @@ jobs:
         run: cargo build -p luna-jit --features repl-line-editor
       - name: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
         run: cargo clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────────
+  # v2.0 CV gap fill: feature="send" matrix coverage. SendVm is the
+  # cross-thread embedding path; its tests live in
+  # `crates/luna-core/tests/send_vm.rs` and are gated behind
+  # `#[cfg(feature = "send")]`. Without an explicit CI job, the
+  # default `cargo test` invocation never exercises the feature,
+  # so SendVm bit-rot would only surface at a release-time smoke.
+  # This job builds + clippies + tests luna-core with the feature
+  # flipped on so any regression in the lock / UnsafeCell wrapper
+  # lands as a red gate.
+  # ─────────────────────────────────────────────────────────────────
+  send-feature:
+    name: luna-core --features send build + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo build -p luna-core --features send
+        run: cargo build -p luna-core --features send
+      - name: cargo clippy -p luna-core --features send --tests -- -D warnings
+        run: cargo clippy -p luna-core --features send --tests -- -D warnings
+      - name: cargo test -p luna-core --features send --test send_vm
+        run: cargo test -p luna-core --features send --test send_vm
 
   # ─────────────────────────────────────────────────────────────────
   # G2: unsafe-usage drift detection (introduced in the v1.3 mega
@@ -202,6 +266,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: count first-party unsafe sites
         run: |
           count=$(grep -rE 'unsafe (\{|fn |impl |trait |extern )' \

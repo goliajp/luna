@@ -1,0 +1,101 @@
+name: docs
+
+# v2.0 Track DO-CI — docs rot gate.
+#
+# Three gates fail the build the moment docs drift:
+#
+#   1. cargo doc -D warnings — catches dangling intra-doc links and
+#      (once `#![warn(missing_docs)]` is upgraded to `deny`) any
+#      undocumented public surface.
+#   2. cargo test --doc — catches stale rustdoc examples (snippets
+#      that no longer compile or whose `assert_*` lines no longer
+#      hold against the current public API).
+#   3. lychee — catches markdown link rot in docs/ + root markdown
+#      + crate READMEs. Allow-list lives in `.lycheeignore`
+#      (regex-per-line, comment-friendly).
+#
+# Gates 1 + 2 run on default features. Enabling `--all-features`
+# would pull in `luna-jit`'s `llvm-jit` feature → `luna-jit-llvm` →
+# inkwell → system LLVM 18 + Polly, which the hosted ubuntu-latest
+# runner doesn't ship. Feature-gated doc surface (e.g. SendVm under
+# `#[cfg(feature = "send")]`) is currently `ignore`-marked in the
+# rustdoc examples, so default-feature coverage is sufficient. When
+# a real (non-ignored) feature-gated doctest lands, add a dedicated
+# job that enables the specific feature without `--all-features`.
+#
+# Existing partial coverage in ci.yml (`doc` + `cargo test --doc`
+# steps) is intentionally left in place as defense-in-depth — this
+# workflow is the canonical docs-rot owner. Whichever fails first
+# stops the PR.
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # Gate 1 — rustdoc warnings = build failure.
+  # ─────────────────────────────────────────────────────────────────
+  rustdoc:
+    name: cargo doc -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo doc --no-deps --workspace
+        # Exclude LLVM-backed crates: they link against system LLVM 18
+        # + Polly, which the hosted ubuntu-latest runner doesn't ship
+        # (`could not find native static library Polly`). They are
+        # dev-only alt-backend audit crates (v2.1 Cranelift alt-backend
+        # RFC); not in the embedder surface and not required for
+        # docs-rot detection on the mainline crates. See header comment
+        # for the `--all-features` removal rationale.
+        run: cargo doc --no-deps --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # ─────────────────────────────────────────────────────────────────
+  # Gate 2 — rustdoc examples must compile + pass.
+  # ─────────────────────────────────────────────────────────────────
+  doctest:
+    name: cargo test --doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test --doc --workspace
+        # See `rustdoc` job above for LLVM exclusion + `--all-features`
+        # removal rationale.
+        run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
+
+  # ─────────────────────────────────────────────────────────────────
+  # Gate 3 — markdown link check via lychee.
+  # ─────────────────────────────────────────────────────────────────
+  link-check:
+    name: lychee markdown links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Mirror the local invocation documented in
+          # docs/contributing-docs.md. --include-fragments turns on
+          # in-doc anchor checks (catches renamed section headers).
+          args: >-
+            --include-fragments
+            --no-progress
+            docs/**/*.md
+            crates/*/README.md
+            CHANGELOG.md
+            README.md
+          fail: true

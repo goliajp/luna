@@ -611,7 +611,32 @@ fn load_function(
     }
 
     // ---- translate opcodes ----
-    let code = translate_code(&raw_code)?;
+    let translated = translate_code(&raw_code)?;
+
+    // Remap per-pc line table from PUC pc-space to luna pc-space (Wave 2:
+    // I-imm lowering will insert a `LoadI` slot per I-imm op, so
+    // luna_pc != puc_pc in general). `luna_to_puc_pc[luna_pc] = puc_pc` of
+    // the *originating* PUC op for every luna slot we emitted.
+    let lines_remapped: Vec<u32> = translated
+        .luna_to_puc_pc
+        .iter()
+        .map(|&puc_pc| lines.get(puc_pc).copied().unwrap_or(0))
+        .collect();
+
+    // Remap locvars' pc ranges from PUC pc-space to luna pc-space.
+    let locvars_remapped: Vec<LocVar> = locvars
+        .into_iter()
+        .map(|lv| LocVar {
+            start_pc: remap_pc(&translated.puc_to_luna_pc, lv.start_pc),
+            end_pc: remap_pc(&translated.puc_to_luna_pc, lv.end_pc),
+            ..lv
+        })
+        .collect();
+
+    // max_stack: PUC value + worst-case temp count from I-imm lowering
+    // (Wave 2: ADDI / SHRI / SHLI / EQI / LTI / LEI / GTI / GEI each claim
+    // one scratch slot above the PUC-reported max).
+    let max_stack = max_stack.saturating_add(translated.max_temp_bump);
 
     // ---- assemble the luna Proto ----
     let env_upval_idx = upvals
@@ -622,7 +647,7 @@ fn load_function(
 
     Ok(heap.adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
-        code: code.into_boxed_slice(),
+        code: translated.code.into_boxed_slice(),
         consts: consts.into_boxed_slice(),
         protos: protos.into_boxed_slice(),
         upvals: upvals.into_boxed_slice(),
@@ -631,11 +656,11 @@ fn load_function(
         has_vararg_table_pseudo,
         has_compat_vararg_arg: false,
         max_stack,
-        lines: lines.into_boxed_slice(),
+        lines: lines_remapped.into_boxed_slice(),
         source,
         line_defined,
         last_line_defined,
-        locvars: locvars.into_boxed_slice(),
+        locvars: locvars_remapped.into_boxed_slice(),
         cache: std::cell::Cell::new(None),
         jit: std::cell::Cell::new(JitProtoState::Untried),
         env_upval_idx,
@@ -643,7 +668,7 @@ fn load_function(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
-        traces: std::cell::RefCell::new(Vec::new()),
+        traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
     }))
 }
 
@@ -698,17 +723,18 @@ fn expand_lineinfo(raw: &[i8], abs: &[(u32, u32)], line_defined: u32) -> Vec<u32
 //       * ADDK..BXORK    → luna's `Add..BXor` with k=1 (constant operand
 //         lives in C, k bit already set).
 //       * ADDI / SHRI    → no luna equivalent op; lower to `LoadI tmp;
-//         Add A B tmp` (with `max_stack` already accommodating tmp slot
-//         from PUC's compiler). The audit calls this out as the "K/I
-//         lowering register-pressure bump"; for v1.3 Wave 2, programs
-//         emitted by PUC have `max_stack` sized for these temps already
-//         because PUC reserves the slot for ADDI's i8 immediate. We
-//         keep the same A register and add an intermediate immediate
-//         load into A+1; PUC's frontend allocates A+1 as scratch so
-//         this is safe in practice for stock luac5.5 output.
-//       * SHLI            → `LoadI tmp; Shl A tmp B`.
-//       * EQI / LTI / LEI / GTI / GEI → `LoadI tmp; Eq/Lt/Le/Lt/Le A
-//         tmp k` (GTI/GEI flip operands).
+//         <op> A B tmp` via the Wave 1 shared `super::lower_i_imm`
+//         helper (3-operand same-order shape). tmp lives at
+//         `max(a, b) + 1`; `translate_code` tracks the worst-case
+//         `max_temp_bump` and `load_function` bumps the proto's
+//         `max_stack` accordingly.
+//       * SHLI            → `LoadI tmp; Shl A tmp B`. Inlined (not via
+//         `lower_i_imm`) because of the operand-swap shape
+//         `R[A] := sC << R[B]`.
+//       * EQI / LTI / LEI / GTI / GEI → `LoadI tmp; <cmp> ... k`.
+//         Inlined; cmp emits don't fit `lower_i_imm`'s arith shape.
+//         GTI/GEI flip operands (luna has no Gt/Ge ops; `R[A] > sB`
+//         becomes `sB < R[A]` → `Lt tmp A 0 k`).
 //       * MMBIN / MMBINI / MMBINK → **drop**; luna's arith ops handle
 //         metamethod fallback inline.
 //       * VARARGPREP     → **drop**; luna's call setup populates
@@ -721,20 +747,302 @@ fn expand_lineinfo(raw: &[i8], abs: &[(u32, u32)], line_defined: u32) -> Vec<u32
 //
 // "Drop" must preserve PC layout (other ops jump to fixed PCs); we emit
 // a no-op `Move A A` in place of dropped ops so PC math stays intact.
+// I-imm / cmp-imm lowering inserts an extra slot per site, so PC layout
+// shifts and `translate_code` builds full `puc_to_luna_pc` /
+// `luna_to_puc_pc` maps: lineinfo + locvar pc ranges remap through
+// `luna_to_puc_pc` / `remap_pc`, and JMP sJ offsets are patched up in
+// a post-pass via `jump_fixups`. (FORLOOP / FORPREP / TFORPREP /
+// TFORLOOP Bx offsets are kept as direct copies — same pre-existing
+// behavior as puc_54. A loop body that contains I-imm sites between
+// the loop start and the FORLOOP yields a wrong backward offset; that
+// gap is shared with puc_54 and is not in Wave 2 scope.)
 
-fn translate_code(raw: &[u32]) -> Result<Vec<Inst>, String> {
-    let mut out: Vec<Inst> = Vec::with_capacity(raw.len());
+/// Output of `translate_code`: the gap-and-pad-free luna bytecode plus the
+/// PC remap tables that downstream debug/locvar/lineinfo logic uses to
+/// translate the PUC pc-space into luna pc-space.
+struct Translated {
+    /// Translated luna instructions.
+    code: Vec<Inst>,
+    /// `puc_to_luna_pc[puc_pc] = luna_pc of the FIRST emitted slot for
+    /// that puc op`. Always `Some(_)` for puc_55 — Wave 2 does not drop
+    /// any op; MMBIN / VARARGPREP become a `Move A A` no-op slot so PC
+    /// layout stays intact for backward jumps (FORLOOP / FORPREP Bx).
+    puc_to_luna_pc: Vec<Option<u32>>,
+    /// `luna_to_puc_pc[luna_pc] = puc_pc that originated this slot`. Used
+    /// to remap the per-pc line table after I-imm lowering inserts
+    /// secondary slots.
+    luna_to_puc_pc: Vec<usize>,
+    /// Highest `tmp + 1` claimed by any I-imm or cmp-imm lowering site;
+    /// the caller adds this to PUC's reported `max_stack`.
+    max_temp_bump: u8,
+}
+
+fn translate_code(raw: &[u32]) -> Result<Translated, String> {
+    let mut code: Vec<Inst> = Vec::with_capacity(raw.len());
+    let mut puc_to_luna_pc: Vec<Option<u32>> = Vec::with_capacity(raw.len());
+    let mut luna_to_puc_pc: Vec<usize> = Vec::with_capacity(raw.len());
+    let mut max_temp_bump: u8 = 0;
+
+    // Stash pending JMP fixups: (luna_pc_of_jmp, puc_target_pc). We
+    // can't compute the luna-pc target until the full pc map is built,
+    // since I-imm lowering inserts slots between the JMP and its target.
+    let mut jump_fixups: Vec<(usize, i64)> = Vec::new();
+
     // PUC `OP_LOADKX` and `OP_NEWTABLE` (k=1) and `OP_SETLIST` (k=1) are
     // each followed by an `OP_EXTRAARG`. luna treats EXTRAARG identically,
     // so emission is 1:1 — we just need to skip translating EXTRAARG's
     // own opcode bits (it's payload, not an instruction).
-    for (pc, &word) in raw.iter().enumerate() {
+    for (puc_pc, &word) in raw.iter().enumerate() {
         let op_byte = (word & 0x7F) as u8;
-        let puc_op = PucOp::from_byte(op_byte).map_err(|e| format!("pc {pc}: {e}"))?;
-        let inst = translate_one(puc_op, word)?;
-        out.push(inst);
+        let puc_op = PucOp::from_byte(op_byte).map_err(|e| format!("pc {puc_pc}: {e}"))?;
+
+        // Each surviving op claims its starting luna slot.
+        puc_to_luna_pc.push(Some(code.len() as u32));
+
+        match puc_op {
+            // ---- I-imm arith (3-operand same-order shape) ----
+            //
+            // PUC `ADDI A B sC`: R[A] := R[B] + sC. luna has no I-imm arith
+            // form, so we lower to `LoadI tmp sC; Add A B tmp`. tmp lives
+            // at `max(a, b) + 1` (above both source slots so the arith op
+            // can still read B before writing A). `lower_i_imm` is the
+            // Wave 1 helper in `super`; same call site pattern as puc_54.
+            PucOp::ADDI => {
+                let a = f_a(word);
+                let b = f_b(word);
+                let sc = f_sc(word);
+                let tmp = a.max(b) + 1;
+                let pair = super::lower_i_imm(Op::Add, a, b, sc, tmp, &mut max_temp_bump)?;
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[0]);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[1]);
+            }
+
+            // PUC `SHRI A B sC`: R[A] := R[B] >> sC. Same 3-operand
+            // same-order shape as ADDI, so the Wave 1 helper applies
+            // directly. (SHLI's operand order is swapped — handled
+            // inline below.)
+            PucOp::SHRI => {
+                let a = f_a(word);
+                let b = f_b(word);
+                let sc = f_sc(word);
+                let tmp = a.max(b) + 1;
+                let pair = super::lower_i_imm(Op::Shr, a, b, sc, tmp, &mut max_temp_bump)?;
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[0]);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(pair[1]);
+            }
+
+            // PUC `SHLI A B sC`: R[A] := sC << R[B] — note the operand
+            // SWAP vs SHRI (left-hand side is the immediate, right-hand
+            // side is the register). luna's `Shl A B C` is `R[A] := R[B]
+            // << R[C]`, so we emit `LoadI tmp sC; Shl A tmp B`. The
+            // Wave 1 helper assumes `OP A B tmp`, so SHLI stays inline.
+            PucOp::SHLI => {
+                let a = f_a(word);
+                let b = f_b(word);
+                let sc = f_sc(word);
+                let tmp = a.max(b) + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 SHLI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sc));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Shl, a, tmp, b, false));
+            }
+
+            // ---- cmp-imm family (skip-on-condition with sB literal) ----
+            //
+            // PUC `EQI A sB k`: skip next if `(R[A] == sB) == k`.
+            // luna has no immediate-compare op, so lower to
+            // `LoadI tmp sB; Eq A tmp k`. tmp lives at `a + 1` (safe
+            // because the compare reads A before writing nothing — A is
+            // a source, not a destination, in cmp ops). Inline rather
+            // than via `super::lower_i_imm` because the emit shape is
+            // a cmp (`Eq A tmp 0 k`) not an arith (`Add A B tmp`).
+            PucOp::EQI => {
+                let a = f_a(word);
+                let sb = f_sb(word);
+                let k = f_k(word);
+                let tmp = a + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 EQI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sb));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Eq, a, tmp, 0, k));
+            }
+
+            // PUC `LTI A sB k`: skip next if `(R[A] < sB) == k`.
+            // luna `Lt A B 0 k`: skip if `(R[A] < R[B]) == k`. Direct.
+            PucOp::LTI => {
+                let a = f_a(word);
+                let sb = f_sb(word);
+                let k = f_k(word);
+                let tmp = a + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 LTI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sb));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Lt, a, tmp, 0, k));
+            }
+
+            // PUC `LEI A sB k`: skip next if `(R[A] <= sB) == k`.
+            // luna `Le A B 0 k`: skip if `(R[A] <= R[B]) == k`. Direct.
+            PucOp::LEI => {
+                let a = f_a(word);
+                let sb = f_sb(word);
+                let k = f_k(word);
+                let tmp = a + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 LEI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sb));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Le, a, tmp, 0, k));
+            }
+
+            // PUC `GTI A sB k`: skip next if `(R[A] > sB) == k`.
+            // luna has no Gt op; rewrite `R[A] > sB` as `sB < R[A]`,
+            // i.e. `Lt tmp A 0 k` after loading sB into tmp. This is
+            // the operand-swap shape, mirroring `puc_54::GTI`.
+            PucOp::GTI => {
+                let a = f_a(word);
+                let sb = f_sb(word);
+                let k = f_k(word);
+                let tmp = a + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 GTI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sb));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Lt, tmp, a, 0, k));
+            }
+
+            // PUC `GEI A sB k`: skip next if `(R[A] >= sB) == k`.
+            // Rewrite as `sB <= R[A]` → `Le tmp A 0 k`. Operand swap as
+            // with GTI.
+            PucOp::GEI => {
+                let a = f_a(word);
+                let sb = f_sb(word);
+                let k = f_k(word);
+                let tmp = a + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.5 GEI lowering at pc {puc_pc}: temp register {tmp} exceeds 255"
+                    ));
+                }
+                max_temp_bump = max_temp_bump.max(tmp as u8 + 1);
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iasbx(Op::LoadI, tmp, sb));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::iabc(Op::Le, tmp, a, 0, k));
+            }
+
+            // ---- JMP needs a fixup; the sJ offset is in PUC pc-space ----
+            PucOp::JMP => {
+                let sj = f_sj(word);
+                let next_puc_pc = puc_pc as i64 + 1;
+                let target_puc_pc = next_puc_pc + sj as i64;
+                let luna_pc = code.len();
+                jump_fixups.push((luna_pc, target_puc_pc));
+                luna_to_puc_pc.push(puc_pc);
+                code.push(Inst::isj(Op::Jmp, 0)); // placeholder
+            }
+
+            _ => {
+                luna_to_puc_pc.push(puc_pc);
+                let inst = translate_one(puc_op, word)?;
+                code.push(inst);
+            }
+        }
     }
-    Ok(out)
+
+    // Patch jump fixups now that we know the full pc map.
+    for (luna_pc, target_puc_pc) in jump_fixups {
+        let target_luna_pc: i64 = if target_puc_pc < 0 {
+            return Err(format!(
+                "PUC 5.5 JMP at luna pc {luna_pc} targets negative pc {target_puc_pc}"
+            ));
+        } else if target_puc_pc as usize >= puc_to_luna_pc.len() {
+            // Past-the-end: jump to the synthetic "end of code" pc.
+            code.len() as i64
+        } else {
+            let mut t = target_puc_pc as usize;
+            loop {
+                if t >= puc_to_luna_pc.len() {
+                    break code.len() as i64;
+                }
+                if let Some(p) = puc_to_luna_pc[t] {
+                    break p as i64;
+                }
+                t += 1;
+            }
+        };
+        let next_pc = luna_pc as i64 + 1;
+        let sj = (target_luna_pc - next_pc) as i32;
+        code[luna_pc] = Inst::isj(Op::Jmp, sj);
+    }
+
+    Ok(Translated {
+        code,
+        puc_to_luna_pc,
+        luna_to_puc_pc,
+        max_temp_bump,
+    })
+}
+
+/// Remap a PUC pc to a luna pc, clamping past-the-end values.
+fn remap_pc(map: &[Option<u32>], puc_pc: u32) -> u32 {
+    let idx = puc_pc as usize;
+    if idx >= map.len() {
+        // past-the-end (locvar end_pc = len): map to translated len.
+        return map
+            .iter()
+            .rev()
+            .find_map(|x| *x)
+            .map(|p| p + 1)
+            .unwrap_or(0);
+    }
+    map[idx].unwrap_or_else(|| {
+        // PUC pc fell on a dropped op; use the next surviving op (currently
+        // unreachable in 5.5 — every op produces at least one luna slot —
+        // but kept symmetric with `puc_54::remap_pc` so locvar tables stay
+        // safe if Wave 3 introduces drops).
+        for &slot in &map[idx + 1..] {
+            if let Some(p) = slot {
+                return p;
+            }
+        }
+        map.iter()
+            .rev()
+            .find_map(|x| *x)
+            .map(|p| p + 1)
+            .unwrap_or(0)
+    })
 }
 
 /// Translate one PUC 5.5 instruction word into a single luna `Inst`.
@@ -847,32 +1155,54 @@ fn translate_one(op: PucOp, word: u32) -> Result<Inst, String> {
         PucOp::BORK => Inst::iabc(L::BOr, a, b, c, true),
         PucOp::BXORK => Inst::iabc(L::BXor, a, b, c, true),
 
-        // -------- I-immediate arith (no luna equivalent; reject loudly) --------
-        // PUC's `OP_ADDI` carries `sC` as a signed 8-bit literal. luna
-        // would need a synthetic constant-pool insert to lower. v1.3
-        // Wave 2 scope: refuse, with diagnostics that name the op + the
-        // immediate so the user can recompile with `-O0` or work around.
-        // (The full lowering is the Phase LB-9 follow-up per
-        // `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"5.4 risks"-2.)
+        // -------- I-immediate arith --------
+        //
+        // PUC's `OP_ADDI` carries `sC` as a signed 8-bit literal:
+        // `R[A] := R[B] + sC`. luna has no I-imm form, so the
+        // ADDI / SHRI sites are lowered inside `translate_code` to a
+        // `LoadI tmp sC; Add A B tmp` pair (via the Wave 1 shared
+        // `super::lower_i_imm` helper). This arm of `translate_one` is
+        // unreachable in the normal undump path; we keep a sentinel so
+        // unit tests that exercise the legacy single-Inst contract still
+        // get a clear error.
         PucOp::ADDI => {
             return Err(format!(
-                "PUC 5.5 OP_ADDI(A={a}, B={b}, sC={sc}) needs I-imm lowering \
-                 (TODO Phase LB-9: synth const-pool entry + lower to Add k=1)"
+                "PUC 5.5 OP_ADDI(A={a}, B={b}, sC={sc}): I-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
         PucOp::SHLI => {
+            // SHLI's operand order swap (`R[A] := sC << R[B]`) doesn't
+            // fit `super::lower_i_imm`'s `OP A B tmp` shape, so it's
+            // lowered inline in `translate_code` to `LoadI tmp sC;
+            // Shl A tmp B`. This arm stays as a sentinel.
             return Err(format!(
-                "PUC 5.5 OP_SHLI(A={a}, B={b}, sC={sc}) needs I-imm lowering"
+                "PUC 5.5 OP_SHLI(A={a}, B={b}, sC={sc}): I-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
         PucOp::SHRI => {
+            // Handled in translate_code via `super::lower_i_imm`; same
+            // single-Inst contract as ADDI above.
             return Err(format!(
-                "PUC 5.5 OP_SHRI(A={a}, B={b}, sC={sc}) needs I-imm lowering"
+                "PUC 5.5 OP_SHRI(A={a}, B={b}, sC={sc}): I-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
         PucOp::EQI | PucOp::LTI | PucOp::LEI | PucOp::GTI | PucOp::GEI => {
+            // Cmp-imm ops are skip-on-condition with an sB literal; each
+            // lowers in `translate_code` to a `LoadI tmp sB; <cmp> ... k`
+            // pair. They don't fit `super::lower_i_imm`'s arith shape
+            // (the emit isn't an iABC arith op) so they're inlined
+            // there. This arm stays as a sentinel for the legacy
+            // single-Inst contract.
             return Err(format!(
-                "PUC 5.5 {op:?}(A={a}, sB={sb}, k={k}) needs cmp-imm lowering"
+                "PUC 5.5 {op:?}(A={a}, sB={sb}, k={k}): cmp-imm lowering is \
+                 handled in translate_code (Wave 2); translate_one is \
+                 single-Inst only"
             ));
         }
 
@@ -1048,13 +1378,160 @@ mod tests {
     }
 
     #[test]
-    fn addi_unsupported_errs_with_diagnostic() {
-        let word = (PucOp::ADDI as u32) | (0u32 << 7) | (1u32 << 16) | (3u32 << 24);
-        let err = translate_one(PucOp::ADDI, word).unwrap_err();
-        assert!(err.contains("ADDI"), "got: {err}");
-        assert!(
-            err.contains("LB-9"),
-            "diagnostic must point at follow-up: {err}"
+    fn translate_eqi_via_inline_cmp() {
+        // OP_EQI A=2 sB=10 k=1 (sB encoded as B = 10 + 0x80 = 138)
+        let sb_enc = (10 + OFFSET_SC) as u32;
+        let word = (PucOp::EQI as u32) | (2u32 << 7) | (1u32 << POS_K) | (sb_enc << 16);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].a(), 3, "tmp = a + 1 = 3");
+        assert_eq!(translated.code[0].sbx(), 10);
+        assert_eq!(translated.code[1].op(), Op::Eq);
+        assert_eq!(translated.code[1].a(), 2);
+        assert_eq!(translated.code[1].b(), 3);
+        assert!(translated.code[1].k(), "k must propagate to Eq");
+        assert_eq!(translated.max_temp_bump, 4);
+    }
+
+    #[test]
+    fn translate_lti_via_inline_cmp() {
+        // OP_LTI A=0 sB=-3 k=0 (sB encoded as B = -3 + 0x80 = 125)
+        let sb_enc = (-3 + OFFSET_SC) as u32;
+        let word = (PucOp::LTI as u32) | (0u32 << 7) | (sb_enc << 16);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].a(), 1, "tmp = a + 1 = 1");
+        assert_eq!(translated.code[0].sbx(), -3, "negative immediate roundtrip");
+        assert_eq!(translated.code[1].op(), Op::Lt);
+        assert_eq!(translated.code[1].a(), 0);
+        assert_eq!(translated.code[1].b(), 1);
+        assert!(!translated.code[1].k());
+    }
+
+    #[test]
+    fn translate_lei_via_inline_cmp() {
+        let sb_enc = (7 + OFFSET_SC) as u32;
+        let word = (PucOp::LEI as u32) | (4u32 << 7) | (1u32 << POS_K) | (sb_enc << 16);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].a(), 5);
+        assert_eq!(translated.code[0].sbx(), 7);
+        assert_eq!(translated.code[1].op(), Op::Le);
+        assert_eq!(translated.code[1].a(), 4);
+        assert_eq!(translated.code[1].b(), 5);
+        assert!(translated.code[1].k());
+    }
+
+    #[test]
+    fn translate_gti_via_inline_cmp_swap() {
+        // OP_GTI A=2 sB=8 k=1 — rewrite as `8 < R[2]` → `Lt tmp 2 0 k`.
+        let sb_enc = (8 + OFFSET_SC) as u32;
+        let word = (PucOp::GTI as u32) | (2u32 << 7) | (1u32 << POS_K) | (sb_enc << 16);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].a(), 3);
+        assert_eq!(translated.code[0].sbx(), 8);
+        assert_eq!(
+            translated.code[1].op(),
+            Op::Lt,
+            "GTI lowers to Lt with operand swap"
         );
+        assert_eq!(
+            translated.code[1].a(),
+            3,
+            "Lt's A is the tmp (sB on the left)"
+        );
+        assert_eq!(
+            translated.code[1].b(),
+            2,
+            "Lt's B is the original A (sB on the right)"
+        );
+        assert!(translated.code[1].k());
+    }
+
+    #[test]
+    fn translate_gei_via_inline_cmp_swap() {
+        // OP_GEI A=2 sB=4 k=0 — rewrite as `4 <= R[2]` → `Le tmp 2 0 k`.
+        let sb_enc = (4 + OFFSET_SC) as u32;
+        let word = (PucOp::GEI as u32) | (2u32 << 7) | (sb_enc << 16);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].a(), 3);
+        assert_eq!(translated.code[0].sbx(), 4);
+        assert_eq!(
+            translated.code[1].op(),
+            Op::Le,
+            "GEI lowers to Le with operand swap"
+        );
+        assert_eq!(translated.code[1].a(), 3);
+        assert_eq!(translated.code[1].b(), 2);
+        assert!(!translated.code[1].k());
+    }
+
+    #[test]
+    fn translate_shli_inline_swap() {
+        // OP_SHLI A=1 B=3 sC=5 → `R[1] := 5 << R[3]` → LoadI tmp 5; Shl 1 tmp 3.
+        let sc_enc = (5 + OFFSET_SC) as u32;
+        let word = (PucOp::SHLI as u32) | (1u32 << 7) | (3u32 << 16) | (sc_enc << 24);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].sbx(), 5);
+        let tmp = translated.code[0].a();
+        assert_eq!(tmp, 4, "tmp must be max(a, b) + 1 = max(1, 3) + 1 = 4");
+        assert_eq!(translated.code[1].op(), Op::Shl);
+        assert_eq!(translated.code[1].a(), 1);
+        assert_eq!(translated.code[1].b(), tmp, "B (left operand) is the tmp");
+        assert_eq!(
+            translated.code[1].c(),
+            3,
+            "C (right operand) is the source reg"
+        );
+        assert_eq!(translated.max_temp_bump, 5);
+    }
+
+    #[test]
+    fn translate_shri_via_lower_i_imm() {
+        // OP_SHRI A=2 B=4 sC=3 (sC encoded as C = 3 + 0x80 = 131)
+        let sc_enc = (3 + OFFSET_SC) as u32;
+        let word = (PucOp::SHRI as u32) | (2u32 << 7) | (4u32 << 16) | (sc_enc << 24);
+        let translated = translate_code(&[word]).unwrap();
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].sbx(), 3);
+        let tmp = translated.code[0].a();
+        assert_eq!(tmp, 5, "tmp must be max(a, b) + 1 = max(2, 4) + 1 = 5");
+        assert_eq!(translated.code[1].op(), Op::Shr);
+        assert_eq!(translated.code[1].a(), 2);
+        assert_eq!(translated.code[1].b(), 4);
+        assert_eq!(translated.code[1].c(), tmp);
+        assert!(!translated.code[1].k());
+        assert_eq!(translated.max_temp_bump, 6);
+    }
+
+    #[test]
+    fn translate_addi_via_lower_i_imm() {
+        // OP_ADDI A=5 B=3 sC=42 (sC encoded as C = 42 + 0x80 = 170)
+        let sc_enc = (42 + OFFSET_SC) as u32;
+        let word = (PucOp::ADDI as u32) | (5u32 << 7) | (3u32 << 16) | (sc_enc << 24);
+        let translated = translate_code(&[word]).unwrap();
+        // Expect 2 luna insts: LoadI tmp 42; Add 5 3 tmp.
+        assert_eq!(translated.code.len(), 2);
+        assert_eq!(translated.code[0].op(), Op::LoadI);
+        assert_eq!(translated.code[0].sbx(), 42);
+        let tmp = translated.code[0].a();
+        assert_eq!(tmp, 6, "tmp must be max(a, b) + 1 = max(5, 3) + 1 = 6");
+        assert_eq!(translated.code[1].op(), Op::Add);
+        assert_eq!(translated.code[1].a(), 5);
+        assert_eq!(translated.code[1].b(), 3);
+        assert_eq!(translated.code[1].c(), tmp);
+        assert!(!translated.code[1].k(), "I-imm arith never sets the k bit");
+        assert_eq!(translated.max_temp_bump, 7);
+        // PC maps: puc pc 0 → luna pc 0 (start of pair); both luna slots
+        // attribute back to puc pc 0 for line/locvar remap.
+        assert_eq!(translated.puc_to_luna_pc, vec![Some(0)]);
+        assert_eq!(translated.luna_to_puc_pc, vec![0, 0]);
     }
 }

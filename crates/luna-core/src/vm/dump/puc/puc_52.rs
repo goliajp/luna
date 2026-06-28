@@ -422,7 +422,13 @@ fn read_function(
     }
 
     // Translate the raw 5.2 instruction stream into luna ops.
-    let (code, translated_lines) = translate_code(&raw_code, &lines, &consts)?;
+    let (code, translated_lines, max_temp_bump) = translate_code(&raw_code, &lines, &consts)?;
+    // K-on-LHS / K-on-both arith, EQ/LT/LE with constant operands, and
+    // GETTABUP-with-register-key all lower through scratch temp registers
+    // allocated above PUC's reported `max_stack`. Bump the frame so the
+    // runtime growth check accounts for them. PUC tops out below 250 so
+    // saturating add is safe.
+    let max_stack = max_stack.saturating_add(max_temp_bump);
 
     // PUC `_ENV` lookup: by 5.2 convention the main chunk's first
     // upvalue is named `_ENV`. Compute the cached index for the VM's
@@ -458,7 +464,7 @@ fn read_function(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
-        traces: std::cell::RefCell::new(Vec::new()),
+        traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
     }))
 }
 
@@ -487,7 +493,7 @@ fn translate_code(
     raw_code: &[u32],
     lines: &[u32],
     _consts: &[Value],
-) -> Result<(Vec<Inst>, Vec<u32>), String> {
+) -> Result<(Vec<Inst>, Vec<u32>, u8), String> {
     let n_src = raw_code.len();
     // Sizing pass: for each src PC, the number of luna ops we'll emit.
     // Also track which src PCs are "data payloads" that follow a
@@ -530,6 +536,7 @@ fn translate_code(
 
     let mut out: Vec<Inst> = Vec::with_capacity(dst_pc as usize);
     let mut out_lines: Vec<u32> = Vec::with_capacity(dst_pc as usize);
+    let mut max_temp_bump: u8 = 0;
     let mut src_pc = 0;
     while src_pc < n_src {
         if is_data_payload[src_pc] {
@@ -547,7 +554,14 @@ fn translate_code(
         } else {
             None
         };
-        translate_one(&mut out, src_pc, p, &src_to_dst, payload)?;
+        translate_one(
+            &mut out,
+            src_pc,
+            p,
+            &src_to_dst,
+            payload,
+            &mut max_temp_bump,
+        )?;
         let emitted = out.len() - pre_emit;
         if emitted as u32 != sizes[src_pc] {
             return Err(format!(
@@ -560,13 +574,38 @@ fn translate_code(
         }
         src_pc += 1;
     }
-    Ok((out, out_lines))
+    Ok((out, out_lines, max_temp_bump))
 }
 
 fn src_size(p: PucInst) -> Result<u32, String> {
     match p.op {
         P_JMP if p.a != 0 => Ok(2),     // Close + Jmp
         P_SETLIST if p.c == 0 => Ok(2), // SetList + ExtraArg payload
+        // arith with K on B / C lowers to `LoadK tmp; OP a tmp c/k`. K on
+        // both adds a second LoadK for the C operand.
+        P_ADD | P_SUB | P_MUL | P_DIV | P_MOD | P_POW => {
+            let b_isk = (p.b & RK_BIT) != 0;
+            let c_isk = (p.c & RK_BIT) != 0;
+            match (b_isk, c_isk) {
+                (false, _) => Ok(1),    // C-K maps to luna's k flag, no temp
+                (true, false) => Ok(2), // LoadK tmp K[B]; OP a tmp c
+                (true, true) => Ok(3),  // LoadK tmpB; LoadK tmpC; OP a tmpB tmpC
+            }
+        }
+        // Eq/Lt/Le with K on B or C lowers via tmp(s). luna's Eq/Lt/Le take
+        // R[A] R[B] with the k bit reserved for the truth sense, so K can't
+        // be folded into either operand — every K becomes a LoadK tmp.
+        P_EQ | P_LT | P_LE => {
+            let b_isk = (p.b & RK_BIT) != 0;
+            let c_isk = (p.c & RK_BIT) != 0;
+            Ok(1 + (b_isk as u32) + (c_isk as u32))
+        }
+        // GETTABUP with a *register* key (PUC's C is R, not K) lowers to
+        // `GetUpval tmp B; GetTable a tmp c`. K-string keys stay 1:1.
+        P_GETTABUP => {
+            let c_isk = (p.c & RK_BIT) != 0;
+            Ok(if c_isk { 1 } else { 2 })
+        }
         _ => Ok(1),
     }
 }
@@ -600,6 +639,7 @@ fn translate_one(
     p: PucInst,
     src_to_dst: &[u32],
     setlist_payload: Option<u32>,
+    max_temp_bump: &mut u8,
 ) -> Result<(), String> {
     let a = p.a;
     match p.op {
@@ -637,19 +677,29 @@ fn translate_one(
         // R(A) := UpValue[B][RK(C)]
         P_GETTABUP => {
             let (c_idx, c_isk) = decode_rk(p.c)?;
-            if !c_isk {
-                // PUC's GETTABUP K(C) is the by-name field-fetch case;
-                // luna's GetTabUp requires K-string. A register key is
-                // valid 5.2 (e.g. dynamic lookup through a captured
-                // table) but the luna VM's dispatch path for GetTabUp
-                // assumes a string K. Lower to: GetUpval tmp B; GetTable
-                // A tmp C — but tmp clashes with stack. For first cut,
-                // reject; PUC's compiler always emits a K name here.
-                return Err(
-                    "PUC 5.2 translator: GETTABUP with register key not supported".to_string(),
-                );
+            if c_isk {
+                // K-string key — luna's GetTabUp handles this 1:1.
+                out.push(Inst::iabc(Op::GetTabUp, a, p.b, c_idx as u32, false));
+            } else {
+                // Register-key case: PUC 5.2 emits `R[A] := UpValue[B][R[C]]`
+                // for dynamic lookups through a captured table. luna's
+                // GetTabUp only accepts a K-string key, so lower to:
+                // `GetUpval tmp B; GetTable A tmp C`. Use `tmp = max(a, c) + 1`
+                // to avoid clobbering either operand before the GetTable
+                // reads them. PUC's compiler reserves the slot for this
+                // pattern's intermediate so `max_stack` is already close;
+                // the post-pass bump tops it off.
+                let tmp = a.max(c_idx as u32) + 1;
+                if tmp > 0xFF {
+                    return Err(format!(
+                        "PUC 5.2 translator: GETTABUP register-key lowering: \
+                         temp register {tmp} exceeds 255 (src_pc {src_pc})"
+                    ));
+                }
+                *max_temp_bump = (*max_temp_bump).max(tmp as u8 + 1);
+                out.push(Inst::iabc(Op::GetUpval, tmp, p.b, 0, false));
+                out.push(Inst::iabc(Op::GetTable, a, tmp, c_idx as u32, false));
             }
-            out.push(Inst::iabc(Op::GetTabUp, a, p.b, c_idx as u32, false));
         }
         // R(A) := R(B)[RK(C)]
         P_GETTABLE => {
@@ -721,28 +771,14 @@ fn translate_one(
             out.push(Inst::iabc(Op::SelfOp, a, p.b, c_idx as u32, c_isk));
         }
         // Arithmetic: R(A) := RK(B) op RK(C). luna's Add/Sub/etc. only
-        // support val-as-K via the `k` bit; key-as-K would need a
-        // LoadK-tmp lowering. Mirror SETTABLE: when B is K we still
-        // load it through a tmp slot above max_stack — but for first
-        // cut, support val-K and reject mixed-K (PUC's compiler usually
-        // only puts one operand as K).
+        // support val-as-K via the `k` bit (C operand). PUC 5.2 places
+        // either or both operands in K (e.g. `1 - x` or `1 + 2` if not
+        // const-folded), so we materialize K-on-LHS via the shared
+        // `lower_k_via_tmp` helper; K-on-both expands to two LoadKs +
+        // reg-reg op. Sizes here must match `src_size`.
         op @ (P_ADD | P_SUB | P_MUL | P_DIV | P_MOD | P_POW) => {
             let (b_idx, b_isk) = decode_rk(p.b)?;
             let (c_idx, c_isk) = decode_rk(p.c)?;
-            if b_isk && c_isk {
-                return Err(format!(
-                    "PUC 5.2 translator: arithmetic op with both operands K not supported (src_pc {src_pc})"
-                ));
-            }
-            // If B is K, we'd need to swap (only commutative ops would
-            // be safe). For first cut, reject; PUC normally puts the K
-            // on the right (C). The compiler does emit `K op R` for
-            // expressions like `1 - x`; treat as a known gap.
-            if b_isk {
-                return Err(format!(
-                    "PUC 5.2 translator: arithmetic op with K on left operand not supported (src_pc {src_pc})"
-                ));
-            }
             let luna_op = match op {
                 P_ADD => Op::Add,
                 P_SUB => Op::Sub,
@@ -752,7 +788,52 @@ fn translate_one(
                 P_POW => Op::Pow,
                 _ => unreachable!(),
             };
-            out.push(Inst::iabc(luna_op, a, b_idx as u32, c_idx as u32, c_isk));
+            match (b_isk, c_isk) {
+                // Common case: R op R, or R op K (luna's `k` bit fits).
+                (false, _) => {
+                    out.push(Inst::iabc(luna_op, a, b_idx as u32, c_idx as u32, c_isk));
+                }
+                // K op R: LoadK tmp K[B]; OP a tmp c. tmp must clear
+                // both `a` and `c` so the OP's reg reads are intact
+                // when it writes `a`.
+                (true, false) => {
+                    let tmp = a.max(c_idx as u32) + 1;
+                    let pair = super::lower_k_via_tmp(
+                        luna_op,
+                        a,
+                        b_idx as u32,
+                        c_idx as u32,
+                        false,
+                        tmp,
+                        max_temp_bump,
+                    )?;
+                    out.push(pair[0]);
+                    out.push(pair[1]);
+                }
+                // K op K: PUC's compiler normally const-folds these, but
+                // a stripped or hand-crafted chunk can present them.
+                // LoadK tmpB K[B]; LoadK tmpC K[C]; OP a tmpB tmpC.
+                (true, true) => {
+                    let tmp_b = a + 1;
+                    let tmp_c = a + 2;
+                    if tmp_c > 0xFF {
+                        return Err(format!(
+                            "PUC 5.2 translator: arith K-on-both lowering: \
+                             temp register {tmp_c} exceeds 255 (src_pc {src_pc})"
+                        ));
+                    }
+                    if (b_idx as u32) > 0x1FFFF || (c_idx as u32) > 0x1FFFF {
+                        return Err(format!(
+                            "PUC 5.2 translator: arith K-on-both lowering: \
+                             K-pool index exceeds 17-bit Bx (src_pc {src_pc})"
+                        ));
+                    }
+                    *max_temp_bump = (*max_temp_bump).max(tmp_c as u8 + 1);
+                    out.push(Inst::iabx(Op::LoadK, tmp_b, b_idx as u32));
+                    out.push(Inst::iabx(Op::LoadK, tmp_c, c_idx as u32));
+                    out.push(Inst::iabc(luna_op, a, tmp_b, tmp_c, false));
+                }
+            }
         }
         // Unary: R(A) := op R(B)
         P_UNM => out.push(Inst::iabc(Op::Unm, a, p.b, 0, false)),
@@ -787,10 +868,10 @@ fn translate_one(
             out.push(Inst::isj(Op::Jmp, sj));
         }
         // Comparison: if ((RK(B) op RK(C)) ~= A) then pc++. luna's
-        // Eq/Lt/Le take registers R[A], R[B] and a `k` flag (matches
-        // the sense from PUC's A). Key-as-K isn't independently
-        // expressible in luna's Eq/Lt/Le encoding — same caveat as the
-        // arith ops.
+        // Eq/Lt/Le take registers R[A], R[B] with the `k` bit reserved
+        // for the truth-sense (PUC's `A` field). Constant operands can't
+        // be folded into either side, so each K becomes a `LoadK tmp` emit.
+        // Sizes here must match `src_size`.
         op @ (P_EQ | P_LT | P_LE) => {
             let (b_idx, b_isk) = decode_rk(p.b)?;
             let (c_idx, c_isk) = decode_rk(p.c)?;
@@ -800,23 +881,59 @@ fn translate_one(
                 P_LE => Op::Le,
                 _ => unreachable!(),
             };
-            // luna's Eq compares R[A] vs R[B] (no K on either side).
-            // PUC 5.2 may put either or both operands in K. For
-            // K-on-both / K-on-RHS without luna support, route through
-            // an unsupported error — most compiled chunks use one R + one
-            // K, which we can't represent here. Document this as the
-            // primary 5.2 limitation.
-            if b_isk || c_isk {
-                return Err(format!(
-                    "PUC 5.2 translator: {luna_op:?} with constant operand not supported (src_pc {src_pc})"
-                ));
-            }
             // PUC's `A` is the "expected truth" bit (skip if cmp != A).
             // luna's `k` bit means the same thing. Map A->k directly.
             let k = a != 0;
-            out.push(Inst::iabc(luna_op, b_idx as u32, c_idx as u32, 0, k));
-            // PUC emits TEST/comparison followed by JMP that adjusts
-            // the PC. luna does the same. No additional emit here.
+            // Materialize K operand(s) into temps that clear the existing
+            // register payload, then emit a reg-reg compare. Temp slots
+            // grow upward from `max(b_reg, c_reg) + 1`; when only one
+            // side is K, the temp goes one above the live reg.
+            let live_max = match (b_isk, c_isk) {
+                (false, false) => 0, // unreachable in this branch (no K)
+                (true, false) => c_idx as u32,
+                (false, true) => b_idx as u32,
+                (true, true) => 0,
+            };
+            let mut next_tmp = live_max + 1;
+            let mut alloc_tmp = || -> Result<u8, String> {
+                let t = next_tmp;
+                if t > 0xFF {
+                    return Err(format!(
+                        "PUC 5.2 translator: comparison K lowering: \
+                         temp register {t} exceeds 255 (src_pc {src_pc})"
+                    ));
+                }
+                next_tmp += 1;
+                *max_temp_bump = (*max_temp_bump).max(t as u8 + 1);
+                Ok(t as u8)
+            };
+            let b_reg = if b_isk {
+                let t = alloc_tmp()?;
+                if (b_idx as u32) > 0x1FFFF {
+                    return Err(format!(
+                        "PUC 5.2 translator: comparison K lowering: \
+                         B K-pool index {b_idx} exceeds 17-bit Bx (src_pc {src_pc})"
+                    ));
+                }
+                out.push(Inst::iabx(Op::LoadK, t as u32, b_idx as u32));
+                t as u32
+            } else {
+                b_idx as u32
+            };
+            let c_reg = if c_isk {
+                let t = alloc_tmp()?;
+                if (c_idx as u32) > 0x1FFFF {
+                    return Err(format!(
+                        "PUC 5.2 translator: comparison K lowering: \
+                         C K-pool index {c_idx} exceeds 17-bit Bx (src_pc {src_pc})"
+                    ));
+                }
+                out.push(Inst::iabx(Op::LoadK, t as u32, c_idx as u32));
+                t as u32
+            } else {
+                c_idx as u32
+            };
+            out.push(Inst::iabc(luna_op, b_reg, c_reg, 0, k));
         }
         // if not (R(A) <=> C) then pc++. luna's Test reads R[A], k bit
         // is the sense. PUC's C is the expected truth; map C->k.
@@ -998,6 +1115,7 @@ mod tests {
             },
             &[0, 1],
             None,
+            &mut 0,
         )
         .unwrap();
         assert_eq!(out[0].op(), Op::LoadFalse);
@@ -1016,6 +1134,7 @@ mod tests {
             },
             &[0, 1],
             None,
+            &mut 0,
         )
         .unwrap();
         assert_eq!(out[0].op(), Op::LFalseSkip);
@@ -1033,8 +1152,306 @@ mod tests {
             },
             &[0, 1],
             None,
+            &mut 0,
         )
         .unwrap();
         assert_eq!(out[0].op(), Op::LoadTrue);
+    }
+
+    // -- Wave 2 punt recovery: arith K-on-LHS / K-on-both ---------------
+
+    #[test]
+    fn arith_k_on_rhs_emits_one_inst_with_k_flag() {
+        // R[2] := R[3] + K[5]  →  Add a=2 b=3 c=5 k=true (single emit).
+        let mut out = Vec::new();
+        let mut bump: u8 = 0;
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_ADD,
+                a: 2,
+                b: 3,
+                c: 5 | RK_BIT,
+            },
+            &[0, 1],
+            None,
+            &mut bump,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].op(), Op::Add);
+        assert_eq!(out[0].a(), 2);
+        assert_eq!(out[0].b(), 3);
+        assert_eq!(out[0].c(), 5);
+        assert!(out[0].k());
+        assert_eq!(bump, 0, "no temp needed when only C is K");
+    }
+
+    #[test]
+    fn arith_k_on_lhs_lowers_via_loadk_tmp() {
+        // R[1] := K[7] - R[2]  →  LoadK tmp K[7]; Sub 1 tmp 2.
+        let mut out = Vec::new();
+        let mut bump: u8 = 0;
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_SUB,
+                a: 1,
+                b: 7 | RK_BIT,
+                c: 2,
+            },
+            &[0, 1],
+            None,
+            &mut bump,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].op(), Op::LoadK);
+        let tmp = out[0].a();
+        assert!(tmp > 2, "tmp ({tmp}) must clear both a=1 and c=2");
+        assert_eq!(out[0].bx(), 7);
+        assert_eq!(out[1].op(), Op::Sub);
+        assert_eq!(out[1].a(), 1);
+        assert_eq!(out[1].b(), tmp);
+        assert_eq!(out[1].c(), 2);
+        assert!(!out[1].k(), "k flag stays clear when lowering K-on-LHS");
+        assert_eq!(bump, tmp as u8 + 1);
+    }
+
+    #[test]
+    fn arith_k_on_both_lowers_via_two_loadks() {
+        // R[0] := K[3] * K[4]  →  LoadK tmpB K[3]; LoadK tmpC K[4]; Mul 0 tmpB tmpC.
+        let mut out = Vec::new();
+        let mut bump: u8 = 0;
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_MUL,
+                a: 0,
+                b: 3 | RK_BIT,
+                c: 4 | RK_BIT,
+            },
+            &[0, 1],
+            None,
+            &mut bump,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].op(), Op::LoadK);
+        assert_eq!(out[0].bx(), 3);
+        assert_eq!(out[1].op(), Op::LoadK);
+        assert_eq!(out[1].bx(), 4);
+        assert_eq!(out[2].op(), Op::Mul);
+        assert_eq!(out[2].a(), 0);
+        assert_eq!(out[2].b(), out[0].a());
+        assert_eq!(out[2].c(), out[1].a());
+        assert_ne!(out[0].a(), out[1].a(), "tmpB and tmpC must differ");
+        assert!(bump >= 3, "frame must grow to hold two new temps");
+    }
+
+    #[test]
+    fn arith_all_six_ops_round_trip_k_on_lhs() {
+        // Sanity that ADD/SUB/MUL/DIV/MOD/POW all reach the same lowering arm.
+        for (puc_op, luna_op) in [
+            (P_ADD, Op::Add),
+            (P_SUB, Op::Sub),
+            (P_MUL, Op::Mul),
+            (P_DIV, Op::Div),
+            (P_MOD, Op::Mod),
+            (P_POW, Op::Pow),
+        ] {
+            let mut out = Vec::new();
+            translate_one(
+                &mut out,
+                0,
+                PucInst {
+                    op: puc_op,
+                    a: 0,
+                    b: 1 | RK_BIT,
+                    c: 2,
+                },
+                &[0, 1],
+                None,
+                &mut 0,
+            )
+            .unwrap();
+            assert_eq!(out[0].op(), Op::LoadK);
+            assert_eq!(out[1].op(), luna_op);
+        }
+    }
+
+    // -- Wave 2 punt recovery: EQ/LT/LE with constant operands -----------
+
+    #[test]
+    fn eq_with_k_on_rhs_lowers_via_loadk_tmp() {
+        // (R[3] == K[1]) ~= 1  →  LoadK tmp K[1]; Eq R[3] tmp k=true.
+        let mut out = Vec::new();
+        let mut bump: u8 = 0;
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_EQ,
+                a: 1, // truth bit
+                b: 3,
+                c: 1 | RK_BIT,
+            },
+            &[0, 1],
+            None,
+            &mut bump,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].op(), Op::LoadK);
+        let tmp = out[0].a();
+        assert!(tmp > 3, "tmp must clear live reg b=3");
+        assert_eq!(out[0].bx(), 1);
+        assert_eq!(out[1].op(), Op::Eq);
+        assert_eq!(out[1].a(), 3);
+        assert_eq!(out[1].b(), tmp);
+        assert!(out[1].k(), "PUC A=1 maps to luna k=true");
+        assert_eq!(bump, tmp as u8 + 1);
+    }
+
+    #[test]
+    fn lt_with_k_on_lhs_lowers_via_loadk_tmp() {
+        // (K[2] < R[5]) ~= 0  →  LoadK tmp K[2]; Lt tmp R[5] k=false.
+        let mut out = Vec::new();
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_LT,
+                a: 0,
+                b: 2 | RK_BIT,
+                c: 5,
+            },
+            &[0, 1],
+            None,
+            &mut 0,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].op(), Op::LoadK);
+        let tmp = out[0].a();
+        assert!(tmp > 5, "tmp must clear live reg c=5");
+        assert_eq!(out[1].op(), Op::Lt);
+        assert_eq!(out[1].a(), tmp);
+        assert_eq!(out[1].b(), 5);
+        assert!(!out[1].k());
+    }
+
+    #[test]
+    fn le_with_k_on_both_lowers_via_two_loadks() {
+        // (K[0] <= K[2]) ~= 1  →  LoadK tmpB K[0]; LoadK tmpC K[2]; Le tmpB tmpC k=true.
+        let mut out = Vec::new();
+        let mut bump: u8 = 0;
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_LE,
+                a: 1,
+                b: 0 | RK_BIT,
+                c: 2 | RK_BIT,
+            },
+            &[0, 1],
+            None,
+            &mut bump,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].op(), Op::LoadK);
+        assert_eq!(out[0].bx(), 0);
+        assert_eq!(out[1].op(), Op::LoadK);
+        assert_eq!(out[1].bx(), 2);
+        assert_eq!(out[2].op(), Op::Le);
+        assert_eq!(out[2].a(), out[0].a());
+        assert_eq!(out[2].b(), out[1].a());
+        assert!(out[2].k());
+        assert_ne!(out[0].a(), out[1].a());
+        assert!(bump >= 2);
+    }
+
+    // -- Wave 2 punt recovery: GETTABUP with register key ---------------
+
+    #[test]
+    fn gettabup_register_key_lowers_to_getupval_gettable() {
+        // R[1] := UpValue[0][R[2]]  →  GetUpval tmp 0; GetTable 1 tmp 2.
+        let mut out = Vec::new();
+        let mut bump: u8 = 0;
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_GETTABUP,
+                a: 1,
+                b: 0,
+                c: 2, // register, RK_BIT not set
+            },
+            &[0, 1],
+            None,
+            &mut bump,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].op(), Op::GetUpval);
+        let tmp = out[0].a();
+        assert!(tmp > 2, "tmp must clear a=1 and c=2");
+        assert_eq!(out[0].b(), 0, "GetUpval reads upval slot from B");
+        assert_eq!(out[1].op(), Op::GetTable);
+        assert_eq!(out[1].a(), 1);
+        assert_eq!(out[1].b(), tmp);
+        assert_eq!(out[1].c(), 2);
+        assert_eq!(bump, tmp as u8 + 1);
+    }
+
+    #[test]
+    fn gettabup_constant_key_stays_one_inst() {
+        // Sanity: K-string key path unchanged (still 1:1).
+        let mut out = Vec::new();
+        translate_one(
+            &mut out,
+            0,
+            PucInst {
+                op: P_GETTABUP,
+                a: 1,
+                b: 0,
+                c: 4 | RK_BIT,
+            },
+            &[0, 1],
+            None,
+            &mut 0,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].op(), Op::GetTabUp);
+    }
+
+    // -- src_size mirrors translate_one for all Wave 2 cases ------------
+
+    #[test]
+    fn src_size_matches_emits_for_wave2_punts() {
+        let cases = [
+            // (puc_op, b, c, expected_size, label)
+            (P_ADD, 1, 2, 1, "R + R"),
+            (P_ADD, 1, 2 | RK_BIT, 1, "R + K (fits luna k bit)"),
+            (P_SUB, 1 | RK_BIT, 2, 2, "K - R"),
+            (P_MUL, 1 | RK_BIT, 2 | RK_BIT, 3, "K * K"),
+            (P_EQ, 1, 2, 1, "R == R"),
+            (P_LT, 1, 2 | RK_BIT, 2, "R < K"),
+            (P_LE, 1 | RK_BIT, 2, 2, "K <= R"),
+            (P_EQ, 1 | RK_BIT, 2 | RK_BIT, 3, "K == K"),
+            (P_GETTABUP, 0, 4 | RK_BIT, 1, "GETTABUP K key"),
+            (P_GETTABUP, 0, 2, 2, "GETTABUP R key"),
+        ];
+        for (op, b, c, expected, label) in cases {
+            let p = PucInst { op, a: 0, b, c };
+            let size = src_size(p).unwrap();
+            assert_eq!(size, expected, "src_size mismatch: {label}");
+        }
     }
 }

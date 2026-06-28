@@ -117,14 +117,23 @@ fn type_tag(v: Value) -> c_int {
 /// install the Cranelift backend here (matching v1.0 behavior where
 /// JIT was on by default for C callers). luna-core's
 /// `Vm::new_minimal` itself defaults to `NullJitBackend`.
+///
+/// v2.0 J-B follow-up — route through `crate::install_default_jit`
+/// so the `CraneliftBackend` install is paired with a fresh
+/// `CraneliftJitStorage`. Calling `install_jit_backend` alone leaves
+/// `Vm.jit.storage` at the default `NullJitStorage`; the trait-pair
+/// invariant means the first JIT compile path that downcasts storage
+/// (via `jit_backend::storage::from_storage`) would observe a type
+/// mismatch. Pre-fix that downcast was an `expect` panic which
+/// became SIGABRT across the C-ABI boundary (panic-can't-unwind);
+/// the `Result` conversion in `storage::from_storage` makes mismatch
+/// gracefully skip JIT, but the right thing here is still to install
+/// both halves so the JIT actually runs for capi callers.
 // SAFETY: `no_mangle` is required for the C ABI symbol to be linkable as `lua_*` by external C/C++ callers; this crate is the sole producer of these symbols within any final binary that links it.
 #[unsafe(no_mangle)]
 pub extern "C" fn luaL_newstate() -> *mut LuaState {
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
-    vm.install_jit_backend(
-        crate::jit_backend::CraneliftBackend,
-        crate::jit_backend::CraneliftBackend,
-    );
+    crate::install_default_jit(&mut vm);
     let l = Box::new(LuaState { vm });
     Box::into_raw(l)
 }

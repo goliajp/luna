@@ -9,6 +9,7 @@
 
 use crate::compiler::compile_chunk;
 use crate::frontend::{SyntaxError, parse};
+use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
 use crate::runtime::heap::GcHeader;
 use crate::runtime::{
@@ -194,6 +195,18 @@ pub struct Vm {
     /// (Phase LB Wave 2 — currently returns "not yet implemented" stubs).
     /// Embedder toggles via `set_puc_bytecode_loading`.
     pub(crate) puc_bytecode_loading: bool,
+    /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`.
+    /// Default [`Vm::DEFAULT_LOADER_INPUT_BUDGET`] (256 MiB). When the
+    /// accumulated reader output (`load(f, ...)`) or a one-shot `&[u8]`
+    /// source exceeds this, the loader returns the PUC-shaped
+    /// `not enough memory` error before the host allocator is asked to
+    /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
+    /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
+    /// crosses `isize::MAX` or the host runs out of RAM. Tracked at
+    /// `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
+    /// Embedders that genuinely need to load > 256 MiB sources widen the
+    /// cap via [`Vm::set_loader_input_budget`].
+    pub(crate) loader_input_budget: usize,
     /// In-process log of fully-emitted warnings (each entry = one flushed
     /// message, sans the "Lua warning: " prefix and trailing newline). Lets
     /// tests assert what was warned without scraping stderr.
@@ -293,6 +306,16 @@ pub struct Vm {
     /// back if non-empty, else extends `host_roots`. Generation
     /// overflow at `u32::MAX` retires the slot (NOT pushed here).
     pub(crate) host_roots_free: Vec<u32>,
+
+    /// v2.1 — GC-rooted scratch stack for `table.sort` (and any other
+    /// builtin that needs a Rust-side `Vec<Value>` to outlive a user
+    /// callback). Each entry is one in-flight working buffer; `gc_roots`
+    /// extends with every contained `Value` so a `collectgarbage()`
+    /// inside the comparator cannot free strings/tables snapshotted
+    /// here. Nested sorts push a new buffer on entry, pop on exit
+    /// (sort.lua's `load(..)(); collectgarbage()` compare callback
+    /// regression).
+    pub(crate) sort_scratch: Vec<Vec<Value>>,
 
     /// v1.3 Phase ML — MacroLua compile-time macro registry.
     /// Pre-populated with built-in macros (`@quote` / `@unquote` /
@@ -924,6 +947,7 @@ impl Vm {
             instr_budget: None,
             bytecode_loading: true,
             puc_bytecode_loading: false,
+            loader_input_budget: Vm::DEFAULT_LOADER_INPUT_BUDGET,
             registry: None,
             file_mt: None,
             io_input: None,
@@ -956,6 +980,7 @@ impl Vm {
                 crate::frontend::macro_expander::MacroRegistry::new()
             },
             host_roots_free: Vec::new(),
+            sort_scratch: Vec::new(),
             // v1.2 Track B — LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),
@@ -1022,6 +1047,25 @@ impl Vm {
     {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
+    }
+
+    /// v2.0 Track J sub-step J-B — install a caller-supplied JIT
+    /// storage holder. Default is [`crate::jit::NullJitStorage`];
+    /// the `luna_jit` crate's `install_default_jit` pairs this with
+    /// `install_jit_backend(CraneliftBackend, CraneliftBackend)` to
+    /// also install a fresh `CraneliftJitStorage`. Storage holds
+    /// the per-`Vm` JIT cache + handle collections that used to be
+    /// `thread_local!`s in `luna_jit::jit_backend`.
+    ///
+    /// Idempotency: re-installing storage on a Vm that already
+    /// holds compiled-trace pointers WILL evict their owners (the
+    /// old `CraneliftJitStorage`'s `JITModule`s drop their mmap
+    /// pages). Call right after construction for a clean swap.
+    pub fn install_jit_storage<S>(&mut self, storage: S)
+    where
+        S: crate::jit::JitStorage + 'static,
+    {
+        self.jit.storage = Box::new(storage);
     }
 
     /// v1.1 A1 Session A — install the no-op JIT backend. `try_compile`
@@ -1271,6 +1315,18 @@ impl Vm {
 
     /// Parse + compile a chunk and close it over the globals table.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
+        // Reject oversize input *before* handing the parser/lexer a
+        // potentially multi-GB slice. The PUC-shaped `not enough memory`
+        // message keeps `heavy.lua::loadrep` compatibility: that test
+        // accepts either `string length overflow` or `not enough memory`
+        // as the failure mode for a feeder loop that outruns the host
+        // allocator. See `set_loader_input_budget`.
+        if src.len() > self.loader_input_budget {
+            return Err(SyntaxError {
+                line: 0,
+                msg: b"not enough memory".to_vec(),
+            });
+        }
         // a precompiled (binary) chunk is undumped; source is parsed + compiled
         let is_bytecode = crate::vm::dump::is_binary_chunk(src);
         if is_bytecode && !self.bytecode_loading {
@@ -1478,10 +1534,14 @@ impl Vm {
         // are Float). The JIT's `GetUpval` ValueRead path uses this
         // to default-pin upvalue reads to Float without a tag check.
         let float_only = version <= crate::version::LuaVersion::Lua52;
-        match self
-            .jit
+        // v2.0 Track J sub-step J-B — split-borrow JitState so the
+        // trait method can take `&mut dyn JitStorage` without
+        // double-borrowing self.jit.
+        let jit = &mut self.jit;
+        let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
+        match jit
             .chunk_compiler
-            .try_compile(proto, pre53, float_only)
+            .try_compile(storage, proto, pre53, float_only)
         {
             crate::jit::CompileResult::Compiled {
                 entry,
@@ -2160,8 +2220,20 @@ impl Vm {
     /// Install a hook on `target` (`None`/current thread → the live VM fields;
     /// another, suspended thread → its saved `Coro` state). PUC `debug.sethook`
     /// with an optional thread argument.
+    ///
+    /// `target == None` means "no explicit thread argument" — PUC binds that
+    /// to `L` (the running thread). luna's live VM fields (`self.hook`,
+    /// `self.frames`, `self.stack`) ARE the running thread's state, regardless
+    /// of whether that's the main thread or a currently-resumed coroutine
+    /// (save/restore happens at resume/yield boundaries via `load_coro_ctx`/
+    /// `store_coro_ctx`). So a `None` target should always route to
+    /// `install_hook` on the live fields. The pre-fix predicate gate
+    /// `is_current_thread(target)` returned `false` when running inside a
+    /// coroutine (`self.current = Some(co)`, `target = None` don't match)
+    /// and silently dropped the hook on the floor — the install happened on
+    /// no thread at all.
     pub(crate) fn set_hook(&mut self, target: Option<Gc<Coro>>, state: HookState) {
-        if self.is_current_thread(target) {
+        if target.is_none() || self.is_current_thread(target) {
             self.install_hook(state);
         } else if let Some(co) = target {
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -2646,6 +2718,24 @@ impl Vm {
             // v1.3 SR — free-list slots carry Value::Nil (GC no-op).
             roots.push(slot.value);
         }
+        // v2.1 — `table.sort` and similar builtins stash their working
+        // `Vec<Value>` here so a `collectgarbage()` invoked inside the
+        // comparator callback doesn't free strings/tables snapshotted
+        // off the live table (sort.lua's `load(..)(); collectgarbage()`
+        // compare regression).
+        for buf in &self.sort_scratch {
+            roots.extend_from_slice(buf);
+        }
+        // v2.1 — the running-natives chain holds Gc<NativeClosure>s
+        // mid-execution. Without rooting them here, a `collectgarbage()`
+        // invoked inside the running native (sort.lua AA `load(..)();
+        // collectgarbage()` compare callback regression) sweeps the
+        // closure that's actively executing, leaving `nc.upvals`
+        // dangling and the Rust local `nc` pointing at recycled memory
+        // — the SIGSEGV pops on the very next field access or pop.
+        for &nc in &self.running_natives {
+            roots.push(Value::Native(nc));
+        }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
         if let Some(h) = self.hook.func {
@@ -2872,12 +2962,66 @@ impl Vm {
         &self.jit.counters.closed_lens
     }
 
+    /// v2.0 Track-R R2 — see [`crate::vm::jit_state::JitCounters::close_cause_counts`].
+    /// Per-reason close-cause counts (recorder-side abort/discard +
+    /// lowerer-side dispatch_off labels) keyed by `&'static str`.
+    pub fn trace_close_cause_counts(&self) -> &std::collections::HashMap<&'static str, u64> {
+        &self.jit.counters.close_cause_counts
+    }
+
+    /// v2.0 Track-R R3b — number of compiled traces whose
+    /// `CompiledTrace.downrec_link` is `Some(_)` (lowerer's
+    /// `downrec_idx_opt` arm emitted the stitch sentinel + caller-pc
+    /// guard scaffold). R3b regression pin checks `>= 1` on a fib(3)
+    /// hot loop with p16-on. R3b keeps `dispatchable = false` even
+    /// when this count bumps; R3d will lift it.
+    pub fn trace_downrec_link_compiled_count(&self) -> u64 {
+        self.jit.counters.downrec_link_compiled
+    }
+
+    /// v2.0 Track-R R3c — see
+    /// [`crate::vm::jit_state::JitCounters::downrec_dispatched`]. Number
+    /// of times the dispatcher's `is_downrec_sentinel` arm fired and
+    /// classified the return as a caller-pc-guard HIT.
+    pub fn trace_downrec_dispatched_count(&self) -> u64 {
+        self.jit.counters.downrec_dispatched
+    }
+
+    /// v2.0 Track-R R3c — see
+    /// [`crate::vm::jit_state::JitCounters::downrec_deopt`]. Number of
+    /// times the dispatcher entered a `downrec_link`-bearing trace and
+    /// the trace returned via the lowerer's deopt block (caller-pc
+    /// guard MISS), or the dispatcher itself force-deopted via the
+    /// stitch-cycle checkpoint.
+    pub fn trace_downrec_deopt_count(&self) -> u64 {
+        self.jit.counters.downrec_deopt
+    }
+
+    /// v2.0 Track-R R3d — see
+    /// [`crate::vm::jit_state::JitCounters::multi_way_guard_emitted`].
+    /// Number of compiled traces whose lowerer emitted a multi-way
+    /// caller-pc guard chain (>= 2 distinct `caller_pc` candidates)
+    /// at the `TraceEnd::DownRec` close + lifted `dispatchable = true`.
+    pub fn trace_multi_way_guard_emitted_count(&self) -> u64 {
+        self.jit.counters.multi_way_guard_emitted
+    }
+
     /// P12-S2.C — number of closed traces the lowerer compiled and
     /// parked on `Proto.traces`. Re-records of the same head_pc are
     /// deduped (the second close finds the head_pc already cached
     /// and skips compile), so this never exceeds `trace_closed_count`.
     pub fn trace_compiled_count(&self) -> u64 {
         self.jit.counters.compiled
+    }
+
+    /// v2.1 Phase 1I.B — number of times the recorder captured a
+    /// [`crate::jit::trace_types::FieldIcSnapshot`] under
+    /// `LUNA_JIT_FIELD_IC=1`. Stays 0 on the env-default path. Used
+    /// by the Phase 1I.B opt-in fire test to verify the env gate
+    /// wiring round-trips end-to-end (env -> recorder -> snapshot
+    /// -> counter -> getter -> assertion).
+    pub fn trace_field_ic_snapshot_count(&self) -> u64 {
+        self.jit.counters.field_ic_snapshot_captured
     }
 
     /// P12-S2.C — number of closed traces the lowerer rejected
@@ -3075,6 +3219,24 @@ impl Vm {
         self.jit.counters.closure_emit
     }
 
+    /// v2.0 Stage 7 polish 6 fire experiment — see
+    /// [`crate::vm::jit_state::JitCounters::per_exit_inline_compiled`].
+    /// Number of compiled traces whose `per_exit_inline.len() > 0`
+    /// (depth>0 inlined cmp side-exits emitted).
+    pub fn trace_per_exit_inline_compiled_count(&self) -> u64 {
+        self.jit.counters.per_exit_inline_compiled
+    }
+
+    /// v2.0 Stage 7 polish 6 fire experiment — see
+    /// [`crate::vm::jit_state::JitCounters::per_exit_inline_dispatchable`].
+    /// Number of compiled traces with `per_exit_inline.len() > 0` AND
+    /// `dispatchable == true` — i.e. the count of compiled traces
+    /// that would actually exercise the AOT polish 6 chain-reloc +
+    /// deploy-resolver path.
+    pub fn trace_per_exit_inline_dispatchable_count(&self) -> u64 {
+        self.jit.counters.per_exit_inline_dispatchable
+    }
+
     /// P12-S4-step1 diagnostic — max `inline_depth` ever seen on any
     /// `RecordedOp` pushed by the recorder. Tells tests + tuning
     /// whether a self-recursive function actually walked the depth
@@ -3093,6 +3255,16 @@ impl Vm {
             Some(CallFrame::Lua(f)) => Some(*f),
             _ => None,
         }
+    }
+
+    /// v2.0 Track TL Phase 2 — read-only borrow of the current call
+    /// stack, for the [`crate::vm::inspect`] pure-read accessors used
+    /// by `luna-tools` (`luna-profile`'s sampler walks this from
+    /// inside a `Count` hook). Sibling-module scope: not part of the
+    /// public embedder surface, but `inspect::frames_for_profile` is.
+    #[doc(hidden)]
+    pub(super) fn inspect_frames(&self) -> &[CallFrame] {
+        &self.frames
     }
 
     /// P12-S4-step4b — ensure the value stack covers indices
@@ -3556,6 +3728,27 @@ impl Vm {
     /// Current PUC bytecode-loading gate state.
     pub fn puc_bytecode_loading(&self) -> bool {
         self.puc_bytecode_loading
+    }
+
+    /// Default loader input budget — 256 MiB.
+    ///
+    /// `Vm::load` and the Lua-level `load(reader, ...)` both refuse
+    /// sources whose byte length crosses this cap, returning the
+    /// PUC-shaped `not enough memory` error rather than letting the
+    /// host allocator try (and crash) to hold the next chunk.
+    pub const DEFAULT_LOADER_INPUT_BUDGET: usize = 256 * 1024 * 1024;
+
+    /// Set the loader input byte budget (see
+    /// [`Vm::DEFAULT_LOADER_INPUT_BUDGET`]). Pass `usize::MAX` to
+    /// effectively disable. Smaller caps are honored verbatim — a 0
+    /// cap rejects every non-empty source.
+    pub fn set_loader_input_budget(&mut self, bytes: usize) {
+        self.loader_input_budget = bytes;
+    }
+
+    /// Current loader input byte budget.
+    pub fn loader_input_budget(&self) -> usize {
+        self.loader_input_budget
     }
 
     /// Take the error traceback captured at the latest error point and
@@ -5559,7 +5752,100 @@ impl Vm {
                     }
                 };
                 if let Some(kind) = self_link_trip {
-                    rec.self_link_kind = Some(kind);
+                    // v2.0 Track-R R3.3+ sub-0 — SelfLink relax for
+                    // self-recursive patterns at frame depth >= 2.
+                    //
+                    // Pre sub-0: a SelfLink trip at the head_pc re-entry
+                    // unconditionally stamped `self_link_kind`. The
+                    // R3a `downrec_close` marker can only fire from the
+                    // depth>0 Op::Return path (`rec.retfs` chain),
+                    // which never reaches the recorder for fib(28)-like
+                    // shapes that hit the SelfLink cycle catch BEFORE
+                    // any base-case Return — leaving `downrec_close`
+                    // None and routing the trace through R1's safe
+                    // `dispatchable=false` `"self-link-retf-r1"` path
+                    // (audit measured `trace_dispatched = 0`).
+                    //
+                    // Sub-0 lift: when the SelfLink trip fires AND
+                    // `cur_depth >= 2` (the count > RECUNROLL_THRESHOLD
+                    // gate already requires this — kept explicit as a
+                    // safety floor), route the close through `downrec_
+                    // close` INSTEAD of `self_link_kind`. The recorder
+                    // synthesises the close marker from the most
+                    // recent Op::Call at depth `cur_depth - 1`:
+                    //   - `return_pc` = `call.pc + 1` (caller's resume
+                    //     PC after the recursive call returns; mirror
+                    //     of R3a's `caller_pc` derivation at the
+                    //     depth>0 Op::Return capture path below).
+                    //   - `target_proto` = `call.proto` (caller's
+                    //     proto; equals `rec.head_proto` for self-
+                    //     recursion).
+                    //   - `depth_delta` = `1` (today's recorder always
+                    //     unrolls one level; R3a uses the same
+                    //     constant).
+                    //
+                    // The lowerer's `end_idx` picker (`trace.rs:3729`)
+                    // routes through `TraceEnd::DownRec` ahead of the
+                    // `self_link_kind` arm; the R3b/R3d lowerer arm
+                    // emits the stitch-sentinel + caller-pc-guard
+                    // scaffold. Single-candidate guard chain (sub-0's
+                    // recorder produces 1 caller_pc candidate because
+                    // `rec.retfs` is empty) keeps `dispatchable=false`
+                    // + `"downrec-stitch-pending"` label (per R3d's
+                    // `multi_way_candidate_count >= 2` gate at
+                    // `trace.rs:7385`). Net behaviour: trace compiles
+                    // under DownRec routing; interp runs the
+                    // recursion naturally → result 317811.
+                    //
+                    // The `cur_depth >= 2` gate is automatically
+                    // satisfied by the count > RECUNROLL_THRESHOLD=2
+                    // trip condition (3 ancestor frames sharing
+                    // head_proto implies cur_depth >= 3), kept
+                    // explicit so a future RECUNROLL_THRESHOLD tweak
+                    // doesn't silently flip shallow-recursion
+                    // shapes (cur_depth == 1) onto the DownRec arm.
+                    //
+                    // R3.3+ sub-1/2/3/4 will replace the depth-baked
+                    // op_offsets[] addressing with runtime base_var
+                    // threading so the trace's recorded body is
+                    // depth-relative and the DownRec dispatch
+                    // becomes wall-clock-positive. Sub-0 is the
+                    // routing scaffold; it does not aim for gain.
+                    let _ = kind;
+                    let relaxed_to_downrec = cur_depth >= 2 && rec.downrec_close.is_none() && {
+                        let caller_depth_u8 = (cur_depth - 1) as u8;
+                        if let Some(call_op) = rec.ops.iter().rev().find(|r| {
+                            r.inline_depth == caller_depth_u8
+                                && matches!(r.inst.op(), crate::vm::isa::Op::Call)
+                        }) {
+                            rec.downrec_close = Some(crate::jit::trace::DownRecClose {
+                                return_pc: call_op.pc + 1,
+                                target_proto: call_op.proto,
+                                depth_delta: 1,
+                            });
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if relaxed_to_downrec {
+                        // R2 close-cause taxonomy: tag the lift so
+                        // probes can tally the fire rate. Mirrors
+                        // R3a's `"downrec-restart"` bump for the
+                        // depth>0 Op::Return path (different trip
+                        // origin, same downstream routing). The
+                        // existing `"self-link-retf-r1"` label still
+                        // fires for trips that DON'T relax (no
+                        // candidate Op::Call ancestor in rec.ops, or
+                        // cur_depth < 2) via the lowerer's
+                        // dispatch_off_reason mirror at the close
+                        // handler — kept as a regression safety net.
+                        self.jit
+                            .counters
+                            .bump_close_cause("selflink-yields-to-downrec");
+                    } else {
+                        rec.self_link_kind = Some(kind);
+                    }
                 }
                 let should_close =
                     at_head_loop || returned_past_head || depth_cap_hit || self_link_trip.is_some();
@@ -5675,6 +5961,16 @@ impl Vm {
                             .counters
                             .closed_lens
                             .push((rec.is_call_triggered, rec.ops.len()));
+                        // v2.0 Track-R R2 — partial-coverage discard
+                        // close path. Pre-R2 this site bumped `closed`
+                        // + `closed_lens` (visibility) but no per-
+                        // reason label, so probes couldn't separate a
+                        // real successful close from a discard tally.
+                        // Tag explicitly to make the recorder-side
+                        // close-cause taxonomy single-source.
+                        self.jit
+                            .counters
+                            .bump_close_cause("partial-coverage-discard");
                         self.jit.active_trace = None;
                         // Continue with interp loop — don't
                         // fall through to compile path.
@@ -5755,11 +6051,15 @@ impl Vm {
                                 aot: false,
                             };
                             // v1.1 A1 Session A — route through trace_compiler.
-                            match self
-                                .jit
-                                .trace_compiler
-                                .try_compile_trace(&closed_record, opts)
-                            {
+                            // v2.0 Track J sub-step J-B — split-borrow JitState
+                            // so the trait method can take `&mut dyn JitStorage`.
+                            let result = {
+                                let jit = &mut self.jit;
+                                let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
+                                jit.trace_compiler
+                                    .try_compile_trace(storage, &closed_record, opts)
+                            };
+                            match result {
                                 Some(mut ct) => {
                                     // P12-S5-A/B/C — tally Sinkable sites
                                     // + actually-sunk-emit sites + materialise
@@ -5776,8 +6076,61 @@ impl Vm {
                                     if ct.is_inline_abort_close {
                                         self.jit.counters.inline_abort += 1;
                                     }
+                                    // v2.0 Stage 7 polish 6 fire
+                                    // experiment — split tally so a
+                                    // probe can answer the AOT
+                                    // `accepted_with_per_exit_inline`
+                                    // gate's question at the JIT
+                                    // surface too: how many compiled
+                                    // traces emitted depth>0 cmp
+                                    // side-exits, and how many of
+                                    // those survived all the
+                                    // `dispatchable = false` pins
+                                    // (`InlineAbort-gate`,
+                                    // `self-link-retf-r1`,
+                                    // `downrec-stitch-pending`, etc.).
+                                    if !ct.per_exit_inline.is_empty() {
+                                        self.jit.counters.per_exit_inline_compiled += 1;
+                                        if ct.dispatchable {
+                                            self.jit.counters.per_exit_inline_dispatchable += 1;
+                                        }
+                                    }
                                     if let Some(reason) = ct.dispatch_off_reason {
                                         self.jit.counters.dispatch_off_reasons.push(reason);
+                                        // v2.0 Track-R R2 — mirror
+                                        // the ordered Vec push into
+                                        // the per-reason HashMap so
+                                        // probes can answer "how many
+                                        // of each dispatch_off label
+                                        // fired" in O(1) without
+                                        // walking the Vec. Same
+                                        // bucket as the recorder-side
+                                        // abort/discard tags above.
+                                        self.jit.counters.bump_close_cause(reason);
+                                    }
+                                    // v2.0 Track-R R3b — count
+                                    // compiled traces that carry a
+                                    // down-recursion stitch link.
+                                    // Bumped here (not at the lowerer
+                                    // emit site) because the Vm's
+                                    // JitCounters live on the Vm,
+                                    // and the lowerer doesn't have a
+                                    // Vm handle. R3b's regression
+                                    // pin reads this via
+                                    // `Vm::trace_downrec_link_compiled_count`.
+                                    if ct.downrec_link.is_some() {
+                                        self.jit.counters.downrec_link_compiled += 1;
+                                    }
+                                    // v2.0 Track-R R3d — multi-way
+                                    // guard emit counter. Bumped when
+                                    // the lowerer's R3d arm collected
+                                    // >= 2 distinct caller_pc candidates
+                                    // and lifted `dispatchable=true`.
+                                    // R3c's single-CMP shape stores
+                                    // `1` here without bumping; non-
+                                    // DownRec closes store `0`.
+                                    if ct.downrec_multi_way_count >= 2 {
+                                        self.jit.counters.multi_way_guard_emitted += 1;
                                     }
                                     // P15-A v2-A — side-trace finalisation.
                                     // Pin `dispatchable=false` so the
@@ -5928,7 +6281,7 @@ impl Vm {
                                         }
                                         drop(parent_traces);
                                     }
-                                    head_proto.traces.borrow_mut().push(std::rc::Rc::new(ct));
+                                    head_proto.traces.borrow_mut().push(TArc::new(ct));
                                     self.jit.counters.compiled += 1;
                                 }
                                 None => {
@@ -5997,9 +6350,147 @@ impl Vm {
                         inline_depth: depth_u8,
                         var_count,
                     };
+                    // v2.0 Track-R R1 — depth>0 Return0/Return1 mirrors
+                    // LuaJIT's `IR_RETF` (lj_record.c:922+ lj_record_ret).
+                    // Captured as a side-channel `RetfRecord` parallel to
+                    // `ops` when `p16_self_link_enabled` is on. R3's
+                    // down-rec stitch consumes these to guard side-trace
+                    // inlined-frame topology against the recorded shape.
+                    // Gated on the same flag as the cycle catch so the
+                    // ship-default path (p16 off) sees zero behavior
+                    // change. `caller_pc` is the recorded enclosing Call's
+                    // pc + 1 — interp's resume point after the inlined
+                    // frame pops.
+                    if self.jit.p16_self_link_enabled
+                        && depth_u8 > 0
+                        && matches!(
+                            inst.op(),
+                            crate::vm::isa::Op::Return0 | crate::vm::isa::Op::Return1
+                        )
+                    {
+                        let results: u8 = match inst.op() {
+                            crate::vm::isa::Op::Return0 => 0,
+                            crate::vm::isa::Op::Return1 => 1,
+                            _ => 0,
+                        };
+                        // Most recent Op::Call recorded at the caller's
+                        // depth (`depth_u8 - 1`) is the frame this Return
+                        // is unwinding from. Reverse scan stops at the
+                        // first match.
+                        let caller_depth = depth_u8 - 1;
+                        let caller_call = rec.ops.iter().rev().find(|r| {
+                            r.inline_depth == caller_depth
+                                && matches!(r.inst.op(), crate::vm::isa::Op::Call)
+                        });
+                        let caller_pc = caller_call.map(|r| r.pc + 1).unwrap_or(pc);
+                        // v2.0 Track-R R3a — capture the caller's proto
+                        // for the RetfRecord. LuaJIT `IR_RETF.op1`
+                        // equivalent. For fib(28) the caller's proto
+                        // equals the trace head; for future mutual
+                        // recursion the recorded Op::Call's proto is the
+                        // right target. Fallback to head_proto when no
+                        // enclosing Call op was captured (mirrors
+                        // `caller_pc`'s fallback to the Return's own pc).
+                        let caller_proto = caller_call.map(|r| r.proto).unwrap_or(rec.head_proto);
+                        rec.retfs.push(crate::jit::trace::RetfRecord {
+                            from_depth: depth_u8,
+                            to_depth: caller_depth,
+                            results,
+                            caller_pc,
+                            proto: caller_proto,
+                        });
+                        // v2.0 Track-R R3a — DownRec close trigger:
+                        // count RetfRecords on this recording whose
+                        // `proto` matches `caller_proto` (LuaJIT
+                        // `check_downrec_unroll` chain filter
+                        // `op1 == ptref`). Threshold mirrors
+                        // RECUNROLL_THRESHOLD; first trip stamps the
+                        // `downrec_close` marker, subsequent retfs
+                        // keep the marker without overwrite. The
+                        // lowerer's end_idx picker routes through
+                        // TraceEnd::DownRec when the marker is set;
+                        // R3a's tail emit still falls through to R1's
+                        // safe deopt path so fib(28) result stays
+                        // 317_811. R3b lifts.
+                        if rec.downrec_close.is_none() {
+                            let caller_proto_ptr = caller_proto.as_ptr();
+                            let prior_match_count = rec
+                                .retfs
+                                .iter()
+                                .filter(|r| r.proto.as_ptr() == caller_proto_ptr)
+                                .count();
+                            // Strictly-greater-than threshold matches
+                            // LuaJIT `count + J->tailcalled > recunroll`.
+                            // The newly-pushed retf is already counted.
+                            if prior_match_count > crate::jit::trace::RECUNROLL_THRESHOLD {
+                                rec.downrec_close = Some(crate::jit::trace::DownRecClose {
+                                    return_pc: caller_pc,
+                                    target_proto: caller_proto,
+                                    depth_delta: 1,
+                                });
+                                // R2 close-cause taxonomy: tag the
+                                // restart with `"downrec-restart"`. R3b
+                                // adds `"downrec-stitch-failed"` when
+                                // the lifted back-edge falls back to
+                                // deopt.
+                                self.jit.counters.bump_close_cause("downrec-restart");
+                            }
+                        }
+                    }
+                    // v2.1 Phase 1I.B — capture FieldIcSnapshot for the
+                    // FIRST eligible Op::GetField site under env-gate
+                    // LUNA_JIT_FIELD_IC=1. "Eligible" means:
+                    //   - R[B] is Value::Table with metatable.is_none()
+                    //   - K[C] is Value::Str
+                    //   - The string key actually occupies a hash slot
+                    //     (so the IC's slot_idx is a real index, not
+                    //     a probe sentinel).
+                    // Once captured, subsequent GetFields skip this
+                    // logic (rec.field_ic_snapshot.is_some() short-
+                    // circuits). Env-OFF short-circuits on the cached
+                    // atomic check inside field_ic_enabled().
+                    if rec.field_ic_snapshot.is_none()
+                        && matches!(inst.op(), crate::vm::isa::Op::GetField)
+                        && crate::jit::trace_types::field_ic_enabled()
+                    {
+                        let b = inst.b();
+                        let c_idx = inst.c() as usize;
+                        let r_b = self.stack[(base + b) as usize];
+                        if let Value::Table(g) = r_b
+                            && g.metatable().is_none()
+                            && c_idx < cl.proto.consts.len()
+                            && let Value::Str(s) = cl.proto.consts[c_idx]
+                        {
+                            let key = Value::Str(s);
+                            let tbl_ref = &*g;
+                            if let Some(slot_idx) = tbl_ref.find_node_idx(key)
+                                && let Some(val) = tbl_ref.node_val_at(slot_idx)
+                            {
+                                let op_idx = rec.ops.len() as u32;
+                                rec.field_ic_snapshot =
+                                    Some(crate::jit::trace_types::FieldIcSnapshot {
+                                        op_idx,
+                                        nodes_len: tbl_ref.nodes_capacity() as u64,
+                                        slot_idx: slot_idx as u64,
+                                        key_ptr_bits: s.as_ptr() as u64,
+                                        cached_val_tag: val.tag_byte(),
+                                    });
+                                self.jit.counters.field_ic_snapshot_captured += 1;
+                            }
+                        }
+                    }
                     if !rec.push(op) {
+                        // v2.0 Track-R R2 — recorder overflow
+                        // (MAX_TRACE_LEN). Pre-R2 this site bumped
+                        // `aborted` with no reason label, leaving the
+                        // overflow indistinguishable from any other
+                        // abort cause that might be added later.
+                        // Tag it explicitly under the close-cause
+                        // bucket so probes can tally overflow vs
+                        // other abort causes in O(1).
                         self.jit.active_trace = None;
                         self.jit.counters.aborted += 1;
+                        self.jit.counters.bump_close_cause("trace-overflow");
                     }
                 }
             }
@@ -6037,12 +6528,50 @@ impl Vm {
             // reads fields via auto-deref. fib_28 saves ~5 Rc::clone
             // operations per dispatch × 434k = ~2.2M Rc atomic ops
             // (~1-2% gain measured separately).
+            // v2.0 Track-R R3c — one-shot consume of the
+            // `suppress_downrec_admit_once` flag. Set by the R3c
+            // downrec post-invoke arm below when it force-deopts the
+            // trace (caller-pc guard miss OR cycle-budget exhausted)
+            // so the NEXT interpreter loop iteration skips the
+            // downrec admit, lets interp run the op at `head_pc`,
+            // advances `pc` past `head_pc`, and breaks the otherwise-
+            // infinite admit loop. Reading + clearing here means a
+            // single dispatch tick consumes the suppression — the
+            // following tick re-admits naturally (with the budget
+            // also reset by the deopt site).
+            let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
+            self.jit.suppress_downrec_admit_once = false;
             if self.jit.trace_enabled
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
                         .iter()
-                        .find(|t| t.head_pc == pc && t.dispatchable)
+                        .find(|t| {
+                            if t.head_pc != pc {
+                                return false;
+                            }
+                            let is_downrec = t.downrec_link.is_some();
+                            // v2.0 Track-R R3c — the one-shot suppress
+                            // flag blocks any admit (primary or fallback)
+                            // for `downrec_link`-bearing traces so the
+                            // next interp iter can run the natural op
+                            // at `head_pc` and advance past it. R3d's
+                            // `dispatchable=true` lift means the suppress
+                            // must also cover the primary `t.dispatchable`
+                            // arm — otherwise the lifted lookup would
+                            // immediately re-admit after a force-deopt
+                            // and the infinite loop returns.
+                            if is_downrec && downrec_admit_blocked {
+                                return false;
+                            }
+                            // Primary arm: `dispatchable=true` traces
+                            // (R3d-lifted DownRec or normal traces).
+                            // Fallback arm: R3c-shape `dispatchable=false`
+                            // DownRec traces (single-CMP guard kept
+                            // pinned because the 90% miss-rate would
+                            // make blind admit perf-negative).
+                            t.dispatchable || is_downrec
+                        })
                         .cloned()
                 }
             {
@@ -6076,9 +6605,36 @@ impl Vm {
                 let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
                 entry_tags.clear();
                 entry_tags.reserve(max_stack);
+                // v2.0 Track-R R3c — this trace was admitted via the
+                // `downrec_link.is_some()` arm rather than the normal
+                // `dispatchable=true` arm. The pre-invoke path
+                // populates a reserved saved-PC slot just past the
+                // normal register window so R3b's lowerer guard load
+                // (`reg_state[window_size]`) compares the runtime
+                // saved caller PC against the recorded `dr_return_pc`.
+                //
+                // v2.0 Track-R R3d — drop the `!ct.dispatchable`
+                // gate. After R3d lifts `dispatchable = true` for
+                // multi-way guards, the trace's body still emits the
+                // R3b/R3d sentinel shape on return — the saved-PC slot
+                // and post-invoke classifier must keep firing.
+                // `downrec_link.is_some()` is the unique structural
+                // signal that the trace closes via DownRec.
+                let is_downrec_entry = ct.downrec_link.is_some();
                 let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
                 reg_state.clear();
-                reg_state.resize(window_size_us, 0i64);
+                // v2.0 Track-R R3c — when admitting a downrec trace,
+                // size the buffer to `window_size + 1` so the lowerer
+                // can `load(I64, ..., reg_state, window_size * 8)`
+                // for the saved caller PC guard input. The extra slot
+                // is the LAST element so cranelift's existing
+                // `0..window_size` accesses are unaffected.
+                let reg_state_len = if is_downrec_entry {
+                    window_size_us + 1
+                } else {
+                    window_size_us
+                };
+                reg_state.resize(reg_state_len, 0i64);
                 let mut dispatch_ok = true;
                 for i in 0..max_stack {
                     let v = self.stack[base_us + i];
@@ -6138,6 +6694,34 @@ impl Vm {
                     // before falling through to the interpreter, else
                     // the stack grows unboundedly per deopted dispatch.
                     let pre_frames = self.frames.len();
+                    // v2.0 Track-R R3c — saved-PC slot population. The
+                    // recorded `dr_return_pc` on the closing trace is
+                    // the caller's resume PC captured at a depth>0
+                    // Return push (recorder push site, see R3a verdict
+                    // §3). The natural runtime analogue for self-
+                    // stitch is the dispatching frame's PARENT frame's
+                    // PC: the trace's head_pc sits inside a Lua frame,
+                    // and the parent (caller) frame's `pc` is what
+                    // luna would observe as `[base-8]` in the LJ
+                    // `asm_retf` shape (`lj_asm_arm64.h:565`). When
+                    // the parent isn't a Lua frame (top-level dispatch
+                    // — first invocation through `call_value`), no
+                    // saved PC exists; we write 0, which always
+                    // mismatches the recorded `dr_return_pc != 0`
+                    // invariant pinned by R3b
+                    // (`crates/luna-jit/src/jit_backend/trace.rs:7206
+                    // debug_assert!(dr_return_pc != 0, ...)`).
+                    if is_downrec_entry {
+                        let saved_pc: i64 = if pre_frames >= 2 {
+                            match &self.frames[pre_frames - 2] {
+                                CallFrame::Lua(parent) => parent.pc as i64,
+                                CallFrame::Cont(_) => 0,
+                            }
+                        } else {
+                            0
+                        };
+                        reg_state[window_size_us] = saved_pc;
+                    }
                     // v1.3 Phase AOT Stage 7 sub-piece 4 — `LUNA_AOT_PROBE`
                     // diagnostic hook. The probe fires once per trace dispatch
                     // (regardless of JIT vs AOT origin — both go through this
@@ -6171,6 +6755,94 @@ impl Vm {
                         while self.frames.len() > pre_frames {
                             frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         }
+                        if is_downrec_entry {
+                            // v2.0 Track-R R3c — pending_err observed
+                            // mid-trace inside a downrec admit. Treat
+                            // it as a guard miss: bump `downrec_deopt`
+                            // and suppress the next downrec admit so
+                            // interp can advance past `head_pc` and
+                            // the same trace doesn't immediately re-
+                            // fire on the next loop iteration.
+                            self.jit.counters.downrec_deopt += 1;
+                            self.jit.suppress_downrec_admit_once = true;
+                        }
+                    } else if is_downrec_entry && {
+                        // v2.0 Track-R R3d — only enter the R3c/R3d
+                        // downrec classifier for returns whose shape
+                        // matches the lowerer's `downrec_idx_opt` tail
+                        // emit: either the stitch_blk DOWNREC sentinel
+                        // (HIT) or the deopt_blk GLOBAL-sentinel-with-
+                        // body==head_pc (MISS via guard fail). Any
+                        // other return from a downrec trace (intermediate
+                        // body cmp side-exit, GetField inference fail,
+                        // etc.) carries a different sentinel/body shape
+                        // and means the body exited BEFORE reaching the
+                        // downrec close — classify those through the
+                        // normal decode path (else branch below) so
+                        // reg_state restores + pc advances correctly.
+                        // The pre-R3d behavior (R3c) classified them all
+                        // as MISS and skipped the normal restore, which
+                        // inflated `downrec_deopt` with non-downrec
+                        // events and lost the trace's mid-flight writes.
+                        let raw_ret = continuation_pc as u64;
+                        let from_side_trace = (raw_ret >> 63) & 1 == 1;
+                        let sentinel_code = if from_side_trace {
+                            ((raw_ret >> 56) & 0x7F) as u32
+                        } else {
+                            0
+                        };
+                        let raw_body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
+                        let global_deopt_code = crate::jit::trace_types::encode_side_sentinel(
+                            crate::jit::trace_types::SIDE_SENT_KIND_GLOBAL,
+                            0,
+                        );
+                        from_side_trace
+                            && (crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
+                                || (sentinel_code == global_deopt_code
+                                    && raw_body == head_pc_val as u64))
+                    } {
+                        // R3d downrec event classifier.
+                        let raw_ret = continuation_pc as u64;
+                        let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
+                        if crate::jit::trace_types::is_downrec_sentinel(sentinel_code) {
+                            // Guard HIT — saved_pc matched one of the
+                            // baked candidates and the trace's
+                            // `stitch_blk` arm returned the DOWNREC
+                            // sentinel. Cycle-safety checkpoint:
+                            // decrement budget; on underflow,
+                            // reclassify as deopt + reset budget.
+                            // R3d's `STITCH_DEPTH_DEFAULT = 32` lets
+                            // ~all natural HITs in a hot loop fire
+                            // before reset pressure.
+                            if self.jit.stitch_depth_remaining > 0 {
+                                self.jit.stitch_depth_remaining -= 1;
+                                self.jit.counters.downrec_dispatched += 1;
+                            } else {
+                                self.jit.counters.downrec_deopt += 1;
+                                self.jit.stitch_depth_remaining =
+                                    crate::vm::jit_state::JitState::STITCH_DEPTH_DEFAULT;
+                            }
+                        } else {
+                            // Guard MISS via the lowerer's deopt_blk
+                            // arm (GLOBAL sentinel + body == head_pc).
+                            // The deopt_blk emit performs the
+                            // store-back via `emit_store_back_and_return_pc`,
+                            // so the live stack already reflects the
+                            // body's writes; no extra restore needed
+                            // from the dispatcher side.
+                            self.jit.counters.downrec_deopt += 1;
+                        }
+                        self.jit.suppress_downrec_admit_once = true;
+                        // Pop helper-pushed inlined frames (defensive —
+                        // R3d's emit shape doesn't push frames in the
+                        // tail, but a body side-exit before reaching
+                        // the tail may have via the materialize helper).
+                        while self.frames.len() > pre_frames {
+                            frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                        }
+                        self.jit.reg_state_buf = reg_state;
+                        self.jit.entry_tags_buf = entry_tags;
+                        continue;
                     } else {
                         // Restore each slot using the trace's
                         // exit-tag analysis (see ExitTag docs).
@@ -7741,8 +8413,21 @@ impl Vm {
         for _ in 0..MAX_TAG_LOOP {
             let mm = match cur {
                 Value::Table(tb) => {
-                    if !tb.get(key).is_nil() {
-                        self.raw_set(tb, key, v)?;
+                    // PI-A3 single-walk collapse — Table::try_set_existing
+                    // fuses the prior `tb.get(key).is_nil()` gate and
+                    // `raw_set` walk into one chain traversal when the
+                    // key is already present with a non-nil value. The
+                    // __newindex chain semantics are preserved by the
+                    // identity (slot_nil ⇔ fire_newindex); see
+                    // .dev/rfcs/v2.0-pi-phase2-a3-audit.md §4.
+                    //
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the
+                    // heap is single-threaded and the pointer is live as
+                    // long as it is reachable from active roots (see
+                    // heap.rs:5-7). Mirrors the raw_set wrapper below.
+                    if unsafe { tb.as_mut() }.try_set_existing(key, v) {
+                        self.heap
+                            .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
                         return Ok(MmOut::Done(Value::Nil));
                     }
                     let mm = self.get_mm(cur, Mm::NewIndex);
@@ -9715,7 +10400,7 @@ impl Vm {
         let _ = self; // resolver passes &mut Vm for symmetry with future
         // pending-install + hash-walk variants; nothing on `self` to
         // mutate today because the install target lives on the Proto.
-        proto.traces.borrow_mut().push(std::rc::Rc::new(trace));
+        proto.traces.borrow_mut().push(TArc::new(trace));
     }
 
     /// v1.3 Phase AOT Stage 7 sub-piece 4 — walk the proto tree

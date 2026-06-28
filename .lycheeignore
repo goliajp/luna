@@ -1,0 +1,10 @@
+# lychee allow-list — broken links we accept on purpose.
+#
+# Each line is a regex matched against the FULL URL (lychee semantics).
+# Add a comment explaining WHY before each pattern.
+
+# docs.rs URLs for unpublished or not-yet-published luna-* versions.
+# Pre-publish: these 404 because the crate version isn't on crates.io yet.
+# Post-publish (Phase G ship): remove this allow-list entry — verify links
+# resolve. See `.dev/rfcs/v2.0-plan-state.md` Track DO-CI for context.
+^https://docs\.rs/luna-[a-z-]+/(latest|\d+(\.\d+)*)/.*$

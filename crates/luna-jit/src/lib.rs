@@ -47,6 +47,15 @@ pub mod capi;
 pub mod jit_backend;
 pub mod lua_facade;
 
+/// v2.0 Track TL — pure-read inspection accessors over a live `Vm`.
+/// Re-exports [`luna_core::vm::inspect`] so the `luna-tools`
+/// binaries (`luna-heap-dump`, `luna-trace-inspect`,
+/// `luna-profile`) can `use luna_jit::inspect::*` without a
+/// separate `luna-core` direct dep.
+pub mod inspect {
+    pub use luna_core::vm::inspect::*;
+}
+
 pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, LuaTable};
 
 /// Unified `jit` namespace — combines luna-core's trait surface +
@@ -59,20 +68,31 @@ pub mod jit {
         CraneliftBackend, cache_lookup_or_compile, enter_jit, try_compile_int_chunk,
     };
     pub use luna_core::jit::*;
-    // `cache_clear` + `cache_entry_count` are #[cfg(test)] in the
-    // jit_backend, so they aren't re-exportable here (they don't
-    // exist in non-test builds). Tests reach them via
-    // `luna_jit::jit::cache_clear` only when both crates compile under
-    // `--test`, which luna's test binaries do today.
-    #[cfg(test)]
+    // v2.0 Track J sub-step J-B — `cache_clear` + `cache_entry_count`
+    // are no longer `#[cfg(test)]` (the per-Vm storage migration made
+    // them harmless probes). Re-exported unconditionally so the J-B
+    // integration test + any embedder can probe a Vm's JIT cache size
+    // / reset it without a downcast.
     pub use crate::jit_backend::{cache_clear, cache_entry_count};
+
+    /// v2.0 Track J sub-step J-A — `Send` wrapper newtype for
+    /// `cranelift_jit::JITModule`. Exposed `#[doc(hidden)]` so
+    /// integration tests under `crates/luna-jit/tests/` can run the
+    /// static-`Send` assertion + cross-thread smoke without a
+    /// `pub(crate)` carve-out. **Not a stable embedder API** — J-B
+    /// consumes this internally and the type will move to
+    /// `Vm.VmJitStorage` when the field migration lands.
+    #[doc(hidden)]
+    pub use crate::jit_backend::SendJitModule as __SendJitModule_for_j_a_test;
     /// `luna_core::jit::trace` (the types) merged with
     /// `luna_jit::jit_backend::trace` (the codegen entry points). Old
     /// `crate::jit::trace::TraceRecord` paths in user code keep
     /// working; new code can `use luna_jit::jit::trace::try_compile_trace_with_options`.
     pub mod trace {
         pub use crate::jit_backend::trace::{
-            last_compile_checkpoint, try_compile_trace, try_compile_trace_with_options,
+            base_var_scaffold_declared_count, last_compile_checkpoint,
+            reset_base_var_scaffold_declared_count, try_compile_trace,
+            try_compile_trace_with_options,
         };
         pub use luna_core::jit::trace_types::*;
     }
@@ -107,8 +127,70 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// fn because the trait orphan rule prevents adding inherent methods
 /// to `luna_core::vm::Vm` from this crate. The `VmExt` extension
 /// trait below restores the dotted-method form.
+///
+/// # v2.1 Phase 1K.D.4 — `LUNA_JIT_BACKEND` env-var override
+///
+/// The chosen backend is normally Cranelift. Set the
+/// `LUNA_JIT_BACKEND` env var to override at Vm-construction time:
+///
+/// | Value | Behaviour |
+/// |---|---|
+/// | unset / `cranelift` | Cranelift (default). |
+/// | `llvm` (with `--features llvm-jit`) | LLVM 18 backend. |
+/// | `llvm` (feature OFF) | `panic!` with a rebuild hint. |
+/// | any other value | `panic!` listing the accepted values. |
+///
+/// The env var is read **once per `install_default_jit` call**; the
+/// selection is then frozen into the Vm. Switching at runtime is
+/// out of scope (see `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md`
+/// § 4.4).
 pub fn install_default_jit(vm: &mut vm::Vm) {
+    let backend = std::env::var("LUNA_JIT_BACKEND").unwrap_or_default();
+    match backend.as_str() {
+        "" | "cranelift" => install_cranelift_jit(vm),
+        "llvm" => install_llvm_jit(vm),
+        other => panic!(
+            "LUNA_JIT_BACKEND={other:?} not recognised; expected one of \
+             {{unset, \"cranelift\", \"llvm\"}}.",
+        ),
+    }
+}
+
+/// v2.1 Phase 1K.D.4 — concrete Cranelift backend installer. Always
+/// available; this is the install path `install_default_jit` lands
+/// on when `LUNA_JIT_BACKEND` is unset or `cranelift`.
+fn install_cranelift_jit(vm: &mut vm::Vm) {
     vm.install_jit_backend(jit_backend::CraneliftBackend, jit_backend::CraneliftBackend);
+    // v2.0 Track J sub-step J-B — pair the CraneliftBackend trait
+    // impls with a fresh CraneliftJitStorage so the trait impls'
+    // `_storage` param downcasts to the right concrete type once
+    // Phases D/E/F start using it.
+    vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::default());
+}
+
+/// v2.1 Phase 1K.D.4 — concrete LLVM backend installer. Only
+/// compiled when `luna-jit` is built with `--features llvm-jit`.
+/// Selected at runtime via `LUNA_JIT_BACKEND=llvm`.
+#[cfg(feature = "llvm-jit")]
+fn install_llvm_jit(vm: &mut vm::Vm) {
+    vm.install_jit_backend(luna_jit_llvm::LlvmBackend, luna_jit_llvm::LlvmBackend);
+    vm.install_jit_storage(luna_jit_llvm::LlvmJitStorage::default());
+}
+
+/// v2.1 Phase 1K.D.4 — `LUNA_JIT_BACKEND=llvm` was requested but
+/// the build does not include the LLVM backend. Panic with a
+/// rebuild hint rather than silently falling back to Cranelift
+/// (silent fallback would mask the configuration error and lead
+/// to confusing bench / test results).
+#[cfg(not(feature = "llvm-jit"))]
+fn install_llvm_jit(_vm: &mut vm::Vm) {
+    panic!(
+        "LUNA_JIT_BACKEND=llvm requested but the `llvm-jit` cargo \
+         feature is OFF in this build of luna-jit. Rebuild with \
+         `cargo build -p luna-jit --features llvm-jit` (or add the \
+         feature to your Cargo.toml's luna-jit dep). See \
+         `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3."
+    );
 }
 
 /// Extension trait that exposes the JIT-installing constructors and

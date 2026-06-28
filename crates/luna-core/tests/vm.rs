@@ -1623,39 +1623,59 @@ fn debug_line_table_precision() {
 
 #[test]
 fn debug_upvalue_order_and_id() {
-    // upvalue indices follow PUC's restassign ordering: a name first seen on an
-    // assignment's left captures its index before one first seen on the right.
-    // `a = 10 + b` (a on the left) → a is upvalue 1, b is upvalue 2.
-    check_str(
-        "local a, b = 1, 2 \
-         local f = function (y) if y then a = 10 + b else return a end end \
-         local n1 = (debug.getupvalue(f, 1)) \
-         local n2 = (debug.getupvalue(f, 2)) \
-         return n1 .. ',' .. n2",
-        b"a,b",
-    );
-    // setupvalue targets the right slot (upvalue 1 = 'a') and returns its name
-    check_int(
-        "local a, b = 0, 5 \
-         local f = function () return a + b end \
-         local nm = debug.setupvalue(f, 1, 7) \
-         return (nm == 'a') and f() or -1",
-        12,
-    );
-    // upvalueid: out-of-range yields nil (not an error, unlike upvaluejoin);
-    // distinct upvalues have distinct ids, shared ones compare equal; it also
-    // works on a C closure (the gmatch iterator).
-    check_bool(
-        "local a, b = 1, 2 \
-         local f = function () return a + b end \
-         local g = function () return b + a end \
-         return debug.upvalueid(f, 3) == nil \
-            and debug.upvalueid(f, 1) ~= debug.upvalueid(f, 2) \
-            and debug.upvalueid(f, 1) == debug.upvalueid(g, 2) \
-            and debug.upvalueid(string.gmatch('x', 'x'), 1) ~= nil \
-            and (not pcall(debug.upvaluejoin, f, 9, g, 1))",
-        true,
-    );
+    // v2.0 CB2: the historical plan-state lists this test as a "100 local 不
+    // reproduce 但 CI 特定 allocator state trip" flake. A data-structure audit
+    // (verdict doc `.dev/rfcs/v2.0-cb2-stabilization-verdict.md`) finds every
+    // code path the assertions ride is deterministic under single-threaded
+    // exec — compiler upvalue indexing is a `Vec::position` + `Vec::push`
+    // walk, the open-upvalue chain is a slot-sorted `Vec` with
+    // `binary_search_by_key` dedup, and `debug.upvalueid` returns the GC
+    // cell's raw address (which is dedup-determined, not allocator-determined,
+    // for the shared-upvalue assertion). The flake — if it ever fired —
+    // most plausibly belonged to the StringTable UAF (`f8afd64`) /
+    // line-hook predicate (`e5db587`) / compiler short-circuit AND (`fae0f9c`)
+    // family closed in the v1.3 sprint and is now collateral-fixed.
+    //
+    // Rather than ship a no-op, repeat each sub-check 50× in a single test
+    // process. This collapses the "1000× CI runs to archive the flake" cost
+    // documented in `.dev/rfcs/v2.0-plan-state.md` (Top risks R3) into one
+    // `cargo test` invocation and gives a fail-fast tripwire if any future
+    // allocator / GC tuning ever breaks shared-upvalue identity.
+    for _ in 0..50 {
+        // upvalue indices follow PUC's restassign ordering: a name first seen on an
+        // assignment's left captures its index before one first seen on the right.
+        // `a = 10 + b` (a on the left) → a is upvalue 1, b is upvalue 2.
+        check_str(
+            "local a, b = 1, 2 \
+             local f = function (y) if y then a = 10 + b else return a end end \
+             local n1 = (debug.getupvalue(f, 1)) \
+             local n2 = (debug.getupvalue(f, 2)) \
+             return n1 .. ',' .. n2",
+            b"a,b",
+        );
+        // setupvalue targets the right slot (upvalue 1 = 'a') and returns its name
+        check_int(
+            "local a, b = 0, 5 \
+             local f = function () return a + b end \
+             local nm = debug.setupvalue(f, 1, 7) \
+             return (nm == 'a') and f() or -1",
+            12,
+        );
+        // upvalueid: out-of-range yields nil (not an error, unlike upvaluejoin);
+        // distinct upvalues have distinct ids, shared ones compare equal; it also
+        // works on a C closure (the gmatch iterator).
+        check_bool(
+            "local a, b = 1, 2 \
+             local f = function () return a + b end \
+             local g = function () return b + a end \
+             return debug.upvalueid(f, 3) == nil \
+                and debug.upvalueid(f, 1) ~= debug.upvalueid(f, 2) \
+                and debug.upvalueid(f, 1) == debug.upvalueid(g, 2) \
+                and debug.upvalueid(string.gmatch('x', 'x'), 1) ~= nil \
+                and (not pcall(debug.upvaluejoin, f, 9, g, 1))",
+            true,
+        );
+    }
 }
 
 #[test]
