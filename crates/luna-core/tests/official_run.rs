@@ -276,7 +276,6 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     };
     // File chunks get the same BOM/shebang strip PUC's `luaL_loadfilex` applies.
     let stripped = luna_core::frontend::lexer::Lexer::strip_shebang_bom(&raw);
-    let stripped = stripped.as_ref();
     // 5.1 main.lua never grew the `if _port then return end` sentinel that 5.2+
     // added at the top of their main.lua, so just setting `_port=true` in the
     // env doesn't short-circuit the chunk. Inject the same guard the later
