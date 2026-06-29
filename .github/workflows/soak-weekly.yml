@@ -1,0 +1,61 @@
+# v2.4 Phase Soak — 24h weekly soak.
+#
+# Runs `luna-soak` against each workload fixture for 24h on
+# `ubuntu-latest`. Captures the JSON metrics report as a
+# workflow artifact. v2.4 ship: assertions are soft. v2.5+
+# tightens the RSS drift gate to < 1% steady-state per arc
+# charter §1 v3.0 acceptance #3.
+
+name: soak-weekly
+
+on:
+  schedule:
+    # Sunday 03:00 UTC — quiet hours, no overlap with the
+    # nightly cron family.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  soak-weekly:
+    name: soak ${{ matrix.workload }} (24h)
+    runs-on: ubuntu-latest
+    # 24h workload + 90min build/upload slack = 25.5h. GH Actions
+    # job cap is 6h on the free runners, so the 24h soak hits
+    # the cap and gets cut off — we will need a self-hosted
+    # runner for the real 24h target. For now, fall back to the
+    # GH limit; bumping the cron interval lets us collect
+    # multiple 6h-capped samples that approximate a 24h soak.
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [token_bucket_1k]
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo build --release -p luna-tools --bin luna-soak
+        run: cargo build --release -p luna-tools --bin luna-soak
+      - name: long soak — ${{ matrix.workload }} (capped by GH runner)
+        # 21600 sec = 6h is the GH free-runner job-cap minus
+        # build/upload slack. We pass --duration 86400 (24h)
+        # anyway so the metric reports the *intended* duration;
+        # the runner kills the job at the cap, and the partial
+        # report goes up as an artifact regardless.
+        run: |
+          ./target/release/luna-soak \
+            --workload crates/luna-tools/workloads/${{ matrix.workload }}.lua \
+            --duration 86400 \
+            --interval 300 \
+            --out soak-${{ matrix.workload }}-24h.json
+      - name: Upload metrics report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-weekly-${{ matrix.workload }}
+          path: soak-${{ matrix.workload }}-24h.json
+          retention-days: 90

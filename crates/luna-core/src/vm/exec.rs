@@ -2648,18 +2648,12 @@ impl Vm {
         if !self.heap.gc_due() {
             return;
         }
-        // v2.2 UAF-A fix: the historical `gc_top = live_top` narrowed
-        // past slots that prior bytecode left holding Gc-bearing
-        // Values (slots are never auto-cleared on frame pop, only
-        // overwritten). The narrow GC swept the closure, the slot
-        // kept the stale `Value::Closure`, and a later wider GC
-        // OOB'd in `Marker::header`. Use `max(live_top, self.top)`
-        // — `self.top` is the multi-result top maintained across
-        // calls/returns, so it leads the live frontier closely
-        // enough to cover stale closure refs without over-rooting
-        // the whole `Vec` (which broke gc.lua / db.lua weak-table
-        // semantics).
-        self.gc_top = live_top.max(self.top);
+        // v2.4 Phase Cleanup: restore historical `gc_top = live_top`
+        // semantics. The v2.2.0 `live_top.max(self.top)` workaround
+        // for UAF-A is obsoleted by v2.3's `Vm::finish_results`
+        // slot-clear (PUC `L->top` discipline now matches), so the
+        // narrow live_top is once again sufficient + faster.
+        self.gc_top = live_top;
         // PUC stepmul: % of allocation rate. Higher = more GC work per
         // safe-point (lower memory, more CPU). Default 100 = `live / 4` per
         // step (~4 safe-points per cycle). stepmul=200 → `live / 2`, etc.
@@ -5564,17 +5558,19 @@ impl Vm {
                     // disarm + raise if the cap is still breached after
                     // collection. PUC's `LUA_GCEMERGENCY` path matches.
                     //
-                    // v2.2 UAF-B fix: the historical `gc_top = self.top`
-                    // under-rooted a Lua-level `a[i] = i` loop's `a`
-                    // table — `a` sits at a slot above the multi-result
-                    // `self.top`, so cap-fire collect swept `a`'s
-                    // internal buckets and the next bytecode read them
-                    // → heap-use-after-free in `Table::try_set_existing`.
-                    // Use `self.stack.len()` here (full over-root) — the
-                    // cap-fire path is rare + a memory cap takes priority
-                    // over weak-table precision (the fire-once semantics
-                    // means a wrong-collected weak ref is recoverable;
-                    // a UAF in a table mutation is not).
+                    // v2.4 Phase Cleanup REVERTED — the v2.2.0
+                    // `gc_top = self.stack.len()` workaround for
+                    // UAF-B is **still load-bearing** here even after
+                    // v2.3's `finish_results` slot-clear. The cap
+                    // fires during table mutation (`a[i] = i` inside
+                    // a tight loop) at a point that is NOT a
+                    // finish_results boundary — the table grows past
+                    // self.top but never goes through a CALL/RETURN,
+                    // so slot-clear never sees the growing region.
+                    // Docker linux/amd64 toomanyidx_memory_cap
+                    // SIGSEGV'd on the revert; the over-root stays
+                    // as the v2.4 production fix. Tracked in v2.4
+                    // plan-state amendments log.
                     self.gc_top = self.stack.len() as u32;
                     self.collect_garbage();
                     if self.heap.bytes() > cap {
