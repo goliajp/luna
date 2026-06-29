@@ -2648,12 +2648,21 @@ impl Vm {
         if !self.heap.gc_due() {
             return;
         }
-        // v2.4 Phase Cleanup: restore historical `gc_top = live_top`
-        // semantics. The v2.2.0 `live_top.max(self.top)` workaround
-        // for UAF-A is obsoleted by v2.3's `Vm::finish_results`
-        // slot-clear (PUC `L->top` discipline now matches), so the
-        // narrow live_top is once again sufficient + faster.
-        self.gc_top = live_top;
+        // v2.4 Phase Cleanup REVERTED — the v2.2.0
+        // `gc_top = live_top.max(self.top)` workaround is **still
+        // load-bearing** on Windows even after v2.3's
+        // `finish_results` slot-clear. macOS + Docker linux/amd64
+        // both pass with bare `live_top`, but Windows
+        // STATUS_ACCESS_VIOLATION's on `Lua55/gc.lua`'s weak-table
+        // + step-GC stress without the over-root. The wider
+        // gc_top stays as the v2.4 production fix; tightening to
+        // bare live_top is a v2.5+ follow-up that requires either
+        // (a) per-frame `[base, base + max_stack)` gc_roots walk
+        // (rejected in v2.2.1 plan-state amendment log — broke
+        // db.lua) or (b) PUC L->top discipline migration through
+        // every safe-point. Tracked in v2.4 plan-state amendments
+        // log.
+        self.gc_top = live_top.max(self.top);
         // PUC stepmul: % of allocation rate. Higher = more GC work per
         // safe-point (lower memory, more CPU). Default 100 = `live / 4` per
         // step (~4 safe-points per cycle). stepmul=200 → `live / 2`, etc.
