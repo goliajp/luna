@@ -39,3 +39,17 @@ path = "fuzz_targets/dispatch.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "gc"
+path = "fuzz_targets/gc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "diff_puc"
+path = "fuzz_targets/diff_puc.rs"
+test = false
+doc = false
+bench = false
