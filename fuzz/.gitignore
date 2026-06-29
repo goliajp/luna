@@ -1,8 +1,0 @@
-target
-artifacts
-coverage
-# corpus/ runtime-mutated entries excluded; seed corpus added
-# explicitly via `git add -f fuzz/corpus/<target>/*.lua`. CI
-# uploads post-run corpus as a workflow artifact for cross-run
-# persistence.
-corpus

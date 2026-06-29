@@ -29,6 +29,8 @@ jobs:
           - fuzz_dump_reader
           - fuzz_vm_dispatch
           - fuzz_aot_meta
+          - fuzz_gc
+          - fuzz_diff_puc
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,12 +40,34 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
+      - name: install PUC lua5.5 (fuzz_diff_puc only)
+        if: matrix.target == 'fuzz_diff_puc'
+        run: |
+          if apt-cache show lua5.5 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lua5.5
+            echo "PUC_LUA=/usr/bin/lua5.5" >> "$GITHUB_ENV"
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq build-essential libreadline-dev curl
+            mkdir -p /tmp/puc-build && cd /tmp/puc-build
+            curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
+            tar -xzf lua.tar.gz && cd lua-5.5.0
+            make linux-readline
+            sudo make install INSTALL_TOP=/usr/local
+            echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
+          fi
       - name: build fuzz target
         working-directory: crates/luna-fuzz
-        run: cargo +nightly fuzz build ${{ matrix.target }}
+        # `--fuzz-dir .` because `crates/luna-fuzz/` IS itself the
+        # fuzz crate (canonical cargo-fuzz layout expects a `fuzz/`
+        # subdir below the crate; ours uses the crate-as-fuzz-crate
+        # convention so the `[workspace] exclude` only needs to skip
+        # one path, not two).
+        run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
       - name: run fuzz target 5 min
         working-directory: crates/luna-fuzz
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
+        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300
       - name: upload artifacts on crash
         if: failure()
         uses: actions/upload-artifact@v4
@@ -70,6 +94,8 @@ jobs:
           - fuzz_dump_reader
           - fuzz_vm_dispatch
           - fuzz_aot_meta
+          - fuzz_gc
+          - fuzz_diff_puc
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,12 +105,34 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
+      - name: install PUC lua5.5 (fuzz_diff_puc only)
+        if: matrix.target == 'fuzz_diff_puc'
+        run: |
+          if apt-cache show lua5.5 >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lua5.5
+            echo "PUC_LUA=/usr/bin/lua5.5" >> "$GITHUB_ENV"
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq build-essential libreadline-dev curl
+            mkdir -p /tmp/puc-build && cd /tmp/puc-build
+            curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
+            tar -xzf lua.tar.gz && cd lua-5.5.0
+            make linux-readline
+            sudo make install INSTALL_TOP=/usr/local
+            echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
+          fi
       - name: build fuzz target
         working-directory: crates/luna-fuzz
-        run: cargo +nightly fuzz build ${{ matrix.target }}
+        # `--fuzz-dir .` because `crates/luna-fuzz/` IS itself the
+        # fuzz crate (canonical cargo-fuzz layout expects a `fuzz/`
+        # subdir below the crate; ours uses the crate-as-fuzz-crate
+        # convention so the `[workspace] exclude` only needs to skip
+        # one path, not two).
+        run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
       - name: run fuzz target 60 min
         working-directory: crates/luna-fuzz
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
+        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=3600
       - name: upload artifacts on crash
         if: failure()
         uses: actions/upload-artifact@v4
