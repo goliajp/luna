@@ -1,0 +1,52 @@
+# v2.4 Phase Soak — 1h smoke nightly.
+#
+# Runs `luna-soak` against each workload fixture for 1h, uploads
+# the JSON metrics report as a workflow artifact. Initial v2.4
+# ship: assertions are soft (always pass) — once we have ≥7
+# baseline samples we tighten the steady-state RSS drift gate
+# in v2.5+.
+#
+# Weekly 24h soak lives in `soak-weekly.yml`.
+
+name: soak-nightly
+
+on:
+  schedule:
+    # Nightly at 08:00 UTC — staggered after fuzz (07:00) +
+    # diff-puc (06:00) + cross-allocator (05:00) etc.
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  soak-nightly:
+    name: soak ${{ matrix.workload }} (1h)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [token_bucket_1k]
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo build --release -p luna-tools --bin luna-soak
+        run: cargo build --release -p luna-tools --bin luna-soak
+      - name: 1h soak — ${{ matrix.workload }}
+        run: |
+          ./target/release/luna-soak \
+            --workload crates/luna-tools/workloads/${{ matrix.workload }}.lua \
+            --duration 3600 \
+            --interval 60 \
+            --out soak-${{ matrix.workload }}.json
+      - name: Upload metrics report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-nightly-${{ matrix.workload }}
+          path: soak-${{ matrix.workload }}.json
+          retention-days: 30

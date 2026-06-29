@@ -19,3 +19,4 @@
 # v2.0 CV-infra — luna-fuzz nested target/ (workspace-excluded crate)
 crates/luna-fuzz/target/
 crates/luna-fuzz/Cargo.lock
+fuzz/Cargo.lock

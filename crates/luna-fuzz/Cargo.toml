@@ -39,6 +39,10 @@ luna-core = { path = "../luna-core" }
 # fuzz crate. luna-core's 0-third-party-dep contract is unaffected
 # because luna-fuzz is workspace-excluded.
 libfuzzer-sys = "0.4"
+# v2.4 Phase Fuzz-C / Fuzz-D — constrained-grammar input shaping
+# via the `Arbitrary` derive. Same workspace-excluded scope; does
+# not propagate into luna-core's cargo tree.
+arbitrary = { version = "1", features = ["derive"] }
 
 [[bin]]
 name = "fuzz_parser"
@@ -64,6 +68,26 @@ bench = false
 [[bin]]
 name = "fuzz_aot_meta"
 path = "fuzz_targets/fuzz_aot_meta.rs"
+test = false
+doc = false
+bench = false
+
+# v2.4 Phase Fuzz-C — GC stress fuzz target. Random ops drive
+# alloc / weak-table / finalizer / collectgarbage paths. The
+# v2.1 → v2.3 UAFs all lived in this surface.
+[[bin]]
+name = "fuzz_gc"
+path = "fuzz_targets/fuzz_gc.rs"
+test = false
+doc = false
+bench = false
+
+# v2.4 Phase Fuzz-D — differential vs PUC fuzz target. Random
+# side-effect-free programs run on both luna + PUC's reference
+# lua5.5 binary; any stdout divergence is a luna bug.
+[[bin]]
+name = "fuzz_diff_puc"
+path = "fuzz_targets/fuzz_diff_puc.rs"
 test = false
 doc = false
 bench = false
