@@ -37,6 +37,14 @@ path = "src/bin/luna_trace_inspect.rs"
 name = "luna-repl-polish"
 path = "src/bin/luna_repl_polish.rs"
 
+# v2.4 Phase Soak — long-running workload runner with RSS + Vm
+# memory sampling. Consumed by `.github/workflows/soak-nightly.yml`
+# (1h smoke) and `.github/workflows/soak-weekly.yml` (24h soak)
+# to assert RSS drift < 1% + GC pause p99 < 10ms.
+[[bin]]
+name = "luna-soak"
+path = "src/bin/luna_soak.rs"
+
 [lints]
 workspace = true
 
