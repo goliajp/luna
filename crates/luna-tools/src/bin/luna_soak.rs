@@ -45,7 +45,9 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -127,7 +129,6 @@ fn rss_kb() -> u64 {
             for line in s.lines() {
                 if let Some(rest) = line.strip_prefix("VmRSS:") {
                     let kb: u64 = rest
-                        .trim()
                         .split_whitespace()
                         .next()
                         .and_then(|w| w.parse().ok())
