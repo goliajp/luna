@@ -4545,6 +4545,18 @@ impl Vm {
 
     /// Pad/announce results sitting at func_slot.
     pub(crate) fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
+        // v2.3 P1B-A: capture the call's high-water-mark before
+        // setting the new top so we can Nil-clear slots that the
+        // call temporarily wrote but no longer holds — matching
+        // PUC's `L->top` discipline (slots past L->top are "free"
+        // and the next push overwrites them). Without this clear,
+        // a stale `Value::Closure` (e.g. the called function
+        // itself, when wanted = 0) sits at `func_slot` and a
+        // later GC with wider `gc_top` traces it after the
+        // closure has been freed by a previous narrow safe-point
+        // GC → heap-buffer-overflow in `Marker::header` (UAF-A
+        // sort.lua AA case).
+        let prev_top = self.top as usize;
         if wanted < 0 {
             self.top = func_slot + nret;
         } else {
@@ -4557,6 +4569,13 @@ impl Vm {
                 self.stack[(func_slot + i) as usize] = Value::Nil;
             }
             self.top = func_slot + wanted;
+        }
+        let new_top = self.top as usize;
+        let clear_end = prev_top.min(self.stack.len());
+        if new_top < clear_end {
+            for slot in &mut self.stack[new_top..clear_end] {
+                *slot = Value::Nil;
+            }
         }
     }
 
