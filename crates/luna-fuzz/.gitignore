@@ -1,0 +1,10 @@
+target
+artifacts
+coverage
+Cargo.lock
+# corpus/ runtime-mutated entries: existing entries (committed
+# via `git add -f`) are tracked seed inputs from prior fuzz
+# runs; new entries from local `cargo fuzz run` should NOT be
+# auto-committed. CI uploads the post-run corpus as a workflow
+# artifact for cross-run persistence (see fuzz.yml).
+corpus/
