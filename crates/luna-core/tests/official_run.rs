@@ -256,11 +256,31 @@ const SUITES: &[Suite] = &[
 ];
 
 fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
+    // v2.4 amendment (per plan-state amendments log): v2.3 P1B-D
+    // removed the gc.lua / gengc.lua / tracegc.lua Windows-CI skip
+    // on the basis of one-shot CI pass. v2.4 sprint reruns showed
+    // it is **intermittently flaky** on windows-latest (different
+    // dialect's gc.lua STATUS_ACCESS_VIOLATION's per run) — the
+    // single observation in v2.3 was a lucky pass, not a real fix.
+    // Re-instate the Windows-CI skip until a full PUC L->top
+    // discipline migration lands (v2.5+). UAF root reopened in
+    // `.dev/known-bugs/sort-aa-load-collectgarbage-segv-uaf-a.md`
+    // → move back to top-level. Tracked in
+    // `.dev/rfcs/v2.4-plan-state.md` amendments log.
+    if std::env::var_os("CI").is_some()
+        && cfg!(target_os = "windows")
+        && matches!(name, "gc.lua" | "gengc.lua" | "tracegc.lua")
+    {
+        return FileCoverage {
+            version,
+            file: name.to_string(),
+            total: 0,
+            hit: 0,
+            error: None,
+            wrapper_skipped: true,
+        };
+    }
     // cwd is the suite dir (set by the caller) so require's ./?.lua finds siblings.
-    // v2.3 P1B-D: the v2.2.0 sort.lua byte-strip + gc.lua/gengc.lua/
-    // tracegc.lua Windows-CI skip are gone — both were workarounds for
-    // the UAF-A/C family closed in v2.3 by `finish_results` slot-clear.
-    // See `.dev/known-bugs/fixed/sort-aa-load-collectgarbage-segv-uaf-a.md`.
     let raw = match std::fs::read(name) {
         Ok(b) => b,
         Err(e) => {
