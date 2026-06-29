@@ -45,9 +45,9 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::process::Command;
+use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
 
