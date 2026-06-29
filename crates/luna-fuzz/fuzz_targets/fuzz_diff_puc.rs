@@ -1,25 +1,22 @@
 //! v2.4 Phase Fuzz-D — differential vs PUC fuzz target.
 //!
-//! Random bytes → constrained-grammar Lua source (reuses
-//! `dispatch`'s Program shape minus side-effecting `print`
-//! plumbing) → run on both luna and PUC reference binary
-//! (`$PUC_LUA`, default `lua5.5`) → byte-diff normalized stdout.
-//! Any divergence is a luna bug.
+//! Arbitrary-derived side-effect-free Expr → list of `print(expr)`
+//! stmts → byte-diff luna vs PUC reference binary (`$PUC_LUA`,
+//! default `lua5.5`). Panics on any divergence — that's a luna bug.
 //!
-//! Why this complements the static `diff_puc.rs` integration
-//! test: that test ships 5 hand-picked deterministic fixtures.
-//! This fuzz target generates infinite distinct programs +
-//! catches semantic-divergence bugs the fixed corpus misses.
+//! Skipped (no panic) when `$PUC_LUA` is unset OR the PUC binary
+//! fails to spawn — local dev without PUC installed shouldn't fail
+//! the fuzz harness; CI's `.github/workflows/fuzz.yml` installs
+//! lua5.5 explicitly when matrix target = fuzz_diff_puc.
 //!
-//! Skipped (no panic) when `$PUC_LUA` is unset OR the PUC
-//! binary fails to spawn — local dev without PUC installed
-//! shouldn't fail; CI's `.github/workflows/fuzz.yml` (Phase
-//! Fuzz-E) sets `$PUC_LUA` explicitly.
+//! Why this complements the static `diff_puc.rs` integration test:
+//! that test ships 5 hand-picked deterministic fixtures. This fuzz
+//! target generates infinite distinct programs + catches
+//! semantic-divergence bugs the fixed corpus misses.
 //!
-//! Run locally:
-//!     PUC_LUA=$(which lua5.5) cd fuzz && \
-//!         cargo +nightly fuzz run diff_puc \
-//!         --target aarch64-apple-darwin -- -runs=1000
+//! Run:
+//!     PUC_LUA=$(which lua5.5) cd crates/luna-fuzz
+//!     cargo +nightly fuzz run fuzz_diff_puc -- -runs=1000
 
 #![no_main]
 
@@ -32,9 +29,6 @@ use std::fmt::Write;
 use std::io::Write as IoWrite;
 use std::process::{Command, Stdio};
 
-/// Side-effect-free expression. No metatables, no userdata, no
-/// IO — every printed value must be deterministically formattable
-/// across luna + PUC.
 #[derive(Arbitrary, Debug)]
 enum Expr {
     Int(i32),
@@ -59,8 +53,6 @@ struct NormalFloat(f64);
 impl<'a> Arbitrary<'a> for NormalFloat {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let n: i32 = u.arbitrary()?;
-        // Map int into a "small, finite, non-zero" float so
-        // tostring output is unambiguous across impls.
         let f = ((n as f64) / 1000.0).clamp(-100.0, 100.0);
         Ok(NormalFloat(f))
     }
@@ -83,8 +75,6 @@ impl VarIdx {
     }
 }
 
-/// Top-level: a list of `print(expr)` statements (the only stmt
-/// type) so the harness can byte-diff stdout meaningfully.
 #[derive(Arbitrary, Debug)]
 struct Program {
     prints: Vec<Expr>,
@@ -106,9 +96,8 @@ fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
         Expr::Sub(l, r) => bin(buf, "-", l, r, depth),
         Expr::Mul(l, r) => bin(buf, "*", l, r, depth),
         Expr::Mod(l, r) => {
-            // Guard divisor != 0 to avoid luna-vs-PUC divergence on
-            // explicit "attempt to perform 'n%%0'" error message
-            // wording. Use `(rhs ~= 0 and rhs or 1)` pattern.
+            // Guard divisor != 0 to avoid luna-vs-PUC error-message
+            // wording drift.
             buf.push('(');
             render_expr(buf, l, depth + 1);
             buf.push_str(" % ((");
@@ -189,8 +178,6 @@ fuzz_target!(|p: Program| {
     let source = render(&p);
     let Some(puc) = run_puc(&source) else { return };
     let Some(luna) = run_luna(&source) else {
-        // luna failed where PUC succeeded — that's a divergence
-        // worth surfacing too.
         panic!(
             "luna eval failed where PUC succeeded\n=== source ===\n{source}\n=== PUC stdout ===\n{puc}"
         );
