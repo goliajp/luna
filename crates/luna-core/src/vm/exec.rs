@@ -7881,6 +7881,24 @@ impl Vm {
                             self.stack[(fr.func_slot + i) as usize] =
                                 self.stack[(abs + i) as usize];
                         }
+                        // v2.5 P1B-2A: clear the slot range that's now
+                        // stranded by the tail-call collapse. The args
+                        // were copied to `[fr.func_slot..fr.func_slot+
+                        // nargs+1)`; the source slots `[abs..abs+
+                        // nargs+1)` still hold the same `Value::Closure
+                        // / Value::Str / ...` entries, but they're past
+                        // the new call's window. Without this clear, a
+                        // later GC with wider gc_top would mark stale
+                        // pointers there (same UAF-A family the v2.3
+                        // finish_results slot-clear closed for the
+                        // Op::Return path).
+                        let new_top_lower_bound = fr.func_slot + nargs + 1;
+                        let prev_top = (self.top as usize).min(self.stack.len());
+                        if (new_top_lower_bound as usize) < prev_top {
+                            for slot in &mut self.stack[new_top_lower_bound as usize..prev_top] {
+                                *slot = Value::Nil;
+                            }
+                        }
                         // PUC `CIST_TAIL`: the new Lua activation inherits
                         // the popped frame's tailcalls count plus one for
                         // this collapse. 5.1 db.lua :372 hammers 30000
