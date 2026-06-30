@@ -20,15 +20,21 @@ jobs:
       matrix:
         # v2.7 Track XP (charter §2.3): extend matrix with arm64
         # variants. macos-latest is already arm64 (macos-14);
-        # add ubuntu-24.04-arm + windows-11-arm. If a new
-        # platform surfaces test failures, amend per charter §4
-        # rather than silently dropping.
+        # ubuntu-24.04-arm added in v2.7.
+        #
+        # windows-11-arm DEFERRED to v2.8+ per v2.7-plan-state
+        # amendments log: vendored cranelift PE/COFF backend
+        # missing `Aarch64AdrGotPage21` relocation support
+        # (`not implemented: Aarch64AdrGotPage21 is not
+        # supported for this file format` in crates/vendored/
+        # wasmtime/cranelift/object/src/backend.rs:813).
+        # Requires upstream wasmtime/cranelift work; not in-
+        # sprint scope.
         os:
           - ubuntu-latest
           - ubuntu-24.04-arm
           - macos-latest
           - windows-latest
-          - windows-11-arm
     steps:
       - uses: actions/checkout@v4
         with:
