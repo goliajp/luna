@@ -2648,21 +2648,13 @@ impl Vm {
         if !self.heap.gc_due() {
             return;
         }
-        // v2.4 Phase Cleanup REVERTED — the v2.2.0
-        // `gc_top = live_top.max(self.top)` workaround is **still
-        // load-bearing** on Windows even after v2.3's
-        // `finish_results` slot-clear. macOS + Docker linux/amd64
-        // both pass with bare `live_top`, but Windows
-        // STATUS_ACCESS_VIOLATION's on `Lua55/gc.lua`'s weak-table
-        // + step-GC stress without the over-root. The wider
-        // gc_top stays as the v2.4 production fix; tightening to
-        // bare live_top is a v2.5+ follow-up that requires either
-        // (a) per-frame `[base, base + max_stack)` gc_roots walk
-        // (rejected in v2.2.1 plan-state amendment log — broke
-        // db.lua) or (b) PUC L->top discipline migration through
-        // every safe-point. Tracked in v2.4 plan-state amendments
-        // log.
-        self.gc_top = live_top.max(self.top);
+        // v2.5 P1B-2E: tighten to bare `live_top`. The v2.2.0
+        // `live_top.max(self.top)` workaround is now obsoleted by
+        // v2.3's `finish_results` slot-clear + v2.5 P1B-2A
+        // (Op::TailCall collapse slot-clear) + v2.5 P1B-2B
+        // (pcall unwind slot-clear). PUC L->top discipline is now
+        // mirrored at every frame-pop site.
+        self.gc_top = live_top;
         // PUC stepmul: % of allocation rate. Higher = more GC work per
         // safe-point (lower memory, more CPU). Default 100 = `live / 4` per
         // step (~4 safe-points per cycle). stepmul=200 → `live / 2`, etc.
@@ -5589,19 +5581,21 @@ impl Vm {
                     // disarm + raise if the cap is still breached after
                     // collection. PUC's `LUA_GCEMERGENCY` path matches.
                     //
-                    // v2.4 Phase Cleanup REVERTED — the v2.2.0
-                    // `gc_top = self.stack.len()` workaround for
-                    // UAF-B is **still load-bearing** here even after
-                    // v2.3's `finish_results` slot-clear. The cap
-                    // fires during table mutation (`a[i] = i` inside
-                    // a tight loop) at a point that is NOT a
-                    // finish_results boundary — the table grows past
-                    // self.top but never goes through a CALL/RETURN,
-                    // so slot-clear never sees the growing region.
-                    // Docker linux/amd64 toomanyidx_memory_cap
-                    // SIGSEGV'd on the revert; the over-root stays
-                    // as the v2.4 production fix. Tracked in v2.4
-                    // plan-state amendments log.
+                    // v2.5 P1B-2E partial: maybe_collect_garbage
+                    // tightening to bare `live_top` works (slot-clear
+                    // covers all frame-pop sites), but the mem-cap-
+                    // fire path remains over-rooted via
+                    // `self.stack.len()`. Reason: the cap fires
+                    // during table mutation in a tight `a[i] = i`
+                    // loop, where `a` lives at a frame-register slot
+                    // past `self.top` (OP_NEWINDEX doesn't advance
+                    // top) and there's no frame-pop event for the
+                    // slot-clear to trigger on. Per-frame walk could
+                    // catch it but broke db.lua in v2.2.1 attempts.
+                    // The over-root here is rare (fire-once disarms)
+                    // + correctness-critical. Full tightening lives
+                    // in v2.6+ if a per-frame walk with weak-table
+                    // semantics fix lands.
                     self.gc_top = self.stack.len() as u32;
                     self.collect_garbage();
                     if self.heap.bytes() > cap {
