@@ -1,0 +1,34 @@
+{
+  "group": "redis_lua_shape",
+  "platform": "ubuntu-x86_64-docker",
+  "commit": "23d0c9b",
+  "recorded": "2026-07-01",
+  "note": "Captured in docker linux/amd64 (rust:1.96) on macOS arm64 host; approximates GHA ubuntu-latest runner perf characteristics.",
+  "cells": {
+    "dict_5k_lookup": {
+      "mean_ns": 12967319.892857144,
+      "mean_low_ns": 12865110.661178572,
+      "mean_high_ns": 13106585.457678562
+    },
+    "method_dispatch_5k": {
+      "mean_ns": 2921987.5546082556,
+      "mean_low_ns": 2910179.727113509,
+      "mean_high_ns": 2933762.362870301
+    },
+    "sliding_window_500": {
+      "mean_ns": 2486813.2616525018,
+      "mean_low_ns": 2475765.0217111656,
+      "mean_high_ns": 2498538.3256086144
+    },
+    "string_ops_2k": {
+      "mean_ns": 9131994.168888887,
+      "mean_low_ns": 9105372.674277773,
+      "mean_high_ns": 9159315.790833332
+    },
+    "token_bucket_1k": {
+      "mean_ns": 461539.6498926098,
+      "mean_low_ns": 457539.1486581048,
+      "mean_high_ns": 465723.3056514022
+    }
+  }
+}

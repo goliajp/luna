@@ -21,7 +21,21 @@
 #   --measurement-time 8 --warm-up-time 2` was run before this script.
 set -euo pipefail
 
-BASELINE="${1:-crates/luna-jit/perf-baselines/v2.6.0-macos-arm64.json}"
+# v2.7 B.2: auto-select baseline by runner OS. CI sets
+# $RUNNER_OS (Linux / macOS / Windows); local dev defaults to
+# macOS arm64 baseline.
+if [[ -z "${1:-}" ]]; then
+    case "${RUNNER_OS:-macOS}" in
+        Linux)
+            BASELINE="crates/luna-jit/perf-baselines/v2.7.0-ubuntu-x86_64.json"
+            ;;
+        macOS|*)
+            BASELINE="crates/luna-jit/perf-baselines/v2.6.0-macos-arm64.json"
+            ;;
+    esac
+else
+    BASELINE="$1"
+fi
 THRESHOLD="${2:-1.05}"
 
 if [[ ! -f "$BASELINE" ]]; then
