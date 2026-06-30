@@ -55,7 +55,7 @@ workspace = true
 # on luna-jit (not luna-core directly) lets one Vm constructor
 # (`luna_jit::new_with_jit`) cover both the "with-JIT" and
 # "interp-only" embedding modes the inspection tools need.
-luna-jit = { path = "../luna-jit", version = "= 2.5.0" }
+luna-jit = { path = "../luna-jit", version = "= 2.6.0" }
 
 # Common CLI plumbing across all 5 binaries.
 clap = { version = "4", features = ["derive"] }
