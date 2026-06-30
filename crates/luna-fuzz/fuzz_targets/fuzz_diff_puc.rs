@@ -42,6 +42,16 @@ enum Expr {
     Mul(Box<Expr>, Box<Expr>),
     Mod(Box<Expr>, Box<Expr>),
     Lt(Box<Expr>, Box<Expr>),
+    // v2.6 Track D — Boltzmann grammar extension.
+    // All variants tostring-wrap inputs or guard cross-engine
+    // semantic drift (negative-exponent power → complex; bad
+    // format spec → runtime err; nil values via TableSet → key
+    // deletion etc).
+    StringConcat(Box<Expr>, Box<Expr>),
+    StringFormat(Box<Expr>),
+    TableGet(Box<Expr>),
+    TableSet(Box<Expr>, Box<Expr>),
+    Pow(Box<Expr>, Box<Expr>),
 }
 
 /// Floats restricted to a narrow non-pathological range — PUC's
@@ -107,6 +117,49 @@ fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
             buf.push_str(") or 1))");
         }
         Expr::Lt(l, r) => bin(buf, "<", l, r, depth),
+        Expr::StringConcat(l, r) => {
+            buf.push_str("(tostring(");
+            render_expr(buf, l, depth + 1);
+            buf.push_str(") .. tostring(");
+            render_expr(buf, r, depth + 1);
+            buf.push_str("))");
+        }
+        Expr::StringFormat(e) => {
+            // %d guarded with (tonumber(x) or 0) → math.floor →
+            // integer string. PUC + luna agree on this contract;
+            // any divergence is a real luna bug.
+            buf.push_str("string.format('%d', math.floor(tonumber(");
+            render_expr(buf, e, depth + 1);
+            buf.push_str(") or 0))");
+        }
+        Expr::TableGet(e) => {
+            // Key derived via tostring so any Value type works;
+            // missing keys yield nil identically in both engines.
+            buf.push_str("(t[tostring(");
+            render_expr(buf, e, depth + 1);
+            buf.push_str(")])");
+        }
+        Expr::TableSet(l, r) => {
+            // wrap in IIFE so the assignment doesn't leak side
+            // effects across prints. nil-value setter still
+            // deletes the key — both engines agree, no need to
+            // guard.
+            buf.push_str("((function() local k = tostring(");
+            render_expr(buf, l, depth + 1);
+            buf.push_str(") local v = ");
+            render_expr(buf, r, depth + 1);
+            buf.push_str(" t[k] = v return v end)())");
+        }
+        Expr::Pow(l, r) => {
+            // Exponent bounded to 0..3 via `((R) % 4)` so a
+            // negative or fractional R doesn't yield complex /
+            // NaN with cross-engine formatting drift.
+            buf.push_str("((");
+            render_expr(buf, l, depth + 1);
+            buf.push_str(") ^ ((");
+            render_expr(buf, r, depth + 1);
+            buf.push_str(") % 4))");
+        }
     }
 }
 
@@ -119,7 +172,8 @@ fn bin(buf: &mut String, op: &str, l: &Expr, r: &Expr, depth: u32) {
 }
 
 fn render(p: &Program) -> String {
-    let mut buf = String::from("local a, b, c = 1, 2, 3\n");
+    // `t` injected for v2.6 Track D TableGet / TableSet variants.
+    let mut buf = String::from("local a, b, c = 1, 2, 3\nlocal t = {}\n");
     for e in p.prints.iter().take(16) {
         buf.push_str("print(");
         render_expr(&mut buf, e, 0);

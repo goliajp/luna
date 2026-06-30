@@ -1,0 +1,58 @@
+# v2.6 Track C — differential vs LuaJIT fuzz target nightly.
+#
+# Why mirror diff-puc.yml: LuaJIT is the de-facto Lua engine
+# in Redis-replica / kevy embedder ecosystems. luna currently
+# tunes for PUC 5.4/5.5 byte-parity; LuaJIT compat is best-
+# effort but undocumented. This job surfaces unintentional
+# divergences as nightly issues (NOT ship-blocking until v3.0
+# per arc charter).
+#
+# Acceptance per v2.6 charter §2.3: 100 fuzz iterations green
+# per nightly. Divergences open issues; flaky ones (single-
+# fixture re-deflakes) tune grammar in fuzz_diff_luajit.
+
+name: diff-luajit
+
+on:
+  schedule:
+    # Nightly at 06:30 UTC — staggered after diff-puc's 06:00.
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  diff-luajit:
+    name: luna-vs-LuaJIT fuzz byte-diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install LuaJIT (apt)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq luajit
+          echo "LUAJIT=/usr/bin/luajit" >> "$GITHUB_ENV"
+
+      - name: Show LuaJIT version
+        run: $LUAJIT -v
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.12.0 --locked
+
+      - name: cargo +nightly fuzz run fuzz_diff_luajit (100 iter)
+        # 100 fuzz iterations per nightly per v2.6 charter §2.3.
+        # `-runs=100` caps iteration count; `-max_total_time=300`
+        # 5min wall-clock cap matches diff-puc.yml's timeout shape.
+        # Failures panic with full source + both outputs for
+        # divergence triage.
+        working-directory: crates/luna-fuzz
+        run: |
+          cargo +nightly fuzz run --fuzz-dir . fuzz_diff_luajit \
+            -- -runs=100 -max_total_time=300

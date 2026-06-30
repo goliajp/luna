@@ -91,3 +91,13 @@ path = "fuzz_targets/fuzz_diff_puc.rs"
 test = false
 doc = false
 bench = false
+
+# v2.6 Track C — differential vs LuaJIT fuzz target. Same
+# shape as fuzz_diff_puc but runs against `$LUAJIT` reference
+# binary and uses LuaVersion::Lua51 (LuaJIT's base dialect).
+[[bin]]
+name = "fuzz_diff_luajit"
+path = "fuzz_targets/fuzz_diff_luajit.rs"
+test = false
+doc = false
+bench = false
