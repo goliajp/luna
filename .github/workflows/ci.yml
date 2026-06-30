@@ -18,7 +18,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # v2.7 Track XP (charter §2.3): extend matrix with arm64
+        # variants. macos-latest is already arm64 (macos-14);
+        # add ubuntu-24.04-arm + windows-11-arm. If a new
+        # platform surfaces test failures, amend per charter §4
+        # rather than silently dropping.
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+          - windows-latest
+          - windows-11-arm
     steps:
       - uses: actions/checkout@v4
         with:
