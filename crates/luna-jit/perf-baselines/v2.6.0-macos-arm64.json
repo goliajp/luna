@@ -1,0 +1,33 @@
+{
+  "group": "redis_lua_shape",
+  "platform": "macos-arm64-local",
+  "commit": "9bcdc77",
+  "recorded": "2026-06-30",
+  "cells": {
+    "dict_5k_lookup": {
+      "mean_ns": 8805291.317000004,
+      "mean_low_ns": 8791519.8549,
+      "mean_high_ns": 8819051.639925005
+    },
+    "method_dispatch_5k": {
+      "mean_ns": 1519077.094122023,
+      "mean_low_ns": 1510346.5929551094,
+      "mean_high_ns": 1530121.4379557846
+    },
+    "sliding_window_500": {
+      "mean_ns": 1526366.8561772846,
+      "mean_low_ns": 1523268.1125111068,
+      "mean_high_ns": 1529630.986989152
+    },
+    "string_ops_2k": {
+      "mean_ns": 5712494.749285711,
+      "mean_low_ns": 5701820.191928571,
+      "mean_high_ns": 5723016.71882143
+    },
+    "token_bucket_1k": {
+      "mean_ns": 238134.64007806336,
+      "mean_low_ns": 236918.25767982213,
+      "mean_high_ns": 239502.07315304756
+    }
+  }
+}
