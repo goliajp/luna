@@ -5581,22 +5581,36 @@ impl Vm {
                     // disarm + raise if the cap is still breached after
                     // collection. PUC's `LUA_GCEMERGENCY` path matches.
                     //
-                    // v2.5 P1B-2E partial: maybe_collect_garbage
-                    // tightening to bare `live_top` works (slot-clear
-                    // covers all frame-pop sites), but the mem-cap-
-                    // fire path remains over-rooted via
-                    // `self.stack.len()`. Reason: the cap fires
-                    // during table mutation in a tight `a[i] = i`
-                    // loop, where `a` lives at a frame-register slot
-                    // past `self.top` (OP_NEWINDEX doesn't advance
-                    // top) and there's no frame-pop event for the
-                    // slot-clear to trigger on. Per-frame walk could
-                    // catch it but broke db.lua in v2.2.1 attempts.
-                    // The over-root here is rare (fire-once disarms)
-                    // + correctness-critical. Full tightening lives
-                    // in v2.6+ if a per-frame walk with weak-table
-                    // semantics fix lands.
-                    self.gc_top = self.stack.len() as u32;
+                    // v2.6 A.2: tighten mem-cap-fire over-root from
+                    // entire `self.stack.len()` (whole heap) to the
+                    // deepest Lua frame's `base + max_stack` window
+                    // (covers register operands the current opcode
+                    // might reference). The cap fires during table
+                    // mutation in a tight `a[i] = i` loop where `a`
+                    // lives at a frame-register slot past `self.top`
+                    // (OP_NEWINDEX doesn't advance top); the deepest
+                    // frame's max_stack window provably covers it
+                    // since `a` is a register of the executing proto.
+                    //
+                    // Still over-roots caller frames' dead regs
+                    // (slots between caller.base and the callee
+                    // func_slot are live; slots past callee
+                    // func_slot in caller's frame are dead until
+                    // caller resumes). For fire-once cap path this
+                    // residual over-root is acceptable; full
+                    // per-frame walk was canceled per
+                    // `.dev/rfcs/v2.6-plan-state.md` amendments log
+                    // (charter §2.1's strong/weak pass split is
+                    // semantically impossible — weak pass depends on
+                    // strong-pass marks).
+                    let cap_root_top = self
+                        .frames
+                        .iter()
+                        .rev()
+                        .find_map(CallFrame::lua)
+                        .map(|f| f.base + f.closure.proto.max_stack as u32)
+                        .unwrap_or(self.top);
+                    self.gc_top = cap_root_top.max(self.top);
                     self.collect_garbage();
                     if self.heap.bytes() > cap {
                         self.heap.mem_cap = None;
