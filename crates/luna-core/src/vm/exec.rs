@@ -5487,6 +5487,28 @@ impl Vm {
                     } else if self.stack.len() > restore {
                         self.stack.truncate(restore);
                     }
+                    // v2.5 P1B-2B: clear slots vacated by the popped
+                    // frames the unwind walked over. finish_results
+                    // above clears `[nc.func_slot + nresults ..
+                    // nc.func_slot + 2)`, which only covers the
+                    // pcall's own result region — the unwind-popped
+                    // frames' locals in `[nc.func_slot + 2 .. restore)`
+                    // are still in place with whatever Gc-bearing
+                    // Values they last held. Without this clear, a
+                    // later GC marks the stale pointers (UAF-A family
+                    // analog of the v2.3 Op::Return finish_results
+                    // path). PUC's `luaD_pcall` similarly truncates
+                    // L->top to the catcher's level — luna's
+                    // truncate above resizes the Vec but doesn't
+                    // touch slots [func_slot+2..restore) that were
+                    // already present.
+                    let clear_lo = (nc.func_slot as usize + 2).min(self.stack.len());
+                    let clear_hi = restore.min(self.stack.len());
+                    if clear_lo < clear_hi {
+                        for slot in &mut self.stack[clear_lo..clear_hi] {
+                            *slot = Value::Nil;
+                        }
+                    }
                     return Unwound::Caught;
                 }
                 CallFrame::Lua(f) => {
