@@ -3,7 +3,9 @@
 use luna_jit::version::LuaVersion;
 
 const CELLS: &[(&str, &str)] = &[
-    ("token_bucket_1k", r#"
+    (
+        "token_bucket_1k",
+        r#"
         local bucket = { tokens = 1000, last = 0, rate = 100 }
         local now = 1
         local refilled = 0
@@ -21,8 +23,11 @@ const CELLS: &[(&str, &str)] = &[
             now = now + 1
         end
         return bucket.tokens, refilled
-    "#),
-    ("method_dispatch_5k", r#"
+    "#,
+    ),
+    (
+        "method_dispatch_5k",
+        r#"
         local cls = {}
         cls.__index = cls
         function cls:get(k) return self.t[k] end
@@ -42,7 +47,8 @@ const CELLS: &[(&str, &str)] = &[
             last = o:incr("k", 1) + v
         end
         return last
-    "#),
+    "#,
+    ),
 ];
 
 fn main() {
