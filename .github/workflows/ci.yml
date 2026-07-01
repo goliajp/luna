@@ -18,7 +18,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # v2.7 Track XP (charter §2.3): extend matrix with arm64
+        # variants. macos-latest is already arm64 (macos-14);
+        # ubuntu-24.04-arm added in v2.7.
+        #
+        # windows-11-arm DEFERRED to v2.8+ per v2.7-plan-state
+        # amendments log: vendored cranelift PE/COFF backend
+        # missing `Aarch64AdrGotPage21` relocation support
+        # (`not implemented: Aarch64AdrGotPage21 is not
+        # supported for this file format` in crates/vendored/
+        # wasmtime/cranelift/object/src/backend.rs:813).
+        # Requires upstream wasmtime/cranelift work; not in-
+        # sprint scope.
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,8 +167,12 @@ jobs:
   # absorbs the residual jitter.
   # ─────────────────────────────────────────────────────────────────
   perf-gate:
-    name: redis_lua_shape perf-gate (manual)
-    if: github.event_name == 'workflow_dispatch'
+    # v2.7 B.3: promoted from manual-only to PR + push trigger,
+    # required gate. Ubuntu baseline at
+    # crates/luna-jit/perf-baselines/v2.7.0-ubuntu-x86_64.json
+    # matches the GHA runner platform. Bypass via [perf-allow]
+    # tag in commit body for intentional regressions.
+    name: redis_lua_shape perf-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -161,14 +181,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo bench --bench redis_lua_shape (taskset -c 1)
         run: taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
-      - name: perf-gate regression check (v2.6 Track B)
-        # The baseline at crates/luna-jit/perf-baselines/v2.6.0-
-        # macos-arm64.json is for macOS arm64; ubuntu-latest GHA
-        # runner has different hardware. For v2.6 first land we
-        # run the gate with the macOS baseline as advisory only
-        # (continue-on-error). A v2.7+ follow-up captures an
-        # ubuntu-latest baseline + flips this to required.
-        continue-on-error: true
+      - name: perf-gate regression check (v2.7 Track B)
+        # perf-gate.sh auto-selects baseline by $RUNNER_OS
+        # (Linux → ubuntu-x86_64; macOS → arm64 local-dev only).
+        # Threshold 1.05x (5% regression); [perf-allow] in
+        # commit body bypasses.
         run: ./scripts/perf-gate.sh
 
   # ─────────────────────────────────────────────────────────────────

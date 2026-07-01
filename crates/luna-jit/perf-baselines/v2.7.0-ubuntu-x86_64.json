@@ -1,0 +1,34 @@
+{
+  "group": "redis_lua_shape",
+  "platform": "ubuntu-x86_64-gha-hosted",
+  "commit": "de18148",
+  "recorded": "2026-07-01",
+  "note": "Captured from actual GHA ubuntu-latest hosted runner (run 28459112420). Initial v2.7 B.1 baseline was via docker linux/amd64 on macOS arm64 host which mispredicted hardware perf by 1.36-1.49x; this replacement uses real runner numbers. Threshold remains 1.05x.",
+  "cells": {
+    "dict_5k_lookup": {
+      "mean_ns": 18311327,
+      "mean_low_ns": 17395761,
+      "mean_high_ns": 19226893
+    },
+    "method_dispatch_5k": {
+      "mean_ns": 4133877,
+      "mean_low_ns": 3927183,
+      "mean_high_ns": 4340571
+    },
+    "sliding_window_500": {
+      "mean_ns": 3374241,
+      "mean_low_ns": 3205529,
+      "mean_high_ns": 3542953
+    },
+    "string_ops_2k": {
+      "mean_ns": 12513658,
+      "mean_low_ns": 11887975,
+      "mean_high_ns": 13139341
+    },
+    "token_bucket_1k": {
+      "mean_ns": 686092,
+      "mean_low_ns": 651787,
+      "mean_high_ns": 720397
+    }
+  }
+}
