@@ -1,4 +1,4 @@
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 //! luna-core — pure-Rust Lua runtime (interpreter only).
 //!
 //! Zero third-party dependencies. The JIT-equipped variant lives in
