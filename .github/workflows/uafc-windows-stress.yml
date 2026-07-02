@@ -1,0 +1,79 @@
+# v2.13 Track WUC Prong B — UAF-C repro-rate measurement.
+#
+# gc.lua / gengc.lua / tracegc.lua loop on windows-latest via the
+# gc_stress_plain harness (native Windows Heap Manager — the
+# environment where STATUS_ACCESS_VIOLATION historically fires),
+# plus a poison-allocator lane that reproduces the MSVC
+# debug-heap 0xDD fill on any platform. WER LocalDumps captures a
+# minidump on crash; the dump uploads as an artifact for cdb
+# analysis. Dispatch-only: this is a diagnostic tool, not a CI
+# lane. Tracking: .dev/known-bugs/windows-gc-weak-table-uaf-c.md
+
+name: uafc-windows-stress
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "stress loop iterations per harness"
+        default: "50"
+        required: false
+
+jobs:
+  stress:
+    name: gc.lua stress ${{ matrix.harness }} (windows)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [gc_stress_plain, gc_stress_poison]
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+      LUNA_GC_STRESS_N: ${{ inputs.iterations }}
+      LUNA_POISON_STRESS_N: ${{ inputs.iterations }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable WER LocalDumps (full minidump on crash)
+        shell: pwsh
+        run: |
+          New-Item -Path "$env:GITHUB_WORKSPACE\crashdumps" -ItemType Directory -Force | Out-Null
+          $k = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+          New-Item -Path $k -Force | Out-Null
+          Set-ItemProperty -Path $k -Name DumpFolder -Value "$env:GITHUB_WORKSPACE\crashdumps"
+          Set-ItemProperty -Path $k -Name DumpType -Value 2
+          Set-ItemProperty -Path $k -Name DumpCount -Value 10
+
+      - name: Build harness
+        run: cargo build --release -p luna-core --test ${{ matrix.harness }}
+
+      - name: Stress loop
+        # cargo test propagates the AV as a non-zero exit; WER has
+        # already written the minidump by the time the process dies.
+        run: cargo test --release -p luna-core --test ${{ matrix.harness }} -- --ignored --nocapture
+
+      - name: Stack from minidump (on crash)
+        if: failure()
+        shell: pwsh
+        run: |
+          $dumps = Get-ChildItem "$env:GITHUB_WORKSPACE\crashdumps" -Filter *.dmp -ErrorAction SilentlyContinue
+          if (-not $dumps) { Write-Host "no minidump found"; exit 0 }
+          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue
+          if (-not $cdb) { Write-Host "cdb not present; dump uploads raw"; exit 0 }
+          foreach ($d in $dumps) {
+            Write-Host "===== $($d.Name)"
+            & $cdb.FullName -z $d.FullName -c "!analyze -v; kv; q" 2>&1 | Select-Object -First 200
+          }
+
+      - name: Upload crash dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uafc-crashdumps-${{ matrix.harness }}
+          path: crashdumps/*.dmp
+          if-no-files-found: ignore
