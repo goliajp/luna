@@ -152,7 +152,10 @@ fn diff_one(path: &Path) {
     let puc = match run_on_puc(path, &source) {
         Some(o) => o,
         None => {
-            eprintln!("[diff_puc] skip {} (PUC binary unavailable)", path.display());
+            eprintln!(
+                "[diff_puc] skip {} (PUC binary unavailable)",
+                path.display()
+            );
             return;
         }
     };

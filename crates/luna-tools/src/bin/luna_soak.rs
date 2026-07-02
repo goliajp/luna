@@ -183,7 +183,12 @@ fn drift_pct(first: f64, last: f64) -> f64 {
 /// Called after every sample so an externally-killed run (e.g.
 /// the GH Actions 6h job cap cutting a 24h soak) still leaves a
 /// complete partial report on disk.
-fn render_report(workload: &Path, duration_secs: u64, interval_secs: u64, samples: &[Sample]) -> String {
+fn render_report(
+    workload: &Path,
+    duration_secs: u64,
+    interval_secs: u64,
+    samples: &[Sample],
+) -> String {
     let mut vm_mems: Vec<usize> = samples.iter().map(|s| s.vm_mem_used).collect();
     let mut rsses: Vec<u64> = samples.iter().map(|s| s.rss_kb).collect();
     let summary = Summary {
