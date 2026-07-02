@@ -13,7 +13,17 @@ feature-depth = 1
 db-path = "~/.cargo/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-ignore = []
+# quick-xml 0.26 (via luna-tools optional `flame-graph` feature →
+# inferno 0.11) hits two XML-parsing DoS advisories patched only in
+# quick-xml >= 0.41.0. inferno's latest (0.12.6) still pins ^0.39,
+# so no upgrade path exists yet. Exposure is nil for luna: quick-xml
+# only parses inferno's own locally-generated flamegraph SVG/collapsed
+# stacks in a dev-only CLI tool — no untrusted XML reaches it. Drop
+# these ignores once inferno releases with quick-xml >= 0.41.
+ignore = [
+    "RUSTSEC-2026-0194", # quick-xml: quadratic runtime on duplicate attr check
+    "RUSTSEC-2026-0195", # quick-xml: unbounded NsReader namespace allocation
+]
 
 # ─────────────────────────────────────────────────────────────────────
 # Licenses — only permissive, no GPL contamination.

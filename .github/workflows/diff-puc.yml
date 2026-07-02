@@ -57,13 +57,16 @@ jobs:
             # apt has no lua5.5 — build from source per the
             # already-vendored test suite version.
             sudo apt-get update -qq
-            sudo apt-get install -y -qq build-essential libreadline-dev
+            sudo apt-get install -y -qq build-essential
             mkdir -p /tmp/puc-build
             cd /tmp/puc-build
             curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
             tar -xzf lua.tar.gz
             cd lua-5.5.0
-            make linux-readline
+            # 5.5 dropped the 5.4-era `linux-readline` target; plain
+            # `linux` builds without readline, which the stdin-driven
+            # diff harness doesn't need anyway.
+            make linux
             sudo make install INSTALL_TOP=/usr/local
             echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
           fi
@@ -76,8 +79,10 @@ jobs:
         # standalone binary — the luna-side harness uses the
         # in-process Vm::eval API. PUC side uses $PUC_LUA.
         # luna-tools build is just to confirm the workspace
-        # compiles cleanly under the diff job env.
-        run: cargo build --workspace --release
+        # compiles cleanly under the diff job env. Same LLVM
+        # excludes as ci.yml — llvm-jit-probe + luna-jit-llvm
+        # need system LLVM 18 + Polly, absent on hosted runners.
+        run: cargo build --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm
 
       - name: cargo test --release -p luna-core --test diff_puc
         # The diff_puc integration test reads each fixture from

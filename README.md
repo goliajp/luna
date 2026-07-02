@@ -111,10 +111,16 @@ let result: i64 = lua.eval("return add(cfg.answer, 8)")?;
 assert_eq!(result, 50);
 ```
 
-Full walkthrough: [`docs/embedding.md`](docs/embedding.md) (12
+Full walkthrough: [`docs/embedding.md`](docs/embedding.md) (14
 sections covering install, sandbox, set_global, tables, native
 functions, userdata, coroutines, debug hooks, errors, the `Lua`
-newtype facade, and threading).
+newtype facade, threading, stable API contract, and known
+limitations).
+
+> **Looking for embedders**: luna is actively recruiting its
+> second production embedder to close v3.0 acceptance #8. See
+> [`docs/embedder-recruitment.md`](docs/embedder-recruitment.md)
+> for what luna offers, what it doesn't, and how to try it.
 
 ## Threading model
 
