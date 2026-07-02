@@ -1,13 +1,16 @@
-# v2.13 Track WUC Prong B — UAF-C repro-rate measurement.
+# v2.13 Track WUC Prong B — UAF-C repro-rate measurement + stack
+# capture.
 #
 # gc.lua / gengc.lua / tracegc.lua loop on windows-latest via the
 # gc_stress_plain harness (native Windows Heap Manager — the
 # environment where STATUS_ACCESS_VIOLATION historically fires),
-# plus a poison-allocator lane that reproduces the MSVC
-# debug-heap 0xDD fill on any platform. WER LocalDumps captures a
-# minidump on crash; the dump uploads as an artifact for cdb
-# analysis. Dispatch-only: this is a diagnostic tool, not a CI
-# lane. Tracking: .dev/known-bugs/windows-gc-weak-table-uaf-c.md
+# plus a poison-allocator lane reproducing the MSVC debug-heap
+# 0xDD fill. Run 28601903484 confirmed repro: plain AVs at
+# iter 4, poison at iter 1. WER LocalDumps captured nothing
+# (WER disabled on GHA runners), so the test binary runs under
+# Sysinternals procdump (-e: unhandled-exception dump) and the
+# dump is stack-walked with cdb. Dispatch-only diagnostic.
+# Tracking: .dev/known-bugs/windows-gc-weak-table-uaf-c.md
 
 name: uafc-windows-stress
 
@@ -31,6 +34,9 @@ jobs:
     env:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
+      # Full debuginfo in the release diagnostic build so the cdb
+      # stack walk resolves Rust symbols + lines from the PDB.
+      CARGO_PROFILE_RELEASE_DEBUG: "true"
       LUNA_GC_STRESS_N: ${{ inputs.iterations }}
       LUNA_POISON_STRESS_N: ${{ inputs.iterations }}
     steps:
@@ -39,23 +45,32 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Enable WER LocalDumps (full minidump on crash)
+      - name: Install procdump
         shell: pwsh
         run: |
+          choco install procdump -y --no-progress | Out-Null
           New-Item -Path "$env:GITHUB_WORKSPACE\crashdumps" -ItemType Directory -Force | Out-Null
-          $k = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
-          New-Item -Path $k -Force | Out-Null
-          Set-ItemProperty -Path $k -Name DumpFolder -Value "$env:GITHUB_WORKSPACE\crashdumps"
-          Set-ItemProperty -Path $k -Name DumpType -Value 2
-          Set-ItemProperty -Path $k -Name DumpCount -Value 10
 
-      - name: Build harness
-        run: cargo build --release -p luna-core --test ${{ matrix.harness }}
+      - name: Build harness (grab test-binary path)
+        id: build
+        shell: pwsh
+        run: |
+          $json = cargo test --release -p luna-core --test ${{ matrix.harness }} --no-run --message-format=json 2>$null
+          $exe = ($json | ConvertFrom-Json -AsHashtable -ErrorAction SilentlyContinue |
+            Where-Object { $_.executable -and $_.target.name -eq "${{ matrix.harness }}" } |
+            Select-Object -Last 1).executable
+          if (-not $exe) { throw "test binary not found in cargo JSON output" }
+          Write-Host "test binary: $exe"
+          "exe=$exe" >> $env:GITHUB_OUTPUT
 
-      - name: Stress loop
-        # cargo test propagates the AV as a non-zero exit; WER has
-        # already written the minidump by the time the process dies.
-        run: cargo test --release -p luna-core --test ${{ matrix.harness }} -- --ignored --nocapture
+      - name: Stress loop under procdump
+        shell: pwsh
+        run: |
+          # -e: write dump on unhandled exception; -ma: full memory.
+          # procdump propagates the debuggee's exit code.
+          procdump -accepteula -e -ma -x "$env:GITHUB_WORKSPACE\crashdumps" `
+            "${{ steps.build.outputs.exe }}" --ignored --nocapture
+          exit $LASTEXITCODE
 
       - name: Stack from minidump (on crash)
         if: failure()
@@ -63,11 +78,15 @@ jobs:
         run: |
           $dumps = Get-ChildItem "$env:GITHUB_WORKSPACE\crashdumps" -Filter *.dmp -ErrorAction SilentlyContinue
           if (-not $dumps) { Write-Host "no minidump found"; exit 0 }
-          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue
-          if (-not $cdb) { Write-Host "cdb not present; dump uploads raw"; exit 0 }
+          $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
+          if (-not (Test-Path $cdb)) {
+            Write-Host "cdb missing; installing windbg portable via choco"
+            choco install windbg -y --no-progress | Out-Null
+          }
+          if (-not (Test-Path $cdb)) { Write-Host "cdb still missing; dump uploads raw"; exit 0 }
           foreach ($d in $dumps) {
             Write-Host "===== $($d.Name)"
-            & $cdb.FullName -z $d.FullName -c "!analyze -v; kv; q" 2>&1 | Select-Object -First 200
+            & $cdb -z $d.FullName -c ".lines; !analyze -v; kv 40; q" 2>&1 | Select-Object -First 300
           }
 
       - name: Upload crash dumps
