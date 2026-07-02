@@ -84,15 +84,18 @@ jobs:
             choco install windbg -y --no-progress | Out-Null
           }
           if (-not (Test-Path $cdb)) { Write-Host "cdb still missing; dump uploads raw"; exit 0 }
+          $deps = "$env:GITHUB_WORKSPACE\target\release\deps"
           foreach ($d in $dumps) {
             Write-Host "===== $($d.Name)"
-            & $cdb -z $d.FullName -c ".lines; !analyze -v; kv 40; q" 2>&1 | Select-Object -First 300
+            & $cdb -z $d.FullName -c ".sympath $deps; .reload /f; .ecxr; .lines; kv 40; q" 2>&1 | Select-Object -First 400
           }
 
-      - name: Upload crash dumps
+      - name: Upload crash dumps + symbols
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: uafc-crashdumps-${{ matrix.harness }}
-          path: crashdumps/*.dmp
+          path: |
+            crashdumps/*.dmp
+            target/release/deps/${{ matrix.harness }}-*.pdb
           if-no-files-found: ignore
