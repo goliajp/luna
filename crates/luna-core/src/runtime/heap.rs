@@ -259,6 +259,12 @@ pub struct Heap {
     /// Cap at 4096 entries to avoid unbounded growth (worst-case: 4096
     /// × sizeof(Table) ≈ 460 KB resident memory in idle pool).
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
+    /// v2.13 WUC `gc-verify` — headers freed since the last collect
+    /// began. O(1) read-time dangling probes (`Vm::op_index`) test
+    /// membership here; cleared when the next mark starts. Only exact
+    /// under ASAN-style quarantining allocators (no immediate reuse).
+    #[cfg(feature = "gc-verify")]
+    pub(crate) recently_freed: std::collections::HashSet<usize>,
     /// P09 embedding memory cap. When `Some(n)`, the VM's run loop watches
     /// `bytes` between dispatch turns and, on overshoot, runs a full collect
     /// and (still overshooting) raises a catchable "memory cap exceeded"
@@ -293,6 +299,8 @@ impl Heap {
             defer_thread_cycle_finalize: false,
             mem_cap: None,
             table_pool: Vec::new(),
+            #[cfg(feature = "gc-verify")]
+            recently_freed: std::collections::HashSet::new(),
         }
     }
 
@@ -339,6 +347,14 @@ impl Heap {
         // Saves ~30ns per alloc (malloc roundtrip elided).
         let p = if let Some(ptr) = self.table_pool.pop() {
             let t = ptr.as_ptr();
+            // gc-verify: the pointer is alive again — drop it from the
+            // freed log so read-time probes don't flag the recycled table.
+            #[cfg(feature = "gc-verify")]
+            {
+                self.recently_freed.remove(&(t as usize));
+                crate::runtime::gc_verify_probe::FREED
+                    .with(|f| f.borrow_mut().remove(&(t as usize)));
+            }
             // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
             unsafe {
                 // Reset to fresh-Table state. Box-owned slab/nodes/
@@ -886,6 +902,111 @@ impl Heap {
         // sweep tests for). Born-during-sweep allocations stamp the new
         // current-white via `Heap::link`, so they survive this cycle.
         self.current_white ^= WHITE_BITS;
+        // v2.13 WUC `gc-verify` — tricolor invariant check at the one
+        // moment it is exact: marking is complete, nothing is freed yet.
+        // A BLACK (surviving) table holding a dead-white child means a
+        // write barrier was missed; the child will be freed by the
+        // upcoming sweep and the table left holding a dangling pointer.
+        // Nothing is dangling *yet*, so the reporter may safely print
+        // string contents to identify the key.
+        #[cfg(feature = "gc-verify")]
+        self.verify_tricolor("atomic_tail");
+    }
+
+    /// v2.13 WUC `gc-verify` — the set of every live object header
+    /// (all + sweep_cur + finalizer queues), for callers that need to
+    /// audit their own containers (e.g. the VM auditing its register
+    /// stack after a collect).
+    #[cfg(feature = "gc-verify")]
+    pub fn debug_live_set(&self) -> std::collections::HashSet<usize> {
+        let mut live = std::collections::HashSet::new();
+        // SAFETY: heap-owned intrusive lists; all elements are live
+        // allocations.
+        unsafe {
+            let mut cur = self.all;
+            while !cur.is_null() {
+                live.insert(cur as usize);
+                cur = (*cur).next;
+            }
+            let mut cur = self.sweep_cur;
+            while !cur.is_null() {
+                live.insert(cur as usize);
+                cur = (*cur).next;
+            }
+        }
+        for &h in &self.finalize {
+            live.insert(h as usize);
+        }
+        for &h in &self.tobefnz {
+            live.insert(h as usize);
+        }
+        live
+    }
+
+    /// See call site in [`Heap::atomic_tail`]. Panics on the first
+    /// BLACK table whose collectable child is dead-white (missed
+    /// barrier — that child is about to be swept while still
+    /// referenced).
+    #[cfg(feature = "gc-verify")]
+    fn verify_tricolor(&self, ctx: &str) {
+        let new_white = self.current_white;
+        // SAFETY: `all` is the heap's own intrusive list; every element
+        // is a live allocation (nothing has been freed this cycle yet).
+        unsafe {
+            let is_live = |v: Value| -> bool {
+                let h = match v {
+                    Value::Str(s) => s.as_ptr() as *mut GcHeader,
+                    Value::Table(t) => t.as_ptr() as *mut GcHeader,
+                    Value::Closure(c) => c.as_ptr() as *mut GcHeader,
+                    Value::Native(n) => n.as_ptr() as *mut GcHeader,
+                    Value::Coro(c) => c.as_ptr() as *mut GcHeader,
+                    Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
+                    _ => return true,
+                };
+                let f = (*h).flags;
+                !(is_white(f) && (f & new_white) == 0)
+            };
+            let mut cur = self.all;
+            while !cur.is_null() {
+                let f = (*cur).flags;
+                if (*cur).tag == ObjTag::Table && (f & BLACK) != 0 {
+                    let t = &*(cur as *const Table);
+                    // Weak tables may legitimately reference dead objects
+                    // between clear passes; they were just cleared above,
+                    // but their sanctioned dead_key nodes are skipped by
+                    // verify_refs anyway. Only strong tables assert.
+                    let (wk, wv) = t.weak_mode();
+                    if wk || wv {
+                        cur = (*cur).next;
+                        continue;
+                    }
+                    let tp = cur as usize;
+                    t.verify_refs(&is_live, &|what, idx, v| {
+                        // Pre-sweep: dereferencing v is still safe — name
+                        // the key when it is a string.
+                        let detail = match v.as_bytes() {
+                            Some(b) => format!("str {:?}", String::from_utf8_lossy(b)),
+                            None => format!(
+                                "non-str {:#x}",
+                                match v {
+                                    Value::Table(t) => t.as_ptr() as usize,
+                                    Value::Closure(c) => c.as_ptr() as usize,
+                                    Value::Coro(c) => c.as_ptr() as usize,
+                                    Value::Userdata(u) => u.as_ptr() as usize,
+                                    Value::Native(n) => n.as_ptr() as usize,
+                                    _ => 0,
+                                }
+                            ),
+                        };
+                        panic!(
+                            "[gc-verify] {ctx}: BLACK table {tp:#x} holds dead-white {what} \
+                             (slot {idx}): {detail} — missed write barrier"
+                        );
+                    });
+                }
+                cur = (*cur).next;
+            }
+        }
     }
 
     /// Borrow Heap's persistent propagate state as an ephemeral Marker.
@@ -1236,6 +1357,8 @@ impl Heap {
             self.all = kept_head;
         }
         self.live -= freed;
+        #[cfg(feature = "gc-verify")]
+        self.verify_no_dangling("full_sweep");
         freed
     }
 
@@ -1267,6 +1390,11 @@ impl Heap {
                 n += 1;
             }
         }
+        // Verify after EVERY step, not just cycle completion: the
+        // mutator runs between steps, so a reference dangling mid-cycle
+        // is already a live bug (this is exactly UAF-C's window).
+        #[cfg(feature = "gc-verify")]
+        self.verify_no_dangling("sweep_step");
         if self.sweep_cur.is_null() {
             self.phase = GcPhase::Pause;
             true
@@ -1275,7 +1403,95 @@ impl Heap {
         }
     }
 
+    /// v2.13 WUC `gc-verify` — post-sweep dangling-reference check
+    /// (PUC `lua_checkmemory` analogue). Builds the live set from the
+    /// `all` list + finalizer queues, then walks every live table's
+    /// collectable refs via [`Table::verify_refs`]. Panics with table
+    /// pointer + slot detail on the first reference whose target is no
+    /// longer live — i.e. at the collect that CREATED the dangling
+    /// pointer, not at the later allocator-dependent dereference.
+    #[cfg(feature = "gc-verify")]
+    pub fn verify_no_dangling(&self, ctx: &str) {
+        use std::collections::HashSet;
+        fn value_header(v: Value) -> Option<*mut GcHeader> {
+            match v {
+                Value::Str(s) => Some(s.as_ptr() as *mut GcHeader),
+                Value::Table(t) => Some(t.as_ptr() as *mut GcHeader),
+                Value::Closure(c) => Some(c.as_ptr() as *mut GcHeader),
+                Value::Native(n) => Some(n.as_ptr() as *mut GcHeader),
+                Value::Coro(c) => Some(c.as_ptr() as *mut GcHeader),
+                Value::Userdata(u) => Some(u.as_ptr() as *mut GcHeader),
+                _ => None,
+            }
+        }
+        let mut live: HashSet<usize> = HashSet::new();
+        // SAFETY: `all` / `sweep_cur` / finalizer-queue pointers are the
+        // heap's own intrusive lists; every element is a live allocation
+        // until free_obj unlinks it.
+        unsafe {
+            let mut cur = self.all;
+            while !cur.is_null() {
+                live.insert(cur as usize);
+                cur = (*cur).next;
+            }
+            let mut cur = self.sweep_cur;
+            while !cur.is_null() {
+                live.insert(cur as usize);
+                cur = (*cur).next;
+            }
+            for &h in &self.finalize {
+                live.insert(h as usize);
+            }
+            for &h in &self.tobefnz {
+                live.insert(h as usize);
+            }
+            let is_live = |v: Value| -> bool {
+                match value_header(v) {
+                    None => true,
+                    Some(h) => live.contains(&(h as usize)),
+                }
+            };
+            // Walk BOTH lists: `all` (already-swept survivors) and
+            // `sweep_cur` (not-yet-swept remainder of an incremental
+            // cycle). A dangling reference can live in either while the
+            // mutator runs between sweep steps.
+            let new_white = self.current_white;
+            for head in [self.all, self.sweep_cur] {
+                let mut cur = head;
+                while !cur.is_null() {
+                    // Skip dead-but-not-yet-swept objects on `sweep_cur`:
+                    // they are unreachable, so a dangling ref inside them
+                    // is benign (their peers may already be freed).
+                    let f = (*cur).flags;
+                    if is_white(f) && (f & new_white) == 0 {
+                        cur = (*cur).next;
+                        continue;
+                    }
+                    if (*cur).tag == ObjTag::Table {
+                        let t = &*(cur as *const Table);
+                        let tp = cur as usize;
+                        t.verify_refs(&is_live, &|what, idx, v| {
+                            // Do NOT Debug-format `v` — for Value::Str that
+                            // would dereference the (dangling) payload.
+                            let p = value_header(v).map(|h| h as usize).unwrap_or(0);
+                            panic!(
+                                "[gc-verify] {ctx}: table {tp:#x} holds dangling {what} \
+                                 (slot {idx}, target {p:#x})"
+                            );
+                        });
+                    }
+                    cur = (*cur).next;
+                }
+            }
+        }
+    }
+
     unsafe fn free_obj(&mut self, h: *mut GcHeader) {
+        #[cfg(feature = "gc-verify")]
+        {
+            self.recently_freed.insert(h as usize);
+            crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
+        }
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             match (*h).tag {
