@@ -79,8 +79,10 @@ jobs:
         # standalone binary — the luna-side harness uses the
         # in-process Vm::eval API. PUC side uses $PUC_LUA.
         # luna-tools build is just to confirm the workspace
-        # compiles cleanly under the diff job env.
-        run: cargo build --workspace --release
+        # compiles cleanly under the diff job env. Same LLVM
+        # excludes as ci.yml — llvm-jit-probe + luna-jit-llvm
+        # need system LLVM 18 + Polly, absent on hosted runners.
+        run: cargo build --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm
 
       - name: cargo test --release -p luna-core --test diff_puc
         # The diff_puc integration test reads each fixture from
