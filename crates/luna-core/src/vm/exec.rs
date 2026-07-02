@@ -2019,11 +2019,11 @@ impl Vm {
     ) -> Result<Vec<Value>, LuaError> {
         match co.status {
             CoroStatus::Suspended => {}
-            CoroStatus::Dead => return Err(self.rt_err("cannot resume dead coroutine")),
-            _ => return Err(self.rt_err("cannot resume non-suspended coroutine")),
+            CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
+            _ => return Err(self.plain_err("cannot resume non-suspended coroutine")),
         }
         if self.c_depth >= MAX_C_DEPTH {
-            return Err(self.rt_err("C stack overflow"));
+            return Err(self.plain_err("C stack overflow"));
         }
         self.c_depth += 1;
         let resumer = self.current;
@@ -5005,6 +5005,13 @@ impl Vm {
             None => msg.to_string(),
         };
         LuaError(Value::Str(self.heap.intern(text.as_bytes())))
+    }
+
+    /// Error without the `chunk:line:` position prefix. PUC's
+    /// `resume_error` (ldo.c) pushes its message as a bare literal,
+    /// so `cannot resume dead coroutine` etc. must not be prefixed.
+    pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
+        LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
     }
 
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
