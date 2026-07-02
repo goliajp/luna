@@ -21,8 +21,8 @@ workspace = true
 # unaffected because luna-jit-helpers is downstream of luna-core, not
 # upstream.
 #
-# `version = "= 2.10.0"` pin matches the workspace version so the
+# `version = "= 2.11.0"` pin matches the workspace version so the
 # crates.io resolver picks the exact matching luna-core release when
 # embedders bypass the `path` fallback (i.e. when this crate is pulled
 # transitively from a published luna-jit).
-luna-core = { path = "../luna-core", version = "= 2.10.0" }
+luna-core = { path = "../luna-core", version = "= 2.11.0" }
