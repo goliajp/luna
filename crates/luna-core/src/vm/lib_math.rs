@@ -260,7 +260,15 @@ fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let x = check_f64(vm, fs, nargs, 0, "modf")?;
     let ip = if x >= 0.0 { x.floor() } else { x.ceil() };
     let fp = if x.is_infinite() { 0.0 } else { x - ip };
-    Ok(vm.nat_return(fs, &[Value::Float(ip), Value::Float(fp)]))
+    // v2.12 KNOWN-DIV: PUC 5.5's math.modf returns the integer
+    // part as Integer subtype when it fits an i64 (matches PUC
+    // luaB_modf's `pushnumint` fast path). Only fall back to
+    // Float when the value is non-integral (NaN/inf) or overflows
+    // i64 range. Fixture 69_math_ops.lua depends on this.
+    let ip_val = crate::runtime::value::f2i_exact(ip)
+        .map(Value::Int)
+        .unwrap_or(Value::Float(ip));
+    Ok(vm.nat_return(fs, &[ip_val, Value::Float(fp)]))
 }
 
 fn m_tointeger(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
