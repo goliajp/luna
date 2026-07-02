@@ -793,29 +793,17 @@ clock. v3.0 ship target ≥ 2027-01-01 at earliest.
 
 ## 14. Known limitations
 
-### Windows: gc.lua / gengc.lua / tracegc.lua weak-table sweep
+*(none currently)*
 
-PUC's `gc.lua` / `gengc.lua` / `tracegc.lua` from the
-official test suite exercise incremental + generational GC
-with tight weak-table convergence loops. On Windows only
-(Linux amd64 + Linux arm64 + macOS arm64 all reliably
-green), luna's `official_run` test suite intermittently
-hits `STATUS_ACCESS_VIOLATION` on the sweep tail.
-
-Root cause is under investigation — likely stems from
-Windows Heap Manager's fill-freed-memory pattern differing
-from glibc/jemalloc. luna's frame-pop slot-clear coverage
-(v2.5) closes the analogous UAF on Linux/macOS but not the
-Windows-specific weak-table path.
-
-**Impact on embedders**: none unless your host does
-`collectgarbage()` inside a `debug.sethook(..., "crl")`
-line-hook with weak-tables (rare pattern). If you hit this,
-please file an issue with your Windows version + a repro —
-the more repro data, the faster the fix.
-
-CI status: gated (Windows-only skip) on
-`{gc,gengc,tracegc}.lua`.
+**Resolved in v2.13** — Windows gc.lua / gengc.lua /
+tracegc.lua weak-table sweep `STATUS_ACCESS_VIOLATION`: root-
+caused to two platform-independent GC bugs (a stale stack-root
+cursor on `collectgarbage()` calls, and weak-table tombstone
+keys escaping the clear-key sweep), both fixed and validated
+with ASAN + a new `gc-verify` invariant-checking build plus
+repeated Windows stress runs. The official-suite Windows gate
+is removed; all three files run unconditionally on every
+platform.
 
 ---
 
