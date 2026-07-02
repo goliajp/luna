@@ -67,10 +67,12 @@ jobs:
         shell: pwsh
         run: |
           # -e: write dump on unhandled exception; -ma: full memory.
-          # procdump propagates the debuggee's exit code.
-          procdump -accepteula -e -ma -x "$env:GITHUB_WORKSPACE\crashdumps" `
-            "${{ steps.build.outputs.exe }}" --ignored --nocapture
-          exit $LASTEXITCODE
+          # procdump's own exit code is unreliable (non-zero on a clean
+          # no-dump session), so judge by the harness's printed verdict.
+          $out = procdump -accepteula -e -ma -x "$env:GITHUB_WORKSPACE\crashdumps" `
+            "${{ steps.build.outputs.exe }}" --ignored --nocapture 2>&1
+          $out | ForEach-Object { Write-Host $_ }
+          if (($out | Select-String -Quiet "test result: ok")) { exit 0 } else { exit 1 }
 
       - name: Stack from minidump (on crash)
         if: failure()
