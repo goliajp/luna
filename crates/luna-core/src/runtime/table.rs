@@ -513,6 +513,42 @@ impl Table {
 
     /// Walk the chain rooted at the key's main position.
     fn find_node(&self, k: Value) -> Option<usize> {
+        // v2.13 WUC read-time probe (gc-verify): both the query key and
+        // every node key compared below must be live. This is the
+        // convergence point of ALL hash lookups, so a dangling string
+        // is named at its dereference site with role attribution.
+        #[cfg(feature = "gc-verify")]
+        {
+            let hdr = |v: Value| -> Option<usize> {
+                match v {
+                    Value::Str(s) => Some(s.as_ptr() as usize),
+                    Value::Table(t) => Some(t.as_ptr() as usize),
+                    _ => None,
+                }
+            };
+            if let Some(p) = hdr(k) {
+                if crate::runtime::gc_verify_probe::is_freed(p) {
+                    panic!("[gc-verify] find_node QUERY key {p:#x} is freed (dangling)");
+                }
+            }
+            for (i, n) in self.nodes.iter().enumerate() {
+                // NOTE: tombstones (val nil, key kept) are NOT skipped —
+                // the walk below raw_eq's their keys too.
+                if n.dead_key {
+                    continue;
+                }
+                if let Some(p) = hdr(n.key) {
+                    if crate::runtime::gc_verify_probe::is_freed(p) {
+                        panic!(
+                            "[gc-verify] find_node NODE key {p:#x} (slot {i}, \
+                             tombstone {}, table {:#x}) is freed (dangling)",
+                            n.val.is_nil(),
+                            self as *const Table as usize
+                        );
+                    }
+                }
+            }
+        }
         if self.nodes.is_empty() {
             return None;
         }
@@ -1058,6 +1094,47 @@ impl Table {
         false
     }
 
+    /// v2.13 WUC `gc-verify`: after a completed sweep, every collectable
+    /// reference this table still holds (array values, node keys/values,
+    /// metatable) must point at a live heap object. Nodes flagged
+    /// `dead_key` are the sanctioned exception — their key pointer is
+    /// documented-dangling and never dereferenced. `describe` receives
+    /// (what, node-index, tag-byte, ptr) on violation.
+    #[cfg(feature = "gc-verify")]
+    pub(crate) fn verify_refs(
+        &self,
+        is_live: &dyn Fn(Value) -> bool,
+        report: &dyn Fn(&str, usize, Value),
+    ) {
+        let atags = self.atags();
+        let avals = self.avals();
+        for (i, &tag) in atags.iter().enumerate() {
+            if raw::is_gc(tag) {
+                // SAFETY: tags/vals parallel arrays kept in sync by all table writers.
+                let v = unsafe { Value::pack(tag, avals[i]) };
+                if !is_live(v) {
+                    report("array value", i, v);
+                }
+            }
+        }
+        for (i, n) in self.nodes.iter().enumerate() {
+            if n.val.is_nil() {
+                continue;
+            }
+            if !n.dead_key && !is_live(n.key) {
+                report("node key", i, n.key);
+            }
+            if !is_live(n.val) {
+                report("node value", i, n.val);
+            }
+        }
+        if let Some(mt) = self.metatable {
+            if !is_live(Value::Table(mt)) {
+                report("metatable", 0, Value::Table(mt));
+            }
+        }
+    }
+
     pub(crate) fn trace(&self, m: &mut Marker) {
         let (wk, wv) = self.weak_mode();
         if wk || wv {
@@ -1145,6 +1222,29 @@ impl Table {
         }
         for n in self.nodes.iter_mut() {
             if n.val.is_nil() {
+                // PUC `clearbykeys`/`clearbyvalues` end with
+                // `if (isempty(gval(n))) clearkey(n)`: an EMPTY entry's
+                // collectable key must be demoted to a dead key. A
+                // tombstone (`t[k] = nil` leaves val nil, key kept for
+                // chain links) is otherwise invisible to this sweep AND
+                // unmarked by the weak-key trace, so its string key gets
+                // freed while `find_node` still raw_eq's it walking the
+                // chain — UAF-C's Linux/ASAN-confirmed read site
+                // (v2.13 Track WUC).
+                if !n.dead_key
+                    && matches!(
+                        n.key,
+                        Value::Table(_)
+                            | Value::Closure(_)
+                            | Value::Native(_)
+                            | Value::Coro(_)
+                            | Value::Userdata(_)
+                            | Value::Str(_)
+                    )
+                {
+                    n.key = Value::Nil;
+                    n.dead_key = true;
+                }
                 continue;
             }
             let key_dead = wk && is_dead(n.key);

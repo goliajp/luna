@@ -2441,6 +2441,45 @@ impl Vm {
 
     /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
     fn op_index(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
+        // v2.13 WUC read-time probe: a collectable key must be live at
+        // the moment it is used. O(1) membership test against the
+        // freed-pointer log — gc-verify diagnostic builds only; exact
+        // under quarantining allocators (ASAN).
+        #[cfg(feature = "gc-verify")]
+        if matches!(key, Value::Str(_)) {
+            let h = match key {
+                Value::Str(s) => s.as_ptr() as usize,
+                _ => unreachable!(),
+            };
+            if self.heap.recently_freed.contains(&h) {
+                let (pc, reg_info) = match self.frames.last() {
+                    Some(CallFrame::Lua(f)) => {
+                        let pc = f.pc as usize;
+                        let inst = f.closure.proto.code.get(pc.wrapping_sub(1));
+                        (
+                            pc,
+                            inst.map(|i| {
+                                format!(
+                                    "op[pc-1]={:?} a={} b={} c={} base={}",
+                                    i.op(),
+                                    i.a(),
+                                    i.b(),
+                                    i.c(),
+                                    f.base
+                                )
+                            })
+                            .unwrap_or_default(),
+                        )
+                    }
+                    _ => (0, String::new()),
+                };
+                panic!(
+                    "[gc-verify] op_index READ of dead string key {h:#x} \
+                     (gc_top {}, top {}, pc {pc}, {reg_info})",
+                    self.gc_top, self.top,
+                );
+            }
+        }
         match self.index_step(t, key)? {
             MmOut::Done(v) => self.stack[dst as usize] = v,
             MmOut::Mm { func, recv } => {
@@ -2681,11 +2720,20 @@ impl Vm {
         for &n in &self.mm_names {
             roots.push(Value::Str(n));
         }
-        // root only the running thread's live registers (PUC marks [stack, top)):
-        // freed temporaries above `gc_top` are excluded so weak values stranded
-        // there are not pinned. Suspended threads (main_ctx, other coroutines)
-        // stay whole-rooted below — safe over-rooting, and they are not the
-        // thread whose weak-table loop is under test.
+        // Root the running thread's live registers (PUC marks [stack, top)).
+        // `gc_top` is the instruction-level cursor of the last GC
+        // safe-point: allocation safe-points set it via
+        // `maybe_collect_garbage(live_top)`, and `begin_call` raises it
+        // to the callee's argument top when entering a native — PUC's
+        // `L->top = func + 1 + nargs` C-call discipline. Without that
+        // raise, an explicit `collectgarbage()` collected with a STALE
+        // cursor from some earlier (lower) safe-point and freed its own
+        // caller's register-held strings — UAF-C
+        // (STATUS_ACCESS_VIOLATION on Windows / ASAN heap-use-after-free
+        // on Linux; the v2.13 WUC gc-verify frame audit pinpointed the
+        // under-rooted slots). Values stranded above the cursor stay
+        // excluded so weak-table entries are not spuriously pinned
+        // (gc.lua:544 suspended-coroutine collection).
         let live = (self.gc_top as usize).min(self.stack.len());
         roots.extend_from_slice(&self.stack[..live]);
         for cf in &self.frames {
@@ -2809,8 +2857,78 @@ impl Vm {
         }
         let (roots, extra) = self.gc_roots();
         let freed = self.heap.collect_ex(&roots, &extra);
+        #[cfg(feature = "gc-verify")]
+        self.verify_frame_regs_live("collect_garbage");
         self.run_finalizers();
         freed
+    }
+
+    /// v2.13 WUC `gc-verify` — after a collect, every register slot the
+    /// collector just rooted (`[0, max(gc_top, top))` — the same bound
+    /// `gc_roots` uses) must hold a live value. A dead value inside the
+    /// rooted range means the root snapshot and the sweep disagreed —
+    /// the bug class behind UAF-C. (Slots ABOVE the bound may hold
+    /// stale dead values legitimately; the interpreter's contract is
+    /// that it writes them before reading.)
+    #[cfg(feature = "gc-verify")]
+    pub(crate) fn verify_frame_regs_live(&self, ctx: &str) {
+        let live = self.heap.debug_live_set();
+        let header = |v: Value| -> Option<usize> {
+            match v {
+                Value::Str(s) => Some(s.as_ptr() as usize),
+                Value::Table(t) => Some(t.as_ptr() as usize),
+                Value::Closure(c) => Some(c.as_ptr() as usize),
+                Value::Native(n) => Some(n.as_ptr() as usize),
+                Value::Coro(c) => Some(c.as_ptr() as usize),
+                Value::Userdata(u) => Some(u.as_ptr() as usize),
+                _ => None,
+            }
+        };
+        let bound = (self.gc_top as usize).min(self.stack.len());
+        for i in 0..bound {
+            if let Some(h) = header(self.stack[i]) {
+                if !live.contains(&h) {
+                    panic!(
+                        "[gc-verify] {ctx}: rooted stack slot {i} (gc_top {}, top {}) \
+                         holds a dead value {h:#x} after collect",
+                        self.gc_top, self.top,
+                    );
+                }
+            }
+        }
+        // Diagnostic tier: a dead value ABOVE the cursor is only a bug if
+        // that register is a named local still in scope (the interpreter
+        // WILL read it). Cross-check against the proto's LocVar table.
+        for (fi, cf) in self.frames.iter().enumerate() {
+            if let CallFrame::Lua(f) = cf {
+                let base = f.base as usize;
+                let maxs = f.closure.proto.max_stack as usize;
+                let hi = (base + maxs).min(self.stack.len());
+                let pc = f.pc;
+                for i in bound.max(base)..hi {
+                    if let Some(h) = header(self.stack[i]) {
+                        if !live.contains(&h) {
+                            let reg = (i - base) as u32;
+                            if let Some(lv) = f
+                                .closure
+                                .proto
+                                .locvars
+                                .iter()
+                                .find(|lv| lv.reg == reg && lv.start_pc <= pc && pc < lv.end_pc)
+                            {
+                                panic!(
+                                    "[gc-verify] {ctx}: frame {fi} IN-SCOPE LOCAL '{}' \
+                                     (reg {reg}, abs {i}, pc {pc}, gc_top {}) holds a \
+                                     dead value {h:#x} — live_top cursor excluded a \
+                                     live named local",
+                                    lv.name, self.gc_top,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// PUC 5.1 `collectgarbage` re-raised the first error a `__gc` finalizer
@@ -2823,6 +2941,8 @@ impl Vm {
         }
         let (roots, extra) = self.gc_roots();
         let freed = self.heap.collect_ex(&roots, &extra);
+        #[cfg(feature = "gc-verify")]
+        self.verify_frame_regs_live("collect_garbage_propagating");
         self.run_finalizers_or_err()?;
         Ok(freed)
     }
@@ -4176,6 +4296,19 @@ impl Vm {
                     // through a scope guard.
                     self.running_natives.push(nc);
                     self.running_native_slots.push((func_slot, nargs));
+                    // PUC C-call discipline: entering a C function sets
+                    // L->top to func + 1 + nargs, so a collect triggered
+                    // INSIDE the native (explicit `collectgarbage()`, or
+                    // an allocation crossing the GC threshold) roots the
+                    // whole caller window up to and including the
+                    // arguments. Without this raise the cursor is stale —
+                    // parked at some earlier, possibly much lower
+                    // safe-point — and the collect frees register-held
+                    // values of the native's own caller (UAF-C, v2.13
+                    // Track WUC). Never lower it: a re-entrant chain
+                    // (native → Lua → native) must keep the outermost
+                    // window rooted.
+                    self.gc_top = self.gc_top.max(func_slot + 1 + nargs);
                     // PUC luaD_precall fires the "call" hook for C functions too.
                     // A yield inside the native (coroutine.yield) propagates an
                     // Err and the matching "return" hook fires on resume instead.
@@ -8502,6 +8635,38 @@ impl Vm {
     /// performed inline (returning `Done`); only a function metamethod (`Mm`)
     /// needs an actual call — which the caller may run yieldably.
     fn newindex_step(&mut self, t: Value, key: Value, v: Value) -> Result<MmOut, LuaError> {
+        // v2.13 WUC read-time probe (gc-verify): a dead query key at a
+        // WRITE site, attributed to the instruction that produced it.
+        #[cfg(feature = "gc-verify")]
+        if let Some(p) = (match key {
+            Value::Str(s) => Some(s.as_ptr() as usize),
+            Value::Table(t2) => Some(t2.as_ptr() as usize),
+            _ => None,
+        }) {
+            if crate::runtime::gc_verify_probe::is_freed(p) {
+                let detail = match self.frames.last() {
+                    Some(CallFrame::Lua(f)) => {
+                        let pc = f.pc as usize;
+                        let mut w = String::new();
+                        for q in pc.saturating_sub(6)..(pc + 2) {
+                            if let Some(inst) = f.closure.proto.code.get(q) {
+                                w.push_str(&format!(
+                                    "\n  [{q}] {:?} a={} b={} c={} k={}",
+                                    inst.op(),
+                                    inst.a(),
+                                    inst.b(),
+                                    inst.c(),
+                                    inst.k()
+                                ));
+                            }
+                        }
+                        format!("pc={pc} base={} gc_top={} window:{w}", f.base, self.gc_top)
+                    }
+                    _ => "non-Lua frame".into(),
+                };
+                panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
+            }
+        }
         let mut cur = t;
         for _ in 0..MAX_TAG_LOOP {
             let mm = match cur {

@@ -33,6 +33,14 @@ default = []
 # the v1.2 baseline. luna-core 0-dep contract preserved (Arc, UnsafeCell,
 # RwLock are all stdlib).
 send = []
+# v2.13 Track WUC: post-sweep GC invariant checker (PUC
+# lua_checkmemory analogue). After every completed sweep, walk all
+# live tables and panic on the first collectable key/value/metatable
+# whose object is no longer on the heap's `all` list — surfacing
+# dangling-reference bugs at the collect that created them instead
+# of at a later (allocator-dependent) dereference. Diagnostic-only:
+# adds an O(live-objects) pass per sweep. Zero deps (std HashSet).
+gc-verify = []
 
 [dependencies]
 # v1.1 F1 acceptance: this list must remain empty so
