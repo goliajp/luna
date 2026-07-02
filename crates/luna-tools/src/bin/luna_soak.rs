@@ -44,7 +44,7 @@
 //! in luna-tools' supply chain.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::process::ExitCode;
@@ -90,7 +90,7 @@ struct Cli {
     out: PathBuf,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct Sample {
     t_secs: u64,
     vm_mem_used: usize,
@@ -179,6 +179,51 @@ fn drift_pct(first: f64, last: f64) -> f64 {
     }
 }
 
+/// Render the full report JSON for the samples collected so far.
+/// Called after every sample so an externally-killed run (e.g.
+/// the GH Actions 6h job cap cutting a 24h soak) still leaves a
+/// complete partial report on disk.
+fn render_report(
+    workload: &Path,
+    duration_secs: u64,
+    interval_secs: u64,
+    samples: &[Sample],
+) -> String {
+    let mut vm_mems: Vec<usize> = samples.iter().map(|s| s.vm_mem_used).collect();
+    let mut rsses: Vec<u64> = samples.iter().map(|s| s.rss_kb).collect();
+    let summary = Summary {
+        vm_mem_p50: pct(&mut vm_mems.clone(), 50),
+        vm_mem_p99: pct(&mut vm_mems, 99),
+        vm_mem_first: samples.first().map(|s| s.vm_mem_used).unwrap_or(0),
+        vm_mem_last: samples.last().map(|s| s.vm_mem_used).unwrap_or(0),
+        vm_mem_drift_pct: drift_pct(
+            samples.first().map(|s| s.vm_mem_used).unwrap_or(0) as f64,
+            samples.last().map(|s| s.vm_mem_used).unwrap_or(0) as f64,
+        ),
+        rss_p50_kb: pct(&mut rsses.clone(), 50),
+        rss_p99_kb: pct(&mut rsses, 99),
+        rss_first_kb: samples.first().map(|s| s.rss_kb).unwrap_or(0),
+        rss_last_kb: samples.last().map(|s| s.rss_kb).unwrap_or(0),
+        rss_drift_pct: drift_pct(
+            samples.first().map(|s| s.rss_kb).unwrap_or(0) as f64,
+            samples.last().map(|s| s.rss_kb).unwrap_or(0) as f64,
+        ),
+    };
+    let report = Report {
+        schema_version: 1,
+        workload: workload
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        duration_secs,
+        interval_secs,
+        samples: samples.to_vec(),
+        summary,
+    };
+    serde_json::to_string_pretty(&report).expect("serializable")
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -228,6 +273,15 @@ fn main() -> ExitCode {
         vm_mem_used: vm.memory_used(),
         rss_kb: rss_kb(),
     });
+    // Write the report after every sample (not just at the end)
+    // so a run killed externally — the GH Actions 6h job cap on a
+    // 24h soak — still leaves the partial report for the artifact
+    // upload step. ~288 small rewrites over 24h is in the noise.
+    let json = render_report(&cli.workload, cli.duration, cli.interval, &samples);
+    if let Err(e) = fs::write(&cli.out, &json) {
+        eprintln!("[luna-soak] write {}: {e}", cli.out.display());
+        return ExitCode::from(2);
+    }
 
     // The wrapped chunk runs for --duration seconds via os.clock;
     // we sample inside Lua via collectgarbage between eval bursts.
@@ -255,6 +309,11 @@ fn main() -> ExitCode {
             vm_mem_used: vm.memory_used(),
             rss_kb: rss_kb(),
         });
+        let json = render_report(&cli.workload, cli.duration, cli.interval, &samples);
+        if let Err(e) = fs::write(&cli.out, &json) {
+            eprintln!("[luna-soak] write {}: {e}", cli.out.display());
+            return ExitCode::from(2);
+        }
         if elapsed >= cli.duration {
             break;
         }
@@ -263,41 +322,7 @@ fn main() -> ExitCode {
         let _ = i;
     }
 
-    let mut vm_mems: Vec<usize> = samples.iter().map(|s| s.vm_mem_used).collect();
-    let mut rsses: Vec<u64> = samples.iter().map(|s| s.rss_kb).collect();
-    let summary = Summary {
-        vm_mem_p50: pct(&mut vm_mems.clone(), 50),
-        vm_mem_p99: pct(&mut vm_mems, 99),
-        vm_mem_first: samples.first().map(|s| s.vm_mem_used).unwrap_or(0),
-        vm_mem_last: samples.last().map(|s| s.vm_mem_used).unwrap_or(0),
-        vm_mem_drift_pct: drift_pct(
-            samples.first().map(|s| s.vm_mem_used).unwrap_or(0) as f64,
-            samples.last().map(|s| s.vm_mem_used).unwrap_or(0) as f64,
-        ),
-        rss_p50_kb: pct(&mut rsses.clone(), 50),
-        rss_p99_kb: pct(&mut rsses, 99),
-        rss_first_kb: samples.first().map(|s| s.rss_kb).unwrap_or(0),
-        rss_last_kb: samples.last().map(|s| s.rss_kb).unwrap_or(0),
-        rss_drift_pct: drift_pct(
-            samples.first().map(|s| s.rss_kb).unwrap_or(0) as f64,
-            samples.last().map(|s| s.rss_kb).unwrap_or(0) as f64,
-        ),
-    };
-    let report = Report {
-        schema_version: 1,
-        workload: cli
-            .workload
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string(),
-        duration_secs: cli.duration,
-        interval_secs: cli.interval,
-        samples,
-        summary,
-    };
-
-    let json = serde_json::to_string_pretty(&report).expect("serializable");
+    let json = render_report(&cli.workload, cli.duration, cli.interval, &samples);
     if let Err(e) = fs::write(&cli.out, &json) {
         eprintln!("[luna-soak] write {}: {e}", cli.out.display());
         return ExitCode::from(2);

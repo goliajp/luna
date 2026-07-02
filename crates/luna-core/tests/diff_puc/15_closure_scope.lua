@@ -18,10 +18,11 @@ end
 local f = outer()
 print(f())  -- outer_y
 
--- vararg + closure
+-- vararg + closure: '...' itself cannot be captured by an inner
+-- function, so materialize it into a table first.
 local function collect(...)
-  local n = select('#', ...)
-  return function(i) return (select(i, ...)) end
+  local args = table.pack(...)
+  return function(i) return args[i] end, args.n
 end
-local pick = collect(10, 20, 30, 40)
-print(pick(2), pick(4))
+local pick, n = collect(10, 20, 30, 40)
+print(pick(2), pick(4), n)

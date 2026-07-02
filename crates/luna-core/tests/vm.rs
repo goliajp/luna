@@ -1022,8 +1022,10 @@ fn math_library() {
     check_error("return math.fmod(1, 0)", "zero");
     check_bool("return math.ult(-1, 1)", false); // -1 is huge unsigned
     check_float("return math.log(8, 2)", 3.0);
+    // v2.12 KNOWN-DIV: math.modf integer part returns Integer subtype
+    // when it fits i64 (matches PUC 5.4/5.5 pushnumint fast path).
     let v = eval("local ip, fp = math.modf(3.7) return ip");
-    assert!(matches!(v[0], Value::Float(f) if f == 3.0));
+    assert!(matches!(v[0], Value::Int(3)));
     // random: determinism after seeding, ranges respected
     check_bool(
         "math.randomseed(42) local a = math.random() math.randomseed(42) \

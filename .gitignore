@@ -20,3 +20,6 @@
 crates/luna-fuzz/target/
 crates/luna-fuzz/Cargo.lock
 fuzz/Cargo.lock
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/target/
