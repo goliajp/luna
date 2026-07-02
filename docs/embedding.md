@@ -828,4 +828,8 @@ CI status: gated (Windows-only skip) on
   matrix (Lua 5.1 / 5.2 / 5.3 / 5.4 / 5.5)
 - [`performance.md`](performance.md) — cross-dialect + Redis-Lua
   bench numbers
+- [`embedder-recruitment.md`](embedder-recruitment.md) — luna is
+  actively looking for its second production embedder to close v3.0
+  acceptance #8; a short overview of what luna offers, what it
+  doesn't, and how to try it
 - `cargo doc --open` — full API reference for every public type
