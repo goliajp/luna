@@ -77,8 +77,9 @@ Be upfront about limits, per
 
 ## First-embedder reference: `kevy`
 
-The first production embedder is [`kevy`](https://github.
-com/goliajp/kevy), a Rust reimplementation of a
+The first production embedder is
+[`kevy`](https://github.com/goliajp/kevy), a Rust
+reimplementation of a
 Redis-compatible KV store, using luna for `EVAL` /
 `EVALSHA` script execution. kevy's dogfood report from
 2026-06-23 seeded much of the v1.1 → v2.x API surface.
