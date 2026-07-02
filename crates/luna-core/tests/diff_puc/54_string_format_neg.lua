@@ -7,4 +7,5 @@ print(string.format("%+5d", -42))
 print(string.format("%+5d", 42))
 print(string.format("%.3d", 7))       -- min-digits precision
 print(string.format("%.3d", 12345))
-print(string.format("%*d", 6, 42))    -- may or may not be supported
+-- C-style "%*d" dynamic width is NOT valid in Lua — errors.
+print((pcall(string.format, "%*d", 6, 42)))

@@ -47,13 +47,13 @@ fn list_fixtures() -> Vec<PathBuf> {
 }
 
 /// Run `source` via PUC's reference binary and capture stdout.
-/// On any PUC error (binary missing, non-zero exit, stderr
-/// non-empty), the test is **skipped with a warning** instead of
-/// failing — local dev machines without `lua5.5` installed
-/// shouldn't fail the test suite. CI's diff-puc workflow
-/// installs PUC explicitly so the skip there means a real
-/// install problem.
-fn run_on_puc(source: &str) -> Option<String> {
+/// Only a **missing binary** skips (dev machines without
+/// `lua5.5` shouldn't fail the suite; CI installs it
+/// explicitly). If PUC runs but errors (non-zero exit or
+/// non-empty stderr), the fixture itself is broken and the test
+/// **fails** — silently skipping here shipped fixtures that
+/// never actually diffed (found in v2.12: 5 of the first 150).
+fn run_on_puc(path: &Path, source: &str) -> Option<String> {
     let bin = std::env::var("PUC_LUA").unwrap_or_else(|_| "lua5.5".to_string());
     let mut child = match Command::new(&bin)
         .arg("-")
@@ -79,12 +79,12 @@ fn run_on_puc(source: &str) -> Option<String> {
         }
     };
     if !out.status.success() || !out.stderr.is_empty() {
-        eprintln!(
-            "[diff_puc] PUC errored (status={:?} stderr={})",
+        panic!(
+            "[diff_puc] fixture {} errors on PUC itself (status={:?} stderr={}) — fix the fixture",
+            path.display(),
             out.status,
             String::from_utf8_lossy(&out.stderr)
         );
-        return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -149,10 +149,10 @@ fn normalize(s: &str) -> String {
 fn diff_one(path: &Path) {
     let source =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let puc = match run_on_puc(&source) {
+    let puc = match run_on_puc(path, &source) {
         Some(o) => o,
         None => {
-            eprintln!("[diff_puc] skip {} (PUC unavailable)", path.display());
+            eprintln!("[diff_puc] skip {} (PUC binary unavailable)", path.display());
             return;
         }
     };
