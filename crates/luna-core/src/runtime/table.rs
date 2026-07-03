@@ -221,7 +221,19 @@ pub struct Table {
     /// P11-S5d.I — inline backing used when `asize <= INLINE_ASIZE`.
     /// Same layout as the slab: avals at low addresses (`asize * 8`
     /// bytes from offset 0), atags at the trailing `asize` bytes.
-    pub(crate) inline_storage: [u64; INLINE_U64S],
+    ///
+    /// `UnsafeCell` because `array_ptr` is a SELF-REFERENTIAL cached
+    /// pointer into this field. Under Stacked Borrows, every
+    /// `&mut self` method call's function-entry retag re-tags the
+    /// whole `*self` byte range Unique and would pop the cached
+    /// pointer's tag — subsequent `array_ptr` accesses were UB (Miri:
+    /// "retag ... tag does not exist in the borrow stack", v2.13).
+    /// An `UnsafeCell` region instead receives SharedReadWrite on
+    /// retag, which coexists with the pointer derived from
+    /// `UnsafeCell::get`. All reads/writes of the inline bytes MUST
+    /// go through `array_ptr` / `.get()` — never through a direct
+    /// `&`/`&mut` borrow of the array contents.
+    pub(crate) inline_storage: std::cell::UnsafeCell<[u64; INLINE_U64S]>,
     /// hash part: power-of-two length (or empty)
     /// hash part: power-of-two length (or empty)
     /// `pub(crate)` so `Heap::free_obj` (pool recycle path) can reset.
@@ -279,7 +291,7 @@ impl Table {
             array_ptr: std::ptr::null_mut(),
             slab: Box::new([]),
             asize: 0,
-            inline_storage: [0; INLINE_U64S],
+            inline_storage: std::cell::UnsafeCell::new([0; INLINE_U64S]),
             nodes: Box::new([]),
             lastfree: 0,
             keys: Box::new([]),
@@ -297,7 +309,31 @@ impl Table {
     /// final location.
     #[inline]
     pub(crate) fn init_array_ptr(&mut self) {
-        self.array_ptr = self.inline_storage.as_mut_ptr() as *mut u8;
+        self.array_ptr = self.inline_storage.get() as *mut u8;
+    }
+
+    /// Freshly-derived base pointer for the array part. Rust-side
+    /// accessors MUST use this instead of the cached `array_ptr`
+    /// field when the backing is inline: a pointer into `*self`
+    /// cached across `&mut self` boundaries is invalidated by every
+    /// function-entry retag under Stacked Borrows — `&mut` retags
+    /// ignore `UnsafeCell` (only `&` retags respect it), so the
+    /// cached tag dies on the next method call (v2.13 Miri finding,
+    /// `retag ... tag does not exist in the borrow stack`). Deriving
+    /// through `UnsafeCell::get()` at each use gives a fresh
+    /// SharedReadWrite tag valid for reads AND writes even from
+    /// `&self`. The slab case keeps the cached pointer: its tag
+    /// lives on the heap allocation, outside `*self`, untouched by
+    /// entry retags. `array_ptr` itself stays maintained for the
+    /// JIT, whose emitted code loads the field directly (no Rust
+    /// borrows involved).
+    #[inline(always)]
+    fn array_base(&self) -> *mut u8 {
+        if self.asize <= INLINE_ASIZE {
+            self.inline_storage.get() as *mut u8
+        } else {
+            self.array_ptr
+        }
     }
 
     /// P11-S5d.H/I — read view onto the array-part tag bytes. Trails
@@ -314,7 +350,7 @@ impl Table {
         // `asize + ceil(asize/8)` u64s). The tag bytes start at byte
         // offset `n * 8` from the buffer base.
         unsafe {
-            let ptr = self.array_ptr.add(n * 8);
+            let ptr = self.array_base().add(n * 8);
             std::slice::from_raw_parts(ptr, n)
         }
     }
@@ -327,7 +363,7 @@ impl Table {
         }
         // SAFETY: `array_ptr` was allocated by `Heap::init_array_ptr` with `array_cap` slots; the table holds it for its lifetime and the heap is single-threaded so no concurrent writers exist.
         unsafe {
-            let ptr = self.array_ptr.add(n * 8);
+            let ptr = self.array_base().add(n * 8);
             std::slice::from_raw_parts_mut(ptr, n)
         }
     }
@@ -344,7 +380,7 @@ impl Table {
         // SAFETY: inline_storage / slab both store u64s, so the cast
         // to `*const RawVal` is alignment-safe (RawVal size = 8,
         // align = 8). The buffer holds at least `n` such slots.
-        unsafe { std::slice::from_raw_parts(self.array_ptr as *const RawVal, n) }
+        unsafe { std::slice::from_raw_parts(self.array_base() as *const RawVal, n) }
     }
 
     #[inline(always)]
@@ -354,7 +390,7 @@ impl Table {
             return &mut [];
         }
         // SAFETY: `array_ptr` was allocated by `Heap::init_array_ptr` with `array_cap` slots; the table holds it for its lifetime and the heap is single-threaded so no concurrent writers exist.
-        unsafe { std::slice::from_raw_parts_mut(self.array_ptr as *mut RawVal, n) }
+        unsafe { std::slice::from_raw_parts_mut(self.array_base() as *mut RawVal, n) }
     }
 
     /// Allocate a fresh external `[avals: asize × 8 bytes][atags: asize
@@ -882,8 +918,8 @@ impl Table {
             // SAFETY: `array_ptr` was set up by `Heap::new_table` or
             // an earlier `resize`; it covers `old_asize * 9` bytes
             // (avals + atags).
-            let avals_base = self.array_ptr as *const RawVal;
-            let atags_base = unsafe { self.array_ptr.add(old_asize * 8) as *const u8 };
+            let avals_base = self.array_base() as *const RawVal;
+            let atags_base = unsafe { self.array_base().add(old_asize * 8) as *const u8 };
             for i in 0..old_asize {
                 // SAFETY: `i < array_len` is enforced by the surrounding loop bound; `atags_base` / `avals_base` point into the table's parallel arrays allocated in lockstep by `init_array_ptr`.
                 let tag = unsafe { *atags_base.add(i) };
@@ -901,10 +937,13 @@ impl Table {
         if new_asize <= INLINE_ASIZE as usize {
             // Inline path — zero the inline buffer; drop any prior
             // external slab.
-            for slot in self.inline_storage.iter_mut() {
-                *slot = 0;
+            // SAFETY: exclusive &mut self; write through the cell to
+            // stay on the raw-pointer access path (no &mut borrow of
+            // the array contents is ever formed).
+            unsafe {
+                *self.inline_storage.get() = [0; INLINE_U64S];
             }
-            self.array_ptr = self.inline_storage.as_mut_ptr() as *mut u8;
+            self.array_ptr = self.inline_storage.get() as *mut u8;
             self.slab = Box::new([]);
         } else {
             // External slab — allocate, then re-point `array_ptr`.
