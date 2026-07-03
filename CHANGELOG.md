@@ -19,9 +19,18 @@ optimization.
 
 ---
 
-## [Unreleased] — v2.13 dev
+## [2.13.0] — 2026-07-04
 
 ### Fixed
+- **Stacked Borrows UB in Table/LuaClosure inline storage** — the
+  cached self-referential pointers (`array_ptr` / `upvals_ptr`,
+  from the P11-S5d inline-array and closure-inline optimizations)
+  were invalidated by every `&mut self` function-entry retag;
+  accesses through them were undefined behavior with real
+  miscompilation risk under rustc's noalias annotations. Inline
+  storage now lives in `UnsafeCell` and accessors derive the base
+  pointer fresh at each use; the Miri nightly lane passes for the
+  first time since it landed.
 - **UAF-C closed** — the Windows gc.lua `STATUS_ACCESS_VIOLATION`
   (gated since v2.4, perma-gated v2.8 as "repro infeasible") was
   root-caused to two platform-independent GC bugs and fixed:
