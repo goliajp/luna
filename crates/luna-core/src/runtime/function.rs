@@ -645,7 +645,14 @@ pub struct LuaClosure {
     /// Inline storage for small closures. Only the first
     /// `upvals_len.min(INLINE_UPVALS_N)` slots are initialised.
     /// `Gc<Upvalue>` is `Copy` so no explicit `Drop` pass is needed.
-    pub(crate) inline_storage: [std::mem::MaybeUninit<Gc<Upvalue>>; INLINE_UPVALS_N],
+    ///
+    /// `UnsafeCell` for the same reason as `Table::inline_storage`:
+    /// `upvals_ptr` is a self-referential cached pointer into this
+    /// field, and a `&mut self` function-entry retag would otherwise
+    /// invalidate it under Stacked Borrows (v2.13 Miri finding). All
+    /// access goes through `upvals_ptr` / `.get()`.
+    pub(crate) inline_storage:
+        std::cell::UnsafeCell<[std::mem::MaybeUninit<Gc<Upvalue>>; INLINE_UPVALS_N]>,
     /// Overflow box for closures with `> INLINE_UPVALS_N` upvalues.
     /// Empty box (dangling, no allocation) otherwise.
     pub(crate) overflow: Box<[Gc<Upvalue>]>,
@@ -660,16 +667,34 @@ unsafe impl Sync for LuaClosure {}
 impl LuaClosure {
     /// View of all upvalues as a `&[Gc<Upvalue>]`. Backed by inline
     /// storage when `upvals_len <= INLINE_UPVALS_N`, else by overflow.
+    /// Freshly-derived base pointer for the upvalue storage — same
+    /// Stacked Borrows discipline as `Table::array_base` (v2.13 Miri
+    /// finding): a cached pointer into `*self` dies on every
+    /// `&mut self` entry retag, so the inline case re-derives through
+    /// `UnsafeCell::get()` at each use; the overflow (heap Box) case
+    /// keeps the cached pointer whose tag lives outside `*self`.
+    /// `upvals_ptr` stays maintained for raw-field consumers.
+    #[inline(always)]
+    fn upvals_base(&self) -> *mut Gc<Upvalue> {
+        if self.upvals_len as usize <= INLINE_UPVALS_N {
+            self.inline_storage.get() as *mut Gc<Upvalue>
+        } else {
+            self.upvals_ptr
+        }
+    }
+
+    /// View of all upvalues as a `&[Gc<Upvalue>]`. Backed by inline
+    /// storage when `upvals_len <= INLINE_UPVALS_N`, else by overflow.
     #[inline(always)]
     pub fn upvals(&self) -> &[Gc<Upvalue>] {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { std::slice::from_raw_parts(self.upvals_ptr, self.upvals_len as usize) }
+        unsafe { std::slice::from_raw_parts(self.upvals_base(), self.upvals_len as usize) }
     }
 
     #[inline(always)]
     pub(crate) fn upvals_mut(&mut self) -> &mut [Gc<Upvalue>] {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { std::slice::from_raw_parts_mut(self.upvals_ptr, self.upvals_len as usize) }
+        unsafe { std::slice::from_raw_parts_mut(self.upvals_base(), self.upvals_len as usize) }
     }
 
     /// Wire `upvals_ptr` to the active backing storage. Called by the
@@ -678,7 +703,7 @@ impl LuaClosure {
     /// Box::new move into the heap).
     pub(crate) fn init_upvals_ptr(&mut self) {
         if self.upvals_len as usize <= INLINE_UPVALS_N {
-            self.upvals_ptr = self.inline_storage.as_mut_ptr() as *mut Gc<Upvalue>;
+            self.upvals_ptr = self.inline_storage.get() as *mut Gc<Upvalue>;
         } else {
             self.upvals_ptr = self.overflow.as_mut_ptr();
         }

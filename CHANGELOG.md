@@ -19,14 +19,161 @@ optimization.
 
 ---
 
-## [Unreleased] — v2.0 dev sprint
+## [2.13.0] — 2026-07-04
 
-> **Status**: in-progress. Single mega sprint targeting "industrial-
-> grade production runtime" — 14 tracks across J/R/PI/AO/MM/DS/CV/DO/
-> PU/AT/TL/BM/CB/SQ. No ship-date target; landing milestones one
-> phase at a time. Full charter: `.dev/rfcs/v2.0-charter.md`.
-> No `1.4.x` planned — v2.0 collapses what would have been v1.4–v1.8
-> per the `nodefer` upgrade.
+### Fixed
+- **Stacked Borrows UB in Table/LuaClosure inline storage** — the
+  cached self-referential pointers (`array_ptr` / `upvals_ptr`,
+  from the P11-S5d inline-array and closure-inline optimizations)
+  were invalidated by every `&mut self` function-entry retag;
+  accesses through them were undefined behavior with real
+  miscompilation risk under rustc's noalias annotations. Inline
+  storage now lives in `UnsafeCell` and accessors derive the base
+  pointer fresh at each use; the Miri nightly lane passes for the
+  first time since it landed.
+- **UAF-C closed** — the Windows gc.lua `STATUS_ACCESS_VIOLATION`
+  (gated since v2.4, perma-gated v2.8 as "repro infeasible") was
+  root-caused to two platform-independent GC bugs and fixed:
+  an explicit `collectgarbage()` collected with a stale stack-root
+  cursor and swept its caller's live register values (fix: PUC
+  C-call discipline — entering a native raises the cursor to the
+  argument top), and weak-table tombstone keys (`t[k] = nil`)
+  escaped the clear-key sweep and were freed while hash-chain walks
+  still compared them (fix: PUC `clearbykeys`-style unconditional
+  key demotion on empty entries). The Windows CI gate on
+  gc.lua/gengc.lua/tracegc.lua is physically removed; validated by
+  25× Linux ASAN stress and 6 consecutive 50-iteration Windows
+  stress runs on native-heap and poison-allocator lanes.
+- `coroutine.resume` status errors ("cannot resume dead coroutine"
+  etc.) no longer carry a position prefix, matching PUC
+  `resume_error`.
+- `debug.getupvalue` / `debug.setupvalue` return zero values (not
+  nil) for out-of-range indices, matching PUC `db_getupvalue`.
+- Float `tostring` now matches PUC 5.5 byte-for-byte: two-stage
+  `%.15g` → round-trip check → `%.17g` (lobject.c
+  `tostringbuffFloat`), replacing Rust's shortest-round-trip
+  spelling (`math.pi` now prints `3.1415926535897931`).
+- `error()` invoked directly by a C function (e.g.
+  `pcall(pcall, error, "msg")`) no longer carries a position
+  prefix — `luaL_where` now counts continuation activations as C
+  frames.
+
+### Added
+- `gc-verify` feature (zero-dep, diagnostic): luna's
+  `lua_checkmemory` analogue — post-sweep dangling-reference walk,
+  atomic-phase tricolor invariant check, post-collect rooted-stack
+  liveness audit, and freed-pointer read-time probes.
+- Differential corpus 150 → **250** fixtures, all byte-equal
+  against PUC 5.5 with zero skips (metamethod full sweep, coroutine
+  edges, string.format matrix, pattern engine sweep, float-spelling
+  matrix, and more). Pinned 5.5 semantics: `__pairs` restored,
+  generic-for control variable is `<const>`.
+- `uafc-windows-stress.yml` dispatch workflow: procdump-hosted
+  gc.lua stress on windows-latest with cdb stack capture.
+- luna-soak writes its JSON report incrementally after every
+  sample, so a run killed by the GHA 6-hour job cap still uploads
+  a complete partial report.
+
+---
+
+## [2.12.0] — 2026-07-02
+
+- Differential corpus 100 → 150 fixtures, all byte-equal PUC 5.5
+  with **zero skips** — the harness now fails loudly when a fixture
+  errors on PUC itself (previously silently skipped; 5 never-diffed
+  broken fixtures repaired).
+- `math.modf` returns its integral part as an integer (PUC
+  5.4/5.5 semantics); arithmetic-on-string error wording documented
+  as a deliberate cross-dialect design (PUC 5.4 wording retained).
+- soak pipeline zero-data root cause fixed (see Unreleased:
+  incremental report write) and 4 latent CI bugs repaired — the
+  diff-puc workflow went green for the first time since landing.
+- `docs/embedder-recruitment.md` — public call for luna's second
+  production embedder.
+
+## [2.11.0] — 2026-07-02
+
+- Differential corpus 45 → 100 fixtures.
+- `#![deny(missing_docs)]` across the public API (was warn).
+
+## [2.10.0] — 2026-07-02
+
+- Differential corpus 5 → 45 fixtures across arithmetic, strings,
+  tables, closures, coroutines, metamethods, and stdlib edges.
+- Docstring audit closed (v3.0 acceptance #9).
+
+## [2.9.0] — 2026-07-01
+
+- Perf positioning finalized: the LuaJIT 1.18× charter floor is
+  documented as a structural ceiling (trace-JIT architecture
+  class); luna's lane is the correctness-first Rust-native Lua VM
+  competitive with the PUC 5.4/5.5 interpreter. Full decomposition
+  evidence in-tree.
+
+## [2.8.0] — 2026-07-01
+
+- Public API stability contract documented
+  (`docs/embedding.md` §13); the 6-month API-stability clock for
+  v3.0 acceptance #7 starts at v2.7.0.
+- Windows gc.lua UAF gated + documented as a known limitation
+  (superseded in v2.13 — root-caused and fixed).
+- Windows arm64 AOT deferred (vendored cranelift PE/COFF Aarch64
+  GOT relocations unimplemented upstream).
+
+## [2.7.0] — 2026-07-01
+
+- Per-PR perf-gate made required (redis_lua_shape 5-cell bench vs
+  committed baseline, 1.05× regression threshold).
+- Embedder API audit; cross-platform CI matrix extended with
+  Linux arm64 (ubuntu-24.04-arm).
+
+## [2.6.0] — 2026-06-30
+
+- Per-PR perf-gate infrastructure (advisory) + nightly
+  luna-vs-LuaJIT differential lane + Boltzmann program-generator
+  grammar extension.
+- Frame-pop slot-clear chain completed (P1B-2E minimal
+  tightening) — later found to be one origin of UAF-C (see
+  Unreleased).
+
+## [2.5.0] — 2026-06-30
+
+- Slot-clear discipline at every Lua-side frame-pop site
+  (`finish_results`, `Op::TailCall` collapse, pcall unwind),
+  mirroring PUC's `L->top` hygiene.
+
+## [2.4.0] — 2026-06-29
+
+- Soak-test harness (`luna-soak`: RSS + `Vm::memory_used`
+  sampling with JSON reports) + nightly 1h / weekly 24h-capped
+  soak workflows.
+- cargo-fuzz corpus seeding + nightly fuzz CI hardening.
+
+## [2.3.0] — 2026-06-29
+
+- UAF-A fully closed (sort.lua AA load+collectgarbage SIGSEGV) —
+  `finish_results` slot-clear root fix; every v2.2.0 CI byte-strip
+  and env-skip gate physically removed.
+- ASAN and Miri nightly CI lanes.
+
+## [2.2.0] — 2026-06-28
+
+- UAF-B closed (toomanyidx memory-cap SIGSEGV under glibc).
+- Test-infrastructure foundation per the v2.x → v3.0 maturity arc
+  charter: ASAN docker environment, differential-vs-PUC harness
+  (first 5 fixtures), cross-allocator test matrix groundwork.
+
+---
+
+## [2.1.0] — 2026-06-28 (the v2.0 mega sprint)
+
+> Shipped 2026-06-28 to crates.io as 7 crates (luna-core /
+> luna-jit-derive / luna-jit-helpers / luna-jit-llvm / luna-jit /
+> luna-runtime-helpers / luna-aot), 235 commits since v1.3.0.
+> The sprint log below is preserved as shipped-scope record —
+> 14 tracks (J/R/PI/AO/MM/DS/CV/DO/PU/AT/TL/BM/CB/SQ) per
+> `.dev/rfcs/v2.0-charter.md`, collapsed from what would have been
+> v1.4–v1.8 under the `nodefer` directive.
 
 ### Phase 0 — 13 parallel audits (2026-06-25)
 
