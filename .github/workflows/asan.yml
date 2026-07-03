@@ -142,3 +142,23 @@ jobs:
             -- --nocapture --test-threads=1
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+
+      # v2.13 Track WUC — UAF-C regression sentinel. Before the fix
+      # (42f3b76: stale gc_top on native collects + weak-table
+      # tombstone clearkey) this loop AV'd at iteration 1-4 under
+      # ASAN, so 5 iterations is a reliable detector. gc-verify
+      # layers the tricolor/root-liveness invariant checkers on top
+      # of ASAN, catching a regression at the collect that creates
+      # the dangling pointer rather than at the later dereference.
+      - name: ASAN + gc-verify — gc.lua family stress (UAF-C sentinel)
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --features gc-verify \
+            --test gc_stress_plain \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --ignored --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          LUNA_GC_STRESS_N: "5"
