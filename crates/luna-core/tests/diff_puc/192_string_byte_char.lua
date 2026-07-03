@@ -1,0 +1,10 @@
+-- v2.13 CORPUS-IV: string.byte/char multi-value + range edges.
+print(string.byte("A"))
+print(string.byte("ABC", 1, 3))
+print(string.byte("ABC", -1))
+print(string.byte("ABC", 2, 10))
+print(string.byte("ABC", 5))
+print(string.char(72, 101, 108, 108, 111))
+print(string.char())
+print((pcall(string.char, 256)))
+print((pcall(string.char, -1)))
