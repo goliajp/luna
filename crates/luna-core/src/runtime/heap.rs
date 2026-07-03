@@ -363,7 +363,8 @@ impl Heap {
                 (*t).hdr = GcHeader::new(ObjTag::Table);
                 (*t).array_ptr = std::ptr::null_mut();
                 (*t).asize = 0;
-                (*t).inline_storage = [0; crate::runtime::table::INLINE_U64S];
+                (*t).inline_storage =
+                    std::cell::UnsafeCell::new([0; crate::runtime::table::INLINE_U64S]);
                 (*t).lastfree = 0;
                 (*t).flags = 0;
             }
@@ -447,7 +448,12 @@ impl Heap {
         self.adopt_closure_with(proto, n as u32, |c| {
             if n <= INLINE_UPVALS_N {
                 for (i, &uv) in upvals.iter().enumerate() {
-                    c.inline_storage[i] = std::mem::MaybeUninit::new(uv);
+                    // SAFETY: exclusive &mut c inside the constructor;
+                    // write through the cell so no direct borrow of
+                    // the inline array is formed (see the field doc).
+                    unsafe {
+                        (*c.inline_storage.get())[i] = std::mem::MaybeUninit::new(uv);
+                    }
                 }
             } else {
                 c.overflow = upvals.to_vec().into_boxed_slice();
@@ -466,8 +472,10 @@ impl Heap {
             proto,
             upvals_ptr: std::ptr::null_mut(),
             upvals_len,
-            inline_storage: [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
-                crate::runtime::function::INLINE_UPVALS_N],
+            inline_storage: std::cell::UnsafeCell::new(
+                [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
+                    crate::runtime::function::INLINE_UPVALS_N],
+            ),
             overflow: Box::new([]),
         });
         // Box is heap-stable now — populate storage at the final

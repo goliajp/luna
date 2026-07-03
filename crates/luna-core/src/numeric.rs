@@ -330,6 +330,44 @@ pub fn num_to_string_for(n: Num, legacy_float: bool) -> String {
     }
 }
 
+/// C `printf("%.{prec}g", f)` semantics: `prec` significant digits;
+/// scientific form when the decimal exponent is `< -4` or `>= prec`,
+/// fixed form otherwise; trailing zeros (and a bare trailing point)
+/// stripped; scientific exponent printed sign + ≥2 digits.
+fn format_g(f: f64, prec: usize) -> String {
+    debug_assert!(prec >= 1);
+    // Decimal exponent from a correctly-rounded scientific rendering at
+    // the target precision (rounding may bump the exponent: 9.99 → 1e1).
+    let sci = format!("{f:.*e}", prec - 1);
+    let epos = sci.rfind('e').expect("scientific form has exponent");
+    let exp: i32 = sci[epos + 1..].parse().expect("valid exponent");
+    if exp < -4 || exp >= prec as i32 {
+        let mut mant = sci[..epos].to_string();
+        if mant.contains('.') {
+            while mant.ends_with('0') {
+                mant.pop();
+            }
+            if mant.ends_with('.') {
+                mant.pop();
+            }
+        }
+        let (esign, eabs) = if exp < 0 { ('-', -exp) } else { ('+', exp) };
+        format!("{mant}e{esign}{eabs:02}")
+    } else {
+        let decimals = (prec as i32 - 1 - exp).max(0) as usize;
+        let mut s = format!("{f:.decimals$}");
+        if s.contains('.') {
+            while s.ends_with('0') {
+                s.pop();
+            }
+            if s.ends_with('.') {
+                s.pop();
+            }
+        }
+        s
+    }
+}
+
 fn float_to_string(f: f64, legacy_float: bool) -> String {
     if f.is_nan() {
         return "nan".to_string();
@@ -337,21 +375,22 @@ fn float_to_string(f: f64, legacy_float: bool) -> String {
     if f.is_infinite() {
         return if f < 0.0 { "-inf" } else { "inf" }.to_string();
     }
-    // decimal exponent from Rust's shortest scientific form "d[.ddd]e±x"
-    let sci = format!("{f:e}");
-    let epos = sci.rfind('e').expect("scientific form has exponent");
-    let exp: i32 = sci[epos + 1..].parse().expect("valid exponent");
-    if (-4..14).contains(&exp) {
-        let s = format!("{f}");
-        if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
-            if legacy_float { s } else { format!("{s}.0") }
-        } else {
-            s
-        }
+    // PUC 5.5 `tostringbuffFloat` (lobject.c): print with %.15g
+    // (LUA_NUMBER_FMT), read it back, and only if the round-trip is
+    // inexact re-print with %.17g (LUA_NUMBER_FMT_N). This keeps the
+    // human-friendly short forms ("0.1", "3.5") while making every
+    // rendering value-exact ("3.1415926535897931"). Applied uniformly
+    // across dialects (≤5.4 PUC used a plain %.14g; luna prefers the
+    // value-exact rendering — official ≤5.4 suites assert semantics,
+    // not stdout float spelling).
+    let mut s = format_g(f, 15);
+    if s.parse::<f64>() != Ok(f) {
+        s = format_g(f, 17);
+    }
+    if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
+        if legacy_float { s } else { format!("{s}.0") }
     } else {
-        let mantissa = &sci[..epos];
-        let (esign, eabs) = if exp < 0 { ('-', -exp) } else { ('+', exp) };
-        format!("{mantissa}e{esign}{eabs:02}")
+        s
     }
 }
 
@@ -405,9 +444,21 @@ mod tests {
         assert_eq!(num_to_string(Num::Float(100.0)), "100.0");
         assert_eq!(num_to_string(Num::Float(f64::INFINITY)), "inf");
         assert_eq!(num_to_string(Num::Float(f64::NAN)), "nan");
-        // shortest round-trip (the 5.5 printing rule)
+        // PUC 5.5 two-stage rule: %.15g, then %.17g when the round-trip
+        // is inexact (lobject.c tostringbuffFloat). Reference spellings
+        // taken from the lua5.5 binary (fixture 226 pins the full matrix).
         assert_eq!(num_to_string(Num::Float(0.1)), "0.1");
-        assert_eq!(num_to_string(Num::Float(1.0 / 3.0)), "0.3333333333333333");
+        assert_eq!(num_to_string(Num::Float(1.0 / 3.0)), "0.33333333333333331");
+        assert_eq!(
+            num_to_string(Num::Float(std::f64::consts::PI)),
+            "3.1415926535897931"
+        );
+        assert_eq!(num_to_string(Num::Float(1e14)), "100000000000000.0");
+        assert_eq!(
+            num_to_string(Num::Float(9007199254740992.0)),
+            "9007199254740992.0"
+        );
+        assert_eq!(num_to_string(Num::Float(5e-324)), "4.94065645841247e-324");
     }
 
     #[test]

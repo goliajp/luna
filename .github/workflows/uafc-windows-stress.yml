@@ -89,7 +89,7 @@ jobs:
           $deps = "$env:GITHUB_WORKSPACE\target\release\deps"
           foreach ($d in $dumps) {
             Write-Host "===== $($d.Name)"
-            & $cdb -z $d.FullName -c ".sympath $deps; .reload /f; .ecxr; .lines; kv 40; q" 2>&1 | Select-Object -First 400
+            & $cdb -z $d.FullName -c ".sympath `"$deps`"; .reload /f; .ecxr; .lines; kv 40; q" 2>&1 | Select-Object -First 400
           }
 
       - name: Upload crash dumps + symbols

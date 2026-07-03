@@ -2019,11 +2019,11 @@ impl Vm {
     ) -> Result<Vec<Value>, LuaError> {
         match co.status {
             CoroStatus::Suspended => {}
-            CoroStatus::Dead => return Err(self.rt_err("cannot resume dead coroutine")),
-            _ => return Err(self.rt_err("cannot resume non-suspended coroutine")),
+            CoroStatus::Dead => return Err(self.plain_err("cannot resume dead coroutine")),
+            _ => return Err(self.plain_err("cannot resume non-suspended coroutine")),
         }
         if self.c_depth >= MAX_C_DEPTH {
-            return Err(self.rt_err("C stack overflow"));
+            return Err(self.plain_err("C stack overflow"));
         }
         self.c_depth += 1;
         let resumer = self.current;
@@ -5140,6 +5140,13 @@ impl Vm {
         LuaError(Value::Str(self.heap.intern(text.as_bytes())))
     }
 
+    /// Error without the `chunk:line:` position prefix. PUC's
+    /// `resume_error` (ldo.c) pushes its message as a bare literal,
+    /// so `cannot resume dead coroutine` etc. must not be prefixed.
+    pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
+        LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
+    }
+
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
         let extra = self.subject_varinfo(v);
         let tn = self.obj_typename(v);
@@ -5331,11 +5338,55 @@ impl Vm {
     /// Lua caller (skipping Cont/C-boundary frames the way `dbg_frame` does),
     /// `level == 2` its caller, and so on. Used by `error(msg, level)` so the
     /// caller's frame is reported even across pcall/xpcall continuations.
+    /// `luaL_where(level)` for `error()`: unlike `dbg_frame` (whose 5.2+
+    /// level numbering skips Cont activations to match db.lua's getinfo
+    /// shape), PUC counts EVERY CallInfo — a C caller occupies a level of
+    /// its own. `pcall(pcall, error, "msg")` must therefore resolve
+    /// level 1 to the inner pcall (a C activation, no line info → no
+    /// prefix), not tunnel through to the Lua frame below (v2.13
+    /// CORPUS-IV fixture 239).
     pub(crate) fn position_prefix_at_level(&self, level: i64) -> Option<String> {
-        let fi = match self.dbg_frame(level)? {
-            DbgKind::Lua(fi) => fi,
-            DbgKind::C(_) | DbgKind::Tail(_) => return None,
-        };
+        if level < 1 {
+            return None;
+        }
+        let v51 = self.version <= LuaVersion::Lua51;
+        let mut lvl = level;
+        let mut found: Option<usize> = None;
+        'walk: for fi in (0..self.frames.len()).rev() {
+            match &self.frames[fi] {
+                CallFrame::Lua(f) => {
+                    lvl -= 1;
+                    if lvl == 0 {
+                        found = Some(fi);
+                        break 'walk;
+                    }
+                    if v51 {
+                        for _ in 0..f.tailcalls {
+                            lvl -= 1;
+                            if lvl == 0 {
+                                return None; // synthetic tail level: no line info
+                            }
+                        }
+                    }
+                    if f.from_c {
+                        lvl -= 1;
+                        if lvl == 0 {
+                            return None; // C activation: no line info
+                        }
+                    }
+                }
+                CallFrame::Cont(_) => {
+                    // A continuation-driven native (pcall/xpcall/close)
+                    // is a C activation — it takes a level and has no
+                    // line info.
+                    lvl -= 1;
+                    if lvl == 0 {
+                        return None;
+                    }
+                }
+            }
+        }
+        let fi = found?;
         let f = self.frames[fi].lua()?;
         let proto = f.closure.proto;
         // PUC luaG_addinfo: a stripped chunk has no source — see

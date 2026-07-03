@@ -452,10 +452,12 @@ fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let f = vm.nat_arg(fs, nargs, 0);
     if let Value::Native(nc) = f {
         // PUC: C function upvalues always carry the empty-string name; an
-        // in-range index returns ("", value), out-of-range returns nil.
+        // in-range index returns ("", value), out-of-range returns NO
+        // values (db_getupvalue's `return 0`, not nil — v2.13 CORPUS-IV
+        // fixture 186 pins the print() spacing difference).
         let n = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as an index")?;
         if n < 1 || (n as usize) > nc.upvals.len() {
-            return Ok(vm.nat_return(fs, &[Value::Nil]));
+            return Ok(vm.nat_return(fs, &[]));
         }
         let value = nc.upvals[(n - 1) as usize];
         let nm = Value::Str(vm.heap.intern(b""));
@@ -464,7 +466,8 @@ fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let cl = check_closure(vm, f, "getupvalue")?;
     let n = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as an index")?;
     let Some(idx) = visible_upvalue_index(vm, cl, n) else {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        // PUC db_getupvalue: out-of-range returns 0 values, not nil.
+        return Ok(vm.nat_return(fs, &[]));
     };
     // PUC `aux_upvalue` returns "(no name)" when the upvalue's name is NULL —
     // which happens for closures loaded from a stripped binary chunk.
@@ -487,16 +490,19 @@ fn d_getupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let f = vm.nat_arg(fs, nargs, 0);
     // PUC's `db_setupvalue` on a C function: the upvalues are C-only, so
-    // Lua-level `setupvalue` returns nil without writing through (no error).
-    // 5.1 db.lua :312 asserts `debug.setupvalue(io.read, 1, 10) == nil`.
+    // Lua-level `setupvalue` returns NO values without writing through
+    // (db_setupvalue's `return 0`). 5.1 db.lua :312's
+    // `debug.setupvalue(io.read, 1, 10) == nil` still holds — a missing
+    // result reads as nil.
     if matches!(f, Value::Native(_)) {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        return Ok(vm.nat_return(fs, &[]));
     }
     let cl = check_closure(vm, f, "setupvalue")?;
     let n = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as an index")?;
     let v = vm.nat_arg(fs, nargs, 2);
     let Some(idx) = visible_upvalue_index(vm, cl, n) else {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
+        // PUC db_setupvalue: out-of-range returns 0 values, not nil.
+        return Ok(vm.nat_return(fs, &[]));
     };
     vm.upvalue_set_value(cl, idx, v);
     let name = cl.proto.upvals[idx].name.clone();
