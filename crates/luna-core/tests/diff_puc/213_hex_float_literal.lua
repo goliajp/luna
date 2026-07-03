@@ -1,0 +1,7 @@
+-- v2.13 CORPUS-IV: hexadecimal float literals (0x1p4 etc).
+print(0x10, 0xA.8p0)
+print(0x1p4, 0x1p-2)
+print(0x.8p1)
+print(math.type(0x10), math.type(0x1p4))
+print(0xFF == 255, 0x1p10 == 1024.0)
+print(tonumber("0x1p4"))
