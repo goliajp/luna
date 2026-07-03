@@ -5338,11 +5338,55 @@ impl Vm {
     /// Lua caller (skipping Cont/C-boundary frames the way `dbg_frame` does),
     /// `level == 2` its caller, and so on. Used by `error(msg, level)` so the
     /// caller's frame is reported even across pcall/xpcall continuations.
+    /// `luaL_where(level)` for `error()`: unlike `dbg_frame` (whose 5.2+
+    /// level numbering skips Cont activations to match db.lua's getinfo
+    /// shape), PUC counts EVERY CallInfo — a C caller occupies a level of
+    /// its own. `pcall(pcall, error, "msg")` must therefore resolve
+    /// level 1 to the inner pcall (a C activation, no line info → no
+    /// prefix), not tunnel through to the Lua frame below (v2.13
+    /// CORPUS-IV fixture 239).
     pub(crate) fn position_prefix_at_level(&self, level: i64) -> Option<String> {
-        let fi = match self.dbg_frame(level)? {
-            DbgKind::Lua(fi) => fi,
-            DbgKind::C(_) | DbgKind::Tail(_) => return None,
-        };
+        if level < 1 {
+            return None;
+        }
+        let v51 = self.version <= LuaVersion::Lua51;
+        let mut lvl = level;
+        let mut found: Option<usize> = None;
+        'walk: for fi in (0..self.frames.len()).rev() {
+            match &self.frames[fi] {
+                CallFrame::Lua(f) => {
+                    lvl -= 1;
+                    if lvl == 0 {
+                        found = Some(fi);
+                        break 'walk;
+                    }
+                    if v51 {
+                        for _ in 0..f.tailcalls {
+                            lvl -= 1;
+                            if lvl == 0 {
+                                return None; // synthetic tail level: no line info
+                            }
+                        }
+                    }
+                    if f.from_c {
+                        lvl -= 1;
+                        if lvl == 0 {
+                            return None; // C activation: no line info
+                        }
+                    }
+                }
+                CallFrame::Cont(_) => {
+                    // A continuation-driven native (pcall/xpcall/close)
+                    // is a C activation — it takes a level and has no
+                    // line info.
+                    lvl -= 1;
+                    if lvl == 0 {
+                        return None;
+                    }
+                }
+            }
+        }
+        let fi = found?;
         let f = self.frames[fi].lua()?;
         let proto = f.closure.proto;
         // PUC luaG_addinfo: a stripped chunk has no source — see
