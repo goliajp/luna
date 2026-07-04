@@ -1432,6 +1432,32 @@ impl Vm {
         }
     }
 
+    /// Render an error value the way PUC's standalone `msghandler`
+    /// does (lua.c): strings pass through, numbers stringify, and any
+    /// other object is given a chance at its `__tostring` metamethod
+    /// (the result must be a string) before collapsing to the
+    /// `"(error object is a … value)"` tag. Needs `&mut self` because
+    /// `__tostring` runs arbitrary Lua — `error_text` remains the
+    /// non-executing variant (v2.14 CV.2, fixture 5.5/321).
+    pub fn error_display(&mut self, e: &LuaError) -> String {
+        match e.0 {
+            Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            v @ (Value::Int(_) | Value::Float(_)) => {
+                String::from_utf8_lossy(&self.tostring_basic(v)).into_owned()
+            }
+            v => {
+                let mm = self.get_mm(v, Mm::ToString);
+                if !mm.is_nil()
+                    && let Ok(r) = self.call_value(mm, &[v])
+                    && let Some(Value::Str(s)) = r.first()
+                {
+                    return String::from_utf8_lossy(s.as_bytes()).into_owned();
+                }
+                format!("(error object is a {} value)", v.type_name())
+            }
+        }
+    }
+
     /// Call any callable value from the host (or from natives like pcall).
     pub fn call_value(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
         // host-level entry (no enclosing exec): drop any error state from a
@@ -5484,17 +5510,6 @@ impl Vm {
     /// continuation frame at/above `entry_depth` (the error is *caught*: its
     /// slot receives `false, msg`); if none is reached, the error propagates.
     fn unwind(&mut self, mut err: Value, entry_depth: usize) -> Unwound {
-        // PUC 5.5 `luaG_errormsg` substitutes "<no error object>" when the
-        // error object is nil — so `pcall(function() error(nil) end)` returns
-        // that string instead of nil, and `assert(nil, nil)` (whose path
-        // throws nil via `lua_settop(L, 1)`) also surfaces a string. Earlier
-        // dialects (5.4 and below) keep the nil — 5.4 errors.lua :49 asserts
-        // `doit("error()") == nil` and luna would fail that if it always
-        // substituted. luna's native `error()` still does its own conversion
-        // for direct callers.
-        if matches!(err, Value::Nil) && self.version >= crate::version::LuaVersion::Lua55 {
-            err = Value::Str(self.heap.intern(b"<no error object>"));
-        }
         // The protected call runs in-place among the caller frames' registers,
         // so truncating the failed frames here cuts into caller windows below
         // the catcher. Snapshot the live length: at the error point the stack
@@ -5634,6 +5649,21 @@ impl Vm {
                         ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_) => {
                             unreachable!("Meta/Pairs/Close cont handled above")
                         }
+                    };
+                    // PUC 5.5 `luaG_errormsg` substitutes "<no error object>"
+                    // for nil AFTER the message handler ran (ldebug.c:849) —
+                    // so it applies to the pcall-caught object and to an
+                    // xpcall HANDLER'S return value, while the handler itself
+                    // (and a top-level propagation into the host, whose
+                    // `error_display` plays msghandler) still sees the raw
+                    // nil. 5.4- keep nil everywhere (errors.lua :49 asserts
+                    // `doit("error()") == nil`). v2.14 fixture 5.5/334.
+                    let result = if matches!(result, Value::Nil)
+                        && self.version >= crate::version::LuaVersion::Lua55
+                    {
+                        Value::Str(self.heap.intern(b"<no error object>"))
+                    } else {
+                        result
                     };
                     // the error has been caught (pcall/xpcall): the captured
                     // traceback was for that error and is no longer in flight.
