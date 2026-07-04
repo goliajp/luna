@@ -257,7 +257,7 @@ fn diff_one_err(path: &Path, bin: &str, version: LuaVersion, source: &str) {
              but eval returned Ok",
             path.display()
         ),
-        Err(e) => vm.error_text(&e),
+        Err(e) => vm.error_display(&e),
     };
     let (luna_pos, luna_n) = normalize_err(&luna_err);
 

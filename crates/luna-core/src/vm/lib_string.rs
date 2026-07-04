@@ -200,11 +200,45 @@ fn s_lower(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(vm.nat_return(fs, &[v]))
 }
 
+/// PUC `luaL_checkinteger` semantics for a numeric argument: ints
+/// pass, integral floats convert, numeric STRINGS convert (the libc
+/// `lua_tointegerx` string leg), and anything else raises the
+/// standard `bad argument #N to 'who' (number expected, got T)` —
+/// not a bespoke wording (v2.14 CV.2, fixture 5.5/330).
+pub(crate) fn check_int_arg(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+    i: u32,
+    who: &str,
+) -> Result<i64, LuaError> {
+    let v = vm.nat_arg(fs, nargs, i);
+    let num = match v {
+        Value::Int(n) => Some(crate::numeric::Num::Int(n)),
+        Value::Float(f) => Some(crate::numeric::Num::Float(f)),
+        Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true),
+        _ => None,
+    };
+    match num {
+        Some(crate::numeric::Num::Int(n)) => Ok(n),
+        Some(crate::numeric::Num::Float(f)) => match crate::runtime::value::f2i_exact(f) {
+            Some(n) => Ok(n),
+            None => Err(vm.rt_err("number has no integer representation")),
+        },
+        None => Err(arg_error(
+            vm,
+            i + 1,
+            who,
+            &format!("number expected, got {}", v.type_name()),
+        )),
+    }
+}
+
 const MAX_STR: usize = 1 << 30;
 
 fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = check_str(vm, fs, nargs, 0, "rep")?;
-    let n = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as a count")?;
+    let n = check_int_arg(vm, fs, nargs, 1, "rep")?;
     let sep: Vec<u8> = match vm.nat_arg(fs, nargs, 2) {
         Value::Nil => Vec::new(),
         Value::Str(x) => x.as_bytes().to_vec(),
@@ -446,7 +480,7 @@ fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let max_n = match vm.nat_arg(fs, nargs, 3) {
         Value::Nil => i64::MAX,
-        v => vm.int_from(v, "use as a count")?,
+        _ => check_int_arg(vm, fs, nargs, 3, "gsub")?,
     };
     let src = s.as_bytes().to_vec();
     let pat = p.as_bytes().to_vec();
@@ -1085,101 +1119,140 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // `%o`/`%x`/`%X`/`%c` (no integer subtype), while 5.3+ raises
         // "number has no integer representation". strings.lua 5.2 :151 probes
         // `string.format("%x", 0.3) == "0"`.
-        let int_from_lenient = |vm: &mut Vm, arg: Value, signed: bool| -> Result<i64, LuaError> {
-            // PUC 5.2 `%u`/`%x`/`%X`/`%o` rejects negative operands (lstrlib.c
-            // casts through `unsigned int` after a non-negative check).
-            // strings.lua :214 exercises this with `%x` on `-1`.
-            if !signed && vm.version() <= crate::version::LuaVersion::Lua52 {
-                let neg = match arg {
-                    Value::Int(i) => i < 0,
-                    Value::Float(f) => f < 0.0,
-                    _ => false,
-                };
-                if neg {
-                    return Err(raise_str(
-                        vm,
-                        "bad argument to 'format' (value out of range)",
-                    ));
+        let int_from_lenient =
+            |vm: &mut Vm, arg: Value, argi: u32, signed: bool| -> Result<i64, LuaError> {
+                // PUC 5.2 `%u`/`%x`/`%X`/`%o` rejects negative operands (lstrlib.c
+                // casts through `unsigned int` after a non-negative check).
+                // strings.lua :214 exercises this with `%x` on `-1`.
+                if !signed && vm.version() <= crate::version::LuaVersion::Lua52 {
+                    let neg = match arg {
+                        Value::Int(i) => i < 0,
+                        Value::Float(f) => f < 0.0,
+                        _ => false,
+                    };
+                    if neg {
+                        return Err(raise_str(
+                            vm,
+                            "bad argument to 'format' (value out of range)",
+                        ));
+                    }
                 }
-            }
-            // PUC `luaL_checkinteger` runs every integer-format operand through
-            // `lua_tointegerx`, which itself accepts a numeric string and
-            // converts via `lua_strx2number`. Without this coercion,
-            // `string.format('%d', '13')` raises "attempt to format a string
-            // value" — but PUC accepts it, and files.lua :611 feeds it the
-            // string results of `os.date('%d')` etc.
-            if let Value::Str(s) = arg
-                && let Some(n) = crate::numeric::str2num(s.as_bytes(), true, true)
-            {
-                let arg = match n {
-                    crate::numeric::Num::Int(i) => Value::Int(i),
-                    crate::numeric::Num::Float(f) => Value::Float(f),
-                };
-                return vm.int_from(arg, "format");
-            }
-            if vm.version() <= crate::version::LuaVersion::Lua52
-                && let Value::Float(f) = arg
-                && f.is_finite()
-            {
-                // Go through u64 first so the PUC 5.2 "unsigned" probes
-                // (`%u` / `%x` near 2^64) survive the cast. Then re-cast to
-                // i64 with the same bit pattern so the downstream `fmt_int`
-                // treats it as unsigned via `v as u64`. For `%d` / `%i` we
-                // bound by the signed range (PUC 5.2 :211 expects `%d` to
-                // error on `2^63`); for unsigned conversions we bound by u64.
-                let t = f.trunc();
-                // The float-to-integer conversion uses strict bounds because
-                // `i64::MAX as f64` rounds *up* to 2^63 — without the strict
-                // upper bound, `2^63` would slip past and the lossy cast
-                // would silently saturate. strings.lua 5.2 :211 catches this.
-                let i64max_f = i64::MAX as f64; // 2^63 exactly after rounding
-                let u64max_f = u64::MAX as f64; // 2^64 exactly after rounding
-                let bits = if signed {
-                    if t >= (i64::MIN as f64) && t < i64max_f {
-                        (t as i64) as u64
+                // PUC `luaL_checkinteger` runs every integer-format operand through
+                // `lua_tointegerx`, which itself accepts a numeric string and
+                // converts via `lua_strx2number`. Without this coercion,
+                // `string.format('%d', '13')` raises "attempt to format a string
+                // value" — but PUC accepts it, and files.lua :611 feeds it the
+                // string results of `os.date('%d')` etc.
+                if let Value::Str(s) = arg
+                    && let Some(n) = crate::numeric::str2num(s.as_bytes(), true, true)
+                {
+                    let arg = match n {
+                        crate::numeric::Num::Int(i) => Value::Int(i),
+                        crate::numeric::Num::Float(f) => Value::Float(f),
+                    };
+                    return {
+                        match arg {
+                            Value::Int(i) => Ok(i),
+                            Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
+                                Some(i) => Ok(i),
+                                None => Err(arg_error(
+                                    vm,
+                                    argi,
+                                    "format",
+                                    "number has no integer representation",
+                                )),
+                            },
+                            v => Err(arg_error(
+                                vm,
+                                argi,
+                                "format",
+                                &format!("number expected, got {}", v.type_name()),
+                            )),
+                        }
+                    };
+                }
+                if vm.version() <= crate::version::LuaVersion::Lua52
+                    && let Value::Float(f) = arg
+                    && f.is_finite()
+                {
+                    // Go through u64 first so the PUC 5.2 "unsigned" probes
+                    // (`%u` / `%x` near 2^64) survive the cast. Then re-cast to
+                    // i64 with the same bit pattern so the downstream `fmt_int`
+                    // treats it as unsigned via `v as u64`. For `%d` / `%i` we
+                    // bound by the signed range (PUC 5.2 :211 expects `%d` to
+                    // error on `2^63`); for unsigned conversions we bound by u64.
+                    let t = f.trunc();
+                    // The float-to-integer conversion uses strict bounds because
+                    // `i64::MAX as f64` rounds *up* to 2^63 — without the strict
+                    // upper bound, `2^63` would slip past and the lossy cast
+                    // would silently saturate. strings.lua 5.2 :211 catches this.
+                    let i64max_f = i64::MAX as f64; // 2^63 exactly after rounding
+                    let u64max_f = u64::MAX as f64; // 2^64 exactly after rounding
+                    let bits = if signed {
+                        if t >= (i64::MIN as f64) && t < i64max_f {
+                            (t as i64) as u64
+                        } else {
+                            return vm.int_from(arg, "format");
+                        }
+                    } else if t >= 0.0 && t < u64max_f {
+                        // Unsigned conversions (%u/%x/%X/%o) reject negative
+                        // operands in PUC 5.2: lstrlib.c's `tointeger` path uses
+                        // an `unsigned int` cast that's UB on negative doubles,
+                        // and the test bakes the error in (strings.lua :214).
+                        t as u64
                     } else {
                         return vm.int_from(arg, "format");
+                    };
+                    return Ok(bits as i64);
+                }
+                {
+                    match arg {
+                        Value::Int(i) => Ok(i),
+                        Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
+                            Some(i) => Ok(i),
+                            None => Err(arg_error(
+                                vm,
+                                argi,
+                                "format",
+                                "number has no integer representation",
+                            )),
+                        },
+                        v => Err(arg_error(
+                            vm,
+                            argi,
+                            "format",
+                            &format!("number expected, got {}", v.type_name()),
+                        )),
                     }
-                } else if t >= 0.0 && t < u64max_f {
-                    // Unsigned conversions (%u/%x/%X/%o) reject negative
-                    // operands in PUC 5.2: lstrlib.c's `tointeger` path uses
-                    // an `unsigned int` cast that's UB on negative doubles,
-                    // and the test bakes the error in (strings.lua :214).
-                    t as u64
-                } else {
-                    return vm.int_from(arg, "format");
-                };
-                return Ok(bits as i64);
-            }
-            vm.int_from(arg, "format")
-        };
+                }
+            };
         match conv {
             b'd' | b'i' => {
-                let v = int_from_lenient(vm, arg, true)?;
+                let v = int_from_lenient(vm, arg, argi, true)?;
                 checkformat(vm, &form, b"-+0 ", true)?;
                 let body = fmt_int(&spec, v, 10, false, true);
                 pad(&mut out, body, &spec, PadKind::Int);
             }
             b'u' => {
-                let v = int_from_lenient(vm, arg, false)?;
+                let v = int_from_lenient(vm, arg, argi, false)?;
                 checkformat(vm, &form, b"-0", true)?;
                 let body = fmt_int(&spec, v, 10, false, false);
                 pad(&mut out, body, &spec, PadKind::Int);
             }
             b'o' => {
-                let v = int_from_lenient(vm, arg, false)?;
+                let v = int_from_lenient(vm, arg, argi, false)?;
                 checkformat(vm, &form, b"-#0", true)?;
                 let body = fmt_int(&spec, v, 8, false, false);
                 pad(&mut out, body, &spec, PadKind::Int);
             }
             b'x' | b'X' => {
-                let v = int_from_lenient(vm, arg, false)?;
+                let v = int_from_lenient(vm, arg, argi, false)?;
                 checkformat(vm, &form, b"-#0", true)?;
                 let body = fmt_int(&spec, v, 16, conv == b'X', false);
                 pad(&mut out, body, &spec, PadKind::Int);
             }
             b'c' => {
-                let v = int_from_lenient(vm, arg, true)?;
+                let v = int_from_lenient(vm, arg, argi, true)?;
                 checkformat(vm, &form, b"-", false)?;
                 pad(&mut out, vec![v as u8], &spec, PadKind::Str);
             }

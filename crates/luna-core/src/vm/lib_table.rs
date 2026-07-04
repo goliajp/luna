@@ -60,7 +60,7 @@ fn t_foreach(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     loop {
         match t
             .next(key)
-            .map_err(|_| raise_str(vm, "invalid key to 'next'"))?
+            .map_err(|_| vm.plain_err("invalid key to 'next'"))?
         {
             Some((k, v)) => {
                 let rs = vm.call_value(f, &[k, v])?;
@@ -105,7 +105,7 @@ fn t_maxn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     loop {
         let entry = t
             .next(key)
-            .map_err(|_| raise_str(vm, "invalid key to 'next'"))?;
+            .map_err(|_| vm.plain_err("invalid key to 'next'"))?;
         match entry {
             Some((k, _)) => {
                 if let Some(n) = match k {
@@ -248,10 +248,14 @@ fn concat_field(
         Value::Float(x) => out.extend_from_slice(
             crate::numeric::num_to_string_for(crate::numeric::Num::Float(x), float_fmt).as_bytes(),
         ),
-        _ => {
+        v => {
+            // PUC ltablib tconcat: "invalid value (%s) at index %I in
+            // table for 'concat'" — type name inside the parens
+            // (v2.14 fixture 5.5/341).
+            let tn = vm.obj_typename(v);
             return Err(raise_str(
                 vm,
-                &format!("invalid value (at index {k}) in table for 'concat'"),
+                &format!("invalid value ({tn}) at index {k} in table for 'concat'"),
             ));
         }
     }
