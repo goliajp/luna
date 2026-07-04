@@ -1,6 +1,8 @@
--- v2.13 CORPUS-IV: __pairs is consulted by pairs() in 5.5
--- (removed in 5.4, restored in 5.5) — custom iterator drives
--- the loop instead of raw entries.
+-- v2.13 CORPUS-IV: __pairs is consulted by pairs() in 5.5.
+-- (The 5.4 manual lists __pairs as removed, but official builds
+-- keep it via LUA_COMPAT_5_3 — see 5.4/543. Behavior is
+-- consistent across default builds.) Custom iterator drives the
+-- loop instead of raw entries.
 local t = setmetatable({ real = 1 }, {
   __pairs = function(self)
     local i = 0

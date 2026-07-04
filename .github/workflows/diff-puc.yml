@@ -42,6 +42,28 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Build PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.8 (dialect matrix)
+        # v2.14 HD — the harness diffs every tests/diff_puc/5.x/
+        # subtree against the matching interpreter. `make posix`
+        # avoids the readline dependency (the harness feeds stdin);
+        # each version's Makefile has the posix target.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+          mkdir -p /tmp/puc-multi && cd /tmp/puc-multi
+          for v in 5.1.5 5.2.4 5.3.6 5.4.8; do
+            curl -fsSL "https://www.lua.org/ftp/lua-$v.tar.gz" | tar -xz
+            ( cd "lua-$v" && make posix > /dev/null )
+          done
+          echo "PUC_LUA_51=/tmp/puc-multi/lua-5.1.5/src/lua" >> "$GITHUB_ENV"
+          echo "PUC_LUA_52=/tmp/puc-multi/lua-5.2.4/src/lua" >> "$GITHUB_ENV"
+          echo "PUC_LUA_53=/tmp/puc-multi/lua-5.3.6/src/lua" >> "$GITHUB_ENV"
+          echo "PUC_LUA_54=/tmp/puc-multi/lua-5.4.8/src/lua" >> "$GITHUB_ENV"
+
+      - name: Show dialect interpreter versions
+        run: |
+          $PUC_LUA_51 -v && $PUC_LUA_52 -v && $PUC_LUA_53 -v && $PUC_LUA_54 -v
+
       - name: Install PUC lua-5.5 (apt or build-from-source)
         # Ubuntu LTS may pin to 5.4; build PUC 5.5 from source if
         # apt's `lua5.5` package isn't available. The 5.5.0

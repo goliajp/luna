@@ -64,6 +64,13 @@ pub(crate) fn open_base(vm: &mut Vm) {
         let f = vm.native(nat_warn);
         vm.set_global("warn", f).expect("stdlib registration");
     }
+    // PUC 5.2's official build ships -DLUA_COMPAT_ALL, so `loadstring`
+    // survives as a `load` alias there too — the diff ground truth is
+    // the default build (v2.14 dialect fixture 5.2/521).
+    if vm.version() == crate::version::LuaVersion::Lua52 {
+        vm.set_global("loadstring", load_obj)
+            .expect("stdlib registration");
+    }
     // PUC 5.1 globals retired in 5.2 (`unpack` → `table.unpack`) and 5.2
     // (`loadstring` → `load`). Provide aliases so the 5.1 test suite, which
     // is full of `unpack(...)` and `loadstring("...")` calls, still resolves.
