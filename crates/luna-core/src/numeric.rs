@@ -288,7 +288,7 @@ fn scale_f64(mut f: f64, mut e: i64) -> f64 {
 /// integral-looking decimals (PUC lua_number2str). Exact boundary alignment
 /// against PUC 5.5 output is rechecked by the P04 gate (strings/math suites).
 pub fn num_to_string(n: Num) -> String {
-    num_to_string_for(n, /* legacy_float = */ false)
+    num_to_string_for(n, FloatFmt::TwoStage55)
 }
 
 /// Write i64 decimal into a stack buffer; returns the slice of valid
@@ -318,15 +318,27 @@ pub fn write_i64_dec(i: i64, buf: &mut [u8; 20]) -> &[u8] {
     &buf[pos..]
 }
 
-/// Variant for ≤5.2: those dialects only had `lua_Number` (a double), so
-/// PUC's `%.14g` formatter trims any trailing `.0` (an integer-valued float
-/// renders as plain `2`, not `2.0`). 5.3+ introduced the integer subtype and
-/// the renderer started appending `.0` to distinguish floats — pm.lua's
-/// pattern transformations build `"%" .. (s+1)` and need `"%2"` on 5.1/5.2.
-pub fn num_to_string_for(n: Num, legacy_float: bool) -> String {
+/// Float rendering flavor per dialect generation — each PUC line
+/// prints floats with a different `LUA_NUMBER_FMT` (v2.14 HD, pinned
+/// by the per-dialect diff corpus):
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FloatFmt {
+    /// ≤5.2: `%.14g`, and NO ".0" suffix (single number type —
+    /// `tostring(2.0)` is `"2"`). pm.lua :13 and 5.1/511 pin this.
+    Legacy14,
+    /// 5.3/5.4: `%.14g` + ".0" on integer-looking renderings.
+    G14,
+    /// 5.5: `%.15g` → round-trip check → `%.17g` + ".0"
+    /// (lobject.c `tostringbuffFloat`).
+    TwoStage55,
+}
+
+/// Render a number per the dialect's float flavor. Integers are
+/// flavor-independent.
+pub fn num_to_string_for(n: Num, fmt: FloatFmt) -> String {
     match n {
         Num::Int(i) => i.to_string(),
-        Num::Float(f) => float_to_string(f, legacy_float),
+        Num::Float(f) => float_to_string(f, fmt),
     }
 }
 
@@ -368,30 +380,31 @@ fn format_g(f: f64, prec: usize) -> String {
     }
 }
 
-fn float_to_string(f: f64, legacy_float: bool) -> String {
+fn float_to_string(f: f64, fmt: FloatFmt) -> String {
     if f.is_nan() {
         return "nan".to_string();
     }
     if f.is_infinite() {
         return if f < 0.0 { "-inf" } else { "inf" }.to_string();
     }
-    // PUC 5.5 `tostringbuffFloat` (lobject.c): print with %.15g
-    // (LUA_NUMBER_FMT), read it back, and only if the round-trip is
-    // inexact re-print with %.17g (LUA_NUMBER_FMT_N). This keeps the
-    // human-friendly short forms ("0.1", "3.5") while making every
-    // rendering value-exact ("3.1415926535897931"). Applied uniformly
-    // across dialects (≤5.4 PUC used a plain %.14g; luna prefers the
-    // value-exact rendering — official ≤5.4 suites assert semantics,
-    // not stdout float spelling).
-    let mut s = format_g(f, 15);
-    if s.parse::<f64>() != Ok(f) {
-        s = format_g(f, 17);
+    let mut s = match fmt {
+        // ≤5.4: plain LUA_NUMBER_FMT="%.14g" (lua 5.1.5-5.4.8).
+        FloatFmt::Legacy14 | FloatFmt::G14 => format_g(f, 14),
+        // 5.5 `tostringbuffFloat` (lobject.c): %.15g, read back, and
+        // only if the round-trip is inexact re-print with %.17g.
+        FloatFmt::TwoStage55 => {
+            let first = format_g(f, 15);
+            if first.parse::<f64>() == Ok(f) {
+                first
+            } else {
+                format_g(f, 17)
+            }
+        }
+    };
+    if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') && fmt != FloatFmt::Legacy14 {
+        s.push_str(".0");
     }
-    if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
-        if legacy_float { s } else { format!("{s}.0") }
-    } else {
-        s
-    }
+    s
 }
 
 #[cfg(test)]
