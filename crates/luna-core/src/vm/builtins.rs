@@ -530,7 +530,9 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, who: &str, extra: &str) -> LuaError
     // The running native is the topmost on `running_natives`; a nested call
     // (depth ≥ 2) means the level-0 caller is another native, not Lua —
     // PUC walks package.loaded to qualify the running function's name.
-    let name = if vm.running_natives.len() >= 2 {
+    // A pcall/xpcall Cont caller is the same situation (pcall is a C
+    // function in PUC), but lives as a frame, not a running native.
+    let name = if vm.running_natives.len() >= 2 || vm.caller_is_protected_cont() {
         let target = vm.running_natives.last().expect("nested native").f;
         vm.pushglobalfuncname(target)
             .unwrap_or_else(|| who.to_string())

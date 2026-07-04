@@ -1,0 +1,10 @@
+-- v2.14 CV.3: length-prefixed and zero-terminated strings.
+local s1 = string.pack("<s1", "hi")
+print(#s1, s1:byte(1))
+print(string.unpack("<s1", s1))
+local s4 = string.pack("<s4", "hello")
+print(#s4)
+print(string.unpack("<s4", s4))
+local z = string.pack("z", "abc")
+print(#z, z:byte(4))
+print(string.unpack("z", z))
