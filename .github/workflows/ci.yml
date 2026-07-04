@@ -190,6 +190,9 @@ jobs:
         run: |
           git worktree add /tmp/perfref "$PERF_REF"
           cd /tmp/perfref
+          # the worktree shares the main .git, so submodule objects are
+          # already local — this just materializes the checkouts
+          git submodule update --init --recursive
           taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
           python3 "$GITHUB_WORKSPACE/scripts/criterion-extract.py" \
             target/criterion/redis_lua_shape "same-runner-ref-$PERF_REF" \
