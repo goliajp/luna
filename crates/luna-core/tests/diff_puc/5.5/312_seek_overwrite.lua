@@ -1,0 +1,12 @@
+-- v2.14 CV.1: mid-file overwrite via seek.
+local f = io.tmpfile()
+f:write("AAAAAAAAAA")
+f:seek("set", 3)
+f:write("bcd")
+f:seek("set", 0)
+print(f:read("a"))
+f:seek("end", 0)
+f:write("Z")
+f:seek("set", 0)
+print(f:read("a"), f:seek("end"))
+f:close()
