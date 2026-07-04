@@ -10382,6 +10382,21 @@ impl Vm {
     /// name (e.g. `"table.sort"`). A `_G.X` match is stripped to `"X"`. Returns
     /// `None` if no match is found. Used by `arg_error` when the running native
     /// was invoked from another native (PUC `ar.name == NULL` at level 0).
+    /// True when the innermost call frame is a pcall/xpcall
+    /// continuation — i.e. the currently-running native was invoked
+    /// DIRECTLY by pcall/xpcall rather than by Lua code. PUC's
+    /// luaL_argerror sees ar.name == NULL there (the caller is C)
+    /// and qualifies the name via pushglobalfuncname — so
+    /// `pcall(coroutine.resume, 42)` blames 'coroutine.resume'
+    /// (v2.14 fixture 5.5/365).
+    pub(crate) fn caller_is_protected_cont(&self) -> bool {
+        matches!(
+            self.frames.last(),
+            Some(CallFrame::Cont(nc))
+                if matches!(nc.kind, ContKind::Pcall | ContKind::Xpcall { .. })
+        )
+    }
+
     pub(crate) fn pushglobalfuncname(
         &mut self,
         target: crate::runtime::value::NativeFn,

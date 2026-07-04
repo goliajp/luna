@@ -38,15 +38,37 @@ fn collect_args(vm: &Vm, fs: u32, nargs: u32) -> Vec<Value> {
 fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = vm.nat_arg(fs, nargs, 0);
     if !matches!(body, Value::Closure(_) | Value::Native(_)) {
-        return Err(arg_error(vm, 1, "create", "function expected"));
+        let got = if nargs == 0 {
+            "no value".to_string()
+        } else {
+            vm.nat_arg(fs, nargs, 0).type_name().to_string()
+        };
+        return Err(arg_error(
+            vm,
+            1,
+            "create",
+            &format!("function expected, got {got}"),
+        ));
     }
     let co = vm.new_coro(body);
     Ok(vm.nat_return(fs, &[Value::Coro(co)]))
 }
 
+/// PUC lcorolib `getco`: luaL_argexpected(…, "thread") — the wording
+/// carries the offender's type ("thread expected, got number" /
+/// "…got no value"). v2.14 fixture 5.5/365.
+fn thread_expected(vm: &mut Vm, fs: u32, nargs: u32, who: &str) -> LuaError {
+    let got = if nargs == 0 {
+        "no value".to_string()
+    } else {
+        vm.nat_arg(fs, nargs, 0).type_name().to_string()
+    };
+    arg_error(vm, 1, who, &format!("thread expected, got {got}"))
+}
+
 fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Coro(co) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "resume", "coroutine expected"));
+        return Err(thread_expected(vm, fs, nargs, "resume"));
     };
     let args: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     match vm.resume_coro(co, args) {
@@ -82,7 +104,7 @@ fn co_yield(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn co_status(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Coro(co) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "status", "coroutine expected"));
+        return Err(thread_expected(vm, fs, nargs, "status"));
     };
     let s = vm.coro_status_str(co);
     let v = Value::Str(vm.heap.intern(s.as_bytes()));
@@ -142,7 +164,7 @@ fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Some(c) => c,
             None => return Err(raise_str(vm, "cannot close main thread")),
         },
-        _ => return Err(arg_error(vm, 1, "close", "coroutine expected")),
+        _ => return Err(thread_expected(vm, fs, nargs, "close")),
     };
     // PUC 5.4 `auxstatus` reports a coroutine as "running" when it is the
     // currently-executing thread — that path errors with "cannot close a
