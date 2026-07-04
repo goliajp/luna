@@ -9007,6 +9007,30 @@ impl Vm {
             let what = if matches!(op, BAnd | BOr | BXor | Shl | Shr) {
                 "perform bitwise operation on"
             } else {
+                // 5.4+ report string-involved arithmetic faults through
+                // lstrlib's string-metatable arithmetic handlers, which
+                // emit the per-op wording `attempt to add a 'string'
+                // with a 'number'` (operands in syntactic order, quoted
+                // type names, no varinfo). Non-string faults (nil+1,
+                // {}+{}) keep the classic VM wording on every dialect —
+                // v2.14 HC.4, probed against stock 5.1.5-5.5.0.
+                if self.version >= crate::version::LuaVersion::Lua54
+                    && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
+                {
+                    let verb = match op {
+                        Add => "add",
+                        Sub => "sub",
+                        Mul => "mul",
+                        Div => "div",
+                        Mod => "mod",
+                        Pow => "pow",
+                        IDiv => "idiv",
+                        BAnd | BOr | BXor | Shl | Shr => unreachable!(),
+                    };
+                    let t1 = self.obj_typename(l);
+                    let t2 = self.obj_typename(r);
+                    return Err(self.rt_err(&format!("attempt to {verb} a '{t1}' with a '{t2}'")));
+                }
                 "perform arithmetic on"
             };
             let bad = if coerce_num(l).is_none() { l } else { r };
