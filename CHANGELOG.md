@@ -19,6 +19,65 @@ optimization.
 
 ---
 
+## [2.14.0] — 2026-07-05
+
+### Added
+- **Multi-dialect differential harness** — the luna-vs-PUC diff
+  corpus now runs per dialect: `tests/diff_puc/5.1/ … 5.5/`
+  subtrees execute against stock PUC 5.1.5 / 5.2.4 / 5.3.6 /
+  5.4.8 / 5.5.0 interpreters (built from source in CI). Ground
+  truth is each version's DEFAULT `make` build, compat flags
+  included.
+- **Error-channel comparison** — `*_err.lua` fixtures pin the
+  error path: both interpreters must fail at top level (non-zero
+  exit ⇔ eval Err) with matching normalized error text.
+- **Corpus 250 → 400** — dialect seed batches (10+ per legacy
+  dialect), io/os deterministic batch, 33-fixture error-channel
+  batch, coroutine deep matrix, string.pack format matrix,
+  metamethod/core-semantics batch.
+- `Vm::error_display` — renders an error value the way PUC's
+  standalone message handler does: numbers stringify and
+  non-string objects get their `__tostring` called before
+  collapsing to the `(error object is a … value)` tag. The
+  non-executing `Vm::error_text` is unchanged.
+
+### Fixed
+23 real divergences against stock PUC interpreters, including:
+- **Per-dialect float formatting** — ≤5.2 prints `%.14g` with no
+  `.0` suffix, 5.3/5.4 `%.14g` + `.0`, 5.5 the two-stage
+  `%.15g`→`%.17g` (new `numeric::FloatFmt`; v2.13 had applied the
+  5.5 scheme to every dialect).
+- **Per-dialect arithmetic error wording** — 5.4+ report
+  string-involved arithmetic faults as `attempt to add a 'string'
+  with a 'number'` (lstrlib's string-metatable handlers); ≤5.3
+  keep the aggregate wording.
+- **`error(nil)` substitution timing** — `<no error object>` is
+  substituted only at the catch point (after a message handler
+  ran), so xpcall handlers and the top level see the raw nil,
+  matching `luaG_errormsg`.
+- Dialect-gated stdlib surface: `loadstring` exists on 5.2 and
+  `bit32` on 5.3 (stock `LUA_COMPAT_*` builds); `math.type` /
+  `tointeger` / `ult` are 5.3+; 5.1 `xpcall` does not forward
+  extra arguments; 5.4/5.5 boot in generational GC mode.
+- `os.date` implements the C99 strftime specs PUC inherits
+  (`%u %e %C %D %T %F`) and the ISO 8601 week date (`%G`/`%V`).
+- luaL-conformant wording/returns: `file:setvbuf`/`file:flush`
+  return `true`; `string.rep`/`gsub`/`format` integer arguments
+  follow `luaL_checkinteger` (numeric strings convert, failures
+  say `bad argument #N … (number expected, got T)`);
+  pcall/xpcall-invoked natives qualify their names via
+  `package.loaded` (`'coroutine.resume'`, not `'resume'`);
+  `table.concat` element errors carry the type name;
+  `invalid key to 'next'` has no position prefix.
+
+### Changed
+- **CI perf-gate is now a same-runner comparison** — the fixed-ns
+  baseline was invalid on heterogeneous hosted runners (identical
+  code measured 0.505x–1.087x across runs). The gate benches a
+  pinned reference commit on the same runner immediately before
+  HEAD and diffs the two. Same-runner verdict for this release:
+  every cell within 0.98x–1.03x of v2.13.0.
+
 ## [2.13.0] — 2026-07-04
 
 ### Fixed
