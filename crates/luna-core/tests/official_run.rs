@@ -555,6 +555,46 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
             // 0, which is the truthful reading. Read via raw Table::get
             // so no __index metamethod can perturb the value.
             let (total, hit) = read_assert_counters(&mut vm);
+            // v2.16 P3.4.4 remainder — byte-diff comparison. Fires
+            // when env-set AND file not allowlisted AND both luna
+            // + PUC actually captured a buffer. Divergences are
+            // eprintln'd for triage rather than failing the file
+            // (opt-in surface per charter §2.4 rollout).
+            if byte_diff_enabled && r.is_ok() {
+                if let Some(luna_bytes) = read_byte_diff_stdout(&mut vm) {
+                    if let Some(bin) = puc_bin_for_version(version) {
+                        match run_official_on_puc(&bin, &src) {
+                            Some(Ok(puc_stdout)) => {
+                                if let Some(puc_bytes) =
+                                    extract_byte_diff_from_puc_stdout(&puc_stdout)
+                                {
+                                    let luna_canon = canonicalize_byte_diff(&luna_bytes);
+                                    let puc_canon = canonicalize_byte_diff(&puc_bytes);
+                                    if luna_canon != puc_canon {
+                                        eprintln!(
+                                            "[STDOUT-DIVERGE] {:?}/{}: luna_len={} puc_len={} first_diff_at={}",
+                                            version,
+                                            label,
+                                            luna_canon.len(),
+                                            puc_canon.len(),
+                                            luna_canon.iter().zip(puc_canon.iter())
+                                                .position(|(a, b)| a != b)
+                                                .map(|i| i as isize).unwrap_or(-1)
+                                        );
+                                    }
+                                }
+                            }
+                            Some(Err(msg)) => {
+                                eprintln!(
+                                    "[STDOUT-DIVERGE-PUC-ERR] {:?}/{}: {}",
+                                    version, label, msg
+                                );
+                            }
+                            None => {} // binary missing; silent
+                        }
+                    }
+                }
+            }
             let _ = tx.send((r, total, hit));
         })
         .expect("spawn");
