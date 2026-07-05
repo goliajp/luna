@@ -70,6 +70,19 @@ struct FileCoverage {
 ///   so does Lua's built-in `error`)
 const ASSERT_COUNTER_PREAMBLE: &[u8] = b"do _G.__luna_assert_total=0 _G.__luna_assert_hit=0 _G.assert=function(v,msg,...) _G.__luna_assert_total=_G.__luna_assert_total+1 if v then _G.__luna_assert_hit=_G.__luna_assert_hit+1 return v,msg,... end if msg==nil then msg='assertion failed!' end error(msg,2) end end ";
 
+/// v2.16 P3.4.1 — byte-diff stdout capture preamble. Opt-in via
+/// `LUNA_OFFICIAL_BYTE_DIFF=1` env var (charter §2.4 gated rollout).
+/// Redirects `_G.print` and `_G.io.write` to append to a global
+/// buffer `_G.__luna_official_stdout` which the harness reads back
+/// after the chunk runs. Mirrors `crates/luna-core/tests/diff_puc.rs`
+/// pattern.
+///
+/// Only applied when the env var is set — default path is
+/// unchanged so existing CB-or coverage semantics are preserved.
+/// v2.16 P3.4.3+ steps add PUC binary spawn per file + byte-diff
+/// comparison + `[STDOUT-DIVERGE]` report tagging.
+const BYTE_DIFF_PREAMBLE: &[u8] = b"do _G.__luna_official_stdout='' _G.print=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t,'\\t')..'\\n' end _G.io.write=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t) end end ";
+
 /// One version's test gate: the suite directory (relative to the workspace
 /// root) and the files that must run clean under that dialect.
 struct Suite {
@@ -315,10 +328,23 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     //
     // For these files the report records `total = 0, note = "skipped"`.
     let skip_wrapper = matches!(name, "errors.lua" | "db.lua");
+    // v2.16 P3.4.1 — opt-in byte-diff stdout capture. Prepended
+    // before the assert-counter wrapper so the two wrappers are
+    // independent (byte-diff redefines _G.print/_G.io.write;
+    // assert-counter redefines _G.assert). Default path is
+    // unchanged when the env var is absent.
+    let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some();
     let src = if skip_wrapper {
         body
     } else {
-        let mut s = Vec::with_capacity(ASSERT_COUNTER_PREAMBLE.len() + body.len());
+        let mut cap = ASSERT_COUNTER_PREAMBLE.len() + body.len();
+        if byte_diff_enabled {
+            cap += BYTE_DIFF_PREAMBLE.len();
+        }
+        let mut s = Vec::with_capacity(cap);
+        if byte_diff_enabled {
+            s.extend_from_slice(BYTE_DIFF_PREAMBLE);
+        }
         s.extend_from_slice(ASSERT_COUNTER_PREAMBLE);
         s.extend_from_slice(&body);
         s
