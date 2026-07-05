@@ -35,9 +35,14 @@ pub(crate) fn open_math(vm: &mut Vm) {
     set(vm, "log", m_log);
     set(vm, "fmod", m_fmod);
     set(vm, "modf", m_modf);
-    set(vm, "tointeger", m_tointeger);
-    set(vm, "type", m_type);
-    set(vm, "ult", m_ult);
+    // Integer-subtype API arrives with 5.3 — ≤5.2 must NOT expose
+    // these (`math.type == nil` on stock PUC 5.2; v2.14 dialect
+    // fixture 5.2/524).
+    if vm.version() >= crate::version::LuaVersion::Lua53 {
+        set(vm, "tointeger", m_tointeger);
+        set(vm, "type", m_type);
+        set(vm, "ult", m_ult);
+    }
     set(vm, "max", m_max);
     set(vm, "min", m_min);
     set(vm, "random", m_random);

@@ -1,0 +1,12 @@
+-- v2.14 CV.1: file:seek whence/offset matrix.
+local f = io.tmpfile()
+f:write("0123456789")
+print(f:seek("set"))
+print(f:seek("end"))
+print(f:seek("set", 3))
+print(f:read(2))
+print(f:seek("cur", 2))
+print(f:read(1))
+print(f:seek("end", -3))
+print(f:read("a"))
+f:close()

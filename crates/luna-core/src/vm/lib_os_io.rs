@@ -113,6 +113,45 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
     vm.set_global("dofile", f).expect("stdlib registration");
 }
 
+/// ISO 8601 week date (for strftime `%G`/`%V`, v2.14 CV.1). Inputs
+/// use the broken-down convention already in play: `yday` 1-based,
+/// `wday` 1=Sunday. Week 1 is the week containing the year's first
+/// Thursday; days before it belong to the previous ISO year's last
+/// week, and trailing days may belong to week 1 of the next.
+fn iso_week_date(year: i64, yday: u32, wday: u32) -> (i64, u32) {
+    let is_leap = |y: i64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    // Monday-based weekday 1..=7.
+    let wd = if wday == 1 { 7 } else { (wday - 1) as i64 };
+    let week = (yday as i64 - wd + 10) / 7;
+    if week < 1 {
+        // Belongs to the previous ISO year's final week (52 or 53).
+        let py = year - 1;
+        // Jan 1 of `year` Monday-based weekday, derived from today's.
+        let jan1_wd = ((wd - 1 - (yday as i64 - 1)).rem_euclid(7)) + 1;
+        // Prev year has 53 weeks iff its Jan 1 is Thursday, or it is
+        // a leap year whose Jan 1 is Wednesday — equivalently, iff
+        // `year`'s Jan 1 is Friday, or Saturday following a leap year.
+        let weeks = if jan1_wd == 5 || (jan1_wd == 6 && is_leap(py)) {
+            53
+        } else {
+            52
+        };
+        return (py, weeks);
+    }
+    let year_days = if is_leap(year) { 366 } else { 365 };
+    // Days remaining after today; if the current week crosses into
+    // January with ≥4 of its days there, it is week 1 of next year.
+    if week == 53 {
+        let jan1_wd = ((wd - 1 - (yday as i64 - 1)).rem_euclid(7)) + 1;
+        let has53 = jan1_wd == 4 || (jan1_wd == 3 && is_leap(year));
+        if !has53 {
+            return (year + 1, 1);
+        }
+    }
+    let _ = year_days;
+    (year, week as u32)
+}
+
 /// Howard Hinnant's calendar algorithm: days from civil (y, m, d) since the
 /// epoch (1970-01-01). Negative for dates before. Valid for the full proleptic
 /// Gregorian range; PUC's `os.time` ultimately funnels through libc `mktime`,
@@ -501,6 +540,37 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 format!("{:02}:{:02}:{:02}", bd.hour, bd.min, bd.sec).as_bytes(),
             ),
             b'Z' => {} // local timezone abbreviation; unknown without libc
+            // C99 additions PUC inherits from strftime (v2.14 CV.1,
+            // fixture 5.5/308 pins the numeric ones against lua5.5):
+            b'u' => {
+                // ISO weekday: Monday=1 … Sunday=7 (bd.wday is 1=Sunday).
+                let u = if bd.wday == 1 { 7 } else { bd.wday - 1 };
+                out.extend_from_slice(format!("{u}").as_bytes());
+            }
+            b'e' => out.extend_from_slice(format!("{:2}", bd.day).as_bytes()),
+            b'C' => out.extend_from_slice(format!("{:02}", bd.year.div_euclid(100)).as_bytes()),
+            b'D' => out.extend_from_slice(
+                format!(
+                    "{:02}/{:02}/{:02}",
+                    bd.month,
+                    bd.day,
+                    bd.year.rem_euclid(100)
+                )
+                .as_bytes(),
+            ),
+            b'T' => out.extend_from_slice(
+                format!("{:02}:{:02}:{:02}", bd.hour, bd.min, bd.sec).as_bytes(),
+            ),
+            b'F' => out
+                .extend_from_slice(format!("{}-{:02}-{:02}", bd.year, bd.month, bd.day).as_bytes()),
+            b'G' | b'V' => {
+                let (iso_year, iso_week) = iso_week_date(bd.year, bd.yday, bd.wday);
+                if c == b'G' {
+                    out.extend_from_slice(format!("{iso_year}").as_bytes());
+                } else {
+                    out.extend_from_slice(format!("{iso_week:02}").as_bytes());
+                }
+            }
             _ => {
                 return Err(raise_str(
                     vm,
@@ -1182,7 +1252,10 @@ fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if buf_mode == 2 {
         let _ = drain_write_buf(u);
     }
-    Ok(vm.nat_return(fs, &[Value::Userdata(u)]))
+    // PUC f_setvbuf funnels through luaL_fileresult(stat, NULL) —
+    // success is boolean TRUE, not the file (v2.14 CV.1, fixture
+    // 5.5/311; probed on 5.4+5.5).
+    Ok(vm.nat_return(fs, &[Value::Bool(true)]))
 }
 
 /// file:flush() → the file, or (nil, msg, errno) when the OS write fails
@@ -1191,7 +1264,10 @@ fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn f_flush(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let u = check_open(vm, fs, nargs, "flush")?;
     match flush_file(u) {
-        Ok(()) => Ok(vm.nat_return(fs, &[Value::Userdata(u)])),
+        // PUC f_flush is luaL_fileresult(fflush()==0, NULL): success
+        // is boolean TRUE, not the file (probed on 5.5; f:write DOES
+        // return the file — different helper).
+        Ok(()) => Ok(vm.nat_return(fs, &[Value::Bool(true)])),
         Err(e) => Ok(file_result_err(vm, fs, "file", &e)),
     }
 }

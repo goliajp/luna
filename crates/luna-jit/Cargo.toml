@@ -24,27 +24,27 @@ path = "src/bin/luna.rs"
 workspace = true
 
 [dependencies]
-# v1.1 A1 — pure-interp + JIT trait surface lives here. `version = "= 2.13.0"`
+# v1.1 A1 — pure-interp + JIT trait surface lives here. `version = "= 2.14.0"`
 # pins the matching luna-core release for `cargo publish` lookups when the
 # `path` fallback isn't in play.
-luna-core = { path = "../luna-core", version = "= 2.13.0" }
+luna-core = { path = "../luna-core", version = "= 2.14.0" }
 
 # v1.3 UD3 — `#[derive(LuaUserdata)]` + `#[lua_userdata_methods]`
 # proc-macros. Re-exported in `lib.rs` so embedders can `use
 # luna_jit::LuaUserdata;` for both the trait (via luna-core re-export)
 # and the derive. Adds `syn` + `quote` + `proc-macro2` to luna-jit's
 # build-time supply chain ONLY; luna-core stays 0-dep.
-luna-jit-derive = { path = "../luna-jit-derive", version = "= 2.13.0" }
+luna-jit-derive = { path = "../luna-jit-derive", version = "= 2.14.0" }
 
 # v2.1 Phase 1K.D.1 — extracted `luna_jit_*` helper / TLS / enter_jit
 # crate. luna-jit re-exports `pub use luna_jit_helpers::*;` from
 # `jit_backend/mod.rs` so existing `crate::jit_backend::luna_jit_*` /
 # `super::luna_jit_*` paths resolve unchanged. luna-jit-llvm (Phase
 # 1K.D.2+) depends on this crate directly without pulling Cranelift.
-# `version = "= 2.13.0"` pin matches the workspace version so the
+# `version = "= 2.14.0"` pin matches the workspace version so the
 # crates.io resolver picks the exact matching release when embedders
 # bypass the `path` fallback.
-luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 2.13.0" }
+luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 2.14.0" }
 
 # v2.1 Phase 1K.D — LLVM 18 + inkwell 0.9 alternative JIT backend
 # crate. Optional behind the `llvm-jit` cargo feature (default OFF)
@@ -52,10 +52,10 @@ luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 2.13.0" }
 # backend and the LLVM toolchain (~1 GB system deps) is not pulled
 # into default builds. Embedders flip the backend at runtime via
 # the `LUNA_JIT_BACKEND=llvm` env var (1K.D.4). See
-# `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3. `version = "= 2.13.0"`
+# `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3. `version = "= 2.14.0"`
 # pin required even for optional deps when the parent crate is
 # `publish = true`.
-luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 2.13.0", optional = true }
+luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 2.14.0", optional = true }
 
 # JIT backend. cranelift is the mainstream Rust codegen for embedded
 # JITs (wasmtime, cg_clif, etc.). aarch64 + x86-64 from day one,

@@ -1,0 +1,10 @@
+-- v2.14 CV.3: coroutine.running identity + ismain flag.
+local main, ismain = coroutine.running()
+print(type(main), ismain)
+local co = coroutine.create(function()
+  local me, im = coroutine.running()
+  print(type(me), im)
+  coroutine.yield(me)
+end)
+local ok, me = coroutine.resume(co)
+print(ok, me == co)

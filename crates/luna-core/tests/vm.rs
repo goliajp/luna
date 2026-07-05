@@ -702,9 +702,12 @@ fn mm_arithmetic_and_string_coercion() {
     check_int("return '0x10' + 0", 16);
     check_int("return '8' // '3'", 2);
     check_int("return '12' & 4", 4);
+    // 5.4+ (the default Vm dialect is 5.5) reports string-involved
+    // arithmetic faults with lstrlib's per-op wording; dialect fixtures
+    // 5.3/541 + 5.4/551 + 5.5/252 pin the full matrix (v2.14 HC.4).
     check_error(
         "return 'abc' + 1",
-        "attempt to perform arithmetic on a string value",
+        "attempt to add a 'string' with a 'number'",
     );
 }
 

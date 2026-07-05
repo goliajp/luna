@@ -60,7 +60,7 @@ fn t_foreach(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     loop {
         match t
             .next(key)
-            .map_err(|_| raise_str(vm, "invalid key to 'next'"))?
+            .map_err(|_| vm.plain_err("invalid key to 'next'"))?
         {
             Some((k, v)) => {
                 let rs = vm.call_value(f, &[k, v])?;
@@ -105,7 +105,7 @@ fn t_maxn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     loop {
         let entry = t
             .next(key)
-            .map_err(|_| raise_str(vm, "invalid key to 'next'"))?;
+            .map_err(|_| vm.plain_err("invalid key to 'next'"))?;
         match entry {
             Some((k, _)) => {
                 if let Some(n) = match k {
@@ -188,14 +188,13 @@ fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // `"2.0"`. Pass through to numeric formatter so concat's element /
     // separator rendering matches `tostring` / `print` (caught by
     // tests/e2e_programs.rs::e2e_5_1/5_2 table_index_sort divergence).
-    let legacy_float = vm.version() <= crate::version::LuaVersion::Lua52;
+    let float_fmt = vm.float_fmt();
     let sep: Vec<u8> = match vm.nat_arg(fs, nargs, 1) {
         Value::Nil => Vec::new(),
         Value::Str(s) => s.as_bytes().to_vec(),
         Value::Int(i) => crate::numeric::num_to_string(crate::numeric::Num::Int(i)).into_bytes(),
         Value::Float(f) => {
-            crate::numeric::num_to_string_for(crate::numeric::Num::Float(f), legacy_float)
-                .into_bytes()
+            crate::numeric::num_to_string_for(crate::numeric::Num::Float(f), float_fmt).into_bytes()
         }
         v => {
             return Err(arg_error(
@@ -222,12 +221,12 @@ fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // overflow when `j == i64::MAX` (e.g. concat at index `maxi`).
     let mut k = i;
     while k < j {
-        concat_field(vm, tv, k, &mut out, legacy_float)?;
+        concat_field(vm, tv, k, &mut out, float_fmt)?;
         out.extend_from_slice(&sep);
         k += 1;
     }
     if i <= j {
-        concat_field(vm, tv, j, &mut out, legacy_float)?;
+        concat_field(vm, tv, j, &mut out, float_fmt)?;
     }
     let s = Value::Str(vm.heap.intern(&out));
     Ok(vm.nat_return(fs, &[s]))
@@ -238,7 +237,7 @@ fn concat_field(
     tv: Value,
     k: i64,
     out: &mut Vec<u8>,
-    legacy_float: bool,
+    float_fmt: crate::numeric::FloatFmt,
 ) -> Result<(), LuaError> {
     match vm.index_value(tv, Value::Int(k))? {
         Value::Str(s) => out.extend_from_slice(s.as_bytes()),
@@ -247,13 +246,16 @@ fn concat_field(
             out.extend_from_slice(crate::numeric::write_i64_dec(x, &mut buf))
         }
         Value::Float(x) => out.extend_from_slice(
-            crate::numeric::num_to_string_for(crate::numeric::Num::Float(x), legacy_float)
-                .as_bytes(),
+            crate::numeric::num_to_string_for(crate::numeric::Num::Float(x), float_fmt).as_bytes(),
         ),
-        _ => {
+        v => {
+            // PUC ltablib tconcat: "invalid value (%s) at index %I in
+            // table for 'concat'" — type name inside the parens
+            // (v2.14 fixture 5.5/341).
+            let tn = vm.obj_typename(v);
             return Err(raise_str(
                 vm,
-                &format!("invalid value (at index {k}) in table for 'concat'"),
+                &format!("invalid value ({tn}) at index {k} in table for 'concat'"),
             ));
         }
     }
