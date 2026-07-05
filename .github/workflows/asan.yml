@@ -162,3 +162,22 @@ jobs:
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
           LUNA_GC_STRESS_N: "5"
+
+      # v2.15 P3.2 — full official_run under ASAN across all 5
+      # dialects. Local docker linux/amd64 measurement (P3.1) put
+      # this at ~5m 34s test-time; GHA ubuntu-latest native x86_64
+      # extrapolates to ~2-3 min. Well within the default job
+      # timeout. Charter P3.5 counter starts here: 30 consecutive
+      # nightly greens → flip asan job to required PR check
+      # (see .dev/rfcs/v2.15-p3-timing.md for the data).
+      - name: ASAN — official_run (all 5 dialects, curated PUC suite)
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test official_run \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            --release \
+            -- --nocapture --test-threads=1
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
