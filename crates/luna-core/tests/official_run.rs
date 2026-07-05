@@ -101,6 +101,65 @@ const BYTE_DIFF_POSTAMBLE: &[u8] = b" io.stdout:write('\\n===LUNA_BYTE_DIFF_STAR
 const BYTE_DIFF_START_MARKER: &[u8] = b"===LUNA_BYTE_DIFF_START===\n";
 const BYTE_DIFF_END_MARKER: &[u8] = b"\n===LUNA_BYTE_DIFF_END===\n";
 
+/// v2.16 P3.4.6 — allowlist of files where the byte-diff preamble
+/// interferes with the file's own tests (introspects `print` /
+/// `io.write` C-function status via `debug.upvaluejoin(print, ...)`
+/// which must fail on a C function; our wrapper is a Lua function).
+///
+/// Files in this list SKIP the byte-diff preamble entirely (default
+/// `LUNA_OFFICIAL_BYTE_DIFF=1` path). They still run the assert-
+/// counter wrapper as usual; only the print/io.write shadowing is
+/// omitted.
+///
+/// Scoping cap: ≤5/dialect per `.dev/rfcs/v2.15-p3-4-*.md` §3.3.
+/// Current counts (max 3/dialect) comfortably within budget:
+///
+/// - Lua5.1: `attrib.lua`, `files.lua`
+/// - Lua5.2/5.3/5.4: `calls.lua`, `closure.lua`, `files.lua`
+/// - Lua5.5: `calls.lua`, `closure.lua`
+///
+/// Each entry documented with the specific offending assertion.
+const BYTE_DIFF_ALLOWLIST: &[(LuaVersion, &str)] = &[
+    // 5.5 — `assert(not pcall(debug.upvaluejoin, print, 1, ...))`
+    // at closure.lua:275; similar shape in calls.lua.
+    (LuaVersion::Lua55, "calls.lua"),
+    (LuaVersion::Lua55, "closure.lua"),
+    // 5.4 — same shape + files.lua:88 relies on original io.write
+    // for a specific write-error path. bwcoercion.lua captures
+    // `local print = print` at line 5 and derefs it in a way our
+    // Lua-function wrapper trips (error attributed to line 79 = EOF).
+    (LuaVersion::Lua54, "calls.lua"),
+    (LuaVersion::Lua54, "closure.lua"),
+    (LuaVersion::Lua54, "files.lua"),
+    (LuaVersion::Lua54, "bwcoercion.lua"),
+    // 5.4 tracegc.lua uses file-scope local variables read via
+    // top-level references that leak past `return` — under our
+    // function-wrapped body they become inaccessible.
+    (LuaVersion::Lua54, "tracegc.lua"),
+    // 5.3 — same shape as 5.4.
+    (LuaVersion::Lua53, "calls.lua"),
+    (LuaVersion::Lua53, "closure.lua"),
+    (LuaVersion::Lua53, "files.lua"),
+    // 5.2 — same shape as 5.4.
+    (LuaVersion::Lua52, "calls.lua"),
+    (LuaVersion::Lua52, "closure.lua"),
+    (LuaVersion::Lua52, "files.lua"),
+    // 5.1 — attrib.lua:68 checks print's setfenv behavior;
+    // files.lua:33 similar io.write assumption as 5.4.
+    (LuaVersion::Lua51, "attrib.lua"),
+    (LuaVersion::Lua51, "files.lua"),
+];
+
+/// v2.16 P3.4.6 — returns `true` when the given (version, file)
+/// pair is on `BYTE_DIFF_ALLOWLIST`. Byte-diff preamble skipped
+/// for allowlisted files.
+#[allow(dead_code)]
+fn byte_diff_should_skip(version: LuaVersion, name: &str) -> bool {
+    BYTE_DIFF_ALLOWLIST
+        .iter()
+        .any(|(v, n)| *v == version && *n == name)
+}
+
 /// One version's test gate: the suite directory (relative to the workspace
 /// root) and the files that must run clean under that dialect.
 struct Suite {
@@ -351,23 +410,45 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     // independent (byte-diff redefines _G.print/_G.io.write;
     // assert-counter redefines _G.assert). Default path is
     // unchanged when the env var is absent.
-    let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some();
+    //
+    // v2.16 P3.4.6 — allowlisted (version, file) pairs skip the
+    // byte-diff preamble even when the env is set. See
+    // `BYTE_DIFF_ALLOWLIST` for the reason per file.
+    let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some()
+        && !byte_diff_should_skip(version, name);
     let src = if skip_wrapper {
         body
-    } else {
-        let mut cap = ASSERT_COUNTER_PREAMBLE.len() + body.len();
-        if byte_diff_enabled {
-            cap += BYTE_DIFF_PREAMBLE.len() + BYTE_DIFF_POSTAMBLE.len();
-        }
+    } else if byte_diff_enabled {
+        // v2.16 P3.4.7 — byte-diff path wraps body in a local
+        // function so the body's own `return X` doesn't terminate
+        // the chunk before postamble runs. `assert`-counter
+        // wrapper stays outside the function since it must be
+        // installed globally before the body observes it.
+        //
+        // Note: some files reference local top-level variables
+        // used later in the same chunk — those become locals of
+        // `__luna_body` and are invisible to the postamble, which
+        // only touches the `_G.__luna_official_stdout` global.
+        const BODY_WRAP_START: &[u8] = b" local __luna_body = function() ";
+        const BODY_WRAP_END: &[u8] = b" end __luna_body() ";
+        let cap = ASSERT_COUNTER_PREAMBLE.len()
+            + BYTE_DIFF_PREAMBLE.len()
+            + BODY_WRAP_START.len()
+            + body.len()
+            + BODY_WRAP_END.len()
+            + BYTE_DIFF_POSTAMBLE.len();
         let mut s = Vec::with_capacity(cap);
-        if byte_diff_enabled {
-            s.extend_from_slice(BYTE_DIFF_PREAMBLE);
-        }
+        s.extend_from_slice(BYTE_DIFF_PREAMBLE);
+        s.extend_from_slice(ASSERT_COUNTER_PREAMBLE);
+        s.extend_from_slice(BODY_WRAP_START);
+        s.extend_from_slice(&body);
+        s.extend_from_slice(BODY_WRAP_END);
+        s.extend_from_slice(BYTE_DIFF_POSTAMBLE);
+        s
+    } else {
+        let mut s = Vec::with_capacity(ASSERT_COUNTER_PREAMBLE.len() + body.len());
         s.extend_from_slice(ASSERT_COUNTER_PREAMBLE);
         s.extend_from_slice(&body);
-        if byte_diff_enabled {
-            s.extend_from_slice(BYTE_DIFF_POSTAMBLE);
-        }
         s
     };
     let label = name.to_string();
