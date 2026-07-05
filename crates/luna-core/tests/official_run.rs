@@ -582,6 +582,72 @@ fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
     None
 }
 
+/// v2.16 P3.4.5 — canonicalize the byte-diff buffer to strip
+/// impl-defined output that PUC and luna print differently for
+/// legitimate reasons:
+///
+/// 1. **Hex addresses in `tostring(table/function/userdata/thread)`**
+///    → `<ADDR>` placeholder. PUC and luna both format these as
+///    `<type>: 0x[0-9a-f]+` but the actual address differs per run.
+///
+/// 2. **Chunk-name in `debug.getinfo(...).source` and similar** →
+///    `[string "..."]` bodies normalized to `[string "<CHUNK>"]`.
+///    The bracketed body captures the *first line* of the source,
+///    which for our preambled chunks starts with `do _G.__luna_
+///    assert_total...` — that's a harness artifact, not the file's
+///    real content.
+///
+/// This is intentionally byte-level scanning (no regex crate) to
+/// keep the harness in the tests dir without adding a dev-dep to
+/// luna-core.
+///
+/// P3.4.6 (allowlist) handles files where even canonicalization
+/// leaves legitimate divergence (gc.lua memory counts, sort.lua
+/// randomseed pointers when seeded differently, etc.).
+#[allow(dead_code)]
+fn canonicalize_byte_diff(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Hex-address scrub: `0x` followed by 1+ hex chars → `0x<ADDR>`.
+        // Only when preceded by `: ` (matches the `type: 0xADDR` shape).
+        if i + 2 <= bytes.len() && &bytes[i..i + 2] == b"0x" {
+            let prev_is_type_sep = i >= 2 && &bytes[i - 2..i] == b": ";
+            if prev_is_type_sep {
+                let mut j = i + 2;
+                while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                if j > i + 2 {
+                    out.extend_from_slice(b"0x<ADDR>");
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        // Chunk-name normalization: `[string "..."]` → `[string "<CHUNK>"]`.
+        // Match the opening `[string "` and scan for the closing `"]`.
+        const OPEN: &[u8] = b"[string \"";
+        const CLOSE: &[u8] = b"\"]";
+        if i + OPEN.len() <= bytes.len() && &bytes[i..i + OPEN.len()] == OPEN {
+            // Find the CLOSE marker. If missing (truncated / malformed),
+            // fall through to normal copy.
+            let after_open = i + OPEN.len();
+            if let Some(off) = bytes[after_open..]
+                .windows(CLOSE.len())
+                .position(|w| w == CLOSE)
+            {
+                out.extend_from_slice(b"[string \"<CHUNK>\"]");
+                i = after_open + off + CLOSE.len();
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
 /// v2.16 P3.4.4 — extract the byte-diff buffer content from PUC's
 /// subprocess stdout, using the sentinel markers emitted by
 /// `BYTE_DIFF_POSTAMBLE`. Returns `None` when either marker is
@@ -858,4 +924,61 @@ fn write_coverage_report(coverage: &[FileCoverage]) -> std::io::Result<()> {
 
     std::fs::write(&dest, out)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod byte_diff_tests {
+    use super::*;
+
+    #[test]
+    fn canonicalize_hex_address_after_type_sep() {
+        let input = b"result is table: 0xdeadbeef and function: 0x123abc";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(
+            &out[..],
+            b"result is table: 0x<ADDR> and function: 0x<ADDR>"
+        );
+    }
+
+    #[test]
+    fn canonicalize_leaves_hex_without_type_sep() {
+        // 0x prefix NOT preceded by ": " should pass through unchanged
+        // (e.g. numeric literals in output).
+        let input = b"count=0xff bytes";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(&out[..], b"count=0xff bytes");
+    }
+
+    #[test]
+    fn canonicalize_chunk_name() {
+        let input = b"[string \"do _G.__luna_assert_total=0 ...\"]:5: something";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(&out[..], b"[string \"<CHUNK>\"]:5: something");
+    }
+
+    #[test]
+    fn canonicalize_preserves_regular_text() {
+        let input = b"hello world 42 no addresses here";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(&out[..], input);
+    }
+
+    #[test]
+    fn extract_byte_diff_roundtrip() {
+        let payload = b"line 1\nline 2\n";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"some prefix output\n");
+        buf.extend_from_slice(BYTE_DIFF_START_MARKER);
+        buf.extend_from_slice(payload);
+        buf.extend_from_slice(BYTE_DIFF_END_MARKER);
+        buf.extend_from_slice(b"trailer\n");
+        let extracted = extract_byte_diff_from_puc_stdout(&buf).expect("markers present");
+        assert_eq!(extracted, payload);
+    }
+
+    #[test]
+    fn extract_byte_diff_missing_marker() {
+        let buf = b"no markers here at all";
+        assert!(extract_byte_diff_from_puc_stdout(buf).is_none());
+    }
 }
