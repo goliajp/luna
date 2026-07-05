@@ -83,6 +83,24 @@ const ASSERT_COUNTER_PREAMBLE: &[u8] = b"do _G.__luna_assert_total=0 _G.__luna_a
 /// comparison + `[STDOUT-DIVERGE]` report tagging.
 const BYTE_DIFF_PREAMBLE: &[u8] = b"do _G.__luna_official_stdout='' _G.print=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t,'\\t')..'\\n' end _G.io.write=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t) end end ";
 
+/// v2.16 P3.4.4 — postamble that emits the captured buffer to
+/// real stdout bracketed by sentinel markers. `io.stdout:write`
+/// bypasses the shadowed `_G.io.write` function because file-
+/// handle methods use the C write directly (not the redefined
+/// Lua function).
+///
+/// On the PUC side, the harness extracts the buffer between the
+/// markers from the subprocess stdout. On the luna side, the
+/// buffer is read directly via `read_byte_diff_stdout` from Vm
+/// globals — the postamble output goes to the test process stdout
+/// (unused).
+const BYTE_DIFF_POSTAMBLE: &[u8] = b" io.stdout:write('\\n===LUNA_BYTE_DIFF_START===\\n') io.stdout:write(_G.__luna_official_stdout or '') io.stdout:write('\\n===LUNA_BYTE_DIFF_END===\\n')";
+
+/// v2.16 P3.4.4 — sentinel markers used by `BYTE_DIFF_POSTAMBLE`
+/// to bracket the captured buffer in PUC's subprocess stdout.
+const BYTE_DIFF_START_MARKER: &[u8] = b"===LUNA_BYTE_DIFF_START===\n";
+const BYTE_DIFF_END_MARKER: &[u8] = b"\n===LUNA_BYTE_DIFF_END===\n";
+
 /// One version's test gate: the suite directory (relative to the workspace
 /// root) and the files that must run clean under that dialect.
 struct Suite {
@@ -339,7 +357,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     } else {
         let mut cap = ASSERT_COUNTER_PREAMBLE.len() + body.len();
         if byte_diff_enabled {
-            cap += BYTE_DIFF_PREAMBLE.len();
+            cap += BYTE_DIFF_PREAMBLE.len() + BYTE_DIFF_POSTAMBLE.len();
         }
         let mut s = Vec::with_capacity(cap);
         if byte_diff_enabled {
@@ -347,6 +365,9 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
         }
         s.extend_from_slice(ASSERT_COUNTER_PREAMBLE);
         s.extend_from_slice(&body);
+        if byte_diff_enabled {
+            s.extend_from_slice(BYTE_DIFF_POSTAMBLE);
+        }
         s
     };
     let label = name.to_string();
@@ -559,6 +580,23 @@ fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
         return Some(std::env::var("PUC_LUA").unwrap_or_else(|_| "lua5.5".to_string()));
     }
     None
+}
+
+/// v2.16 P3.4.4 — extract the byte-diff buffer content from PUC's
+/// subprocess stdout, using the sentinel markers emitted by
+/// `BYTE_DIFF_POSTAMBLE`. Returns `None` when either marker is
+/// missing (postamble was skipped, e.g. early `os.exit(0)` or
+/// PUC errored before postamble ran) — the byte-diff comparison
+/// then reports as "no PUC data" rather than divergence.
+#[allow(dead_code)]
+fn extract_byte_diff_from_puc_stdout(bytes: &[u8]) -> Option<Vec<u8>> {
+    let s = bytes.windows(BYTE_DIFF_START_MARKER.len())
+        .position(|w| w == BYTE_DIFF_START_MARKER)?;
+    let start = s + BYTE_DIFF_START_MARKER.len();
+    let rest = &bytes[start..];
+    let e = rest.windows(BYTE_DIFF_END_MARKER.len())
+        .position(|w| w == BYTE_DIFF_END_MARKER)?;
+    Some(rest[..e].to_vec())
 }
 
 /// v2.16 P3.4.3 — spawn PUC on the given source file and capture
