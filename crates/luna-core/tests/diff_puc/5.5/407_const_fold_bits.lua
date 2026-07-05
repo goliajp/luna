@@ -1,0 +1,7 @@
+-- v2.15 P2.4: bitwise constant expressions.
+print(0xff | 0xf00)
+print(0xffff & 0xf00f)
+print(0x0f0f ~ 0xf000)
+print(~0xff & 0xffff)
+print(1 << 10)
+print(0x10000 >> 4)
