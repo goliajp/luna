@@ -64,6 +64,13 @@ pub(crate) fn open_base(vm: &mut Vm) {
         let f = vm.native(nat_warn);
         vm.set_global("warn", f).expect("stdlib registration");
     }
+    // PUC 5.2's official build ships -DLUA_COMPAT_ALL, so `loadstring`
+    // survives as a `load` alias there too — the diff ground truth is
+    // the default build (v2.14 dialect fixture 5.2/521).
+    if vm.version() == crate::version::LuaVersion::Lua52 {
+        vm.set_global("loadstring", load_obj)
+            .expect("stdlib registration");
+    }
     // PUC 5.1 globals retired in 5.2 (`unpack` → `table.unpack`) and 5.2
     // (`loadstring` → `load`). Provide aliases so the 5.1 test suite, which
     // is full of `unpack(...)` and `loadstring("...")` calls, still resolves.
@@ -155,14 +162,14 @@ fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let msg = vm.nat_arg(fs, nargs, 0);
-    // PUC 5.5 `luaG_errormsg` substitutes "<no error object>" for nil;
-    // earlier dialects propagate the nil unchanged (5.4 errors.lua :49
-    // asserts `doit("error()") == nil`).
+    // A nil error object stays nil HERE: PUC 5.5's luaG_errormsg
+    // substitutes "<no error object>" only AFTER the message handler
+    // ran (ldebug.c:849-852) — xpcall handlers and the standalone
+    // msghandler see the raw nil ("(error object is a nil value)" at
+    // top level, v2.14 fixture 5.5/334), while a plain pcall catch
+    // yields the substituted string. luna's substitution lives at the
+    // matching point in `unwind` (5.5-gated there).
     if msg.is_nil() {
-        if vm.version() >= crate::version::LuaVersion::Lua55 {
-            let s = Value::Str(vm.heap.intern(b"<no error object>"));
-            return Err(LuaError(s));
-        }
         return Err(LuaError(Value::Nil));
     }
     let level = match vm.nat_arg(fs, nargs, 1) {
@@ -426,7 +433,7 @@ fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     match t.next(k) {
         Ok(Some((k, v))) => Ok(vm.nat_return(fs, &[k, v])),
         Ok(None) => Ok(vm.nat_return(fs, &[Value::Nil])),
-        Err(_) => Err(raise_str(vm, "invalid key to 'next'")),
+        Err(_) => Err(vm.plain_err("invalid key to 'next'")),
     }
 }
 
@@ -523,7 +530,9 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, who: &str, extra: &str) -> LuaError
     // The running native is the topmost on `running_natives`; a nested call
     // (depth ≥ 2) means the level-0 caller is another native, not Lua —
     // PUC walks package.loaded to qualify the running function's name.
-    let name = if vm.running_natives.len() >= 2 {
+    // A pcall/xpcall Cont caller is the same situation (pcall is a C
+    // function in PUC), but lives as a frame, not a running native.
+    let name = if vm.running_natives.len() >= 2 || vm.caller_is_protected_cont() {
         let target = vm.running_natives.last().expect("nested native").f;
         vm.pushglobalfuncname(target)
             .unwrap_or_else(|| who.to_string())

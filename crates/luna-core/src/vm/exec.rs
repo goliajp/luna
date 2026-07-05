@@ -933,7 +933,17 @@ impl Vm {
             yielding: None,
             native_nresults: -1,
             main_coro: None,
-            gc_mode: "incremental",
+            // PUC 5.4+ boots in GENERATIONAL mode (the first
+            // `collectgarbage("generational")` reports "generational"
+            // as the previous mode — v2.14 dialect fixture 5.4/549;
+            // 5.5 behaves the same, probed against lua5.5). luna's
+            // collector is a single incremental engine either way;
+            // this field is the MODE REPORT the stdlib exposes.
+            gc_mode: if version >= crate::version::LuaVersion::Lua54 {
+                "generational"
+            } else {
+                "incremental"
+            },
             gc_top: 0,
             gc_pause: 200,
             gc_stepmul: 100,
@@ -1097,11 +1107,12 @@ impl Vm {
         self.open_debug();
         self.open_coroutine();
         self.open_package();
-        // PUC 5.2 introduced `bit32` and 5.3 retired it (the native bitwise
-        // operators replace it on 64-bit integers). Only expose it under 5.2
-        // so bitwise.lua's first line (`bit32.band(...)`) resolves without
-        // leaking the global into newer dialects.
-        if self.version == LuaVersion::Lua52 {
+        // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
+        // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
+        // library loaded. The diff ground truth is the default build
+        // (v2.14 dialect fixture 5.3/535), so expose it under 5.2 AND
+        // 5.3; 5.4 dropped the compat default for real.
+        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.open_bit32();
         }
     }
@@ -1418,6 +1429,32 @@ impl Vm {
         match e.0 {
             Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             v => format!("(error object is a {} value)", v.type_name()),
+        }
+    }
+
+    /// Render an error value the way PUC's standalone `msghandler`
+    /// does (lua.c): strings pass through, numbers stringify, and any
+    /// other object is given a chance at its `__tostring` metamethod
+    /// (the result must be a string) before collapsing to the
+    /// `"(error object is a … value)"` tag. Needs `&mut self` because
+    /// `__tostring` runs arbitrary Lua — `error_text` remains the
+    /// non-executing variant (v2.14 CV.2, fixture 5.5/321).
+    pub fn error_display(&mut self, e: &LuaError) -> String {
+        match e.0 {
+            Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            v @ (Value::Int(_) | Value::Float(_)) => {
+                String::from_utf8_lossy(&self.tostring_basic(v)).into_owned()
+            }
+            v => {
+                let mm = self.get_mm(v, Mm::ToString);
+                if !mm.is_nil()
+                    && let Ok(r) = self.call_value(mm, &[v])
+                    && let Some(Value::Str(s)) = r.first()
+                {
+                    return String::from_utf8_lossy(s.as_bytes()).into_owned();
+                }
+                format!("(error object is a {} value)", v.type_name())
+            }
         }
     }
 
@@ -4610,7 +4647,14 @@ impl Vm {
         // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh and
         // close its gap so f's args become [f@+1, a1@+2, ...].
         let handler = self.stack[(func_slot + 2) as usize];
-        let nfargs = nargs - 2;
+        // 5.1: `xpcall (f, err)` takes exactly two parameters — extra
+        // arguments are NOT forwarded to `f` (5.2 added forwarding;
+        // 5.1 calls f with zero args). v2.14 dialect fixture 5.1/519.
+        let nfargs = if self.version <= crate::version::LuaVersion::Lua51 {
+            0
+        } else {
+            nargs - 2
+        };
         for i in 0..nfargs {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
         }
@@ -5466,17 +5510,6 @@ impl Vm {
     /// continuation frame at/above `entry_depth` (the error is *caught*: its
     /// slot receives `false, msg`); if none is reached, the error propagates.
     fn unwind(&mut self, mut err: Value, entry_depth: usize) -> Unwound {
-        // PUC 5.5 `luaG_errormsg` substitutes "<no error object>" when the
-        // error object is nil — so `pcall(function() error(nil) end)` returns
-        // that string instead of nil, and `assert(nil, nil)` (whose path
-        // throws nil via `lua_settop(L, 1)`) also surfaces a string. Earlier
-        // dialects (5.4 and below) keep the nil — 5.4 errors.lua :49 asserts
-        // `doit("error()") == nil` and luna would fail that if it always
-        // substituted. luna's native `error()` still does its own conversion
-        // for direct callers.
-        if matches!(err, Value::Nil) && self.version >= crate::version::LuaVersion::Lua55 {
-            err = Value::Str(self.heap.intern(b"<no error object>"));
-        }
         // The protected call runs in-place among the caller frames' registers,
         // so truncating the failed frames here cuts into caller windows below
         // the catcher. Snapshot the live length: at the error point the stack
@@ -5616,6 +5649,21 @@ impl Vm {
                         ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_) => {
                             unreachable!("Meta/Pairs/Close cont handled above")
                         }
+                    };
+                    // PUC 5.5 `luaG_errormsg` substitutes "<no error object>"
+                    // for nil AFTER the message handler ran (ldebug.c:849) —
+                    // so it applies to the pcall-caught object and to an
+                    // xpcall HANDLER'S return value, while the handler itself
+                    // (and a top-level propagation into the host, whose
+                    // `error_display` plays msghandler) still sees the raw
+                    // nil. 5.4- keep nil everywhere (errors.lua :49 asserts
+                    // `doit("error()") == nil`). v2.14 fixture 5.5/334.
+                    let result = if matches!(result, Value::Nil)
+                        && self.version >= crate::version::LuaVersion::Lua55
+                    {
+                        Value::Str(self.heap.intern(b"<no error object>"))
+                    } else {
+                        result
                     };
                     // the error has been caught (pcall/xpcall): the captured
                     // traceback was for that error and is no longer in flight.
@@ -8989,6 +9037,30 @@ impl Vm {
             let what = if matches!(op, BAnd | BOr | BXor | Shl | Shr) {
                 "perform bitwise operation on"
             } else {
+                // 5.4+ report string-involved arithmetic faults through
+                // lstrlib's string-metatable arithmetic handlers, which
+                // emit the per-op wording `attempt to add a 'string'
+                // with a 'number'` (operands in syntactic order, quoted
+                // type names, no varinfo). Non-string faults (nil+1,
+                // {}+{}) keep the classic VM wording on every dialect —
+                // v2.14 HC.4, probed against stock 5.1.5-5.5.0.
+                if self.version >= crate::version::LuaVersion::Lua54
+                    && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
+                {
+                    let verb = match op {
+                        Add => "add",
+                        Sub => "sub",
+                        Mul => "mul",
+                        Div => "div",
+                        Mod => "mod",
+                        Pow => "pow",
+                        IDiv => "idiv",
+                        BAnd | BOr | BXor | Shl | Shr => unreachable!(),
+                    };
+                    let t1 = self.obj_typename(l);
+                    let t2 = self.obj_typename(r);
+                    return Err(self.rt_err(&format!("attempt to {verb} a '{t1}' with a '{t2}'")));
+                }
                 "perform arithmetic on"
             };
             let bad = if coerce_num(l).is_none() { l } else { r };
@@ -9339,7 +9411,7 @@ impl Vm {
     /// Fast string concatenation of an adjacent pair, or `None` when a
     /// `__concat` metamethod is required.
     fn concat_pair(&mut self, l: Value, r: Value) -> Result<Option<Value>, LuaError> {
-        let legacy = self.version <= crate::version::LuaVersion::Lua52;
+        let legacy = self.float_fmt();
         // Length-check fast paths for both string operands BEFORE the
         // (expensive) copy in `concat_piece`, so a runaway `a..a..a..…`
         // chain (5.1 big.lua / 5.5 heavy.lua's `teststring`) raises the
@@ -9413,7 +9485,7 @@ impl Vm {
                         mm = self.get_mm(y, Mm::Concat);
                     }
                     if mm.is_nil() {
-                        let legacy = self.version <= crate::version::LuaVersion::Lua52;
+                        let legacy = self.float_fmt();
                         let bad = if concat_piece(x, legacy).is_none() {
                             x
                         } else {
@@ -9456,6 +9528,17 @@ impl Vm {
         Ok(self.tostring_basic(v))
     }
 
+    /// The dialect's float-rendering flavor (v2.14 HD): ≤5.2 %.14g
+    /// bare, 5.3/5.4 %.14g + ".0", 5.5 two-stage %.15g/%.17g + ".0".
+    pub(crate) fn float_fmt(&self) -> numeric::FloatFmt {
+        use crate::version::LuaVersion::*;
+        match self.version {
+            Lua51 | Lua52 => numeric::FloatFmt::Legacy14,
+            Lua53 | Lua54 => numeric::FloatFmt::G14,
+            _ => numeric::FloatFmt::TwoStage55,
+        }
+    }
+
     /// Basic tostring (no metamethods).
     pub(crate) fn tostring_basic(&mut self, v: Value) -> Vec<u8> {
         match v {
@@ -9468,8 +9551,7 @@ impl Vm {
             // distinguishable from `print(2)`. pm.lua :13 builds patterns by
             // concatenating these renderings.
             Value::Float(f) => {
-                let legacy = self.version <= crate::version::LuaVersion::Lua52;
-                numeric::num_to_string_for(Num::Float(f), legacy).into_bytes()
+                numeric::num_to_string_for(Num::Float(f), self.float_fmt()).into_bytes()
             }
             Value::Str(s) => s.as_bytes().to_vec(),
             Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
@@ -9537,13 +9619,11 @@ fn as_num(v: Value) -> Option<Num> {
 /// string), or `None` when only a `__concat` metamethod can handle it.
 /// `legacy_float = true` follows PUC ≤5.2's `%.14g` rendering (no `.0`
 /// suffix on integer-valued floats) — see `num_to_string_for`.
-fn concat_piece(v: Value, legacy_float: bool) -> Option<Vec<u8>> {
+fn concat_piece(v: Value, float_fmt: numeric::FloatFmt) -> Option<Vec<u8>> {
     match v {
         Value::Str(s) => Some(s.as_bytes().to_vec()),
         Value::Int(x) => Some(numeric::num_to_string(Num::Int(x)).into_bytes()),
-        Value::Float(x) => {
-            Some(numeric::num_to_string_for(Num::Float(x), legacy_float).into_bytes())
-        }
+        Value::Float(x) => Some(numeric::num_to_string_for(Num::Float(x), float_fmt).into_bytes()),
         _ => None,
     }
 }
@@ -10302,6 +10382,21 @@ impl Vm {
     /// name (e.g. `"table.sort"`). A `_G.X` match is stripped to `"X"`. Returns
     /// `None` if no match is found. Used by `arg_error` when the running native
     /// was invoked from another native (PUC `ar.name == NULL` at level 0).
+    /// True when the innermost call frame is a pcall/xpcall
+    /// continuation — i.e. the currently-running native was invoked
+    /// DIRECTLY by pcall/xpcall rather than by Lua code. PUC's
+    /// luaL_argerror sees ar.name == NULL there (the caller is C)
+    /// and qualifies the name via pushglobalfuncname — so
+    /// `pcall(coroutine.resume, 42)` blames 'coroutine.resume'
+    /// (v2.14 fixture 5.5/365).
+    pub(crate) fn caller_is_protected_cont(&self) -> bool {
+        matches!(
+            self.frames.last(),
+            Some(CallFrame::Cont(nc))
+                if matches!(nc.kind, ContKind::Pcall | ContKind::Xpcall { .. })
+        )
+    }
+
     pub(crate) fn pushglobalfuncname(
         &mut self,
         target: crate::runtime::value::NativeFn,
