@@ -27,7 +27,7 @@ workspace = true
 # Runtime + bytecode-format upstream. Pinned to the matching luna-core
 # release so `cargo publish` lookups still resolve when the path
 # fallback isn't in play.
-luna-core = { path = "../luna-core", version = "= 2.14.0" }
+luna-core = { path = "../luna-core", version = "= 2.15.0" }
 
 # Object-file emission for the embedded bytecode section.
 # `default-features = false` + the selected formats keeps the crate
@@ -47,7 +47,7 @@ clap = { version = "4", features = ["derive"] }
 # is what `lower_trace_into_named` emits into per-trace .o bytes.
 # Until this commit these were dev-deps; promoting them to prod
 # deps for the end-to-end AOT-mcode-firing pipeline.
-luna-jit = { path = "../luna-jit", version = "= 2.14.0" }
+luna-jit = { path = "../luna-jit", version = "= 2.15.0" }
 # v1.3 Phase AOT Stage 7 polish 4 — cross-compile AOT traces. The
 # `all-arch` feature pulls in every Cranelift backend (x86_64, arm64,
 # s390x, riscv64) so the offline trace lowerer can codegen for any
