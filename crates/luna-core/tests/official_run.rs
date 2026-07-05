@@ -536,6 +536,73 @@ fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
     }
 }
 
+/// v2.16 P3.4.3 — resolve the per-dialect PUC interpreter path.
+/// Mirrors `crates/luna-core/tests/diff_puc.rs::puc_bin_for`.
+/// Returns `None` when the env var is unset for a non-5.5 dialect;
+/// 5.5 falls back to `PUC_LUA` env then bare `lua5.5` in PATH.
+#[allow(dead_code)]
+fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
+    let env_key = match version {
+        LuaVersion::Lua51 => "PUC_LUA_51",
+        LuaVersion::Lua52 => "PUC_LUA_52",
+        LuaVersion::Lua53 => "PUC_LUA_53",
+        LuaVersion::Lua54 => "PUC_LUA_54",
+        LuaVersion::Lua55 => "PUC_LUA_55",
+        // MacroLua is a compat variant that inherits 5.4 semantics
+        // (per version.rs comment); byte-diff against PUC 5.4.
+        LuaVersion::MacroLua => "PUC_LUA_54",
+    };
+    if let Ok(b) = std::env::var(env_key) {
+        return Some(b);
+    }
+    if matches!(version, LuaVersion::Lua55) {
+        return Some(std::env::var("PUC_LUA").unwrap_or_else(|_| "lua5.5".to_string()));
+    }
+    None
+}
+
+/// v2.16 P3.4.3 — spawn PUC on the given source file and capture
+/// stdout as raw bytes. `source` is passed via stdin (matching
+/// diff_puc.rs's `-` invocation). Returns `None` when the binary is
+/// missing (dev-machine friendliness). PUC-side errors (non-zero
+/// exit / stderr) surface as `Err` so the harness can decide whether
+/// to allowlist or fail — different files legitimately error at the
+/// PUC layer (e.g. `attrib.lua` when the sub-package section can't
+/// write `libs/P1/`).
+///
+/// Bytes come back unchanged — canonicalization (source-path
+/// normalization, hex-address scrub) is a separate pass in P3.4.5.
+#[allow(dead_code)]
+fn run_official_on_puc(bin: &str, source: &[u8]) -> Option<Result<Vec<u8>, String>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new(bin)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return None, // binary missing
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(source);
+    }
+    let out = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return Some(Err(format!("PUC wait failed: {e}"))),
+    };
+    if !out.status.success() {
+        return Some(Err(format!(
+            "PUC non-zero exit (status={:?} stderr={})",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Some(Ok(out.stdout))
+}
+
 fn run_suite(suite: &Suite, coverage: &mut Vec<FileCoverage>) -> Vec<String> {
     let root = std::env::current_dir().expect("cwd");
     std::env::set_current_dir(suite.dir).unwrap_or_else(|e| panic!("cd {}: {}", suite.dir, e));
