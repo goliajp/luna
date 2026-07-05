@@ -590,11 +590,13 @@ fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
 /// then reports as "no PUC data" rather than divergence.
 #[allow(dead_code)]
 fn extract_byte_diff_from_puc_stdout(bytes: &[u8]) -> Option<Vec<u8>> {
-    let s = bytes.windows(BYTE_DIFF_START_MARKER.len())
+    let s = bytes
+        .windows(BYTE_DIFF_START_MARKER.len())
         .position(|w| w == BYTE_DIFF_START_MARKER)?;
     let start = s + BYTE_DIFF_START_MARKER.len();
     let rest = &bytes[start..];
-    let e = rest.windows(BYTE_DIFF_END_MARKER.len())
+    let e = rest
+        .windows(BYTE_DIFF_END_MARKER.len())
         .position(|w| w == BYTE_DIFF_END_MARKER)?;
     Some(rest[..e].to_vec())
 }
