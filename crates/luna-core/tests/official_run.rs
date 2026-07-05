@@ -517,6 +517,25 @@ fn read_assert_counters(vm: &mut Vm) -> (i64, i64) {
     )
 }
 
+/// v2.16 P3.4.2 — read the byte-diff stdout capture buffer set by
+/// `BYTE_DIFF_PREAMBLE`. Returns `None` when the global is absent
+/// (the env var was off, or the chunk errored before the preamble
+/// installed the buffer). Bytes come out of the Lua string
+/// unchanged — no re-encoding.
+///
+/// Not yet wired into the run loop — that lands in P3.4.4 alongside
+/// the PUC binary spawn (P3.4.3). Allow the dead-code warning until
+/// then; CI's `-D warnings` would otherwise trip.
+#[allow(dead_code)]
+fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
+    let k = Value::Str(vm.heap.intern(b"__luna_official_stdout"));
+    let globals = vm.globals();
+    match globals.get(k) {
+        Value::Str(s) => Some(s.as_bytes().to_vec()),
+        _ => None,
+    }
+}
+
 fn run_suite(suite: &Suite, coverage: &mut Vec<FileCoverage>) -> Vec<String> {
     let root = std::env::current_dir().expect("cwd");
     std::env::set_current_dir(suite.dir).unwrap_or_else(|e| panic!("cd {}: {}", suite.dir, e));
