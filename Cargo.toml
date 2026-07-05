@@ -82,7 +82,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.14.0"
+version = "2.15.0"
 edition = "2024"
 # MSRV (G1): tracks the rustc that v1.0 shipped against. Bumping this
 # is a minor-version change because embedders pinning to a specific

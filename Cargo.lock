@@ -941,7 +941,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "llvm-jit-probe"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "inkwell",
 ]
@@ -977,7 +977,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "luna-aot"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "clap",
  "cranelift-codegen",
@@ -993,14 +993,14 @@ dependencies = [
 
 [[package]]
 name = "luna-core"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "dhat",
 ]
 
 [[package]]
 name = "luna-jit"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "luna-jit-derive"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1027,14 +1027,14 @@ dependencies = [
 
 [[package]]
 name = "luna-jit-helpers"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "luna-core",
 ]
 
 [[package]]
 name = "luna-jit-llvm"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "inkwell",
  "luna-core",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "luna-runtime-helpers"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "luna-core",
  "luna-jit",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "luna-tools"
-version = "2.14.0"
+version = "2.15.0"
 dependencies = [
  "capstone",
  "clap",
