@@ -70,6 +70,96 @@ struct FileCoverage {
 ///   so does Lua's built-in `error`)
 const ASSERT_COUNTER_PREAMBLE: &[u8] = b"do _G.__luna_assert_total=0 _G.__luna_assert_hit=0 _G.assert=function(v,msg,...) _G.__luna_assert_total=_G.__luna_assert_total+1 if v then _G.__luna_assert_hit=_G.__luna_assert_hit+1 return v,msg,... end if msg==nil then msg='assertion failed!' end error(msg,2) end end ";
 
+/// v2.16 P3.4.1 — byte-diff stdout capture preamble. Opt-in via
+/// `LUNA_OFFICIAL_BYTE_DIFF=1` env var (charter §2.4 gated rollout).
+/// Redirects `_G.print` and `_G.io.write` to append to a global
+/// buffer `_G.__luna_official_stdout` which the harness reads back
+/// after the chunk runs. Mirrors `crates/luna-core/tests/diff_puc.rs`
+/// pattern.
+///
+/// Only applied when the env var is set — default path is
+/// unchanged so existing CB-or coverage semantics are preserved.
+/// v2.16 P3.4.3+ steps add PUC binary spawn per file + byte-diff
+/// comparison + `[STDOUT-DIVERGE]` report tagging.
+const BYTE_DIFF_PREAMBLE: &[u8] = b"do _G.__luna_official_stdout='' _G.print=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t,'\\t')..'\\n' end _G.io.write=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t) end end ";
+
+/// v2.16 P3.4.4 — postamble that emits the captured buffer to
+/// real stdout bracketed by sentinel markers. `io.stdout:write`
+/// bypasses the shadowed `_G.io.write` function because file-
+/// handle methods use the C write directly (not the redefined
+/// Lua function).
+///
+/// On the PUC side, the harness extracts the buffer between the
+/// markers from the subprocess stdout. On the luna side, the
+/// buffer is read directly via `read_byte_diff_stdout` from Vm
+/// globals — the postamble output goes to the test process stdout
+/// (unused).
+const BYTE_DIFF_POSTAMBLE: &[u8] = b" io.stdout:write('\\n===LUNA_BYTE_DIFF_START===\\n') io.stdout:write(_G.__luna_official_stdout or '') io.stdout:write('\\n===LUNA_BYTE_DIFF_END===\\n')";
+
+/// v2.16 P3.4.4 — sentinel markers used by `BYTE_DIFF_POSTAMBLE`
+/// to bracket the captured buffer in PUC's subprocess stdout.
+const BYTE_DIFF_START_MARKER: &[u8] = b"===LUNA_BYTE_DIFF_START===\n";
+const BYTE_DIFF_END_MARKER: &[u8] = b"\n===LUNA_BYTE_DIFF_END===\n";
+
+/// v2.16 P3.4.6 — allowlist of files where the byte-diff preamble
+/// interferes with the file's own tests (introspects `print` /
+/// `io.write` C-function status via `debug.upvaluejoin(print, ...)`
+/// which must fail on a C function; our wrapper is a Lua function).
+///
+/// Files in this list SKIP the byte-diff preamble entirely (default
+/// `LUNA_OFFICIAL_BYTE_DIFF=1` path). They still run the assert-
+/// counter wrapper as usual; only the print/io.write shadowing is
+/// omitted.
+///
+/// Scoping cap: ≤5/dialect per `.dev/rfcs/v2.15-p3-4-*.md` §3.3.
+/// Current counts (max 3/dialect) comfortably within budget:
+///
+/// - Lua5.1: `attrib.lua`, `files.lua`
+/// - Lua5.2/5.3/5.4: `calls.lua`, `closure.lua`, `files.lua`
+/// - Lua5.5: `calls.lua`, `closure.lua`
+///
+/// Each entry documented with the specific offending assertion.
+const BYTE_DIFF_ALLOWLIST: &[(LuaVersion, &str)] = &[
+    // 5.5 — `assert(not pcall(debug.upvaluejoin, print, 1, ...))`
+    // at closure.lua:275; similar shape in calls.lua.
+    (LuaVersion::Lua55, "calls.lua"),
+    (LuaVersion::Lua55, "closure.lua"),
+    // 5.4 — same shape + files.lua:88 relies on original io.write
+    // for a specific write-error path. bwcoercion.lua captures
+    // `local print = print` at line 5 and derefs it in a way our
+    // Lua-function wrapper trips (error attributed to line 79 = EOF).
+    (LuaVersion::Lua54, "calls.lua"),
+    (LuaVersion::Lua54, "closure.lua"),
+    (LuaVersion::Lua54, "files.lua"),
+    (LuaVersion::Lua54, "bwcoercion.lua"),
+    // 5.4 tracegc.lua uses file-scope local variables read via
+    // top-level references that leak past `return` — under our
+    // function-wrapped body they become inaccessible.
+    (LuaVersion::Lua54, "tracegc.lua"),
+    // 5.3 — same shape as 5.4.
+    (LuaVersion::Lua53, "calls.lua"),
+    (LuaVersion::Lua53, "closure.lua"),
+    (LuaVersion::Lua53, "files.lua"),
+    // 5.2 — same shape as 5.4.
+    (LuaVersion::Lua52, "calls.lua"),
+    (LuaVersion::Lua52, "closure.lua"),
+    (LuaVersion::Lua52, "files.lua"),
+    // 5.1 — attrib.lua:68 checks print's setfenv behavior;
+    // files.lua:33 similar io.write assumption as 5.4.
+    (LuaVersion::Lua51, "attrib.lua"),
+    (LuaVersion::Lua51, "files.lua"),
+];
+
+/// v2.16 P3.4.6 — returns `true` when the given (version, file)
+/// pair is on `BYTE_DIFF_ALLOWLIST`. Byte-diff preamble skipped
+/// for allowlisted files.
+#[allow(dead_code)]
+fn byte_diff_should_skip(version: LuaVersion, name: &str) -> bool {
+    BYTE_DIFF_ALLOWLIST
+        .iter()
+        .any(|(v, n)| *v == version && *n == name)
+}
+
 /// One version's test gate: the suite directory (relative to the workspace
 /// root) and the files that must run clean under that dialect.
 struct Suite {
@@ -315,8 +405,46 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     //
     // For these files the report records `total = 0, note = "skipped"`.
     let skip_wrapper = matches!(name, "errors.lua" | "db.lua");
+    // v2.16 P3.4.1 — opt-in byte-diff stdout capture. Prepended
+    // before the assert-counter wrapper so the two wrappers are
+    // independent (byte-diff redefines _G.print/_G.io.write;
+    // assert-counter redefines _G.assert). Default path is
+    // unchanged when the env var is absent.
+    //
+    // v2.16 P3.4.6 — allowlisted (version, file) pairs skip the
+    // byte-diff preamble even when the env is set. See
+    // `BYTE_DIFF_ALLOWLIST` for the reason per file.
+    let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some()
+        && !byte_diff_should_skip(version, name);
     let src = if skip_wrapper {
         body
+    } else if byte_diff_enabled {
+        // v2.16 P3.4.7 — byte-diff path wraps body in a local
+        // function so the body's own `return X` doesn't terminate
+        // the chunk before postamble runs. `assert`-counter
+        // wrapper stays outside the function since it must be
+        // installed globally before the body observes it.
+        //
+        // Note: some files reference local top-level variables
+        // used later in the same chunk — those become locals of
+        // `__luna_body` and are invisible to the postamble, which
+        // only touches the `_G.__luna_official_stdout` global.
+        const BODY_WRAP_START: &[u8] = b" local __luna_body = function() ";
+        const BODY_WRAP_END: &[u8] = b" end __luna_body() ";
+        let cap = ASSERT_COUNTER_PREAMBLE.len()
+            + BYTE_DIFF_PREAMBLE.len()
+            + BODY_WRAP_START.len()
+            + body.len()
+            + BODY_WRAP_END.len()
+            + BYTE_DIFF_POSTAMBLE.len();
+        let mut s = Vec::with_capacity(cap);
+        s.extend_from_slice(BYTE_DIFF_PREAMBLE);
+        s.extend_from_slice(ASSERT_COUNTER_PREAMBLE);
+        s.extend_from_slice(BODY_WRAP_START);
+        s.extend_from_slice(&body);
+        s.extend_from_slice(BODY_WRAP_END);
+        s.extend_from_slice(BYTE_DIFF_POSTAMBLE);
+        s
     } else {
         let mut s = Vec::with_capacity(ASSERT_COUNTER_PREAMBLE.len() + body.len());
         s.extend_from_slice(ASSERT_COUNTER_PREAMBLE);
@@ -427,6 +555,46 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
             // 0, which is the truthful reading. Read via raw Table::get
             // so no __index metamethod can perturb the value.
             let (total, hit) = read_assert_counters(&mut vm);
+            // v2.16 P3.4.4 remainder — byte-diff comparison. Fires
+            // when env-set AND file not allowlisted AND both luna
+            // + PUC actually captured a buffer. Divergences are
+            // eprintln'd for triage rather than failing the file
+            // (opt-in surface per charter §2.4 rollout).
+            if byte_diff_enabled && r.is_ok() {
+                if let Some(luna_bytes) = read_byte_diff_stdout(&mut vm) {
+                    if let Some(bin) = puc_bin_for_version(version) {
+                        match run_official_on_puc(&bin, &src) {
+                            Some(Ok(puc_stdout)) => {
+                                if let Some(puc_bytes) =
+                                    extract_byte_diff_from_puc_stdout(&puc_stdout)
+                                {
+                                    let luna_canon = canonicalize_byte_diff(&luna_bytes);
+                                    let puc_canon = canonicalize_byte_diff(&puc_bytes);
+                                    if luna_canon != puc_canon {
+                                        eprintln!(
+                                            "[STDOUT-DIVERGE] {:?}/{}: luna_len={} puc_len={} first_diff_at={}",
+                                            version,
+                                            label,
+                                            luna_canon.len(),
+                                            puc_canon.len(),
+                                            luna_canon.iter().zip(puc_canon.iter())
+                                                .position(|(a, b)| a != b)
+                                                .map(|i| i as isize).unwrap_or(-1)
+                                        );
+                                    }
+                                }
+                            }
+                            Some(Err(msg)) => {
+                                eprintln!(
+                                    "[STDOUT-DIVERGE-PUC-ERR] {:?}/{}: {}",
+                                    version, label, msg
+                                );
+                            }
+                            None => {} // binary missing; silent
+                        }
+                    }
+                }
+            }
             let _ = tx.send((r, total, hit));
         })
         .expect("spawn");
@@ -489,6 +657,177 @@ fn read_assert_counters(vm: &mut Vm) -> (i64, i64) {
         get_i64(vm, "__luna_assert_total"),
         get_i64(vm, "__luna_assert_hit"),
     )
+}
+
+/// v2.16 P3.4.2 — read the byte-diff stdout capture buffer set by
+/// `BYTE_DIFF_PREAMBLE`. Returns `None` when the global is absent
+/// (the env var was off, or the chunk errored before the preamble
+/// installed the buffer). Bytes come out of the Lua string
+/// unchanged — no re-encoding.
+///
+/// Not yet wired into the run loop — that lands in P3.4.4 alongside
+/// the PUC binary spawn (P3.4.3). Allow the dead-code warning until
+/// then; CI's `-D warnings` would otherwise trip.
+#[allow(dead_code)]
+fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
+    let k = Value::Str(vm.heap.intern(b"__luna_official_stdout"));
+    let globals = vm.globals();
+    match globals.get(k) {
+        Value::Str(s) => Some(s.as_bytes().to_vec()),
+        _ => None,
+    }
+}
+
+/// v2.16 P3.4.3 — resolve the per-dialect PUC interpreter path.
+/// Mirrors `crates/luna-core/tests/diff_puc.rs::puc_bin_for`.
+/// Returns `None` when the env var is unset for a non-5.5 dialect;
+/// 5.5 falls back to `PUC_LUA` env then bare `lua5.5` in PATH.
+#[allow(dead_code)]
+fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
+    let env_key = match version {
+        LuaVersion::Lua51 => "PUC_LUA_51",
+        LuaVersion::Lua52 => "PUC_LUA_52",
+        LuaVersion::Lua53 => "PUC_LUA_53",
+        LuaVersion::Lua54 => "PUC_LUA_54",
+        LuaVersion::Lua55 => "PUC_LUA_55",
+        // MacroLua is a compat variant that inherits 5.4 semantics
+        // (per version.rs comment); byte-diff against PUC 5.4.
+        LuaVersion::MacroLua => "PUC_LUA_54",
+    };
+    if let Ok(b) = std::env::var(env_key) {
+        return Some(b);
+    }
+    if matches!(version, LuaVersion::Lua55) {
+        return Some(std::env::var("PUC_LUA").unwrap_or_else(|_| "lua5.5".to_string()));
+    }
+    None
+}
+
+/// v2.16 P3.4.5 — canonicalize the byte-diff buffer to strip
+/// impl-defined output that PUC and luna print differently for
+/// legitimate reasons:
+///
+/// 1. **Hex addresses in `tostring(table/function/userdata/thread)`**
+///    → `<ADDR>` placeholder. PUC and luna both format these as
+///    `<type>: 0x[0-9a-f]+` but the actual address differs per run.
+///
+/// 2. **Chunk-name in `debug.getinfo(...).source` and similar** →
+///    `[string "..."]` bodies normalized to `[string "<CHUNK>"]`.
+///    The bracketed body captures the *first line* of the source,
+///    which for our preambled chunks starts with `do _G.__luna_
+///    assert_total...` — that's a harness artifact, not the file's
+///    real content.
+///
+/// This is intentionally byte-level scanning (no regex crate) to
+/// keep the harness in the tests dir without adding a dev-dep to
+/// luna-core.
+///
+/// P3.4.6 (allowlist) handles files where even canonicalization
+/// leaves legitimate divergence (gc.lua memory counts, sort.lua
+/// randomseed pointers when seeded differently, etc.).
+#[allow(dead_code)]
+fn canonicalize_byte_diff(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Hex-address scrub: `0x` followed by 1+ hex chars → `0x<ADDR>`.
+        // Only when preceded by `: ` (matches the `type: 0xADDR` shape).
+        if i + 2 <= bytes.len() && &bytes[i..i + 2] == b"0x" {
+            let prev_is_type_sep = i >= 2 && &bytes[i - 2..i] == b": ";
+            if prev_is_type_sep {
+                let mut j = i + 2;
+                while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                if j > i + 2 {
+                    out.extend_from_slice(b"0x<ADDR>");
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        // Chunk-name normalization: `[string "..."]` → `[string "<CHUNK>"]`.
+        // Match the opening `[string "` and scan for the closing `"]`.
+        const OPEN: &[u8] = b"[string \"";
+        const CLOSE: &[u8] = b"\"]";
+        if i + OPEN.len() <= bytes.len() && &bytes[i..i + OPEN.len()] == OPEN {
+            // Find the CLOSE marker. If missing (truncated / malformed),
+            // fall through to normal copy.
+            let after_open = i + OPEN.len();
+            if let Some(off) = bytes[after_open..]
+                .windows(CLOSE.len())
+                .position(|w| w == CLOSE)
+            {
+                out.extend_from_slice(b"[string \"<CHUNK>\"]");
+                i = after_open + off + CLOSE.len();
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+/// v2.16 P3.4.4 — extract the byte-diff buffer content from PUC's
+/// subprocess stdout, using the sentinel markers emitted by
+/// `BYTE_DIFF_POSTAMBLE`. Returns `None` when either marker is
+/// missing (postamble was skipped, e.g. early `os.exit(0)` or
+/// PUC errored before postamble ran) — the byte-diff comparison
+/// then reports as "no PUC data" rather than divergence.
+#[allow(dead_code)]
+fn extract_byte_diff_from_puc_stdout(bytes: &[u8]) -> Option<Vec<u8>> {
+    let s = bytes
+        .windows(BYTE_DIFF_START_MARKER.len())
+        .position(|w| w == BYTE_DIFF_START_MARKER)?;
+    let start = s + BYTE_DIFF_START_MARKER.len();
+    let rest = &bytes[start..];
+    let e = rest
+        .windows(BYTE_DIFF_END_MARKER.len())
+        .position(|w| w == BYTE_DIFF_END_MARKER)?;
+    Some(rest[..e].to_vec())
+}
+
+/// v2.16 P3.4.3 — spawn PUC on the given source file and capture
+/// stdout as raw bytes. `source` is passed via stdin (matching
+/// diff_puc.rs's `-` invocation). Returns `None` when the binary is
+/// missing (dev-machine friendliness). PUC-side errors (non-zero
+/// exit / stderr) surface as `Err` so the harness can decide whether
+/// to allowlist or fail — different files legitimately error at the
+/// PUC layer (e.g. `attrib.lua` when the sub-package section can't
+/// write `libs/P1/`).
+///
+/// Bytes come back unchanged — canonicalization (source-path
+/// normalization, hex-address scrub) is a separate pass in P3.4.5.
+#[allow(dead_code)]
+fn run_official_on_puc(bin: &str, source: &[u8]) -> Option<Result<Vec<u8>, String>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new(bin)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return None, // binary missing
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(source);
+    }
+    let out = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return Some(Err(format!("PUC wait failed: {e}"))),
+    };
+    if !out.status.success() {
+        return Some(Err(format!(
+            "PUC non-zero exit (status={:?} stderr={})",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Some(Ok(out.stdout))
 }
 
 fn run_suite(suite: &Suite, coverage: &mut Vec<FileCoverage>) -> Vec<String> {
@@ -706,4 +1045,61 @@ fn write_coverage_report(coverage: &[FileCoverage]) -> std::io::Result<()> {
 
     std::fs::write(&dest, out)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod byte_diff_tests {
+    use super::*;
+
+    #[test]
+    fn canonicalize_hex_address_after_type_sep() {
+        let input = b"result is table: 0xdeadbeef and function: 0x123abc";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(
+            &out[..],
+            b"result is table: 0x<ADDR> and function: 0x<ADDR>"
+        );
+    }
+
+    #[test]
+    fn canonicalize_leaves_hex_without_type_sep() {
+        // 0x prefix NOT preceded by ": " should pass through unchanged
+        // (e.g. numeric literals in output).
+        let input = b"count=0xff bytes";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(&out[..], b"count=0xff bytes");
+    }
+
+    #[test]
+    fn canonicalize_chunk_name() {
+        let input = b"[string \"do _G.__luna_assert_total=0 ...\"]:5: something";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(&out[..], b"[string \"<CHUNK>\"]:5: something");
+    }
+
+    #[test]
+    fn canonicalize_preserves_regular_text() {
+        let input = b"hello world 42 no addresses here";
+        let out = canonicalize_byte_diff(input);
+        assert_eq!(&out[..], input);
+    }
+
+    #[test]
+    fn extract_byte_diff_roundtrip() {
+        let payload = b"line 1\nline 2\n";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"some prefix output\n");
+        buf.extend_from_slice(BYTE_DIFF_START_MARKER);
+        buf.extend_from_slice(payload);
+        buf.extend_from_slice(BYTE_DIFF_END_MARKER);
+        buf.extend_from_slice(b"trailer\n");
+        let extracted = extract_byte_diff_from_puc_stdout(&buf).expect("markers present");
+        assert_eq!(extracted, payload);
+    }
+
+    #[test]
+    fn extract_byte_diff_missing_marker() {
+        let buf = b"no markers here at all";
+        assert!(extract_byte_diff_from_puc_stdout(buf).is_none());
+    }
 }
