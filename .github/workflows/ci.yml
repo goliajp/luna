@@ -179,7 +179,7 @@ jobs:
     name: redis_lua_shape perf-gate
     runs-on: ubuntu-latest
     env:
-      PERF_REF: 0acc1944ba8894960d3b6a5c1e5ada11ffb3c71a # v2.14.0
+      PERF_REF: a78ce9081e4eaaac77cf23d2b4fa59c861d71812 # v2.15.0
     steps:
       - uses: actions/checkout@v4
         with:
