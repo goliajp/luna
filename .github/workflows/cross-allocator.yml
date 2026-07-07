@@ -81,7 +81,13 @@ jobs:
           fi
 
       - name: cargo build --workspace
-        run: cargo build --workspace --all-targets
+        # Exclude LLVM-backed alt-backend crates that need system
+        # LLVM 18 + Polly which hosted ubuntu-latest doesn't ship
+        # (matches ci.yml's `native` job exclusions; per v2.0 CI
+        # blocker fix commit 5ef6cb4). Without these excludes, the
+        # cross-allocator matrix has been failing on `error: could
+        # not find native static library `Polly`` since ~2026-07-03.
+        run: cargo build --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm
 
       - name: cargo test --workspace --release (official_run + regressions)
         # Cap the scope to luna-core for the matrix (where the UAFs
