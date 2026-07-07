@@ -44,7 +44,13 @@ jobs:
         run: $LUAJIT -v
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.12.0 --locked
+        # Unpinned to match fuzz.yml — the `--version 0.12.0
+        # --locked` pin broke ~2026-07-06 when a rustix transitive
+        # dep started using unstable rustc_* attrs that current
+        # nightly rejects. fuzz.yml's unpinned install path stays
+        # green because it picks the latest cargo-fuzz that works
+        # with current nightly (rolls with the toolchain).
+        run: cargo install cargo-fuzz
 
       - name: cargo +nightly fuzz run fuzz_diff_luajit (100 iter)
         # 100 fuzz iterations per nightly per v2.6 charter §2.3.
