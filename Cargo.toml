@@ -87,7 +87,7 @@ edition = "2024"
 # MSRV (G1): tracks the rustc that v1.0 shipped against. Bumping this
 # is a minor-version change because embedders pinning to a specific
 # rustc need a heads-up. CI matrix locks against this value.
-rust-version = "1.86"
+rust-version = "1.97"
 authors = ["GOLIA K.K. <lihao@golia.jp>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goliajp/luna"
