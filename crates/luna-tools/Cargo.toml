@@ -79,8 +79,12 @@ inferno = { version = "0.11", optional = true }
 # only. Pinned >=0.14 to close RUSTSEC-2024-0408 (`TempFdArrayIterator::next`
 # unsound misaligned `from_raw_parts` — panics under
 # `ReportBuilder::build`); 0.13 was reachable only through the
-# `flame-graph` feature but cargo-deny's `[advisories]` walks the
-# whole lockfile regardless of feature gating.
+# `flame-graph` feature, and cargo-deny reaches it because
+# cargo-deny.yml passes `--all-features`. (An earlier version of this
+# comment claimed cargo-deny walks the whole lockfile regardless of
+# feature gating — that was true of an older cargo-deny. Current
+# releases resolve the default feature set only, which is why the
+# `--all-features` flag is load-bearing; see v2.17 H7.)
 pprof = { version = "0.15", optional = true }
 
 # Optional: disassembly for `luna-trace-inspect --show mcode`.
