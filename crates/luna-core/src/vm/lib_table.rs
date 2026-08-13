@@ -16,22 +16,52 @@ pub(crate) fn open_table(vm: &mut Vm) {
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
     };
+    // v2.18: the table library's *surface* is dialect-specific, and luna
+    // used to register the union of every dialect's functions. Measured
+    // against stock PUC (`for n in pairs(table)`), that exposed
+    // `create`/`move`/`pack`/`unpack` on 5.1, `create`/`move` on 5.2 and
+    // `create` on 5.3/5.4, while omitting 5.1's `setn` and 5.2's `maxn`.
+    // An embedder writing 5.1-targeted Lua would silently pick up 5.5 API.
+    //
+    // Ordering note: the enum runs Lua51 < Lua52 < Lua53 < Lua54 <
+    // MacroLua < Lua55, so MacroLua (a 5.4 base) inherits exactly the 5.4
+    // surface from these comparisons — pack/unpack/move but no create.
+    use crate::version::LuaVersion as V;
+    let ver = vm.version();
+
+    // Present in every dialect.
     set(vm, "insert", t_insert);
     set(vm, "remove", t_remove);
     set(vm, "concat", t_concat);
-    set(vm, "unpack", t_unpack);
-    set(vm, "pack", t_pack);
-    set(vm, "move", t_move);
-    set(vm, "create", t_create);
     set(vm, "sort", t_sort);
-    // PUC 5.1 had `table.getn` (length, replaced by `#`), `table.foreach`,
-    // `table.foreachi` (iterator helpers, replaced by `pairs`/`ipairs`).
-    // 5.2+ dropped them; keep them registered for the 5.1 suite.
-    if vm.version() == crate::version::LuaVersion::Lua51 {
+
+    // 5.2+ — `pack`/`unpack` live in the table library. On 5.1 `unpack` is
+    // a global only (registered in builtins), and `table.unpack` does not
+    // exist.
+    if ver >= V::Lua52 {
+        set(vm, "unpack", t_unpack);
+        set(vm, "pack", t_pack);
+    }
+    // 5.3+ — `table.move`.
+    if ver >= V::Lua53 {
+        set(vm, "move", t_move);
+    }
+    // 5.5+ — `table.create`.
+    if ver >= V::Lua55 {
+        set(vm, "create", t_create);
+    }
+    // 5.1 and 5.2 — `table.maxn`, dropped in 5.3.
+    if ver <= V::Lua52 {
+        set(vm, "maxn", t_maxn);
+    }
+    // 5.1 only — `getn` (length, replaced by `#`), `foreach`/`foreachi`
+    // (replaced by `pairs`/`ipairs`), and `setn`, which PUC 5.1 keeps
+    // registered purely to raise "'setn' is obsolete".
+    if ver == V::Lua51 {
         set(vm, "getn", t_getn);
         set(vm, "foreach", t_foreach);
         set(vm, "foreachi", t_foreachi);
-        set(vm, "maxn", t_maxn);
+        set(vm, "setn", t_setn);
     }
     vm.set_global("table", Value::Table(t))
         .expect("stdlib registration");
@@ -40,6 +70,14 @@ pub(crate) fn open_table(vm: &mut Vm) {
     // no-op when phase != Propagate, where t was born current_white.
     vm.barrier_back_table(t);
     // the global unpack alias exists in 5.1 mode only (P08)
+}
+
+/// 5.1 `table.setn(t, n)` — PUC 5.1 keeps this registered solely to raise
+/// "'setn' is obsolete" (ltablib.c `setn`); the manual-length mechanism it
+/// belonged to was removed in 5.1 itself. Registered on 5.1 only so the
+/// dialect's table surface matches stock PUC.
+fn t_setn(vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+    Err(raise_str(vm, "'setn' is obsolete"))
 }
 
 /// 5.1 `table.getn(t)` — synonymous with `#t` (luna's `checked_len`).
