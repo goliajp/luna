@@ -581,25 +581,24 @@ fn translate_one(
     // The B-is-register path keeps falling through to `translate_inst`'s
     // existing arith arm, which is the hot path in stock chunks (PUC's
     // `luaK_exp2RK` prefers the C slot for the constant).
-    if let Some(luna_op) = arith_op_for(i.op) {
-        if b_is_k {
-            // Allocate a temp register above PUC's own usage. Same policy as
-            // puc_54.rs's I-imm lowering: `max(a, c) + 1` keeps the tmp slot
-            // distinct from both source registers (the arith reads `b/c` and
-            // writes `a`, so `tmp` must dodge `a` *and* the live C register).
-            let tmp = i.a.max(c_idx) + 1;
-            let pair =
-                super::lower_k_via_tmp(luna_op, i.a, b_idx, c_idx, c_is_k, tmp, max_temp_bump)?;
-            let first_luna_pc = code.len() as u32;
-            puc_to_luna_pc.push(Some(first_luna_pc));
-            luna_to_puc_pc.push(puc_pc);
-            code.push(pair[0]);
-            luna_to_puc_pc.push(puc_pc);
-            code.push(pair[1]);
-            return Ok(());
-        }
-        // B is a register → 1:1 path; let `translate_inst` handle bounds.
+    if let Some(luna_op) = arith_op_for(i.op)
+        && b_is_k
+    {
+        // Allocate a temp register above PUC's own usage. Same policy as
+        // puc_54.rs's I-imm lowering: `max(a, c) + 1` keeps the tmp slot
+        // distinct from both source registers (the arith reads `b/c` and
+        // writes `a`, so `tmp` must dodge `a` *and* the live C register).
+        let tmp = i.a.max(c_idx) + 1;
+        let pair = super::lower_k_via_tmp(luna_op, i.a, b_idx, c_idx, c_is_k, tmp, max_temp_bump)?;
+        let first_luna_pc = code.len() as u32;
+        puc_to_luna_pc.push(Some(first_luna_pc));
+        luna_to_puc_pc.push(puc_pc);
+        code.push(pair[0]);
+        luna_to_puc_pc.push(puc_pc);
+        code.push(pair[1]);
+        return Ok(());
     }
+    // B is a register → 1:1 path; let `translate_inst` handle bounds.
 
     // --- PC-relative ops: emit placeholder + push fixup ---
     match i.op {

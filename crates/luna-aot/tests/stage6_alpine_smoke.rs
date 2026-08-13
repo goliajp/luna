@@ -216,7 +216,7 @@ fn alpine_aot_binary_runs_without_lua_installed() {
 
     eprintln!(
         "stage6 alpine: passed — binary {} runs cleanly in alpine:3.20",
-        &out_path.display()
+        out_path.display()
     );
     // Sanity ldd check (best-effort; alpine has no ldd, but `file`
     // can confirm static-linkage; skip if neither command is in the
