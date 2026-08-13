@@ -19,7 +19,7 @@ optimization.
 
 ---
 
-## [Unreleased] — 2.17.0
+## [2.17.0] — 2026-08-14
 
 Maintenance release. No runtime behaviour changes; the VM, its dialect
 semantics, and the C ABI are untouched. Everything here is metadata,
