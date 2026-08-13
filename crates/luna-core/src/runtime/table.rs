@@ -562,10 +562,10 @@ impl Table {
                     _ => None,
                 }
             };
-            if let Some(p) = hdr(k) {
-                if crate::runtime::gc_verify_probe::is_freed(p) {
-                    panic!("[gc-verify] find_node QUERY key {p:#x} is freed (dangling)");
-                }
+            if let Some(p) = hdr(k)
+                && crate::runtime::gc_verify_probe::is_freed(p)
+            {
+                panic!("[gc-verify] find_node QUERY key {p:#x} is freed (dangling)");
             }
             for (i, n) in self.nodes.iter().enumerate() {
                 // NOTE: tombstones (val nil, key kept) are NOT skipped —
@@ -573,15 +573,15 @@ impl Table {
                 if n.dead_key {
                     continue;
                 }
-                if let Some(p) = hdr(n.key) {
-                    if crate::runtime::gc_verify_probe::is_freed(p) {
-                        panic!(
-                            "[gc-verify] find_node NODE key {p:#x} (slot {i}, \
+                if let Some(p) = hdr(n.key)
+                    && crate::runtime::gc_verify_probe::is_freed(p)
+                {
+                    panic!(
+                        "[gc-verify] find_node NODE key {p:#x} (slot {i}, \
                              tombstone {}, table {:#x}) is freed (dangling)",
-                            n.val.is_nil(),
-                            self as *const Table as usize
-                        );
-                    }
+                        n.val.is_nil(),
+                        self as *const Table as usize
+                    );
                 }
             }
         }
@@ -1119,15 +1119,15 @@ impl Table {
             }
         }
         for n in self.nodes.iter() {
-            if let Value::Coro(co) = n.key {
-                if !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader) {
-                    return true;
-                }
+            if let Value::Coro(co) = n.key
+                && !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader)
+            {
+                return true;
             }
-            if let Value::Coro(co) = n.val {
-                if !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader) {
-                    return true;
-                }
+            if let Value::Coro(co) = n.val
+                && !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader)
+            {
+                return true;
             }
         }
         false
@@ -1167,10 +1167,10 @@ impl Table {
                 report("node value", i, n.val);
             }
         }
-        if let Some(mt) = self.metatable {
-            if !is_live(Value::Table(mt)) {
-                report("metatable", 0, Value::Table(mt));
-            }
+        if let Some(mt) = self.metatable
+            && !is_live(Value::Table(mt))
+        {
+            report("metatable", 0, Value::Table(mt));
         }
     }
 

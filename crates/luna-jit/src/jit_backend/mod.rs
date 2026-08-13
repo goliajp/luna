@@ -2557,10 +2557,10 @@ pub fn lower_int_chunk_into<M: Module>(
             // the GetTabUp at `start_pc` actually writes
             // `fold.dst_reg = Float`.
             if folded_math[p] {
-                if let Some(fold) = math_folds.iter().find(|f| f.start_pc == p) {
-                    if let Some(slot) = state.get_mut(fold.dst_reg as usize) {
-                        *slot = RegKind::Float;
-                    }
+                if let Some(fold) = math_folds.iter().find(|f| f.start_pc == p)
+                    && let Some(slot) = state.get_mut(fold.dst_reg as usize)
+                {
+                    *slot = RegKind::Float;
                 }
                 continue;
             }
@@ -2609,10 +2609,10 @@ pub fn lower_int_chunk_into<M: Module>(
                 Op::Call => {
                     // Self-recursive (the only non-folded Call shape
                     // the whitelist admits). Result is `ret_kind`.
-                    if !matches!(ret_kind, RegKind::Unset) {
-                        if let Some(slot) = state.get_mut(ins.a() as usize) {
-                            *slot = ret_kind;
-                        }
+                    if !matches!(ret_kind, RegKind::Unset)
+                        && let Some(slot) = state.get_mut(ins.a() as usize)
+                    {
+                        *slot = ret_kind;
                     }
                 }
                 Op::ForPrep => {

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>luna — a Lua runtime in pure Rust</title>
+<meta name="description" content="luna is a Lua runtime written in pure Rust: Lua 5.1–5.5 plus MacroLua in one binary, a zero-dependency interpreter core, a Cranelift trace JIT, ahead-of-time compilation, and a sandbox built for embedding untrusted scripts.">
+<meta property="og:title" content="luna — a Lua runtime in pure Rust">
+<meta property="og:description" content="Five Lua dialects in one binary. Zero-dependency core. Cranelift JIT + AOT. A sandbox built for embedding.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://luna.golia.jp/">
+<link rel="canonical" href="https://luna.golia.jp/">
+<link rel="alternate" hreflang="en" href="https://luna.golia.jp/">
+<link rel="alternate" hreflang="zh" href="https://luna.golia.jp/zh/">
+<link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/">
+<link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/">
+<link rel="icon" type="image/svg+xml" href="/assets/luna-icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("luna-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+    <nav class="nav-links">
+      <a href="#overview">Overview</a>
+      <a href="#dialects">Dialects</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#performance">Performance</a>
+      <a href="#start">Quick start</a>
+      <a href="docs.html">Docs</a>
+    </nav>
+    <span class="nav-spacer"></span>
+    <div class="nav-tools">
+      <div class="seg" role="group" aria-label="Language">
+        <a href="./" aria-current="true">EN</a>
+        <a href="zh/">中文</a>
+        <a href="ja/">日本語</a>
+      </div>
+      <button class="icon-btn" data-theme-toggle aria-label="Toggle theme">☾</button>
+      <a class="icon-btn" href="https://github.com/goliajp/luna" aria-label="GitHub repository" title="GitHub">
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+      <button class="icon-btn nav-toggle" aria-label="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ============================================================ HERO -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <span class="badge reveal" style="animation-delay:.05s"><span class="dot"></span> v2.17.0 · MIT / Apache-2.0</span>
+      <h1 class="reveal" style="animation-delay:.12s">A Lua runtime in <em>pure Rust</em>.</h1>
+      <p class="lead reveal" style="animation-delay:.2s">Five Lua dialects and MacroLua in a single binary. A zero-dependency interpreter core, a Cranelift-backed trace JIT, ahead-of-time native compilation, and a sandbox designed for embedding untrusted scripts.</p>
+      <div class="hero-cta reveal" style="animation-delay:.28s">
+        <a class="btn btn-primary" href="docs.html">Read the docs →</a>
+        <a class="btn btn-ghost" href="#start"><span class="mono">cargo add</span> luna-jit</a>
+      </div>
+      <div class="hero-meta reveal" style="animation-delay:.36s">
+        <span><b>5.1 – 5.5</b> + MacroLua</span>
+        <span><b>0</b> deps in core</span>
+        <span><b>~33 KB</b> cold-start heap</span>
+        <span><b>lua.h</b>-compatible C ABI</span>
+      </div>
+    </div>
+    <div class="hero-disc-wrap reveal" style="animation-delay:.15s">
+      <div class="hero-ring r2"></div>
+      <div class="hero-ring"></div>
+      <div class="hero-disc" role="img" aria-label="A rendered moon"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= OVERVIEW -->
+<section class="band" id="overview">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="01">What luna is</span>
+      <h2>One runtime, every Lua you need to embed.</h2>
+      <p class="lead">luna implements the Lua language family from the ground up in safe Rust — no C, no <span class="mono">unsafe</span> at the surface an embedder touches. Pick the dependency footprint you want and grow into the JIT and AOT tiers as your workload demands.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="k">§ dialects</div>
+        <h3>5.1 – 5.5 + MacroLua</h3>
+        <p>Every mainline Lua dialect in one build, selected per-<span class="mono">Vm</span> at construction. A single process can host several dialects concurrently without interference. MacroLua adds compile-time <span class="mono">@macro</span> expansion over the 5.4 surface.</p>
+      </div>
+      <div class="card">
+        <div class="k">§ core</div>
+        <h3>Zero-dependency core</h3>
+        <p><span class="mono">luna-core</span> pulls exactly one crate — itself. A <span class="mono">cargo deny</span> gate enforces it on every commit. That means a tiny audit surface, seconds-long builds, and a clean <span class="mono">wasm32</span> target with no <span class="mono">mmap</span> RWX requirement.</p>
+      </div>
+      <div class="card">
+        <div class="k">§ jit</div>
+        <h3>Cranelift trace JIT</h3>
+        <p>A trace-based compiler in the LuaJIT lineage. Hot loops record into typed IR, lower through Cranelift, and run as native machine code — plugged in behind a trait so the interpreter path never depends on the backend.</p>
+      </div>
+      <div class="card">
+        <div class="k">§ aot</div>
+        <h3>Ahead-of-time binaries</h3>
+        <p><span class="mono">luna-aot</span> turns a Lua source file into a self-contained native executable — bytecode, warmed traces, and a static runtime linked into one binary that runs with luna nowhere on the host.</p>
+      </div>
+      <div class="card">
+        <div class="k">§ embed</div>
+        <h3>Ergonomic embedding</h3>
+        <p>An mlua-shaped <span class="mono">Lua</span> facade, typed native functions with automatic arg decode, table builders, userdata via a derive macro, Rust-side coroutines and debug hooks, and structured <span class="mono">LuaError</span>s.</p>
+      </div>
+      <div class="card">
+        <div class="k k-warm">§ sandbox</div>
+        <h3>Built to contain scripts</h3>
+        <p>The host owns the security boundary. Curated stdlib whitelisting, an instruction budget, an approximate memory cap, and bytecode loading off by default — every capability a script sees was opted in by Rust.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ======================================================== DIALECTS -->
+<section class="band" id="dialects">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="02">Dialect datasheet</span>
+      <h2>What each dialect can do.</h2>
+      <p class="lead">Feature availability is driven by the capability predicates in <span class="mono">src/version.rs</span>. luna emits per-dialect bytecode matching PUC's compiler format, so PUC-compiled <span class="mono">.luac</span> files load directly.</p>
+    </div>
+    <div class="sheet-wrap">
+      <table class="sheet">
+        <thead>
+          <tr><th>Feature</th><th class="c">5.1</th><th class="c">5.2</th><th class="c">5.3</th><th class="c">5.4</th><th class="c">5.5</th><th class="c">MacroLua</th></tr>
+        </thead>
+        <tbody>
+          <tr class="grp"><td colspan="7">Numeric</td></tr>
+          <tr><td>Integer subtype <span class="mono">Int</span></td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">//</span> floor divide</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>Bitwise <span class="mono">&amp; | ~ &lt;&lt; &gt;&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>Hex float <span class="mono">0x1p4</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">Syntax</td></tr>
+          <tr><td><span class="mono">goto</span> / <span class="mono">::label::</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>Empty statement <span class="mono">;</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">Strings</td></tr>
+          <tr><td><span class="mono">\xXX</span> / <span class="mono">\z</span> escapes</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">\u{XXXX}</span> unicode escape</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">5.4+ attributes</td></tr>
+          <tr><td><span class="mono">local &lt;const&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">local &lt;close&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">5.5 exclusives</td></tr>
+          <tr><td><span class="mono">global</span> keyword</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c no">–</td></tr>
+          <tr><td>Named vararg <span class="mono">function f(...name)</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c no">–</td></tr>
+          <tr class="grp"><td colspan="7">MacroLua exclusives</td></tr>
+          <tr><td><span class="mono">@name(args)</span> compile-time macros</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="doc-toc" style="margin-top:1rem">Full matrix, stdlib coverage, and the C API surface live in <a class="xref" href="docs.html#compatibility">the compatibility reference</a>.</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ==================================================== ARCHITECTURE -->
+<section class="band" id="architecture">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="03">Architecture</span>
+      <h2>Choose your dependency surface.</h2>
+      <p class="lead">luna ships as a Cargo workspace of five publishable crates. The interpreter core stands alone; the JIT and AOT tiers layer on top through a trait boundary, so removing or swapping the backend never touches the core API.</p>
+    </div>
+    <div class="cards" style="margin-bottom:2rem">
+      <div class="card">
+        <div class="k">luna-core</div>
+        <h3>The interpreter</h3>
+        <p>Lexer, parser, per-dialect compiler, dispatcher, runtime, stdlib, NaN-boxed values, an intrusive mark-sweep GC, the PUC pattern engine, and the JIT trait surface. <strong>Zero third-party crates.</strong></p>
+      </div>
+      <div class="card">
+        <div class="k">luna-jit</div>
+        <h3>The JIT + C ABI</h3>
+        <p>The Cranelift-backed backend, a <span class="mono">lua.h</span>-compatible C ABI as <span class="mono">cdylib</span> / <span class="mono">staticlib</span>, the <span class="mono">luna</span> CLI, and the <span class="mono">Lua</span> embedding facade.</p>
+      </div>
+      <div class="card">
+        <div class="k">luna-aot</div>
+        <h3>The AOT compiler</h3>
+        <p>A build-time tool: Lua source → standalone native binary. Not a runtime dependency of what it produces.</p>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem" class="arch-split">
+      <div>
+        <h3 style="margin-bottom:1rem">The JIT pipeline</h3>
+        <div class="pipe">
+          <div class="step"><span class="i">01</span> Interpreter dispatcher — bump counter, check threshold</div>
+          <div class="arrow">↓ hot path detected</div>
+          <div class="step"><span class="i">02</span> Trace recorder — replay opcodes into typed IR</div>
+          <div class="arrow">↓ closed trace, across the trait boundary</div>
+          <div class="step jit"><span class="i">03</span> Cranelift backend — lower IR, regalloc, emit</div>
+          <div class="arrow">↓ mmap RWX + symbol relocation</div>
+          <div class="step jit"><span class="i">04</span> Native machine code — runs until a side-exit</div>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:1rem">Source classification</h3>
+        <p style="color:var(--text-dim);font-size:.95rem">Every file sits in one of three tiers, each with its own change discipline and review depth:</p>
+        <ul style="color:var(--text-dim);font-size:.95rem;margin-left:1.1rem">
+          <li><strong>Stone</strong> — business-agnostic foundations (pattern engine, heap, value layout). Fuzzed, benched, semver-strict.</li>
+          <li><strong>Steel</strong> — Lua-domain primitives (compiler, dispatcher, JIT backend). Cross-validated against PUC per dialect.</li>
+          <li><strong>Cement</strong> — host glue (CLI, C ABI, stdlib bindings, AOT). Free to evolve as embedder needs change.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===================================================== PERFORMANCE -->
+<section class="band" id="performance">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="04">Performance discipline</span>
+      <h2>Honest numbers, or none.</h2>
+      <p class="lead">luna deliberately does <strong>not</strong> ship a cherry-picked headline ratio. A single microbench cell that wins is a marketing artifact; the outlier that loses is the signal worth chasing. What we publish are reproducible baselines and the methodology that produced them.</p>
+    </div>
+    <div class="stats" style="margin-bottom:1.5rem">
+      <div class="stat"><div class="n">33<span class="u">KB</span></div><div class="l">cold-start peak heap · empty Vm</div></div>
+      <div class="stat"><div class="n">435</div><div class="l">allocations · cold start</div></div>
+      <div class="stat"><div class="n">~4.5<span class="u">MiB</span></div><div class="l">AOT binary · release, stripped</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">third-party deps · luna-core</div></div>
+    </div>
+    <div class="note">
+      <b>Measured, reproducible baselines.</b> Memory is profiled under dhat across five workloads (cold start, REPL idle, host-root churn, alloc + GC, userdata lifecycle); a &gt;5% steady-state regression on any of them is a tracked alarm. Binary sizes are <span class="mono">cargo publish --dry-run</span> and stripped-release measurements. The reproduction recipes ship in the docs — nothing here is a number you have to take on faith.
+    </div>
+    <p class="doc-toc" style="margin-top:1.2rem">The methodology, tuning knobs, and hot-path counters are documented in <a class="xref" href="docs.html#performance">the performance reference</a>.</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ======================================================= QUICKSTART -->
+<section class="band" id="start">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="05">Quick start</span>
+      <h2>Embed it in three lines.</h2>
+      <p class="lead">Add a crate, open the libraries you want, evaluate. Grow into the sandbox, native functions, and userdata when you need them.</p>
+    </div>
+
+    <div data-tabs style="margin-bottom:1.5rem">
+      <div class="tabs">
+        <button class="tab" data-tab="jit" aria-selected="true">luna-jit (JIT)</button>
+        <button class="tab" data-tab="core" aria-selected="false">luna-core (interp)</button>
+        <button class="tab" data-tab="cli" aria-selected="false">CLI</button>
+      </div>
+      <div class="tabpanel" data-panel="jit">
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code><span class="tok-c"># full interpreter + Cranelift JIT + C ABI</span>
+[dependencies]
+luna-jit = <span class="tok-s">"2"</span></code></pre></div>
+      </div>
+      <div class="tabpanel" data-panel="core" hidden>
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code><span class="tok-c"># minimum surface — pure interpreter, zero deps, wasm-friendly</span>
+[dependencies]
+luna-core = <span class="tok-s">"2"</span></code></pre></div>
+      </div>
+      <div class="tabpanel" data-panel="cli" hidden>
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>cargo install luna-jit          <span class="tok-c"># the `luna` REPL + script runner</span>
+luna -e <span class="tok-s">"print('hello, world')"</span>
+luna path/to/script.lua</code></pre></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem" class="arch-split">
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs — hello</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code><span class="tok-k">use</span> luna_jit::vm::<span class="tok-f">Vm</span>;
+<span class="tok-k">use</span> luna_jit::version::<span class="tok-f">LuaVersion</span>;
+
+<span class="tok-k">let mut</span> vm = <span class="tok-f">Vm</span>::<span class="tok-f">new</span>(<span class="tok-f">LuaVersion</span>::<span class="tok-f">Lua55</span>);
+<span class="tok-k">let</span> out = vm.<span class="tok-f">eval</span>(<span class="tok-s">"return 1 + 2"</span>)?;
+<span class="tok-c">// out[0] == Value::Int(3)</span></code></pre></div>
+
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs — sandbox</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code><span class="tok-k">use</span> luna_jit::<span class="tok-f">Lua</span>;
+<span class="tok-k">use</span> luna_jit::version::<span class="tok-f">LuaVersion</span>;
+
+<span class="tok-k">let mut</span> lua = <span class="tok-f">Lua</span>::<span class="tok-f">sandbox</span>(<span class="tok-f">LuaVersion</span>::<span class="tok-f">Lua54</span>)
+    .<span class="tok-f">open_base</span>().<span class="tok-f">open_math</span>().<span class="tok-f">open_string</span>()
+    .<span class="tok-f">with_instr_budget</span>(<span class="tok-n">1_000_000</span>)
+    .<span class="tok-f">with_memory_cap</span>(<span class="tok-n">8</span> * <span class="tok-n">1024</span> * <span class="tok-n">1024</span>)
+    .<span class="tok-f">build</span>();
+
+<span class="tok-k">let</span> add = lua.<span class="tok-f">create_function</span>(|a: <span class="tok-f">i64</span>, b: <span class="tok-f">i64</span>| a + b);
+lua.<span class="tok-f">set_global</span>(<span class="tok-s">"add"</span>, add)?;
+<span class="tok-k">let</span> r: <span class="tok-f">i64</span> = lua.<span class="tok-f">eval</span>(<span class="tok-s">"return add(40, 2)"</span>)?;</code></pre></div>
+    </div>
+
+    <div class="hero-cta" style="margin-top:2rem">
+      <a class="btn btn-primary" href="docs.html">Full embedding guide →</a>
+      <a class="btn btn-ghost" href="https://crates.io/crates/luna-jit">crates.io</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ========================================================== FOOTER -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+        <p>A Lua runtime in pure Rust. Built and maintained by GOLIA K.K.</p>
+      </div>
+      <div class="foot-col">
+        <h5>Docs</h5>
+        <a href="docs.html#getting-started">Getting started</a>
+        <a href="docs.html#embedding">Embedding</a>
+        <a href="docs.html#compatibility">Compatibility</a>
+        <a href="docs.html#architecture">Architecture</a>
+        <a href="docs.html#security">Security</a>
+      </div>
+      <div class="foot-col">
+        <h5>Packages</h5>
+        <a href="https://crates.io/crates/luna-jit">luna-jit</a>
+        <a href="https://crates.io/crates/luna-core">luna-core</a>
+        <a href="https://crates.io/crates/luna-aot">luna-aot</a>
+        <a href="https://docs.rs/luna-jit">docs.rs</a>
+      </div>
+      <div class="foot-col">
+        <h5>Project</h5>
+        <a href="https://github.com/goliajp/luna">GitHub</a>
+        <a href="https://github.com/goliajp/luna/blob/master/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-MIT">MIT license</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-APACHE">Apache-2.0</a>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>© 2026 GOLIA K.K. · luna is dual-licensed MIT / Apache-2.0</span>
+      <span class="mono">luna.golia.jp</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

@@ -150,12 +150,11 @@ fn rss_kb() -> u64 {
         let out = Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "rss="])
             .output();
-        if let Ok(out) = out {
-            if out.status.success() {
-                if let Ok(s) = std::str::from_utf8(&out.stdout) {
-                    return s.trim().parse().unwrap_or(0);
-                }
-            }
+        if let Ok(out) = out
+            && out.status.success()
+            && let Ok(s) = std::str::from_utf8(&out.stdout)
+        {
+            return s.trim().parse().unwrap_or(0);
         }
         0
     }

@@ -45,7 +45,7 @@ jobs:
       CI: 1  # Match the CI byte-strip sort.lua AA gate in
              # official_run.rs (Phase 1.B residual).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 

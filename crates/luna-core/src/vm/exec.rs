@@ -2923,14 +2923,14 @@ impl Vm {
         };
         let bound = (self.gc_top as usize).min(self.stack.len());
         for i in 0..bound {
-            if let Some(h) = header(self.stack[i]) {
-                if !live.contains(&h) {
-                    panic!(
-                        "[gc-verify] {ctx}: rooted stack slot {i} (gc_top {}, top {}) \
+            if let Some(h) = header(self.stack[i])
+                && !live.contains(&h)
+            {
+                panic!(
+                    "[gc-verify] {ctx}: rooted stack slot {i} (gc_top {}, top {}) \
                          holds a dead value {h:#x} after collect",
-                        self.gc_top, self.top,
-                    );
-                }
+                    self.gc_top, self.top,
+                );
             }
         }
         // Diagnostic tier: a dead value ABOVE the cursor is only a bug if
@@ -2943,24 +2943,24 @@ impl Vm {
                 let hi = (base + maxs).min(self.stack.len());
                 let pc = f.pc;
                 for i in bound.max(base)..hi {
-                    if let Some(h) = header(self.stack[i]) {
-                        if !live.contains(&h) {
-                            let reg = (i - base) as u32;
-                            if let Some(lv) = f
-                                .closure
-                                .proto
-                                .locvars
-                                .iter()
-                                .find(|lv| lv.reg == reg && lv.start_pc <= pc && pc < lv.end_pc)
-                            {
-                                panic!(
-                                    "[gc-verify] {ctx}: frame {fi} IN-SCOPE LOCAL '{}' \
+                    if let Some(h) = header(self.stack[i])
+                        && !live.contains(&h)
+                    {
+                        let reg = (i - base) as u32;
+                        if let Some(lv) = f
+                            .closure
+                            .proto
+                            .locvars
+                            .iter()
+                            .find(|lv| lv.reg == reg && lv.start_pc <= pc && pc < lv.end_pc)
+                        {
+                            panic!(
+                                "[gc-verify] {ctx}: frame {fi} IN-SCOPE LOCAL '{}' \
                                      (reg {reg}, abs {i}, pc {pc}, gc_top {}) holds a \
                                      dead value {h:#x} — live_top cursor excluded a \
                                      live named local",
-                                    lv.name, self.gc_top,
-                                );
-                            }
+                                lv.name, self.gc_top,
+                            );
                         }
                     }
                 }
@@ -7518,10 +7518,10 @@ impl Vm {
                         if site_id > 0 {
                             let idx = (site_id - 1) as usize;
                             let head_resume_pc = decode_inline[idx].head_resume_pc;
-                            if pre_frames > 0 {
-                                if let CallFrame::Lua(f) = &mut self.frames[pre_frames - 1] {
-                                    f.pc = head_resume_pc;
-                                }
+                            if pre_frames > 0
+                                && let CallFrame::Lua(f) = &mut self.frames[pre_frames - 1]
+                            {
+                                f.pc = head_resume_pc;
                             }
                         }
                         let frames_len_now = self.frames.len();
@@ -8737,34 +8737,33 @@ impl Vm {
         // v2.13 WUC read-time probe (gc-verify): a dead query key at a
         // WRITE site, attributed to the instruction that produced it.
         #[cfg(feature = "gc-verify")]
-        if let Some(p) = (match key {
+        if let Some(p) = match key {
             Value::Str(s) => Some(s.as_ptr() as usize),
             Value::Table(t2) => Some(t2.as_ptr() as usize),
             _ => None,
-        }) {
-            if crate::runtime::gc_verify_probe::is_freed(p) {
-                let detail = match self.frames.last() {
-                    Some(CallFrame::Lua(f)) => {
-                        let pc = f.pc as usize;
-                        let mut w = String::new();
-                        for q in pc.saturating_sub(6)..(pc + 2) {
-                            if let Some(inst) = f.closure.proto.code.get(q) {
-                                w.push_str(&format!(
-                                    "\n  [{q}] {:?} a={} b={} c={} k={}",
-                                    inst.op(),
-                                    inst.a(),
-                                    inst.b(),
-                                    inst.c(),
-                                    inst.k()
-                                ));
-                            }
+        } && crate::runtime::gc_verify_probe::is_freed(p)
+        {
+            let detail = match self.frames.last() {
+                Some(CallFrame::Lua(f)) => {
+                    let pc = f.pc as usize;
+                    let mut w = String::new();
+                    for q in pc.saturating_sub(6)..(pc + 2) {
+                        if let Some(inst) = f.closure.proto.code.get(q) {
+                            w.push_str(&format!(
+                                "\n  [{q}] {:?} a={} b={} c={} k={}",
+                                inst.op(),
+                                inst.a(),
+                                inst.b(),
+                                inst.c(),
+                                inst.k()
+                            ));
                         }
-                        format!("pc={pc} base={} gc_top={} window:{w}", f.base, self.gc_top)
                     }
-                    _ => "non-Lua frame".into(),
-                };
-                panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
-            }
+                    format!("pc={pc} base={} gc_top={} window:{w}", f.base, self.gc_top)
+                }
+                _ => "non-Lua frame".into(),
+            };
+            panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
         }
         let mut cur = t;
         for _ in 0..MAX_TAG_LOOP {

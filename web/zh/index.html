@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>luna — 纯 Rust 实现的 Lua 运行时</title>
+<meta name="description" content="luna 是一个用纯 Rust 编写的 Lua 运行时:单个二进制内含 Lua 5.1–5.5 与 MacroLua、零依赖的解释器核心、基于 Cranelift 的 trace JIT、提前编译(AOT),以及为嵌入不受信任脚本而设计的沙箱。">
+<meta property="og:title" content="luna — 纯 Rust 实现的 Lua 运行时">
+<meta property="og:description" content="一个二进制里的五种 Lua 方言。零依赖核心。Cranelift JIT + AOT。为嵌入而生的沙箱。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://luna.golia.jp/zh/">
+<link rel="canonical" href="https://luna.golia.jp/zh/">
+<link rel="alternate" hreflang="en" href="https://luna.golia.jp/">
+<link rel="alternate" hreflang="zh" href="https://luna.golia.jp/zh/">
+<link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/">
+<link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/">
+<link rel="icon" type="image/svg+xml" href="/assets/luna-icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try{var t=localStorage.getItem("luna-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+    <nav class="nav-links">
+      <a href="#overview">概览</a>
+      <a href="#dialects">方言</a>
+      <a href="#architecture">架构</a>
+      <a href="#performance">性能</a>
+      <a href="#start">快速开始</a>
+      <a href="docs.html">文档</a>
+    </nav>
+    <span class="nav-spacer"></span>
+    <div class="nav-tools">
+      <div class="seg" role="group" aria-label="语言">
+        <a href="../">EN</a>
+        <a href="./" aria-current="true">中文</a>
+        <a href="../ja/">日本語</a>
+      </div>
+      <button class="icon-btn" data-theme-toggle aria-label="切换主题">☾</button>
+      <a class="icon-btn" href="https://github.com/goliajp/luna" aria-label="GitHub 仓库" title="GitHub">
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+      <button class="icon-btn nav-toggle" aria-label="菜单">☰</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ============================================================ HERO -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <span class="badge reveal" style="animation-delay:.05s"><span class="dot"></span> v2.17.0 · MIT / Apache-2.0</span>
+      <h1 class="reveal" style="animation-delay:.12s">用纯 <em>Rust</em> 打造的 Lua 运行时。</h1>
+      <p class="lead reveal" style="animation-delay:.2s">单个二进制里容纳五种 Lua 方言与 MacroLua。一个零依赖的解释器核心、一个基于 Cranelift 的 trace JIT、提前编译成原生二进制,以及一个为嵌入不受信任脚本而设计的沙箱。</p>
+      <div class="hero-cta reveal" style="animation-delay:.28s">
+        <a class="btn btn-primary" href="docs.html">阅读文档 →</a>
+        <a class="btn btn-ghost" href="#start"><span class="mono">cargo add</span> luna-jit</a>
+      </div>
+      <div class="hero-meta reveal" style="animation-delay:.36s">
+        <span><b>5.1 – 5.5</b> + MacroLua</span>
+        <span>核心 <b>0</b> 依赖</span>
+        <span>冷启动堆 <b>~33 KB</b></span>
+        <span><b>lua.h</b> 兼容 C ABI</span>
+      </div>
+    </div>
+    <div class="hero-disc-wrap reveal" style="animation-delay:.15s">
+      <div class="hero-ring r2"></div>
+      <div class="hero-ring"></div>
+      <div class="hero-disc" role="img" aria-label="渲染的月亮"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= OVERVIEW -->
+<section class="band" id="overview">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="01">luna 是什么</span>
+      <h2>一个运行时,覆盖你要嵌入的每一种 Lua。</h2>
+      <p class="lead">luna 用安全的 Rust 从头实现了整个 Lua 语言家族——没有 C,嵌入方接触到的表层也没有 <span class="mono">unsafe</span>。按需选择依赖体量,再随工作负载增长逐步用上 JIT 与 AOT 两层。</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="k">§ 方言</div>
+        <h3>5.1 – 5.5 + MacroLua</h3>
+        <p>所有主线 Lua 方言都在同一构建里,在构造 <span class="mono">Vm</span> 时逐一选定。同一进程可并发承载多种方言而互不干扰。MacroLua 在 5.4 表层之上加入编译期 <span class="mono">@macro</span> 展开。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ 核心</div>
+        <h3>零依赖核心</h3>
+        <p><span class="mono">luna-core</span> 只引入一个 crate——它自己。每次提交都由 <span class="mono">cargo deny</span> 关卡强制保证。这意味着极小的审计面、以秒计的构建,以及无需 <span class="mono">mmap</span> RWX 的干净 <span class="mono">wasm32</span> 目标。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ jit</div>
+        <h3>Cranelift trace JIT</h3>
+        <p>一个 LuaJIT 血统的 trace 式编译器。热循环被记录成带类型的 IR,经 Cranelift 降级后作为原生机器码运行——通过 trait 接入,使解释器路径永不依赖具体后端。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ aot</div>
+        <h3>提前编译的二进制</h3>
+        <p><span class="mono">luna-aot</span> 把一份 Lua 源码变成自包含的原生可执行文件——字节码、预热的 trace、静态运行时全部链接进同一个二进制,宿主上无需安装 luna 即可运行。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ 嵌入</div>
+        <h3>顺手的嵌入体验</h3>
+        <p>一个 mlua 风格的 <span class="mono">Lua</span> 门面、自动解析参数的类型化原生函数、表构造器、通过 derive 宏暴露的 userdata、Rust 侧的协程与调试钩子,以及结构化的 <span class="mono">LuaError</span>。</p>
+      </div>
+      <div class="card">
+        <div class="k k-warm">§ 沙箱</div>
+        <h3>为约束脚本而建</h3>
+        <p>安全边界由宿主掌握。精选的标准库白名单、指令预算、近似内存上限,以及默认关闭的字节码加载——脚本能看到的每一项能力,都是 Rust 主动放行的。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ======================================================== DIALECTS -->
+<section class="band" id="dialects">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="02">方言数据表</span>
+      <h2>每种方言能做什么。</h2>
+      <p class="lead">特性的可用性由 <span class="mono">src/version.rs</span> 中的能力判定驱动。luna 生成的按方言字节码与 PUC 编译器格式一致,因此 PUC 编译出的 <span class="mono">.luac</span> 文件可直接加载。</p>
+    </div>
+    <div class="sheet-wrap">
+      <table class="sheet">
+        <thead>
+          <tr><th>特性</th><th class="c">5.1</th><th class="c">5.2</th><th class="c">5.3</th><th class="c">5.4</th><th class="c">5.5</th><th class="c">MacroLua</th></tr>
+        </thead>
+        <tbody>
+          <tr class="grp"><td colspan="7">数值</td></tr>
+          <tr><td>整数子类型 <span class="mono">Int</span></td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">//</span> 向下取整除</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>位运算 <span class="mono">&amp; | ~ &lt;&lt; &gt;&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>十六进制浮点 <span class="mono">0x1p4</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">语法</td></tr>
+          <tr><td><span class="mono">goto</span> / <span class="mono">::label::</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>空语句 <span class="mono">;</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">字符串</td></tr>
+          <tr><td><span class="mono">\xXX</span> / <span class="mono">\z</span> 转义</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">\u{XXXX}</span> Unicode 转义</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">5.4+ 属性</td></tr>
+          <tr><td><span class="mono">local &lt;const&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">local &lt;close&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">5.5 独有</td></tr>
+          <tr><td><span class="mono">global</span> 关键字</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c no">–</td></tr>
+          <tr><td>具名变参 <span class="mono">function f(...name)</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c no">–</td></tr>
+          <tr class="grp"><td colspan="7">MacroLua 独有</td></tr>
+          <tr><td><span class="mono">@name(args)</span> 编译期宏</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="doc-toc" style="margin-top:1rem">完整矩阵、标准库覆盖与 C API 表面见 <a class="xref" href="docs.html#compatibility">兼容性参考</a>。</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ==================================================== ARCHITECTURE -->
+<section class="band" id="architecture">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="03">架构</span>
+      <h2>自己决定依赖表面。</h2>
+      <p class="lead">luna 以一个含五个可发布 crate 的 Cargo 工作区形式交付。解释器核心独立成立;JIT 与 AOT 两层通过 trait 边界叠加其上,因此移除或替换后端都不会触碰核心 API。</p>
+    </div>
+    <div class="cards" style="margin-bottom:2rem">
+      <div class="card">
+        <div class="k">luna-core</div>
+        <h3>解释器</h3>
+        <p>词法、语法、按方言的编译器、分派器、运行时、标准库、NaN 装箱的值、侵入式标记-清除 GC、PUC 模式引擎,以及 JIT trait 表面。<strong>零第三方 crate。</strong></p>
+      </div>
+      <div class="card">
+        <div class="k">luna-jit</div>
+        <h3>JIT 与 C ABI</h3>
+        <p>Cranelift 后端、以 <span class="mono">cdylib</span> / <span class="mono">staticlib</span> 形式暴露的 <span class="mono">lua.h</span> 兼容 C ABI、<span class="mono">luna</span> CLI,以及 <span class="mono">Lua</span> 嵌入门面。</p>
+      </div>
+      <div class="card">
+        <div class="k">luna-aot</div>
+        <h3>AOT 编译器</h3>
+        <p>一个构建期工具:Lua 源码 → 独立原生二进制。它不是所产物的运行时依赖。</p>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem" class="arch-split">
+      <div>
+        <h3 style="margin-bottom:1rem">JIT 流水线</h3>
+        <div class="pipe">
+          <div class="step"><span class="i">01</span> 解释器分派器 —— 累加计数,检查阈值</div>
+          <div class="arrow">↓ 检测到热路径</div>
+          <div class="step"><span class="i">02</span> Trace 记录器 —— 把操作码回放为带类型的 IR</div>
+          <div class="arrow">↓ 闭合的 trace,跨越 trait 边界</div>
+          <div class="step jit"><span class="i">03</span> Cranelift 后端 —— 降级 IR、寄存器分配、发射</div>
+          <div class="arrow">↓ mmap RWX + 符号重定位</div>
+          <div class="step jit"><span class="i">04</span> 原生机器码 —— 运行至一次 side-exit</div>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:1rem">源码分类</h3>
+        <p style="color:var(--text-dim);font-size:.95rem">每个文件都落在三类之一,各有各的改动纪律与 review 深度:</p>
+        <ul style="color:var(--text-dim);font-size:.95rem;margin-left:1.1rem">
+          <li><strong>石头</strong> —— 与业务无关的地基(模式引擎、堆、值布局)。做 fuzz、做 bench、semver 严格。</li>
+          <li><strong>钢筋</strong> —— Lua 领域原语(编译器、分派器、JIT 后端)。逐方言与 PUC 交叉校验。</li>
+          <li><strong>水泥</strong> —— 宿主胶水(CLI、C ABI、标准库绑定、AOT)。随嵌入方需求自由演化。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===================================================== PERFORMANCE -->
+<section class="band" id="performance">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="04">性能纪律</span>
+      <h2>要么诚实的数字,要么不给数字。</h2>
+      <p class="lead">luna 刻意<strong>不</strong>发布一个精挑细选的头条比率。一个恰好胜出的 microbench 单元只是营销产物;真正值得追的信号,是那个落后的离群点。我们发布的是可复现的基线,以及产出它们的方法论。</p>
+    </div>
+    <div class="stats" style="margin-bottom:1.5rem">
+      <div class="stat"><div class="n">33<span class="u">KB</span></div><div class="l">冷启动峰值堆 · 空 Vm</div></div>
+      <div class="stat"><div class="n">435</div><div class="l">分配次数 · 冷启动</div></div>
+      <div class="stat"><div class="n">~4.5<span class="u">MiB</span></div><div class="l">AOT 二进制 · release,strip 后</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">第三方依赖 · luna-core</div></div>
+    </div>
+    <div class="note">
+      <b>可测量、可复现的基线。</b>内存在 dhat 下跨五个工作负载测量(冷启动、REPL 空转、host-root churn、分配 + GC、userdata 生命周期);任一负载稳态回归超过 5% 都会触发已跟踪的告警。二进制大小取自 <span class="mono">cargo publish --dry-run</span> 与 strip 后的 release 测量。复现脚本随文档一同交付——这里没有一个数字需要你凭空相信。
+    </div>
+    <p class="doc-toc" style="margin-top:1.2rem">方法论、调优旋钮与热路径计数器详见 <a class="xref" href="docs.html#performance">性能参考</a>。</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ======================================================= QUICKSTART -->
+<section class="band" id="start">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="05">快速开始</span>
+      <h2>三行就能嵌入。</h2>
+      <p class="lead">加一个 crate,打开你要的库,求值即可。需要时再逐步用上沙箱、原生函数与 userdata。</p>
+    </div>
+
+    <div data-tabs style="margin-bottom:1.5rem">
+      <div class="tabs">
+        <button class="tab" data-tab="jit" aria-selected="true">luna-jit(JIT)</button>
+        <button class="tab" data-tab="core" aria-selected="false">luna-core(解释器)</button>
+        <button class="tab" data-tab="cli" aria-selected="false">命令行</button>
+      </div>
+      <div class="tabpanel" data-panel="jit">
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code><span class="tok-c"># 完整解释器 + Cranelift JIT + C ABI</span>
+[dependencies]
+luna-jit = <span class="tok-s">"2"</span></code></pre></div>
+      </div>
+      <div class="tabpanel" data-panel="core" hidden>
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code><span class="tok-c"># 最小表面 —— 纯解释器,零依赖,对 wasm 友好</span>
+[dependencies]
+luna-core = <span class="tok-s">"2"</span></code></pre></div>
+      </div>
+      <div class="tabpanel" data-panel="cli" hidden>
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>cargo install luna-jit          <span class="tok-c"># 安装 `luna` REPL 与脚本运行器</span>
+luna -e <span class="tok-s">"print('hello, world')"</span>
+luna path/to/script.lua</code></pre></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem" class="arch-split">
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs — hello</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code><span class="tok-k">use</span> luna_jit::vm::<span class="tok-f">Vm</span>;
+<span class="tok-k">use</span> luna_jit::version::<span class="tok-f">LuaVersion</span>;
+
+<span class="tok-k">let mut</span> vm = <span class="tok-f">Vm</span>::<span class="tok-f">new</span>(<span class="tok-f">LuaVersion</span>::<span class="tok-f">Lua55</span>);
+<span class="tok-k">let</span> out = vm.<span class="tok-f">eval</span>(<span class="tok-s">"return 1 + 2"</span>)?;
+<span class="tok-c">// out[0] == Value::Int(3)</span></code></pre></div>
+
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs — 沙箱</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code><span class="tok-k">use</span> luna_jit::<span class="tok-f">Lua</span>;
+<span class="tok-k">use</span> luna_jit::version::<span class="tok-f">LuaVersion</span>;
+
+<span class="tok-k">let mut</span> lua = <span class="tok-f">Lua</span>::<span class="tok-f">sandbox</span>(<span class="tok-f">LuaVersion</span>::<span class="tok-f">Lua54</span>)
+    .<span class="tok-f">open_base</span>().<span class="tok-f">open_math</span>().<span class="tok-f">open_string</span>()
+    .<span class="tok-f">with_instr_budget</span>(<span class="tok-n">1_000_000</span>)
+    .<span class="tok-f">with_memory_cap</span>(<span class="tok-n">8</span> * <span class="tok-n">1024</span> * <span class="tok-n">1024</span>)
+    .<span class="tok-f">build</span>();
+
+<span class="tok-k">let</span> add = lua.<span class="tok-f">create_function</span>(|a: <span class="tok-f">i64</span>, b: <span class="tok-f">i64</span>| a + b);
+lua.<span class="tok-f">set_global</span>(<span class="tok-s">"add"</span>, add)?;
+<span class="tok-k">let</span> r: <span class="tok-f">i64</span> = lua.<span class="tok-f">eval</span>(<span class="tok-s">"return add(40, 2)"</span>)?;</code></pre></div>
+    </div>
+
+    <div class="hero-cta" style="margin-top:2rem">
+      <a class="btn btn-primary" href="docs.html">完整嵌入指南 →</a>
+      <a class="btn btn-ghost" href="https://crates.io/crates/luna-jit">crates.io</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ========================================================== FOOTER -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+        <p>纯 Rust 实现的 Lua 运行时。由 GOLIA 株式会社构建与维护。</p>
+      </div>
+      <div class="foot-col">
+        <h5>文档</h5>
+        <a href="docs.html#getting-started">快速上手</a>
+        <a href="docs.html#embedding">嵌入</a>
+        <a href="docs.html#compatibility">兼容性</a>
+        <a href="docs.html#architecture">架构</a>
+        <a href="docs.html#security">安全</a>
+      </div>
+      <div class="foot-col">
+        <h5>包</h5>
+        <a href="https://crates.io/crates/luna-jit">luna-jit</a>
+        <a href="https://crates.io/crates/luna-core">luna-core</a>
+        <a href="https://crates.io/crates/luna-aot">luna-aot</a>
+        <a href="https://docs.rs/luna-jit">docs.rs</a>
+      </div>
+      <div class="foot-col">
+        <h5>项目</h5>
+        <a href="https://github.com/goliajp/luna">GitHub</a>
+        <a href="https://github.com/goliajp/luna/blob/master/CHANGELOG.md">更新日志</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-MIT">MIT 许可</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-APACHE">Apache-2.0</a>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>© 2026 GOLIA 株式会社 · luna 以 MIT / Apache-2.0 双许可发布</span>
+      <span class="mono">luna.golia.jp</span>
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>
