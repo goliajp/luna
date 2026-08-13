@@ -31,7 +31,7 @@ jobs:
     name: cargo llvm-cov vs baseline
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
@@ -59,7 +59,7 @@ jobs:
             coverage-current.json
       - name: upload current coverage as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-current
           path: coverage-current.json

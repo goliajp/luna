@@ -40,7 +40,7 @@ jobs:
       LUNA_GC_STRESS_N: ${{ inputs.iterations }}
       LUNA_POISON_STRESS_N: ${{ inputs.iterations }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
@@ -94,7 +94,7 @@ jobs:
 
       - name: Upload crash dumps + symbols
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: uafc-crashdumps-${{ matrix.harness }}
           path: |

@@ -21,13 +21,29 @@ jobs:
     name: cargo deny check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
           log-level: warn
+          # v2.17 H7: `--all-features` is a cargo-deny GLOBAL flag, so it
+          # goes in `arguments` (placed BEFORE the sub-command), not in
+          # `command-arguments` — same placement rule the comment below
+          # spells out for `--hide-inclusion-graph`.
+          #
+          # Without it, cargo-deny resolves only the default feature set
+          # and never sees the crates behind luna-tools' opt-in
+          # `flame-graph` / `mcode-disasm` features. That silently
+          # dropped coverage: our two quick-xml ignores started
+          # reporting `advisory-not-detected` (the advisory could not be
+          # reached to be ignored), and a yanked `spin 0.10.0` behind
+          # `pprof` went unnoticed until this flag was restored. The
+          # luna-tools Cargo.toml comment claiming cargo-deny "walks the
+          # whole lockfile regardless of feature gating" was true of an
+          # older cargo-deny and is not true now.
+          arguments: --all-features
           # `--hide-inclusion-graph` is a `check` sub-command option,
           # not a cargo-deny global option. cargo-deny-action's
           # `arguments` input is placed BEFORE the sub-command, so it
@@ -46,7 +62,7 @@ jobs:
     name: luna-core 0 third-party dep contract (F1)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
