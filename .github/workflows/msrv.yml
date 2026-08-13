@@ -1,29 +1,73 @@
 name: msrv
 
+# v2.17 H2 — this workflow was DEAD from its introduction until v2.17:
+# the trigger named a `main` branch, which this repo does not have (the
+# branches are `master` and `develop`). It therefore never ran once, and
+# that is precisely how the wrong `rust-version = "1.86"` declaration
+# survived from v1.1.0 through v2.16.0 while the tree had been using
+# let-chains (rustc 1.88+) the whole time. A gate that never runs looks
+# exactly like a gate that always passes.
+#
+# The MSRV floor is derived by measurement, not chosen — see the policy
+# comment on `rust-version` in the workspace Cargo.toml.
+
 on:
   push:
-    branches: [main]
+    branches: [master, develop]
   pull_request:
-    branches: [main]
+    branches: [master, develop]
+  workflow_dispatch:
+
+env:
+  # Single source of truth for this workflow. Must equal Cargo.toml's
+  # `[workspace.package] rust-version`; the first step asserts it.
+  MSRV: "1.88"
 
 jobs:
   msrv-check:
-    name: MSRV (1.86) — cargo check --workspace
+    name: MSRV — cargo check --workspace
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@1.97
-      - name: Verify Cargo.toml rust-version matches
+
+      - name: Verify Cargo.toml rust-version matches this workflow
         run: |
           set -euo pipefail
           DECLARED=$(grep -E '^rust-version' Cargo.toml | head -1 | awk -F'"' '{print $2}')
-          if [ "$DECLARED" != "1.86" ]; then
-            echo "::error::Cargo.toml rust-version ($DECLARED) does not match CI matrix (1.86). Bump both together."
+          if [ "$DECLARED" != "$MSRV" ]; then
+            echo "::error::Cargo.toml rust-version ($DECLARED) does not match this workflow's MSRV ($MSRV). Bump both together, and add a CHANGELOG entry — raising MSRV is a minor-version change."
             exit 1
           fi
+          echo "MSRV declaration agrees: $DECLARED"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+
       - name: cargo check --workspace
         run: cargo check --workspace --all-targets
+
       - name: cargo check -p luna-core
         run: cargo check -p luna-core --all-targets
+
+      # The floor must be TIGHT, not merely sufficient: if MSRV-1 also
+      # compiles, the declared floor is needlessly high and is shutting
+      # out embedders for no reason. This step fails the job when that
+      # happens, so the declaration cannot silently drift upward again.
+      - name: Assert the floor is tight (MSRV-1 must fail)
+        run: |
+          set -euo pipefail
+          MINOR=$(echo "$MSRV" | cut -d. -f2)
+          PREV="1.$((MINOR - 1))"
+          echo "Installing $PREV to confirm it does NOT build the tree..."
+          rustup toolchain install "$PREV" --profile minimal
+          # Cargo refuses outright on the rust-version declaration, so
+          # lower it for the probe only; we want the compiler's verdict.
+          sed -i "s/^rust-version = \"$MSRV\"/rust-version = \"$PREV\"/" Cargo.toml
+          if cargo "+$PREV" check -p luna-core --all-targets 2>/dev/null; then
+            echo "::error::luna-core also compiles on $PREV — the declared MSRV ($MSRV) is higher than the tree actually needs. Lower it."
+            exit 1
+          fi
+          echo "$PREV correctly fails; $MSRV is a tight floor."

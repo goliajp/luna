@@ -84,10 +84,28 @@ exclude = [
 [workspace.package]
 version = "2.16.0"
 edition = "2024"
-# MSRV (G1): tracks the rustc that v1.0 shipped against. Bumping this
-# is a minor-version change because embedders pinning to a specific
-# rustc need a heads-up. CI matrix locks against this value.
-rust-version = "1.97"
+# MSRV (G1) policy, restated v2.17 after the 1.86 declaration was found
+# to have been wrong since v1.1.0:
+#
+#   This value tracks the oldest rustc that ACTUALLY COMPILES the tree —
+#   it is derived by measurement, never chosen to match the newest
+#   stable. 1.88 is the floor because the codebase uses let-chains in
+#   edition 2024 (58 sites), stabilised in 1.88.0; 1.87 fails with
+#   E0658 "`let` expressions in this position are unstable".
+#
+#   Raising it is a minor-version change with a CHANGELOG entry, because
+#   embedders pinning a specific rustc need a heads-up. Raise it only
+#   when the tree genuinely needs a newer language feature — not to
+#   silence a lint. (The v2.16 -> v2.17 gap is exactly that mistake:
+#   `69b6828` raised MSRV to 1.97 with no feature driving it, which
+#   unlocked clippy's MSRV-gated `collapsible_if` let-chain suggestion
+#   and broke CI for 34 days.)
+#
+#   msrv.yml locks against this value and MUST stay runnable — it was
+#   dead from its introduction until v2.17 (trigger named a `main`
+#   branch this repo does not have), which is how the wrong 1.86
+#   declaration survived 11 releases.
+rust-version = "1.88"
 authors = ["GOLIA K.K. <lihao@golia.jp>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goliajp/luna"
