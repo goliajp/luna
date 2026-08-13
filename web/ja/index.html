@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>luna — 純粋な Rust による Lua ランタイム</title>
+<meta name="description" content="luna は純粋な Rust で書かれた Lua ランタイムです。1 つのバイナリに Lua 5.1〜5.5 と MacroLua、依存ゼロのインタプリタコア、Cranelift ベースのトレース JIT、事前コンパイル(AOT)、そして信頼できないスクリプトを埋め込むためのサンドボックスを備えます。">
+<meta property="og:title" content="luna — 純粋な Rust による Lua ランタイム">
+<meta property="og:description" content="1 つのバイナリに 5 つの Lua ダイアレクト。依存ゼロのコア。Cranelift JIT + AOT。埋め込みのためのサンドボックス。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://luna.golia.jp/ja/">
+<link rel="canonical" href="https://luna.golia.jp/ja/">
+<link rel="alternate" hreflang="en" href="https://luna.golia.jp/">
+<link rel="alternate" hreflang="zh" href="https://luna.golia.jp/zh/">
+<link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/">
+<link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/">
+<link rel="icon" type="image/svg+xml" href="/assets/luna-icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+<script>try{var t=localStorage.getItem("luna-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+    <nav class="nav-links">
+      <a href="#overview">概要</a>
+      <a href="#dialects">ダイアレクト</a>
+      <a href="#architecture">アーキテクチャ</a>
+      <a href="#performance">パフォーマンス</a>
+      <a href="#start">クイックスタート</a>
+      <a href="docs.html">ドキュメント</a>
+    </nav>
+    <span class="nav-spacer"></span>
+    <div class="nav-tools">
+      <div class="seg" role="group" aria-label="言語">
+        <a href="../">EN</a>
+        <a href="../zh/">中文</a>
+        <a href="./" aria-current="true">日本語</a>
+      </div>
+      <button class="icon-btn" data-theme-toggle aria-label="テーマ切り替え">☾</button>
+      <a class="icon-btn" href="https://github.com/goliajp/luna" aria-label="GitHub リポジトリ" title="GitHub">
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+      <button class="icon-btn nav-toggle" aria-label="メニュー">☰</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ============================================================ HERO -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <span class="badge reveal" style="animation-delay:.05s"><span class="dot"></span> v2.16.0 · MIT / Apache-2.0</span>
+      <h1 class="reveal" style="animation-delay:.12s">純粋な <em>Rust</em> による Lua ランタイム。</h1>
+      <p class="lead reveal" style="animation-delay:.2s">5 つの Lua ダイアレクトと MacroLua を 1 つのバイナリに。依存ゼロのインタプリタコア、Cranelift ベースのトレース JIT、ネイティブへの事前コンパイル、そして信頼できないスクリプトを埋め込むために設計されたサンドボックス。</p>
+      <div class="hero-cta reveal" style="animation-delay:.28s">
+        <a class="btn btn-primary" href="docs.html">ドキュメントを読む →</a>
+        <a class="btn btn-ghost" href="#start"><span class="mono">cargo add</span> luna-jit</a>
+      </div>
+      <div class="hero-meta reveal" style="animation-delay:.36s">
+        <span><b>5.1 – 5.5</b> + MacroLua</span>
+        <span>コアの依存 <b>0</b></span>
+        <span>コールドスタート <b>~33 KB</b></span>
+        <span><b>lua.h</b> 互換 C ABI</span>
+      </div>
+    </div>
+    <div class="hero-disc-wrap reveal" style="animation-delay:.15s">
+      <div class="hero-ring r2"></div>
+      <div class="hero-ring"></div>
+      <div class="hero-disc" role="img" aria-label="描画された月"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================= OVERVIEW -->
+<section class="band" id="overview">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="01">luna とは</span>
+      <h2>埋め込みたいすべての Lua を、1 つのランタイムで。</h2>
+      <p class="lead">luna は Lua 言語ファミリを安全な Rust だけで一から実装しています。C はなく、埋め込み側が触れる表層に <span class="mono">unsafe</span> もありません。必要な依存量を選び、ワークロードの要求に応じて JIT と AOT の各層へ育てていけます。</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="k">§ dialects</div>
+        <h3>5.1 – 5.5 + MacroLua</h3>
+        <p>主要な Lua ダイアレクトすべてを 1 つのビルドに収め、<span class="mono">Vm</span> 構築時にダイアレクトを選択します。1 つのプロセスが複数のダイアレクトを干渉なく同時にホストできます。MacroLua は 5.4 の表層にコンパイル時 <span class="mono">@macro</span> 展開を加えます。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ core</div>
+        <h3>依存ゼロのコア</h3>
+        <p><span class="mono">luna-core</span> が引き込む crate は、それ自身ただ 1 つ。<span class="mono">cargo deny</span> ゲートがコミットごとにこれを保証します。監査面は極小、ビルドは数秒、そして <span class="mono">mmap</span> RWX を要さないクリーンな <span class="mono">wasm32</span> ターゲットが得られます。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ jit</div>
+        <h3>Cranelift トレース JIT</h3>
+        <p>LuaJIT 系譜のトレースベースコンパイラ。ホットループは型付き IR に記録され、Cranelift を通じて降格され、ネイティブ機械語として実行されます。トレイト越しに差し込まれるため、インタプリタ経路はバックエンドに依存しません。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ aot</div>
+        <h3>事前コンパイルされたバイナリ</h3>
+        <p><span class="mono">luna-aot</span> は Lua ソースを自己完結型のネイティブ実行ファイルに変換します。バイトコード、温めたトレース、静的ランタイムが 1 つのバイナリにリンクされ、ホストに luna が無くても動きます。</p>
+      </div>
+      <div class="card">
+        <div class="k">§ embed</div>
+        <h3>心地よい埋め込み</h3>
+        <p>mlua 風の <span class="mono">Lua</span> ファサード、引数を自動デコードする型付きネイティブ関数、テーブルビルダー、derive マクロによる userdata、Rust 側のコルーチンとデバッグフック、そして構造化された <span class="mono">LuaError</span>。</p>
+      </div>
+      <div class="card">
+        <div class="k k-warm">§ sandbox</div>
+        <h3>スクリプトを閉じ込めるために</h3>
+        <p>セキュリティ境界はホストが握ります。厳選した標準ライブラリのホワイトリスト、命令予算、概算メモリ上限、そして既定でオフのバイトコードロード。スクリプトが見るすべての能力は、Rust が明示的に許可したものです。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ======================================================== DIALECTS -->
+<section class="band" id="dialects">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="02">ダイアレクト仕様表</span>
+      <h2>各ダイアレクトができること。</h2>
+      <p class="lead">機能の有無は <span class="mono">src/version.rs</span> の能力述語で決まります。luna が生成するダイアレクト別バイトコードは PUC のコンパイラ形式に一致するため、PUC でコンパイルした <span class="mono">.luac</span> ファイルをそのままロードできます。</p>
+    </div>
+    <div class="sheet-wrap">
+      <table class="sheet">
+        <thead>
+          <tr><th>機能</th><th class="c">5.1</th><th class="c">5.2</th><th class="c">5.3</th><th class="c">5.4</th><th class="c">5.5</th><th class="c">MacroLua</th></tr>
+        </thead>
+        <tbody>
+          <tr class="grp"><td colspan="7">数値</td></tr>
+          <tr><td>整数サブタイプ <span class="mono">Int</span></td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">//</span> 切り捨て除算</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>ビット演算 <span class="mono">&amp; | ~ &lt;&lt; &gt;&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>十六進浮動小数 <span class="mono">0x1p4</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">構文</td></tr>
+          <tr><td><span class="mono">goto</span> / <span class="mono">::label::</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td>空文 <span class="mono">;</span></td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">文字列</td></tr>
+          <tr><td><span class="mono">\xXX</span> / <span class="mono">\z</span> エスケープ</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">\u{XXXX}</span> Unicode エスケープ</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">5.4+ の属性</td></tr>
+          <tr><td><span class="mono">local &lt;const&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr><td><span class="mono">local &lt;close&gt;</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c yes">✓</td></tr>
+          <tr class="grp"><td colspan="7">5.5 固有</td></tr>
+          <tr><td><span class="mono">global</span> キーワード</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c no">–</td></tr>
+          <tr><td>名前付き可変長引数 <span class="mono">function f(...name)</span></td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td><td class="c no">–</td></tr>
+          <tr class="grp"><td colspan="7">MacroLua 固有</td></tr>
+          <tr><td><span class="mono">@name(args)</span> コンパイル時マクロ</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c no">–</td><td class="c yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="doc-toc" style="margin-top:1rem">完全な機能表、標準ライブラリのカバレッジ、C API の表面は <a class="xref" href="docs.html#compatibility">互換性リファレンス</a>にあります。</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ==================================================== ARCHITECTURE -->
+<section class="band" id="architecture">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="03">アーキテクチャ</span>
+      <h2>依存の表面は、あなたが選ぶ。</h2>
+      <p class="lead">luna は 5 つの公開可能な crate からなる Cargo ワークスペースとして提供されます。インタプリタコアは単独で成立し、JIT と AOT の各層はトレイト境界を介してその上に重なります。バックエンドの削除や差し替えがコア API に触れることはありません。</p>
+    </div>
+    <div class="cards" style="margin-bottom:2rem">
+      <div class="card">
+        <div class="k">luna-core</div>
+        <h3>インタプリタ</h3>
+        <p>字句・構文解析、ダイアレクト別コンパイラ、ディスパッチャ、ランタイム、標準ライブラリ、NaN ボックス化された値、侵入的マーク&スイープ GC、PUC パターンエンジン、そして JIT トレイト表面。<strong>第三者 crate ゼロ。</strong></p>
+      </div>
+      <div class="card">
+        <div class="k">luna-jit</div>
+        <h3>JIT と C ABI</h3>
+        <p>Cranelift バックエンド、<span class="mono">cdylib</span> / <span class="mono">staticlib</span> として公開される <span class="mono">lua.h</span> 互換 C ABI、<span class="mono">luna</span> CLI、そして <span class="mono">Lua</span> 埋め込みファサード。</p>
+      </div>
+      <div class="card">
+        <div class="k">luna-aot</div>
+        <h3>AOT コンパイラ</h3>
+        <p>ビルド時ツール。Lua ソース → 単独ネイティブバイナリ。生成物のランタイム依存ではありません。</p>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem" class="arch-split">
+      <div>
+        <h3 style="margin-bottom:1rem">JIT パイプライン</h3>
+        <div class="pipe">
+          <div class="step"><span class="i">01</span> インタプリタディスパッチャ — カウンタ加算、閾値チェック</div>
+          <div class="arrow">↓ ホット経路を検出</div>
+          <div class="step"><span class="i">02</span> トレースレコーダ — オペコードを型付き IR に再生</div>
+          <div class="arrow">↓ 閉じたトレース、トレイト境界を越えて</div>
+          <div class="step jit"><span class="i">03</span> Cranelift バックエンド — IR 降格、レジスタ割付、発行</div>
+          <div class="arrow">↓ mmap RWX + シンボル再配置</div>
+          <div class="step jit"><span class="i">04</span> ネイティブ機械語 — サイドイグジットまで実行</div>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:1rem">ソースの分類</h3>
+        <p style="color:var(--text-dim);font-size:.95rem">各ファイルは 3 つの層のいずれかに属し、それぞれ変更規律とレビュー深度が異なります:</p>
+        <ul style="color:var(--text-dim);font-size:.95rem;margin-left:1.1rem">
+          <li><strong>Stone(石)</strong> — 業務非依存の基盤(パターンエンジン、ヒープ、値レイアウト)。fuzz とベンチを施し、semver は厳格。</li>
+          <li><strong>Steel(鋼)</strong> — Lua ドメインのプリミティブ(コンパイラ、ディスパッチャ、JIT バックエンド)。ダイアレクトごとに PUC と相互検証。</li>
+          <li><strong>Cement(コンクリート)</strong> — ホストのグルー(CLI、C ABI、標準ライブラリ束縛、AOT)。埋め込み側の要求に応じて自由に進化。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ===================================================== PERFORMANCE -->
+<section class="band" id="performance">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="04">パフォーマンスの規律</span>
+      <h2>誠実な数字を、さもなくば出さない。</h2>
+      <p class="lead">luna は、都合よく選んだ見出しの比率を<strong>あえて</strong>出しません。たまたま勝つマイクロベンチの 1 セルはマーケティングの産物にすぎず、追う価値のあるシグナルは、負ける外れ値のほうです。私たちが公開するのは、再現可能なベースラインと、それを生んだ方法論です。</p>
+    </div>
+    <div class="stats" style="margin-bottom:1.5rem">
+      <div class="stat"><div class="n">33<span class="u">KB</span></div><div class="l">コールドスタート ピークヒープ · 空の Vm</div></div>
+      <div class="stat"><div class="n">435</div><div class="l">アロケーション回数 · コールドスタート</div></div>
+      <div class="stat"><div class="n">~4.5<span class="u">MiB</span></div><div class="l">AOT バイナリ · release、strip 後</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">第三者依存 · luna-core</div></div>
+    </div>
+    <div class="note">
+      <b>測定可能で再現可能なベースライン。</b>メモリは dhat の下で 5 つのワークロード(コールドスタート、REPL アイドル、host-root churn、アロケーション + GC、userdata ライフサイクル)にわたり測定します。いずれかの定常状態で 5% を超える回帰は、追跡対象のアラームになります。バイナリサイズは <span class="mono">cargo publish --dry-run</span> と strip 後の release 測定値です。再現手順はドキュメントに同梱——ここに、鵜呑みにすべき数字は 1 つもありません。
+    </div>
+    <p class="doc-toc" style="margin-top:1.2rem">方法論、チューニングノブ、ホット経路カウンタは <a class="xref" href="docs.html#performance">パフォーマンスリファレンス</a>で解説しています。</p>
+  </div>
+</section>
+
+<hr class="divider">
+
+<!-- ======================================================= QUICKSTART -->
+<section class="band" id="start">
+  <div class="wrap">
+    <div class="band-head">
+      <span class="eyebrow" data-idx="05">クイックスタート</span>
+      <h2>3 行で埋め込む。</h2>
+      <p class="lead">crate を 1 つ追加し、必要なライブラリを開き、評価するだけ。サンドボックス、ネイティブ関数、userdata は必要になったときに。</p>
+    </div>
+
+    <div data-tabs style="margin-bottom:1.5rem">
+      <div class="tabs">
+        <button class="tab" data-tab="jit" aria-selected="true">luna-jit(JIT)</button>
+        <button class="tab" data-tab="core" aria-selected="false">luna-core(インタプリタ)</button>
+        <button class="tab" data-tab="cli" aria-selected="false">CLI</button>
+      </div>
+      <div class="tabpanel" data-panel="jit">
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code><span class="tok-c"># 完全なインタプリタ + Cranelift JIT + C ABI</span>
+[dependencies]
+luna-jit = <span class="tok-s">"2"</span></code></pre></div>
+      </div>
+      <div class="tabpanel" data-panel="core" hidden>
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code><span class="tok-c"># 最小の表面 —— 純インタプリタ、依存ゼロ、wasm フレンドリー</span>
+[dependencies]
+luna-core = <span class="tok-s">"2"</span></code></pre></div>
+      </div>
+      <div class="tabpanel" data-panel="cli" hidden>
+        <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>cargo install luna-jit          <span class="tok-c"># `luna` REPL とスクリプトランナー</span>
+luna -e <span class="tok-s">"print('hello, world')"</span>
+luna path/to/script.lua</code></pre></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem" class="arch-split">
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs — hello</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code><span class="tok-k">use</span> luna_jit::vm::<span class="tok-f">Vm</span>;
+<span class="tok-k">use</span> luna_jit::version::<span class="tok-f">LuaVersion</span>;
+
+<span class="tok-k">let mut</span> vm = <span class="tok-f">Vm</span>::<span class="tok-f">new</span>(<span class="tok-f">LuaVersion</span>::<span class="tok-f">Lua55</span>);
+<span class="tok-k">let</span> out = vm.<span class="tok-f">eval</span>(<span class="tok-s">"return 1 + 2"</span>)?;
+<span class="tok-c">// out[0] == Value::Int(3)</span></code></pre></div>
+
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs — サンドボックス</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code><span class="tok-k">use</span> luna_jit::<span class="tok-f">Lua</span>;
+<span class="tok-k">use</span> luna_jit::version::<span class="tok-f">LuaVersion</span>;
+
+<span class="tok-k">let mut</span> lua = <span class="tok-f">Lua</span>::<span class="tok-f">sandbox</span>(<span class="tok-f">LuaVersion</span>::<span class="tok-f">Lua54</span>)
+    .<span class="tok-f">open_base</span>().<span class="tok-f">open_math</span>().<span class="tok-f">open_string</span>()
+    .<span class="tok-f">with_instr_budget</span>(<span class="tok-n">1_000_000</span>)
+    .<span class="tok-f">with_memory_cap</span>(<span class="tok-n">8</span> * <span class="tok-n">1024</span> * <span class="tok-n">1024</span>)
+    .<span class="tok-f">build</span>();
+
+<span class="tok-k">let</span> add = lua.<span class="tok-f">create_function</span>(|a: <span class="tok-f">i64</span>, b: <span class="tok-f">i64</span>| a + b);
+lua.<span class="tok-f">set_global</span>(<span class="tok-s">"add"</span>, add)?;
+<span class="tok-k">let</span> r: <span class="tok-f">i64</span> = lua.<span class="tok-f">eval</span>(<span class="tok-s">"return add(40, 2)"</span>)?;</code></pre></div>
+    </div>
+
+    <div class="hero-cta" style="margin-top:2rem">
+      <a class="btn btn-primary" href="docs.html">埋め込みガイド全文 →</a>
+      <a class="btn btn-ghost" href="https://crates.io/crates/luna-jit">crates.io</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ========================================================== FOOTER -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+        <p>純粋な Rust による Lua ランタイム。GOLIA 株式会社が開発・保守しています。</p>
+      </div>
+      <div class="foot-col">
+        <h5>ドキュメント</h5>
+        <a href="docs.html#getting-started">はじめに</a>
+        <a href="docs.html#embedding">埋め込み</a>
+        <a href="docs.html#compatibility">互換性</a>
+        <a href="docs.html#architecture">アーキテクチャ</a>
+        <a href="docs.html#security">セキュリティ</a>
+      </div>
+      <div class="foot-col">
+        <h5>パッケージ</h5>
+        <a href="https://crates.io/crates/luna-jit">luna-jit</a>
+        <a href="https://crates.io/crates/luna-core">luna-core</a>
+        <a href="https://crates.io/crates/luna-aot">luna-aot</a>
+        <a href="https://docs.rs/luna-jit">docs.rs</a>
+      </div>
+      <div class="foot-col">
+        <h5>プロジェクト</h5>
+        <a href="https://github.com/goliajp/luna">GitHub</a>
+        <a href="https://github.com/goliajp/luna/blob/master/CHANGELOG.md">変更履歴</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-MIT">MIT ライセンス</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-APACHE">Apache-2.0</a>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>© 2026 GOLIA 株式会社 · luna は MIT / Apache-2.0 のデュアルライセンス</span>
+      <span class="mono">luna.golia.jp</span>
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

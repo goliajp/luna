@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation — luna</title>
+<meta name="description" content="luna documentation: getting started, embedding cookbook, dialect compatibility, architecture, JIT & AOT, threading, security, deployment, CLI, and the stable API contract.">
+<link rel="canonical" href="https://luna.golia.jp/docs.html">
+<link rel="alternate" hreflang="en" href="https://luna.golia.jp/docs.html">
+<link rel="alternate" hreflang="zh" href="https://luna.golia.jp/zh/docs.html">
+<link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/docs.html">
+<link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/docs.html">
+<link rel="icon" type="image/svg+xml" href="/assets/luna-icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<script>try{var t=localStorage.getItem("luna-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+    <nav class="nav-links">
+      <a href="index.html#overview">Overview</a>
+      <a href="index.html#dialects">Dialects</a>
+      <a href="index.html#architecture">Architecture</a>
+      <a href="docs.html">Docs</a>
+    </nav>
+    <span class="nav-spacer"></span>
+    <div class="nav-tools">
+      <div class="seg" role="group" aria-label="Language">
+        <a href="docs.html" aria-current="true">EN</a>
+        <a href="zh/docs.html">中文</a>
+        <a href="ja/docs.html">日本語</a>
+      </div>
+      <button class="icon-btn" data-theme-toggle aria-label="Toggle theme">☾</button>
+      <a class="icon-btn" href="https://github.com/goliajp/luna" aria-label="GitHub repository" title="GitHub">
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+      <button class="icon-btn nav-toggle" aria-label="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap docs-shell">
+  <!-- ---------------------------------------------------------- sidebar -->
+  <aside class="sidebar">
+    <h4>Getting started</h4>
+    <a href="#getting-started">Install &amp; hello</a>
+    <a href="#cli">CLI</a>
+    <h4>Guides</h4>
+    <a href="#embedding">Embedding</a>
+    <a href="#threading">Threading</a>
+    <a href="#security">Security &amp; sandbox</a>
+    <a href="#deploy">Deployment</a>
+    <a href="#jit-aot">JIT &amp; AOT</a>
+    <h4>Reference</h4>
+    <a href="#compatibility">Compatibility</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#performance">Performance</a>
+    <a href="#versioning">Versioning</a>
+  </aside>
+
+  <!-- ------------------------------------------------------------- main -->
+  <main class="doc-main">
+    <h1>Documentation</h1>
+    <p class="lead">Everything you need to embed luna in a Rust host — from a three-line hello to the stable API contract. Snapshotted against <span class="mono">v2.16.0</span>. The rustdoc API reference is on <a class="xref" href="https://docs.rs/luna-jit">docs.rs</a>.</p>
+
+    <!-- ============================================ getting started -->
+    <section id="getting-started">
+      <h2>Install &amp; hello</h2>
+      <p>luna is a Cargo workspace with five publishable crates. Pick the dependency footprint that fits: <span class="mono">luna-jit</span> for the full interpreter plus Cranelift JIT and the C ABI, or <span class="mono">luna-core</span> for a zero-dependency, wasm-friendly interpreter.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code># full interpreter + Cranelift JIT + C ABI
+luna-jit = "2"
+
+# or the minimum surface — pure interpreter, zero third-party deps
+luna-core = "2"</code></pre></div>
+      <p>Construct a <span class="mono">Vm</span> for a chosen dialect and evaluate. <span class="mono">Vm::new</span> opens every safe-by-default stdlib library and installs the JIT (a no-op backend under <span class="mono">luna-core</span>).</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>use luna_jit::vm::Vm;
+use luna_jit::version::LuaVersion;
+
+fn main() {
+    let mut vm = Vm::new(LuaVersion::Lua55);  // 5.5 + full stdlib + JIT on
+    let result = vm.eval("return 'hello, ' .. 'world'").unwrap();
+    let s: String = result[0].try_as_str().unwrap().to_string();
+    println!("{s}");
+}</code></pre></div>
+      <div class="note"><b>Which crate?</b> <span class="mono">luna-jit</span> re-exports everything in <span class="mono">luna-core</span>, so you can start with the JIT crate and never think about the split. Reach for <span class="mono">luna-core</span> directly only when you want the tiny audit surface, a fast build, or a <span class="mono">wasm32</span> target.</div>
+    </section>
+
+    <!-- ============================================ CLI -->
+    <section id="cli">
+      <h2>Command-line interface</h2>
+      <p>Installing <span class="mono">luna-jit</span> puts a <span class="mono">luna</span> binary on your path — a REPL and script runner.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>luna script.lua              # run a file
+luna -e "print(1 + 2)"       # run inline code
+luna --lua=5.4 script.lua    # pick a dialect
+luna                         # interactive REPL (Ctrl-D exits)</code></pre></div>
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead><tr><th>Flag</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">--lua=5.X</td><td>Select dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5; default 5.5)</td></tr>
+            <tr><td class="mono">--sandbox</td><td>Open base/math/string/table/coroutine only; reject bytecode loading</td></tr>
+            <tr><td class="mono">--budget=N</td><td>Set an instruction budget before running</td></tr>
+            <tr><td class="mono">--no-jit</td><td>Interpreter-only run (installs the null JIT backend)</td></tr>
+            <tr><td class="mono">--profile</td><td>Print trace-JIT counters after the script finishes</td></tr>
+            <tr><td class="mono">-e "&lt;code&gt;"</td><td>Run inline code instead of a file</td></tr>
+            <tr><td class="mono">-</td><td>Read source from stdin</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The REPL evaluates each line first as an expression (prefixed with <span class="mono">return</span>), then retries as a statement on syntax error — so both expressions and assignments work.</p>
+    </section>
+
+    <!-- ============================================ embedding -->
+    <section id="embedding">
+      <h2>Embedding</h2>
+      <p>The embedding API is the primary surface — richer than the C ABI, with fully safe ownership. Below is the shape of each capability; the full cookbook covers 14 sections including proc-macro userdata and the async surface.</p>
+
+      <h3>Sandbox for untrusted scripts</h3>
+      <p>The sandbox builder whitelists libraries and arms the budgets. A sandboxed script cannot <span class="mono">require</span>, touch the filesystem, or compile bytecode chunks.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">sandbox.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>use luna_jit::Lua;
+use luna_jit::version::LuaVersion;
+
+let mut lua = Lua::sandbox(LuaVersion::Lua54)
+    .open_base()
+    .open_math()
+    .open_string()
+    .open_table()
+    .with_instr_budget(1_000_000)      // ~10 ms wall-clock budget
+    .with_memory_cap(8 * 1024 * 1024)  // 8 MiB cap
+    .build();
+
+let r: i64 = lua.eval("return 1 + 2").unwrap();</code></pre></div>
+
+      <h3>Globals &amp; tables</h3>
+      <p><span class="mono">set_global</span> accepts any <span class="mono">IntoValue</span> type (with <span class="mono">Option&lt;T&gt;</span> mapping to nil). Tables come in a one-shot and a chained builder form.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">globals.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>vm.set_global("answer", 42_i64)?;
+vm.set_global("name", "luna")?;
+vm.set_global("missing", Option::&lt;i64&gt;::None)?;   // sets to nil
+
+// one-shot, fixed shape:
+let t = vm.table_of([("answer", 42_i64), ("year", 2026_i64)]);
+
+// or a chained builder for variable shapes:
+let t = vm.new_table()
+    .with("name", "luna")
+    .with(1_i64, "first array entry")
+    .build();</code></pre></div>
+
+      <h3>Typed native functions</h3>
+      <p><span class="mono">native_typed</span> bridges a Rust closure or fn-pointer to Lua with automatic argument decode and return encode — pure, multi-return, or fallible (<span class="mono">Result&lt;T, LuaError&gt;</span>), for arities 0 through 6.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">natives.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>let add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
+vm.set_global("add", add)?;
+
+let split = vm.native_typed(|x: i64| -&gt; (i64, i64) { (x / 10, x % 10) });
+vm.set_global("split", split)?;
+
+let safe_div = vm.native_typed(|a: i64, b: i64| -&gt; Result&lt;i64, LuaError&gt; {
+    if b == 0 { Err(LuaError::new(Value::Nil)) } else { Ok(a / b) }
+});
+vm.set_global("safe_div", safe_div)?;</code></pre></div>
+
+      <h3>Userdata — exposing host types</h3>
+      <p>Stash any <span class="mono">T: 'static</span> Rust value behind Lua userdata. An empty <span class="mono">impl LuaUserdata for T {}</span> is enough to bridge; add methods and metamethods to make it feel native. A <span class="mono">#[derive(LuaUserdata)]</span> proc-macro generates the boilerplate.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">userdata.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>use luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
+
+struct Counter { value: i64 }
+
+impl LuaUserdata for Counter {
+    fn type_name() -&gt; &amp;'static str { "Counter" }
+    fn add_methods&lt;M: UserdataMethods&lt;Self&gt;&gt;(m: &amp;mut M) {
+        m.add_method("get", |_vm, this, ()| Ok::&lt;_, _&gt;(this.value));
+        m.add_method_mut("incr", |_vm, this, (by,): (i64,)| {
+            this.value += by; Ok::&lt;_, _&gt;(())
+        });
+        m.add_meta_method(MetaMethod::ToString, |_vm, this, ()| {
+            Ok::&lt;_, _&gt;(format!("Counter({})", this.value))
+        });
+    }
+}
+
+vm.set_userdata("c", Counter { value: 100 })?;
+vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre></div>
+      <div class="note warm"><b>One unsound-to-break rule.</b> If a userdata holds any <span class="mono">Gc&lt;…&gt;</span> field, you must override <span class="mono">trace</span> and <span class="mono">m.mark(...)</span> every handle — inside <span class="mono">trace</span> you may only mark, never call the Vm, allocate, or lock. A missing <span class="mono">trace</span> is a use-after-free. The derive macro handles this for you.</div>
+
+      <h3>Coroutines &amp; debug hooks from Rust</h3>
+      <p>Drive Lua coroutines from Rust without Lua-side <span class="mono">coroutine.create</span> via <span class="mono">create_coroutine</span> / <span class="mono">resume_coroutine</span>. Install a Rust callback on Call / Return / Line / Count / TailCall events with <span class="mono">set_rust_debug_hook</span>.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">coroutine.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>let body = vm.eval(r#"
+    return function()
+        coroutine.yield(1)
+        coroutine.yield(2)
+        return 3
+    end
+"#)?[0];
+
+let co = vm.create_coroutine(body);
+let r1 = vm.resume_coroutine(co, vec![])?;   // r1[0] == Int(1)
+let r2 = vm.resume_coroutine(co, vec![])?;   // r2[0] == Int(2)
+let r3 = vm.resume_coroutine(co, vec![])?;   // r3[0] == Int(3), terminal</code></pre></div>
+
+      <h3>Errors</h3>
+      <p>Lua errors surface as <span class="mono">Result&lt;T, LuaError&gt;</span>. <span class="mono">LuaError</span> implements <span class="mono">Display</span> / <span class="mono">Error</span>; richer context is available from the Vm.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">errors.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>match vm.eval("error('something failed')") {
+    Ok(v)  =&gt; println!("ok: {:?}", v),
+    Err(e) =&gt; {
+        println!("error: {}", e);              // Display
+        let kind = vm.error_kind();            // LuaErrorKind
+        let source = vm.error_source();        // Option&lt;(&amp;str, u32)&gt;
+        let tb = vm.take_error_traceback();    // Option&lt;String&gt;
+    }
+}</code></pre></div>
+
+      <h3>The <span class="mono">Lua</span> facade</h3>
+      <p>If you prefer an mlua-shaped front door, <span class="mono">Lua</span> wraps the same machinery with <span class="mono">Copy + Clone</span> handles backed by host-root tickets.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">facade.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>use luna_jit::Lua;
+
+let mut lua = Lua::new();          // JIT on, Lua 5.5
+lua.open_base(); lua.open_math();
+
+let add = lua.create_function(|a: i64, b: i64| -&gt; i64 { a + b });
+lua.set_global("add", add)?;
+let r: i64 = lua.eval("return add(40, 2)")?;   // 42
+
+let t = lua.create_table();
+t.set(&amp;mut lua, "name", "luna")?;
+let name: String = t.get(&amp;mut lua, "name")?;</code></pre></div>
+    </section>
+
+    <!-- ============================================ threading -->
+    <section id="threading">
+      <h2>Threading</h2>
+      <p>The default <span class="mono">Vm</span> (and the <span class="mono">Lua</span> facade) is <strong><span class="mono">!Send + !Sync</span></strong> — a Vm and every handle into its GC heap lives on the thread that created it. The constraint is enforced at compile time by a <span class="mono">compile_fail</span> doctest.</p>
+      <p>This is a deliberate performance choice: the GC uses <span class="mono">Gc&lt;T&gt; = NonNull&lt;T&gt;</span> over an intrusive mark-sweep heap, with no stop-the-world protocol and no locked trace-cache reads. Making it <span class="mono">Send</span> would cost 5–15% on real workloads. Lua's own data model is single-threaded to begin with.</p>
+      <h3>Three canonical patterns</h3>
+      <ul>
+        <li><strong>Single-thread Tokio</strong> — run the executor on the thread the Vm lives on with <span class="mono">flavor = "current_thread"</span>, and use <span class="mono">vm.eval_async(...)</span>.</li>
+        <li><strong><span class="mono">LocalSet</span> on multi-thread Tokio</strong> — <span class="mono">LocalSet::run_until</span> pins the Vm's futures to the calling thread.</li>
+        <li><strong>Vm per OS thread + channels</strong> — for real parallelism, one Vm per thread; only <span class="mono">Send</span> data (source strings, result strings) crosses between them.</li>
+      </ul>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">pattern-1.rs</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>#[tokio::main(flavor = "current_thread")]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let mut vm = Vm::new_minimal_with_jit(LuaVersion::Lua55);
+    vm.open_base();
+    let result = vm.eval_async("return 1 + 2").await?;
+    Ok(())
+}</code></pre></div>
+      <div class="note"><b>Opt-in <span class="mono">SendVm</span>.</b> The <span class="mono">feature = "send"</span> flag adds a <span class="mono">SendVm</span> newtype that is <span class="mono">Send</span> (not <span class="mono">Sync</span>) so a clone can move across threads or be held across <span class="mono">.await</span> on a multi-thread runtime. It is interpreter-only today — the trace JIT does not run on a <span class="mono">SendVm</span>. Measured overhead is roughly within noise. For <span class="mono">Send</span> + JIT, use the Vm-per-thread pattern.</div>
+    </section>
+
+    <!-- ============================================ security -->
+    <section id="security">
+      <h2>Security &amp; sandbox</h2>
+      <p>luna is an embedded VM: the <strong>host</strong>, not the script, owns the security boundary. Every capability a script sees was opted in by Rust code.</p>
+      <h3>In scope</h3>
+      <ul>
+        <li>Script-driven OS-access exfiltration (filesystem, environment, network, child processes) — blocked beyond what the host exposed.</li>
+        <li>Resource exhaustion — a per-call instruction budget and an approximate memory cap force a catchable Lua error.</li>
+        <li>Bytecode-loader escape — luna's own dump format and PUC <span class="mono">.luac</span> loading are off by default in a sandbox.</li>
+        <li>Zero <span class="mono">unsafe</span> at the embedder surface — every <span class="mono">cargo doc</span>-visible API is safe Rust.</li>
+      </ul>
+      <h3>Out of scope</h3>
+      <ul>
+        <li>VM correctness bugs (report as a normal bug, not a sandbox escape), side-channel resistance, and supply-chain integrity.</li>
+        <li>Denial of service from legal-but-pathological scripts — the budgets bound CPU and memory per call, not output volume to a host sink.</li>
+        <li><span class="mono">debug.*</span>, and <span class="mono">os.execute</span> / <span class="mono">io.popen</span> once opened — these are equivalent to handing over the Vm or a shell.</li>
+      </ul>
+      <div class="note warm"><b>Deliberate asymmetry.</b> Safe-subset stdlibs (<span class="mono">base</span>, <span class="mono">math</span>, <span class="mono">string</span>, <span class="mono">table</span>, <span class="mono">coroutine</span>) are opened on the builder. OS-touching libraries (<span class="mono">io</span>/<span class="mono">os</span>, <span class="mono">debug</span>, <span class="mono">package</span>) require a post-build handle — <span class="mono">vm.open_os_io()</span> and friends — so the trust decision is always visible in host code. Budgets are unbounded until you arm them; the memory cap disarms after firing and must be re-armed to reuse a Vm across requests.</div>
+    </section>
+
+    <!-- ============================================ deploy -->
+    <section id="deploy">
+      <h2>Deployment</h2>
+      <p>Four packaging shapes cover most hosts. luna does no logging of its own — observability is hooked through the debug-hook mechanism and host counters around <span class="mono">Vm::eval</span>.</p>
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead><tr><th>Shape</th><th>Crate</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Standalone binary, frozen source</td><td class="mono">luna-aot</td><td>Build-time; no runtime crate on host</td></tr>
+            <tr><td>Rust service, JIT enabled</td><td class="mono">luna-jit</td><td>Pulls Cranelift; cross-thread via <span class="mono">feature = "send"</span></td></tr>
+            <tr><td>Rust service, interpreter only</td><td class="mono">luna-core</td><td>Zero third-party deps</td></tr>
+            <tr><td>WASM (browser / wasmtime)</td><td class="mono">luna-core</td><td><span class="mono">wasm32-wasip1</span>; JIT off, <span class="mono">io</span>/<span class="mono">os</span> stubbed</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>For the smallest container, static-link against musl and build <span class="mono">FROM scratch</span>; strip before copying to drop most of <span class="mono">__LINKEDIT</span>.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Dockerfile</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>FROM scratch
+COPY ./target/x86_64-unknown-linux-musl/release/service /service
+ENTRYPOINT ["/service"]</code></pre></div>
+    </section>
+
+    <!-- ============================================ jit-aot -->
+    <section id="jit-aot">
+      <h2>JIT &amp; AOT</h2>
+      <p>The trace JIT is on by default under <span class="mono">luna-jit</span>. A handful of sticky knobs let you tune or disable it for predictable latency and A/B testing.</p>
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead><tr><th>Knob</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">set_jit_enabled(false)</td><td>true</td><td>Disable for predictable latency / debug repro</td></tr>
+            <tr><td class="mono">set_trace_jit_enabled(false)</td><td>true</td><td>A/B the trace JIT against the interpreter</td></tr>
+            <tr><td class="mono">set_hot_threshold(n)</td><td>constant</td><td>Lower for hot-immediately workloads</td></tr>
+            <tr><td class="mono">set_max_trace_len(n)</td><td>constant</td><td>Raise for long unrolled loops</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Hot-path counters (<span class="mono">trace_compiled_count</span>, <span class="mono">trace_dispatched_count</span>, <span class="mono">trace_aborted_count</span>, <span class="mono">trace_deopt_count</span>) help diagnose whether a workload is actually getting JIT speedup.</p>
+      <h3>Ahead-of-time compilation</h3>
+      <p><span class="mono">luna-aot</span> compiles a Lua source file into a self-contained native binary — parse, emit bytecode into a data section, warm hot traces under the recorder, link the static runtime, and produce the executable.</p>
+      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="copied ✓">copy</button></div><pre><code>cargo install luna-aot
+luna-aot compile hello.lua --out hello
+./hello                    # standalone native binary
+
+# cross-compile from a macOS host to Linux
+luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre></div>
+      <p>Cranelift's <span class="mono">all-arch</span> backend cross-compiles to every target without a rebuild. A stripped release binary lands around <strong>4.5 MiB</strong>; the runtime floor dominates, so a 1-line script and a 1.5k-LOC script differ by only ~82 KiB.</p>
+    </section>
+
+    <!-- ============================================ compatibility -->
+    <section id="compatibility">
+      <h2>Compatibility</h2>
+      <p>luna implements Lua 5.1 – 5.5 and MacroLua in one binary. The dialect is chosen per-Vm; a single process can host several at once. See the <a class="xref" href="index.html#dialects">dialect datasheet</a> on the home page for the per-feature matrix.</p>
+      <h3>Standard library</h3>
+      <p>The whitelisted subset suitable for sandboxed embedding is exposed via <span class="mono">Vm::open_*()</span> methods:</p>
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead><tr><th>Library</th><th>Method</th><th>Coverage</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">base</td><td class="mono">open_base</td><td>full</td></tr>
+            <tr><td class="mono">math</td><td class="mono">open_math</td><td>full</td></tr>
+            <tr><td class="mono">string</td><td class="mono">open_string</td><td>full (incl. pattern matching)</td></tr>
+            <tr><td class="mono">table</td><td class="mono">open_table</td><td>full</td></tr>
+            <tr><td class="mono">coroutine</td><td class="mono">open_coroutine</td><td>full</td></tr>
+            <tr><td class="mono">io / os</td><td class="mono">open_io / open_os</td><td>full (host-controlled)</td></tr>
+            <tr><td class="mono">utf8</td><td class="mono">open_utf8</td><td>full (5.3+)</td></tr>
+            <tr><td class="mono">debug</td><td>—</td><td>partial, not exposed by default</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>C API</h3>
+      <p>luna ships a <span class="mono">cdylib</span> / <span class="mono">staticlib</span> exposing a <span class="mono">lua.h</span>-compatible C ABI subset. Existing PUC consumers linking against <span class="mono">liblua</span> can link luna as a drop-in for the covered surface: state lifecycle, value push/read, stack manipulation, the table API, <span class="mono">lua_call</span> / <span class="mono">lua_pcall</span>, and script load. A 13-test conformance suite pins it. Userdata, C-side coroutines, and continuations are not yet covered — use the richer Rust API for those.</p>
+      <h3>Bytecode</h3>
+      <p>luna emits per-dialect bytecode matching PUC's compiler binary format, so PUC-compiled <span class="mono">.luac</span> files load directly and luna-dumped bytecode loads in PUC. Bytecode loading is <strong>off by default in a sandbox</strong> — crafted bytecode can bypass the type checks the compiler enforces.</p>
+    </section>
+
+    <!-- ============================================ architecture -->
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <p>Five publishable crates. The interpreter core carries zero third-party dependencies; the JIT plugs in through a trait, so swapping or removing the backend is a <span class="mono">luna-jit</span> concern that never touches <span class="mono">luna-core</span>'s API.</p>
+      <div class="sheet-wrap">
+        <table class="sheet">
+          <thead><tr><th>Crate</th><th>Depends on</th><th>Surface</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">luna-core</td><td>0 third-party</td><td>Lexer, parser, compiler, interpreter, runtime, stdlib, GC, pattern engine, JIT trait</td></tr>
+            <tr><td class="mono">luna-jit-derive</td><td>syn + quote</td><td><span class="mono">#[derive(LuaUserdata)]</span> proc-macro</td></tr>
+            <tr><td class="mono">luna-jit</td><td>luna-core + Cranelift ×6</td><td>Cranelift backend, C ABI, <span class="mono">luna</span> CLI, embedding facade</td></tr>
+            <tr><td class="mono">luna-runtime-helpers</td><td>luna-jit</td><td>Static runtime entry for AOT binaries</td></tr>
+            <tr><td class="mono">luna-aot</td><td>luna-core + luna-jit</td><td>Build-time AOT compiler</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The zero-dep <span class="mono">luna-core</span> contract is enforced by <span class="mono">cargo deny check</span> in CI. Source is classified into three tiers — <strong>stone</strong> (business-agnostic foundations: pattern engine, heap, value layout), <strong>steel</strong> (Lua-domain primitives: compiler, dispatcher, JIT backend), and <strong>cement</strong> (host glue: CLI, C ABI, stdlib bindings) — each with its own change discipline and review depth.</p>
+    </section>
+
+    <!-- ============================================ performance -->
+    <section id="performance">
+      <h2>Performance</h2>
+      <p>luna deliberately does not publish a single headline ratio. A microbench cell that wins is a marketing artifact; the cell that loses is the signal worth chasing. Any gap greater than 1.5× a reference triggers a side-by-side, stage-by-stage decomposition of the workload — not surface-level polish.</p>
+      <p>What ships are reproducible baselines. Memory is profiled under dhat across five workloads; a &gt;5% steady-state regression on any is a tracked alarm.</p>
+      <div class="stats">
+        <div class="stat"><div class="n">33<span class="u">KB</span></div><div class="l">cold_start peak · 435 allocs</div></div>
+        <div class="stat"><div class="n">71<span class="u">KB</span></div><div class="l">repl_idle · 100 evals</div></div>
+        <div class="stat"><div class="n">523<span class="u">KB</span></div><div class="l">alloc_collect steady · 1M + 10 GC</div></div>
+        <div class="stat"><div class="n">63<span class="u">KB</span></div><div class="l">userdata_lifecycle · 200 + finalizers</div></div>
+      </div>
+    </section>
+
+    <!-- ============================================ versioning -->
+    <section id="versioning">
+      <h2>Versioning &amp; stability</h2>
+      <p>The public API is partitioned into a stable surface (breaking changes require a SemVer-major bump) and an unstable / internal surface (may change in a minor release for performance work).</p>
+      <ul>
+        <li><strong>Stable:</strong> the <span class="mono">luna_jit</span> front-door types (<span class="mono">Lua</span>, <span class="mono">LuaFunction</span>, <span class="mono">LuaTable</span>, <span class="mono">LuaRoot</span>, <span class="mono">LuaSandboxBuilder</span>), the re-exported core (<span class="mono">Vm</span>, <span class="mono">LuaVersion</span>, <span class="mono">Value</span>, <span class="mono">LuaError</span>), the derive macros, and the <span class="mono">lua.h</span>-compatible C ABI.</li>
+        <li><strong>Unstable / internal:</strong> <span class="mono">luna_core::{compiler, frontend, jit, pattern}</span> and the JIT backend internals — free to change for optimization.</li>
+        <li><strong>Bytecode:</strong> the per-dialect binary format is stable; PUC <span class="mono">.luac</span> files load across the line.</li>
+      </ul>
+      <div class="note">Full stable/unstable item lists live in the embedding cookbook's API-contract section and in <span class="mono">CHANGELOG.md</span>. The rustdoc reference on <a class="xref" href="https://docs.rs/luna-jit">docs.rs</a> is the authoritative per-item source.</div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
+        <p>A Lua runtime in pure Rust. Built and maintained by GOLIA K.K.</p>
+      </div>
+      <div class="foot-col">
+        <h5>Docs</h5>
+        <a href="#getting-started">Getting started</a>
+        <a href="#embedding">Embedding</a>
+        <a href="#compatibility">Compatibility</a>
+        <a href="#security">Security</a>
+      </div>
+      <div class="foot-col">
+        <h5>Packages</h5>
+        <a href="https://crates.io/crates/luna-jit">luna-jit</a>
+        <a href="https://crates.io/crates/luna-core">luna-core</a>
+        <a href="https://docs.rs/luna-jit">docs.rs</a>
+      </div>
+      <div class="foot-col">
+        <h5>Project</h5>
+        <a href="https://github.com/goliajp/luna">GitHub</a>
+        <a href="https://github.com/goliajp/luna/blob/master/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-MIT">License</a>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>© 2026 GOLIA K.K. · luna is dual-licensed MIT / Apache-2.0</span>
+      <span class="mono">luna.golia.jp</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>
