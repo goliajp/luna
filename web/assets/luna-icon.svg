@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="luna">
+  <defs>
+    <linearGradient id="lunaGrad" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C9B8FF"/>
+      <stop offset=".5" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="#0B0817"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#2B2452" stroke-width="1.5"/>
+  <path d="M41 14a20 20 0 1 0 0 36 16 16 0 0 1 0-36z" fill="url(#lunaGrad)"/>
+  <circle cx="45" cy="21" r="2.6" fill="#E7B968"/>
+</svg>
