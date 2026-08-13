@@ -84,28 +84,29 @@ exclude = [
 [workspace.package]
 version = "2.16.0"
 edition = "2024"
-# MSRV (G1) policy, restated v2.17 after the 1.86 declaration was found
-# to have been wrong since v1.1.0:
+# MSRV: deliberately NOT declared (decision v2.17, 2026-08-14).
 #
-#   This value tracks the oldest rustc that ACTUALLY COMPILES the tree —
-#   it is derived by measurement, never chosen to match the newest
-#   stable. 1.88 is the floor because the codebase uses let-chains in
-#   edition 2024 (58 sites), stabilised in 1.88.0; 1.87 fails with
-#   E0658 "`let` expressions in this position are unstable".
+# luna declared `rust-version = "1.86"` from v1.1.0 through v2.16.0 and
+# it was false the whole time — the tree has used edition-2024
+# let-chains since `2bbda24`, and those need 1.88. Nobody caught it
+# because msrv.yml triggered on a `main` branch this repo does not
+# have, so it never ran once. Eleven releases shipped a compatibility
+# promise the code did not keep.
 #
-#   Raising it is a minor-version change with a CHANGELOG entry, because
-#   embedders pinning a specific rustc need a heads-up. Raise it only
-#   when the tree genuinely needs a newer language feature — not to
-#   silence a lint. (The v2.16 -> v2.17 gap is exactly that mistake:
-#   `69b6828` raised MSRV to 1.97 with no feature driving it, which
-#   unlocked clippy's MSRV-gated `collapsible_if` let-chain suggestion
-#   and broke CI for 34 days.)
+# Rather than re-pin and carry the upkeep, luna makes no MSRV promise.
+# A pin only means something if something verifies it every push, and
+# an unverified pin is worse than none: it misleads. What luna is
+# willing to guarantee today is "builds on current stable", and that is
+# what the CI matrix actually tests.
 #
-#   msrv.yml locks against this value and MUST stay runnable — it was
-#   dead from its introduction until v2.17 (trigger named a `main`
-#   branch this repo does not have), which is how the wrong 1.86
-#   declaration survived 11 releases.
-rust-version = "1.88"
+# Informationally (NOT a contract, may move without a version bump):
+# as of v2.17.0 the tree needs **rustc 1.88+** — 1.87 fails with E0658
+# on the let-chains. Building on an older toolchain surfaces as a
+# compiler error rather than a cargo manifest error, since there is no
+# declared floor for cargo to check against.
+#
+# If a future release wants an MSRV promise back, it needs a workflow
+# that runs and can fail — not just the manifest key.
 authors = ["GOLIA K.K. <lihao@golia.jp>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goliajp/luna"
@@ -198,9 +199,11 @@ doc_overindented_list_items = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
-# MSRV-related: we pin to rust-version = "1.86" so newer stable APIs
-# warn when used. The workspace policy is to bump MSRV only on minor
-# releases; meanwhile occasional MSRV warnings are acceptable.
+# Moot since v2.17: with no `rust-version` declared (see the MSRV note
+# in [workspace.package]), clippy has no floor to compare against and
+# this lint cannot fire. Kept as an explicit `allow` so that re-adding
+# an MSRV declaration later does not silently turn it on across the
+# whole tree in the same commit.
 incompatible_msrv = "allow"
 
 # v2.1 Path D Phase 1A — vendored cranelift fork.

@@ -26,25 +26,31 @@ semantics, and the C ABI are untouched. Everything here is metadata,
 tooling, or disclosure — but two items materially affect embedders, so
 read Changed before upgrading.
 
-### Changed
-- **MSRV is now correctly declared as 1.88.** It had said `1.86` since
-  v1.1.0 and that was never true: the tree has used edition-2024
-  let-chains since `2bbda24` (2026-06-23), and let-chains stabilised in
-  rustc **1.88**. Measured: 1.87 fails with `E0658: 'let' expressions in
-  this position are unstable`; 1.88 builds the whole workspace.
+### Removed
+- **luna no longer declares an MSRV.** `rust-version` is gone from the
+  workspace and from all nine crate manifests, and the `msrv` CI
+  workflow is deleted.
 
-  **This is a correction, not a raise.** Nothing that previously built
-  stops building — rustc 1.86 and 1.87 could never build luna, whatever
-  the metadata claimed. If you pin a toolchain by our `rust-version`,
-  1.88 is the real floor and always was. (v2.16.0's tree briefly
-  declared `1.97`; that declaration was never released.)
+  It had said `1.86` since v1.1.0 and that was **false the entire time**:
+  the tree has used edition-2024 let-chains since `2bbda24`
+  (2026-06-23), and let-chains need rustc **1.88**. Measured: 1.87 fails
+  with `E0658: 'let' expressions in this position are unstable`. Eleven
+  releases shipped a compatibility promise the code did not keep.
 
-  The declaration went unchecked because the `msrv` CI workflow
-  triggered on a `main` branch this repository does not have, so it never
-  ran once. It now triggers on `master`/`develop`, keeps its version in a
-  single place, and additionally asserts the floor is *tight* — if
-  MSRV-1 also compiles, the job fails, so the floor cannot drift upward
-  unnoticed either.
+  Nobody caught it because the `msrv` workflow triggered on a `main`
+  branch this repository does not have — it never executed once. An
+  unverified pin is worse than no pin: it misleads people who trust it.
+
+  Rather than re-pin and carry the upkeep, luna makes no MSRV promise.
+  What it is willing to guarantee is "builds on current stable", which
+  is what the CI matrix actually tests on every push across ubuntu /
+  macos / windows / ubuntu-arm.
+
+  **Informational, not a contract** (may move without a version bump):
+  as of 2.17.0 the tree needs **rustc 1.88+**. With no declared floor,
+  an older toolchain surfaces as a compiler error (`E0658`) rather than
+  a cargo manifest error — if you see that, upgrade rustc rather than
+  suspecting your own code.
 
 ### Fixed
 - **Disclosure — `numeric::num_to_string_for` changed signature in
@@ -89,9 +95,11 @@ read Changed before upgrading.
 ### Internal
 - Cleared 25 `clippy` 0.1.97 findings (22 `collapsible_if` → edition-2024
   let-chains, plus `unnecessary_parens`, a redundant `&`, and a
-  `match` → `?`). CI had been red for 34 days. Root cause was the
-  spurious `1.97` MSRV declaration above: clippy's let-chain suggestion
-  is MSRV-gated, so declaring 1.97 unlocked it.
+  `match` → `?`). CI had been red for 34 days. The trigger was an
+  unreleased commit raising the MSRV declaration to `1.97`: clippy's
+  let-chain suggestion is MSRV-gated, so a higher declared floor
+  unlocked it. With no MSRV declared at all, clippy assumes current
+  stable and the tree is clean — verified.
 - `cargo-deny` now runs with `--all-features`. It had been resolving only
   the default feature set, leaving every crate behind luna-tools' opt-in
   `flame-graph`/`mcode-disasm` features unscanned; restoring coverage

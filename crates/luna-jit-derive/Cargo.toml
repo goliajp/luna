@@ -3,7 +3,6 @@ name = "luna-jit-derive"
 description = "Procedural macros for the luna-jit Lua runtime. The `#[derive(LuaUserdata)]` macro lives here so the parent `luna-core` crate stays zero-dependency."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

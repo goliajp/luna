@@ -3,7 +3,6 @@ name = "luna-jit-llvm"
 description = "LLVM 18 + inkwell 0.9 alternative JIT backend for the goliajp/luna Lua runtime. Lives alongside `luna-jit` (Cranelift); backend selection at runtime via the `LUNA_JIT_BACKEND=llvm` env var. Internal alt-backend crate — embedders should depend on `luna-jit` and enable the `llvm-jit` feature, not depend on this crate directly. Requires `LLVM_SYS_181_PREFIX` pointing at an LLVM 18.1.x install at build time."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

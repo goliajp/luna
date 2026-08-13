@@ -3,7 +3,6 @@ name = "luna-aot"
 description = "Ahead-of-time compiler from Lua source to self-contained native binary, built on luna-core's VM. v1.3 scaffold ships the bytecode-embed pipeline (Lua source → luna bytecode dump → ELF/Mach-O/PE data section → linked binary); the Cranelift-lowered native trace codegen lands in follow-up sessions within the same v1.3 mega sprint. Embedders that want a runtime JIT keep using `luna-jit`; embedders that want pure interp keep using `luna-core`. `luna-aot` is a build-time tool, not a runtime dep of the produced binary."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
