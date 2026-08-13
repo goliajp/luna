@@ -251,11 +251,18 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             ));
         }
     };
-    if n <= 0 {
+    let piece = s.len() + sep.len();
+    // `piece == 0` (both the string and the separator are empty) must
+    // short-circuit alongside `n <= 0`: the result is the empty string for
+    // any `n`, but the loop below would otherwise spin `n` times copying
+    // zero bytes — `string.rep("", math.maxinteger, "")` hangs the VM.
+    // The size check does not catch it, since `0 * n` never exceeds
+    // MAX_STR. Matches PUC 5.5.1's `if (n <= 0 || (len | lsep) == 0)`
+    // (lstrlib.c:144); PUC 5.5.0 and earlier hang here exactly as we did.
+    if n <= 0 || piece == 0 {
         let v = Value::Str(vm.heap.intern(b""));
         return Ok(vm.nat_return(fs, &[v]));
     }
-    let piece = s.len() + sep.len();
     if piece.saturating_mul(n as usize) > MAX_STR {
         return Err(raise_str(vm, "resulting string too large"));
     }
