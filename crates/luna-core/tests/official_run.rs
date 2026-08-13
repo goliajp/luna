@@ -560,9 +560,9 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
             // + PUC actually captured a buffer. Divergences are
             // eprintln'd for triage rather than failing the file
             // (opt-in surface per charter §2.4 rollout).
-            if byte_diff_enabled && r.is_ok() {
-                if let Some(luna_bytes) = read_byte_diff_stdout(&mut vm) {
-                    if let Some(bin) = puc_bin_for_version(version) {
+            if byte_diff_enabled && r.is_ok()
+                && let Some(luna_bytes) = read_byte_diff_stdout(&mut vm)
+                    && let Some(bin) = puc_bin_for_version(version) {
                         match run_official_on_puc(&bin, &src) {
                             Some(Ok(puc_stdout)) => {
                                 if let Some(puc_bytes) =
@@ -593,8 +593,6 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
                             None => {} // binary missing; silent
                         }
                     }
-                }
-            }
             let _ = tx.send((r, total, hit));
         })
         .expect("spawn");

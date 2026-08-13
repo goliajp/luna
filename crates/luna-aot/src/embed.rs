@@ -142,10 +142,10 @@ pub fn embed_bytecode(
     target_triple: Option<&str>,
     version: LuaVersion,
 ) -> Result<(), AotError> {
-    if let Some(t) = target_triple {
-        if t != host_triple() {
-            return Err(AotError::UnsupportedTarget(t.to_string()));
-        }
+    if let Some(t) = target_triple
+        && t != host_triple()
+    {
+        return Err(AotError::UnsupportedTarget(t.to_string()));
     }
 
     // Stage 1 + 2: source → AST → Proto. Uses the same path the runtime

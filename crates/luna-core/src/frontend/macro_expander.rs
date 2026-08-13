@@ -599,10 +599,10 @@ mod builtins {
                 ));
             }
             let a = &args[0];
-            if a.len() == 1 {
-                if let Token::MacroQuote(body) = &a[0].tok {
-                    return Ok(body.to_vec());
-                }
+            if a.len() == 1
+                && let Token::MacroQuote(body) = &a[0].tok
+            {
+                return Ok(body.to_vec());
             }
             // Permissive: any non-MacroQuote single arg just passes
             // through verbatim — `@unquote(x)` becomes `x`. Useful in
@@ -669,10 +669,10 @@ mod builtins {
                 &EMPTY_ARM
             };
             // Unwrap MacroQuote if present; else splice as-is.
-            if chosen.len() == 1 {
-                if let Token::MacroQuote(body) = &chosen[0].tok {
-                    return Ok(body.to_vec());
-                }
+            if chosen.len() == 1
+                && let Token::MacroQuote(body) = &chosen[0].tok
+            {
+                return Ok(body.to_vec());
             }
             Ok(chosen.clone())
         }

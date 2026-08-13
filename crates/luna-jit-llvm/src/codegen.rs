@@ -894,10 +894,10 @@ fn determine_getupval_roles(code: &[Inst]) -> Vec<bool> {
             }
             // Any write to a tagged register clears the tag (the
             // dest no longer carries the marker).
-            if let Some(write_reg) = primary_write_reg(&q_ins) {
-                if let Some(slot) = tagged.get_mut(write_reg as usize) {
-                    *slot = false;
-                }
+            if let Some(write_reg) = primary_write_reg(&q_ins)
+                && let Some(slot) = tagged.get_mut(write_reg as usize)
+            {
+                *slot = false;
             }
         }
         roles[pc] = value_read;
