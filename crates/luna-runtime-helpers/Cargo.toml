@@ -3,7 +3,6 @@ name = "luna-runtime-helpers"
 description = "Static-link runtime entry for AOT-produced binaries. Exposes a single C-ABI symbol `luna_aot_run(bytecode, len) -> i32` that constructs a luna `Vm`, `undump`s the embedded bytecode, calls the root chunk, and returns a process exit code. Built as a `staticlib` so `luna-aot`'s `cc` link step can statically pull it (plus rust stdlib) into the produced native binary. Also built as `rlib` so `luna-aot`'s integration tests can drive it via the Rust runtime."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -27,7 +26,7 @@ workspace = true
 # drives a luna-core Vm. luna-core stays 0-third-party-dep; the
 # staticlib's transitive footprint is rust stdlib + luna-core only
 # when the `jit-helpers` feature is OFF.
-luna-core = { path = "../luna-core", version = "= 2.16.0" }
+luna-core = { path = "../luna-core", version = "= 2.17.0" }
 
 # v1.3 Stage 7 follow-on — opt-in dep on luna-jit so the 27
 # `luna_jit_*` Cranelift helper symbols (table set/get, op_concat,
@@ -52,7 +51,7 @@ luna-core = { path = "../luna-core", version = "= 2.16.0" }
 # Gated behind a feature so non-AOT consumers of the runtime helpers
 # (e.g. embedders who only want the `luna_aot_run` C-ABI entry for an
 # interp-only deploy binary) don't pay the cranelift dep cost.
-luna-jit = { path = "../luna-jit", version = "= 2.16.0", optional = true }
+luna-jit = { path = "../luna-jit", version = "= 2.17.0", optional = true }
 
 [features]
 default = ["jit-helpers"]

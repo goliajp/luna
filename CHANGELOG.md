@@ -19,6 +19,137 @@ optimization.
 
 ---
 
+## [2.17.0] — 2026-08-14
+
+Maintenance release. No runtime behaviour changes; the VM, its dialect
+semantics, and the C ABI are untouched. Everything here is metadata,
+tooling, or disclosure — but two items materially affect embedders, so
+read Changed before upgrading.
+
+### Removed
+- **luna no longer declares an MSRV.** `rust-version` is gone from the
+  workspace and from all nine crate manifests, and the `msrv` CI
+  workflow is deleted.
+
+  It had said `1.86` since v1.1.0 and that was **false the entire time**:
+  the tree has used edition-2024 let-chains since `2bbda24`
+  (2026-06-23), and let-chains need rustc **1.88**. Measured: 1.87 fails
+  with `E0658: 'let' expressions in this position are unstable`. Eleven
+  releases shipped a compatibility promise the code did not keep.
+
+  Nobody caught it because the `msrv` workflow triggered on a `main`
+  branch this repository does not have — it never executed once. An
+  unverified pin is worse than no pin: it misleads people who trust it.
+
+  Rather than re-pin and carry the upkeep, luna makes no MSRV promise.
+  What it is willing to guarantee is "builds on current stable", which
+  is what the CI matrix actually tests on every push across ubuntu /
+  macos / windows / ubuntu-arm.
+
+  **Informational, not a contract** (may move without a version bump):
+  as of 2.17.0 the tree needs **rustc 1.88+**. With no declared floor,
+  an older toolchain surfaces as a compiler error (`E0658`) rather than
+  a cargo manifest error — if you see that, upgrade rustc rather than
+  suspecting your own code.
+
+### Fixed
+- **Disclosure — `numeric::num_to_string_for` changed signature in
+  v2.14.0 and this was not announced.** The parameter went from
+  `legacy_float: bool` to `fmt: FloatFmt`:
+
+  ```rust
+  // <= 2.13.0
+  pub fn num_to_string_for(n: Num, legacy_float: bool) -> String
+  // >= 2.14.0
+  pub fn num_to_string_for(n: Num, fmt: FloatFmt) -> String
+  ```
+
+  `luna_core::numeric` is a `pub mod`, so this is inside the stability
+  contract stated at the top of this file, and it shipped in a *minor*
+  release — a semver violation on our part. The v2.14.0 entry mentioned
+  the new `numeric::FloatFmt` type under **Fixed** but never said the
+  function's signature had changed, and carried no `BREAKING` marker.
+
+  No compatibility shim is being added: a `bool` cannot express the three
+  per-dialect float formats v2.14 had to distinguish, so the enum is the
+  correct shape and restoring the old overload would permanently carry an
+  API that cannot say what the function does.
+
+  Migration — pass the variant instead of the bool:
+
+  | Old call | New call | Dialects |
+  |---|---|---|
+  | `num_to_string_for(n, true)` | `num_to_string_for(n, FloatFmt::Legacy14)` | 5.1, 5.2 (`%.14g`, no `.0`) |
+  | `num_to_string_for(n, false)` | `num_to_string_for(n, FloatFmt::TwoStage55)` | 5.5 (`%.15g` → round-trip → `%.17g`) |
+  | *(not expressible)* | `num_to_string_for(n, FloatFmt::G14)` | 5.3, 5.4 (`%.14g` + `.0`) |
+
+  The third row is the reason for the change: v2.13 applied the 5.5
+  scheme to 5.3/5.4 as well, which was one of the divergences v2.14
+  fixed. `FloatFmt` has no constructor from a `LuaVersion` — pick the
+  variant directly, as the VM itself does.
+
+  Found by the public-surface audit now run every release
+  (786 → 788 public items over v2.13.0→HEAD; this was the only
+  removal/signature change).
+
+### Internal
+- Cleared 25 `clippy` 0.1.97 findings (22 `collapsible_if` → edition-2024
+  let-chains, plus `unnecessary_parens`, a redundant `&`, and a
+  `match` → `?`). CI had been red for 34 days. The trigger was an
+  unreleased commit raising the MSRV declaration to `1.97`: clippy's
+  let-chain suggestion is MSRV-gated, so a higher declared floor
+  unlocked it. With no MSRV declared at all, clippy assumes current
+  stable and the tree is clean — verified.
+- `cargo-deny` now runs with `--all-features`. It had been resolving only
+  the default feature set, leaving every crate behind luna-tools' opt-in
+  `flame-graph`/`mcode-disasm` features unscanned; restoring coverage
+  surfaced a yanked `spin 0.10.0` (bumped to 0.10.1).
+- `soak-weekly` now finishes inside the runner cap instead of being
+  killed every week — 11 consecutive `cancelled` runs made the job
+  useless as a signal even though its artifacts were valid. Six
+  backlogged samples analysed: 6/6 clean, second-half RSS drift
+  0.414%–0.899%, all under the 1% bar.
+- `actions/checkout` and `actions/upload-artifact` upgraded v4 → v7.
+
+## [2.16.0] — 2026-07-06
+
+### Changed
+- **v3.0 differential-parity acceptance narrowed to two legs.** The
+  official-suite *byte-diff* leg is dropped from the acceptance set;
+  parity is now proven by (a) the 500-fixture private corpus being
+  byte-identical to PUC across all five dialects, gated on every push,
+  and (b) the official suite's assert-count instrumentation running
+  nightly. Measured divergence on the byte-diff harness was 24% (against
+  a 5% estimate), split between files where the harness's body-wrap
+  breaks PUC's own scope semantics and genuine numeric-formatting
+  internals; closing it would have needed a per-dialect allowlist roughly
+  twice the size the design permitted.
+
+### Added
+- Opt-in official-suite byte-diff harness (`LUNA_OFFICIAL_BYTE_DIFF=1`,
+  with `PUC_LUA_5X` binaries) as a local diagnostic surface for
+  investigating per-file divergence. Not a CI gate.
+
+## [2.15.0] — 2026-07-06
+
+### Added
+- **Differential corpus 400 → 500 fixtures**, every one byte-equal to
+  its stock PUC interpreter with zero skips: 15 compiler-shape and 25
+  utf8 fixtures for 5.5, a 14-fixture 5.4 batch (to-be-closed variables,
+  `<const>`, `coroutine.close`, generational GC, `__pairs`), and 43
+  fixtures across 5.1/5.2/5.3. Every dialect now carries at least 25
+  fixtures (5.1=25, 5.2=25, 5.3=25, 5.4=25, 5.5=400).
+- ASAN nightly now runs the full official suite across all five dialects,
+  measured at 5m34s under Docker and 2–3 min on hosted runners.
+
+### Changed
+- **Miri's acceptance leg narrowed to the library plus a representative
+  integration subset.** Full `official_run` under Miri measured at 30 min
+  – 2.5 h per nightly; the marginal provenance/UB coverage beyond the
+  `--lib` gate is small against luna's bounded unsafe surface (~2000 LOC),
+  and the combinatorial surface it would add is what the ASAN gate above
+  already covers.
+
 ## [2.14.0] — 2026-07-05
 
 ### Added

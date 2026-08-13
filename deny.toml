@@ -15,11 +15,18 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
 # quick-xml 0.26 (via luna-tools optional `flame-graph` feature →
 # inferno 0.11) hits two XML-parsing DoS advisories patched only in
-# quick-xml >= 0.41.0. inferno's latest (0.12.6) still pins ^0.39,
-# so no upgrade path exists yet. Exposure is nil for luna: quick-xml
-# only parses inferno's own locally-generated flamegraph SVG/collapsed
-# stacks in a dev-only CLI tool — no untrusted XML reaches it. Drop
-# these ignores once inferno releases with quick-xml >= 0.41.
+# quick-xml >= 0.41.0. Re-checked 2026-08-14: inferno's latest is now
+# 0.12.8 and it still pins quick-xml ^0.39, so there is still no
+# upgrade path. Exposure is nil for luna: quick-xml only parses
+# inferno's own locally-generated flamegraph SVG/collapsed stacks in a
+# dev-only CLI tool — no untrusted XML reaches it. Drop these ignores
+# once inferno releases with quick-xml >= 0.41.
+#
+# These entries only bite when cargo-deny can actually reach the crate:
+# it must run with `--all-features`, since `flame-graph` is opt-in. See
+# cargo-deny.yml (v2.17 H7) — without that flag these two lines report
+# `advisory-not-detected` and the whole optional-feature dep tree goes
+# unscanned.
 ignore = [
     "RUSTSEC-2026-0194", # quick-xml: quadratic runtime on duplicate attr check
     "RUSTSEC-2026-0195", # quick-xml: unbounded NsReader namespace allocation

@@ -32,7 +32,7 @@ jobs:
           - fuzz_gc
           - fuzz_diff_puc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
@@ -70,7 +70,7 @@ jobs:
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300
       - name: upload artifacts on crash
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crash-${{ matrix.target }}
           path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/
@@ -97,7 +97,7 @@ jobs:
           - fuzz_gc
           - fuzz_diff_puc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
@@ -135,7 +135,7 @@ jobs:
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=3600
       - name: upload artifacts on crash
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crash-weekly-${{ matrix.target }}
           path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/

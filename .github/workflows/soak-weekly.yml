@@ -1,10 +1,24 @@
-# v2.4 Phase Soak — 24h weekly soak.
+# v2.4 Phase Soak — weekly long-soak sample.
 #
-# Runs `luna-soak` against each workload fixture for 24h on
-# `ubuntu-latest`. Captures the JSON metrics report as a
-# workflow artifact. v2.4 ship: assertions are soft. v2.5+
-# tightens the RSS drift gate to < 1% steady-state per arc
-# charter §1 v3.0 acceptance #3.
+# Runs `luna-soak` against each workload fixture and captures the JSON
+# metrics report as a workflow artifact.
+#
+# v2.17 H6 — this job used to ask for a 24h soak (`--duration 86400`)
+# against a 350-minute `timeout-minutes`, so GitHub killed it every
+# single week: 11 runs, 11 `cancelled`, zero `success`. The artifact was
+# still produced (v2.12 made luna-soak write incrementally, and the
+# upload step is `if: always()`), so the DATA was fine — but a job whose
+# steady state is red carries no signal when something actually breaks,
+# and in practice nobody read the reports: five samples had accumulated
+# unanalysed by 2026-08.
+#
+# The soak now asks for a duration it can actually finish inside the
+# runner cap, so a healthy week ends `success` and a red run means a
+# real failure. This does not change what is measured — arc charter §1
+# #3 was closed (2026-07-03 amendment) on the "4 clean capped samples
+# ≈ 24h cumulative" form precisely because a single 24h run is
+# structurally impossible on hosted runners. These weekly samples are
+# ongoing corroboration of that closed criterion.
 
 name: soak-weekly
 
@@ -15,16 +29,18 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch:
 
+env:
+  # 5h30m of actual soak. Budget against `timeout-minutes: 350`:
+  #   release build ~5 min + soak 330 min + upload ~1 min ≈ 336 min,
+  # leaving ~14 min of headroom. Raise both numbers together, and keep
+  # the headroom — the whole point of H6 is that the job finishes on
+  # its own rather than being killed.
+  SOAK_SECONDS: "19800"
+
 jobs:
   soak-weekly:
-    name: soak ${{ matrix.workload }} (24h)
+    name: soak ${{ matrix.workload }} (5h30m capped sample)
     runs-on: ubuntu-latest
-    # 24h workload + 90min build/upload slack = 25.5h. GH Actions
-    # job cap is 6h on the free runners, so the 24h soak hits
-    # the cap and gets cut off — we will need a self-hosted
-    # runner for the real 24h target. For now, fall back to the
-    # GH limit; bumping the cron interval lets us collect
-    # multiple 6h-capped samples that approximate a 24h soak.
     timeout-minutes: 350
     strategy:
       fail-fast: false
@@ -34,28 +50,23 @@ jobs:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo build --release -p luna-tools --bin luna-soak
         run: cargo build --release -p luna-tools --bin luna-soak
-      - name: long soak — ${{ matrix.workload }} (capped by GH runner)
-        # 21600 sec = 6h is the GH free-runner job-cap minus
-        # build/upload slack. We pass --duration 86400 (24h)
-        # anyway so the metric reports the *intended* duration;
-        # the runner kills the job at the cap, and the partial
-        # report goes up as an artifact regardless.
+      - name: long soak — ${{ matrix.workload }}
         run: |
           ./target/release/luna-soak \
             --workload crates/luna-tools/workloads/${{ matrix.workload }}.lua \
-            --duration 86400 \
+            --duration "$SOAK_SECONDS" \
             --interval 300 \
-            --out soak-${{ matrix.workload }}-24h.json
+            --out soak-${{ matrix.workload }}-5h30m.json
       - name: Upload metrics report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-weekly-${{ matrix.workload }}
-          path: soak-${{ matrix.workload }}-24h.json
+          path: soak-${{ matrix.workload }}-5h30m.json
           retention-days: 90

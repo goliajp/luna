@@ -1912,83 +1912,83 @@ fn escape_analyze(
         }
     }
 
-    if let Some(end) = end_kind {
-        if effective_end < record.ops.len() {
-            let term = &record.ops[effective_end];
-            let depth = term.inline_depth;
-            let a = term.inst.a();
-            let op = term.inst.op();
-            let in_range = (depth as usize) < max_depth && (a as usize) < max_stack;
-            match end {
-                TraceEnd::Call => {
-                    if in_range {
-                        let b = term.inst.b();
-                        if b > 0 {
-                            for off in 1..b {
-                                let src = a.wrapping_add(off);
-                                if (src as usize) < max_stack
-                                    && let Some(src_sid) = lookup(&bindings, depth, src)
-                                {
-                                    mark_escape(&mut sites, src_sid);
-                                }
+    if let Some(end) = end_kind
+        && effective_end < record.ops.len()
+    {
+        let term = &record.ops[effective_end];
+        let depth = term.inline_depth;
+        let a = term.inst.a();
+        let op = term.inst.op();
+        let in_range = (depth as usize) < max_depth && (a as usize) < max_stack;
+        match end {
+            TraceEnd::Call => {
+                if in_range {
+                    let b = term.inst.b();
+                    if b > 0 {
+                        for off in 1..b {
+                            let src = a.wrapping_add(off);
+                            if (src as usize) < max_stack
+                                && let Some(src_sid) = lookup(&bindings, depth, src)
+                            {
+                                mark_escape(&mut sites, src_sid);
                             }
                         }
-                        if let Some(fn_sid) = lookup(&bindings, depth, a) {
-                            mark_escape(&mut sites, fn_sid);
-                        }
+                    }
+                    if let Some(fn_sid) = lookup(&bindings, depth, a) {
+                        mark_escape(&mut sites, fn_sid);
                     }
                 }
-                TraceEnd::InlineAbort => {
-                    escape_all_live(&bindings, &mut sites);
+            }
+            TraceEnd::InlineAbort => {
+                escape_all_live(&bindings, &mut sites);
+            }
+            TraceEnd::ForLoop => {
+                // P12-S5-D — DO NOT auto-escape on a ForLoop
+                // terminator. ForLoop's IR side-exit fires on
+                // loop exit; interp resumes OUTSIDE the loop,
+                // where any `local t = {...}` declared inside
+                // the body is out of scope (parser frees the
+                // register slot at loop end). The dispatcher's
+                // exit-tag override (Sinkable slot → Untouched)
+                // keeps the slot reading as its entry tag.
+                //
+                // A mid-body cmp side-exit would still need
+                // materialise (interp resumes IN the loop body
+                // at the side-exit PC, where `t` may still be
+                // accessed) — the cmp arm in the body sweep
+                // already escapes live bindings, and the
+                // pre-emit `body_has_cmp` gate is a defensive
+                // backstop.
+            }
+            TraceEnd::Return => {
+                if matches!(op, Op::Return1)
+                    && in_range
+                    && let Some(sid) = lookup(&bindings, depth, a)
+                {
+                    mark_escape(&mut sites, sid);
                 }
-                TraceEnd::ForLoop => {
-                    // P12-S5-D — DO NOT auto-escape on a ForLoop
-                    // terminator. ForLoop's IR side-exit fires on
-                    // loop exit; interp resumes OUTSIDE the loop,
-                    // where any `local t = {...}` declared inside
-                    // the body is out of scope (parser frees the
-                    // register slot at loop end). The dispatcher's
-                    // exit-tag override (Sinkable slot → Untouched)
-                    // keeps the slot reading as its entry tag.
-                    //
-                    // A mid-body cmp side-exit would still need
-                    // materialise (interp resumes IN the loop body
-                    // at the side-exit PC, where `t` may still be
-                    // accessed) — the cmp arm in the body sweep
-                    // already escapes live bindings, and the
-                    // pre-emit `body_has_cmp` gate is a defensive
-                    // backstop.
-                }
-                TraceEnd::Return => {
-                    if matches!(op, Op::Return1)
-                        && in_range
-                        && let Some(sid) = lookup(&bindings, depth, a)
-                    {
-                        mark_escape(&mut sites, sid);
-                    }
-                }
-                TraceEnd::SelfLink(_) => {
-                    // P16-A — self-link close. Body loops with
-                    // snapshot-restore (deepest-frame's window →
-                    // head-frame's window). Every live binding at
-                    // close must be marshalled back across the
-                    // back-edge so the next iter sees a coherent
-                    // window, same as InlineAbort's blanket escape.
-                    escape_all_live(&bindings, &mut sites);
-                }
-                TraceEnd::DownRec { .. } => {
-                    // v2.0 Track-R R3a — down-rec close. R3a routes
-                    // the tail emit through R1's safe deopt path
-                    // (dispatchable=false), so every live binding
-                    // at close must be marshalled back into the
-                    // caller window before the deopt return —
-                    // same blanket-escape posture as SelfLink /
-                    // InlineAbort. R3b's lowerer will keep this
-                    // shape when it lifts to a real native back-edge:
-                    // the retf-guard exit also returns through the
-                    // caller window.
-                    escape_all_live(&bindings, &mut sites);
-                }
+            }
+            TraceEnd::SelfLink(_) => {
+                // P16-A — self-link close. Body loops with
+                // snapshot-restore (deepest-frame's window →
+                // head-frame's window). Every live binding at
+                // close must be marshalled back across the
+                // back-edge so the next iter sees a coherent
+                // window, same as InlineAbort's blanket escape.
+                escape_all_live(&bindings, &mut sites);
+            }
+            TraceEnd::DownRec { .. } => {
+                // v2.0 Track-R R3a — down-rec close. R3a routes
+                // the tail emit through R1's safe deopt path
+                // (dispatchable=false), so every live binding
+                // at close must be marshalled back into the
+                // caller window before the deopt return —
+                // same blanket-escape posture as SelfLink /
+                // InlineAbort. R3b's lowerer will keep this
+                // shape when it lifts to a real native back-edge:
+                // the retf-guard exit also returns through the
+                // caller window.
+                escape_all_live(&bindings, &mut sites);
             }
         }
     }
@@ -3474,11 +3474,11 @@ pub fn lower_trace_into_named<M: Module>(
     // depth 0 on `head_proto`. A record violating either would break
     // `compute_op_offsets`' depth-bump arithmetic; bail cleanly here
     // rather than panic deeper in.
-    if let Some(first) = record.ops.first() {
-        if first.inline_depth != 0 || !std::ptr::eq(first.proto.as_ptr(), head_proto.as_ptr()) {
-            checkpoint("bail:first-op-shape");
-            return None;
-        }
+    if let Some(first) = record.ops.first()
+        && (first.inline_depth != 0 || !std::ptr::eq(first.proto.as_ptr(), head_proto.as_ptr()))
+    {
+        checkpoint("bail:first-op-shape");
+        return None;
     }
     checkpoint("post:first-op-check");
 
@@ -6755,13 +6755,10 @@ pub fn lower_trace_into_named<M: Module>(
                 // (validated in escape sweep).
                 let b_bytecode = ins.b() as usize;
                 let effective_b = if b_bytecode == 0 {
-                    match record.ops[i].var_count {
-                        Some(n) => n as usize,
-                        // Unreachable on sunk path (escape sweep
-                        // already mark_escaped on None). Helper path
-                        // bails compile too — None means no live top.
-                        None => return None,
-                    }
+                    // Unreachable on the sunk path (the escape sweep
+                    // already mark_escaped on None). The helper path
+                    // bails compile too — None means no live top.
+                    record.ops[i].var_count? as usize
                 } else {
                     b_bytecode
                 };
