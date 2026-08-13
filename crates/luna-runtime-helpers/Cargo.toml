@@ -3,7 +3,6 @@ name = "luna-runtime-helpers"
 description = "Static-link runtime entry for AOT-produced binaries. Exposes a single C-ABI symbol `luna_aot_run(bytecode, len) -> i32` that constructs a luna `Vm`, `undump`s the embedded bytecode, calls the root chunk, and returns a process exit code. Built as a `staticlib` so `luna-aot`'s `cc` link step can statically pull it (plus rust stdlib) into the produced native binary. Also built as `rlib` so `luna-aot`'s integration tests can drive it via the Rust runtime."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

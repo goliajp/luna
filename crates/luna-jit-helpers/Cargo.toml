@@ -3,7 +3,6 @@ name = "luna-jit-helpers"
 description = "Shared `luna_jit_*` extern-C runtime helpers + per-thread JIT_VM/JIT_CL TLS slots + `enter_jit` RAII rebind for the goliajp/luna Lua runtime. Used by both `luna-jit` (Cranelift backend) and `luna-jit-llvm` (LLVM alt backend) so the helper symbol table and TLS discipline stay single-source-of-truth across JIT backends. Internal infrastructure crate — embedders should depend on `luna-jit`, not this crate directly."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
