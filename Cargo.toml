@@ -82,7 +82,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.17.0"
+version = "2.18.0"
 edition = "2024"
 # MSRV: deliberately NOT declared (decision v2.17, 2026-08-14).
 #
@@ -100,7 +100,7 @@ edition = "2024"
 # what the CI matrix actually tests.
 #
 # Informationally (NOT a contract, may move without a version bump):
-# as of v2.17.0 the tree needs **rustc 1.88+** — 1.87 fails with E0658
+# as of v2.18.0 the tree needs **rustc 1.88+** — 1.87 fails with E0658
 # on the let-chains. Building on an older toolchain surfaces as a
 # compiler error rather than a cargo manifest error, since there is no
 # declared floor for cargo to check against.
