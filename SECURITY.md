@@ -2,21 +2,21 @@
 
 ## Supported versions
 
-Only the latest minor release on the `1.x` line receives security
-patches. The patch-level cadence is opportunistic; backports to
-older minor versions are not guaranteed.
+The latest minor of the current major receives security patches. The
+last minor of the prior major receives security-only fixes for twelve
+months after the major shipped. The patch cadence is opportunistic;
+backports beyond this table are not guaranteed.
 
 | Version | Supported |
 |---|---|
-| 1.3.x | ✅ |
-| 1.2.x | ❌ (collapsed into 1.3 per nodefer charter — never published) |
-| 1.1.x | ⚠️ Best-effort backport on request |
-| 1.0.x | ❌ |
-| < 1.0 | ❌ |
+| 3.x (latest minor) | ✅ |
+| 2.20.x | ⚠️ Security only, until 2027-08-14 |
+| < 2.20 | ❌ |
+| 1.x | ❌ |
 
-When v2.0 ships, the support window will shift to "latest minor of
-the current major + last minor of the prior major (security only,
-12-month window)".
+Upgrading from 2.x costs nothing: 3.0 made no breaking change — the
+public surface is identical to 2.18.0 — so the supported version is a
+version bump away. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Reporting a vulnerability
 
@@ -61,7 +61,8 @@ Out of scope:
 
 - Lua VM semantic bugs that don't have a security impact (file these
   as regular issues, or run them through the dogfood report channel)
-- Performance issues (use the v2.0 charter Track BM bench gate)
+- Performance issues — see [`docs/performance.md`](docs/performance.md)
+  for the measurement methodology and the per-release perf gate
 - Issues in `cargo audit`-flagged transitive dependencies that don't
   reach a luna call path (file upstream)
 - Compromise of the `crates.io` publishing pipeline (separately
@@ -82,11 +83,13 @@ luna's threat model + defense-in-depth contracts are documented in
 
 ## Acknowledgements
 
-A `THANKS.md` file enumerates security researchers who have
-responsibly disclosed issues (with consent). For embargo'd reports,
-acknowledgement happens at the disclosure window.
+Researchers who disclose responsibly are credited, with their consent,
+in the release notes for the fix and in a `THANKS.md` that will be
+created at the first such disclosure — there has not been one yet, so
+the file does not exist. For embargoed reports, credit lands at the
+disclosure window.
 
 ---
 
-*Last updated 2026-06-25. For the threat model + sandbox boundary
+*Last updated 2026-08-15. For the threat model + sandbox boundary
 documentation, see [`docs/security.md`](docs/security.md).*

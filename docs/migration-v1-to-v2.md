@@ -1,218 +1,154 @@
-# Migration: luna v1.x → v2.0
+# Migration: luna v1.x → v2.x / v3.x
 
-luna v2.0 is the first major-version break since v1.0. This page is
-the consolidated migration guide for embedders moving from any v1.x
-release. Each section below summarizes what changed and, where
-applicable, gives the recipe to update call sites.
+The consolidated guide for embedders moving off any v1.x release.
 
-> **Status:** v2.0 is in-flight. Sections marked **TBD post-ship**
-> are scaffolds that will be filled in at v2.0 release time once
-> the corresponding tracks land. The shape and intent are stable;
-> the exact code-level details are pending.
+**There was never a v2.0.** The v2.0 charter's fourteen tracks shipped
+as one release, and that release was **2.1.0** (2026-06-28, 235 commits
+after 1.3.0). No `v2.0.0` tag or crates.io version exists. If you are
+looking for "what broke in 2.0", the answer is: what broke in 2.1.0,
+listed below.
 
----
-
-## Overview
-
-### Stability contract carried forward from v1.x
-
-luna v1.0 → v1.3 held a strict semver contract:
-
-- Public `cargo doc` API: no breaking changes within v1.
-- Embedder-visible sandbox defaults: no tightening that would break
-  a working sandbox setup.
-- Compiled luna-dialect bytecode: v1.x can load any earlier v1.x
-  bytecode (forward-compatible).
-
-v2.0 is allowed to break each of these surfaces. Everything that
-*does* break is listed below.
-
-### What does NOT change in v2.0
-
-Even at a major bump, the following invariants are preserved:
-
-- **`luna-core` 0 third-party deps.** Still ironclad; `cargo deny`
-  gate intact.
-- **0 `unsafe` at the embedder surface.** A4 still holds; the four
-  `pub unsafe fn` remain `#[doc(hidden)]`.
-- **`Vm: !Send + !Sync` baseline.** The `feature = "send"` track
-  remains opt-in. Default `Vm` is still single-threaded.
-- **Sandbox-by-default.** `Vm::sandbox(...)` still opens zero
-  libraries and rejects bytecode loading by default.
-- **PUC dialect coverage.** 5.1 / 5.2 / 5.3 / 5.4 / 5.5 all still
-  supported.
+**3.0 broke nothing.** The major bump marks a maturity gate, not an API
+break — `luna_core`'s public surface is identical to 2.18.0, and code
+that builds against any 2.x builds against 3.0 unchanged. Everything on
+this page is about the 1.x → 2.x step.
 
 ---
 
-## API renames
+## What does not change
 
-**TBD post-ship.** Track SQ (source-quality audit) flagged a
-naming-inconsistency top-10 list (see
-`.dev/rfcs/v2.0-audit-source-quality.md`). v2.0 collapses those
-inconsistencies in one rename pass.
+Even across the major bump, these hold:
 
-Each rename below will be expanded with:
+- **`luna-core` has zero third-party dependencies.** CI-enforced on
+  every commit.
+- **No `unsafe` at the embedder surface.** The four `pub unsafe fn` in
+  the workspace remain `#[doc(hidden)]`.
+- **`Vm` is `!Send + !Sync`.** `feature = "send"` stays opt-in; the
+  default `Vm` is single-threaded.
+- **Sandbox by default.** `Vm::sandbox(...)` opens zero libraries and
+  rejects bytecode loading unless told otherwise.
+- **Every dialect.** 5.1 / 5.2 / 5.3 / 5.4 / 5.5, plus MacroLua.
 
-- Old name → new name
-- Crate / module / item kind
-- `cargo fix`-style sed pattern if mechanical
-- Rationale (which inconsistency it resolves)
+---
 
-```
-TBD: rename list pending Track SQ landing.
+## 1. Host roots are tickets, not indices
+
+The pin pool used to hand back a `usize` index that stayed valid
+forever, which meant a long-running embedder's pool only ever grew.
+It now returns a generation-checked ticket, so slots are reusable and a
+stale read is caught instead of silently returning someone else's value.
+
+```rust
+// v1.x
+let idx: usize = vm.pin_host(value);
+let v = vm.host_root_at(idx);
+vm.host_root_set(idx, new_value);
+
+// v2.x
+let ticket: HostRootTicket = vm.pin_host(value);
+let v = vm.read_host(ticket).expect("still pinned");
+vm.write_host(ticket, new_value)?;      // Err(HostRootStale) if unpinned
+vm.unpin(ticket)?;                      // release one slot
 ```
 
-Embedders can prepare by enabling the `#[deprecated]` warnings
-luna v1.3 emits on the to-be-renamed surfaces; every deprecation
-landing in v1.3.x will name its v2.0 replacement.
+`vm.unpin_all()` and `vm.host_root_count()` keep their signatures.
+`unpin_all` now bumps every slot's generation, so all outstanding
+tickets go stale together.
 
----
+**Recipe:** replace each stored `usize` with a `HostRootTicket`;
+`host_root_at(i)` → `read_host(t)`, `host_root_set(i, v)` →
+`write_host(t, v)`.
 
-## Removed features
+## 2. Facade handles carry a ticket
 
-**TBD post-ship.** v2.0 retires a small set of v1.x APIs that were
-either deprecated since v1.1 or shadow a cleaner replacement that
-landed during the v2.0 cycle.
+`LuaFunction`, `LuaTable` and `LuaRoot` hold a `HostRootTicket` where
+they held a `usize`. They stay `Copy + Clone` and their method surface
+(`call`, `call_multi`, `get`, `set`, …) is unchanged, so this is
+invisible unless you constructed or destructured them by field.
 
-Expected categories (subject to track confirmation):
+New: `Lua::unpin(handle)` releases a single handle, via the
+`PinnedHandle` trait implemented by all three. Reading a handle after
+`unpin` or `unpin_all` panics with `"<HandleType> used after unpin /
+unpin_all"` — the behaviour the v1.1 docstring already described.
 
-- v1.1-era `#[deprecated]` shims that were kept for one major.
-- Internal `pub` items that leaked through the v1.0 surface and are
-  now `pub(crate)`.
-- Compatibility flags whose only consumer was a v1.x test.
+## 3. Userdata needs the trait
 
-The release notes for v2.0.0 will be the canonical removed-list;
-this section mirrors that list with migration recipes.
+`Vm::create_userdata` and `Vm::set_userdata` tightened from
+`T: Any + 'static` to `T: LuaUserdata`, so a userdata type can be given
+a metatable and a `__gc` finalizer at allocation time.
 
----
-
-## Deprecated → removed
-
-**TBD post-ship.** The full deprecation ledger lives in CHANGELOG
-entries for v1.1, v1.2, v1.3. Each entry tagged "scheduled removal
-in v2.0" will get a row here with:
-
-- File:line of the v1.x deprecation
-- Replacement API
-- Behavior difference, if any, beyond the name
-
----
-
-## Compiler / bytecode-format breaking
-
-**TBD post-ship.** Track PU (PUC polish) audited the dump-format
-shape during v1.3 and flagged candidate cleanups for the next major.
-Likely shape:
-
-- luna's own dump format (`crates/luna-core/src/vm/dump/luna.rs`)
-  may bump its magic-bytes minor revision; v1.x dumps may need a
-  re-dump pass with the v2.0 compiler.
-- PUC `.luac` translator coverage (Phase LB Wave 2 dialects) may
-  extend to new opcodes; v1.x `.luac` files that loaded before will
-  continue to load.
-- The `cargo doc`-visible dump API may rename `dump_*` /
-  `reader::*` items per Track SQ.
-
-Concrete recipes — including how to detect the format version of an
-existing dump and re-emit it — will land here at v2.0 ship.
-
----
-
-## JIT API changes
-
-**TBD post-ship.** Track J (JIT-aware SendVm interop) and the
-side-trace ABI cleanup that ran across v1.2 → v1.3 left the
-`JitState` / `IntChunkCompiler` / `TraceCompiler` traits in their
-v1 shape. v2.0 may:
-
-- Tighten the `IntChunkCompiler` / `TraceCompiler` trait surface so
-  third-party backends compile cleanly against the post-cleanup
-  shape.
-- Promote `install_jit_backend` ergonomics (e.g. a builder taking
-  the two compilers together) without removing the v1.x entry point.
-- Re-shape `Vm::jit` (`JitState` sidecar from A2) public accessor
-  if v1.x consumers exist (none known at v1.3 ship).
-
-Embedders using only `Vm::install_jit_backend(chunk, trace)` and
-`Vm::install_null_jit()` should not need changes; details on any
-trait-method signature delta will land here.
-
----
-
-## AOT binary breaking
-
-**TBD post-ship.** `luna-aot` (introduced in v1.3 as Stages 1-7)
-shipped its first stable binary format at v1.3.0. v2.0 may evolve:
-
-- The object-file embed format (Stage 2 `bytecode-embed pipeline`)
-  if the data-symbol layout changes (Stage 7 sub-piece 2 added
-  string-key data symbols; further symbols may be added).
-- The runtime-helpers staticlib symbol set (Stage 4) if new
-  `luna_jit_*` helpers are needed by the lowerer.
-- The `Vm::install_aot_trace` API surface introduced in Stage 7
-  sub-piece 4.
-
-AOT binaries produced by v1.3.x `luna-aot` will not be guaranteed
-to load on v2.0 runtimes; recompile from source. The CLI subcommand
-shape may also extend per Track TL.
-
----
-
-## Performance changes
-
-**TBD post-ship.** Track R (interpreter perf) and Track PI (PUC
-parity polish) are expected to shift workload-by-workload numbers
-in v2.0. Documented per-workload deltas will land here in the form
-of a `vs v1.3.0` table:
-
-```
-TBD: per-workload table at v2.0 ship time. Reference the v1.3
-baseline frozen in docs/performance.md.
+```rust
+// v2.x — one line for a type that needs no methods
+impl LuaUserdata for MyType {}
 ```
 
-Embedders should re-run their own perf gates against v2.0 and not
-rely on v1.x absolute numbers.
+If the type holds any `Gc<…>` field you must also override `trace` and
+mark every handle, or the collector will free something still reachable.
+`#[derive(LuaUserdata)]` from `luna-jit-derive` does this for you.
+
+Related, from v1.2: method-call syntax (`obj:width()`) needs an explicit
+`add_method` — the dual registration that used to make it work
+implicitly was removed.
+
+## 4. `feature = "send"` compiles now
+
+In v1.2 selecting `send` raised a `compile_error!`. It now compiles and
+surfaces `SendVm`. If you were guarding against that with
+`cfg(not(feature = "send"))`, drop the guard.
 
 ---
 
-## Tooling changes
+## A semver violation to know about, inside 2.x
 
-**TBD post-ship.** `luna-aot` CLI is the primary tooling surface
-that may grow new subcommands per Track TL. Other tooling areas:
+`luna_core::numeric::num_to_string_for` changed signature in **2.14.0**,
+a *minor* release. `luna_core::numeric` is public, so this was inside
+the stability contract and should not have happened in a minor. The
+2.14.0 changelog entry mentioned the new type but never said the
+signature moved, and carried no `BREAKING` marker.
 
-- `cargo fmt` / `cargo clippy` / `cargo deny` profile pinning may
-  bump MSRV; check `.github/workflows/msrv.yml` at ship.
-- `cargo doc` output may reorganize per Track SQ rename pass.
-- Workspace shape (currently 5 crates) is not expected to change in
-  v2.0; if a sixth crate splits out, it will be listed here.
+```rust
+// <= 2.13.0
+pub fn num_to_string_for(n: Num, legacy_float: bool) -> String
+// >= 2.14.0
+pub fn num_to_string_for(n: Num, fmt: FloatFmt) -> String
+```
+
+| Old call | New call | Dialects |
+|---|---|---|
+| `num_to_string_for(n, true)` | `num_to_string_for(n, FloatFmt::Legacy14)` | 5.1, 5.2 (`%.14g`, no `.0`) |
+| `num_to_string_for(n, false)` | `num_to_string_for(n, FloatFmt::TwoStage55)` | 5.5 (`%.15g` → round-trip → `%.17g`) |
+| *(not expressible)* | `num_to_string_for(n, FloatFmt::G14)` | 5.3, 5.4 (`%.14g` + `.0`) |
+
+The third row is why the change had to happen: 2.13 applied the 5.5
+scheme to 5.3/5.4 as well, one of the divergences 2.14 fixed. A `bool`
+cannot express three formats, so no compatibility shim was added —
+restoring the old overload would permanently carry an API that cannot
+say what it does. `FloatFmt` has no constructor from a `LuaVersion`;
+pick the variant directly, as the VM does.
+
+It was found — and written down, in the 2.17.0 changelog entry — by the
+public-surface audit that now runs every release, which exists because
+of this. A minor bump showing a non-empty removal
+list fails the release checklist.
 
 ---
 
-## Migration recipes
+## Bytecode
 
-**TBD post-ship.** Once the rename / removal lists settle, this
-section will host idiom-level before/after recipes for the most
-common v1.x patterns:
+luna's own dump format carries no version field, and no release has
+recorded or tested whether 1.x-produced bytecode loads under 2.x. Treat
+it as unsupported and recompile from source; if you have a case that
+depends on it, say so and it can be given a contract and a test rather
+than an assumption.
 
-- Sandbox setup
-- Userdata trait migration (if any `LuaUserdata` API delta)
-- Native function registration (if `native_typed` signature shifts)
-- JIT backend installation
-- AOT compilation pipeline
-
-For each pattern, a short v1.x snippet and the equivalent v2.0
-form, with a one-line explanation of why the shape changed.
-
----
+PUC-format `.luac` loading is a separate, opt-in path
+(`Vm::set_puc_bytecode_loading(true)`), covered by the differential
+corpus on all five dialects.
 
 ## See also
 
-- [`CHANGELOG.md`](../CHANGELOG.md) — full v1.x → v2.0 change log
-  (canonical source for renamed / removed / added items)
-- [`embedding.md`](embedding.md) — current (v2.0) cookbook
-- [`security.md`](security.md) — sandbox boundaries (unchanged
-  intent v1.x → v2.0)
-- [`compatibility.md`](compatibility.md) — per-dialect feature
-  matrix (PUC 5.1–5.5 coverage)
-- [`architecture.md`](architecture.md) — crate layout (post-v1.3
-  shape)
+- [`CHANGELOG.md`](../CHANGELOG.md) — canonical per-release record;
+  every entry above links back to it
+- [`embedding.md`](embedding.md) — the current cookbook
+- [`threading.md`](threading.md) — `Vm` threading constraints and
+  `SendVm`

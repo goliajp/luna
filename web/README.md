@@ -1,8 +1,8 @@
 # luna.golia.jp — website
 
-Static marketing + documentation site for **luna**, a GOLIA product. No
-build step, no framework, no server-side logic — plain HTML/CSS/JS. Just
-serve this directory as the web root.
+Static site for **luna**, a GOLIA Lab project. No build step, no
+framework, no JavaScript, no server-side logic — plain HTML and one
+stylesheet. Serve this directory as the web root.
 
 ## Layout
 
@@ -17,84 +17,126 @@ web/
 │   ├── index.html      # 日本語 landing          → /ja/
 │   └── docs.html       # 日本語 docs             → /ja/docs.html
 └── assets/
-    ├── style.css       # one stylesheet, shared by all 6 pages
-    └── app.js          # theme toggle, mobile nav, copy buttons, scrollspy, tabs
+    ├── style.css       # one stylesheet, shared by all six pages
+    ├── luna-logo.svg   # the mark
+    └── golia-wordmark.png
 ```
 
-English is the default locale at the root; `zh/` and `ja/` mirror it. Every
-page carries `<link rel="alternate" hreflang="…">` tags pointing at
-`https://luna.golia.jp/` (en), `/zh/`, and `/ja/`, with `x-default → /`. The
-in-page language switcher links between the three locales.
+English is the default locale at the root; `zh/` and `ja/` mirror it.
+Every page carries `<link rel="alternate" hreflang="…">` pointing at
+`https://luna.golia.jp/` (en), `/zh/` and `/ja/`, with `x-default → /`.
+The in-page switcher links between the three.
 
-## Design identity
+## Design
 
-Deep-violet base with a gold accent — violet for the brand/tech signal, gold
-for the financial/value note — on a fine data grid, with tabular-figure
-numerics and glass panels for a precision-instrument, fintech feel. Type:
-**Bricolage Grotesque** display, **Hanken Grotesk** body, **JetBrains Mono**
-for code. The luna wordmark carries a small `by GOLIA` tag; the moon glyph is
-a violet orb with a gold rim-light. Dark theme is default; a light theme
-(lavender paper) ships via the nav toggle.
+A **Golia Lab** project page, set like a journal article: warm paper
+ground (`#fcfbf8`), ink black text, hairline rules, generous measure.
+GOLIA blue (`#155dfc`) is structural rather than decorative — it marks
+section numbers, key figures, and the one link state.
+
+Type: **Archivo** for display, **IBM Plex Sans** for prose, **IBM Plex
+Mono** for every number and identifier. CJK falls back to the system UI
+faces rather than Mincho, so the page reads as modern in all three
+languages. `line-break: strict` and `word-break: auto-phrase` let the
+browser do correct CJK typesetting natively.
+
+**The stylesheet is kevy.golia.jp's, not a version of it** — every rule
+here appears there verbatim, and every class this site uses is one that
+site defines. The masthead and footer markup is likewise identical, with
+only luna's own identity substituted: the logo, the wordmark, the nav
+labels, and the three links (luna has no npm package, so kevy's fourth
+footer link is absent). The sites should read as one lab rather than
+three unrelated projects. If you change any of it here, change it there
+too — the family resemblance is the thing that breaks first.
+
+What is absent is as deliberate as what is present: kevy's terminal,
+calculator, bar charts, tabs and recipe blocks have no counterpart here,
+so their rules were not carried over.
+
+There is no theme toggle and no dark variant: the paper ground *is* the
+design, and a dark inversion of it would be a different design wearing
+the same layout.
 
 ## Deploy
 
-It's a static bundle — copy `web/` to the document root and point the vhost
-at it. Nothing to compile.
-
-Minimal nginx sketch:
-
-```nginx
-server {
-    server_name luna.golia.jp;
-    root /var/www/luna;          # this directory
-    index index.html;
-
-    # pretty /zh/ and /ja/ directory URLs resolve to their index.html
-    location / {
-        try_files $uri $uri/ $uri.html =404;
-    }
-
-    # long-cache the immutable assets
-    location /assets/ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
-    }
-}
+```sh
+./deploy.sh --check     # verify without uploading
+./deploy.sh             # verify, upload, then confirm the origin
 ```
 
-Optional: a first-visit `Accept-Language` redirect from `/` to `/zh/` or
-`/ja/`. Not required — the switcher and `hreflang` already cover discovery,
-and defaulting everyone to English is fine.
+The script rsyncs this directory to `t01:/apps/luna/web` and checks that
+the origin actually serves the version in the tree — a stale deploy shows
+up nowhere else. It verifies before uploading, because a static site
+fails silently: a broken tag or a missing asset still returns HTTP 200.
+The checks are tag balance, every class having a rule behind it, every
+relative reference resolving, and one version string across all six pages.
 
-Local preview: `cd web && python3 -m http.server 8080`, then open
-`http://localhost:8080/`.
+The box, TLS and the Caddy vhost belong to `goliajp/devops`; the script
+never touches them. It does not run `caddy deploy` — that regenerates the
+whole Caddyfile from CaddyStore and drops any site not in the store.
+
+What ships differs from this directory in one way: the stylesheet is
+renamed after its own contents (`style.<hash>.css`) and the pages are
+rewritten to match, so a returning visitor's cached copy can never win.
+The source tree keeps the plain `style.css` and stays previewable as-is.
+
+Local preview: `cd web && python3 -m http.server 8080`.
+
+## Two passes over the pages
+
+Both are idempotent and both hold `<pre>`, `<code>` and every tag out of
+what they touch. Run them after editing content; `--dry` reports without
+writing.
+
+```sh
+cd web && python3 paint.py && python3 punct.py
+```
+
+**`paint.py`** writes the syntax-highlight spans into the docs pages.
+kevy does the same colouring in the browser, so its prerendered HTML has
+none; this site has no JavaScript, so the spans live in the markup. It
+re-detects each block's language, and strips the previous run's spans
+before re-reading the source.
+
+**`punct.py`** gives the Chinese and Japanese pages their own
+punctuation. A half-width comma in a CJK sentence sets with the wrong
+sidebearings and reads as a typo. Two things it gets right that a
+search-and-replace would not: a bracket can straddle markup — the two
+halves of `(<code>luna-core</code> では …)` live in different text nodes
+— and what decides a mark is the sentence it sits in, not the character
+before it, so the comma in `… C ABI, luna-core 则是 …` is converted even
+though a Latin letter precedes it. It leaves alone thousands separators,
+and brackets whose contents are code rather than prose.
+
+It also strips the full stop from CJK headings and short labels. A
+Chinese or Japanese title, figure caption or standalone phrase does not
+end in 。 — the line ending already closes it, and the stop makes the
+heading read as a stray sentence. Question and exclamation marks stay:
+those carry tone rather than closure. Body paragraphs keep their stops.
+
+Neither tool is uploaded.
 
 ## External dependencies
 
 The pages load web fonts from Google Fonts (`fonts.googleapis.com` /
-`fonts.gstatic.com`): **Bricolage Grotesque** (display), **Hanken Grotesk**
-(Latin body), **JetBrains Mono** (code), and **Noto Sans/Serif SC & JP** for
-the Chinese and Japanese pages. If a Content-Security-Policy is applied,
-allow those two hosts — or self-host the fonts and rewrite the `<link>` tags
-in each `<head>` for zero third-party requests. Everything else (theme, i18n
-switch, copy buttons) is inline and self-contained; there are no analytics or
-trackers.
-
-## Theme & i18n
-
-- **Theme** — light/dark toggle in the nav; the choice persists in
-  `localStorage` (`luna-theme`) and is applied before first paint by a tiny
-  inline script in each `<head>` (no flash). Dark is the default.
-- **Language** — separate HTML per locale (good for SEO and clean URLs), not
-  a client-side string swap. Adding or editing a locale means copying a
-  locale folder and translating the text nodes; the markup, CSS, and JS are
-  identical across all six pages.
+`fonts.gstatic.com`): **Archivo**, **IBM Plex Sans** and **IBM Plex
+Mono**. Under a Content-Security-Policy, allow those two hosts — or
+self-host the fonts and rewrite the `<link>` in each `<head>` for zero
+third-party requests. Nothing else is fetched: no analytics, no
+trackers, no scripts at all.
 
 ## Updating for a new release
 
-The version string `v3.0.0` appears in each landing page's hero badge and
-each docs page's intro sentence. Bump those on release. Content is
-snapshotted against the crate docs under `../docs/` — re-sync if the
-embedding API or dialect matrix changes.
+The version string `v3.0.0` appears in the `.eyebrow` of all six pages.
+Bump them on release — `deploy.sh` refuses to ship a tree where the six
+disagree, which is what a half-finished bump looks like. This is also
+step 8 of `.dev/rfcs/monthly-drift-sweep.md`.
+
+Content is snapshotted against the crate docs under `../docs/`. Re-sync
+when the embedding API or the dialect matrix changes. The landing page
+also states two measured figures — the fixture count and the cold-start
+heap — which should be checked against reality rather than carried
+forward on faith.
 
 ---
 

@@ -23,3 +23,7 @@ fuzz/Cargo.lock
 fuzz/corpus/
 fuzz/artifacts/
 fuzz/target/
+
+# Python bytecode from the web/ tooling
+__pycache__/
+*.pyc

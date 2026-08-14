@@ -24,10 +24,10 @@ requests through the issue tracker.
 luna is the runtime for [`goliajp/kevy`](https://github.com/goliajp/kevy)
 and a handful of other GOLIA K.K. projects. The single-maintainer
 shape lets the project evolve to those workloads' needs without
-the coordination overhead of multi-party review. v2.0 in particular
-is a "no defer" sprint where every track lands or is permanently
-out-of-scope — that cadence isn't compatible with community-PR
-review windows.
+the coordination overhead of multi-party review. Sprints run on a
+"no defer" rule — every track lands or is declared permanently
+out-of-scope in the release notes, never quietly postponed — and
+that cadence is not compatible with community-PR review windows.
 
 ## If you want to fork
 
@@ -70,4 +70,4 @@ Dual-licensed under MIT or Apache-2.0, at your option. See
 
 ---
 
-*Last updated 2026-06-25.*
+*Last updated 2026-08-15.*

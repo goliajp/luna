@@ -1,301 +1,260 @@
 <!doctype html>
-<html lang="ja" data-theme="dark">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ドキュメント — luna</title>
-<meta name="description" content="luna ドキュメント:はじめに、埋め込みクックブック、ダイアレクト互換性、アーキテクチャ、JIT と AOT、スレッド、セキュリティ、デプロイ、CLI、そして安定 API 契約。">
+<title>luna ドキュメント · Golia Lab</title>
+<meta name="description" content="luna のドキュメント:インストール、埋め込み API、スレッド、サンドボックス、デプロイ、JIT と AOT、方言互換マトリクス、安定性の保証。">
 <link rel="canonical" href="https://luna.golia.jp/ja/docs.html">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fcfbf8">
+<link rel="icon" href="../assets/luna-logo.svg" type="image/svg+xml">
+
 <link rel="alternate" hreflang="en" href="https://luna.golia.jp/docs.html">
-<link rel="alternate" hreflang="zh" href="https://luna.golia.jp/zh/docs.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://luna.golia.jp/zh/docs.html">
 <link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/docs.html">
 <link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/docs.html">
-<link rel="icon" type="image/svg+xml" href="/assets/luna-icon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="../assets/style.css">
-<script>try{var t=localStorage.getItem("luna-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
 </head>
 <body>
 
-<header class="nav">
-  <div class="wrap nav-in">
-    <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
-    <nav class="nav-links">
-      <a href="index.html#overview">概要</a>
-      <a href="index.html#dialects">ダイアレクト</a>
-      <a href="index.html#architecture">アーキテクチャ</a>
-      <a href="docs.html">ドキュメント</a>
-    </nav>
-    <span class="nav-spacer"></span>
-    <div class="nav-tools">
-      <div class="seg" role="group" aria-label="言語">
-        <a href="../docs.html">EN</a>
-        <a href="../zh/docs.html">中文</a>
-        <a href="docs.html" aria-current="true">日本語</a>
+<header class="masthead"><div class="masthead-inner"><a class="brand" href="./"><img src="../assets/luna-logo.svg" alt="" width="26" height="26"/><span class="wordmark">luna</span></a><nav class="topnav"><a href="./">ホーム</a><a href="docs.html" class="on" aria-current="page">ドキュメント</a><a href="./#dialects" class="hide-sm">方言</a><div class="langswitch" role="group" aria-label="language"><a href="../docs.html" hreflang="en">EN</a><a href="../zh/docs.html" hreflang="zh-CN">中文</a><a class="on" href="docs.html" hreflang="ja">日本語</a></div></nav></div></header>
+
+<div class="shell">
+  <section class="frontmatter">
+    <div class="eyebrow">v3.0.0 · ドキュメント</div>
+    <h1>luna ドキュメント</h1>
+    <p class="abstract">luna を埋め込むために必要なすべて：crate の分割、Rust API、サンドボックス制御、デプロイ形態、方言ごとの互換マトリクス。</p>
+  </section>
+</div>
+
+<div class="docshell">
+    <nav class="docnav" aria-label="documentation">
+      <div>
+        <div class="group">このページの目次</div>
+
+      <a href="#getting-started">インストールと hello</a>
+      <a href="#cli">CLI</a>
+      <a href="#embedding">埋め込み</a>
+      <a href="#threading">スレッド</a>
+      <a href="#security">セキュリティとサンドボックス</a>
+      <a href="#deploy">デプロイ</a>
+      <a href="#jit-aot">JIT と AOT</a>
+      <a href="#compat">互換性</a>
+      <a href="#architecture">アーキテクチャ</a>
+      <a href="#performance">パフォーマンス</a>
+      <a href="#versioning">バージョン方針</a>
       </div>
-      <button class="icon-btn" data-theme-toggle aria-label="テーマ切り替え">☾</button>
-      <a class="icon-btn" href="https://github.com/goliajp/luna" aria-label="GitHub リポジトリ" title="GitHub">
-        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-      </a>
-      <button class="icon-btn nav-toggle" aria-label="メニュー">☰</button>
-    </div>
-  </div>
-</header>
+    </nav>
+    <main class="docmain">
+<h2 id="getting-started">インストールと hello</h2>
+      <p>luna は 7 つの公開済み crate からなる Cargo ワークスペースです。合う依存量を選んでください。完全なインタプリタに Cranelift JIT と C ABI を加えた <code>luna-jit</code>、あるいは依存ゼロで wasm フレンドリーな <code>luna-core</code>。</p>
+      <pre><code><span class="tok-c"># 完全なインタプリタ + Cranelift JIT + C ABI</span>
+luna-jit = <span class="tok-s">"3"</span>
 
-<div class="wrap docs-shell">
-  <aside class="sidebar">
-    <h4>はじめに</h4>
-    <a href="#getting-started">インストールと hello</a>
-    <a href="#cli">CLI</a>
-    <h4>ガイド</h4>
-    <a href="#embedding">埋め込み</a>
-    <a href="#threading">スレッド</a>
-    <a href="#security">セキュリティとサンドボックス</a>
-    <a href="#deploy">デプロイ</a>
-    <a href="#jit-aot">JIT と AOT</a>
-    <h4>リファレンス</h4>
-    <a href="#compatibility">互換性</a>
-    <a href="#architecture">アーキテクチャ</a>
-    <a href="#performance">パフォーマンス</a>
-    <a href="#versioning">バージョン方針</a>
-  </aside>
+<span class="tok-c"># または最小の表面 —— 純インタプリタ、第三者依存ゼロ</span>
+luna-core = <span class="tok-s">"3"</span></code></pre>
+      <p>選んだダイアレクトの <code>Vm</code> を構築して評価します。<code>Vm::new</code> は既定で安全な標準ライブラリをすべて開き、JIT を組み込みます（<code>luna-core</code> では no-op バックエンド）。</p>
+      <pre><code><span class="tok-k">use</span> luna_jit::vm::Vm;
+<span class="tok-k">use</span> luna_jit::version::LuaVersion;
 
-  <main class="doc-main">
-    <h1>ドキュメント</h1>
-    <p class="lead">luna を Rust ホストに埋め込むために必要なすべて——3 行の hello から安定 API 契約まで。<span class="mono">v3.0.0</span> 時点のスナップショットです。rustdoc の API リファレンスは <a class="xref" href="https://docs.rs/luna-jit">docs.rs</a> にあります。</p>
-
-    <!-- ============================================ getting started -->
-    <section id="getting-started">
-      <h2>インストールと hello</h2>
-      <p>luna は 5 つの公開可能な crate からなる Cargo ワークスペースです。合う依存量を選んでください。完全なインタプリタに Cranelift JIT と C ABI を加えた <span class="mono">luna-jit</span>、あるいは依存ゼロで wasm フレンドリーな <span class="mono">luna-core</span>。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code># 完全なインタプリタ + Cranelift JIT + C ABI
-luna-jit = "2"
-
-# または最小の表面 —— 純インタプリタ、第三者依存ゼロ
-luna-core = "2"</code></pre></div>
-      <p>選んだダイアレクトの <span class="mono">Vm</span> を構築して評価します。<span class="mono">Vm::new</span> は既定で安全な標準ライブラリをすべて開き、JIT を組み込みます(<span class="mono">luna-core</span> では no-op バックエンド)。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>use luna_jit::vm::Vm;
-use luna_jit::version::LuaVersion;
-
-fn main() {
-    let mut vm = Vm::new(LuaVersion::Lua55);  // 5.5 + full stdlib + JIT on
-    let result = vm.eval("return 'hello, ' .. 'world'").unwrap();
-    let s: String = result[0].try_as_str().unwrap().to_string();
-    println!("{s}");
-}</code></pre></div>
-      <div class="note"><b>どの crate を?</b> <span class="mono">luna-jit</span> は <span class="mono">luna-core</span> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <span class="mono">wasm32</span> ターゲットが欲しいときだけ、<span class="mono">luna-core</span> を直接使ってください。</div>
-    </section>
-
-    <!-- ============================================ CLI -->
-    <section id="cli">
-      <h2>コマンドラインインターフェース</h2>
-      <p><span class="mono">luna-jit</span> をインストールすると、PATH に <span class="mono">luna</span> バイナリ——REPL 兼スクリプトランナー——が置かれます。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>luna script.lua              # ファイルを実行
-luna -e "print(1 + 2)"       # インラインコードを実行
-luna --lua=5.4 script.lua    # ダイアレクトを選択
-luna                         # 対話 REPL(Ctrl-D で終了)</code></pre></div>
-      <div class="sheet-wrap">
-        <table class="sheet">
+<span class="tok-k">fn</span> main() {
+    <span class="tok-k">let</span> <span class="tok-k">mut</span> vm = Vm::<span class="tok-k">new</span>(LuaVersion::Lua55);  <span class="tok-c">// 5.5 + full stdlib + JIT on</span>
+    <span class="tok-k">let</span> result = vm.eval(<span class="tok-s">"return 'hello, ' .. 'world'"</span>).unwrap();
+    <span class="tok-k">let</span> s: String = result[0].try_as_str().unwrap().to_string();
+    println!(<span class="tok-s">"{s}"</span>);
+}</code></pre>
+      <div class="callout note"><b>どの crate を？</b> <code>luna-jit</code> は <code>luna-core</code> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <code>wasm32</code> ターゲットが欲しいときだけ、<code>luna-core</code> を直接使ってください。</div>
+<h2 id="cli">コマンドラインインターフェース</h2>
+      <p><code>luna-jit</code> をインストールすると、PATH に <code>luna</code> バイナリ——REPL 兼スクリプトランナー——が置かれます。</p>
+      <pre><code>luna script.lua              <span class="tok-c"># ファイルを実行</span>
+luna -e <span class="tok-s">"print(1 + 2)"</span>       <span class="tok-c"># インラインコードを実行</span>
+luna --lua=5.4 script.lua    <span class="tok-c"># ダイアレクトを選択</span>
+luna                         <span class="tok-c"># 対話 REPL(Ctrl-D で終了)</span></code></pre>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>フラグ</th><th>挙動</th></tr></thead>
           <tbody>
-            <tr><td class="mono">--lua=5.X</td><td>ダイアレクトを選択(5.1 / 5.2 / 5.3 / 5.4 / 5.5;既定 5.5)</td></tr>
-            <tr><td class="mono">--sandbox</td><td>base/math/string/table/coroutine のみ開く;バイトコードロードを拒否</td></tr>
+            <tr><td class="mono">--lua=5.X</td><td>ダイアレクトを選択（5.1 / 5.2 / 5.3 / 5.4 / 5.5；既定 5.5）</td></tr>
+            <tr><td class="mono">--sandbox</td><td>base/math/string/table/coroutine のみ開く；バイトコードロードを拒否</td></tr>
             <tr><td class="mono">--budget=N</td><td>実行前に命令予算を設定</td></tr>
-            <tr><td class="mono">--no-jit</td><td>インタプリタのみで実行(no-op JIT バックエンドを組み込む)</td></tr>
+            <tr><td class="mono">--no-jit</td><td>インタプリタのみで実行（no-op JIT バックエンドを組み込む）</td></tr>
             <tr><td class="mono">--profile</td><td>スクリプト終了後に trace-JIT カウンタを出力</td></tr>
-            <tr><td class="mono">-e "&lt;code&gt;"</td><td>ファイルの代わりにインラインコードを実行</td></tr>
+            <tr><td class="mono">-e "&lt；code&gt；"</td><td>ファイルの代わりにインラインコードを実行</td></tr>
             <tr><td class="mono">-</td><td>stdin からソースを読む</td></tr>
           </tbody>
         </table>
       </div>
-      <p>REPL は各行をまず式として評価し(<span class="mono">return</span> を前置)、構文エラーなら文として再試行します——式も代入も動きます。</p>
-    </section>
-
-    <!-- ============================================ embedding -->
-    <section id="embedding">
-      <h2>埋め込み</h2>
+      <p>REPL は各行をまず式として評価し（<code>return</code> を前置）、構文エラーなら文として再試行します——式も代入も動きます。</p>
+<h2 id="embedding">埋め込み</h2>
       <p>埋め込み API が主要な表面です——C ABI より豊かで、完全に安全な所有権を備えます。以下は各能力の形です。完全なクックブックは proc-macro userdata と非同期表面を含む 14 節をカバーします。</p>
 
       <h3>信頼できないスクリプト向けサンドボックス</h3>
-      <p>サンドボックスビルダーがライブラリをホワイトリスト化し、予算を武装します。サンドボックス化されたスクリプトは <span class="mono">require</span> もファイルシステムへのアクセスも、バイトコードチャンクのコンパイルもできません。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">sandbox.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>use luna_jit::Lua;
-use luna_jit::version::LuaVersion;
+      <p>サンドボックスビルダーがライブラリをホワイトリスト化し、予算を武装します。サンドボックス化されたスクリプトは <code>require</code> もファイルシステムへのアクセスも、バイトコードチャンクのコンパイルもできません。</p>
+      <pre><code><span class="tok-k">use</span> luna_jit::Lua;
+<span class="tok-k">use</span> luna_jit::version::LuaVersion;
 
-let mut lua = Lua::sandbox(LuaVersion::Lua54)
+<span class="tok-k">let</span> <span class="tok-k">mut</span> lua = Lua::sandbox(LuaVersion::Lua54)
     .open_base()
     .open_math()
     .open_string()
     .open_table()
-    .with_instr_budget(1_000_000)      // ~10 ms の実時間予算
-    .with_memory_cap(8 * 1024 * 1024)  // 8 MiB の上限
+    .with_instr_budget(1_000_000)      <span class="tok-c">// ~10 ms の実時間予算</span>
+    .with_memory_cap(8 * 1024 * 1024)  <span class="tok-c">// 8 MiB の上限</span>
     .build();
 
-let r: i64 = lua.eval("return 1 + 2").unwrap();</code></pre></div>
+<span class="tok-k">let</span> r: i64 = lua.eval(<span class="tok-s">"return 1 + 2"</span>).unwrap();</code></pre>
 
       <h3>グローバルとテーブル</h3>
-      <p><span class="mono">set_global</span> は任意の <span class="mono">IntoValue</span> 型を受け取ります(<span class="mono">Option&lt;T&gt;</span> は nil に対応)。テーブルはワンショットとチェーンビルダーの 2 形態です。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">globals.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>vm.set_global("answer", 42_i64)?;
-vm.set_global("name", "luna")?;
-vm.set_global("missing", Option::&lt;i64&gt;::None)?;   // nil に設定
+      <p><code>set_global</code> は任意の <code>IntoValue</code> 型を受け取ります（<code>Option&lt;T&gt;</code> は nil に対応）。テーブルはワンショットとチェーンビルダーの 2 形態です。</p>
+      <pre><code>vm.set_global(<span class="tok-s">"answer"</span>, 42_i64)?;
+vm.set_global(<span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)?;
+vm.set_global(<span class="tok-s">"missing"</span>, Option::&lt;i64&gt;::None)?;   <span class="tok-c">// nil に設定</span>
 
-// ワンショット、固定の形:
-let t = vm.table_of([("answer", 42_i64), ("year", 2026_i64)]);
+<span class="tok-c">// ワンショット、固定の形:</span>
+<span class="tok-k">let</span> t = vm.table_of([(<span class="tok-s">"answer"</span>, 42_i64), (<span class="tok-s">"year"</span>, 2026_i64)]);
 
-// または可変の形にチェーンビルダー:
-let t = vm.new_table()
-    .with("name", "luna")
-    .with(1_i64, "first array entry")
-    .build();</code></pre></div>
+<span class="tok-c">// または可変の形にチェーンビルダー:</span>
+<span class="tok-k">let</span> t = vm.new_table()
+    .with(<span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)
+    .with(1_i64, <span class="tok-s">"first array entry"</span>)
+    .build();</code></pre>
 
       <h3>型付きネイティブ関数</h3>
-      <p><span class="mono">native_typed</span> は Rust のクロージャや関数ポインタを Lua に橋渡しし、引数のデコードと戻り値のエンコードを自動化します——純関数、多値返し、失敗しうる形(<span class="mono">Result&lt;T, LuaError&gt;</span>)まで、0〜6 引数に対応します。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">natives.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>let add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
-vm.set_global("add", add)?;
+      <p><code>native_typed</code> は Rust のクロージャや関数ポインタを Lua に橋渡しし、引数のデコードと戻り値のエンコードを自動化します——純関数、多値返し、失敗しうる形(<code>Result&lt;T, LuaError&gt;</code>)まで、0〜6 引数に対応します。</p>
+      <pre><code><span class="tok-k">let</span> add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
+vm.set_global(<span class="tok-s">"add"</span>, add)?;
 
-let split = vm.native_typed(|x: i64| -&gt; (i64, i64) { (x / 10, x % 10) });
-vm.set_global("split", split)?;
+<span class="tok-k">let</span> split = vm.native_typed(|x: i64| -&gt; (i64, i64) { (x / 10, x % 10) });
+vm.set_global(<span class="tok-s">"split"</span>, split)?;
 
-let safe_div = vm.native_typed(|a: i64, b: i64| -&gt; Result&lt;i64, LuaError&gt; {
-    if b == 0 { Err(LuaError::new(Value::Nil)) } else { Ok(a / b) }
+<span class="tok-k">let</span> safe_div = vm.native_typed(|a: i64, b: i64| -&gt; Result&lt;i64, LuaError&gt; {
+    <span class="tok-k">if</span> b == 0 { Err(LuaError::<span class="tok-k">new</span>(Value::Nil)) } <span class="tok-k">else</span> { Ok(a / b) }
 });
-vm.set_global("safe_div", safe_div)?;</code></pre></div>
+vm.set_global(<span class="tok-s">"safe_div"</span>, safe_div)?;</code></pre>
 
       <h3>userdata —— ホスト型を公開する</h3>
-      <p>任意の <span class="mono">T: 'static</span> な Rust の値を Lua userdata の背後に格納できます。空の <span class="mono">impl LuaUserdata for T {}</span> だけで橋渡しは十分。メソッドとメタメソッドを足せば、ネイティブのように振る舞います。<span class="mono">#[derive(LuaUserdata)]</span> proc-macro がボイラープレートを生成します。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">userdata.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>use luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
+      <p>任意の <code>T: 'static</code> な Rust の値を Lua userdata の背後に格納できます。空の <code>impl LuaUserdata for T {}</code> だけで橋渡しは十分。メソッドとメタメソッドを足せば、ネイティブのように振る舞います。<code>#[derive(LuaUserdata)]</code> proc-macro がボイラープレートを生成します。</p>
+      <pre><code><span class="tok-k">use</span> luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
 
-struct Counter { value: i64 }
+<span class="tok-k">struct</span> Counter { value: i64 }
 
-impl LuaUserdata for Counter {
-    fn type_name() -&gt; &amp;'static str { "Counter" }
-    fn add_methods&lt;M: UserdataMethods&lt;Self&gt;&gt;(m: &amp;mut M) {
-        m.add_method("get", |_vm, this, ()| Ok::&lt;_, _&gt;(this.value));
-        m.add_method_mut("incr", |_vm, this, (by,): (i64,)| {
+<span class="tok-k">impl</span> LuaUserdata <span class="tok-k">for</span> Counter {
+    <span class="tok-k">fn</span> type_name() -&gt; &amp;'static str { <span class="tok-s">"Counter"</span> }
+    <span class="tok-k">fn</span> add_methods&lt;M: UserdataMethods&lt;Self&gt;&gt;(m: &amp;<span class="tok-k">mut</span> M) {
+        m.add_method(<span class="tok-s">"get"</span>, |_vm, this, ()| Ok::&lt;_, _&gt;(this.value));
+        m.add_method_mut(<span class="tok-s">"incr"</span>, |_vm, this, (by,): (i64,)| {
             this.value += by; Ok::&lt;_, _&gt;(())
         });
         m.add_meta_method(MetaMethod::ToString, |_vm, this, ()| {
-            Ok::&lt;_, _&gt;(format!("Counter({})", this.value))
+            Ok::&lt;_, _&gt;(format!(<span class="tok-s">"Counter({})"</span>, this.value))
         });
     }
 }
 
-vm.set_userdata("c", Counter { value: 100 })?;
-vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre></div>
-      <div class="note warm"><b>破れば即 unsound な唯一の規則。</b>userdata が <span class="mono">Gc&lt;…&gt;</span> フィールドを 1 つでも持つなら、<span class="mono">trace</span> をオーバーライドし、すべてのハンドルを <span class="mono">m.mark(...)</span> しなければなりません——<span class="mono">trace</span> の中で許されるのはマークだけで、Vm 呼び出し・確保・ロックは禁止です。<span class="mono">trace</span> の欠落は use-after-free です。derive マクロがこれを代行します。</div>
+vm.set_userdata(<span class="tok-s">"c"</span>, Counter { value: 100 })?;
+vm.eval(<span class="tok-s">"c:incr(50); print(tostring(c))"</span>)?;   <span class="tok-c">// → Counter(150)</span></code></pre>
+      <div class="callout note"><b>破れば即 unsound な唯一の規則。</b>userdata が <code>Gc&lt;…&gt;</code> フィールドを 1 つでも持つなら、<code>trace</code> をオーバーライドし、すべてのハンドルを <code>m.mark(...)</code> しなければなりません——<code>trace</code> の中で許されるのはマークだけで、Vm 呼び出し・確保・ロックは禁止です。<code>trace</code> の欠落は use-after-free です。derive マクロがこれを代行します。</div>
 
       <h3>Rust からコルーチンとデバッグフックを駆動</h3>
-      <p>Lua 側の <span class="mono">coroutine.create</span> を使わずに、<span class="mono">create_coroutine</span> / <span class="mono">resume_coroutine</span> で Rust から Lua コルーチンを駆動できます。<span class="mono">set_rust_debug_hook</span> で Call / Return / Line / Count / TailCall の各イベントに Rust コールバックを掛けられます。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">coroutine.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>let body = vm.eval(r#"
+      <p>Lua 側の <code>coroutine.create</code> を使わずに、<code>create_coroutine</code> / <code>resume_coroutine</code> で Rust から Lua コルーチンを駆動できます。<code>set_rust_debug_hook</code> で Call / Return / Line / Count / TailCall の各イベントに Rust コールバックを掛けられます。</p>
+      <pre><code><span class="tok-k">let</span> body = vm.eval(r#<span class="tok-s">"
     return function()
         coroutine.yield(1)
         coroutine.yield(2)
         return 3
     end
-"#)?[0];
+"</span>#)?[0];
 
-let co = vm.create_coroutine(body);
-let r1 = vm.resume_coroutine(co, vec![])?;   // r1[0] == Int(1)
-let r2 = vm.resume_coroutine(co, vec![])?;   // r2[0] == Int(2)
-let r3 = vm.resume_coroutine(co, vec![])?;   // r3[0] == Int(3), 終端</code></pre></div>
+<span class="tok-k">let</span> co = vm.create_coroutine(body);
+<span class="tok-k">let</span> r1 = vm.resume_coroutine(co, vec![])?;   <span class="tok-c">// r1[0] == Int(1)</span>
+<span class="tok-k">let</span> r2 = vm.resume_coroutine(co, vec![])?;   <span class="tok-c">// r2[0] == Int(2)</span>
+<span class="tok-k">let</span> r3 = vm.resume_coroutine(co, vec![])?;   <span class="tok-c">// r3[0] == Int(3), 終端</span></code></pre>
 
       <h3>エラー</h3>
-      <p>Lua のエラーは <span class="mono">Result&lt;T, LuaError&gt;</span> として現れます。<span class="mono">LuaError</span> は <span class="mono">Display</span> / <span class="mono">Error</span> を実装し、より豊かな文脈は Vm から取得できます。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">errors.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>match vm.eval("error('something failed')") {
-    Ok(v)  =&gt; println!("ok: {:?}", v),
+      <p>Lua のエラーは <code>Result&lt;T, LuaError&gt;</code> として現れます。<code>LuaError</code> は <code>Display</code> / <code>Error</code> を実装し、より豊かな文脈は Vm から取得できます。</p>
+      <pre><code><span class="tok-k">match</span> vm.eval(<span class="tok-s">"error('something failed')"</span>) {
+    Ok(v)  =&gt; println!(<span class="tok-s">"ok: {:?}"</span>, v),
     Err(e) =&gt; {
-        println!("error: {}", e);              // Display
-        let kind = vm.error_kind();            // LuaErrorKind
-        let source = vm.error_source();        // Option&lt;(&amp;str, u32)&gt;
-        let tb = vm.take_error_traceback();    // Option&lt;String&gt;
+        println!(<span class="tok-s">"error: {}"</span>, e);              <span class="tok-c">// Display</span>
+        <span class="tok-k">let</span> kind = vm.error_kind();            <span class="tok-c">// LuaErrorKind</span>
+        <span class="tok-k">let</span> source = vm.error_source();        <span class="tok-c">// Option&lt;(&amp;str, u32)&gt;</span>
+        <span class="tok-k">let</span> tb = vm.take_error_traceback();    <span class="tok-c">// Option&lt;String&gt;</span>
     }
-}</code></pre></div>
+}</code></pre>
 
-      <h3><span class="mono">Lua</span> ファサード</h3>
-      <p>mlua 風の入口が好みなら、<span class="mono">Lua</span> が同じ機構を包み、host-root チケットに支えられた <span class="mono">Copy + Clone</span> なハンドルを提供します。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">facade.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>use luna_jit::Lua;
+      <h3><code>Lua</code> ファサード</h3>
+      <p>mlua 風の入口が好みなら、<code>Lua</code> が同じ機構を包み、host-root チケットに支えられた <code>Copy + Clone</code> なハンドルを提供します。</p>
+      <pre><code><span class="tok-k">use</span> luna_jit::Lua;
 
-let mut lua = Lua::new();          // JIT on, Lua 5.5
+<span class="tok-k">let</span> <span class="tok-k">mut</span> lua = Lua::<span class="tok-k">new</span>();          <span class="tok-c">// JIT on, Lua 5.5</span>
 lua.open_base(); lua.open_math();
 
-let add = lua.create_function(|a: i64, b: i64| -&gt; i64 { a + b });
-lua.set_global("add", add)?;
-let r: i64 = lua.eval("return add(40, 2)")?;   // 42
+<span class="tok-k">let</span> add = lua.create_function(|a: i64, b: i64| -&gt; i64 { a + b });
+lua.set_global(<span class="tok-s">"add"</span>, add)?;
+<span class="tok-k">let</span> r: i64 = lua.eval(<span class="tok-s">"return add(40, 2)"</span>)?;   <span class="tok-c">// 42</span>
 
-let t = lua.create_table();
-t.set(&amp;mut lua, "name", "luna")?;
-let name: String = t.get(&amp;mut lua, "name")?;</code></pre></div>
-    </section>
-
-    <!-- ============================================ threading -->
-    <section id="threading">
-      <h2>スレッド</h2>
-      <p>既定の <span class="mono">Vm</span>(および <span class="mono">Lua</span> ファサード)は <strong><span class="mono">!Send + !Sync</span></strong> です——Vm と、その GC ヒープへのすべてのハンドルは、それを生成したスレッド上に留まります。この制約は <span class="mono">compile_fail</span> doctest によってコンパイル時に強制されます。</p>
-      <p>これは意図したパフォーマンス上の選択です。GC は侵入的マーク&スイープヒープ上の <span class="mono">Gc&lt;T&gt; = NonNull&lt;T&gt;</span> を用い、stop-the-world プロトコルもロック付きのトレースキャッシュ読み取りもありません。<span class="mono">Send</span> にすると実ワークロードで 5〜15% のコストが乗ります。そもそも Lua 自身のデータモデルがシングルスレッドです。</p>
+<span class="tok-k">let</span> t = lua.create_table();
+t.set(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)?;
+<span class="tok-k">let</span> name: String = t.get(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>)?;</code></pre>
+<h2 id="threading">スレッド</h2>
+      <p>既定の <code>Vm</code>（および <code>Lua</code> ファサード）は <strong><code>!Send + !Sync</code></strong> です——Vm と、その GC ヒープへのすべてのハンドルは、それを生成したスレッド上に留まります。この制約は <code>compile_fail</code> doctest によってコンパイル時に強制されます。</p>
+      <p>これは意図したパフォーマンス上の選択です。GC は侵入的マーク&スイープヒープ上の <code>Gc&lt;T&gt; = NonNull&lt;T&gt;</code> を用い、stop-the-world プロトコルもロック付きのトレースキャッシュ読み取りもありません。<code>Send</code> にすると実ワークロードで 5〜15% のコストが乗ります。そもそも Lua 自身のデータモデルがシングルスレッドです。</p>
       <h3>3 つの定石パターン</h3>
       <ul>
-        <li><strong>シングルスレッド Tokio</strong> —— <span class="mono">flavor = "current_thread"</span> で Vm のいるスレッド上に executor を走らせ、<span class="mono">vm.eval_async(...)</span> を使う。</li>
-        <li><strong>マルチスレッド Tokio 上の <span class="mono">LocalSet</span></strong> —— <span class="mono">LocalSet::run_until</span> が Vm の future を呼び出しスレッドに固定する。</li>
-        <li><strong>OS スレッドごとに 1 つの Vm + チャネル</strong> —— 真の並列には、スレッドごとに Vm を 1 つ。スレッド間を渡るのは <span class="mono">Send</span> なデータ(ソース文字列、結果文字列)だけ。</li>
+        <li><strong>シングルスレッド Tokio</strong> —— <code>flavor = "current_thread"</code> で Vm のいるスレッド上に executor を走らせ、<code>vm.eval_async(...)</code> を使う。</li>
+        <li><strong>マルチスレッド Tokio 上の <code>LocalSet</code></strong> —— <code>LocalSet::run_until</code> が Vm の future を呼び出しスレッドに固定する。</li>
+        <li><strong>OS スレッドごとに 1 つの Vm + チャネル</strong> —— 真の並列には、スレッドごとに Vm を 1 つ。スレッド間を渡るのは <code>Send</code> なデータ（ソース文字列、結果文字列）だけ。</li>
       </ul>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">pattern-1.rs</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>#[tokio::main(flavor = "current_thread")]
-async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let mut vm = Vm::new_minimal_with_jit(LuaVersion::Lua55);
+      <pre><code>#[tokio::main(flavor = <span class="tok-s">"current_thread"</span>)]
+<span class="tok-k">async</span> <span class="tok-k">fn</span> main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    <span class="tok-k">let</span> <span class="tok-k">mut</span> vm = Vm::new_minimal_with_jit(LuaVersion::Lua55);
     vm.open_base();
-    let result = vm.eval_async("return 1 + 2").await?;
+    <span class="tok-k">let</span> result = vm.eval_async(<span class="tok-s">"return 1 + 2"</span>).<span class="tok-k">await</span>?;
     Ok(())
-}</code></pre></div>
-      <div class="note"><b>オプトインの <span class="mono">SendVm</span>。</b><span class="mono">feature = "send"</span> フラグは <span class="mono">SendVm</span> newtype を追加します。これは <span class="mono">Send</span>(ただし <span class="mono">Sync</span> ではない)なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <span class="mono">.await</span> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <span class="mono">SendVm</span> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<span class="mono">Send</span> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
-    </section>
-
-    <!-- ============================================ security -->
-    <section id="security">
-      <h2>セキュリティとサンドボックス</h2>
+}</code></pre>
+      <div class="callout note"><b>オプトインの <code>SendVm</code>。</b><code>feature = "send"</code> フラグは <code>SendVm</code> newtype を追加します。これは <code>Send</code>（ただし <code>Sync</code> ではない）なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <code>.await</code> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <code>SendVm</code> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<code>Send</code> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
+<h2 id="security">セキュリティとサンドボックス</h2>
       <p>luna は埋め込み VM です。セキュリティ境界を握るのはスクリプトではなく<strong>ホスト</strong>です。スクリプトが見るすべての能力は、Rust コードが明示的に許可したものです。</p>
       <h3>対象範囲</h3>
       <ul>
-        <li>スクリプト由来の OS アクセスによる漏洩(ファイルシステム、環境変数、ネットワーク、子プロセス)——ホストが公開した範囲を超えるものは遮断。</li>
+        <li>スクリプト由来の OS アクセスによる漏洩（ファイルシステム、環境変数、ネットワーク、子プロセス）——ホストが公開した範囲を超えるものは遮断。</li>
         <li>リソース枯渇——呼び出しごとの命令予算と概算メモリ上限が、捕捉可能な Lua エラーを強制します。</li>
-        <li>バイトコードローダーのエスケープ——luna 自身の dump 形式と PUC <span class="mono">.luac</span> ロードはサンドボックスで既定オフ。</li>
-        <li>埋め込み表面のゼロ <span class="mono">unsafe</span>——<span class="mono">cargo doc</span> で見えるすべての API は安全な Rust。</li>
+        <li>バイトコードローダーのエスケープ——luna 自身の dump 形式と PUC <code>.luac</code> ロードはサンドボックスで既定オフ。</li>
+        <li>埋め込み表面のゼロ <code>unsafe</code>——<code>cargo doc</code> で見えるすべての API は安全な Rust。</li>
       </ul>
       <h3>対象外</h3>
       <ul>
-        <li>VM の正しさに関するバグ(サンドボックスエスケープではなく通常のバグとして報告)、サイドチャネル耐性、サプライチェーンの完全性。</li>
+        <li>VM の正しさに関するバグ（サンドボックスエスケープではなく通常のバグとして報告）、サイドチャネル耐性、サプライチェーンの完全性。</li>
         <li>合法だが病的なスクリプトによる DoS——予算が縛るのは呼び出しごとの CPU とメモリであり、ホストのシンクへの出力量ではありません。</li>
-        <li>一度開いた <span class="mono">debug.*</span>、および <span class="mono">os.execute</span> / <span class="mono">io.popen</span>——これらは Vm やシェルを手渡すのと同義です。</li>
+        <li>一度開いた <code>debug.*</code>、および <code>os.execute</code> / <code>io.popen</code>——これらは Vm やシェルを手渡すのと同義です。</li>
       </ul>
-      <div class="note warm"><b>意図した非対称性。</b>安全な部分集合の標準ライブラリ(<span class="mono">base</span>、<span class="mono">math</span>、<span class="mono">string</span>、<span class="mono">table</span>、<span class="mono">coroutine</span>)はビルダー上で開きます。OS に触れるライブラリ(<span class="mono">io</span>/<span class="mono">os</span>、<span class="mono">debug</span>、<span class="mono">package</span>)は、ビルド後のハンドル——<span class="mono">vm.open_os_io()</span> など——を要求し、その信頼判断が常にホストコードに現れるようにします。予算は武装するまで無制限で、メモリ上限は発火後に自ら解除されるため、リクエスト間で Vm を再利用する前に再武装が必要です。</div>
-    </section>
-
-    <!-- ============================================ deploy -->
-    <section id="deploy">
-      <h2>デプロイ</h2>
-      <p>4 つのパッケージ形態がほとんどのホストをカバーします。luna 自身はロギングを行いません——可観測性はデバッグフック機構と <span class="mono">Vm::eval</span> 周りのホストカウンタで接続します。</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <div class="callout note"><b>意図した非対称性。</b>安全な部分集合の標準ライブラリ(<code>base</code>、<code>math</code>、<code>string</code>、<code>table</code>、<code>coroutine</code>)はビルダー上で開きます。OS に触れるライブラリ(<code>io</code>/<code>os</code>、<code>debug</code>、<code>package</code>)は、ビルド後のハンドル——<code>vm.open_os_io()</code> など——を要求し、その信頼判断が常にホストコードに現れるようにします。予算は武装するまで無制限で、メモリ上限は発火後に自ら解除されるため、リクエスト間で Vm を再利用する前に再武装が必要です。</div>
+<h2 id="deploy">デプロイ</h2>
+      <p>4 つのパッケージ形態がほとんどのホストをカバーします。luna 自身はロギングを行いません——可観測性はデバッグフック機構と <code>Vm::eval</code> 周りのホストカウンタで接続します。</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>形態</th><th>Crate</th><th>備考</th></tr></thead>
           <tbody>
-            <tr><td>単独バイナリ、ソース固定</td><td class="mono">luna-aot</td><td>ビルド時;ホストにランタイム crate なし</td></tr>
-            <tr><td>Rust サービス、JIT 有効</td><td class="mono">luna-jit</td><td>Cranelift を引き込む;クロススレッドは <span class="mono">feature = "send"</span></td></tr>
+            <tr><td>単独バイナリ、ソース固定</td><td class="mono">luna-aot</td><td>ビルド時；ホストにランタイム crate なし</td></tr>
+            <tr><td>Rust サービス、JIT 有効</td><td class="mono">luna-jit</td><td>Cranelift を引き込む；クロススレッドは <code>feature = "send"</code></td></tr>
             <tr><td>Rust サービス、インタプリタのみ</td><td class="mono">luna-core</td><td>第三者依存ゼロ</td></tr>
-            <tr><td>WASM(ブラウザ / wasmtime)</td><td class="mono">luna-core</td><td><span class="mono">wasm32-wasip1</span>;JIT オフ、<span class="mono">io</span>/<span class="mono">os</span> はスタブ</td></tr>
+            <tr><td>WASM（ブラウザ / wasmtime）</td><td class="mono">luna-core</td><td><code>wasm32-wasip1</code>；JIT オフ、<code>io</code>/<code>os</code> はスタブ</td></tr>
           </tbody>
         </table>
       </div>
-      <p>最小のコンテナには musl に静的リンクし <span class="mono">FROM scratch</span> でビルド。コピー前に strip すれば <span class="mono">__LINKEDIT</span> の大半を落とせます。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Dockerfile</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>FROM scratch
+      <p>最小のコンテナには musl に静的リンクし <code>FROM scratch</code> でビルド。コピー前に strip すれば <code>__LINKEDIT</code> の大半を落とせます。</p>
+      <pre><code>FROM scratch
 COPY ./target/x86_64-unknown-linux-musl/release/service /service
-ENTRYPOINT ["/service"]</code></pre></div>
-    </section>
-
-    <!-- ============================================ jit-aot -->
-    <section id="jit-aot">
-      <h2>JIT と AOT</h2>
-      <p><span class="mono">luna-jit</span> ではトレース JIT が既定で有効です。いくつかの粘着的なノブで、予測可能なレイテンシや A/B テストのために調整・無効化できます。</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+ENTRYPOINT [<span class="tok-s">"/service"</span>]</code></pre>
+<h2 id="jit-aot">JIT と AOT</h2>
+      <p><code>luna-jit</code> ではトレース JIT が既定で有効です。いくつかの粘着的なノブで、予測可能なレイテンシや A/B テストのために調整・無効化できます。</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>ノブ</th><th>既定</th><th>効果</th></tr></thead>
           <tbody>
             <tr><td class="mono">set_jit_enabled(false)</td><td>true</td><td>予測可能なレイテンシ / デバッグ再現のため無効化</td></tr>
@@ -305,126 +264,77 @@ ENTRYPOINT ["/service"]</code></pre></div>
           </tbody>
         </table>
       </div>
-      <p>ホット経路カウンタ(<span class="mono">trace_compiled_count</span>、<span class="mono">trace_dispatched_count</span>、<span class="mono">trace_aborted_count</span>、<span class="mono">trace_deopt_count</span>)は、その負荷が実際に JIT の高速化を得ているかの診断に役立ちます。</p>
+      <p>ホット経路カウンタ(<code>trace_compiled_count</code>、<code>trace_dispatched_count</code>、<code>trace_aborted_count</code>、<code>trace_deopt_count</code>)は、その負荷が実際に JIT の高速化を得ているかの診断に役立ちます。</p>
       <h3>事前コンパイル</h3>
-      <p><span class="mono">luna-aot</span> は Lua ソースを自己完結型のネイティブバイナリにコンパイルします——解析、バイトコードをデータセクションに発行、レコーダの下でホットトレースを温め、静的ランタイムをリンクし、実行ファイルを生成します。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code>cargo install luna-aot
+      <p><code>luna-aot</code> は Lua ソースを自己完結型のネイティブバイナリにコンパイルします——解析、バイトコードをデータセクションに発行、レコーダの下でホットトレースを温め、静的ランタイムをリンクし、実行ファイルを生成します。</p>
+      <pre><code>cargo install luna-aot
 luna-aot compile hello.lua --out hello
-./hello                    # 単独ネイティブバイナリ
+./hello                    <span class="tok-c"># 単独ネイティブバイナリ</span>
 
-# macOS ホストから Linux へクロスコンパイル
-luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre></div>
-      <p>Cranelift の <span class="mono">all-arch</span> バックエンドは再ビルドなしにあらゆるターゲットへクロスコンパイルします。strip した release バイナリは <strong>4.5 MiB</strong> 前後に収まり、ランタイムの下限が支配的なため、1 行のスクリプトと 1.5k 行のスクリプトの差はわずか約 82 KiB です。</p>
-    </section>
-
-    <!-- ============================================ compatibility -->
-    <section id="compatibility">
-      <h2>互換性</h2>
-      <p>luna は 1 つのバイナリで Lua 5.1 – 5.5 と MacroLua を実装します。ダイアレクトは Vm ごとに選択され、1 つのプロセスが複数を同時にホストできます。機能別のマトリクスはトップページの<a class="xref" href="index.html#dialects">ダイアレクト仕様表</a>を参照してください。</p>
+<span class="tok-c"># macOS ホストから Linux へクロスコンパイル</span>
+luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre>
+      <p>Cranelift の <code>all-arch</code> バックエンドは再ビルドなしにあらゆるターゲットへクロスコンパイルします。strip した release バイナリは <strong>4.5 MiB</strong> 前後に収まり、ランタイムの下限が支配的なため、1 行のスクリプトと 1.5k 行のスクリプトの差はわずか約 82 KiB です。</p>
+<h2 id="compat">互換性</h2>
+      <p>luna は 1 つのバイナリで Lua 5.1 – 5.5 と MacroLua を実装します。ダイアレクトは Vm ごとに選択され、1 つのプロセスが複数を同時にホストできます。機能別のマトリクスはトップページの<a href="index.html#dialects">ダイアレクト仕様表</a>を参照してください。</p>
       <h3>標準ライブラリ</h3>
-      <p>サンドボックス埋め込みに適したホワイトリスト部分集合は、<span class="mono">Vm::open_*()</span> メソッドで公開されます:</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <p>サンドボックス埋め込みに適したホワイトリスト部分集合は、<code>Vm::open_*()</code> メソッドで公開されます：</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>ライブラリ</th><th>メソッド</th><th>カバレッジ</th></tr></thead>
           <tbody>
             <tr><td class="mono">base</td><td class="mono">open_base</td><td>完全</td></tr>
             <tr><td class="mono">math</td><td class="mono">open_math</td><td>完全</td></tr>
-            <tr><td class="mono">string</td><td class="mono">open_string</td><td>完全(パターンマッチ含む)</td></tr>
+            <tr><td class="mono">string</td><td class="mono">open_string</td><td>完全（パターンマッチ含む）</td></tr>
             <tr><td class="mono">table</td><td class="mono">open_table</td><td>完全</td></tr>
             <tr><td class="mono">coroutine</td><td class="mono">open_coroutine</td><td>完全</td></tr>
-            <tr><td class="mono">io / os</td><td class="mono">open_io / open_os</td><td>完全(ホスト制御)</td></tr>
+            <tr><td class="mono">io / os</td><td class="mono">open_io / open_os</td><td>完全（ホスト制御）</td></tr>
             <tr><td class="mono">utf8</td><td class="mono">open_utf8</td><td>完全(5.3+)</td></tr>
             <tr><td class="mono">debug</td><td>—</td><td>部分、既定では非公開</td></tr>
           </tbody>
         </table>
       </div>
       <h3>C API</h3>
-      <p>luna は <span class="mono">lua.h</span> 互換の C ABI 部分集合を公開する <span class="mono">cdylib</span> / <span class="mono">staticlib</span> を提供します。<span class="mono">liblua</span> にリンクしている既存の PUC 利用者は、そのカバー範囲で luna を drop-in として使えます:状態のライフサイクル、値の push/read、スタック操作、テーブル API、<span class="mono">lua_call</span> / <span class="mono">lua_pcall</span>、そしてスクリプトのロード。13 個の適合性テストがこれを固定します。userdata、C 側コルーチン、継続はまだ未対応——これらはより豊かな Rust API を使ってください。</p>
+      <p>luna は <code>lua.h</code> 互換の C ABI 部分集合を公開する <code>cdylib</code> / <code>staticlib</code> を提供します。<code>liblua</code> にリンクしている既存の PUC 利用者は、そのカバー範囲で luna を drop-in として使えます：状態のライフサイクル、値の push/read、スタック操作、テーブル API、<code>lua_call</code> / <code>lua_pcall</code>、そしてスクリプトのロード。13 個の適合性テストがこれを固定します。userdata、C 側コルーチン、継続はまだ未対応——これらはより豊かな Rust API を使ってください。</p>
       <h3>バイトコード</h3>
-      <p>luna は PUC コンパイラのバイナリ形式に一致するダイアレクト別バイトコードを発行するため、PUC でコンパイルした <span class="mono">.luac</span> はそのままロードでき、luna がダンプしたバイトコードも PUC でロードできます。バイトコードのロードは<strong>サンドボックスでは既定オフ</strong>です——細工されたバイトコードは、コンパイラが強制する型チェックを迂回しうるためです。</p>
-    </section>
-
-    <!-- ============================================ architecture -->
-    <section id="architecture">
-      <h2>アーキテクチャ</h2>
-      <p>5 つの公開可能な crate。インタプリタコアは第三者依存を一切持ちません。JIT はトレイト経由で接続されるため、バックエンドの差し替えや削除は <span class="mono">luna-jit</span> の関心事であり、<span class="mono">luna-core</span> の API には決して触れません。</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <p>luna は PUC コンパイラのバイナリ形式に一致するダイアレクト別バイトコードを発行するため、PUC でコンパイルした <code>.luac</code> はそのままロードでき、luna がダンプしたバイトコードも PUC でロードできます。バイトコードのロードは<strong>サンドボックスでは既定オフ</strong>です——細工されたバイトコードは、コンパイラが強制する型チェックを迂回しうるためです。</p>
+<h2 id="architecture">アーキテクチャ</h2>
+      <p>7 つの公開済み crate。うち 3 つが直接依存するものです。インタプリタコアは第三者依存を一切持ちません。JIT はトレイト経由で接続されるため、バックエンドの差し替えや削除は <code>luna-jit</code> の関心事であり、<code>luna-core</code> の API には決して触れません。</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>Crate</th><th>依存</th><th>表面</th></tr></thead>
           <tbody>
             <tr><td class="mono">luna-core</td><td>第三者 0</td><td>字句・構文解析、コンパイラ、インタプリタ、ランタイム、標準ライブラリ、GC、パターンエンジン、JIT トレイト</td></tr>
-            <tr><td class="mono">luna-jit-derive</td><td>syn + quote</td><td><span class="mono">#[derive(LuaUserdata)]</span> proc-macro</td></tr>
-            <tr><td class="mono">luna-jit</td><td>luna-core + Cranelift ×6</td><td>Cranelift バックエンド、C ABI、<span class="mono">luna</span> CLI、埋め込みファサード</td></tr>
+            <tr><td class="mono">luna-jit-derive</td><td>syn + quote</td><td><code>#[derive(LuaUserdata)]</code> proc-macro</td></tr>
+            <tr><td class="mono">luna-jit</td><td>luna-core + Cranelift ×6</td><td>Cranelift バックエンド、C ABI、<code>luna</code> CLI、埋め込みファサード</td></tr>
             <tr><td class="mono">luna-runtime-helpers</td><td>luna-jit</td><td>AOT バイナリの静的ランタイム入口</td></tr>
             <tr><td class="mono">luna-aot</td><td>luna-core + luna-jit</td><td>ビルド時 AOT コンパイラ</td></tr>
           </tbody>
         </table>
       </div>
-      <p>依存ゼロの <span class="mono">luna-core</span> 契約は CI の <span class="mono">cargo deny check</span> で強制されます。ソースは 3 層に分類されます——<strong>Stone(石)</strong>(業務非依存の基盤:パターンエンジン、ヒープ、値レイアウト)、<strong>Steel(鋼)</strong>(Lua ドメインのプリミティブ:コンパイラ、ディスパッチャ、JIT バックエンド)、<strong>Cement(コンクリート)</strong>(ホストのグルー:CLI、C ABI、標準ライブラリ束縛)——それぞれ変更規律とレビュー深度が異なります。</p>
-    </section>
-
-    <!-- ============================================ performance -->
-    <section id="performance">
-      <h2>パフォーマンス</h2>
+      <p>依存ゼロの <code>luna-core</code> 契約は CI の <code>cargo deny check</code> で強制されます。ソースは 3 層に分類されます——<strong>Stone（石）</strong>（業務非依存の基盤：パターンエンジン、ヒープ、値レイアウト）、<strong>Steel（鋼）</strong>（Lua ドメインのプリミティブ：コンパイラ、ディスパッチャ、JIT バックエンド）、<strong>Cement（コンクリート）</strong>（ホストのグルー：CLI、C ABI、標準ライブラリ束縛）——それぞれ変更規律とレビュー深度が異なります。</p>
+<h2 id="performance">パフォーマンス</h2>
       <p>luna はあえて単一の見出し比率を出しません。勝つマイクロベンチのセルはマーケティングの産物であり、負けるセルこそ追う価値のあるシグナルです。参照実装に対して 1.5 倍を超える差があれば、表層の磨き込みではなく、その負荷を段階ごとに並べて分解します。</p>
       <p>リリースに同梱されるのは再現可能なベースラインです。メモリは dhat の下で 5 つの負荷にわたり測定され、いずれかの定常状態で 5% を超える回帰は追跡対象のアラームです。</p>
-      <div class="stats">
-        <div class="stat"><div class="n">33<span class="u">KB</span></div><div class="l">cold_start ピーク · 435 アロケーション</div></div>
-        <div class="stat"><div class="n">71<span class="u">KB</span></div><div class="l">repl_idle · 100 回評価</div></div>
-        <div class="stat"><div class="n">523<span class="u">KB</span></div><div class="l">alloc_collect 定常 · 1M + 10 GC</div></div>
-        <div class="stat"><div class="n">63<span class="u">KB</span></div><div class="l">userdata_lifecycle · 200 + ファイナライザ</div></div>
+      <div>
+        <div><div class="n">33<span>KB</span></div><div>cold_start ピーク · 435 アロケーション</div></div>
+        <div><div class="n">71<span>KB</span></div><div>repl_idle · 100 回評価</div></div>
+        <div><div class="n">523<span>KB</span></div><div>alloc_collect 定常 · 1M + 10 GC</div></div>
+        <div><div class="n">63<span>KB</span></div><div>userdata_lifecycle · 200 + ファイナライザ</div></div>
       </div>
-    </section>
-
-    <!-- ============================================ versioning -->
-    <section id="versioning">
-      <h2>バージョン方針と安定性</h2>
-      <p>公開 API は、安定表面(破壊的変更には SemVer メジャーの引き上げが必要)と、不安定 / 内部表面(パフォーマンス作業のためマイナーで変わりうる)に分かれます。</p>
+<h2 id="versioning">バージョン方針と安定性</h2>
+      <p>公開 API は、安定表面（破壊的変更には SemVer メジャーの引き上げが必要）と、不安定 / 内部表面（パフォーマンス作業のためマイナーで変わりうる）に分かれます。</p>
       <ul>
-        <li><strong>安定:</strong><span class="mono">luna_jit</span> の入口型(<span class="mono">Lua</span>、<span class="mono">LuaFunction</span>、<span class="mono">LuaTable</span>、<span class="mono">LuaRoot</span>、<span class="mono">LuaSandboxBuilder</span>)、再エクスポートされたコア(<span class="mono">Vm</span>、<span class="mono">LuaVersion</span>、<span class="mono">Value</span>、<span class="mono">LuaError</span>)、derive マクロ、そして <span class="mono">lua.h</span> 互換 C ABI。</li>
-        <li><strong>不安定 / 内部:</strong><span class="mono">luna_core::{compiler, frontend, jit, pattern}</span> と JIT バックエンド内部——最適化のため自由に変わりうる。</li>
-        <li><strong>バイトコード:</strong>ダイアレクト別のバイナリ形式は安定で、PUC <span class="mono">.luac</span> ファイルは全ラインでロードできます。</li>
+        <li><strong>安定：</strong><code>luna_jit</code> の入口型(<code>Lua</code>、<code>LuaFunction</code>、<code>LuaTable</code>、<code>LuaRoot</code>、<code>LuaSandboxBuilder</code>)、再エクスポートされたコア(<code>Vm</code>、<code>LuaVersion</code>、<code>Value</code>、<code>LuaError</code>)、derive マクロ、そして <code>lua.h</code> 互換 C ABI。</li>
+        <li><strong>不安定 / 内部：</strong><code>luna_core::{compiler, frontend, jit, pattern}</code> と JIT バックエンド内部——最適化のため自由に変わりうる。</li>
+        <li><strong>バイトコード：</strong>ダイアレクト別のバイナリ形式は安定で、PUC <code>.luac</code> ファイルは全ラインでロードできます。</li>
       </ul>
-      <div class="note">安定 / 不安定の項目一覧は、埋め込みクックブックの API 契約節と <span class="mono">CHANGELOG.md</span> にあります。<a class="xref" href="https://docs.rs/luna-jit">docs.rs</a> の rustdoc リファレンスが項目ごとの正典です。</div>
-    </section>
+      <div class="callout note">安定 / 不安定の項目一覧は、埋め込みクックブックの API 契約節と <code>CHANGELOG.md</code> にあります。<a href="https://docs.rs/luna-jit">docs.rs</a> の rustdoc リファレンスが項目ごとの正典です。</div>
+    </main>
+  </div>
 
-  </main>
+<div class="shell">
+<footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../assets/golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>Released under MIT OR Apache-2.0</div></div><div class="links"><a href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer>
 </div>
 
-<footer class="foot">
-  <div class="wrap">
-    <div class="foot-grid">
-      <div class="foot-brand">
-        <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
-        <p>純粋な Rust による Lua ランタイム。GOLIA 株式会社が開発・保守しています。</p>
-      </div>
-      <div class="foot-col">
-        <h5>ドキュメント</h5>
-        <a href="#getting-started">はじめに</a>
-        <a href="#embedding">埋め込み</a>
-        <a href="#compatibility">互換性</a>
-        <a href="#security">セキュリティ</a>
-      </div>
-      <div class="foot-col">
-        <h5>パッケージ</h5>
-        <a href="https://crates.io/crates/luna-jit">luna-jit</a>
-        <a href="https://crates.io/crates/luna-core">luna-core</a>
-        <a href="https://docs.rs/luna-jit">docs.rs</a>
-      </div>
-      <div class="foot-col">
-        <h5>プロジェクト</h5>
-        <a href="https://github.com/goliajp/luna">GitHub</a>
-        <a href="https://github.com/goliajp/luna/blob/master/CHANGELOG.md">変更履歴</a>
-        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-MIT">ライセンス</a>
-      </div>
-    </div>
-    <div class="foot-base">
-      <span>© 2026 GOLIA 株式会社 · luna は MIT / Apache-2.0 のデュアルライセンス</span>
-      <span class="mono">luna.golia.jp</span>
-    </div>
-  </div>
-</footer>
-
-<script src="../assets/app.js"></script>
 </body>
 </html>
