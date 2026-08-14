@@ -69,7 +69,7 @@
     <!-- ============================================ getting started -->
     <section id="getting-started">
       <h2>安装与 hello</h2>
-      <p>luna 是一个含五个可发布 crate 的 Cargo 工作区。挑选合适的依赖体量:<span class="mono">luna-jit</span> 提供完整解释器加 Cranelift JIT 与 C ABI,<span class="mono">luna-core</span> 则是零依赖、对 wasm 友好的解释器。</p>
+      <p>luna 是一个含七个已发布 crate 的 Cargo 工作区。挑选合适的依赖体量:<span class="mono">luna-jit</span> 提供完整解释器加 Cranelift JIT 与 C ABI,<span class="mono">luna-core</span> 则是零依赖、对 wasm 友好的解释器。</p>
       <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code># 完整解释器 + Cranelift JIT + C ABI
 luna-jit = "2"
 
@@ -347,7 +347,7 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
     <!-- ============================================ architecture -->
     <section id="architecture">
       <h2>架构</h2>
-      <p>五个可发布 crate。解释器核心不带任何第三方依赖;JIT 通过 trait 接入,因此替换或移除后端是 <span class="mono">luna-jit</span> 的事,永不触碰 <span class="mono">luna-core</span> 的 API。</p>
+      <p>七个已发布 crate,其中三个是你直接依赖的。解释器核心不带任何第三方依赖;JIT 通过 trait 接入,因此替换或移除后端是 <span class="mono">luna-jit</span> 的事,永不触碰 <span class="mono">luna-core</span> 的 API。</p>
       <div class="sheet-wrap">
         <table class="sheet">
           <thead><tr><th>Crate</th><th>依赖</th><th>表面</th></tr></thead>

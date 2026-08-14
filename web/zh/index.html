@@ -67,7 +67,7 @@
         <span><b>5.1 – 5.5</b> + MacroLua</span>
         <span>核心 <b>0</b> 依赖</span>
         <span>冷启动堆 <b>~33 KB</b></span>
-        <span><b>lua.h</b> 兼容 C ABI</span>
+        <span><b>514</b> 个 fixture 与 PUC 逐字节相等</span> <span><b>lua.h</b> 兼容 C ABI</span>
       </div>
     </div>
     <div class="hero-disc-wrap reveal" style="animation-delay:.15s">
@@ -171,7 +171,7 @@
     <div class="band-head">
       <span class="eyebrow" data-idx="03">架构</span>
       <h2>自己决定依赖表面。</h2>
-      <p class="lead">luna 以一个含五个可发布 crate 的 Cargo 工作区形式交付。解释器核心独立成立;JIT 与 AOT 两层通过 trait 边界叠加其上,因此移除或替换后端都不会触碰核心 API。</p>
+      <p class="lead">luna 以一个含七个已发布 crate 的 Cargo 工作区形式交付,其中三个是你直接依赖的。解释器核心独立成立;JIT 与 AOT 两层通过 trait 边界叠加其上,因此移除或替换后端都不会触碰核心 API。</p>
     </div>
     <div class="cards" style="margin-bottom:2rem">
       <div class="card">
