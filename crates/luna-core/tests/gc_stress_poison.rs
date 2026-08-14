@@ -81,7 +81,7 @@ fn gc_lua_family_under_poison_allocator() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
-    let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/official/lua-5.5.0-tests");
+    let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/official/lua-5.5.1-tests");
     std::env::set_current_dir(&suite).expect("suite dir");
     for iter in 1..=n {
         for file in ["gc.lua", "gengc.lua", "tracegc.lua"] {

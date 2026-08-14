@@ -4,7 +4,7 @@
 //! `0x55`) and produces a `Gc<Proto>` ready for `Vm::call_value` on its
 //! wrapping closure.
 //!
-//! Format reference: `lua-5.5.0/src/lundump.c`, `ldump.c`,
+//! Format reference: `lua-5.5.1/src/lundump.c`, `ldump.c`,
 //! `lopcodes.h`. luna's opcode set is documented in `vm/isa.rs` as
 //! "follows lopcodes.h (v5.5.0) with deliberate v1 trims" — most ops
 //! translate 1:1, the exceptions are listed in the per-op match below.
@@ -20,7 +20,7 @@ use crate::runtime::function::{JitProtoState, LocVar, Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, GcHeader, Heap, ObjTag};
 use crate::vm::isa::{Inst, Op};
 
-// ---- PUC 5.5 header constants (from `lua-5.5.0/src/lua.h`, `lundump.h`) ----
+// ---- PUC 5.5 header constants (from `lua-5.5.1/src/lua.h`, `lundump.h`) ----
 
 /// `\x1bLua` — same across every PUC dialect.
 const LUA_SIGNATURE: &[u8] = b"\x1bLua";

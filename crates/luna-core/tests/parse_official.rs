@@ -33,7 +33,7 @@ fn parse_suite(dir: &str, version: LuaVersion) {
 
 #[test]
 fn lua_5_5_suite() {
-    parse_suite("tests/official/lua-5.5.0-tests", LuaVersion::Lua55);
+    parse_suite("tests/official/lua-5.5.1-tests", LuaVersion::Lua55);
 }
 
 #[test]
