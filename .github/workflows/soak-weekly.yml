@@ -22,11 +22,13 @@
 
 name: soak-weekly
 
+# Manual only (2026-08-14). Soak is no longer on a timer: acceptance #3
+# closed on four named capped runs from v2.13, which are historical
+# facts and do not decay, so nothing is served by burning ~5.5h of
+# runner every week to re-derive them. Run it on demand — before a
+# release, after a GC or allocator change, or when investigating a
+# suspected leak.
 on:
-  schedule:
-    # Sunday 03:00 UTC — quiet hours, no overlap with the
-    # nightly cron family.
-    - cron: '0 3 * * 0'
   workflow_dispatch:
 
 env:
