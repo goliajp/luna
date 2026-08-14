@@ -1,8 +1,8 @@
 # luna.golia.jp — website
 
-Static marketing + documentation site for **luna**, a GOLIA product. No
-build step, no framework, no server-side logic — plain HTML/CSS/JS. Just
-serve this directory as the web root.
+Static site for **luna**, a GOLIA Lab project. No build step, no
+framework, no JavaScript, no server-side logic — plain HTML and one
+stylesheet. Serve this directory as the web root.
 
 ## Layout
 
@@ -17,31 +17,43 @@ web/
 │   ├── index.html      # 日本語 landing          → /ja/
 │   └── docs.html       # 日本語 docs             → /ja/docs.html
 └── assets/
-    ├── style.css       # one stylesheet, shared by all 6 pages
-    └── app.js          # theme toggle, mobile nav, copy buttons, scrollspy, tabs
+    ├── style.css       # one stylesheet, shared by all six pages
+    ├── luna-logo.svg   # the mark
+    └── golia-wordmark.png
 ```
 
-English is the default locale at the root; `zh/` and `ja/` mirror it. Every
-page carries `<link rel="alternate" hreflang="…">` tags pointing at
-`https://luna.golia.jp/` (en), `/zh/`, and `/ja/`, with `x-default → /`. The
-in-page language switcher links between the three locales.
+English is the default locale at the root; `zh/` and `ja/` mirror it.
+Every page carries `<link rel="alternate" hreflang="…">` pointing at
+`https://luna.golia.jp/` (en), `/zh/` and `/ja/`, with `x-default → /`.
+The in-page switcher links between the three.
 
-## Design identity
+## Design
 
-Deep-violet base with a gold accent — violet for the brand/tech signal, gold
-for the financial/value note — on a fine data grid, with tabular-figure
-numerics and glass panels for a precision-instrument, fintech feel. Type:
-**Bricolage Grotesque** display, **Hanken Grotesk** body, **JetBrains Mono**
-for code. The luna wordmark carries a small `by GOLIA` tag; the moon glyph is
-a violet orb with a gold rim-light. Dark theme is default; a light theme
-(lavender paper) ships via the nav toggle.
+A **Golia Lab** project page, set like a journal article: warm paper
+ground (`#fcfbf8`), ink black text, hairline rules, generous measure.
+GOLIA blue (`#155dfc`) is structural rather than decorative — it marks
+section numbers, key figures, and the one link state.
+
+Type: **Archivo** for display, **IBM Plex Sans** for prose, **IBM Plex
+Mono** for every number and identifier. CJK falls back to the system UI
+faces rather than Mincho, so the page reads as modern in all three
+languages. `line-break: strict` and `word-break: auto-phrase` let the
+browser do correct CJK typesetting natively.
+
+**The masthead and footer are identical to tiktoken.golia.jp and
+kevy.golia.jp by intent** — same markup, same classes, same GOLIA
+wordmark in the footer. The three sites should read as one lab rather
+than three unrelated projects. If you change either here, change it
+there too, or the family resemblance is the thing that breaks.
+
+There is no theme toggle and no dark variant: the paper ground *is* the
+design, and a dark inversion of it would be a different design wearing
+the same layout.
 
 ## Deploy
 
-It's a static bundle — copy `web/` to the document root and point the vhost
+A static bundle — copy `web/` to the document root and point the vhost
 at it. Nothing to compile.
-
-Minimal nginx sketch:
 
 ```nginx
 server {
@@ -61,40 +73,28 @@ server {
 }
 ```
 
-Optional: a first-visit `Accept-Language` redirect from `/` to `/zh/` or
-`/ja/`. Not required — the switcher and `hreflang` already cover discovery,
-and defaulting everyone to English is fine.
-
-Local preview: `cd web && python3 -m http.server 8080`, then open
-`http://localhost:8080/`.
+Local preview: `cd web && python3 -m http.server 8080`.
 
 ## External dependencies
 
 The pages load web fonts from Google Fonts (`fonts.googleapis.com` /
-`fonts.gstatic.com`): **Bricolage Grotesque** (display), **Hanken Grotesk**
-(Latin body), **JetBrains Mono** (code), and **Noto Sans/Serif SC & JP** for
-the Chinese and Japanese pages. If a Content-Security-Policy is applied,
-allow those two hosts — or self-host the fonts and rewrite the `<link>` tags
-in each `<head>` for zero third-party requests. Everything else (theme, i18n
-switch, copy buttons) is inline and self-contained; there are no analytics or
-trackers.
-
-## Theme & i18n
-
-- **Theme** — light/dark toggle in the nav; the choice persists in
-  `localStorage` (`luna-theme`) and is applied before first paint by a tiny
-  inline script in each `<head>` (no flash). Dark is the default.
-- **Language** — separate HTML per locale (good for SEO and clean URLs), not
-  a client-side string swap. Adding or editing a locale means copying a
-  locale folder and translating the text nodes; the markup, CSS, and JS are
-  identical across all six pages.
+`fonts.gstatic.com`): **Archivo**, **IBM Plex Sans** and **IBM Plex
+Mono**. Under a Content-Security-Policy, allow those two hosts — or
+self-host the fonts and rewrite the `<link>` in each `<head>` for zero
+third-party requests. Nothing else is fetched: no analytics, no
+trackers, no scripts at all.
 
 ## Updating for a new release
 
-The version string `v3.0.0` appears in each landing page's hero badge and
-each docs page's intro sentence. Bump those on release. Content is
-snapshotted against the crate docs under `../docs/` — re-sync if the
-embedding API or dialect matrix changes.
+The version string `v3.0.0` appears in each landing page's kicker and
+each docs page's kicker — six occurrences. Bump them on release; this is
+also step 8 of `.dev/rfcs/monthly-drift-sweep.md`.
+
+Content is snapshotted against the crate docs under `../docs/`. Re-sync
+when the embedding API or the dialect matrix changes. The landing page
+also states two measured figures — the fixture count and the cold-start
+heap — which should be checked against reality rather than carried
+forward on faith.
 
 ---
 
