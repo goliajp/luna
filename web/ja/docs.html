@@ -69,7 +69,7 @@
     <!-- ============================================ getting started -->
     <section id="getting-started">
       <h2>インストールと hello</h2>
-      <p>luna は 5 つの公開可能な crate からなる Cargo ワークスペースです。合う依存量を選んでください。完全なインタプリタに Cranelift JIT と C ABI を加えた <span class="mono">luna-jit</span>、あるいは依存ゼロで wasm フレンドリーな <span class="mono">luna-core</span>。</p>
+      <p>luna は 7 つの公開済み crate からなる Cargo ワークスペースです。合う依存量を選んでください。完全なインタプリタに Cranelift JIT と C ABI を加えた <span class="mono">luna-jit</span>、あるいは依存ゼロで wasm フレンドリーな <span class="mono">luna-core</span>。</p>
       <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="コピー済み ✓">コピー</button></div><pre><code># 完全なインタプリタ + Cranelift JIT + C ABI
 luna-jit = "2"
 
@@ -347,7 +347,7 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
     <!-- ============================================ architecture -->
     <section id="architecture">
       <h2>アーキテクチャ</h2>
-      <p>5 つの公開可能な crate。インタプリタコアは第三者依存を一切持ちません。JIT はトレイト経由で接続されるため、バックエンドの差し替えや削除は <span class="mono">luna-jit</span> の関心事であり、<span class="mono">luna-core</span> の API には決して触れません。</p>
+      <p>7 つの公開済み crate。うち 3 つが直接依存するものです。インタプリタコアは第三者依存を一切持ちません。JIT はトレイト経由で接続されるため、バックエンドの差し替えや削除は <span class="mono">luna-jit</span> の関心事であり、<span class="mono">luna-core</span> の API には決して触れません。</p>
       <div class="sheet-wrap">
         <table class="sheet">
           <thead><tr><th>Crate</th><th>依存</th><th>表面</th></tr></thead>

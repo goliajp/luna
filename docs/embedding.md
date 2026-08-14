@@ -443,7 +443,8 @@ either upgrade to `luna-jit`, or add `luna-jit-derive = "1.3"` as a
 direct dep alongside `luna-core` (the derive emits fully-qualified
 `::luna_core::vm::*` paths and has no other runtime deps). Hand-impl
 remains the supported escape hatch for generic types, conditional
-method sets, and `MSRV`-sensitive embedders avoiding `syn` 2.
+method sets, and embedders who would rather not pull `syn` into their
+tree at all.
 
 Add the dep:
 

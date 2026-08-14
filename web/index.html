@@ -67,7 +67,7 @@
         <span><b>5.1 – 5.5</b> + MacroLua</span>
         <span><b>0</b> deps in core</span>
         <span><b>~33 KB</b> cold-start heap</span>
-        <span><b>lua.h</b>-compatible C ABI</span>
+        <span><b>514</b> fixtures byte-equal vs PUC</span> <span><b>lua.h</b>-compatible C ABI</span>
       </div>
     </div>
     <div class="hero-disc-wrap reveal" style="animation-delay:.15s">
@@ -171,7 +171,7 @@
     <div class="band-head">
       <span class="eyebrow" data-idx="03">Architecture</span>
       <h2>Choose your dependency surface.</h2>
-      <p class="lead">luna ships as a Cargo workspace of five publishable crates. The interpreter core stands alone; the JIT and AOT tiers layer on top through a trait boundary, so removing or swapping the backend never touches the core API.</p>
+      <p class="lead">luna ships as a Cargo workspace of seven published crates — three of them the ones you depend on directly. The interpreter core stands alone; the JIT and AOT tiers layer on top through a trait boundary, so removing or swapping the backend never touches the core API.</p>
     </div>
     <div class="cards" style="margin-bottom:2rem">
       <div class="card">

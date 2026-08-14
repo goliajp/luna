@@ -180,8 +180,11 @@ rely on v1.x absolute numbers.
 **TBD post-ship.** `luna-aot` CLI is the primary tooling surface
 that may grow new subcommands per Track TL. Other tooling areas:
 
-- `cargo fmt` / `cargo clippy` / `cargo deny` profile pinning may
-  bump MSRV; check `.github/workflows/msrv.yml` at ship.
+- `cargo fmt` / `cargo clippy` / `cargo deny` profile pinning used to
+  interact with a declared MSRV. **luna declares no MSRV since v2.17.0**
+  and `msrv.yml` is gone — the promise is "builds on current stable",
+  which the four-platform CI matrix tests on every push. (The former
+  declaration was wrong for eleven releases; see the 2.17.0 CHANGELOG.)
 - `cargo doc` output may reorganize per Track SQ rename pass.
 - Workspace shape (currently 5 crates) is not expected to change in
   v2.0; if a sixth crate splits out, it will be listed here.
