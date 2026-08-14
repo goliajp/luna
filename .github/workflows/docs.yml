@@ -91,6 +91,10 @@ jobs:
           # Mirror the local invocation documented in
           # docs/contributing-docs.md. --include-fragments turns on
           # in-doc anchor checks (catches renamed section headers).
+          # v2.20 D7: web/ joined the scope. The site is live at
+          # luna.golia.jp, so a broken link there is publicly visible —
+          # and until now nothing checked it. 57 links across the six
+          # locale pages.
           args: >-
             --include-fragments
             --no-progress
@@ -98,4 +102,6 @@ jobs:
             crates/*/README.md
             CHANGELOG.md
             README.md
+            web/**/*.html
+            web/README.md
           fail: true

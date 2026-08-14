@@ -3,8 +3,16 @@
 # Each line is a regex matched against the FULL URL (lychee semantics).
 # Add a comment explaining WHY before each pattern.
 
-# docs.rs URLs for unpublished or not-yet-published luna-* versions.
-# Pre-publish: these 404 because the crate version isn't on crates.io yet.
-# Post-publish (Phase G ship): remove this allow-list entry — verify links
-# resolve. See `.dev/rfcs/v2.0-plan-state.md` Track DO-CI for context.
-^https://docs\.rs/luna-[a-z-]+/(latest|\d+(\.\d+)*)/.*$
+# (Retired 2026-08-14, v2.20 D7. The docs.rs entry for unpublished luna-*
+# versions did what its own comment asked: it was removed once the crates
+# shipped. Verified first — /luna-core/latest/, /luna-jit/latest/ and
+# /luna-aot/2.18.0/ all return 200. Broken docs.rs links are now real
+# failures again.)
+
+# Font CDN origins referenced by `<link rel="preconnect">` in web/*.html.
+# A preconnect target is a bare origin for the connection handshake, not a
+# fetchable document — both return 404 for a plain GET, by design. The
+# actual stylesheet URLs under fonts.googleapis.com/css2?... are checked
+# normally.
+^https://fonts\.googleapis\.com/?$
+^https://fonts\.gstatic\.com/?$
