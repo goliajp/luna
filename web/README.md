@@ -108,6 +108,12 @@ before it, so the comma in `… C ABI, luna-core 则是 …` is converted even
 though a Latin letter precedes it. It leaves alone thousands separators,
 and brackets whose contents are code rather than prose.
 
+It also strips the full stop from CJK headings and short labels. A
+Chinese or Japanese title, figure caption or standalone phrase does not
+end in 。 — the line ending already closes it, and the stop makes the
+heading read as a stray sentence. Question and exclamation marks stay:
+those carry tone rather than closure. Body paragraphs keep their stops.
+
 Neither tool is uploaded.
 
 ## External dependencies

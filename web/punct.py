@@ -89,12 +89,37 @@ def convert(s, lang):
         if re.search(CJK, text[left + 1:right]):
             edits[i] = table[m.group(0)]
 
-    if not edits:
-        return s, 0
-    out = list(s)
-    for i, ch in edits.items():
-        out[i] = ch
-    return ''.join(out), len(edits)
+    if edits:
+        out = list(s)
+        for i, ch in edits.items():
+            out[i] = ch
+        s = ''.join(out)
+    s, n = drop_heading_stops(s)
+    return s, len(edits) + n
+
+
+def drop_heading_stops(s):
+    """A CJK heading does not end in a full stop.
+
+    Chinese and Japanese typographic practice: a title, a label or a
+    standalone phrase carries no 。 — the line break already ends it, and
+    the stop makes a heading read as a stray sentence. A question or
+    exclamation mark stays, because those carry tone rather than closure.
+    """
+    n = 0
+
+    def strip(m):
+        nonlocal n
+        open_tag, body, close = m.group(1), m.group(2), m.group(3)
+        stripped = re.sub(r'。(\s*)$', r'\1', body)
+        if stripped != body:
+            n += 1
+        return open_tag + stripped + close
+
+    # Headings, and the short label elements that are phrases by construction.
+    s = re.sub(r'(<h[1-4]\b[^>]*>)(.*?)(</h[1-4]>)', strip, s, flags=re.S)
+    s = re.sub(r'(<div class="(?:k|eyebrow)">)(.*?)(</div>)', strip, s, flags=re.S)
+    return s, n
 
 
 def main():
