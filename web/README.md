@@ -82,16 +82,33 @@ The source tree keeps the plain `style.css` and stays previewable as-is.
 
 Local preview: `cd web && python3 -m http.server 8080`.
 
-## Code blocks
+## Two passes over the pages
 
-`paint.py` writes the syntax-highlight spans into the docs pages. kevy
-does the same colouring in the browser; this site has no JavaScript, so
-the spans live in the HTML. Edit a code block, then re-run it — it is
-idempotent, and it re-detects the language of every block:
+Both are idempotent and both hold `<pre>`, `<code>` and every tag out of
+what they touch. Run them after editing content; `--dry` reports without
+writing.
 
 ```sh
-cd web && python3 paint.py          # --dry to see what it would do
+cd web && python3 paint.py && python3 punct.py
 ```
+
+**`paint.py`** writes the syntax-highlight spans into the docs pages.
+kevy does the same colouring in the browser, so its prerendered HTML has
+none; this site has no JavaScript, so the spans live in the markup. It
+re-detects each block's language, and strips the previous run's spans
+before re-reading the source.
+
+**`punct.py`** gives the Chinese and Japanese pages their own
+punctuation. A half-width comma in a CJK sentence sets with the wrong
+sidebearings and reads as a typo. Two things it gets right that a
+search-and-replace would not: a bracket can straddle markup — the two
+halves of `(<code>luna-core</code> では …)` live in different text nodes
+— and what decides a mark is the sentence it sits in, not the character
+before it, so the comma in `… C ABI, luna-core 则是 …` is converted even
+though a Latin letter precedes it. It leaves alone thousands separators,
+and brackets whose contents are code rather than prose.
+
+Neither tool is uploaded.
 
 ## External dependencies
 

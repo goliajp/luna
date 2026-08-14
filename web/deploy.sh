@@ -109,7 +109,7 @@ fi
 # rewritten, so the source tree stays editable and previewable as-is.
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-rsync -a ./ "$stage/" --exclude deploy.sh --exclude README.md --exclude paint.py
+rsync -a ./ "$stage/" --exclude deploy.sh --exclude README.md --exclude paint.py --exclude punct.py --exclude __pycache__
 hash=$(md5 -q assets/style.css 2>/dev/null || md5sum assets/style.css | cut -c1-32)
 hash=${hash:0:10}
 mv "$stage/assets/style.css" "$stage/assets/style.$hash.css"
