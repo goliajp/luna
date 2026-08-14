@@ -107,8 +107,24 @@ jobs:
             mingw-w64 wine64
       - name: cargo build -p luna-aot
         run: cargo build -p luna-aot --release
+
+      # v2.20 D5: same root cause as the Alpine job — `luna-aot` finds
+      # the workspace via CARGO_MANIFEST_DIR to build the runtime-helpers
+      # staticlib, and that compile-time cargo variable is absent when
+      # the binary runs standalone. Both jobs had been failing on it,
+      # masked by continue-on-error:
+      #   luna-aot: linker failed: CARGO_MANIFEST_DIR not set
+      # Build the staticlib for the *target* triple and point at it.
+      - name: build the runtime-helpers staticlib (windows-gnu)
+        run: cargo build -p luna-runtime-helpers --release --target x86_64-pc-windows-gnu
+
       - name: compile hello.lua → hello.exe
         run: |
+          set -eu
+          STATICLIB="$PWD/target/x86_64-pc-windows-gnu/release/libluna_runtime_helpers.a"
+          test -f "$STATICLIB" || { echo "staticlib missing at $STATICLIB"; ls -l target/x86_64-pc-windows-gnu/release/ | head -20; exit 1; }
+          export LUNA_AOT_RUNTIME_HELPERS_STATICLIB="$STATICLIB"
+          echo "using staticlib: $STATICLIB"
           cat > /tmp/hello.lua <<'EOF'
           print("hello from luna-aot via wine")
           return 42
@@ -116,16 +132,25 @@ jobs:
           ./target/release/luna-aot compile /tmp/hello.lua \
             --target x86_64-pc-windows-gnu \
             --out /tmp/hello.exe
+          test -f /tmp/hello.exe || { echo "luna-aot produced no .exe"; exit 1; }
           file /tmp/hello.exe
+          file /tmp/hello.exe | grep -q 'PE32+' || { echo "not a PE32+ binary"; exit 1; }
       - name: run hello.exe under wine
         env:
           WINEDEBUG: "-all"
         run: |
-          wine /tmp/hello.exe || (echo "wine ran the binary; checking exit" && true)
-          # luna-aot's runtime entry returns 42 from `return 42`;
-          # wine should exit with 42. We don't assert exact code
-          # because wine's exit-code propagation varies by version;
-          # just verify the binary ran without segfault.
+          set -u
+          # Exit-code propagation through wine varies by version, so the
+          # assertion is on the program's OUTPUT, not its status. The old
+          # form (`wine ... || (echo ... && true)`) could not fail at all,
+          # which is how this job stayed "meaningful" while the compile
+          # step above had been broken the whole time.
+          OUT=$(wine /tmp/hello.exe 2>&1) || true
+          echo "$OUT"
+          case "$OUT" in
+            *"hello from luna-aot via wine"*) echo "PE ran under wine, output matches" ;;
+            *) echo "::error::hello.exe did not produce the expected output under wine"; exit 1 ;;
+          esac
 
   # ─────────────────────────────────────────────────────────────────
   # Alpine musl native E2E: in a real Alpine container (rather than
