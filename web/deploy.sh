@@ -56,7 +56,14 @@ for f in pages:
 
     used = set()
     for m in re.finditer(r'class="([^"]+)"', s): used.update(m.group(1).split())
-    unstyled = sorted(used - defined)
+    # Two kinds of class name are carried deliberately without a rule behind
+    # them, and flagging either would train us to ignore this check:
+    #   lucide*  — the icon set stamps its own name on every glyph it ships;
+    #              it identifies the icon, it is not a styling hook.
+    #   note     — the neutral .callout variant. Only .callout.loss restyles
+    #              anything, so the common case correctly has no rule.
+    known = {c for c in used if c.startswith('lucide')} | {'note'}
+    unstyled = sorted(used - defined - known)
 
     refs = re.findall(r'(?:src|href)="((?!http|#|mailto:|/)[^"]+)"', s)
     missing = [r for r in refs

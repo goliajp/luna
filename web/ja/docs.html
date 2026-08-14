@@ -15,44 +15,27 @@
 <link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/docs.html">
 <link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/docs.html">
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
 
-<header class="masthead">
-  <div class="masthead-inner">
-    <a class="brand" href="./">
-      <img src="../assets/luna-logo.svg" alt="" width="26" height="26">
-      <span class="wordmark">luna</span>
-    </a>
-    <nav class="topnav">
-      <a class="navlink" href="/#what">概要</a>
-      <a class="navlink" href="/#dialects">方言</a>
-      <a class="navlink" href="/#architecture">アーキテクチャ</a>
-      <a href="./">ホーム</a>
-      <a class="on" href="docs.html" aria-current="page">ドキュメント</a>
-      <div class="langswitch" role="group" aria-label="language">
-        <a href="../docs.html" hreflang="en">EN</a>
-        <a href="../zh/docs.html" hreflang="zh-Hans">中文</a>
-        <a class="on" href="docs.html" hreflang="ja">日本語</a>
-      </div>
-    </nav>
-  </div>
-</header>
+<header class="masthead"><div class="masthead-inner"><a class="brand" href="./"><img src="../assets/luna-logo.svg" alt="" width="26" height="26"/><span class="wordmark">luna</span></a><nav class="topnav"><a href="./">ホーム</a><a href="docs.html" class="on" aria-current="page">ドキュメント</a><a href="./#dialects" class="hide-sm">方言</a><div class="langswitch" role="group" aria-label="language"><a href="../docs.html" hreflang="en">EN</a><a href="../zh/docs.html" hreflang="zh-CN">中文</a><a class="on" href="docs.html" hreflang="ja">日本語</a></div></nav></div></header>
 
-<main class="shell">
-  <section class="hero" style="padding-bottom:2.2rem">
-    <div class="kicker">v3.0.0 · ドキュメント</div>
+<div class="shell">
+  <section class="frontmatter">
+    <div class="eyebrow">v3.0.0 · ドキュメント</div>
     <h1>luna ドキュメント</h1>
     <p class="abstract">luna を埋め込むために必要なすべて:crate の分割、Rust API、サンドボックス制御、デプロイ形態、方言ごとの互換マトリクス。</p>
   </section>
 
-  <div class="doclayout">
-    <aside class="toc">
-      <h2>このページの目次</h2>
+  <div class="docshell">
+    <nav class="docnav" aria-label="documentation">
+      <div>
+        <div class="group">このページの目次</div>
+
       <a href="#getting-started">インストールと hello</a>
       <a href="#cli">CLI</a>
       <a href="#embedding">埋め込み</a>
@@ -64,10 +47,10 @@
       <a href="#architecture">アーキテクチャ</a>
       <a href="#performance">パフォーマンス</a>
       <a href="#versioning">バージョン方針</a>
-    </aside>
-    <div class="doc">
-<section id="getting-started">
-      <h2>インストールと hello</h2>
+      </div>
+    </nav>
+    <main class="docmain">
+<h2 id="getting-started">インストールと hello</h2>
       <p>luna は 7 つの公開済み crate からなる Cargo ワークスペースです。合う依存量を選んでください。完全なインタプリタに Cranelift JIT と C ABI を加えた <code>luna-jit</code>、あるいは依存ゼロで wasm フレンドリーな <code>luna-core</code>。</p>
       <pre><code># 完全なインタプリタ + Cranelift JIT + C ABI
 luna-jit = "3"
@@ -84,10 +67,8 @@ fn main() {
     let s: String = result[0].try_as_str().unwrap().to_string();
     println!("{s}");
 }</code></pre>
-      <div class="note"><b>どの crate を?</b> <code>luna-jit</code> は <code>luna-core</code> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <code>wasm32</code> ターゲットが欲しいときだけ、<code>luna-core</code> を直接使ってください。</div>
-    </section>
-<section id="cli">
-      <h2>コマンドラインインターフェース</h2>
+      <div class="callout note"><b>どの crate を?</b> <code>luna-jit</code> は <code>luna-core</code> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <code>wasm32</code> ターゲットが欲しいときだけ、<code>luna-core</code> を直接使ってください。</div>
+<h2 id="cli">コマンドラインインターフェース</h2>
       <p><code>luna-jit</code> をインストールすると、PATH に <code>luna</code> バイナリ——REPL 兼スクリプトランナー——が置かれます。</p>
       <pre><code>luna script.lua              # ファイルを実行
 luna -e "print(1 + 2)"       # インラインコードを実行
@@ -108,9 +89,7 @@ luna                         # 対話 REPL(Ctrl-D で終了)</code></pre>
         </table>
       </div>
       <p>REPL は各行をまず式として評価し(<code>return</code> を前置)、構文エラーなら文として再試行します——式も代入も動きます。</p>
-    </section>
-<section id="embedding">
-      <h2>埋め込み</h2>
+<h2 id="embedding">埋め込み</h2>
       <p>埋め込み API が主要な表面です——C ABI より豊かで、完全に安全な所有権を備えます。以下は各能力の形です。完全なクックブックは proc-macro userdata と非同期表面を含む 14 節をカバーします。</p>
 
       <h3>信頼できないスクリプト向けサンドボックス</h3>
@@ -178,7 +157,7 @@ impl LuaUserdata for Counter {
 
 vm.set_userdata("c", Counter { value: 100 })?;
 vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre>
-      <div class="note"><b>破れば即 unsound な唯一の規則。</b>userdata が <code>Gc&lt;…&gt;</code> フィールドを 1 つでも持つなら、<code>trace</code> をオーバーライドし、すべてのハンドルを <code>m.mark(...)</code> しなければなりません——<code>trace</code> の中で許されるのはマークだけで、Vm 呼び出し・確保・ロックは禁止です。<code>trace</code> の欠落は use-after-free です。derive マクロがこれを代行します。</div>
+      <div class="callout note"><b>破れば即 unsound な唯一の規則。</b>userdata が <code>Gc&lt;…&gt;</code> フィールドを 1 つでも持つなら、<code>trace</code> をオーバーライドし、すべてのハンドルを <code>m.mark(...)</code> しなければなりません——<code>trace</code> の中で許されるのはマークだけで、Vm 呼び出し・確保・ロックは禁止です。<code>trace</code> の欠落は use-after-free です。derive マクロがこれを代行します。</div>
 
       <h3>Rust からコルーチンとデバッグフックを駆動</h3>
       <p>Lua 側の <code>coroutine.create</code> を使わずに、<code>create_coroutine</code> / <code>resume_coroutine</code> で Rust から Lua コルーチンを駆動できます。<code>set_rust_debug_hook</code> で Call / Return / Line / Count / TailCall の各イベントに Rust コールバックを掛けられます。</p>
@@ -221,9 +200,7 @@ let r: i64 = lua.eval("return add(40, 2)")?;   // 42
 let t = lua.create_table();
 t.set(&amp;mut lua, "name", "luna")?;
 let name: String = t.get(&amp;mut lua, "name")?;</code></pre>
-    </section>
-<section id="threading">
-      <h2>スレッド</h2>
+<h2 id="threading">スレッド</h2>
       <p>既定の <code>Vm</code>(および <code>Lua</code> ファサード)は <strong><code>!Send + !Sync</code></strong> です——Vm と、その GC ヒープへのすべてのハンドルは、それを生成したスレッド上に留まります。この制約は <code>compile_fail</code> doctest によってコンパイル時に強制されます。</p>
       <p>これは意図したパフォーマンス上の選択です。GC は侵入的マーク&スイープヒープ上の <code>Gc&lt;T&gt; = NonNull&lt;T&gt;</code> を用い、stop-the-world プロトコルもロック付きのトレースキャッシュ読み取りもありません。<code>Send</code> にすると実ワークロードで 5〜15% のコストが乗ります。そもそも Lua 自身のデータモデルがシングルスレッドです。</p>
       <h3>3 つの定石パターン</h3>
@@ -239,10 +216,8 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
     let result = vm.eval_async("return 1 + 2").await?;
     Ok(())
 }</code></pre>
-      <div class="note"><b>オプトインの <code>SendVm</code>。</b><code>feature = "send"</code> フラグは <code>SendVm</code> newtype を追加します。これは <code>Send</code>(ただし <code>Sync</code> ではない)なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <code>.await</code> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <code>SendVm</code> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<code>Send</code> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
-    </section>
-<section id="security">
-      <h2>セキュリティとサンドボックス</h2>
+      <div class="callout note"><b>オプトインの <code>SendVm</code>。</b><code>feature = "send"</code> フラグは <code>SendVm</code> newtype を追加します。これは <code>Send</code>(ただし <code>Sync</code> ではない)なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <code>.await</code> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <code>SendVm</code> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<code>Send</code> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
+<h2 id="security">セキュリティとサンドボックス</h2>
       <p>luna は埋め込み VM です。セキュリティ境界を握るのはスクリプトではなく<strong>ホスト</strong>です。スクリプトが見るすべての能力は、Rust コードが明示的に許可したものです。</p>
       <h3>対象範囲</h3>
       <ul>
@@ -257,10 +232,8 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
         <li>合法だが病的なスクリプトによる DoS——予算が縛るのは呼び出しごとの CPU とメモリであり、ホストのシンクへの出力量ではありません。</li>
         <li>一度開いた <code>debug.*</code>、および <code>os.execute</code> / <code>io.popen</code>——これらは Vm やシェルを手渡すのと同義です。</li>
       </ul>
-      <div class="note"><b>意図した非対称性。</b>安全な部分集合の標準ライブラリ(<code>base</code>、<code>math</code>、<code>string</code>、<code>table</code>、<code>coroutine</code>)はビルダー上で開きます。OS に触れるライブラリ(<code>io</code>/<code>os</code>、<code>debug</code>、<code>package</code>)は、ビルド後のハンドル——<code>vm.open_os_io()</code> など——を要求し、その信頼判断が常にホストコードに現れるようにします。予算は武装するまで無制限で、メモリ上限は発火後に自ら解除されるため、リクエスト間で Vm を再利用する前に再武装が必要です。</div>
-    </section>
-<section id="deploy">
-      <h2>デプロイ</h2>
+      <div class="callout note"><b>意図した非対称性。</b>安全な部分集合の標準ライブラリ(<code>base</code>、<code>math</code>、<code>string</code>、<code>table</code>、<code>coroutine</code>)はビルダー上で開きます。OS に触れるライブラリ(<code>io</code>/<code>os</code>、<code>debug</code>、<code>package</code>)は、ビルド後のハンドル——<code>vm.open_os_io()</code> など——を要求し、その信頼判断が常にホストコードに現れるようにします。予算は武装するまで無制限で、メモリ上限は発火後に自ら解除されるため、リクエスト間で Vm を再利用する前に再武装が必要です。</div>
+<h2 id="deploy">デプロイ</h2>
       <p>4 つのパッケージ形態がほとんどのホストをカバーします。luna 自身はロギングを行いません——可観測性はデバッグフック機構と <code>Vm::eval</code> 周りのホストカウンタで接続します。</p>
       <div class="tablewrap">
         <table>
@@ -277,9 +250,7 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
       <pre><code>FROM scratch
 COPY ./target/x86_64-unknown-linux-musl/release/service /service
 ENTRYPOINT ["/service"]</code></pre>
-    </section>
-<section id="jit-aot">
-      <h2>JIT と AOT</h2>
+<h2 id="jit-aot">JIT と AOT</h2>
       <p><code>luna-jit</code> ではトレース JIT が既定で有効です。いくつかの粘着的なノブで、予測可能なレイテンシや A/B テストのために調整・無効化できます。</p>
       <div class="tablewrap">
         <table>
@@ -302,9 +273,7 @@ luna-aot compile hello.lua --out hello
 # macOS ホストから Linux へクロスコンパイル
 luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre>
       <p>Cranelift の <code>all-arch</code> バックエンドは再ビルドなしにあらゆるターゲットへクロスコンパイルします。strip した release バイナリは <strong>4.5 MiB</strong> 前後に収まり、ランタイムの下限が支配的なため、1 行のスクリプトと 1.5k 行のスクリプトの差はわずか約 82 KiB です。</p>
-    </section>
-<section id="compat">
-      <h2>互換性</h2>
+<h2 id="compat">互換性</h2>
       <p>luna は 1 つのバイナリで Lua 5.1 – 5.5 と MacroLua を実装します。ダイアレクトは Vm ごとに選択され、1 つのプロセスが複数を同時にホストできます。機能別のマトリクスはトップページの<a href="index.html#dialects">ダイアレクト仕様表</a>を参照してください。</p>
       <h3>標準ライブラリ</h3>
       <p>サンドボックス埋め込みに適したホワイトリスト部分集合は、<code>Vm::open_*()</code> メソッドで公開されます:</p>
@@ -327,9 +296,7 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
       <p>luna は <code>lua.h</code> 互換の C ABI 部分集合を公開する <code>cdylib</code> / <code>staticlib</code> を提供します。<code>liblua</code> にリンクしている既存の PUC 利用者は、そのカバー範囲で luna を drop-in として使えます:状態のライフサイクル、値の push/read、スタック操作、テーブル API、<code>lua_call</code> / <code>lua_pcall</code>、そしてスクリプトのロード。13 個の適合性テストがこれを固定します。userdata、C 側コルーチン、継続はまだ未対応——これらはより豊かな Rust API を使ってください。</p>
       <h3>バイトコード</h3>
       <p>luna は PUC コンパイラのバイナリ形式に一致するダイアレクト別バイトコードを発行するため、PUC でコンパイルした <code>.luac</code> はそのままロードでき、luna がダンプしたバイトコードも PUC でロードできます。バイトコードのロードは<strong>サンドボックスでは既定オフ</strong>です——細工されたバイトコードは、コンパイラが強制する型チェックを迂回しうるためです。</p>
-    </section>
-<section id="architecture">
-      <h2>アーキテクチャ</h2>
+<h2 id="architecture">アーキテクチャ</h2>
       <p>7 つの公開済み crate。うち 3 つが直接依存するものです。インタプリタコアは第三者依存を一切持ちません。JIT はトレイト経由で接続されるため、バックエンドの差し替えや削除は <code>luna-jit</code> の関心事であり、<code>luna-core</code> の API には決して触れません。</p>
       <div class="tablewrap">
         <table>
@@ -344,9 +311,7 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
         </table>
       </div>
       <p>依存ゼロの <code>luna-core</code> 契約は CI の <code>cargo deny check</code> で強制されます。ソースは 3 層に分類されます——<strong>Stone(石)</strong>(業務非依存の基盤:パターンエンジン、ヒープ、値レイアウト)、<strong>Steel(鋼)</strong>(Lua ドメインのプリミティブ:コンパイラ、ディスパッチャ、JIT バックエンド)、<strong>Cement(コンクリート)</strong>(ホストのグルー:CLI、C ABI、標準ライブラリ束縛)——それぞれ変更規律とレビュー深度が異なります。</p>
-    </section>
-<section id="performance">
-      <h2>パフォーマンス</h2>
+<h2 id="performance">パフォーマンス</h2>
       <p>luna はあえて単一の見出し比率を出しません。勝つマイクロベンチのセルはマーケティングの産物であり、負けるセルこそ追う価値のあるシグナルです。参照実装に対して 1.5 倍を超える差があれば、表層の磨き込みではなく、その負荷を段階ごとに並べて分解します。</p>
       <p>リリースに同梱されるのは再現可能なベースラインです。メモリは dhat の下で 5 つの負荷にわたり測定され、いずれかの定常状態で 5% を超える回帰は追跡対象のアラームです。</p>
       <div>
@@ -355,46 +320,21 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
         <div><div class="n">523<span>KB</span></div><div>alloc_collect 定常 · 1M + 10 GC</div></div>
         <div><div class="n">63<span>KB</span></div><div>userdata_lifecycle · 200 + ファイナライザ</div></div>
       </div>
-    </section>
-<section id="versioning">
-      <h2>バージョン方針と安定性</h2>
+<h2 id="versioning">バージョン方針と安定性</h2>
       <p>公開 API は、安定表面(破壊的変更には SemVer メジャーの引き上げが必要)と、不安定 / 内部表面(パフォーマンス作業のためマイナーで変わりうる)に分かれます。</p>
       <ul>
         <li><strong>安定:</strong><code>luna_jit</code> の入口型(<code>Lua</code>、<code>LuaFunction</code>、<code>LuaTable</code>、<code>LuaRoot</code>、<code>LuaSandboxBuilder</code>)、再エクスポートされたコア(<code>Vm</code>、<code>LuaVersion</code>、<code>Value</code>、<code>LuaError</code>)、derive マクロ、そして <code>lua.h</code> 互換 C ABI。</li>
         <li><strong>不安定 / 内部:</strong><code>luna_core::{compiler, frontend, jit, pattern}</code> と JIT バックエンド内部——最適化のため自由に変わりうる。</li>
         <li><strong>バイトコード:</strong>ダイアレクト別のバイナリ形式は安定で、PUC <code>.luac</code> ファイルは全ラインでロードできます。</li>
       </ul>
-      <div class="note">安定 / 不安定の項目一覧は、埋め込みクックブックの API 契約節と <code>CHANGELOG.md</code> にあります。<a href="https://docs.rs/luna-jit">docs.rs</a> の rustdoc リファレンスが項目ごとの正典です。</div>
-    </section>
-    </div>
+      <div class="callout note">安定 / 不安定の項目一覧は、埋め込みクックブックの API 契約節と <code>CHANGELOG.md</code> にあります。<a href="https://docs.rs/luna-jit">docs.rs</a> の rustdoc リファレンスが項目ごとの正典です。</div>
+    </main>
   </div>
+</div>
 
-  <footer>
-    <div>
-      <a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA">
-        <img src="../assets/golia-wordmark.png" alt="GOLIA" width="92" height="20">
-      </a>
-      <div>luna は MIT / Apache-2.0 のデュアルライセンスです。</div>
-    </div>
-    <div class="links">
-      <a href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
-        GitHub
-        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-      </a>
-      <a href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
-        crates.io
-        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-      </a>
-      <a href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/><path d="M8 7h6"/><path d="M8 11h8"/></svg>
-        docs.rs
-        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-      </a>
-    </div>
-  </footer>
+<div class="shell">
+<footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../assets/golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>Released under MIT OR Apache-2.0</div></div><div class="links"><a href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer>
+</div>
 
-</main>
 </body>
 </html>

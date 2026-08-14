@@ -40,11 +40,18 @@ faces rather than Mincho, so the page reads as modern in all three
 languages. `line-break: strict` and `word-break: auto-phrase` let the
 browser do correct CJK typesetting natively.
 
-**The masthead and footer are identical to tiktoken.golia.jp and
-kevy.golia.jp by intent** — same markup, same classes, same GOLIA
-wordmark in the footer. The three sites should read as one lab rather
-than three unrelated projects. If you change either here, change it
-there too, or the family resemblance is the thing that breaks.
+**The stylesheet is kevy.golia.jp's, not a version of it** — every rule
+here appears there verbatim, and every class this site uses is one that
+site defines. The masthead and footer markup is likewise identical, with
+only luna's own identity substituted: the logo, the wordmark, the nav
+labels, and the three links (luna has no npm package, so kevy's fourth
+footer link is absent). The sites should read as one lab rather than
+three unrelated projects. If you change any of it here, change it there
+too — the family resemblance is the thing that breaks first.
+
+What is absent is as deliberate as what is present: kevy's terminal,
+calculator, bar charts, tabs and recipe blocks have no counterpart here,
+so their rules were not carried over.
 
 There is no theme toggle and no dark variant: the paper ground *is* the
 design, and a dark inversion of it would be a different design wearing
@@ -52,26 +59,21 @@ the same layout.
 
 ## Deploy
 
-A static bundle — copy `web/` to the document root and point the vhost
-at it. Nothing to compile.
-
-```nginx
-server {
-    server_name luna.golia.jp;
-    root /var/www/luna;          # this directory
-    index index.html;
-
-    # pretty /zh/ and /ja/ directory URLs resolve to their index.html
-    location / {
-        try_files $uri $uri/ $uri.html =404;
-    }
-
-    # long-cache the immutable assets
-    location /assets/ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
-    }
-}
+```sh
+./deploy.sh --check     # verify without uploading
+./deploy.sh             # verify, upload, then confirm the origin
 ```
+
+The script rsyncs this directory to `t01:/apps/luna/web` and checks that
+the origin actually serves the version in the tree — a stale deploy shows
+up nowhere else. It verifies before uploading, because a static site
+fails silently: a broken tag or a missing asset still returns HTTP 200.
+The checks are tag balance, every class having a rule behind it, every
+relative reference resolving, and one version string across all six pages.
+
+The box, TLS and the Caddy vhost belong to `goliajp/devops`; the script
+never touches them. It does not run `caddy deploy` — that regenerates the
+whole Caddyfile from CaddyStore and drops any site not in the store.
 
 Local preview: `cd web && python3 -m http.server 8080`.
 
@@ -86,9 +88,10 @@ trackers, no scripts at all.
 
 ## Updating for a new release
 
-The version string `v3.0.0` appears in each landing page's kicker and
-each docs page's kicker — six occurrences. Bump them on release; this is
-also step 8 of `.dev/rfcs/monthly-drift-sweep.md`.
+The version string `v3.0.0` appears in the `.eyebrow` of all six pages.
+Bump them on release — `deploy.sh` refuses to ship a tree where the six
+disagree, which is what a half-finished bump looks like. This is also
+step 8 of `.dev/rfcs/monthly-drift-sweep.md`.
 
 Content is snapshotted against the crate docs under `../docs/`. Re-sync
 when the embedding API or the dialect matrix changes. The landing page
