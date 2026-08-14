@@ -139,8 +139,23 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     container:
-      image: rust:1.86-alpine
+      # v2.20 D5: was `rust:1.86-alpine`. luna needs 1.88+ (edition-2024
+      # let-chains), and since v2.17 declares no MSRV the promise is
+      # "builds on current stable" — so track stable rather than pin a
+      # version that cannot build the tree.
+      image: rust:alpine
     steps:
+      # v2.20 D5: the alpine image ships without git, so actions/checkout
+      # fell back to the REST API download path, which does not support
+      # `submodules` — the job failed at checkout before compiling
+      # anything:
+      #   Input 'submodules' not supported when falling back to download
+      #   using the GitHub REST API
+      # It had been failing that way silently, masked by
+      # continue-on-error. Install git first so checkout takes the real
+      # git path and the vendored cranelift submodule lands.
+      - name: install git (the alpine image ships without it)
+        run: apk add --no-cache git
       - uses: actions/checkout@v7
         with:
           submodules: recursive
