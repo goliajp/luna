@@ -171,7 +171,7 @@ struct Suite {
 const SUITES: &[Suite] = &[
     Suite {
         version: LuaVersion::Lua55,
-        dir: "tests/official/lua-5.5.0-tests",
+        dir: "tests/official/lua-5.5.1-tests",
         expected_pass: &[
             "main.lua",
             "api.lua",

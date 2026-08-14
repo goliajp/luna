@@ -12,7 +12,7 @@ fn parse_version(arg: &str) -> Option<(LuaVersion, &'static str)> {
         "5.2" => Some((LuaVersion::Lua52, "tests/official/lua-5.2.2-tests")),
         "5.3" => Some((LuaVersion::Lua53, "tests/official/lua-5.3.4-tests")),
         "5.4" => Some((LuaVersion::Lua54, "tests/official/lua-5.4.8-tests")),
-        "5.5" => Some((LuaVersion::Lua55, "tests/official/lua-5.5.0-tests")),
+        "5.5" => Some((LuaVersion::Lua55, "tests/official/lua-5.5.1-tests")),
         _ => None,
     }
 }
@@ -20,7 +20,7 @@ fn parse_version(arg: &str) -> Option<(LuaVersion, &'static str)> {
 fn main() {
     let args = std::env::args().skip(1);
     let mut version = LuaVersion::Lua55;
-    let mut dir = "tests/official/lua-5.5.0-tests";
+    let mut dir = "tests/official/lua-5.5.1-tests";
     let mut path: Option<String> = None;
     for a in args {
         if let Some(v) = a.strip_prefix("--lua=") {
