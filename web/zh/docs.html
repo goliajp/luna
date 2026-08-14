@@ -1,82 +1,81 @@
 <!doctype html>
-<html lang="zh" data-theme="dark">
+<html lang="zh-Hans">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>文档 — luna</title>
-<meta name="description" content="luna 文档:快速上手、嵌入指南、方言兼容性、架构、JIT 与 AOT、线程、安全、部署、命令行,以及稳定 API 契约。">
+<title>luna 文档 · Golia Lab</title>
+<meta name="description" content="luna 文档:安装、嵌入 API、线程、沙箱、部署、JIT 与 AOT、方言兼容矩阵,以及稳定性承诺。">
 <link rel="canonical" href="https://luna.golia.jp/zh/docs.html">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#fcfbf8">
+<link rel="icon" href="../assets/luna-logo.svg" type="image/svg+xml">
+
 <link rel="alternate" hreflang="en" href="https://luna.golia.jp/docs.html">
-<link rel="alternate" hreflang="zh" href="https://luna.golia.jp/zh/docs.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://luna.golia.jp/zh/docs.html">
 <link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/docs.html">
 <link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/docs.html">
-<link rel="icon" type="image/svg+xml" href="/assets/luna-icon.svg">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/style.css">
-<script>try{var t=localStorage.getItem("luna-theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
 </head>
 <body>
 
-<header class="nav">
-  <div class="wrap nav-in">
-    <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
-    <nav class="nav-links">
-      <a href="index.html#overview">概览</a>
-      <a href="index.html#dialects">方言</a>
-      <a href="index.html#architecture">架构</a>
-      <a href="docs.html">文档</a>
-    </nav>
-    <span class="nav-spacer"></span>
-    <div class="nav-tools">
-      <div class="seg" role="group" aria-label="语言">
-        <a href="../docs.html">EN</a>
-        <a href="docs.html" aria-current="true">中文</a>
-        <a href="../ja/docs.html">日本語</a>
+<header class="masthead">
+  <div class="masthead-inner">
+    <a class="brand" href="./">
+      <img src="../assets/luna-logo.svg" alt="" width="26" height="26">
+      <span class="wordmark">luna</span>
+    </a>
+    <nav class="topnav">
+      <a class="navlink" href="/#what">概览</a>
+      <a class="navlink" href="/#dialects">方言</a>
+      <a class="navlink" href="/#architecture">架构</a>
+      <a href="./">首页</a>
+      <a class="on" href="docs.html" aria-current="page">文档</a>
+      <div class="langswitch" role="group" aria-label="language">
+        <a href="../docs.html" hreflang="en">EN</a>
+        <a class="on" href="docs.html" hreflang="zh-Hans">中文</a>
+        <a href="../ja/docs.html" hreflang="ja">日本語</a>
       </div>
-      <button class="icon-btn" data-theme-toggle aria-label="切换主题">☾</button>
-      <a class="icon-btn" href="https://github.com/goliajp/luna" aria-label="GitHub 仓库" title="GitHub">
-        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-      </a>
-      <button class="icon-btn nav-toggle" aria-label="菜单">☰</button>
-    </div>
+    </nav>
   </div>
 </header>
 
-<div class="wrap docs-shell">
-  <aside class="sidebar">
-    <h4>入门</h4>
-    <a href="#getting-started">安装与 hello</a>
-    <a href="#cli">命令行</a>
-    <h4>指南</h4>
-    <a href="#embedding">嵌入</a>
-    <a href="#threading">线程</a>
-    <a href="#security">安全与沙箱</a>
-    <a href="#deploy">部署</a>
-    <a href="#jit-aot">JIT 与 AOT</a>
-    <h4>参考</h4>
-    <a href="#compatibility">兼容性</a>
-    <a href="#architecture">架构</a>
-    <a href="#performance">性能</a>
-    <a href="#versioning">版本策略</a>
-  </aside>
+<main class="shell">
+  <section class="hero" style="padding-bottom:2.2rem">
+    <div class="kicker">v3.0.0 · 文档</div>
+    <h1>luna 文档</h1>
+    <p class="abstract">嵌入 luna 所需的一切:crate 拆分、Rust API、沙箱控制、部署形态,以及逐方言的兼容矩阵。</p>
+  </section>
 
-  <main class="doc-main">
-    <h1>文档</h1>
-    <p class="lead">把 luna 嵌入 Rust 宿主所需的一切——从三行的 hello 到稳定 API 契约。以 <span class="mono">v3.0.0</span> 为快照。rustdoc API 参考在 <a class="xref" href="https://docs.rs/luna-jit">docs.rs</a>。</p>
-
-    <!-- ============================================ getting started -->
-    <section id="getting-started">
+  <div class="doclayout">
+    <aside class="toc">
+      <h2>本页目录</h2>
+      <a href="#getting-started">安装与 hello</a>
+      <a href="#cli">命令行</a>
+      <a href="#embedding">嵌入</a>
+      <a href="#threading">线程</a>
+      <a href="#security">安全与沙箱</a>
+      <a href="#deploy">部署</a>
+      <a href="#jit-aot">JIT 与 AOT</a>
+      <a href="#compat">兼容性</a>
+      <a href="#architecture">架构</a>
+      <a href="#performance">性能</a>
+      <a href="#versioning">版本策略</a>
+    </aside>
+    <div class="doc">
+<section id="getting-started">
       <h2>安装与 hello</h2>
-      <p>luna 是一个含七个已发布 crate 的 Cargo 工作区。挑选合适的依赖体量:<span class="mono">luna-jit</span> 提供完整解释器加 Cranelift JIT 与 C ABI,<span class="mono">luna-core</span> 则是零依赖、对 wasm 友好的解释器。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Cargo.toml</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code># 完整解释器 + Cranelift JIT + C ABI
-luna-jit = "2"
+      <p>luna 是一个含七个已发布 crate 的 Cargo 工作区。挑选合适的依赖体量:<code>luna-jit</code> 提供完整解释器加 Cranelift JIT 与 C ABI,<code>luna-core</code> 则是零依赖、对 wasm 友好的解释器。</p>
+      <pre><code># 完整解释器 + Cranelift JIT + C ABI
+luna-jit = "3"
 
 # 或者最小表面 —— 纯解释器,零第三方依赖
-luna-core = "2"</code></pre></div>
-      <p>为选定的方言构造一个 <span class="mono">Vm</span> 并求值。<span class="mono">Vm::new</span> 会打开所有默认安全的标准库并装上 JIT(在 <span class="mono">luna-core</span> 下是一个空操作后端)。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">main.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>use luna_jit::vm::Vm;
+luna-core = "3"</code></pre>
+      <p>为选定的方言构造一个 <code>Vm</code> 并求值。<code>Vm::new</code> 会打开所有默认安全的标准库并装上 JIT(在 <code>luna-core</code> 下是一个空操作后端)。</p>
+      <pre><code>use luna_jit::vm::Vm;
 use luna_jit::version::LuaVersion;
 
 fn main() {
@@ -84,20 +83,18 @@ fn main() {
     let result = vm.eval("return 'hello, ' .. 'world'").unwrap();
     let s: String = result[0].try_as_str().unwrap().to_string();
     println!("{s}");
-}</code></pre></div>
-      <div class="note"><b>选哪个 crate?</b> <span class="mono">luna-jit</span> 重新导出了 <span class="mono">luna-core</span> 的一切,因此你可以直接从 JIT crate 起步,不必操心拆分。只有在你想要极小审计面、极快构建或 <span class="mono">wasm32</span> 目标时,才需要直接用 <span class="mono">luna-core</span>。</div>
+}</code></pre>
+      <div class="note"><b>选哪个 crate?</b> <code>luna-jit</code> 重新导出了 <code>luna-core</code> 的一切,因此你可以直接从 JIT crate 起步,不必操心拆分。只有在你想要极小审计面、极快构建或 <code>wasm32</code> 目标时,才需要直接用 <code>luna-core</code>。</div>
     </section>
-
-    <!-- ============================================ CLI -->
-    <section id="cli">
+<section id="cli">
       <h2>命令行界面</h2>
-      <p>安装 <span class="mono">luna-jit</span> 会在 PATH 上放一个 <span class="mono">luna</span> 二进制——一个 REPL 兼脚本运行器。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>luna script.lua              # 运行文件
+      <p>安装 <code>luna-jit</code> 会在 PATH 上放一个 <code>luna</code> 二进制——一个 REPL 兼脚本运行器。</p>
+      <pre><code>luna script.lua              # 运行文件
 luna -e "print(1 + 2)"       # 运行内联代码
 luna --lua=5.4 script.lua    # 选择方言
-luna                         # 交互式 REPL(Ctrl-D 退出)</code></pre></div>
-      <div class="sheet-wrap">
-        <table class="sheet">
+luna                         # 交互式 REPL(Ctrl-D 退出)</code></pre>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>选项</th><th>行为</th></tr></thead>
           <tbody>
             <tr><td class="mono">--lua=5.X</td><td>选择方言(5.1 / 5.2 / 5.3 / 5.4 / 5.5;默认 5.5)</td></tr>
@@ -110,17 +107,15 @@ luna                         # 交互式 REPL(Ctrl-D 退出)</code></pre></div>
           </tbody>
         </table>
       </div>
-      <p>REPL 先把每一行当表达式求值(前缀 <span class="mono">return</span>),遇语法错误再当语句重试——所以表达式与赋值都能工作。</p>
+      <p>REPL 先把每一行当表达式求值(前缀 <code>return</code>),遇语法错误再当语句重试——所以表达式与赋值都能工作。</p>
     </section>
-
-    <!-- ============================================ embedding -->
-    <section id="embedding">
+<section id="embedding">
       <h2>嵌入</h2>
       <p>嵌入 API 是首要表面——比 C ABI 更丰富,且拥有完全安全的所有权。以下展示每种能力的形态;完整手册覆盖 14 个小节,含 proc-macro userdata 与异步表面。</p>
 
       <h3>面向不受信任脚本的沙箱</h3>
-      <p>沙箱构造器为库设立白名单并武装预算。被沙箱化的脚本无法 <span class="mono">require</span>、触碰文件系统,或编译字节码块。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">sandbox.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>use luna_jit::Lua;
+      <p>沙箱构造器为库设立白名单并武装预算。被沙箱化的脚本无法 <code>require</code>、触碰文件系统,或编译字节码块。</p>
+      <pre><code>use luna_jit::Lua;
 use luna_jit::version::LuaVersion;
 
 let mut lua = Lua::sandbox(LuaVersion::Lua54)
@@ -132,11 +127,11 @@ let mut lua = Lua::sandbox(LuaVersion::Lua54)
     .with_memory_cap(8 * 1024 * 1024)  // 8 MiB 上限
     .build();
 
-let r: i64 = lua.eval("return 1 + 2").unwrap();</code></pre></div>
+let r: i64 = lua.eval("return 1 + 2").unwrap();</code></pre>
 
       <h3>全局变量与表</h3>
-      <p><span class="mono">set_global</span> 接受任意 <span class="mono">IntoValue</span> 类型(<span class="mono">Option&lt;T&gt;</span> 映射为 nil)。表提供一次性与链式构造器两种形态。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">globals.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>vm.set_global("answer", 42_i64)?;
+      <p><code>set_global</code> 接受任意 <code>IntoValue</code> 类型(<code>Option&lt;T&gt;</code> 映射为 nil)。表提供一次性与链式构造器两种形态。</p>
+      <pre><code>vm.set_global("answer", 42_i64)?;
 vm.set_global("name", "luna")?;
 vm.set_global("missing", Option::&lt;i64&gt;::None)?;   // 设为 nil
 
@@ -147,11 +142,11 @@ let t = vm.table_of([("answer", 42_i64), ("year", 2026_i64)]);
 let t = vm.new_table()
     .with("name", "luna")
     .with(1_i64, "first array entry")
-    .build();</code></pre></div>
+    .build();</code></pre>
 
       <h3>类型化原生函数</h3>
-      <p><span class="mono">native_typed</span> 把 Rust 闭包或函数指针桥接到 Lua,自动完成参数解析与返回值编码——纯函数、多返回值或可失败(<span class="mono">Result&lt;T, LuaError&gt;</span>)皆可,支持 0 到 6 元。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">natives.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>let add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
+      <p><code>native_typed</code> 把 Rust 闭包或函数指针桥接到 Lua,自动完成参数解析与返回值编码——纯函数、多返回值或可失败(<code>Result&lt;T, LuaError&gt;</code>)皆可,支持 0 到 6 元。</p>
+      <pre><code>let add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
 vm.set_global("add", add)?;
 
 let split = vm.native_typed(|x: i64| -&gt; (i64, i64) { (x / 10, x % 10) });
@@ -160,11 +155,11 @@ vm.set_global("split", split)?;
 let safe_div = vm.native_typed(|a: i64, b: i64| -&gt; Result&lt;i64, LuaError&gt; {
     if b == 0 { Err(LuaError::new(Value::Nil)) } else { Ok(a / b) }
 });
-vm.set_global("safe_div", safe_div)?;</code></pre></div>
+vm.set_global("safe_div", safe_div)?;</code></pre>
 
       <h3>Userdata —— 暴露宿主类型</h3>
-      <p>把任意 <span class="mono">T: 'static</span> 的 Rust 值藏在 Lua userdata 背后。一个空的 <span class="mono">impl LuaUserdata for T {}</span> 就足以桥接;再加上方法与元方法,它便如原生一般。<span class="mono">#[derive(LuaUserdata)]</span> proc-macro 会生成样板代码。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">userdata.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>use luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
+      <p>把任意 <code>T: 'static</code> 的 Rust 值藏在 Lua userdata 背后。一个空的 <code>impl LuaUserdata for T {}</code> 就足以桥接;再加上方法与元方法,它便如原生一般。<code>#[derive(LuaUserdata)]</code> proc-macro 会生成样板代码。</p>
+      <pre><code>use luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
 
 struct Counter { value: i64 }
 
@@ -182,12 +177,12 @@ impl LuaUserdata for Counter {
 }
 
 vm.set_userdata("c", Counter { value: 100 })?;
-vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre></div>
-      <div class="note warm"><b>唯一一条破坏即不安全的规则。</b>若一个 userdata 持有任何 <span class="mono">Gc&lt;…&gt;</span> 字段,你必须重写 <span class="mono">trace</span> 并 <span class="mono">m.mark(...)</span> 每一个句柄——在 <span class="mono">trace</span> 内你只能标记,绝不可调用 Vm、分配或加锁。缺失 <span class="mono">trace</span> 即是 use-after-free。derive 宏会替你处理好这件事。</div>
+vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre>
+      <div class="note"><b>唯一一条破坏即不安全的规则。</b>若一个 userdata 持有任何 <code>Gc&lt;…&gt;</code> 字段,你必须重写 <code>trace</code> 并 <code>m.mark(...)</code> 每一个句柄——在 <code>trace</code> 内你只能标记,绝不可调用 Vm、分配或加锁。缺失 <code>trace</code> 即是 use-after-free。derive 宏会替你处理好这件事。</div>
 
       <h3>从 Rust 驱动协程与调试钩子</h3>
-      <p>无需 Lua 侧的 <span class="mono">coroutine.create</span>,用 <span class="mono">create_coroutine</span> / <span class="mono">resume_coroutine</span> 即可从 Rust 驱动 Lua 协程。用 <span class="mono">set_rust_debug_hook</span> 在 Call / Return / Line / Count / TailCall 事件上装一个 Rust 回调。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">coroutine.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>let body = vm.eval(r#"
+      <p>无需 Lua 侧的 <code>coroutine.create</code>,用 <code>create_coroutine</code> / <code>resume_coroutine</code> 即可从 Rust 驱动 Lua 协程。用 <code>set_rust_debug_hook</code> 在 Call / Return / Line / Count / TailCall 事件上装一个 Rust 回调。</p>
+      <pre><code>let body = vm.eval(r#"
     return function()
         coroutine.yield(1)
         coroutine.yield(2)
@@ -198,11 +193,11 @@ vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre></
 let co = vm.create_coroutine(body);
 let r1 = vm.resume_coroutine(co, vec![])?;   // r1[0] == Int(1)
 let r2 = vm.resume_coroutine(co, vec![])?;   // r2[0] == Int(2)
-let r3 = vm.resume_coroutine(co, vec![])?;   // r3[0] == Int(3), 终止</code></pre></div>
+let r3 = vm.resume_coroutine(co, vec![])?;   // r3[0] == Int(3), 终止</code></pre>
 
       <h3>错误</h3>
-      <p>Lua 错误以 <span class="mono">Result&lt;T, LuaError&gt;</span> 浮现。<span class="mono">LuaError</span> 实现了 <span class="mono">Display</span> / <span class="mono">Error</span>;更丰富的上下文可从 Vm 取得。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">errors.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>match vm.eval("error('something failed')") {
+      <p>Lua 错误以 <code>Result&lt;T, LuaError&gt;</code> 浮现。<code>LuaError</code> 实现了 <code>Display</code> / <code>Error</code>;更丰富的上下文可从 Vm 取得。</p>
+      <pre><code>match vm.eval("error('something failed')") {
     Ok(v)  =&gt; println!("ok: {:?}", v),
     Err(e) =&gt; {
         println!("error: {}", e);              // Display
@@ -210,11 +205,11 @@ let r3 = vm.resume_coroutine(co, vec![])?;   // r3[0] == Int(3), 终止</code></
         let source = vm.error_source();        // Option&lt;(&amp;str, u32)&gt;
         let tb = vm.take_error_traceback();    // Option&lt;String&gt;
     }
-}</code></pre></div>
+}</code></pre>
 
-      <h3><span class="mono">Lua</span> 门面</h3>
-      <p>若你偏爱 mlua 风格的门面,<span class="mono">Lua</span> 用同一套机制封装,提供由 host-root 票据支撑的 <span class="mono">Copy + Clone</span> 句柄。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">facade.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>use luna_jit::Lua;
+      <h3><code>Lua</code> 门面</h3>
+      <p>若你偏爱 mlua 风格的门面,<code>Lua</code> 用同一套机制封装,提供由 host-root 票据支撑的 <code>Copy + Clone</code> 句柄。</p>
+      <pre><code>use luna_jit::Lua;
 
 let mut lua = Lua::new();          // JIT on, Lua 5.5
 lua.open_base(); lua.open_math();
@@ -225,77 +220,69 @@ let r: i64 = lua.eval("return add(40, 2)")?;   // 42
 
 let t = lua.create_table();
 t.set(&amp;mut lua, "name", "luna")?;
-let name: String = t.get(&amp;mut lua, "name")?;</code></pre></div>
+let name: String = t.get(&amp;mut lua, "name")?;</code></pre>
     </section>
-
-    <!-- ============================================ threading -->
-    <section id="threading">
+<section id="threading">
       <h2>线程</h2>
-      <p>默认的 <span class="mono">Vm</span>(以及 <span class="mono">Lua</span> 门面)是 <strong><span class="mono">!Send + !Sync</span></strong>——一个 Vm 及其 GC 堆上的每个句柄,都活在创建它的线程上。该约束由一个 <span class="mono">compile_fail</span> doctest 在编译期强制。</p>
-      <p>这是一个刻意的性能取舍:GC 使用 <span class="mono">Gc&lt;T&gt; = NonNull&lt;T&gt;</span>,建于侵入式标记-清除堆之上,没有 stop-the-world 协议,也没有加锁的 trace 缓存读取。让它变成 <span class="mono">Send</span> 会在真实负载上带来 5–15% 的开销。而 Lua 自身的数据模型本就是单线程的。</p>
+      <p>默认的 <code>Vm</code>(以及 <code>Lua</code> 门面)是 <strong><code>!Send + !Sync</code></strong>——一个 Vm 及其 GC 堆上的每个句柄,都活在创建它的线程上。该约束由一个 <code>compile_fail</code> doctest 在编译期强制。</p>
+      <p>这是一个刻意的性能取舍:GC 使用 <code>Gc&lt;T&gt; = NonNull&lt;T&gt;</code>,建于侵入式标记-清除堆之上,没有 stop-the-world 协议,也没有加锁的 trace 缓存读取。让它变成 <code>Send</code> 会在真实负载上带来 5–15% 的开销。而 Lua 自身的数据模型本就是单线程的。</p>
       <h3>三种范式</h3>
       <ul>
-        <li><strong>单线程 Tokio</strong> —— 用 <span class="mono">flavor = "current_thread"</span> 把执行器跑在 Vm 所在的线程上,并使用 <span class="mono">vm.eval_async(...)</span>。</li>
-        <li><strong>多线程 Tokio 上的 <span class="mono">LocalSet</span></strong> —— <span class="mono">LocalSet::run_until</span> 把 Vm 的 future 钉在调用线程上。</li>
-        <li><strong>每 OS 线程一个 Vm + 通道</strong> —— 要真正的并行,就每线程一个 Vm;只有 <span class="mono">Send</span> 数据(源码字符串、结果字符串)在它们之间流转。</li>
+        <li><strong>单线程 Tokio</strong> —— 用 <code>flavor = "current_thread"</code> 把执行器跑在 Vm 所在的线程上,并使用 <code>vm.eval_async(...)</code>。</li>
+        <li><strong>多线程 Tokio 上的 <code>LocalSet</code></strong> —— <code>LocalSet::run_until</code> 把 Vm 的 future 钉在调用线程上。</li>
+        <li><strong>每 OS 线程一个 Vm + 通道</strong> —— 要真正的并行,就每线程一个 Vm;只有 <code>Send</code> 数据(源码字符串、结果字符串)在它们之间流转。</li>
       </ul>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">pattern-1.rs</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>#[tokio::main(flavor = "current_thread")]
+      <pre><code>#[tokio::main(flavor = "current_thread")]
 async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
     let mut vm = Vm::new_minimal_with_jit(LuaVersion::Lua55);
     vm.open_base();
     let result = vm.eval_async("return 1 + 2").await?;
     Ok(())
-}</code></pre></div>
-      <div class="note"><b>可选的 <span class="mono">SendVm</span>。</b><span class="mono">feature = "send"</span> 开关增加一个 <span class="mono">SendVm</span> newtype,它是 <span class="mono">Send</span>(但非 <span class="mono">Sync</span>),因此其克隆可跨线程移动,或在多线程运行时里跨 <span class="mono">.await</span> 持有。它目前仅解释器可用——trace JIT 不在 <span class="mono">SendVm</span> 上运行。实测开销大致落在噪声内。若要 <span class="mono">Send</span> + JIT,请用每线程一个 Vm 的范式。</div>
+}</code></pre>
+      <div class="note"><b>可选的 <code>SendVm</code>。</b><code>feature = "send"</code> 开关增加一个 <code>SendVm</code> newtype,它是 <code>Send</code>(但非 <code>Sync</code>),因此其克隆可跨线程移动,或在多线程运行时里跨 <code>.await</code> 持有。它目前仅解释器可用——trace JIT 不在 <code>SendVm</code> 上运行。实测开销大致落在噪声内。若要 <code>Send</code> + JIT,请用每线程一个 Vm 的范式。</div>
     </section>
-
-    <!-- ============================================ security -->
-    <section id="security">
+<section id="security">
       <h2>安全与沙箱</h2>
       <p>luna 是一个嵌入式 VM:安全边界属于<strong>宿主</strong>,而非脚本。脚本能看到的每一项能力,都是 Rust 代码主动放行的。</p>
       <h3>在范围内</h3>
       <ul>
         <li>脚本驱动的 OS 访问外泄(文件系统、环境变量、网络、子进程)——超出宿主暴露范围的一律阻断。</li>
         <li>资源耗尽——每次调用的指令预算与近似内存上限,会强制抛出一个可捕获的 Lua 错误。</li>
-        <li>字节码加载器逃逸——luna 自有的 dump 格式与 PUC <span class="mono">.luac</span> 加载在沙箱中默认关闭。</li>
-        <li>嵌入方表面零 <span class="mono">unsafe</span>——每个 <span class="mono">cargo doc</span> 可见的 API 都是安全 Rust。</li>
+        <li>字节码加载器逃逸——luna 自有的 dump 格式与 PUC <code>.luac</code> 加载在沙箱中默认关闭。</li>
+        <li>嵌入方表面零 <code>unsafe</code>——每个 <code>cargo doc</code> 可见的 API 都是安全 Rust。</li>
       </ul>
       <h3>不在范围内</h3>
       <ul>
         <li>VM 正确性 bug(当作普通 bug 上报,而非沙箱逃逸)、侧信道抵抗,以及供应链完整性。</li>
         <li>合法但病态脚本导致的拒绝服务——预算约束的是每次调用的 CPU 与内存,而非流向宿主接收端的输出量。</li>
-        <li>一旦打开的 <span class="mono">debug.*</span>,以及 <span class="mono">os.execute</span> / <span class="mono">io.popen</span>——这些等同于交出 Vm 或一个 shell。</li>
+        <li>一旦打开的 <code>debug.*</code>,以及 <code>os.execute</code> / <code>io.popen</code>——这些等同于交出 Vm 或一个 shell。</li>
       </ul>
-      <div class="note warm"><b>刻意的不对称。</b>安全子集的标准库(<span class="mono">base</span>、<span class="mono">math</span>、<span class="mono">string</span>、<span class="mono">table</span>、<span class="mono">coroutine</span>)在构造器上打开。触碰 OS 的库(<span class="mono">io</span>/<span class="mono">os</span>、<span class="mono">debug</span>、<span class="mono">package</span>)则需要一个构建后的句柄——<span class="mono">vm.open_os_io()</span> 之类——使这个信任决策始终显现在宿主代码里。预算在你武装之前是无界的;内存上限在触发后会自行解除,跨请求复用 Vm 前需重新武装。</div>
+      <div class="note"><b>刻意的不对称。</b>安全子集的标准库(<code>base</code>、<code>math</code>、<code>string</code>、<code>table</code>、<code>coroutine</code>)在构造器上打开。触碰 OS 的库(<code>io</code>/<code>os</code>、<code>debug</code>、<code>package</code>)则需要一个构建后的句柄——<code>vm.open_os_io()</code> 之类——使这个信任决策始终显现在宿主代码里。预算在你武装之前是无界的;内存上限在触发后会自行解除,跨请求复用 Vm 前需重新武装。</div>
     </section>
-
-    <!-- ============================================ deploy -->
-    <section id="deploy">
+<section id="deploy">
       <h2>部署</h2>
-      <p>四种打包形态覆盖大多数宿主。luna 自身不做日志——可观测性通过调试钩子机制与 <span class="mono">Vm::eval</span> 周边的宿主计数器接入。</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <p>四种打包形态覆盖大多数宿主。luna 自身不做日志——可观测性通过调试钩子机制与 <code>Vm::eval</code> 周边的宿主计数器接入。</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>形态</th><th>Crate</th><th>说明</th></tr></thead>
           <tbody>
             <tr><td>独立二进制,源码固化</td><td class="mono">luna-aot</td><td>构建期;宿主上无运行时 crate</td></tr>
-            <tr><td>Rust 服务,启用 JIT</td><td class="mono">luna-jit</td><td>引入 Cranelift;跨线程用 <span class="mono">feature = "send"</span></td></tr>
+            <tr><td>Rust 服务,启用 JIT</td><td class="mono">luna-jit</td><td>引入 Cranelift;跨线程用 <code>feature = "send"</code></td></tr>
             <tr><td>Rust 服务,纯解释器</td><td class="mono">luna-core</td><td>零第三方依赖</td></tr>
-            <tr><td>WASM(浏览器 / wasmtime)</td><td class="mono">luna-core</td><td><span class="mono">wasm32-wasip1</span>;JIT 关闭,<span class="mono">io</span>/<span class="mono">os</span> 打桩</td></tr>
+            <tr><td>WASM(浏览器 / wasmtime)</td><td class="mono">luna-core</td><td><code>wasm32-wasip1</code>;JIT 关闭,<code>io</code>/<code>os</code> 打桩</td></tr>
           </tbody>
         </table>
       </div>
-      <p>要最小的容器,就静态链接 musl 并 <span class="mono">FROM scratch</span> 构建;拷贝前先 strip,可去掉 <span class="mono">__LINKEDIT</span> 的绝大部分。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">Dockerfile</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>FROM scratch
+      <p>要最小的容器,就静态链接 musl 并 <code>FROM scratch</code> 构建;拷贝前先 strip,可去掉 <code>__LINKEDIT</code> 的绝大部分。</p>
+      <pre><code>FROM scratch
 COPY ./target/x86_64-unknown-linux-musl/release/service /service
-ENTRYPOINT ["/service"]</code></pre></div>
+ENTRYPOINT ["/service"]</code></pre>
     </section>
-
-    <!-- ============================================ jit-aot -->
-    <section id="jit-aot">
+<section id="jit-aot">
       <h2>JIT 与 AOT</h2>
-      <p>在 <span class="mono">luna-jit</span> 下,trace JIT 默认开启。少量粘性旋钮让你为可预测的延迟与 A/B 测试而调优或关闭它。</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <p>在 <code>luna-jit</code> 下,trace JIT 默认开启。少量粘性旋钮让你为可预测的延迟与 A/B 测试而调优或关闭它。</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>旋钮</th><th>默认</th><th>作用</th></tr></thead>
           <tbody>
             <tr><td class="mono">set_jit_enabled(false)</td><td>true</td><td>为可预测延迟 / 调试复现而关闭</td></tr>
@@ -305,26 +292,24 @@ ENTRYPOINT ["/service"]</code></pre></div>
           </tbody>
         </table>
       </div>
-      <p>热路径计数器(<span class="mono">trace_compiled_count</span>、<span class="mono">trace_dispatched_count</span>、<span class="mono">trace_aborted_count</span>、<span class="mono">trace_deopt_count</span>)帮助诊断一个负载是否真的获得了 JIT 加速。</p>
+      <p>热路径计数器(<code>trace_compiled_count</code>、<code>trace_dispatched_count</code>、<code>trace_aborted_count</code>、<code>trace_deopt_count</code>)帮助诊断一个负载是否真的获得了 JIT 加速。</p>
       <h3>提前编译</h3>
-      <p><span class="mono">luna-aot</span> 把一份 Lua 源码编译成自包含的原生二进制——解析、把字节码发射进数据段、在记录器下预热热 trace、链接静态运行时,并产出可执行文件。</p>
-      <div class="code"><div class="code-top"><div class="dots"><i></i><i></i><i></i></div><span class="fname">shell</span><button class="copy" data-copied="已复制 ✓">复制</button></div><pre><code>cargo install luna-aot
+      <p><code>luna-aot</code> 把一份 Lua 源码编译成自包含的原生二进制——解析、把字节码发射进数据段、在记录器下预热热 trace、链接静态运行时,并产出可执行文件。</p>
+      <pre><code>cargo install luna-aot
 luna-aot compile hello.lua --out hello
 ./hello                    # 独立原生二进制
 
 # 从 macOS 宿主交叉编译到 Linux
-luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre></div>
-      <p>Cranelift 的 <span class="mono">all-arch</span> 后端无需重建即可交叉编译到每个目标。一个 strip 后的 release 二进制落在 <strong>4.5 MiB</strong> 左右;运行时地板占主导,因此一个单行脚本与一个 1.5k 行脚本仅相差约 82 KiB。</p>
+luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre>
+      <p>Cranelift 的 <code>all-arch</code> 后端无需重建即可交叉编译到每个目标。一个 strip 后的 release 二进制落在 <strong>4.5 MiB</strong> 左右;运行时地板占主导,因此一个单行脚本与一个 1.5k 行脚本仅相差约 82 KiB。</p>
     </section>
-
-    <!-- ============================================ compatibility -->
-    <section id="compatibility">
+<section id="compat">
       <h2>兼容性</h2>
-      <p>luna 在一个二进制里实现了 Lua 5.1 – 5.5 与 MacroLua。方言逐 Vm 选定;同一进程可同时承载多种。逐特性矩阵见首页的<a class="xref" href="index.html#dialects">方言数据表</a>。</p>
+      <p>luna 在一个二进制里实现了 Lua 5.1 – 5.5 与 MacroLua。方言逐 Vm 选定;同一进程可同时承载多种。逐特性矩阵见首页的<a href="index.html#dialects">方言数据表</a>。</p>
       <h3>标准库</h3>
-      <p>适合沙箱嵌入的白名单子集通过 <span class="mono">Vm::open_*()</span> 方法暴露:</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <p>适合沙箱嵌入的白名单子集通过 <code>Vm::open_*()</code> 方法暴露:</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>库</th><th>方法</th><th>覆盖</th></tr></thead>
           <tbody>
             <tr><td class="mono">base</td><td class="mono">open_base</td><td>完整</td></tr>
@@ -339,92 +324,77 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
         </table>
       </div>
       <h3>C API</h3>
-      <p>luna 提供一个 <span class="mono">cdylib</span> / <span class="mono">staticlib</span>,暴露 <span class="mono">lua.h</span> 兼容的 C ABI 子集。现有链接 <span class="mono">liblua</span> 的 PUC 使用方,可在其覆盖范围内把 luna 当作 drop-in:状态生命周期、值 push/read、栈操作、表 API、<span class="mono">lua_call</span> / <span class="mono">lua_pcall</span>,以及脚本加载。一个 13 项的一致性测试套件为其兜底。userdata、C 侧协程与延续暂未覆盖——这些请用更丰富的 Rust API。</p>
+      <p>luna 提供一个 <code>cdylib</code> / <code>staticlib</code>,暴露 <code>lua.h</code> 兼容的 C ABI 子集。现有链接 <code>liblua</code> 的 PUC 使用方,可在其覆盖范围内把 luna 当作 drop-in:状态生命周期、值 push/read、栈操作、表 API、<code>lua_call</code> / <code>lua_pcall</code>,以及脚本加载。一个 13 项的一致性测试套件为其兜底。userdata、C 侧协程与延续暂未覆盖——这些请用更丰富的 Rust API。</p>
       <h3>字节码</h3>
-      <p>luna 生成与 PUC 编译器二进制格式一致的按方言字节码,因此 PUC 编译的 <span class="mono">.luac</span> 可直接加载,luna 转储的字节码也能在 PUC 中加载。字节码加载在<strong>沙箱中默认关闭</strong>——精心构造的字节码可绕过编译器强制的类型检查。</p>
+      <p>luna 生成与 PUC 编译器二进制格式一致的按方言字节码,因此 PUC 编译的 <code>.luac</code> 可直接加载,luna 转储的字节码也能在 PUC 中加载。字节码加载在<strong>沙箱中默认关闭</strong>——精心构造的字节码可绕过编译器强制的类型检查。</p>
     </section>
-
-    <!-- ============================================ architecture -->
-    <section id="architecture">
+<section id="architecture">
       <h2>架构</h2>
-      <p>七个已发布 crate,其中三个是你直接依赖的。解释器核心不带任何第三方依赖;JIT 通过 trait 接入,因此替换或移除后端是 <span class="mono">luna-jit</span> 的事,永不触碰 <span class="mono">luna-core</span> 的 API。</p>
-      <div class="sheet-wrap">
-        <table class="sheet">
+      <p>七个已发布 crate,其中三个是你直接依赖的。解释器核心不带任何第三方依赖;JIT 通过 trait 接入,因此替换或移除后端是 <code>luna-jit</code> 的事,永不触碰 <code>luna-core</code> 的 API。</p>
+      <div class="tablewrap">
+        <table>
           <thead><tr><th>Crate</th><th>依赖</th><th>表面</th></tr></thead>
           <tbody>
             <tr><td class="mono">luna-core</td><td>0 第三方</td><td>词法、语法、编译器、解释器、运行时、标准库、GC、模式引擎、JIT trait</td></tr>
-            <tr><td class="mono">luna-jit-derive</td><td>syn + quote</td><td><span class="mono">#[derive(LuaUserdata)]</span> proc-macro</td></tr>
-            <tr><td class="mono">luna-jit</td><td>luna-core + Cranelift ×6</td><td>Cranelift 后端、C ABI、<span class="mono">luna</span> CLI、嵌入门面</td></tr>
+            <tr><td class="mono">luna-jit-derive</td><td>syn + quote</td><td><code>#[derive(LuaUserdata)]</code> proc-macro</td></tr>
+            <tr><td class="mono">luna-jit</td><td>luna-core + Cranelift ×6</td><td>Cranelift 后端、C ABI、<code>luna</code> CLI、嵌入门面</td></tr>
             <tr><td class="mono">luna-runtime-helpers</td><td>luna-jit</td><td>AOT 二进制的静态运行时入口</td></tr>
             <tr><td class="mono">luna-aot</td><td>luna-core + luna-jit</td><td>构建期 AOT 编译器</td></tr>
           </tbody>
         </table>
       </div>
-      <p>零依赖的 <span class="mono">luna-core</span> 契约由 CI 中的 <span class="mono">cargo deny check</span> 强制。源码被分为三类——<strong>石头</strong>(与业务无关的地基:模式引擎、堆、值布局)、<strong>钢筋</strong>(Lua 领域原语:编译器、分派器、JIT 后端)与<strong>水泥</strong>(宿主胶水:CLI、C ABI、标准库绑定)——各有各的改动纪律与 review 深度。</p>
+      <p>零依赖的 <code>luna-core</code> 契约由 CI 中的 <code>cargo deny check</code> 强制。源码被分为三类——<strong>石头</strong>(与业务无关的地基:模式引擎、堆、值布局)、<strong>钢筋</strong>(Lua 领域原语:编译器、分派器、JIT 后端)与<strong>水泥</strong>(宿主胶水:CLI、C ABI、标准库绑定)——各有各的改动纪律与 review 深度。</p>
     </section>
-
-    <!-- ============================================ performance -->
-    <section id="performance">
+<section id="performance">
       <h2>性能</h2>
       <p>luna 刻意不发布单一头条比率。一个胜出的 microbench 单元是营销产物;落后的那个才是值得追的信号。任何超过参考实现 1.5× 的差距,都会触发对该负载逐阶段、并排的分解——而非表层的打磨。</p>
       <p>随发布交付的是可复现基线。内存在 dhat 下跨五个负载测量;任一稳态回归超过 5% 都是已跟踪的告警。</p>
-      <div class="stats">
-        <div class="stat"><div class="n">33<span class="u">KB</span></div><div class="l">cold_start 峰值 · 435 次分配</div></div>
-        <div class="stat"><div class="n">71<span class="u">KB</span></div><div class="l">repl_idle · 100 次求值</div></div>
-        <div class="stat"><div class="n">523<span class="u">KB</span></div><div class="l">alloc_collect 稳态 · 1M + 10 GC</div></div>
-        <div class="stat"><div class="n">63<span class="u">KB</span></div><div class="l">userdata_lifecycle · 200 + 终结器</div></div>
+      <div>
+        <div><div class="n">33<span>KB</span></div><div>cold_start 峰值 · 435 次分配</div></div>
+        <div><div class="n">71<span>KB</span></div><div>repl_idle · 100 次求值</div></div>
+        <div><div class="n">523<span>KB</span></div><div>alloc_collect 稳态 · 1M + 10 GC</div></div>
+        <div><div class="n">63<span>KB</span></div><div>userdata_lifecycle · 200 + 终结器</div></div>
       </div>
     </section>
-
-    <!-- ============================================ versioning -->
-    <section id="versioning">
+<section id="versioning">
       <h2>版本策略与稳定性</h2>
       <p>公共 API 被划分为一个稳定表面(破坏性改动需 SemVer 主版本递增)与一个不稳定 / 内部表面(可在小版本中为性能工作而变动)。</p>
       <ul>
-        <li><strong>稳定:</strong><span class="mono">luna_jit</span> 门面类型(<span class="mono">Lua</span>、<span class="mono">LuaFunction</span>、<span class="mono">LuaTable</span>、<span class="mono">LuaRoot</span>、<span class="mono">LuaSandboxBuilder</span>)、重新导出的核心(<span class="mono">Vm</span>、<span class="mono">LuaVersion</span>、<span class="mono">Value</span>、<span class="mono">LuaError</span>)、derive 宏,以及 <span class="mono">lua.h</span> 兼容的 C ABI。</li>
-        <li><strong>不稳定 / 内部:</strong><span class="mono">luna_core::{compiler, frontend, jit, pattern}</span> 与 JIT 后端内部——可为优化自由变动。</li>
-        <li><strong>字节码:</strong>按方言的二进制格式是稳定的;PUC <span class="mono">.luac</span> 文件在整条线上都能加载。</li>
+        <li><strong>稳定:</strong><code>luna_jit</code> 门面类型(<code>Lua</code>、<code>LuaFunction</code>、<code>LuaTable</code>、<code>LuaRoot</code>、<code>LuaSandboxBuilder</code>)、重新导出的核心(<code>Vm</code>、<code>LuaVersion</code>、<code>Value</code>、<code>LuaError</code>)、derive 宏,以及 <code>lua.h</code> 兼容的 C ABI。</li>
+        <li><strong>不稳定 / 内部:</strong><code>luna_core::{compiler, frontend, jit, pattern}</code> 与 JIT 后端内部——可为优化自由变动。</li>
+        <li><strong>字节码:</strong>按方言的二进制格式是稳定的;PUC <code>.luac</code> 文件在整条线上都能加载。</li>
       </ul>
-      <div class="note">完整的稳定 / 不稳定条目清单见嵌入手册的 API 契约小节与 <span class="mono">CHANGELOG.md</span>。<a class="xref" href="https://docs.rs/luna-jit">docs.rs</a> 上的 rustdoc 参考是逐条目的权威来源。</div>
+      <div class="note">完整的稳定 / 不稳定条目清单见嵌入手册的 API 契约小节与 <code>CHANGELOG.md</code>。<a href="https://docs.rs/luna-jit">docs.rs</a> 上的 rustdoc 参考是逐条目的权威来源。</div>
     </section>
-
-  </main>
-</div>
-
-<footer class="foot">
-  <div class="wrap">
-    <div class="foot-grid">
-      <div class="foot-brand">
-        <a class="brand" href="./"><img src="/assets/luna-icon.svg" alt="" class="mark"><span>lun<b>a</b></span><span class="by">by GOLIA</span></a>
-        <p>纯 Rust 实现的 Lua 运行时。由 GOLIA 株式会社构建与维护。</p>
-      </div>
-      <div class="foot-col">
-        <h5>文档</h5>
-        <a href="#getting-started">快速上手</a>
-        <a href="#embedding">嵌入</a>
-        <a href="#compatibility">兼容性</a>
-        <a href="#security">安全</a>
-      </div>
-      <div class="foot-col">
-        <h5>包</h5>
-        <a href="https://crates.io/crates/luna-jit">luna-jit</a>
-        <a href="https://crates.io/crates/luna-core">luna-core</a>
-        <a href="https://docs.rs/luna-jit">docs.rs</a>
-      </div>
-      <div class="foot-col">
-        <h5>项目</h5>
-        <a href="https://github.com/goliajp/luna">GitHub</a>
-        <a href="https://github.com/goliajp/luna/blob/master/CHANGELOG.md">更新日志</a>
-        <a href="https://github.com/goliajp/luna/blob/master/LICENSE-MIT">许可</a>
-      </div>
-    </div>
-    <div class="foot-base">
-      <span>© 2026 GOLIA 株式会社 · luna 以 MIT / Apache-2.0 双许可发布</span>
-      <span class="mono">luna.golia.jp</span>
     </div>
   </div>
-</footer>
 
-<script src="../assets/app.js"></script>
+  <footer>
+    <div>
+      <a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA">
+        <img src="../assets/golia-wordmark.png" alt="GOLIA" width="92" height="20">
+      </a>
+      <div>luna 采用 MIT / Apache-2.0 双许可。</div>
+    </div>
+    <div class="links">
+      <a href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+        GitHub
+        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+      </a>
+      <a href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+        crates.io
+        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+      </a>
+      <a href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/><path d="M8 7h6"/><path d="M8 11h8"/></svg>
+        docs.rs
+        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
+      </a>
+    </div>
+  </footer>
+
+</main>
 </body>
 </html>
