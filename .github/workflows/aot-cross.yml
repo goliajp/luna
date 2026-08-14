@@ -92,7 +92,13 @@ jobs:
   wine-mingw-pe-run:
     name: Wine MinGW PE actual-run
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # v2.20 D5: soft-fail removed. This job had never once completed —
+    # five stacked problems (no git in image, standalone luna-aot cannot
+    # cross-compile, an assertion that could not fail, wrong wine binary
+    # name, wine64 package gone on noble), each invisible until the one
+    # before it was fixed, all of them masked by continue-on-error.
+    # Observed green on run 31796441342: PE compiled, ran under wine-9.0,
+    # output matched.
     steps:
       - uses: actions/checkout@v7
         with:
