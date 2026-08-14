@@ -34,7 +34,7 @@
 
   <section class="frontmatter">
     <div class="eyebrow">v3.0.0 · MIT / Apache-2.0</div>
-    <h1><em>純粋な Rust</em> による Lua ランタイム。</h1>
+    <h1><em>純粋な Rust</em> による Lua ランタイム</h1>
     <p class="abstract">5 つの Lua ダイアレクトと MacroLua を 1 つのバイナリに。依存ゼロのインタプリタコア、Cranelift ベースのトレース JIT、ネイティブへの事前コンパイル、そして信頼できないスクリプトを埋め込むために設計されたサンドボックス。</p>
     <div class="figures">
       <div class="figure"><div class="v">5.1 – 5.5</div><div class="k">種のダイアレクトと MacroLua</div></div>
@@ -52,7 +52,7 @@
 
   <section id="what">
     <div class="sechead">
-      <h2>埋め込みたいすべての Lua を、1 つのランタイムで。</h2>
+      <h2>埋め込みたいすべての Lua を、1 つのランタイムで</h2>
       <p class="lede">luna は Lua 言語ファミリを安全な Rust だけで一から実装しています。C はなく、埋め込み側が触れる表層に <code>unsafe</code> もありません。必要な依存量を選び、ワークロードの要求に応じて JIT と AOT の各層へ育てていけます。</p>
     </div>
     <div class="cards">
@@ -85,7 +85,7 @@
 
   <section id="parity">
     <div class="sechead">
-      <h2>参照 Lua とバイト単位で一致、プッシュごとに検証。</h2>
+      <h2>参照 Lua とバイト単位で一致、プッシュごとに検証</h2>
       <p class="lede">互換性はここでは主張ではなく計測です。514 個の fixture からなる非公開コーパスを、ソースからビルドした純正 PUC インタプリタ——5.1.5、5.2.4、5.3.6、5.4.8、5.5.1——と突き合わせ、すべてがバイト単位で一致し skip ゼロであって初めてコミットがグリーンになります。</p>
     </div>
     <div class="cards">
@@ -106,7 +106,7 @@
 
   <section id="dialects">
     <div class="sechead">
-      <h2>各ダイアレクトで何ができるか。</h2>
+      <h2>各ダイアレクトで何ができるか</h2>
       <p class="lede">機能の可否は <code>src/version.rs</code> の能力判定で決まります。luna はダイアレクトごとに PUC コンパイラ形式と一致するバイトコードを出力するため、PUC でコンパイルした <code>.luac</code> がそのまま読み込めます。</p>
     </div>
     <div class="tablewrap">
@@ -142,7 +142,7 @@
 
   <section id="architecture">
     <div class="sechead">
-      <h2>依存の表面は、あなたが選ぶ。</h2>
+      <h2>依存の表面は、あなたが選ぶ</h2>
       <p class="lede">luna は 7 つの公開済み crate からなる Cargo ワークスペースとして提供されます。うち 3 つが直接依存するものです。インタプリタコアは単独で成立し、JIT と AOT の各層はトレイト境界越しに積み上がるため、バックエンドの削除や差し替えがコア API に触れることはありません。</p>
     </div>
     <div class="cards">
@@ -187,7 +187,7 @@
 
   <section id="start">
     <div class="sechead">
-      <h2>4 行で埋め込む。</h2>
+      <h2>4 行で埋め込む</h2>
       <p class="lede">必要な依存量に合う crate を追加し、対象ダイアレクトの <code>Vm</code> を構築して評価します。</p>
     </div>
 <div class="codeblock">

@@ -34,7 +34,7 @@
 
   <section class="frontmatter">
     <div class="eyebrow">v3.0.0 · MIT / Apache-2.0</div>
-    <h1>用<em>纯 Rust</em>打造的 Lua 运行时。</h1>
+    <h1>用<em>纯 Rust</em> 打造的 Lua 运行时</h1>
     <p class="abstract">单个二进制里容纳五种 Lua 方言与 MacroLua。一个零依赖的解释器核心、一个基于 Cranelift 的 trace JIT、提前编译成原生二进制，以及一个为嵌入不受信任脚本而设计的沙箱。</p>
     <div class="figures">
       <div class="figure"><div class="v">5.1 – 5.5</div><div class="k">种方言，外加 MacroLua</div></div>
@@ -52,7 +52,7 @@
 
   <section id="what">
     <div class="sechead">
-      <h2>一个运行时，覆盖你要嵌入的每一种 Lua。</h2>
+      <h2>一个运行时，覆盖你要嵌入的每一种 Lua</h2>
       <p class="lede">luna 用安全的 Rust 从头实现了整个 Lua 语言家族——没有 C，嵌入方接触到的表层也没有 <code>unsafe</code>。按需选择依赖体量，再随工作负载增长逐步用上 JIT 与 AOT 两层。</p>
     </div>
     <div class="cards">
@@ -85,7 +85,7 @@
 
   <section id="parity">
     <div class="sechead">
-      <h2>对照参考 Lua 逐字节相等，每次推送都验。</h2>
+      <h2>对照参考 Lua 逐字节相等，每次推送都验</h2>
       <p class="lede">兼容性在这里是量出来的，不是声称的。一份 514 个 fixture 的私有语料库，对照从源码构建的原版 PUC 解释器——5.1.5、5.2.4、5.3.6、5.4.8 与 5.5.1——每一个都必须逐字节一致、零 skip，提交才算绿。</p>
     </div>
     <div class="cards">
@@ -106,7 +106,7 @@
 
   <section id="dialects">
     <div class="sechead">
-      <h2>每种方言能做什么。</h2>
+      <h2>每种方言能做什么</h2>
       <p class="lede">特性的可用性由 <code>src/version.rs</code> 中的能力判定驱动。luna 生成的按方言字节码与 PUC 编译器格式一致，因此 PUC 编译出的 <code>.luac</code> 文件可直接加载。</p>
     </div>
     <div class="tablewrap">
@@ -142,7 +142,7 @@
 
   <section id="architecture">
     <div class="sechead">
-      <h2>自己决定依赖表面。</h2>
+      <h2>自己决定依赖表面</h2>
       <p class="lede">luna 以一个含七个已发布 crate 的 Cargo 工作区形式交付，其中三个是你直接依赖的。解释器核心独立成立；JIT 与 AOT 两层通过 trait 边界叠加其上，因此移除或替换后端不会触及核心 API。</p>
     </div>
     <div class="cards">
@@ -187,7 +187,7 @@
 
   <section id="start">
     <div class="sechead">
-      <h2>四行就能嵌入。</h2>
+      <h2>四行就能嵌入</h2>
       <p class="lede">加入符合你所需体量的 crate，为目标方言构造一个 <code>Vm</code>，然后求值。</p>
     </div>
 <div class="codeblock">
