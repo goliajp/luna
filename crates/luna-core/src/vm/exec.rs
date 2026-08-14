@@ -8670,6 +8670,13 @@ impl Vm {
         match v {
             Value::Str(s) => Ok(MmOut::Done(Value::Int(s.len() as i64))),
             Value::Table(t) => {
+                // PUC 5.1's `__len` applies to userdata only — `luaV_objlen`
+                // there takes the raw border for a table without consulting
+                // the metatable, so `#setmetatable({}, {__len = f})` is 0 on
+                // 5.1 and 7 on 5.2+. Verified against stock 5.1.5 / 5.2.4.
+                if self.version() == crate::version::LuaVersion::Lua51 {
+                    return Ok(MmOut::Done(Value::Int(t.len())));
+                }
                 let mm = self.get_mm(v, Mm::Len);
                 if mm.is_nil() {
                     Ok(MmOut::Done(Value::Int(t.len())))
