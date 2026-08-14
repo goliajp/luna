@@ -184,6 +184,15 @@ pub fn getobjname(proto: &Proto, lastpc: usize, reg: u32) -> Option<(&'static st
         // C-operand limit, or an explicit `t[k]`): name from the key register.
         Op::GetTable => Some((gxf(proto, setpc, i, false), rname(proto, setpc, i.c()))),
         Op::GetI => Some(("field", "integer index".to_string())),
+        // A named-vararg table read (`function f(...t) ... t.k ...`) compiles
+        // to VARGIDX rather than GETFIELD: there is no table object to index,
+        // so the key arrives in a register (`R[A] := vararg[R[C]]`) loaded by
+        // a preceding LOADK. Name it the same way GETTABLE does. Without this
+        // arm every error mentioning such a value lost its "(field 'k')"
+        // suffix — 5.5.1's errors.lua added a case that pins exactly this.
+        // `gxf` is not consulted: a vararg table can never be _ENV, so the
+        // access is always a field, never a global.
+        Op::VargIdx => Some(("field", rname(proto, setpc, i.c()))),
         Op::SelfOp => {
             // SELF's C is RK: a constant when the k-flag is set, otherwise a
             // register holding the (constant-loaded) key. The latter path is

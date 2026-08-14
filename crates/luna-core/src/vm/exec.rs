@@ -5194,7 +5194,38 @@ impl Vm {
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
         let extra = self.subject_varinfo(v);
         let tn = self.obj_typename(v);
-        self.rt_err(&format!("attempt to {what} a {tn} value{extra}"))
+        let msg = self.compose_type_err(what, &tn, &extra);
+        self.rt_err(&msg)
+    }
+
+    /// Assemble a `luaG_typeerror` / `luaG_callerror` message in the dialect's
+    /// word order.
+    ///
+    /// PUC ≤5.2 names the operand first — `attempt to call field 'f' (a nil
+    /// value)`. 5.3 flipped it to type-first — `attempt to call a nil value
+    /// (field 'f')`. luna emitted the 5.3+ form on every dialect, so every
+    /// such error was worded wrong under 5.1/5.2.
+    ///
+    /// Two shapes carry no operand name on ≤5.2 and must collapse to the bare
+    /// message: an absent varinfo (identical across dialects), and a
+    /// metamethod target — ≤5.2's `luaG_typeerror` only names locals, globals,
+    /// fields, upvalues and methods, so `(metamethod 'add')` has no ≤5.2
+    /// counterpart and is dropped rather than reworded. All four shapes were
+    /// measured against stock 5.1.5 / 5.2.4 / 5.5.1 before this was written.
+    fn compose_type_err(&self, what: &str, tn: &str, extra: &str) -> String {
+        if self.version() > crate::version::LuaVersion::Lua52 {
+            return format!("attempt to {what} a {tn} value{extra}");
+        }
+        // `extra` is "" or " (kind 'name')" — unwrap to "kind 'name'".
+        let inner = extra
+            .trim_start()
+            .trim_start_matches('(')
+            .trim_end_matches(')');
+        if inner.is_empty() || inner.starts_with("metamethod") {
+            format!("attempt to {what} a {tn} value")
+        } else {
+            format!("attempt to {what} {inner} (a {tn} value)")
+        }
     }
 
     /// Name the offending operand of the current instruction (PUC varinfo) for
@@ -5267,7 +5298,8 @@ impl Vm {
     fn call_err(&mut self, v: Value) -> LuaError {
         let extra = self.call_target_varinfo(v);
         let tn = self.obj_typename(v);
-        self.rt_err(&format!("attempt to call a {tn} value{extra}"))
+        let msg = self.compose_type_err("call", &tn, &extra);
+        self.rt_err(&msg)
     }
 
     /// Name the offending call target. A metamethod dispatch pushes a `Cont`
@@ -8638,6 +8670,13 @@ impl Vm {
         match v {
             Value::Str(s) => Ok(MmOut::Done(Value::Int(s.len() as i64))),
             Value::Table(t) => {
+                // PUC 5.1's `__len` applies to userdata only — `luaV_objlen`
+                // there takes the raw border for a table without consulting
+                // the metatable, so `#setmetatable({}, {__len = f})` is 0 on
+                // 5.1 and 7 on 5.2+. Verified against stock 5.1.5 / 5.2.4.
+                if self.version() == crate::version::LuaVersion::Lua51 {
+                    return Ok(MmOut::Done(Value::Int(t.len())));
+                }
                 let mm = self.get_mm(v, Mm::Len);
                 if mm.is_nil() {
                     Ok(MmOut::Done(Value::Int(t.len())))

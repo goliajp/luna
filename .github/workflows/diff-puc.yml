@@ -64,34 +64,44 @@ jobs:
         run: |
           $PUC_LUA_51 -v && $PUC_LUA_52 -v && $PUC_LUA_53 -v && $PUC_LUA_54 -v
 
-      - name: Install PUC lua-5.5 (apt or build-from-source)
-        # Ubuntu LTS may pin to 5.4; build PUC 5.5 from source if
-        # apt's `lua5.5` package isn't available. The 5.5.0
-        # tarball is what `tests/official/lua-5.5.0-tests/` is
-        # already aligned with, so the source pin is internally
-        # consistent.
+      - name: Install PUC lua-5.5.1 (build from source)
+        # v2.18 P1: pinned to 5.5.1 (released 2026-07-24), superseding
+        # 5.5.0. The pin is exact and the build is always from source.
+        #
+        # The previous version tried `apt-get install lua5.5` first and
+        # only fell back to source. That made the differential basis
+        # depend on whatever the runner image happened to ship, which is
+        # the same class of problem as an unpinned reference: the
+        # comparison silently changes when the image updates. Arc
+        # charter §2.5 calls for build-from-source pinned to the vendored
+        # suite version, so the apt path is gone.
+        #
+        # The version assertion below exists so this step can FAIL. A
+        # pin nobody checks is not a pin (v2.17 gate-audit lesson).
         run: |
-          if apt-cache show lua5.5 >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq lua5.5
-            echo "PUC_LUA=/usr/bin/lua5.5" >> "$GITHUB_ENV"
-          else
-            # apt has no lua5.5 — build from source per the
-            # already-vendored test suite version.
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq build-essential
-            mkdir -p /tmp/puc-build
-            cd /tmp/puc-build
-            curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
-            tar -xzf lua.tar.gz
-            cd lua-5.5.0
-            # 5.5 dropped the 5.4-era `linux-readline` target; plain
-            # `linux` builds without readline, which the stdin-driven
-            # diff harness doesn't need anyway.
-            make linux
-            sudo make install INSTALL_TOP=/usr/local
-            echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+          mkdir -p /tmp/puc-build && cd /tmp/puc-build
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
+          tar -xzf lua.tar.gz
+          cd lua-5.5.1
+          # 5.5 dropped the 5.4-era `linux-readline` target; plain
+          # `linux` builds without readline, which the stdin-driven
+          # diff harness doesn't need anyway.
+          make linux
+          sudo make install INSTALL_TOP=/usr/local
+          echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
+          echo "PUC_LUA_55=/usr/local/bin/lua" >> "$GITHUB_ENV"
+
+      - name: Assert the 5.5 interpreter is exactly 5.5.1
+        run: |
+          set -euo pipefail
+          GOT=$(/usr/local/bin/lua -v 2>&1)
+          case "$GOT" in
+            "Lua 5.5.1"*) echo "PUC 5.5 pin OK: $GOT" ;;
+            *) echo "::error::expected Lua 5.5.1, got: $GOT"; exit 1 ;;
+          esac
 
       - name: Show PUC version
         run: $PUC_LUA -v

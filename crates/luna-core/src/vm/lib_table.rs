@@ -2,7 +2,7 @@
 //! comparators (std's sort would panic on non-total orders).
 
 use crate::runtime::Value;
-use crate::vm::builtins::{arg_error, check_table, check_table_at, raise_str};
+use crate::vm::builtins::{arg_error, check_table, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -16,22 +16,52 @@ pub(crate) fn open_table(vm: &mut Vm) {
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
     };
+    // v2.18: the table library's *surface* is dialect-specific, and luna
+    // used to register the union of every dialect's functions. Measured
+    // against stock PUC (`for n in pairs(table)`), that exposed
+    // `create`/`move`/`pack`/`unpack` on 5.1, `create`/`move` on 5.2 and
+    // `create` on 5.3/5.4, while omitting 5.1's `setn` and 5.2's `maxn`.
+    // An embedder writing 5.1-targeted Lua would silently pick up 5.5 API.
+    //
+    // Ordering note: the enum runs Lua51 < Lua52 < Lua53 < Lua54 <
+    // MacroLua < Lua55, so MacroLua (a 5.4 base) inherits exactly the 5.4
+    // surface from these comparisons — pack/unpack/move but no create.
+    use crate::version::LuaVersion as V;
+    let ver = vm.version();
+
+    // Present in every dialect.
     set(vm, "insert", t_insert);
     set(vm, "remove", t_remove);
     set(vm, "concat", t_concat);
-    set(vm, "unpack", t_unpack);
-    set(vm, "pack", t_pack);
-    set(vm, "move", t_move);
-    set(vm, "create", t_create);
     set(vm, "sort", t_sort);
-    // PUC 5.1 had `table.getn` (length, replaced by `#`), `table.foreach`,
-    // `table.foreachi` (iterator helpers, replaced by `pairs`/`ipairs`).
-    // 5.2+ dropped them; keep them registered for the 5.1 suite.
-    if vm.version() == crate::version::LuaVersion::Lua51 {
+
+    // 5.2+ — `pack`/`unpack` live in the table library. On 5.1 `unpack` is
+    // a global only (registered in builtins), and `table.unpack` does not
+    // exist.
+    if ver >= V::Lua52 {
+        set(vm, "unpack", t_unpack);
+        set(vm, "pack", t_pack);
+    }
+    // 5.3+ — `table.move`.
+    if ver >= V::Lua53 {
+        set(vm, "move", t_move);
+    }
+    // 5.5+ — `table.create`.
+    if ver >= V::Lua55 {
+        set(vm, "create", t_create);
+    }
+    // 5.1 and 5.2 — `table.maxn`, dropped in 5.3.
+    if ver <= V::Lua52 {
+        set(vm, "maxn", t_maxn);
+    }
+    // 5.1 only — `getn` (length, replaced by `#`), `foreach`/`foreachi`
+    // (replaced by `pairs`/`ipairs`), and `setn`, which PUC 5.1 keeps
+    // registered purely to raise "'setn' is obsolete".
+    if ver == V::Lua51 {
         set(vm, "getn", t_getn);
         set(vm, "foreach", t_foreach);
         set(vm, "foreachi", t_foreachi);
-        set(vm, "maxn", t_maxn);
+        set(vm, "setn", t_setn);
     }
     vm.set_global("table", Value::Table(t))
         .expect("stdlib registration");
@@ -40,6 +70,106 @@ pub(crate) fn open_table(vm: &mut Vm) {
     // no-op when phase != Propagate, where t was born current_white.
     vm.barrier_back_table(t);
     // the global unpack alias exists in 5.1 mode only (P08)
+}
+
+// ── Dialect-aware table-argument handling (v2.18) ──────────────────────
+//
+// PUC's table library changed shape twice, and luna implemented neither
+// gradient — it used a hard type check (like <=5.2) together with
+// metamethod-aware element access (like 5.3+), so it matched no dialect
+// exactly.
+//
+// Measured against stock binaries:
+//
+//   5.1  `luaL_checktype` + `lua_rawgeti`/`lua_rawseti`  (hard, raw)
+//   5.2  same                                            (hard, raw)
+//   5.3+ `checktab` + `lua_geti`/`lua_seti`               (duck-typed,
+//                                                          metamethod)
+//
+// The visible consequence, concatenating a proxy table whose contents
+// live behind `__index`: 5.1 gives "", 5.2 raises "invalid value (nil)
+// at index 1", 5.3+ reads through and gives "3,1,2".
+
+/// PUC `ltablib.c` argument-check flags (5.3+).
+const TAB_R: u8 = 1;
+const TAB_W: u8 = 2;
+const TAB_L: u8 = 4;
+const TAB_RW: u8 = TAB_R | TAB_W;
+
+/// PUC `checktab`: the argument must be a table, or behave like one.
+///
+/// On <=5.2 there is no such notion — `luaL_checktype` demands a real
+/// table — so the flags are ignored there and any non-table is rejected.
+///
+/// On 5.3+ a non-table passes when its metatable carries every metamethod
+/// the caller needs. 5.5 additionally exempts strings from the `TAB_L`
+/// requirement ("strings don't need '__len' to have a length"), which is
+/// why `table.concat("abc")` reaches its element loop on 5.5 but is
+/// rejected outright on 5.3/5.4.
+fn checktab(vm: &mut Vm, v: Value, what: u8, argn: u32, who: &str) -> Result<(), LuaError> {
+    if matches!(v, Value::Table(_)) {
+        return Ok(());
+    }
+    let reject = |vm: &mut Vm| {
+        let got = vm.obj_typename(v);
+        Err(arg_error(
+            vm,
+            argn,
+            who,
+            &format!("table expected, got {got}"),
+        ))
+    };
+    if vm.version() <= crate::version::LuaVersion::Lua52 {
+        return reject(vm);
+    }
+    if vm.metatable_of(v).is_none() {
+        return reject(vm);
+    }
+    let strings_skip_len =
+        vm.version() >= crate::version::LuaVersion::Lua55 && matches!(v, Value::Str(_));
+    let ok = (what & TAB_R == 0 || !vm.get_mm(v, crate::vm::exec::Mm::Index).is_nil())
+        && (what & TAB_W == 0 || !vm.get_mm(v, crate::vm::exec::Mm::NewIndex).is_nil())
+        && (what & TAB_L == 0
+            || strings_skip_len
+            || !vm.get_mm(v, crate::vm::exec::Mm::Len).is_nil());
+    if ok { Ok(()) } else { reject(vm) }
+}
+
+/// Element read: raw on <=5.2 (`lua_rawgeti`), through `__index` on 5.3+
+/// (`lua_geti`).
+fn tab_geti(vm: &mut Vm, tv: Value, i: i64) -> Result<Value, LuaError> {
+    if vm.version() <= crate::version::LuaVersion::Lua52 {
+        // checktab already guaranteed a real table on these dialects.
+        return Ok(match tv {
+            Value::Table(t) => t.get(Value::Int(i)),
+            _ => Value::Nil,
+        });
+    }
+    vm.index_value(tv, Value::Int(i))
+}
+
+/// Element write: raw on <=5.2 (`lua_rawseti`), through `__newindex` on
+/// 5.3+ (`lua_seti`).
+fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
+    if vm.version() <= crate::version::LuaVersion::Lua52 {
+        if let Value::Table(t) = tv {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            let r = unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i), v);
+            debug_assert!(r.is_ok(), "integer key is never nil/NaN");
+            let _ = r;
+            vm.barrier_back_table(t);
+        }
+        return Ok(());
+    }
+    vm.newindex_value(tv, Value::Int(i), v)
+}
+
+/// 5.1 `table.setn(t, n)` — PUC 5.1 keeps this registered solely to raise
+/// "'setn' is obsolete" (ltablib.c `setn`); the manual-length mechanism it
+/// belonged to was removed in 5.1 itself. Registered on 5.1 only so the
+/// dialect's table surface matches stock PUC.
+fn t_setn(vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+    Err(raise_str(vm, "'setn' is obsolete"))
 }
 
 /// 5.1 `table.getn(t)` — synonymous with `#t` (luna's `checked_len`).
@@ -84,7 +214,7 @@ fn t_foreachi(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let f = vm.nat_arg(fs, nargs, 1);
     let n = vm.checked_len(tv)?;
     for i in 1..=n {
-        let v = vm.index_value(tv, Value::Int(i))?;
+        let v = tab_geti(vm, tv, i)?;
         let rs = vm.call_value(f, &[Value::Int(i), v])?;
         if let Some(r) = rs.first().copied()
             && !r.is_nil()
@@ -126,7 +256,7 @@ fn t_maxn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "insert")?;
+    checktab(vm, tv, TAB_RW | TAB_L, 1, "insert")?;
     let n = vm.checked_len(tv)?;
     // first empty slot; PUC lets this overflow (a __len of maxinteger inserts
     // at mininteger), so the shift loop must not run for the 2-argument form.
@@ -142,21 +272,21 @@ fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             }
             let mut i = e;
             while i > pos {
-                let mv = vm.index_value(tv, Value::Int(i - 1))?;
-                vm.newindex_value(tv, Value::Int(i), mv)?;
+                let mv = tab_geti(vm, tv, i - 1)?;
+                tab_seti(vm, tv, i, mv)?;
                 i -= 1;
             }
             (pos, vm.nat_arg(fs, nargs, 2))
         }
         _ => return Err(raise_str(vm, "wrong number of arguments to 'insert'")),
     };
-    vm.newindex_value(tv, Value::Int(pos), v)?;
+    tab_seti(vm, tv, pos, v)?;
     Ok(0)
 }
 
 fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "remove")?;
+    checktab(vm, tv, TAB_RW | TAB_L, 1, "remove")?;
     let n = vm.checked_len(tv)?;
     let pos = if nargs >= 2 {
         let pos = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as a position")?;
@@ -168,22 +298,22 @@ fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         n
     };
     // PUC tremove uses lua_geti/lua_seti, honouring __index/__newindex.
-    let removed = vm.index_value(tv, Value::Int(pos))?;
+    let removed = tab_geti(vm, tv, pos)?;
     if pos <= n {
         let mut i = pos;
         while i < n {
-            let mv = vm.index_value(tv, Value::Int(i + 1))?;
-            vm.newindex_value(tv, Value::Int(i), mv)?;
+            let mv = tab_geti(vm, tv, i + 1)?;
+            tab_seti(vm, tv, i, mv)?;
             i += 1;
         }
-        vm.newindex_value(tv, Value::Int(n), Value::Nil)?;
+        tab_seti(vm, tv, n, Value::Nil)?;
     }
     Ok(vm.nat_return(fs, &[removed]))
 }
 
 fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "concat")?;
+    checktab(vm, tv, TAB_R | TAB_L, 1, "concat")?;
     // PUC ≤5.2 has no integer subtype; `tostring(2.0)` is `"2"`, not
     // `"2.0"`. Pass through to numeric formatter so concat's element /
     // separator rendering matches `tostring` / `print` (caught by
@@ -239,7 +369,7 @@ fn concat_field(
     out: &mut Vec<u8>,
     float_fmt: crate::numeric::FloatFmt,
 ) -> Result<(), LuaError> {
-    match vm.index_value(tv, Value::Int(k))? {
+    match tab_geti(vm, tv, k)? {
         Value::Str(s) => out.extend_from_slice(s.as_bytes()),
         Value::Int(x) => {
             let mut buf = [0u8; 20];
@@ -266,7 +396,16 @@ const MAX_UNPACK: i64 = 1_000_000;
 
 pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "unpack")?;
+    // PUC only gave tunpack a type check in 5.5 (`aux_getn(L, 1, TAB_R)`).
+    // 5.3/5.4 call `luaL_len` straight away, so `table.unpack("abc")` yields
+    // three nils rather than a type error, and `table.unpack(42)` raises
+    // "attempt to get length of a number value". <=5.2 hard-checks, which is
+    // what checktab does on those dialects.
+    if vm.version() >= crate::version::LuaVersion::Lua55
+        || vm.version() <= crate::version::LuaVersion::Lua52
+    {
+        checktab(vm, tv, TAB_R | TAB_L, 1, "unpack")?;
+    }
     let i = if nargs >= 2 && !vm.nat_arg(fs, nargs, 1).is_nil() {
         vm.int_from(vm.nat_arg(fs, nargs, 1), "use as an index")?
     } else {
@@ -295,7 +434,7 @@ pub(crate) fn t_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // PUC unpack uses lua_geti, honouring __index.
     let mut vals: Vec<Value> = Vec::with_capacity(count as usize);
     for k in i..=j {
-        vals.push(vm.index_value(tv, Value::Int(k))?);
+        vals.push(tab_geti(vm, tv, k)?);
     }
     Ok(vm.nat_return(fs, &vals))
 }
@@ -324,15 +463,16 @@ fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a1v = vm.nat_arg(fs, nargs, 0);
-    let a1 = check_table(vm, a1v, "move")?;
+    checktab(vm, a1v, TAB_R, 1, "move")?;
     let f = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as an index")?;
     let e = vm.int_from(vm.nat_arg(fs, nargs, 2), "use as an index")?;
     let d = vm.int_from(vm.nat_arg(fs, nargs, 3), "use as an index")?;
-    let (a2v, a2) = if nargs >= 5 {
+    let a2v = if nargs >= 5 {
         let v = vm.nat_arg(fs, nargs, 4);
-        (v, check_table_at(vm, v, 5, "move")?)
+        checktab(vm, v, TAB_W, 5, "move")?;
+        v
     } else {
-        (a1v, a1)
+        a1v
     };
     // PUC table.move uses lua_geti/lua_seti, honouring __index/__newindex.
     if e >= f {
@@ -346,18 +486,18 @@ fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         if (d as i128) > i64::MAX as i128 - n + 1 {
             return Err(arg_error(vm, 4, "move", "destination wrap around"));
         }
-        if d > f && d <= e && a1.ptr_eq(a2) {
+        if d > f && d <= e && a1v.raw_eq(a2v) {
             // overlapping forward: copy backwards
             let mut i = e;
             while i >= f {
-                let v = vm.index_value(a1v, Value::Int(i))?;
-                vm.newindex_value(a2v, Value::Int(d + (i - f)), v)?;
+                let v = tab_geti(vm, a1v, i)?;
+                tab_seti(vm, a2v, d + (i - f), v)?;
                 i -= 1;
             }
         } else {
             for i in f..=e {
-                let v = vm.index_value(a1v, Value::Int(i))?;
-                vm.newindex_value(a2v, Value::Int(d + (i - f)), v)?;
+                let v = tab_geti(vm, a1v, i)?;
+                tab_seti(vm, a2v, d + (i - f), v)?;
             }
         }
     }
@@ -396,7 +536,7 @@ fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "sort")?;
+    checktab(vm, tv, TAB_RW | TAB_L, 1, "sort")?;
     let comp = match vm.nat_arg(fs, nargs, 1) {
         Value::Nil => None,
         f @ (Value::Closure(_) | Value::Native(_)) => Some(f),
@@ -423,13 +563,13 @@ fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.sort_scratch.push(Vec::with_capacity(cap));
     let result = (|| -> Result<(), LuaError> {
         for i in 1..=n {
-            let val = vm.index_value(tv, Value::Int(i))?;
+            let val = tab_geti(vm, tv, i)?;
             vm.sort_scratch.last_mut().unwrap().push(val);
         }
         sort_scratch_top(vm, comp)?;
         for i in 0..cap {
             let val = vm.sort_scratch.last().unwrap()[i];
-            vm.newindex_value(tv, Value::Int(i as i64 + 1), val)?;
+            tab_seti(vm, tv, i as i64 + 1, val)?;
         }
         Ok(())
     })();

@@ -19,6 +19,73 @@ optimization.
 
 ---
 
+## [2.18.0] — 2026-08-14
+
+Upstream reference moved to **PUC Lua 5.5.1** (released 2026-07-24), and
+six real defects were found and fixed in the process. One is a denial of
+service; three change behaviour on the 5.1/5.2 dialects.
+
+### Fixed
+- **`string.rep` hung the VM when the piece was empty (DoS).**
+  `string.rep("", math.maxinteger, "")` looped `n` times copying zero
+  bytes; the size guard cannot catch it because `0 * n` never overflows.
+  A single expression could hang any embedder running untrusted Lua. luna
+  matched PUC 5.5.0 here, which has the same bug; PUC fixed it in 5.5.1.
+- **The table library's surface ignored the dialect.** luna registered
+  the union of every version's functions, so 5.1 saw
+  `table.create`/`move`/`pack`/`unpack` and 5.2 saw `create`/`move`,
+  while 5.1 was missing `setn` and 5.2 was missing `maxn`. Code written
+  against an older dialect ran here and broke on real PUC. Registration
+  is now ordered by version, and `table.setn` exists on 5.1 to raise
+  "'setn' is obsolete" exactly as PUC does.
+- **Type errors were worded wrongly on 5.1/5.2.** PUC ≤5.2 names the
+  operand first — `attempt to call field 'f' (a nil value)`; 5.3 flipped
+  to type-first. luna emitted the 5.3+ form everywhere, so every type
+  error under 5.1/5.2 (calls, indexes, arithmetic) had the wrong shape.
+  ≤5.2 also has no metamethod operand names, so those collapse to the
+  bare message.
+- **Table-argument checking and element access now follow the dialect.**
+  PUC changed this twice: 5.1/5.2 demand a real table and read elements
+  raw (`lua_rawgeti`); 5.3+ accept anything with the needed metamethods
+  (`checktab`) and read through `__index` (`lua_geti`); 5.5 additionally
+  exempts strings from the `__len` requirement and is the first version
+  to type-check `table.unpack` at all. luna combined a hard check with
+  metamethod access, matching no dialect. Visible effect, concatenating a
+  proxy whose contents sit behind `__index`: 5.1 gives `""`, 5.2 raises
+  `invalid value (nil) at index 1`, 5.3+ reads through.
+- **`__len` no longer applies to tables on 5.1.** PUC 5.1's `__len` is a
+  userdata-only metamethod, so `#setmetatable({}, {__len = f})` is `0`
+  there and `7` on 5.2+. luna called the metamethod on every dialect.
+  This governs every `#` on 5.1, not just the table library.
+- **Errors naming a value read from a named-vararg table lost the field
+  name.** `t.k` inside `function f(...t)` compiles to a dedicated opcode
+  rather than `GETFIELD`, and the operand-naming walk did not recognise
+  it: `attempt to perform arithmetic on a nil value` instead of
+  `… (field 'xx')`.
+- **Locals left scope before their block's `CLOSE` ran.** A `__close`
+  handler calling `debug.getlocal` on the enclosing frame saw
+  `(temporary)` rather than the variable name, because the block's
+  `OP_CLOSE` was emitted after each local's scope had been closed off.
+  Most visible in a `repeat` body, where the exit path was affected and
+  the loop-back path was not.
+
+### Changed
+- Differential basis is now PUC **5.5.1** throughout: the corpus builds
+  against the 5.5.1 tarball, `tests/official/` carries the 5.5.1 suite,
+  the fuzz workflow's reference interpreter is 5.5.1, and CI asserts the
+  5.5 interpreter is exactly 5.5.1 rather than accepting whatever the
+  runner image ships.
+- Private differential corpus 500 → **514** fixtures, byte-equal against
+  stock PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.8 / 5.5.1 with zero skips.
+
+### Note on how these were found
+Re-running the corpus against 5.5.1 produced **zero** divergences. That
+was not reassurance — it meant the corpus could not reach what upstream
+had changed. Reading the 5.5.0→5.5.1 source diff and probing the
+behaviour it touched, three ways (5.5.0 / 5.5.1 / luna), is what surfaced
+all six defects. A 210-cell dialect matrix (7 argument shapes × 6 table
+operations × 5 dialects) went from 27 divergent cells to 0.
+
 ## [2.17.0] — 2026-08-14
 
 Maintenance release. No runtime behaviour changes; the VM, its dialect

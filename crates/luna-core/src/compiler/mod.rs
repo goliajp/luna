@@ -632,6 +632,16 @@ impl<'a> Compiler<'a> {
     fn leave_block(&mut self) -> Result<(), SyntaxError> {
         let b = self.l().blocks.pop().expect("block underflow");
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
+        // The block's CLOSE runs *while* these locals are still in scope: a
+        // `__close` handler can call `debug.getlocal` on the frame and must
+        // see them (5.5.1 locals.lua :1198 pins this for a `repeat` body,
+        // where the exit path's close is the one emitted here). So emit it
+        // before fixing `end_pc` — computing `end_pc` first would leave the
+        // CLOSE at `pc >= end_pc`, and `getlocalname`'s `pc < end_pc` test
+        // would report "(temporary)".
+        if captured || b.has_tbc {
+            self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
+        }
         // record debug LocVar entries for the locals leaving scope here
         let end_pc = self.lr().code.len() as u32;
         let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[b.first_local..]
@@ -647,9 +657,6 @@ impl<'a> Compiler<'a> {
         self.l().locals.truncate(b.first_local);
         self.l().avars.truncate(b.first_avar);
         self.set_freereg(b.reg_floor);
-        if captured || b.has_tbc {
-            self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
-        }
         for pc in b.breaks {
             self.patch_to_here(pc)?;
         }
