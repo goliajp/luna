@@ -53,28 +53,28 @@
     <main class="docmain">
 <h2 id="getting-started">インストールと hello</h2>
       <p>luna は 7 つの公開済み crate からなる Cargo ワークスペースです。合う依存量を選んでください。完全なインタプリタに Cranelift JIT と C ABI を加えた <code>luna-jit</code>、あるいは依存ゼロで wasm フレンドリーな <code>luna-core</code>。</p>
-      <pre><code># 完全なインタプリタ + Cranelift JIT + C ABI
-luna-jit = "3"
+      <pre><code><span class="tok-c"># 完全なインタプリタ + Cranelift JIT + C ABI</span>
+luna-jit = <span class="tok-s">"3"</span>
 
-# または最小の表面 —— 純インタプリタ、第三者依存ゼロ
-luna-core = "3"</code></pre>
+<span class="tok-c"># または最小の表面 —— 純インタプリタ、第三者依存ゼロ</span>
+luna-core = <span class="tok-s">"3"</span></code></pre>
       <p>選んだダイアレクトの <code>Vm</code> を構築して評価します。<code>Vm::new</code> は既定で安全な標準ライブラリをすべて開き、JIT を組み込みます(<code>luna-core</code> では no-op バックエンド)。</p>
-      <pre><code>use luna_jit::vm::Vm;
-use luna_jit::version::LuaVersion;
+      <pre><code><span class="tok-k">use</span> luna_jit::vm::Vm;
+<span class="tok-k">use</span> luna_jit::version::LuaVersion;
 
-fn main() {
-    let mut vm = Vm::new(LuaVersion::Lua55);  // 5.5 + full stdlib + JIT on
-    let result = vm.eval("return 'hello, ' .. 'world'").unwrap();
-    let s: String = result[0].try_as_str().unwrap().to_string();
-    println!("{s}");
+<span class="tok-k">fn</span> main() {
+    <span class="tok-k">let</span> <span class="tok-k">mut</span> vm = Vm::<span class="tok-k">new</span>(LuaVersion::Lua55);  <span class="tok-c">// 5.5 + full stdlib + JIT on</span>
+    <span class="tok-k">let</span> result = vm.eval(<span class="tok-s">"return 'hello, ' .. 'world'"</span>).unwrap();
+    <span class="tok-k">let</span> s: String = result[0].try_as_str().unwrap().to_string();
+    println!(<span class="tok-s">"{s}"</span>);
 }</code></pre>
       <div class="callout note"><b>どの crate を?</b> <code>luna-jit</code> は <code>luna-core</code> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <code>wasm32</code> ターゲットが欲しいときだけ、<code>luna-core</code> を直接使ってください。</div>
 <h2 id="cli">コマンドラインインターフェース</h2>
       <p><code>luna-jit</code> をインストールすると、PATH に <code>luna</code> バイナリ——REPL 兼スクリプトランナー——が置かれます。</p>
-      <pre><code>luna script.lua              # ファイルを実行
-luna -e "print(1 + 2)"       # インラインコードを実行
-luna --lua=5.4 script.lua    # ダイアレクトを選択
-luna                         # 対話 REPL(Ctrl-D で終了)</code></pre>
+      <pre><code>luna script.lua              <span class="tok-c"># ファイルを実行</span>
+luna -e <span class="tok-s">"print(1 + 2)"</span>       <span class="tok-c"># インラインコードを実行</span>
+luna --lua=5.4 script.lua    <span class="tok-c"># ダイアレクトを選択</span>
+luna                         <span class="tok-c"># 対話 REPL(Ctrl-D で終了)</span></code></pre>
       <div class="tablewrap">
         <table>
           <thead><tr><th>フラグ</th><th>挙動</th></tr></thead>
@@ -95,112 +95,112 @@ luna                         # 対話 REPL(Ctrl-D で終了)</code></pre>
 
       <h3>信頼できないスクリプト向けサンドボックス</h3>
       <p>サンドボックスビルダーがライブラリをホワイトリスト化し、予算を武装します。サンドボックス化されたスクリプトは <code>require</code> もファイルシステムへのアクセスも、バイトコードチャンクのコンパイルもできません。</p>
-      <pre><code>use luna_jit::Lua;
-use luna_jit::version::LuaVersion;
+      <pre><code><span class="tok-k">use</span> luna_jit::Lua;
+<span class="tok-k">use</span> luna_jit::version::LuaVersion;
 
-let mut lua = Lua::sandbox(LuaVersion::Lua54)
+<span class="tok-k">let</span> <span class="tok-k">mut</span> lua = Lua::sandbox(LuaVersion::Lua54)
     .open_base()
     .open_math()
     .open_string()
     .open_table()
-    .with_instr_budget(1_000_000)      // ~10 ms の実時間予算
-    .with_memory_cap(8 * 1024 * 1024)  // 8 MiB の上限
+    .with_instr_budget(1_000_000)      <span class="tok-c">// ~10 ms の実時間予算</span>
+    .with_memory_cap(8 * 1024 * 1024)  <span class="tok-c">// 8 MiB の上限</span>
     .build();
 
-let r: i64 = lua.eval("return 1 + 2").unwrap();</code></pre>
+<span class="tok-k">let</span> r: i64 = lua.eval(<span class="tok-s">"return 1 + 2"</span>).unwrap();</code></pre>
 
       <h3>グローバルとテーブル</h3>
       <p><code>set_global</code> は任意の <code>IntoValue</code> 型を受け取ります(<code>Option&lt;T&gt;</code> は nil に対応)。テーブルはワンショットとチェーンビルダーの 2 形態です。</p>
-      <pre><code>vm.set_global("answer", 42_i64)?;
-vm.set_global("name", "luna")?;
-vm.set_global("missing", Option::&lt;i64&gt;::None)?;   // nil に設定
+      <pre><code>vm.set_global(<span class="tok-s">"answer"</span>, 42_i64)?;
+vm.set_global(<span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)?;
+vm.set_global(<span class="tok-s">"missing"</span>, Option::&lt;i64&gt;::None)?;   <span class="tok-c">// nil に設定</span>
 
-// ワンショット、固定の形:
-let t = vm.table_of([("answer", 42_i64), ("year", 2026_i64)]);
+<span class="tok-c">// ワンショット、固定の形:</span>
+<span class="tok-k">let</span> t = vm.table_of([(<span class="tok-s">"answer"</span>, 42_i64), (<span class="tok-s">"year"</span>, 2026_i64)]);
 
-// または可変の形にチェーンビルダー:
-let t = vm.new_table()
-    .with("name", "luna")
-    .with(1_i64, "first array entry")
+<span class="tok-c">// または可変の形にチェーンビルダー:</span>
+<span class="tok-k">let</span> t = vm.new_table()
+    .with(<span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)
+    .with(1_i64, <span class="tok-s">"first array entry"</span>)
     .build();</code></pre>
 
       <h3>型付きネイティブ関数</h3>
       <p><code>native_typed</code> は Rust のクロージャや関数ポインタを Lua に橋渡しし、引数のデコードと戻り値のエンコードを自動化します——純関数、多値返し、失敗しうる形(<code>Result&lt;T, LuaError&gt;</code>)まで、0〜6 引数に対応します。</p>
-      <pre><code>let add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
-vm.set_global("add", add)?;
+      <pre><code><span class="tok-k">let</span> add = vm.native_typed(|a: i64, b: i64| -&gt; i64 { a + b });
+vm.set_global(<span class="tok-s">"add"</span>, add)?;
 
-let split = vm.native_typed(|x: i64| -&gt; (i64, i64) { (x / 10, x % 10) });
-vm.set_global("split", split)?;
+<span class="tok-k">let</span> split = vm.native_typed(|x: i64| -&gt; (i64, i64) { (x / 10, x % 10) });
+vm.set_global(<span class="tok-s">"split"</span>, split)?;
 
-let safe_div = vm.native_typed(|a: i64, b: i64| -&gt; Result&lt;i64, LuaError&gt; {
-    if b == 0 { Err(LuaError::new(Value::Nil)) } else { Ok(a / b) }
+<span class="tok-k">let</span> safe_div = vm.native_typed(|a: i64, b: i64| -&gt; Result&lt;i64, LuaError&gt; {
+    <span class="tok-k">if</span> b == 0 { Err(LuaError::<span class="tok-k">new</span>(Value::Nil)) } <span class="tok-k">else</span> { Ok(a / b) }
 });
-vm.set_global("safe_div", safe_div)?;</code></pre>
+vm.set_global(<span class="tok-s">"safe_div"</span>, safe_div)?;</code></pre>
 
       <h3>userdata —— ホスト型を公開する</h3>
       <p>任意の <code>T: 'static</code> な Rust の値を Lua userdata の背後に格納できます。空の <code>impl LuaUserdata for T {}</code> だけで橋渡しは十分。メソッドとメタメソッドを足せば、ネイティブのように振る舞います。<code>#[derive(LuaUserdata)]</code> proc-macro がボイラープレートを生成します。</p>
-      <pre><code>use luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
+      <pre><code><span class="tok-k">use</span> luna_core::vm::{LuaUserdata, MetaMethod, UserdataMethods};
 
-struct Counter { value: i64 }
+<span class="tok-k">struct</span> Counter { value: i64 }
 
-impl LuaUserdata for Counter {
-    fn type_name() -&gt; &amp;'static str { "Counter" }
-    fn add_methods&lt;M: UserdataMethods&lt;Self&gt;&gt;(m: &amp;mut M) {
-        m.add_method("get", |_vm, this, ()| Ok::&lt;_, _&gt;(this.value));
-        m.add_method_mut("incr", |_vm, this, (by,): (i64,)| {
+<span class="tok-k">impl</span> LuaUserdata <span class="tok-k">for</span> Counter {
+    <span class="tok-k">fn</span> type_name() -&gt; &amp;'static str { <span class="tok-s">"Counter"</span> }
+    <span class="tok-k">fn</span> add_methods&lt;M: UserdataMethods&lt;Self&gt;&gt;(m: &amp;<span class="tok-k">mut</span> M) {
+        m.add_method(<span class="tok-s">"get"</span>, |_vm, this, ()| Ok::&lt;_, _&gt;(this.value));
+        m.add_method_mut(<span class="tok-s">"incr"</span>, |_vm, this, (by,): (i64,)| {
             this.value += by; Ok::&lt;_, _&gt;(())
         });
         m.add_meta_method(MetaMethod::ToString, |_vm, this, ()| {
-            Ok::&lt;_, _&gt;(format!("Counter({})", this.value))
+            Ok::&lt;_, _&gt;(format!(<span class="tok-s">"Counter({})"</span>, this.value))
         });
     }
 }
 
-vm.set_userdata("c", Counter { value: 100 })?;
-vm.eval("c:incr(50); print(tostring(c))")?;   // → Counter(150)</code></pre>
+vm.set_userdata(<span class="tok-s">"c"</span>, Counter { value: 100 })?;
+vm.eval(<span class="tok-s">"c:incr(50); print(tostring(c))"</span>)?;   <span class="tok-c">// → Counter(150)</span></code></pre>
       <div class="callout note"><b>破れば即 unsound な唯一の規則。</b>userdata が <code>Gc&lt;…&gt;</code> フィールドを 1 つでも持つなら、<code>trace</code> をオーバーライドし、すべてのハンドルを <code>m.mark(...)</code> しなければなりません——<code>trace</code> の中で許されるのはマークだけで、Vm 呼び出し・確保・ロックは禁止です。<code>trace</code> の欠落は use-after-free です。derive マクロがこれを代行します。</div>
 
       <h3>Rust からコルーチンとデバッグフックを駆動</h3>
       <p>Lua 側の <code>coroutine.create</code> を使わずに、<code>create_coroutine</code> / <code>resume_coroutine</code> で Rust から Lua コルーチンを駆動できます。<code>set_rust_debug_hook</code> で Call / Return / Line / Count / TailCall の各イベントに Rust コールバックを掛けられます。</p>
-      <pre><code>let body = vm.eval(r#"
+      <pre><code><span class="tok-k">let</span> body = vm.eval(r#<span class="tok-s">"
     return function()
         coroutine.yield(1)
         coroutine.yield(2)
         return 3
     end
-"#)?[0];
+"</span>#)?[0];
 
-let co = vm.create_coroutine(body);
-let r1 = vm.resume_coroutine(co, vec![])?;   // r1[0] == Int(1)
-let r2 = vm.resume_coroutine(co, vec![])?;   // r2[0] == Int(2)
-let r3 = vm.resume_coroutine(co, vec![])?;   // r3[0] == Int(3), 終端</code></pre>
+<span class="tok-k">let</span> co = vm.create_coroutine(body);
+<span class="tok-k">let</span> r1 = vm.resume_coroutine(co, vec![])?;   <span class="tok-c">// r1[0] == Int(1)</span>
+<span class="tok-k">let</span> r2 = vm.resume_coroutine(co, vec![])?;   <span class="tok-c">// r2[0] == Int(2)</span>
+<span class="tok-k">let</span> r3 = vm.resume_coroutine(co, vec![])?;   <span class="tok-c">// r3[0] == Int(3), 終端</span></code></pre>
 
       <h3>エラー</h3>
       <p>Lua のエラーは <code>Result&lt;T, LuaError&gt;</code> として現れます。<code>LuaError</code> は <code>Display</code> / <code>Error</code> を実装し、より豊かな文脈は Vm から取得できます。</p>
-      <pre><code>match vm.eval("error('something failed')") {
-    Ok(v)  =&gt; println!("ok: {:?}", v),
+      <pre><code><span class="tok-k">match</span> vm.eval(<span class="tok-s">"error('something failed')"</span>) {
+    Ok(v)  =&gt; println!(<span class="tok-s">"ok: {:?}"</span>, v),
     Err(e) =&gt; {
-        println!("error: {}", e);              // Display
-        let kind = vm.error_kind();            // LuaErrorKind
-        let source = vm.error_source();        // Option&lt;(&amp;str, u32)&gt;
-        let tb = vm.take_error_traceback();    // Option&lt;String&gt;
+        println!(<span class="tok-s">"error: {}"</span>, e);              <span class="tok-c">// Display</span>
+        <span class="tok-k">let</span> kind = vm.error_kind();            <span class="tok-c">// LuaErrorKind</span>
+        <span class="tok-k">let</span> source = vm.error_source();        <span class="tok-c">// Option&lt;(&amp;str, u32)&gt;</span>
+        <span class="tok-k">let</span> tb = vm.take_error_traceback();    <span class="tok-c">// Option&lt;String&gt;</span>
     }
 }</code></pre>
 
       <h3><code>Lua</code> ファサード</h3>
       <p>mlua 風の入口が好みなら、<code>Lua</code> が同じ機構を包み、host-root チケットに支えられた <code>Copy + Clone</code> なハンドルを提供します。</p>
-      <pre><code>use luna_jit::Lua;
+      <pre><code><span class="tok-k">use</span> luna_jit::Lua;
 
-let mut lua = Lua::new();          // JIT on, Lua 5.5
+<span class="tok-k">let</span> <span class="tok-k">mut</span> lua = Lua::<span class="tok-k">new</span>();          <span class="tok-c">// JIT on, Lua 5.5</span>
 lua.open_base(); lua.open_math();
 
-let add = lua.create_function(|a: i64, b: i64| -&gt; i64 { a + b });
-lua.set_global("add", add)?;
-let r: i64 = lua.eval("return add(40, 2)")?;   // 42
+<span class="tok-k">let</span> add = lua.create_function(|a: i64, b: i64| -&gt; i64 { a + b });
+lua.set_global(<span class="tok-s">"add"</span>, add)?;
+<span class="tok-k">let</span> r: i64 = lua.eval(<span class="tok-s">"return add(40, 2)"</span>)?;   <span class="tok-c">// 42</span>
 
-let t = lua.create_table();
-t.set(&amp;mut lua, "name", "luna")?;
-let name: String = t.get(&amp;mut lua, "name")?;</code></pre>
+<span class="tok-k">let</span> t = lua.create_table();
+t.set(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)?;
+<span class="tok-k">let</span> name: String = t.get(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>)?;</code></pre>
 <h2 id="threading">スレッド</h2>
       <p>既定の <code>Vm</code>(および <code>Lua</code> ファサード)は <strong><code>!Send + !Sync</code></strong> です——Vm と、その GC ヒープへのすべてのハンドルは、それを生成したスレッド上に留まります。この制約は <code>compile_fail</code> doctest によってコンパイル時に強制されます。</p>
       <p>これは意図したパフォーマンス上の選択です。GC は侵入的マーク&スイープヒープ上の <code>Gc&lt;T&gt; = NonNull&lt;T&gt;</code> を用い、stop-the-world プロトコルもロック付きのトレースキャッシュ読み取りもありません。<code>Send</code> にすると実ワークロードで 5〜15% のコストが乗ります。そもそも Lua 自身のデータモデルがシングルスレッドです。</p>
@@ -210,11 +210,11 @@ let name: String = t.get(&amp;mut lua, "name")?;</code></pre>
         <li><strong>マルチスレッド Tokio 上の <code>LocalSet</code></strong> —— <code>LocalSet::run_until</code> が Vm の future を呼び出しスレッドに固定する。</li>
         <li><strong>OS スレッドごとに 1 つの Vm + チャネル</strong> —— 真の並列には、スレッドごとに Vm を 1 つ。スレッド間を渡るのは <code>Send</code> なデータ(ソース文字列、結果文字列)だけ。</li>
       </ul>
-      <pre><code>#[tokio::main(flavor = "current_thread")]
-async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let mut vm = Vm::new_minimal_with_jit(LuaVersion::Lua55);
+      <pre><code>#[tokio::main(flavor = <span class="tok-s">"current_thread"</span>)]
+<span class="tok-k">async</span> <span class="tok-k">fn</span> main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    <span class="tok-k">let</span> <span class="tok-k">mut</span> vm = Vm::new_minimal_with_jit(LuaVersion::Lua55);
     vm.open_base();
-    let result = vm.eval_async("return 1 + 2").await?;
+    <span class="tok-k">let</span> result = vm.eval_async(<span class="tok-s">"return 1 + 2"</span>).<span class="tok-k">await</span>?;
     Ok(())
 }</code></pre>
       <div class="callout note"><b>オプトインの <code>SendVm</code>。</b><code>feature = "send"</code> フラグは <code>SendVm</code> newtype を追加します。これは <code>Send</code>(ただし <code>Sync</code> ではない)なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <code>.await</code> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <code>SendVm</code> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<code>Send</code> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
@@ -250,7 +250,7 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
       <p>最小のコンテナには musl に静的リンクし <code>FROM scratch</code> でビルド。コピー前に strip すれば <code>__LINKEDIT</code> の大半を落とせます。</p>
       <pre><code>FROM scratch
 COPY ./target/x86_64-unknown-linux-musl/release/service /service
-ENTRYPOINT ["/service"]</code></pre>
+ENTRYPOINT [<span class="tok-s">"/service"</span>]</code></pre>
 <h2 id="jit-aot">JIT と AOT</h2>
       <p><code>luna-jit</code> ではトレース JIT が既定で有効です。いくつかの粘着的なノブで、予測可能なレイテンシや A/B テストのために調整・無効化できます。</p>
       <div class="tablewrap">
@@ -269,9 +269,9 @@ ENTRYPOINT ["/service"]</code></pre>
       <p><code>luna-aot</code> は Lua ソースを自己完結型のネイティブバイナリにコンパイルします——解析、バイトコードをデータセクションに発行、レコーダの下でホットトレースを温め、静的ランタイムをリンクし、実行ファイルを生成します。</p>
       <pre><code>cargo install luna-aot
 luna-aot compile hello.lua --out hello
-./hello                    # 単独ネイティブバイナリ
+./hello                    <span class="tok-c"># 単独ネイティブバイナリ</span>
 
-# macOS ホストから Linux へクロスコンパイル
+<span class="tok-c"># macOS ホストから Linux へクロスコンパイル</span>
 luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code></pre>
       <p>Cranelift の <code>all-arch</code> バックエンドは再ビルドなしにあらゆるターゲットへクロスコンパイルします。strip した release バイナリは <strong>4.5 MiB</strong> 前後に収まり、ランタイムの下限が支配的なため、1 行のスクリプトと 1.5k 行のスクリプトの差はわずか約 82 KiB です。</p>
 <h2 id="compat">互換性</h2>
