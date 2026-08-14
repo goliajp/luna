@@ -91,7 +91,7 @@ trackers.
 
 ## Updating for a new release
 
-The version string `v2.18.0` appears in each landing page's hero badge and
+The version string `v3.0.0` appears in each landing page's hero badge and
 each docs page's intro sentence. Bump those on release. Content is
 snapshotted against the crate docs under `../docs/` — re-sync if the
 embedding API or dialect matrix changes.
