@@ -102,23 +102,31 @@ jobs:
           targets: x86_64-pc-windows-gnu
       - name: install MinGW + Wine
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            mingw-w64 wine64
-          # v2.20 D5: the `wine64` package installs a `wine64` binary and
-          # not necessarily `wine`, so record which one exists rather
-          # than assuming. The run step failed with
-          # "wine: command not found" while this install step reported
-          # success — the package was there, the command name was not.
-          WINE_BIN=$(command -v wine || command -v wine64 || true)
-          if [ -z "$WINE_BIN" ]; then
-            echo "::error::neither 'wine' nor 'wine64' is on PATH after installing wine64"
-            dpkg -L wine64 | grep -E '/bin/' | head
+          set -u
+          sudo apt-get update -qq
+          # v2.20 D5: `wine64` is gone on Ubuntu 24.04 (noble) — apt
+          # reported success while installing nothing usable, and the run
+          # step then died on "wine: command not found". Try the
+          # candidates in order and report what the archive actually has
+          # if none of them yields a binary.
+          for pkg in wine wine64 wine-stable; do
+            if apt-cache show "$pkg" >/dev/null 2>&1; then
+              echo "installing $pkg"
+              sudo apt-get install -y --no-install-recommends mingw-w64 "$pkg" || true
+            fi
+            WINE_BIN=$(command -v wine || command -v wine64 || command -v wine-stable || true)
+            [ -n "$WINE_BIN" ] && break
+          done
+          if [ -z "${WINE_BIN:-}" ]; then
+            echo "::error::no wine binary on PATH after trying wine / wine64 / wine-stable"
+            echo "--- wine-ish packages in the archive ---"
+            apt-cache search --names-only '^wine' | head -20 || true
             exit 1
           fi
           echo "WINE_BIN=$WINE_BIN" >> "$GITHUB_ENV"
           echo "using wine binary: $WINE_BIN"
-          "$WINE_BIN" --version
+          "$WINE_BIN" --version || true
+
       - name: cargo build -p luna-aot
         run: cargo build -p luna-aot --release
         # Kept so a compile error surfaces as its own step; the compile
