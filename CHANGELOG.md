@@ -709,9 +709,9 @@ bottleneck (interp, not trace) and updates the methodology accordingly.
 ### Track B — `LuaUserdata` trait (new embedder surface)
 
 - **`luna_core::vm::userdata_trait`** module exposes the
-  [`LuaUserdata`](https://docs.rs/luna-core/1.3/luna_core/vm/trait.LuaUserdata.html)
-  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.3/luna_core/vm/trait.UserdataMethods.html)
-  builder + [`MetaMethod`](https://docs.rs/luna-core/1.3/luna_core/vm/enum.MetaMethod.html)
+  [`LuaUserdata`](https://docs.rs/luna-core/1.3/luna_core/vm/userdata_trait/trait.LuaUserdata.html)
+  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.3/luna_core/vm/userdata_trait/trait.UserdataMethods.html)
+  builder + [`MetaMethod`](https://docs.rs/luna-core/1.3/luna_core/vm/userdata_trait/enum.MetaMethod.html)
   enum. Embedders register methods (`add_method` / `add_method_mut`),
   static fns (`add_function`), metamethods (`add_meta_method`), and
   call-syntax field getters (`add_field_method_get`) via a typed

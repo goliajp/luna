@@ -95,9 +95,15 @@ jobs:
           # luna.golia.jp, so a broken link there is publicly visible —
           # and until now nothing checked it. 57 links across the six
           # locale pages.
+          # `--root-dir` is required for the site: its pages use
+          # root-relative hrefs (`/assets/luna-icon.svg`), which lychee
+          # cannot resolve against a local file without being told what
+          # the document root is. Without it every such link is an error,
+          # not a 404 — the checker simply cannot follow them.
           args: >-
             --include-fragments
             --no-progress
+            --root-dir ${{ github.workspace }}/web
             docs/**/*.md
             crates/*/README.md
             CHANGELOG.md
