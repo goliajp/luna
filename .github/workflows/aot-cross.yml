@@ -163,11 +163,35 @@ jobs:
         run: apk add --no-cache musl-dev gcc make
       - name: cargo build -p luna-aot
         run: cargo build -p luna-aot --release --target x86_64-unknown-linux-musl
+
+      # v2.20 D5: `luna-aot` normally locates the workspace via
+      # CARGO_MANIFEST_DIR and builds the runtime-helpers staticlib on
+      # demand. That variable is a *compile-time* cargo thing and is
+      # absent when the binary runs standalone, so the link step failed:
+      #   luna-aot: linker failed: CARGO_MANIFEST_DIR not set — cannot
+      #   locate workspace to build luna-runtime-helpers.
+      # The error names its own escape hatch. Build the staticlib for the
+      # same target first and point at it.
+      - name: build the runtime-helpers staticlib (musl)
+        run: cargo build -p luna-runtime-helpers --release --target x86_64-unknown-linux-musl
+
       - name: compile + run hello.lua
         run: |
+          set -eu
+          STATICLIB="$PWD/target/x86_64-unknown-linux-musl/release/libluna_runtime_helpers.a"
+          test -f "$STATICLIB" || { echo "staticlib missing at $STATICLIB"; ls -l target/x86_64-unknown-linux-musl/release/ | head -20; exit 1; }
+          export LUNA_AOT_RUNTIME_HELPERS_STATICLIB="$STATICLIB"
+          echo "using staticlib: $STATICLIB"
           cat > /tmp/hello.lua <<'EOF'
           print("hello from luna-aot on alpine musl")
           return 7
           EOF
           ./target/x86_64-unknown-linux-musl/release/luna-aot compile /tmp/hello.lua --out /tmp/hello
-          /tmp/hello || echo "ran; exit=$?"
+          test -x /tmp/hello || { echo "luna-aot produced no executable"; exit 1; }
+          OUT=$(/tmp/hello) ; RC=$?
+          echo "output: $OUT"
+          echo "exit:   $RC"
+          case "$OUT" in
+            *"hello from luna-aot on alpine musl"*) echo "E2E ok" ;;
+            *) echo "unexpected output"; exit 1 ;;
+          esac
