@@ -98,24 +98,57 @@ if $check_only; then
   exit 0
 fi
 
+# ── stage with a content-hashed stylesheet ───────────────────────────
+# A stylesheet served under a fixed name is the one file a returning
+# visitor is most likely to have cached, and the origin sends no
+# Cache-Control — so a redesign can land on the server and still not
+# reach anyone who saw the old one. Naming the file after its contents
+# makes that impossible: different CSS, different URL, no stale hit.
+# The pages keep referring to `style.css` in git; only what ships is
+# rewritten, so the source tree stays editable and previewable as-is.
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+rsync -a ./ "$stage/" --exclude deploy.sh --exclude README.md
+hash=$(md5 -q assets/style.css 2>/dev/null || md5sum assets/style.css | cut -c1-32)
+hash=${hash:0:10}
+mv "$stage/assets/style.css" "$stage/assets/style.$hash.css"
+find "$stage" -name '*.html' -exec \
+  sed -i '' "s|assets/style\.css|assets/style.$hash.css|g" {} +
+echo "→ stylesheet pinned as style.$hash.css"
+
 echo "→ uploading to $HOST:$ROOT"
 ssh "$HOST" "mkdir -p $ROOT"
 # --delete keeps the target an exact mirror; without it, files removed here
-# (an old stylesheet, a retired script) keep being served indefinitely.
-rsync -a --delete ./ "$HOST:$ROOT/" \
-  --exclude deploy.sh --exclude README.md
+# (a superseded stylesheet, a retired script) keep being served forever.
+rsync -a --delete "$stage/" "$HOST:$ROOT/"
 
 echo "→ verifying $URL"
-for path in / /docs.html /zh/ /ja/ /zh/docs.html /ja/docs.html /assets/style.css; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "$URL$path")
-  [[ "$code" == "200" ]] || { echo "  ✗ $path → $code"; exit 1; }
+# The vhost falls back to index.html for anything it cannot find, and
+# answers 200 while doing it — so a status code proves nothing here. Ask
+# for the content type each path should have, and for a missing asset
+# expect to be handed HTML, which is the fallback confessing itself.
+check() { curl -sI "$URL$1" | tr -d '\r' | grep -i '^content-type:' | cut -d' ' -f2-; }
+for path in / /docs.html /zh/ /ja/ /zh/docs.html /ja/docs.html; do
+  ct=$(check "$path")
+  [[ "$ct" == text/html* ]] || { echo "  ✗ $path → $ct"; exit 1; }
   echo "  ✓ $path"
 done
+ct=$(check "/assets/style.$hash.css")
+[[ "$ct" == text/css* ]] || { echo "  ✗ stylesheet → $ct"; exit 1; }
+echo "  ✓ /assets/style.$hash.css"
 
 # The version string is the one thing a stale deploy shows most obviously,
 # so confirm the origin actually serves the version in this tree.
 want=$(grep -om1 'v[0-9]\+\.[0-9]\+\.[0-9]\+' index.html)
 got=$(curl -s "$URL/" | grep -om1 'v[0-9]\+\.[0-9]\+\.[0-9]\+' || true)
 [[ "$got" == "$want" ]] || { echo "  ✗ origin serves $got, tree has $want"; exit 1; }
+
+# The pages must point at the stylesheet we just uploaded, and the old
+# fixed-name one must be gone — otherwise a cached copy can still win.
+curl -s "$URL/" | grep -q "assets/style.$hash.css" \
+  || { echo "  ✗ origin's HTML does not reference style.$hash.css"; exit 1; }
+old=$(check /assets/style.css)
+[[ "$old" != text/css* ]] || { echo "  ✗ /assets/style.css is still a stylesheet"; exit 1; }
+echo "  ✓ pages reference style.$hash.css; the unversioned name is gone"
 
 echo "✓ deployed — $URL ($want)"
