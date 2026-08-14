@@ -197,7 +197,7 @@
 <span class="tok-k">use</span> luna_jit::{Vm, LuaVersion};
 
 <span class="tok-k">let mut</span> vm = Vm::new(LuaVersion::Lua54);
-<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// 42</span></code></pre>
+<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// [Int(42)]</span></code></pre>
 </div>
     <p class="prose" style="margin-top:1.4rem">若想要完全没有第三方依赖的解释器，改为依赖 <code>luna-core</code>。要产出独立原生二进制，把 <code>luna-aot</code> 当作构建期工具使用。<a href="docs.html">文档</a>完整覆盖嵌入 API、沙箱控制与方言矩阵。</p>
   </section>
