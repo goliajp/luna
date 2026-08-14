@@ -223,7 +223,7 @@
 <span class="tok-k">use</span> luna_jit::{Vm, LuaVersion};
 
 <span class="tok-k">let mut</span> vm = Vm::new(LuaVersion::Lua54);
-<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// 42</span></code></pre>
+<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// [Int(42)]</span></code></pre>
 </div>
     <p class="prose" style="margin-top:1.4rem">
       For an interpreter with no third-party dependencies at all, depend on

@@ -197,7 +197,7 @@
 <span class="tok-k">use</span> luna_jit::{Vm, LuaVersion};
 
 <span class="tok-k">let mut</span> vm = Vm::new(LuaVersion::Lua54);
-<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// 42</span></code></pre>
+<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// [Int(42)]</span></code></pre>
 </div>
     <p class="prose" style="margin-top:1.4rem">第三者依存が一切ないインタプリタが欲しい場合は <code>luna-core</code> に依存してください。単独ネイティブバイナリを生成するには <code>luna-aot</code> をビルド時ツールとして使います。<a href="docs.html">ドキュメント</a>で埋め込み API、サンドボックス制御、ダイアレクトマトリクスを網羅しています。</p>
   </section>
