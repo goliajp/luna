@@ -601,12 +601,30 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
     // `CARGO_MANIFEST_DIR` is the directory containing the
     // **luna-aot** Cargo.toml. The workspace root is two levels up.
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
-        AotError::Link(
-            "CARGO_MANIFEST_DIR not set — cannot locate workspace to build \
-             luna-runtime-helpers. Set LUNA_AOT_RUNTIME_HELPERS_STATICLIB \
-             to bypass."
+        // The advice has to differ by build kind. Suggesting the env-var
+        // override for a cross target is actively misleading: the check at
+        // the top of this function honours it only when `target_triple`
+        // is None, so a user following that hint would set it, see the
+        // identical error, and have nothing left to try. (This cost the
+        // v2.20 CI repair two rounds — the Wine job was "fixed" that way
+        // twice before the gate was read.)
+        AotError::Link(match target_triple {
+            None => "CARGO_MANIFEST_DIR not set — cannot locate workspace to \
+                     build luna-runtime-helpers. Set \
+                     LUNA_AOT_RUNTIME_HELPERS_STATICLIB to a prebuilt \
+                     staticlib to bypass."
                 .to_string(),
-        )
+            Some(t) => format!(
+                "CARGO_MANIFEST_DIR not set — cannot locate workspace to build \
+                 luna-runtime-helpers for target {t}. Cross-compilation \
+                 requires running luna-aot from inside its workspace (e.g. \
+                 `cargo run -p luna-aot -- compile ...`), because the \
+                 staticlib must be built for the target ABI. \
+                 LUNA_AOT_RUNTIME_HELPERS_STATICLIB does NOT apply here — it \
+                 is honoured for host builds only, so that a cross link is \
+                 never handed a staticlib built for the wrong ABI."
+            ),
+        })
     })?;
     let workspace_root = PathBuf::from(&manifest_dir)
         .parent()
