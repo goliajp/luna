@@ -51,8 +51,8 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq build-essential libreadline-dev curl
             mkdir -p /tmp/puc-build && cd /tmp/puc-build
-            curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
-            tar -xzf lua.tar.gz && cd lua-5.5.0
+            curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
+            tar -xzf lua.tar.gz && cd lua-5.5.1
             make linux-readline
             sudo make install INSTALL_TOP=/usr/local
             echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
@@ -116,8 +116,8 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq build-essential libreadline-dev curl
             mkdir -p /tmp/puc-build && cd /tmp/puc-build
-            curl -fsSL https://www.lua.org/ftp/lua-5.5.0.tar.gz -o lua.tar.gz
-            tar -xzf lua.tar.gz && cd lua-5.5.0
+            curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
+            tar -xzf lua.tar.gz && cd lua-5.5.1
             make linux-readline
             sudo make install INSTALL_TOP=/usr/local
             echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"

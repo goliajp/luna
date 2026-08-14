@@ -57,7 +57,7 @@ fn gc_lua_family_plain_stress() {
     // chunkname "gc.lua" — manifestation is allocation-order sensitive).
     let suite = match std::env::var("LUNA_GC_STRESS_SUITE") {
         Ok(d) => std::path::PathBuf::from(d),
-        Err(_) => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/official/lua-5.5.0-tests"),
+        Err(_) => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/official/lua-5.5.1-tests"),
     };
     std::env::set_current_dir(&suite).expect("suite dir");
     // Minimization hook: LUNA_GC_STRESS_FILE=<abs path> runs just

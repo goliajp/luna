@@ -85,8 +85,8 @@ impl<'a> Reader<'a> {
 ///
 /// (Note: this is the MIRROR of LEB128 / DWARF "continuation = high bit
 /// set, LSB-first". Wave 1's stub doc-comment had it backwards; corrected
-/// here from a direct read of `lua-5.5.0/src/ldump.c::dumpVarint` and
-/// `lua-5.5.0/src/lundump.c::loadVarint`.)
+/// here from a direct read of `lua-5.5.1/src/ldump.c::dumpVarint` and
+/// `lua-5.5.1/src/lundump.c::loadVarint`.)
 ///
 /// Hand-rolled to keep the luna-core 0-dep contract (no `leb128` crate).
 /// Caps at 10 payload bytes (u64 saturation); rejects overflow.

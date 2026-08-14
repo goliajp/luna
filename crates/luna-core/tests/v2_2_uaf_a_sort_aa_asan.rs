@@ -27,9 +27,9 @@ fn sort_lua_full_file_under_assert_wrapper() {
     let body = std::fs::read(
         std::env::current_dir()
             .unwrap()
-            .join("tests/official/lua-5.5.0-tests/sort.lua"),
+            .join("tests/official/lua-5.5.1-tests/sort.lua"),
     )
-    .expect("sort.lua at tests/official/lua-5.5.0-tests/sort.lua");
+    .expect("sort.lua at tests/official/lua-5.5.1-tests/sort.lua");
     let mut src = Vec::new();
     src.extend_from_slice(PREAMBLE);
     src.extend_from_slice(&body);
