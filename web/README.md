@@ -75,7 +75,23 @@ The box, TLS and the Caddy vhost belong to `goliajp/devops`; the script
 never touches them. It does not run `caddy deploy` — that regenerates the
 whole Caddyfile from CaddyStore and drops any site not in the store.
 
+What ships differs from this directory in one way: the stylesheet is
+renamed after its own contents (`style.<hash>.css`) and the pages are
+rewritten to match, so a returning visitor's cached copy can never win.
+The source tree keeps the plain `style.css` and stays previewable as-is.
+
 Local preview: `cd web && python3 -m http.server 8080`.
+
+## Code blocks
+
+`paint.py` writes the syntax-highlight spans into the docs pages. kevy
+does the same colouring in the browser; this site has no JavaScript, so
+the spans live in the HTML. Edit a code block, then re-run it — it is
+idempotent, and it re-detects the language of every block:
+
+```sh
+cd web && python3 paint.py          # --dry to see what it would do
+```
 
 ## External dependencies
 

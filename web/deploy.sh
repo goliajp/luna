@@ -8,8 +8,9 @@
 # `caddy deploy`: that regenerates the whole Caddyfile from CaddyStore and
 # silently drops any site not in the store (devops incident, powerme).
 #
-# There is no build step — the site is plain HTML and one stylesheet, so what
-# ships is exactly what is in this directory.
+# The site is plain HTML and one stylesheet. The only thing this does that
+# the directory does not already say is rename the stylesheet after its
+# contents, so a returning visitor's cache cannot serve them the old one.
 #
 #   usage: web/deploy.sh [--check]
 #     --check   verify only; do not upload
@@ -108,7 +109,7 @@ fi
 # rewritten, so the source tree stays editable and previewable as-is.
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-rsync -a ./ "$stage/" --exclude deploy.sh --exclude README.md
+rsync -a ./ "$stage/" --exclude deploy.sh --exclude README.md --exclude paint.py
 hash=$(md5 -q assets/style.css 2>/dev/null || md5sum assets/style.css | cut -c1-32)
 hash=${hash:0:10}
 mv "$stage/assets/style.css" "$stage/assets/style.$hash.css"
