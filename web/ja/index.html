@@ -21,89 +21,62 @@
 <link rel="alternate" hreflang="ja" href="https://luna.golia.jp/ja/">
 <link rel="alternate" hreflang="x-default" href="https://luna.golia.jp/">
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
 
-<header class="masthead">
-  <div class="masthead-inner">
-    <a class="brand" href="./">
-      <img src="../assets/luna-logo.svg" alt="" width="26" height="26">
-      <span class="wordmark">luna</span>
-    </a>
-    <nav class="topnav">
-      <a class="navlink" href="#what">概要</a>
-      <a class="navlink" href="#parity">正しさ</a>
-      <a class="navlink" href="#dialects">ダイアレクト</a>
-      <a class="navlink" href="#architecture">アーキテクチャ</a>
-      <a class="navlink" href="#start">クイックスタート</a>
-      <a href="docs.html">ドキュメント</a>
-      <div class="langswitch" role="group" aria-label="language">
-        <a href="../" hreflang="en">EN</a>
-        <a href="../zh/" hreflang="zh-Hans">中文</a>
-        <a class="on" href="./" hreflang="ja">日本語</a>
-      </div>
-    </nav>
-  </div>
-</header>
+<header class="masthead"><div class="masthead-inner"><a class="brand" href="./"><img src="../assets/luna-logo.svg" alt="" width="26" height="26"/><span class="wordmark">luna</span></a><nav class="topnav"><a href="./" class="on" aria-current="page">ホーム</a><a href="docs.html">ドキュメント</a><a href="./#dialects" class="hide-sm">方言</a><div class="langswitch" role="group" aria-label="language"><a href="../" hreflang="en">EN</a><a href="../zh/" hreflang="zh-CN">中文</a><a class="on" href="./" hreflang="ja">日本語</a></div></nav></div></header>
 
-<main class="shell">
+<div class="shell">
 
-  <section class="hero">
-    <div class="kicker">v3.0.0 · MIT / Apache-2.0</div>
-    <h1>純粋な Rust による Lua ランタイム。</h1>
+  <section class="frontmatter">
+    <div class="eyebrow">v3.0.0 · MIT / Apache-2.0</div>
+    <h1><em>純粋な Rust</em> による Lua ランタイム。</h1>
     <p class="abstract">5 つの Lua ダイアレクトと MacroLua を 1 つのバイナリに。依存ゼロのインタプリタコア、Cranelift ベースのトレース JIT、ネイティブへの事前コンパイル、そして信頼できないスクリプトを埋め込むために設計されたサンドボックス。</p>
-    <div class="cta">
-      <a class="btn primary" href="docs.html">ドキュメントを読む</a>
-      <span class="install">cargo add luna-jit</span>
-      <a class="btn" href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer">GitHub <svg class="ext" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a>
+    <div class="figures">
+      <div class="figure"><div class="v">5.1 – 5.5</div><div class="k">種のダイアレクトと MacroLua</div></div>
+      <div class="figure"><div class="v">0</div><div class="k">コアの外部依存</div></div>
+      <div class="figure"><div class="v">514</div><div class="k">個の fixture が PUC とバイト単位で一致</div></div>
+      <div class="figure"><div class="v">~33 KB</div><div class="k">コールドスタート時のヒープ</div></div>
     </div>
-    <div class="stats">
-      <span><b>5.1 – 5.5</b> + MacroLua</span>
-      <span>コアの依存 <b>0</b></span>
-      <span><b>514</b> 個の fixture が PUC とバイト単位で一致</span>
-      <span>コールドスタート <b>~33 KB</b></span>
-      <span><b>lua.h</b> 互換 C ABI</span>
+    <div class="actions">
+      <a class="btn primary" href="#start">はじめる<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-down"><path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path></svg></a>
+      <a class="btn" href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a>
+      <a class="btn" href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a>
+      <a class="btn" href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a>
     </div>
   </section>
 
   <section id="what">
     <div class="sechead">
-      <span class="eyebrow">01 — luna とは</span>
       <h2>埋め込みたいすべての Lua を、1 つのランタイムで。</h2>
       <p class="lede">luna は Lua 言語ファミリを安全な Rust だけで一から実装しています。C はなく、埋め込み側が触れる表層に <code>unsafe</code> もありません。必要な依存量を選び、ワークロードの要求に応じて JIT と AOT の各層へ育てていけます。</p>
     </div>
-    <div class="grid">
-      <div class="cell">
-        <span class="tag">dialects</span>
+    <div class="cards">
+      <div class="card">
         <h3>5.1 – 5.5 + MacroLua</h3>
         <p>主要な Lua ダイアレクトすべてを 1 つのビルドに収め、<code>Vm</code> 構築時にダイアレクトを選択します。1 つのプロセスが複数のダイアレクトを干渉なく同時にホストできます。MacroLua は 5.4 の表層にコンパイル時 <code>@macro</code> 展開を加えます。</p>
       </div>
-      <div class="cell">
-        <span class="tag">core</span>
+      <div class="card">
         <h3>依存ゼロのコア</h3>
         <p><code>luna-core</code> が引き込む crate は、それ自身ただ 1 つ。<code>cargo deny</code> ゲートがコミットごとにこれを保証します。監査面は極小、ビルドは数秒、そして mmap RWX を要さないクリーンな wasm32 ターゲットが得られます。</p>
       </div>
-      <div class="cell">
-        <span class="tag">jit</span>
+      <div class="card">
         <h3>Cranelift トレース JIT</h3>
         <p>LuaJIT 系譜のトレースベースコンパイラ。ホットループは型付き IR に記録され、Cranelift を通じて降格され、ネイティブ機械語として実行されます。トレイト越しに差し込まれるため、インタプリタ経路はバックエンドに依存しません。</p>
       </div>
-      <div class="cell">
-        <span class="tag">aot</span>
+      <div class="card">
         <h3>事前コンパイルされたバイナリ</h3>
         <p><code>luna-aot</code> は Lua ソースを自己完結型のネイティブ実行ファイルに変換します。バイトコード、温めたトレース、静的ランタイムが 1 つのバイナリにリンクされ、ホストに luna が無くても動きます。</p>
       </div>
-      <div class="cell">
-        <span class="tag">embed</span>
+      <div class="card">
         <h3>心地よい埋め込み</h3>
         <p>mlua 風の Lua ファサード、引数を自動デコードする型付きネイティブ関数、テーブルビルダー、derive マクロによる userdata、Rust 側のコルーチンとデバッグフック、そして構造化された <code>LuaError</code>。</p>
       </div>
-      <div class="cell">
-        <span class="tag">sandbox</span>
+      <div class="card">
         <h3>スクリプトを閉じ込めるために</h3>
         <p>セキュリティ境界はホストが握ります。厳選した標準ライブラリのホワイトリスト、命令バジェット、概算メモリ上限、既定で無効なバイトコード読み込み——スクリプトが見られる能力はすべて Rust が明示的に許可したものです。</p>
       </div>
@@ -112,23 +85,19 @@
 
   <section id="parity">
     <div class="sechead">
-      <span class="eyebrow">02 — 正しさ</span>
       <h2>参照 Lua とバイト単位で一致、プッシュごとに検証。</h2>
       <p class="lede">互換性はここでは主張ではなく計測です。514 個の fixture からなる非公開コーパスを、ソースからビルドした純正 PUC インタプリタ——5.1.5、5.2.4、5.3.6、5.4.8、5.5.1——と突き合わせ、すべてがバイト単位で一致し skip ゼロであって初めてコミットがグリーンになります。</p>
     </div>
-    <div class="grid">
-      <div class="cell">
-        <span class="tag">差分</span>
+    <div class="cards">
+      <div class="card">
         <h3>514 fixture、5 ダイアレクト</h3>
         <p>各ダイアレクトの参照バイナリに対して stdout・stderr・終了コードで比較します。CI は 5.5 インタプリタが厳密に 5.5.1 であることも表明するため、基準が runner イメージとともに漂流することはありません。</p>
       </div>
-      <div class="cell">
-        <span class="tag">公式テスト</span>
+      <div class="card">
         <h3>PUC 自身のテスト</h3>
         <p>上流 Lua テストスイートを 5 ダイアレクト全てでエンドツーエンドに実行し、アサーション数も突き合わせます。PUC が自身のリリース検証に使うのと同じファイルです。</p>
       </div>
-      <div class="cell">
-        <span class="tag">メモリ</span>
+      <div class="card">
         <h3>ASAN・Miri・fuzz・soak</h3>
         <p>毎晩 AddressSanitizer で公式スイート全体を、Miri で provenance と UB を検査。7 つの fuzz ターゲットを毎週実行し、crash artifact が出たら失敗するゲートで守ります。長時間 soak の RSS ドリフトは 1% 未満に抑えます。</p>
       </div>
@@ -137,35 +106,34 @@
 
   <section id="dialects">
     <div class="sechead">
-      <span class="eyebrow">03 — ダイアレクト仕様表</span>
       <h2>各ダイアレクトで何ができるか。</h2>
       <p class="lede">機能の可否は <code>src/version.rs</code> の能力判定で決まります。luna はダイアレクトごとに PUC コンパイラ形式と一致するバイトコードを出力するため、PUC でコンパイルした <code>.luac</code> がそのまま読み込めます。</p>
     </div>
     <div class="tablewrap">
       <table>
         <thead>
-          <tr><th>機能</th><th>5.1</th><th>5.2</th><th>5.3</th><th>5.4</th><th>5.5</th><th>MacroLua</th></tr>
+          <tr><th>機能</th><th class="num">5.1</th><th class="num">5.2</th><th class="num">5.3</th><th class="num">5.4</th><th class="num">5.5</th><th class="num">MacroLua</th></tr>
         </thead>
         <tbody>
-          <tr class="groupname"><td colspan="7">数値</td></tr>
-          <tr><td class="rowhead">整数サブタイプ <code>Int</code></td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td class="rowhead"><code>//</code> 切り捨て除算</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td class="rowhead">ビット演算 <code>&amp; | ~ &lt;&lt; &gt;&gt;</code></td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td class="rowhead">16 進浮動小数 <code>0x1p4</code></td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr class="groupname"><td colspan="7">構文</td></tr>
-          <tr><td class="rowhead"><code>goto</code> / <code>::label::</code></td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td class="rowhead">空文 <code>;</code></td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr class="groupname"><td colspan="7">文字列</td></tr>
-          <tr><td class="rowhead"><code>\xXX</code> / <code>\z</code> エスケープ</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td class="rowhead"><code>\u{XXXX}</code> unicode エスケープ</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr class="groupname"><td colspan="7">5.4+ 属性</td></tr>
-          <tr><td class="rowhead"><code>local &lt;const&gt;</code></td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr><td class="rowhead"><code>local &lt;close&gt;</code></td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
-          <tr class="groupname"><td colspan="7">5.5 限定</td></tr>
-          <tr><td class="rowhead"><code>global</code> キーワード</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="n">–</td></tr>
-          <tr><td class="rowhead">名前付き可変長引数 <code>function f(...name)</code></td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td><td class="n">–</td></tr>
-          <tr class="groupname"><td colspan="7">MacroLua 限定</td></tr>
-          <tr><td class="rowhead"><code>@name(args)</code> コンパイル時マクロ</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="y">✓</td></tr>
+          <tr><td colspan="7"><b>数値</b></td></tr>
+          <tr><td>整数サブタイプ <code>Int</code></td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td><code>//</code> 切り捨て除算</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td>ビット演算 <code>&amp; | ~ &lt;&lt; &gt;&gt;</code></td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td>16 進浮動小数 <code>0x1p4</code></td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td colspan="7"><b>構文</b></td></tr>
+          <tr><td><code>goto</code> / <code>::label::</code></td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td>空文 <code>;</code></td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td colspan="7"><b>文字列</b></td></tr>
+          <tr><td><code>\xXX</code> / <code>\z</code> エスケープ</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td><code>\u{XXXX}</code> unicode エスケープ</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td colspan="7"><b>5.4+ 属性</b></td></tr>
+          <tr><td><code>local &lt;const&gt;</code></td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td><code>local &lt;close&gt;</code></td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num win">✓</td><td class="num win">✓</td></tr>
+          <tr><td colspan="7"><b>5.5 限定</b></td></tr>
+          <tr><td><code>global</code> キーワード</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num">–</td></tr>
+          <tr><td>名前付き可変長引数 <code>function f(...name)</code></td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td><td class="num">–</td></tr>
+          <tr><td colspan="7"><b>MacroLua 限定</b></td></tr>
+          <tr><td><code>@name(args)</code> コンパイル時マクロ</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num win">✓</td></tr>
         </tbody>
       </table>
     </div>
@@ -174,98 +142,70 @@
 
   <section id="architecture">
     <div class="sechead">
-      <span class="eyebrow">04 — アーキテクチャ</span>
       <h2>依存の表面は、あなたが選ぶ。</h2>
       <p class="lede">luna は 7 つの公開済み crate からなる Cargo ワークスペースとして提供されます。うち 3 つが直接依存するものです。インタプリタコアは単独で成立し、JIT と AOT の各層はトレイト境界越しに積み上がるため、バックエンドの削除や差し替えがコア API に触れることはありません。</p>
     </div>
-    <div class="grid">
-      <div class="cell">
-        <span class="tag">luna-core</span>
+    <div class="cards">
+      <div class="card">
         <h3>インタプリタ</h3>
         <p>レキサ、パーサ、ダイアレクト別コンパイラ、ディスパッチャ、ランタイム、標準ライブラリ、NaN ボックス値、侵入型 mark-sweep GC、PUC パターンエンジン、そして JIT トレイト表層。第三者 crate はゼロ。</p>
       </div>
-      <div class="cell">
-        <span class="tag">luna-jit</span>
+      <div class="card">
         <h3>JIT + C ABI</h3>
         <p>Cranelift ベースのバックエンド、<code>cdylib</code> / <code>staticlib</code> として提供する <code>lua.h</code> 互換 C ABI、<code>luna</code> CLI、Lua 埋め込みファサード。</p>
       </div>
-      <div class="cell">
-        <span class="tag">luna-aot</span>
+      <div class="card">
         <h3>AOT コンパイラ</h3>
         <p>ビルド時ツール:Lua ソース → 単独ネイティブバイナリ。生成物のランタイム依存ではありません。</p>
       </div>
     </div>
+  </section>
 
-    <h3 style="font-family:var(--display);font-size:1.06rem;margin-top:2.4rem">JIT パイプライン</h3>
-    <div class="pipeline">
-      <div class="stage">
-        <span class="no">01</span>
-        <h4>インタプリタ・ディスパッチャ</h4>
-        <p>カウンタを増やし、閾値を確認。</p>
-        <div class="arrow">↓ ホットパス検出</div>
-      </div>
-      <div class="stage">
-        <span class="no">02</span>
-        <h4>トレースレコーダ</h4>
-        <p>オペコードを型付き IR に再生。</p>
-        <div class="arrow">↓ 閉じたトレース、トレイト境界を越えて</div>
-      </div>
-      <div class="stage">
-        <span class="no">03</span>
-        <h4>Cranelift バックエンド</h4>
-        <p>IR を降格し、レジスタ割付、発行。</p>
-        <div class="arrow">↓ mmap RWX + シンボル再配置</div>
-      </div>
-      <div class="stage">
-        <span class="no">04</span>
-        <h4>ネイティブ機械語</h4>
-        <p>サイドイグジットまで実行。</p>
-        
-      </div>
+  <section>
+    <div class="sechead">
+      <h2>JIT パイプライン</h2>
     </div>
+    <ol class="steps">
+      <li>
+        <h3>インタプリタ・ディスパッチャ</h3>
+        <p>カウンタを増やし、閾値を確認。</p>
+      </li>
+      <li>
+        <h3>トレースレコーダ</h3>
+        <p>オペコードを型付き IR に再生。</p>
+      </li>
+      <li>
+        <h3>Cranelift バックエンド</h3>
+        <p>IR を降格し、レジスタ割付、発行。</p>
+      </li>
+      <li>
+        <h3>ネイティブ機械語</h3>
+        <p>サイドイグジットまで実行。</p>
+      </li>
+    </ol>
   </section>
 
   <section id="start">
     <div class="sechead">
-      <span class="eyebrow">05 — クイックスタート</span>
       <h2>4 行で埋め込む。</h2>
       <p class="lede">必要な依存量に合う crate を追加し、対象ダイアレクトの <code>Vm</code> を構築して評価します。</p>
     </div>
-<pre><code><span class="c">// Cargo.toml → luna-jit = "3"</span>
+<div class="codeblock">
+  <div class="code-head"><span>Rust</span></div>
+  <pre><code><span class="tok-c">// Cargo.toml → luna-jit = "3"</span>
 
-<span class="k">use</span> luna_jit::{Vm, LuaVersion};
+<span class="tok-k">use</span> luna_jit::{Vm, LuaVersion};
 
-<span class="k">let mut</span> vm = Vm::new(LuaVersion::Lua54);
-<span class="k">let</span> v = vm.eval(<span class="s">"return 6 * 7"</span>)?;   <span class="c">// 42</span></code></pre>
+<span class="tok-k">let mut</span> vm = Vm::new(LuaVersion::Lua54);
+<span class="tok-k">let</span> v = vm.eval(<span class="tok-s">"return 6 * 7"</span>)?;   <span class="tok-c">// 42</span></code></pre>
+</div>
     <p class="prose" style="margin-top:1.4rem">第三者依存が一切ないインタプリタが欲しい場合は <code>luna-core</code> に依存してください。単独ネイティブバイナリを生成するには <code>luna-aot</code> をビルド時ツールとして使います。<a href="docs.html">ドキュメント</a>で埋め込み API、サンドボックス制御、ダイアレクトマトリクスを網羅しています。</p>
   </section>
+</div>
 
-  <footer>
-    <div>
-      <a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA">
-        <img src="../assets/golia-wordmark.png" alt="GOLIA" width="92" height="20">
-      </a>
-      <div>luna は MIT / Apache-2.0 のデュアルライセンスです。</div>
-    </div>
-    <div class="links">
-      <a href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
-        GitHub
-        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-      </a>
-      <a href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
-        crates.io
-        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-      </a>
-      <a href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/><path d="M8 7h6"/><path d="M8 11h8"/></svg>
-        docs.rs
-        <svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-      </a>
-    </div>
-  </footer>
+<div class="shell">
+<footer><div><a class="org" href="https://golia.jp" target="_blank" rel="noreferrer" aria-label="GOLIA"><img src="../assets/golia-wordmark.png" alt="GOLIA" width="92" height="20"/></a><div>Released under MIT OR Apache-2.0</div></div><div class="links"><a href="https://github.com/goliajp/luna" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg>GitHub<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://crates.io/crates/luna-jit" target="_blank" rel="noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-package"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>crates.io<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a><a href="https://docs.rs/luna-jit" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" focusable="false"><path d="m22.903 11.728-4.528-1.697V4.945a1.69 1.69 0 0 0-1.097-1.58l-4.687-1.757a1.668 1.668 0 0 0-1.186 0L6.717 3.366a1.687 1.687 0 0 0-1.097 1.58v5.085l-4.528 1.697A1.69 1.69 0 0 0 0 13.308v5.16c0 .638.36 1.224.933 1.51l4.687 2.344a1.68 1.68 0 0 0 1.51 0L12 19.884l4.87 2.438a1.68 1.68 0 0 0 1.51 0l4.687-2.344a1.69 1.69 0 0 0 .933-1.51v-5.16c0-.703-.436-1.331-1.097-1.58zm-6.122-1.66-3.984 1.496V8.367l3.984-1.734zM7.22 4.88 12 3.09l4.781 1.79v.028L12 6.848l-4.781-1.94Zm3.937 13.645-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79zm11.25 5.25-3.984 1.992V16.81l3.984-1.818zm0-5.25-4.781 1.94-4.781-1.94v-.028l4.781-1.79 4.781 1.79z"></path></svg>docs.rs<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right ext"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></svg></a></div></footer>
+</div>
 
-</main>
 </body>
 </html>
