@@ -40,8 +40,45 @@ jobs:
           sudo apt-get install -y -qq luajit
           echo "LUAJIT=/usr/bin/luajit" >> "$GITHUB_ENV"
 
-      - name: Show LuaJIT version
-        run: $LUAJIT -v
+      # v2.20 D4 — record the reference version, and fail if it moves.
+      #
+      # This comes from apt, so it tracks the runner image rather than a
+      # pin of ours: an image refresh can change the differential
+      # reference with nothing in our history to show it. That is the
+      # same class of problem as diff-puc's old apt-first path (fixed in
+      # v2.18 by building 5.5.1 from source).
+      #
+      # LuaJIT is not built from source here because this comparison is
+      # best-effort fuzz, not a #2 acceptance gate — 5.1 compatibility
+      # only, per arc charter §2.6. So instead of pinning the build, we
+      # pin the *expectation*: the version is asserted, and the job goes
+      # red when the image moves under us. Then it is a deliberate
+      # decision to update EXPECTED_LUAJIT, with the change recorded,
+      # rather than a silent basis shift.
+      #
+      # The assertion is a PREFIX ("LuaJIT 2.1"), not the full string.
+      # LuaJIT 2.1 is a rolling release whose patch component is a commit
+      # timestamp (the runner currently ships 2.1.1703358377), so pinning
+      # it exactly would go red on every image refresh — turning this into
+      # another job whose red state means nothing. The prefix catches the
+      # drift that would actually change semantics (2.1 -> 2.2), while the
+      # full version is written to the step summary every run, so the exact
+      # basis stays recoverable from the job log.
+      - name: Show and assert the LuaJIT version
+        env:
+          EXPECTED_LUAJIT: "LuaJIT 2.1"
+        run: |
+          set -euo pipefail
+          GOT=$($LUAJIT -v 2>&1 | head -1)
+          echo "LuaJIT reference: $GOT"
+          echo "luajit-version=$GOT" >> "$GITHUB_STEP_SUMMARY"
+          case "$GOT" in
+            "$EXPECTED_LUAJIT"*) echo "matches expected prefix: $EXPECTED_LUAJIT" ;;
+            *)
+              echo "::error::LuaJIT reference moved. Expected prefix '$EXPECTED_LUAJIT', runner now ships '$GOT'. Update EXPECTED_LUAJIT deliberately, noting what changed."
+              exit 1
+              ;;
+          esac
 
       - name: Install cargo-fuzz
         # Unpinned to match fuzz.yml — the `--version 0.12.0
