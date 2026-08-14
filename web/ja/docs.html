@@ -28,7 +28,7 @@
   <section class="frontmatter">
     <div class="eyebrow">v3.0.0 · ドキュメント</div>
     <h1>luna ドキュメント</h1>
-    <p class="abstract">luna を埋め込むために必要なすべて:crate の分割、Rust API、サンドボックス制御、デプロイ形態、方言ごとの互換マトリクス。</p>
+    <p class="abstract">luna を埋め込むために必要なすべて：crate の分割、Rust API、サンドボックス制御、デプロイ形態、方言ごとの互換マトリクス。</p>
   </section>
 </div>
 
@@ -58,7 +58,7 @@ luna-jit = <span class="tok-s">"3"</span>
 
 <span class="tok-c"># または最小の表面 —— 純インタプリタ、第三者依存ゼロ</span>
 luna-core = <span class="tok-s">"3"</span></code></pre>
-      <p>選んだダイアレクトの <code>Vm</code> を構築して評価します。<code>Vm::new</code> は既定で安全な標準ライブラリをすべて開き、JIT を組み込みます(<code>luna-core</code> では no-op バックエンド)。</p>
+      <p>選んだダイアレクトの <code>Vm</code> を構築して評価します。<code>Vm::new</code> は既定で安全な標準ライブラリをすべて開き、JIT を組み込みます（<code>luna-core</code> では no-op バックエンド）。</p>
       <pre><code><span class="tok-k">use</span> luna_jit::vm::Vm;
 <span class="tok-k">use</span> luna_jit::version::LuaVersion;
 
@@ -68,7 +68,7 @@ luna-core = <span class="tok-s">"3"</span></code></pre>
     <span class="tok-k">let</span> s: String = result[0].try_as_str().unwrap().to_string();
     println!(<span class="tok-s">"{s}"</span>);
 }</code></pre>
-      <div class="callout note"><b>どの crate を?</b> <code>luna-jit</code> は <code>luna-core</code> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <code>wasm32</code> ターゲットが欲しいときだけ、<code>luna-core</code> を直接使ってください。</div>
+      <div class="callout note"><b>どの crate を？</b> <code>luna-jit</code> は <code>luna-core</code> のすべてを再エクスポートするので、JIT crate から始めれば分割を意識せずに済みます。極小の監査面、高速ビルド、あるいは <code>wasm32</code> ターゲットが欲しいときだけ、<code>luna-core</code> を直接使ってください。</div>
 <h2 id="cli">コマンドラインインターフェース</h2>
       <p><code>luna-jit</code> をインストールすると、PATH に <code>luna</code> バイナリ——REPL 兼スクリプトランナー——が置かれます。</p>
       <pre><code>luna script.lua              <span class="tok-c"># ファイルを実行</span>
@@ -79,17 +79,17 @@ luna                         <span class="tok-c"># 対話 REPL(Ctrl-D で終了)
         <table>
           <thead><tr><th>フラグ</th><th>挙動</th></tr></thead>
           <tbody>
-            <tr><td class="mono">--lua=5.X</td><td>ダイアレクトを選択(5.1 / 5.2 / 5.3 / 5.4 / 5.5;既定 5.5)</td></tr>
-            <tr><td class="mono">--sandbox</td><td>base/math/string/table/coroutine のみ開く;バイトコードロードを拒否</td></tr>
+            <tr><td class="mono">--lua=5.X</td><td>ダイアレクトを選択（5.1 / 5.2 / 5.3 / 5.4 / 5.5；既定 5.5）</td></tr>
+            <tr><td class="mono">--sandbox</td><td>base/math/string/table/coroutine のみ開く；バイトコードロードを拒否</td></tr>
             <tr><td class="mono">--budget=N</td><td>実行前に命令予算を設定</td></tr>
-            <tr><td class="mono">--no-jit</td><td>インタプリタのみで実行(no-op JIT バックエンドを組み込む)</td></tr>
+            <tr><td class="mono">--no-jit</td><td>インタプリタのみで実行（no-op JIT バックエンドを組み込む）</td></tr>
             <tr><td class="mono">--profile</td><td>スクリプト終了後に trace-JIT カウンタを出力</td></tr>
-            <tr><td class="mono">-e "&lt;code&gt;"</td><td>ファイルの代わりにインラインコードを実行</td></tr>
+            <tr><td class="mono">-e "&lt；code&gt；"</td><td>ファイルの代わりにインラインコードを実行</td></tr>
             <tr><td class="mono">-</td><td>stdin からソースを読む</td></tr>
           </tbody>
         </table>
       </div>
-      <p>REPL は各行をまず式として評価し(<code>return</code> を前置)、構文エラーなら文として再試行します——式も代入も動きます。</p>
+      <p>REPL は各行をまず式として評価し（<code>return</code> を前置）、構文エラーなら文として再試行します——式も代入も動きます。</p>
 <h2 id="embedding">埋め込み</h2>
       <p>埋め込み API が主要な表面です——C ABI より豊かで、完全に安全な所有権を備えます。以下は各能力の形です。完全なクックブックは proc-macro userdata と非同期表面を含む 14 節をカバーします。</p>
 
@@ -110,7 +110,7 @@ luna                         <span class="tok-c"># 対話 REPL(Ctrl-D で終了)
 <span class="tok-k">let</span> r: i64 = lua.eval(<span class="tok-s">"return 1 + 2"</span>).unwrap();</code></pre>
 
       <h3>グローバルとテーブル</h3>
-      <p><code>set_global</code> は任意の <code>IntoValue</code> 型を受け取ります(<code>Option&lt;T&gt;</code> は nil に対応)。テーブルはワンショットとチェーンビルダーの 2 形態です。</p>
+      <p><code>set_global</code> は任意の <code>IntoValue</code> 型を受け取ります（<code>Option&lt;T&gt;</code> は nil に対応）。テーブルはワンショットとチェーンビルダーの 2 形態です。</p>
       <pre><code>vm.set_global(<span class="tok-s">"answer"</span>, 42_i64)?;
 vm.set_global(<span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)?;
 vm.set_global(<span class="tok-s">"missing"</span>, Option::&lt;i64&gt;::None)?;   <span class="tok-c">// nil に設定</span>
@@ -202,13 +202,13 @@ lua.set_global(<span class="tok-s">"add"</span>, add)?;
 t.set(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>, <span class="tok-s">"luna"</span>)?;
 <span class="tok-k">let</span> name: String = t.get(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>)?;</code></pre>
 <h2 id="threading">スレッド</h2>
-      <p>既定の <code>Vm</code>(および <code>Lua</code> ファサード)は <strong><code>!Send + !Sync</code></strong> です——Vm と、その GC ヒープへのすべてのハンドルは、それを生成したスレッド上に留まります。この制約は <code>compile_fail</code> doctest によってコンパイル時に強制されます。</p>
+      <p>既定の <code>Vm</code>（および <code>Lua</code> ファサード）は <strong><code>!Send + !Sync</code></strong> です——Vm と、その GC ヒープへのすべてのハンドルは、それを生成したスレッド上に留まります。この制約は <code>compile_fail</code> doctest によってコンパイル時に強制されます。</p>
       <p>これは意図したパフォーマンス上の選択です。GC は侵入的マーク&スイープヒープ上の <code>Gc&lt;T&gt; = NonNull&lt;T&gt;</code> を用い、stop-the-world プロトコルもロック付きのトレースキャッシュ読み取りもありません。<code>Send</code> にすると実ワークロードで 5〜15% のコストが乗ります。そもそも Lua 自身のデータモデルがシングルスレッドです。</p>
       <h3>3 つの定石パターン</h3>
       <ul>
         <li><strong>シングルスレッド Tokio</strong> —— <code>flavor = "current_thread"</code> で Vm のいるスレッド上に executor を走らせ、<code>vm.eval_async(...)</code> を使う。</li>
         <li><strong>マルチスレッド Tokio 上の <code>LocalSet</code></strong> —— <code>LocalSet::run_until</code> が Vm の future を呼び出しスレッドに固定する。</li>
-        <li><strong>OS スレッドごとに 1 つの Vm + チャネル</strong> —— 真の並列には、スレッドごとに Vm を 1 つ。スレッド間を渡るのは <code>Send</code> なデータ(ソース文字列、結果文字列)だけ。</li>
+        <li><strong>OS スレッドごとに 1 つの Vm + チャネル</strong> —— 真の並列には、スレッドごとに Vm を 1 つ。スレッド間を渡るのは <code>Send</code> なデータ（ソース文字列、結果文字列）だけ。</li>
       </ul>
       <pre><code>#[tokio::main(flavor = <span class="tok-s">"current_thread"</span>)]
 <span class="tok-k">async</span> <span class="tok-k">fn</span> main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
@@ -217,19 +217,19 @@ t.set(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>
     <span class="tok-k">let</span> result = vm.eval_async(<span class="tok-s">"return 1 + 2"</span>).<span class="tok-k">await</span>?;
     Ok(())
 }</code></pre>
-      <div class="callout note"><b>オプトインの <code>SendVm</code>。</b><code>feature = "send"</code> フラグは <code>SendVm</code> newtype を追加します。これは <code>Send</code>(ただし <code>Sync</code> ではない)なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <code>.await</code> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <code>SendVm</code> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<code>Send</code> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
+      <div class="callout note"><b>オプトインの <code>SendVm</code>。</b><code>feature = "send"</code> フラグは <code>SendVm</code> newtype を追加します。これは <code>Send</code>（ただし <code>Sync</code> ではない）なので、そのクローンはスレッド間を移動でき、マルチスレッドランタイムで <code>.await</code> をまたいで保持できます。現状はインタプリタ専用で、トレース JIT は <code>SendVm</code> 上では動きません。実測オーバーヘッドはおおむねノイズの範囲です。<code>Send</code> + JIT が必要なら、スレッドごとに Vm のパターンを使ってください。</div>
 <h2 id="security">セキュリティとサンドボックス</h2>
       <p>luna は埋め込み VM です。セキュリティ境界を握るのはスクリプトではなく<strong>ホスト</strong>です。スクリプトが見るすべての能力は、Rust コードが明示的に許可したものです。</p>
       <h3>対象範囲</h3>
       <ul>
-        <li>スクリプト由来の OS アクセスによる漏洩(ファイルシステム、環境変数、ネットワーク、子プロセス)——ホストが公開した範囲を超えるものは遮断。</li>
+        <li>スクリプト由来の OS アクセスによる漏洩（ファイルシステム、環境変数、ネットワーク、子プロセス）——ホストが公開した範囲を超えるものは遮断。</li>
         <li>リソース枯渇——呼び出しごとの命令予算と概算メモリ上限が、捕捉可能な Lua エラーを強制します。</li>
         <li>バイトコードローダーのエスケープ——luna 自身の dump 形式と PUC <code>.luac</code> ロードはサンドボックスで既定オフ。</li>
         <li>埋め込み表面のゼロ <code>unsafe</code>——<code>cargo doc</code> で見えるすべての API は安全な Rust。</li>
       </ul>
       <h3>対象外</h3>
       <ul>
-        <li>VM の正しさに関するバグ(サンドボックスエスケープではなく通常のバグとして報告)、サイドチャネル耐性、サプライチェーンの完全性。</li>
+        <li>VM の正しさに関するバグ（サンドボックスエスケープではなく通常のバグとして報告）、サイドチャネル耐性、サプライチェーンの完全性。</li>
         <li>合法だが病的なスクリプトによる DoS——予算が縛るのは呼び出しごとの CPU とメモリであり、ホストのシンクへの出力量ではありません。</li>
         <li>一度開いた <code>debug.*</code>、および <code>os.execute</code> / <code>io.popen</code>——これらは Vm やシェルを手渡すのと同義です。</li>
       </ul>
@@ -240,10 +240,10 @@ t.set(&amp;<span class="tok-k">mut</span> lua, <span class="tok-s">"name"</span>
         <table>
           <thead><tr><th>形態</th><th>Crate</th><th>備考</th></tr></thead>
           <tbody>
-            <tr><td>単独バイナリ、ソース固定</td><td class="mono">luna-aot</td><td>ビルド時;ホストにランタイム crate なし</td></tr>
-            <tr><td>Rust サービス、JIT 有効</td><td class="mono">luna-jit</td><td>Cranelift を引き込む;クロススレッドは <code>feature = "send"</code></td></tr>
+            <tr><td>単独バイナリ、ソース固定</td><td class="mono">luna-aot</td><td>ビルド時；ホストにランタイム crate なし</td></tr>
+            <tr><td>Rust サービス、JIT 有効</td><td class="mono">luna-jit</td><td>Cranelift を引き込む；クロススレッドは <code>feature = "send"</code></td></tr>
             <tr><td>Rust サービス、インタプリタのみ</td><td class="mono">luna-core</td><td>第三者依存ゼロ</td></tr>
-            <tr><td>WASM(ブラウザ / wasmtime)</td><td class="mono">luna-core</td><td><code>wasm32-wasip1</code>;JIT オフ、<code>io</code>/<code>os</code> はスタブ</td></tr>
+            <tr><td>WASM（ブラウザ / wasmtime）</td><td class="mono">luna-core</td><td><code>wasm32-wasip1</code>；JIT オフ、<code>io</code>/<code>os</code> はスタブ</td></tr>
           </tbody>
         </table>
       </div>
@@ -277,24 +277,24 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
 <h2 id="compat">互換性</h2>
       <p>luna は 1 つのバイナリで Lua 5.1 – 5.5 と MacroLua を実装します。ダイアレクトは Vm ごとに選択され、1 つのプロセスが複数を同時にホストできます。機能別のマトリクスはトップページの<a href="index.html#dialects">ダイアレクト仕様表</a>を参照してください。</p>
       <h3>標準ライブラリ</h3>
-      <p>サンドボックス埋め込みに適したホワイトリスト部分集合は、<code>Vm::open_*()</code> メソッドで公開されます:</p>
+      <p>サンドボックス埋め込みに適したホワイトリスト部分集合は、<code>Vm::open_*()</code> メソッドで公開されます：</p>
       <div class="tablewrap">
         <table>
           <thead><tr><th>ライブラリ</th><th>メソッド</th><th>カバレッジ</th></tr></thead>
           <tbody>
             <tr><td class="mono">base</td><td class="mono">open_base</td><td>完全</td></tr>
             <tr><td class="mono">math</td><td class="mono">open_math</td><td>完全</td></tr>
-            <tr><td class="mono">string</td><td class="mono">open_string</td><td>完全(パターンマッチ含む)</td></tr>
+            <tr><td class="mono">string</td><td class="mono">open_string</td><td>完全（パターンマッチ含む）</td></tr>
             <tr><td class="mono">table</td><td class="mono">open_table</td><td>完全</td></tr>
             <tr><td class="mono">coroutine</td><td class="mono">open_coroutine</td><td>完全</td></tr>
-            <tr><td class="mono">io / os</td><td class="mono">open_io / open_os</td><td>完全(ホスト制御)</td></tr>
+            <tr><td class="mono">io / os</td><td class="mono">open_io / open_os</td><td>完全（ホスト制御）</td></tr>
             <tr><td class="mono">utf8</td><td class="mono">open_utf8</td><td>完全(5.3+)</td></tr>
             <tr><td class="mono">debug</td><td>—</td><td>部分、既定では非公開</td></tr>
           </tbody>
         </table>
       </div>
       <h3>C API</h3>
-      <p>luna は <code>lua.h</code> 互換の C ABI 部分集合を公開する <code>cdylib</code> / <code>staticlib</code> を提供します。<code>liblua</code> にリンクしている既存の PUC 利用者は、そのカバー範囲で luna を drop-in として使えます:状態のライフサイクル、値の push/read、スタック操作、テーブル API、<code>lua_call</code> / <code>lua_pcall</code>、そしてスクリプトのロード。13 個の適合性テストがこれを固定します。userdata、C 側コルーチン、継続はまだ未対応——これらはより豊かな Rust API を使ってください。</p>
+      <p>luna は <code>lua.h</code> 互換の C ABI 部分集合を公開する <code>cdylib</code> / <code>staticlib</code> を提供します。<code>liblua</code> にリンクしている既存の PUC 利用者は、そのカバー範囲で luna を drop-in として使えます：状態のライフサイクル、値の push/read、スタック操作、テーブル API、<code>lua_call</code> / <code>lua_pcall</code>、そしてスクリプトのロード。13 個の適合性テストがこれを固定します。userdata、C 側コルーチン、継続はまだ未対応——これらはより豊かな Rust API を使ってください。</p>
       <h3>バイトコード</h3>
       <p>luna は PUC コンパイラのバイナリ形式に一致するダイアレクト別バイトコードを発行するため、PUC でコンパイルした <code>.luac</code> はそのままロードでき、luna がダンプしたバイトコードも PUC でロードできます。バイトコードのロードは<strong>サンドボックスでは既定オフ</strong>です——細工されたバイトコードは、コンパイラが強制する型チェックを迂回しうるためです。</p>
 <h2 id="architecture">アーキテクチャ</h2>
@@ -311,7 +311,7 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
           </tbody>
         </table>
       </div>
-      <p>依存ゼロの <code>luna-core</code> 契約は CI の <code>cargo deny check</code> で強制されます。ソースは 3 層に分類されます——<strong>Stone(石)</strong>(業務非依存の基盤:パターンエンジン、ヒープ、値レイアウト)、<strong>Steel(鋼)</strong>(Lua ドメインのプリミティブ:コンパイラ、ディスパッチャ、JIT バックエンド)、<strong>Cement(コンクリート)</strong>(ホストのグルー:CLI、C ABI、標準ライブラリ束縛)——それぞれ変更規律とレビュー深度が異なります。</p>
+      <p>依存ゼロの <code>luna-core</code> 契約は CI の <code>cargo deny check</code> で強制されます。ソースは 3 層に分類されます——<strong>Stone（石）</strong>（業務非依存の基盤：パターンエンジン、ヒープ、値レイアウト）、<strong>Steel（鋼）</strong>（Lua ドメインのプリミティブ：コンパイラ、ディスパッチャ、JIT バックエンド）、<strong>Cement（コンクリート）</strong>（ホストのグルー：CLI、C ABI、標準ライブラリ束縛）——それぞれ変更規律とレビュー深度が異なります。</p>
 <h2 id="performance">パフォーマンス</h2>
       <p>luna はあえて単一の見出し比率を出しません。勝つマイクロベンチのセルはマーケティングの産物であり、負けるセルこそ追う価値のあるシグナルです。参照実装に対して 1.5 倍を超える差があれば、表層の磨き込みではなく、その負荷を段階ごとに並べて分解します。</p>
       <p>リリースに同梱されるのは再現可能なベースラインです。メモリは dhat の下で 5 つの負荷にわたり測定され、いずれかの定常状態で 5% を超える回帰は追跡対象のアラームです。</p>
@@ -322,11 +322,11 @@ luna-aot compile foo.lua --target x86_64-unknown-linux-gnu --out foo.linux</code
         <div><div class="n">63<span>KB</span></div><div>userdata_lifecycle · 200 + ファイナライザ</div></div>
       </div>
 <h2 id="versioning">バージョン方針と安定性</h2>
-      <p>公開 API は、安定表面(破壊的変更には SemVer メジャーの引き上げが必要)と、不安定 / 内部表面(パフォーマンス作業のためマイナーで変わりうる)に分かれます。</p>
+      <p>公開 API は、安定表面（破壊的変更には SemVer メジャーの引き上げが必要）と、不安定 / 内部表面（パフォーマンス作業のためマイナーで変わりうる）に分かれます。</p>
       <ul>
-        <li><strong>安定:</strong><code>luna_jit</code> の入口型(<code>Lua</code>、<code>LuaFunction</code>、<code>LuaTable</code>、<code>LuaRoot</code>、<code>LuaSandboxBuilder</code>)、再エクスポートされたコア(<code>Vm</code>、<code>LuaVersion</code>、<code>Value</code>、<code>LuaError</code>)、derive マクロ、そして <code>lua.h</code> 互換 C ABI。</li>
-        <li><strong>不安定 / 内部:</strong><code>luna_core::{compiler, frontend, jit, pattern}</code> と JIT バックエンド内部——最適化のため自由に変わりうる。</li>
-        <li><strong>バイトコード:</strong>ダイアレクト別のバイナリ形式は安定で、PUC <code>.luac</code> ファイルは全ラインでロードできます。</li>
+        <li><strong>安定：</strong><code>luna_jit</code> の入口型(<code>Lua</code>、<code>LuaFunction</code>、<code>LuaTable</code>、<code>LuaRoot</code>、<code>LuaSandboxBuilder</code>)、再エクスポートされたコア(<code>Vm</code>、<code>LuaVersion</code>、<code>Value</code>、<code>LuaError</code>)、derive マクロ、そして <code>lua.h</code> 互換 C ABI。</li>
+        <li><strong>不安定 / 内部：</strong><code>luna_core::{compiler, frontend, jit, pattern}</code> と JIT バックエンド内部——最適化のため自由に変わりうる。</li>
+        <li><strong>バイトコード：</strong>ダイアレクト別のバイナリ形式は安定で、PUC <code>.luac</code> ファイルは全ラインでロードできます。</li>
       </ul>
       <div class="callout note">安定 / 不安定の項目一覧は、埋め込みクックブックの API 契約節と <code>CHANGELOG.md</code> にあります。<a href="https://docs.rs/luna-jit">docs.rs</a> の rustdoc リファレンスが項目ごとの正典です。</div>
     </main>

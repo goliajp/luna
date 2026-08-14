@@ -53,7 +53,7 @@
   <section id="what">
     <div class="sechead">
       <h2>一个运行时，覆盖你要嵌入的每一种 Lua。</h2>
-      <p class="lede">luna 用安全的 Rust 从头实现了整个 Lua 语言家族——没有 C,嵌入方接触到的表层也没有 <code>unsafe</code>。按需选择依赖体量，再随工作负载增长逐步用上 JIT 与 AOT 两层。</p>
+      <p class="lede">luna 用安全的 Rust 从头实现了整个 Lua 语言家族——没有 C，嵌入方接触到的表层也没有 <code>unsafe</code>。按需选择依赖体量，再随工作负载增长逐步用上 JIT 与 AOT 两层。</p>
     </div>
     <div class="cards">
       <div class="card">
@@ -66,7 +66,7 @@
       </div>
       <div class="card">
         <h3>Cranelift trace JIT</h3>
-        <p>一个 LuaJIT 血统的 trace 式编译器。热循环被记录成带类型的 IR,经 Cranelift 降级后作为原生机器码运行——通过 trait 接入，使解释器路径永不依赖具体后端。</p>
+        <p>一个 LuaJIT 血统的 trace 式编译器。热循环被记录成带类型的 IR，经 Cranelift 降级后作为原生机器码运行——通过 trait 接入，使解释器路径永不依赖具体后端。</p>
       </div>
       <div class="card">
         <h3>提前编译的二进制</h3>
@@ -86,12 +86,12 @@
   <section id="parity">
     <div class="sechead">
       <h2>对照参考 Lua 逐字节相等，每次推送都验。</h2>
-      <p class="lede">兼容性在这里是量出来的，不是声称的。一份 514 个 fixture 的私有语料库，对照从源码构建的原版 PUC 解释器——5.1.5、5.2.4、5.3.6、5.4.8 与 5.5.1——每一个都必须逐字节一致、零 skip,提交才算绿。</p>
+      <p class="lede">兼容性在这里是量出来的，不是声称的。一份 514 个 fixture 的私有语料库，对照从源码构建的原版 PUC 解释器——5.1.5、5.2.4、5.3.6、5.4.8 与 5.5.1——每一个都必须逐字节一致、零 skip，提交才算绿。</p>
     </div>
     <div class="cards">
       <div class="card">
-        <h3>514 个 fixture,五种方言</h3>
-        <p>按 stdout、stderr 与退出码对照每种方言的参考二进制。CI 还会断言 5.5 解释器恰好是 5.5.1,使基准不会随 runner 镜像漂移。</p>
+        <h3>514 个 fixture，五种方言</h3>
+        <p>按 stdout、stderr 与退出码对照每种方言的参考二进制。CI 还会断言 5.5 解释器恰好是 5.5.1，使基准不会随 runner 镜像漂移。</p>
       </div>
       <div class="card">
         <h3>PUC 自己的测试集</h3>
@@ -99,7 +99,7 @@
       </div>
       <div class="card">
         <h3>ASAN、Miri、fuzz、soak</h3>
-        <p>每晚用 AddressSanitizer 跑完整官方套件,Miri 检查 provenance 与 UB,七个 fuzz target 每周运行且由一道遇到 crash artifact 就失败的关卡把守，长跑 soak 的 RSS 漂移上限低于 1%。</p>
+        <p>每晚用 AddressSanitizer 跑完整官方套件，Miri 检查 provenance 与 UB，七个 fuzz target 每周运行且由一道遇到 crash artifact 就失败的关卡把守，长跑 soak 的 RSS 漂移上限低于 1%。</p>
       </div>
     </div>
   </section>
@@ -143,7 +143,7 @@
   <section id="architecture">
     <div class="sechead">
       <h2>自己决定依赖表面。</h2>
-      <p class="lede">luna 以一个含七个已发布 crate 的 Cargo 工作区形式交付，其中三个是你直接依赖的。解释器核心独立成立;JIT 与 AOT 两层通过 trait 边界叠加其上，因此移除或替换后端不会触及核心 API。</p>
+      <p class="lede">luna 以一个含七个已发布 crate 的 Cargo 工作区形式交付，其中三个是你直接依赖的。解释器核心独立成立；JIT 与 AOT 两层通过 trait 边界叠加其上，因此移除或替换后端不会触及核心 API。</p>
     </div>
     <div class="cards">
       <div class="card">
@@ -156,7 +156,7 @@
       </div>
       <div class="card">
         <h3>AOT 编译器</h3>
-        <p>一个构建期工具:Lua 源码 → 独立原生二进制。它不是产物的运行时依赖。</p>
+        <p>一个构建期工具：Lua 源码 → 独立原生二进制。它不是产物的运行时依赖。</p>
       </div>
     </div>
   </section>
@@ -188,7 +188,7 @@
   <section id="start">
     <div class="sechead">
       <h2>四行就能嵌入。</h2>
-      <p class="lede">加入符合你所需体量的 crate,为目标方言构造一个 <code>Vm</code>,然后求值。</p>
+      <p class="lede">加入符合你所需体量的 crate，为目标方言构造一个 <code>Vm</code>，然后求值。</p>
     </div>
 <div class="codeblock">
   <div class="code-head"><span>Rust</span></div>
