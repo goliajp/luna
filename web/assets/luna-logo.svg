@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="luna">
+  <!-- A crescent: one disc minus a second, offset disc. The oldest way to
+       draw a moon and the only one that still reads at 26px in a masthead.
+       Drawn on the same grid as the page's hairlines, in the paper/ink pair
+       the rest of the design uses; the blue is the single structural accent,
+       here a star rather than decoration. -->
+  <rect width="32" height="32" rx="7" fill="#17161a"/>
+  <path d="M18.4 6.6a10 10 0 1 0 0 18.8 8 8 0 0 1 0-18.8Z" fill="#fcfbf8"/>
+  <circle cx="23.4" cy="10.4" r="1.7" fill="#1576ff"/>
+</svg>
