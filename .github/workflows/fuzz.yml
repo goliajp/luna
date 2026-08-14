@@ -140,3 +140,42 @@ jobs:
           name: fuzz-crash-weekly-${{ matrix.target }}
           path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/
           retention-days: 365
+
+  # ─────────────────────────────────────────────────────────────────
+  # v2.20 D5 — make "no unhandled crash class" a check that can FAIL.
+  #
+  # Both fuzz jobs above are `continue-on-error: true`, which is right
+  # for the fuzzing itself: a crash needs human triage, not a blocked
+  # branch. But the side effect is that this workflow reports `success`
+  # even when a target crashed, so its conclusion proves only that the
+  # run happened — not that nothing was found. v3.0 acceptance #10 wants
+  # the second claim, and until now nothing asserted it.
+  #
+  # The fuzz jobs upload an artifact only on crash (`if: failure()`), so
+  # "this run produced an artifact" is exactly "a target crashed". This
+  # job turns that into a red signal.
+  # ─────────────────────────────────────────────────────────────────
+  crash-check:
+    name: no unhandled fuzz crashes
+    needs: [fuzz-weekly]
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: fail if any fuzz target uploaded a crash artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          N=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+                --jq '[.artifacts[] | select(.name | startswith("fuzz-crash"))] | length')
+          echo "crash artifacts in this run: $N"
+          echo "fuzz-crash-artifacts=$N" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$N" -ne 0 ]; then
+            gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+              --jq '.artifacts[] | select(.name | startswith("fuzz-crash")) | "  \(.name)"'
+            echo "::error::A fuzz target crashed. Triage the artifact and convert it to a regression test before this goes green again (v3.0 acceptance #10)."
+            exit 1
+          fi
+          echo "no crashes — #10's 'no unhandled crash class' holds for this run"

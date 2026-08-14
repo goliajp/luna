@@ -1,0 +1,87 @@
+# v2.20 D2 — catch toolchain lint drift before it turns develop red.
+#
+# Rust ships every six weeks and each release can add or sharpen lints.
+# ci.yml runs clippy with `-D warnings` on *stable*, so a new lint lands
+# as a hard failure the day that stable is released — with no warning
+# beforehand. That is exactly how v2.17 happened: `collapsible_if`
+# became active and develop was red for 34 days.
+#
+# This job runs the same clippy invocations against **beta** and
+# **nightly**, i.e. the compilers that stable will become in 6 and 12
+# weeks. A lint that will break us shows up here first, while there is
+# still time to clear it as ordinary work.
+#
+# Design note — this job FAILS when it finds something, deliberately.
+# The v2.17 audit's lesson was that a workflow whose steady state is red
+# carries no signal (soak-weekly had been red 11 weeks running while
+# producing perfectly good data, and nobody read it). So the contract
+# here is: green means the next two toolchains are clean, red means
+# clear the lints now, and red is never the normal state. Nightly is
+# split into its own job and allowed to fail without failing the
+# workflow, because nightly lints churn and are not a commitment.
+
+name: lint-drift
+
+on:
+  schedule:
+    # Wednesdays 05:00 UTC. Rust releases land on Thursdays, so this
+    # gives a week's notice before beta promotes to stable.
+    - cron: '0 5 * * 3'
+  workflow_dispatch:
+
+jobs:
+  beta:
+    name: clippy on beta (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@beta
+        with:
+          components: clippy, rustfmt
+      - name: rustc version
+        run: rustc +beta --version && cargo +beta clippy --version
+
+      # Mirrors ci.yml's lint job exactly — same exclusions, same flags.
+      #
+      # Expect to see `unused import` warnings from `cranelift-codegen`
+      # in the log. Those come from the vendored wasmtime tree, which
+      # cargo lint-caps as a dependency, so they do not fail the step and
+      # are not ours to fix. Only findings in luna's own crates can turn
+      # this job red. (Checked on 1.98.0-beta.7, 2026-08-14: five such
+      # warnings, exit code 0.)
+      - name: cargo +beta clippy --workspace --all-targets -- -D warnings
+        run: |
+          cargo +beta clippy --workspace --all-targets \
+            --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
+
+      - name: cargo +beta clippy -p luna-core --features send --tests
+        run: cargo +beta clippy -p luna-core --features send --tests -- -D warnings
+
+      - name: cargo +beta clippy -p luna-jit --features repl-line-editor
+        run: cargo +beta clippy -p luna-jit --bin luna --features repl-line-editor -- -D warnings
+
+      - name: cargo +beta fmt --all -- --check
+        run: cargo +beta fmt --all -- --check
+
+  nightly:
+    name: clippy on nightly (informational)
+    runs-on: ubuntu-latest
+    # Nightly lints churn and get reverted; a failure here is a heads-up,
+    # not a defect. Kept out of the workflow's pass/fail so `beta` stays
+    # a meaningful signal.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - name: rustc version
+        run: rustc +nightly --version && cargo +nightly clippy --version
+      - name: cargo +nightly clippy --workspace --all-targets
+        run: |
+          cargo +nightly clippy --workspace --all-targets \
+            --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings

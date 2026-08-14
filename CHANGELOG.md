@@ -19,6 +19,66 @@ optimization.
 
 ---
 
+## [3.0.0] — 2026-08-14
+
+The v2.x maturity arc's destination. **No breaking change** — the major
+bump marks the maturity gate, not an API break. `luna_core`'s public
+surface is identical to 2.18.0 (788 items, zero removals, zero
+additions), and code building against 2.x builds against 3.0 unchanged.
+
+### What 3.0 asserts
+
+The arc opened (2026-06-28) with a list of ten things that had to be
+true before luna could be called mature. Where each landed:
+
+| | Criterion | How it is evidenced today |
+|---|---|---|
+| 1 | No known UAF / heap corruption | ASAN nightly over the full PUC official suite across 5 dialects, 48 consecutive greens; Miri on the library plus a regression subset; zero open known-bugs |
+| 2 | Differential parity with PUC 5.1–5.5 | 514 private-corpus fixtures byte-identical to stock PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.8 / 5.5.1, zero skips, gated on every push; the official suite passes end-to-end on all five dialects |
+| 3 | 24h-equivalent soak clean | Four capped runs, ~23h cumulative, second-half RSS drift under 1% with no vm_mem accumulation; six later samples corroborate |
+| 4 | Cross-allocator clean | glibc + jemalloc + mimalloc + Apple-malloc, nightly |
+| 5 | Cross-platform matrix green per push | ubuntu / macos / windows / ubuntu-arm × stable, plus wasm32 targets, perf-gate, feature matrix and the zero-dependency contract |
+| 6 | Perf floor closed or ceiling explicit | v2.9 established a structural ceiling with a decomposition record |
+| 7 | API stability | Enforced per release by a public-surface audit: a minor bump must show an empty removal list |
+| 8 | *(removed from the gate)* | Adoption is a product outcome, not an engineering one; tracked as an observed fact rather than a precondition |
+| 9 | Documentation complete | Every public item documented, `deny(missing_docs)` |
+| 10 | Fuzz corpus established | 7 targets on a weekly schedule, with a gate that fails the run if any target produces a crash artifact |
+
+### Changed since 2.18.0
+
+Nothing in the runtime. This release is the arc's closing record plus CI
+and tooling repair:
+
+- **`luna-aot` cross-compilation errors now give correct advice.** The
+  "CARGO_MANIFEST_DIR not set" message suggested setting
+  `LUNA_AOT_RUNTIME_HELPERS_STATICLIB`, which is honoured for host
+  builds only — following that hint on a cross target produced the same
+  error with nothing left to try. Cross builds are now told what
+  actually works (run luna-aot from inside its workspace) and why the
+  override does not apply. **The underlying limitation stands and is
+  worth knowing: a standalone `luna-aot` binary cannot cross-compile**,
+  because a cross target always builds its own runtime-helpers staticlib
+  and that needs the workspace.
+- Two CI jobs that had never once completed — Alpine musl E2E and Wine
+  PE execution — were repaired and are now blocking. Between them they
+  had been masking a real product path (standalone cross-compilation)
+  and four CI defects.
+- Toolchain-lint drift now gets previewed on beta and nightly ahead of
+  each stable release; the LuaJIT differential reference is asserted
+  rather than inherited from the runner image; the site's links are
+  link-checked; dependency major-version lag is measurable.
+
+### For embedders
+
+- **No migration needed.** Public API unchanged from 2.18.0.
+- luna declares **no MSRV** (since 2.17.0). The promise is "builds on
+  current stable", which the four-platform matrix tests on every push.
+  Informationally, the tree currently needs rustc 1.88+.
+- The dialect-sensitive behaviour corrected in 2.18.0 (5.1/5.2 type-error
+  wording, table-library surface and raw element access, `__len` on 5.1)
+  is unchanged here — see that entry if you are coming from 2.17 or
+  earlier.
+
 ## [2.18.0] — 2026-08-14
 
 Upstream reference moved to **PUC Lua 5.5.1** (released 2026-07-24), and
@@ -649,9 +709,9 @@ bottleneck (interp, not trace) and updates the methodology accordingly.
 ### Track B — `LuaUserdata` trait (new embedder surface)
 
 - **`luna_core::vm::userdata_trait`** module exposes the
-  [`LuaUserdata`](https://docs.rs/luna-core/1.3/luna_core/vm/trait.LuaUserdata.html)
-  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.3/luna_core/vm/trait.UserdataMethods.html)
-  builder + [`MetaMethod`](https://docs.rs/luna-core/1.3/luna_core/vm/enum.MetaMethod.html)
+  [`LuaUserdata`](https://docs.rs/luna-core/1.3/luna_core/vm/userdata_trait/trait.LuaUserdata.html)
+  trait + [`UserdataMethods<T>`](https://docs.rs/luna-core/1.3/luna_core/vm/userdata_trait/trait.UserdataMethods.html)
+  builder + [`MetaMethod`](https://docs.rs/luna-core/1.3/luna_core/vm/userdata_trait/enum.MetaMethod.html)
   enum. Embedders register methods (`add_method` / `add_method_mut`),
   static fns (`add_function`), metamethods (`add_meta_method`), and
   call-syntax field getters (`add_field_method_get`) via a typed

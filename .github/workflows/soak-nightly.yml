@@ -10,11 +10,11 @@
 
 name: soak-nightly
 
+# Manual only (2026-08-14) — see soak-weekly.yml for the reasoning.
+# Acceptance #3 is closed on historical evidence; a nightly hour of soak
+# was re-proving a settled point. Dispatch it when a change could
+# plausibly affect steady-state memory.
 on:
-  schedule:
-    # Nightly at 08:00 UTC — staggered after fuzz (07:00) +
-    # diff-puc (06:00) + cross-allocator (05:00) etc.
-    - cron: '0 8 * * *'
   workflow_dispatch:
 
 jobs:

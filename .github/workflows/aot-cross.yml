@@ -92,7 +92,13 @@ jobs:
   wine-mingw-pe-run:
     name: Wine MinGW PE actual-run
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # v2.20 D5: soft-fail removed. This job had never once completed —
+    # five stacked problems (no git in image, standalone luna-aot cannot
+    # cross-compile, an assertion that could not fail, wrong wine binary
+    # name, wine64 package gone on noble), each invisible until the one
+    # before it was fixed, all of them masked by continue-on-error.
+    # Observed green on run 31796441342: PE compiled, ran under wine-9.0,
+    # output matched.
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,30 +108,86 @@ jobs:
           targets: x86_64-pc-windows-gnu
       - name: install MinGW + Wine
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            mingw-w64 wine64
+          set -u
+          sudo apt-get update -qq
+          # v2.20 D5: `wine64` is gone on Ubuntu 24.04 (noble) — apt
+          # reported success while installing nothing usable, and the run
+          # step then died on "wine: command not found". Try the
+          # candidates in order and report what the archive actually has
+          # if none of them yields a binary.
+          for pkg in wine wine64 wine-stable; do
+            if apt-cache show "$pkg" >/dev/null 2>&1; then
+              echo "installing $pkg"
+              sudo apt-get install -y --no-install-recommends mingw-w64 "$pkg" || true
+            fi
+            WINE_BIN=$(command -v wine || command -v wine64 || command -v wine-stable || true)
+            [ -n "$WINE_BIN" ] && break
+          done
+          if [ -z "${WINE_BIN:-}" ]; then
+            echo "::error::no wine binary on PATH after trying wine / wine64 / wine-stable"
+            echo "--- wine-ish packages in the archive ---"
+            apt-cache search --names-only '^wine' | head -20 || true
+            exit 1
+          fi
+          echo "WINE_BIN=$WINE_BIN" >> "$GITHUB_ENV"
+          echo "using wine binary: $WINE_BIN"
+          "$WINE_BIN" --version || true
+
       - name: cargo build -p luna-aot
         run: cargo build -p luna-aot --release
+        # Kept so a compile error surfaces as its own step; the compile
+        # below goes through `cargo run` for the reason explained there.
+
+      # v2.20 D5: cross-compiling needs luna-aot to run *inside* the
+      # workspace, not as a standalone binary.
+      #
+      # `LUNA_AOT_RUNTIME_HELPERS_STATICLIB` is honoured only for host
+      # builds — `build_runtime_helpers_staticlib` gates it on
+      # `target_triple.is_none()`, deliberately, so a cross link cannot
+      # be handed a staticlib built for the wrong ABI. For a cross
+      # target it always builds its own, which means it needs
+      # CARGO_MANIFEST_DIR to find the workspace. That variable is set
+      # by cargo at compile time and is absent when the binary is
+      # invoked directly, so `./target/release/luna-aot --target ...`
+      # can never work:
+      #   luna-aot: linker failed: CARGO_MANIFEST_DIR not set
+      #
+      # (That is why the Alpine job's fix does not transfer: it builds
+      # natively inside the container, so it is a host build and the
+      # override applies.)
+      #
+      # Running through `cargo run` puts CARGO_MANIFEST_DIR back and
+      # lets luna-aot build the windows-gnu staticlib itself.
       - name: compile hello.lua → hello.exe
         run: |
+          set -eu
           cat > /tmp/hello.lua <<'EOF'
           print("hello from luna-aot via wine")
           return 42
           EOF
-          ./target/release/luna-aot compile /tmp/hello.lua \
+          cargo run -p luna-aot --release -- compile /tmp/hello.lua \
             --target x86_64-pc-windows-gnu \
             --out /tmp/hello.exe
+          test -f /tmp/hello.exe || { echo "luna-aot produced no .exe"; exit 1; }
           file /tmp/hello.exe
+          file /tmp/hello.exe | grep -q 'PE32+' || { echo "not a PE32+ binary"; exit 1; }
+
       - name: run hello.exe under wine
         env:
           WINEDEBUG: "-all"
         run: |
-          wine /tmp/hello.exe || (echo "wine ran the binary; checking exit" && true)
-          # luna-aot's runtime entry returns 42 from `return 42`;
-          # wine should exit with 42. We don't assert exact code
-          # because wine's exit-code propagation varies by version;
-          # just verify the binary ran without segfault.
+          set -u
+          # Exit-code propagation through wine varies by version, so the
+          # assertion is on the program's OUTPUT, not its status. The old
+          # form (`wine ... || (echo ... && true)`) could not fail at all,
+          # which is how this job stayed "meaningful" while the compile
+          # step above had been broken the whole time.
+          OUT=$("$WINE_BIN" /tmp/hello.exe 2>&1) || true
+          echo "$OUT"
+          case "$OUT" in
+            *"hello from luna-aot via wine"*) echo "PE ran under wine, output matches" ;;
+            *) echo "::error::hello.exe did not produce the expected output under wine"; exit 1 ;;
+          esac
 
   # ─────────────────────────────────────────────────────────────────
   # Alpine musl native E2E: in a real Alpine container (rather than
@@ -137,10 +199,29 @@ jobs:
   alpine-musl-e2e:
     name: Alpine musl native E2E
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # v2.20 D5: soft-fail removed. This job had been failing silently for
+    # an unknown stretch behind `continue-on-error`; after the git,
+    # image and staticlib fixes it has been observed green twice (runs
+    # 31793374064 and 31794199111). Per the arc rule adopted in v2.17, a
+    # gate counts once it can fail — so now it can.
     container:
-      image: rust:1.86-alpine
+      # v2.20 D5: was `rust:1.86-alpine`. luna needs 1.88+ (edition-2024
+      # let-chains), and since v2.17 declares no MSRV the promise is
+      # "builds on current stable" — so track stable rather than pin a
+      # version that cannot build the tree.
+      image: rust:alpine
     steps:
+      # v2.20 D5: the alpine image ships without git, so actions/checkout
+      # fell back to the REST API download path, which does not support
+      # `submodules` — the job failed at checkout before compiling
+      # anything:
+      #   Input 'submodules' not supported when falling back to download
+      #   using the GitHub REST API
+      # It had been failing that way silently, masked by
+      # continue-on-error. Install git first so checkout takes the real
+      # git path and the vendored cranelift submodule lands.
+      - name: install git (the alpine image ships without it)
+        run: apk add --no-cache git
       - uses: actions/checkout@v7
         with:
           submodules: recursive
@@ -148,11 +229,35 @@ jobs:
         run: apk add --no-cache musl-dev gcc make
       - name: cargo build -p luna-aot
         run: cargo build -p luna-aot --release --target x86_64-unknown-linux-musl
+
+      # v2.20 D5: `luna-aot` normally locates the workspace via
+      # CARGO_MANIFEST_DIR and builds the runtime-helpers staticlib on
+      # demand. That variable is a *compile-time* cargo thing and is
+      # absent when the binary runs standalone, so the link step failed:
+      #   luna-aot: linker failed: CARGO_MANIFEST_DIR not set — cannot
+      #   locate workspace to build luna-runtime-helpers.
+      # The error names its own escape hatch. Build the staticlib for the
+      # same target first and point at it.
+      - name: build the runtime-helpers staticlib (musl)
+        run: cargo build -p luna-runtime-helpers --release --target x86_64-unknown-linux-musl
+
       - name: compile + run hello.lua
         run: |
+          set -eu
+          STATICLIB="$PWD/target/x86_64-unknown-linux-musl/release/libluna_runtime_helpers.a"
+          test -f "$STATICLIB" || { echo "staticlib missing at $STATICLIB"; ls -l target/x86_64-unknown-linux-musl/release/ | head -20; exit 1; }
+          export LUNA_AOT_RUNTIME_HELPERS_STATICLIB="$STATICLIB"
+          echo "using staticlib: $STATICLIB"
           cat > /tmp/hello.lua <<'EOF'
           print("hello from luna-aot on alpine musl")
           return 7
           EOF
           ./target/x86_64-unknown-linux-musl/release/luna-aot compile /tmp/hello.lua --out /tmp/hello
-          /tmp/hello || echo "ran; exit=$?"
+          test -x /tmp/hello || { echo "luna-aot produced no executable"; exit 1; }
+          OUT=$(/tmp/hello) ; RC=$?
+          echo "output: $OUT"
+          echo "exit:   $RC"
+          case "$OUT" in
+            *"hello from luna-aot on alpine musl"*) echo "E2E ok" ;;
+            *) echo "unexpected output"; exit 1 ;;
+          esac

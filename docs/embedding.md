@@ -308,9 +308,9 @@ The closure shape is `Fn(&mut Vm, &T, A) -> Result<R, LuaError>` for
 be **non-capturing** (`Copy + 'static + ZST`) — capture state by
 making it part of `T` itself.
 
-[`LuaUserdata`]: https://docs.rs/luna-core/latest/luna_core/vm/trait.LuaUserdata.html
-[`FromLuaArgs`]: https://docs.rs/luna-core/latest/luna_core/vm/trait.FromLuaArgs.html
-[`IntoLuaReturn`]: https://docs.rs/luna-core/latest/luna_core/vm/trait.IntoLuaReturn.html
+[`LuaUserdata`]: https://docs.rs/luna-core/latest/luna_core/vm/userdata_trait/trait.LuaUserdata.html
+[`FromLuaArgs`]: https://docs.rs/luna-core/latest/luna_core/vm/typed_native/trait.FromLuaArgs.html
+[`IntoLuaReturn`]: https://docs.rs/luna-core/latest/luna_core/vm/typed_native/trait.IntoLuaReturn.html
 
 ### 7.2 Static constructors via `add_function`
 
