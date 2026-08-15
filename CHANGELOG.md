@@ -844,7 +844,7 @@ scope** for v1.3 (no longer deferred). Tracked in
   `Int(...)`, so `Int(...)(obj)` errors). Embedders who need both
   shapes should register an explicit `add_method("name", ...)`
   alongside the field-getter. Unknown writes go to a runtime error
-  rather than silently dropping (`code/no-unsolicited-fallback`).
+  rather than silently dropping.
 - **`#[derive(LuaUserdata)]` proc-macro** — *(Phase UD3 landed)* new
   `luna-jit-derive` crate ships the derive + `#[lua_userdata_methods]`
   attr macro. Helper attributes: `#[lua_method("name")]`,
@@ -1237,9 +1237,8 @@ scope** for v1.3 (no longer deferred). Tracked in
 
 - `.dev/perf-baselines/2026-06-24-*.md` records the decomp work
   that surfaced "interp not trace" as the true attack surface.
-- `~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
-  gained the v2-* polish-disaster anti-pattern catalog from the
-  v1.0 fib_28 misdirection.
+- The perf-attack methodology gained an anti-pattern catalog drawn
+  from the v1.0 fib_28 misdirection.
 - Charter, plan-state, and audit docs live in `.dev/rfcs/v1.2-*.md`
   (gitignored); `docs/` stays user-facing.
 

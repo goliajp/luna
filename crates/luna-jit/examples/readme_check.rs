@@ -1,8 +1,8 @@
 //! Compiles the two snippets in the repository README, so the README
 //! cannot drift from the API it advertises.
-use luna_jit::version::LuaVersion;
 use luna_jit::Lua;
 use luna_jit::Vm;
+use luna_jit::version::LuaVersion;
 
 fn first() -> Result<(), Box<dyn std::error::Error>> {
     let mut vm = Vm::new(LuaVersion::Lua54);

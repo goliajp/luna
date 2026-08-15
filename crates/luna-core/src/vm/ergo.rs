@@ -309,11 +309,10 @@ impl Vm {
     /// Read the most recently dispatched Lua opcode, if the Vm is currently
     /// executing inside a Lua frame. Intended for use from a Count hook
     /// (installed via [`Self::set_rust_debug_hook`] with `HOOK_MASK_COUNT`)
-    /// to tally per-opcode distribution against a workload — the v1.2
-    /// methodology gate (`perf-decomposition-vs-polish.md` §2 Phase A,
-    /// in `~/.claude-shared/global/methodology/`) requires runtime-counter
-    /// validation of per-iter op mix before any stage decomposition is
-    /// acted on.
+    /// to tally per-opcode distribution against a workload. Reading source
+    /// is not enough to know what a hot loop executes: a decomposition is
+    /// only actionable once a runtime counter has confirmed the per-iter
+    /// op mix it assumed.
     ///
     /// Returns `None` outside a Lua frame (top-level setup, while a
     /// native callback or Cont guard is on top of the call stack, etc.).

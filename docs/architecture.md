@@ -157,8 +157,13 @@ The crate boundary roughly tracks this classification:
 The few cement bits in `luna-core` (dialect-specific stdlib glue
 under `luna-core/src/vm/lib_*.rs`) are isolated so they could be
 feature-gated later if a wasm-friendly minimal embed needs them
-out. See `~/.claude-shared/global/methodology/steel-cement-stone.md`
-for the full methodology + workflow tier transitions.
+out.
+
+The three tiers are not decoration: they set how much review and what
+kind of testing a change gets. A bug in stone is amplified through
+every caller, so it earns unit tests, benches and fuzzing; cement is
+local and business tests catch it. Code moves between tiers as it
+earns or loses reuse.
 
 ---
 

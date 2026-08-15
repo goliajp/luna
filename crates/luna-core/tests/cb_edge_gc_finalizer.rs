@@ -2,7 +2,7 @@
 //!
 //! Audit (`.dev/rfcs/v2.0-plan-state.md` §Phase 0 Track CB summary):
 //! GC finalizer in finalizer / cycle with weak ref + finalizer /
-//! hashmap-key 是 newly-collected userdata — 3-5 spot tests.
+//! hashmap key is a newly-collected userdata — 3-5 spot tests.
 //!
 //! Pinned shapes:
 //! 1. `__gc` handler that triggers another GC cycle (recursive collection).
