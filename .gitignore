@@ -6,6 +6,11 @@
 
 # Development scratch — not part of the public source tree
 .dev/
+# Same private working area, other spellings — the `.dev/` rule above only
+# matches the directory, so scratch trackers and audit dumps beside it were
+# being tracked by accident.
+.dev-audit/
+.dev-*.md
 .tmp/
 .claude/
 

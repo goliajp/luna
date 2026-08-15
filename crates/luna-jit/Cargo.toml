@@ -50,9 +50,8 @@ luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 3.0.0" }
 # so the standard install path keeps Cranelift as the only JIT
 # backend and the LLVM toolchain (~1 GB system deps) is not pulled
 # into default builds. Embedders flip the backend at runtime via
-# the `LUNA_JIT_BACKEND=llvm` env var (1K.D.4). See
-# `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3. `version = "= 3.0.0"`
-# pin required even for optional deps when the parent crate is
+# the `LUNA_JIT_BACKEND=llvm` env var. The `version = "= 3.0.0"` pin is
+# required even for an optional dep when the parent crate is
 # `publish = true`.
 luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 3.0.0", optional = true }
 
@@ -95,8 +94,7 @@ repl-line-editor = ["dep:rustyline"]
 #
 # Local dev requires `LLVM_SYS_181_PREFIX` pointing at an LLVM 18.1.x
 # install (e.g. `brew install llvm@18` →
-# `/opt/homebrew/opt/llvm@18`). CI matrix gate lands in Phase 1K.D
-# follow-up — see `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3.
+# `/opt/homebrew/opt/llvm@18`). There is no CI matrix gate for it yet.
 llvm-jit = ["dep:luna-jit-llvm"]
 
 # v1.3 Phase SS-B — forward the `send` feature to luna-core so embedders
