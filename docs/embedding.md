@@ -1,6 +1,6 @@
 # Embedding
 
-Cookbook for hosting luna inside a Rust program. Snapshot at v1.1.
+Cookbook for hosting luna inside a Rust program. Current as of v3.0.0.
 Companion docs: [`architecture.md`](architecture.md) (crate layout +
 JIT pipeline), [`threading.md`](threading.md) (async + multi-thread
 patterns), [`compatibility.md`](compatibility.md) (per-dialect
@@ -20,7 +20,7 @@ whether you need the Cranelift JIT:
 ```toml
 # Most embedders — full interpreter + Cranelift JIT + capi.
 [dependencies]
-luna-jit = "1.1"
+luna-jit = "3"
 ```
 
 ```toml
@@ -28,7 +28,7 @@ luna-jit = "1.1"
 # Embedders running on wasm32, in audited supply chains, or shipping
 # small static binaries pick this path.
 [dependencies]
-luna-core = "1.1"
+luna-core = "3"
 ```
 
 `luna-core` has **zero third-party dependencies** (`cargo tree -p
@@ -261,11 +261,11 @@ let c: &mut DbConn = vm.userdata_borrow_mut("db").unwrap();
 c.pool_size = 16;
 ```
 
-> v1.1 → v1.2 migration: `Vm::create_userdata` / `Vm::set_userdata`
-> now require `T: LuaUserdata`. Existing `T: 'static` types upgrade
-> with an empty `impl LuaUserdata for T {}`. The metatable produced
-> by the trait is auto-installed on the userdata at creation time
-> (cached per-Vm by `TypeId::of::<T>()`).
+> `Vm::create_userdata` / `Vm::set_userdata` require
+> `T: LuaUserdata`; a type that needs no methods satisfies it with an
+> empty `impl LuaUserdata for T {}`. The trait's metatable is
+> auto-installed on the userdata at creation time, cached per-Vm by
+> `TypeId::of::<T>()`. (Tightened from `T: 'static` in 1.2.)
 
 ### 7.1 `LuaUserdata` trait — methods + metamethods
 
@@ -381,17 +381,17 @@ Implementation: when any getter is registered, the metatable's `__index`
 slot becomes a native trampoline that dispatches `methods → field-
 getters → nil`; when any setter is registered, the metatable's
 `__newindex` slot becomes a trampoline that dispatches to the setter
-or raises `attempt to write unknown field …` (no silent fallback,
-per `code/no-unsolicited-fallback`).
+or raises `attempt to write unknown field …`. There is no silent
+fallback: writing an unknown field is a mistake worth surfacing, not
+something to absorb.
 
-**v1.2 → v1.3 breaking change**: in v1.2, `add_field_method_get`
-generated a method-table entry, so `obj:width()` (call-syntax) worked.
-In v1.3 the entry is dispatched through the function-`__index`
-trampoline, so `obj.width` returns the field value directly and
-`obj:width()` no longer works for getters defined this way (calling a
-returned `Int(16)` errors). Embedders who need both shapes should
-register an explicit `add_method("width", ...)` alongside the
-field-getter. Methods win over field-getters on name collision
+**A field getter is not a method.** `add_field_method_get` dispatches
+through the function-`__index` trampoline, so `obj.width` returns the
+value directly and `obj:width()` does **not** work for it — the
+call-syntax form tries to call the returned `Int(16)` and errors. If
+you need both shapes, register an explicit `add_method("width", ...)`
+alongside the field getter. (Call syntax did work in 1.2, when the
+getter generated a method-table entry; 1.3 changed the dispatch.) Methods win over field-getters on name collision
 (matches mlua; precedence is documented in
 `crates/luna-core/tests/userdata_trait.rs::methods_win_on_collision`).
 
@@ -439,7 +439,7 @@ Helper attrs (placed on `fn` items inside the impl block):
 
 `luna-jit-derive` lives downstream of `luna-core` so the 0-dep
 contract is preserved — luna-core embedders who want the derive can
-either upgrade to `luna-jit`, or add `luna-jit-derive = "1.3"` as a
+either upgrade to `luna-jit`, or add `luna-jit-derive = "3"` as a
 direct dep alongside `luna-core` (the derive emits fully-qualified
 `::luna_core::vm::*` paths and has no other runtime deps). Hand-impl
 remains the supported escape hatch for generic types, conditional
@@ -449,10 +449,10 @@ tree at all.
 Add the dep:
 
 ```toml
-luna-jit = "1.3"
+luna-jit = "3"
 # or
-luna-core = "1.3"
-luna-jit-derive = "1.3"
+luna-core = "3"
+luna-jit-derive = "3"
 ```
 
 ### 7.5 GC + `__gc` finalizers
@@ -739,8 +739,8 @@ thread that created it. Embedders wanting concurrency spawn one
 Vm per worker; async embedders pin Vm access to a single-thread
 Tokio runtime or a `LocalSet`. See [`threading.md`](threading.md)
 for the canonical patterns (single-thread Tokio, `LocalSet`,
-per-OS-thread `Vm` + channels) and the post-v1.1
-`feature = "send"` roadmap.
+per-OS-thread `Vm` + channels) and for `feature = "send"`, which
+surfaces `SendVm` and has shipped since 2.1.
 
 The constraint is type-system-enforced; a compile_fail doctest on
 `Vm` catches accidental loss of the `!Send` invariant.

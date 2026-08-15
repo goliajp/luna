@@ -3,9 +3,8 @@
 This document tracks luna's performance discipline, methodology, and
 what's measured at the current ship. It does **not** publish a
 headline `vs LuaJIT 1.21×` or `vs PUC 41/42 green` ratio — both shapes
-are perf-methodology anti-patterns (see §1 "trigger words" in
-`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`,
-the project-wide perf attack methodology):
+are perf-methodology anti-patterns, for reasons the rest of this
+section spells out:
 
 - "vs subprocess-launched reference" inflates the reference's
   measured time by 50–200 µs of subprocess startup,
@@ -28,9 +27,8 @@ surfaces.
 
 ## 1. Methodology
 
-luna's perf attack methodology is documented in
-`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
-and applied across the v2.0 sprint. Key principles:
+The methodology luna's perf work follows, applied from the v2.0
+sprint onward:
 
 - **Decomposition before polish.** Any gap > 1.5× a reference impl
   triggers a side-by-side 18-stage decomposition of the workload,
@@ -155,9 +153,6 @@ scaffold for `token_bucket_1k`.
 
 ## 5. See also
 
-- `~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
-  — full perf attack methodology (§1 trigger words / §3 sprint
-  structure / §7 luna v2-J Chain A实证 lessons)
 - [`contributing-mem.md`](contributing-mem.md) — memory baseline
   reproduction
 - [`contributing-disk.md`](contributing-disk.md) — disk + binary

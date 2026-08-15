@@ -299,7 +299,7 @@ fn loads_closure_chunk_strips_pseudo_and_patches_jumps() {
 
 /// Build a 5.1 main proto exercising the SETLIST C=0 path: when PUC
 /// emits a SETLIST with C==0 the next raw 32-bit code-stream slot is a
-/// literal int (block index), NOT an opcode. PU Wave 2 收回 punt: this
+/// literal int (block index), NOT an opcode. PU Wave 2 retired this punt: this
 /// chunk's load must now succeed where it previously errored out.
 ///
 /// Layout:
@@ -344,7 +344,7 @@ fn build_setlist_c0_chunk() -> Vec<u8> {
 }
 
 /// Build a 5.1 main proto exercising arith with the constant on the
-/// B side (`R[A] := K[b] + R[c]`). PU Wave 2 收回 punt: this chunk's
+/// B side (`R[A] := K[b] + R[c]`). PU Wave 2 retired this punt: this chunk's
 /// load must now succeed (translator routes through
 /// `super::lower_k_via_tmp` to materialise the K into a tmp register).
 ///
@@ -386,7 +386,7 @@ fn build_arith_k_on_b_chunk() -> Vec<u8> {
 }
 
 /// Build a 5.1 main proto exercising EQ with a K-pool operand on C. PU
-/// Wave 2 收回 punt: 5.1 EQ A B C uses RK on B and C; luna's Eq has no
+/// Wave 2 retired this punt: 5.1 EQ A B C uses RK on B and C; luna's Eq has no
 /// RK form, so the translator must materialise the K into a tmp
 /// register first.
 ///
@@ -511,7 +511,7 @@ fn build_tforloop_chunk() -> Vec<u8> {
     chunk
 }
 
-/// PU Wave 4 punt-A 收回: PUC 5.1 `OP_TFORLOOP A C` + trailing `JMP sBx`
+/// PU Wave 4 retired punt-A: PUC 5.1 `OP_TFORLOOP A C` + trailing `JMP sBx`
 /// now lowers to luna's `TForCall A 0 C; TForLoop A back` pair. The chunk
 /// builds a generic-for that exits immediately (iter returns nil) so the
 /// body never executes; the post-loop return must read back the
@@ -523,7 +523,7 @@ fn translate_tforloop_5_1() {
     let chunk = build_tforloop_chunk();
     let cl = vm
         .load(&chunk, b"=test")
-        .expect("TFORLOOP chunk loads (PU Wave 4 punt-A 收回)");
+        .expect("TFORLOOP chunk loads (PU Wave 4 retired punt-A)");
     let res = vm
         .call_value(luna_core::runtime::Value::Closure(cl), &[])
         .expect("TFORLOOP chunk runs");
@@ -588,7 +588,7 @@ fn build_compat_vararg_chunk() -> Vec<u8> {
     chunk
 }
 
-/// PU Wave 4 punt-B 收回: `LUAI_COMPAT_VARARG` `arg` table now
+/// PU Wave 4 retired punt-B: `LUAI_COMPAT_VARARG` `arg` table now
 /// materialises at the runtime frame entry (`vm/exec.rs:4200` —
 /// `proto.has_compat_vararg_arg` cold path; hot path untouched). The
 /// test calls a 5.1 main chunk (nparams=0, NEEDSARG=1) with two
@@ -601,7 +601,7 @@ fn translate_compat_vararg_5_1_arg_table() {
     let chunk = build_compat_vararg_chunk();
     let cl = vm
         .load(&chunk, b"=test")
-        .expect("compat-vararg chunk loads (PU Wave 4 punt-B 收回)");
+        .expect("compat-vararg chunk loads (PU Wave 4 retired punt-B)");
     let res = vm
         .call_value(Value::Closure(cl), &[Value::Int(42), Value::Int(7)])
         .expect("compat-vararg chunk runs");
@@ -622,7 +622,7 @@ fn translate_compat_vararg_5_1_arg_table() {
     assert_eq!(one, 42, "arg[1] must equal the first passed vararg");
 }
 
-/// PU Wave 2 punt-7 收回: SETLIST with C=0 (block-index in next code
+/// PU Wave 2 retired punt-7: SETLIST with C=0 (block-index in next code
 /// slot) now translates to luna's `SetList k=true + ExtraArg` pair
 /// instead of erroring out.
 #[test]
@@ -631,10 +631,10 @@ fn loads_setlist_c0_chunk() {
     vm.set_puc_bytecode_loading(true);
     let chunk = build_setlist_c0_chunk();
     vm.load(&chunk, b"=test")
-        .expect("SETLIST C=0 chunk loads (PU Wave 2 punt-7 收回)");
+        .expect("SETLIST C=0 chunk loads (PU Wave 2 retired punt-7)");
 }
 
-/// PU Wave 2 punt-5 收回: arith op with the constant on the B side
+/// PU Wave 2 retired punt-5: arith op with the constant on the B side
 /// (5.1 RK encoding) now lowers through `super::lower_k_via_tmp` instead
 /// of erroring out.
 #[test]
@@ -643,10 +643,10 @@ fn loads_arith_k_on_b_chunk() {
     vm.set_puc_bytecode_loading(true);
     let chunk = build_arith_k_on_b_chunk();
     vm.load(&chunk, b"=test")
-        .expect("arith K-on-B chunk loads (PU Wave 2 punt-5 收回)");
+        .expect("arith K-on-B chunk loads (PU Wave 2 retired punt-5)");
 }
 
-/// PU Wave 2 punt-6 收回: EQ/LT/LE with a K-pool operand now
+/// PU Wave 2 retired punt-6: EQ/LT/LE with a K-pool operand now
 /// materialises the K into a tmp register before comparing (5.1 RK
 /// encoding on comparison operands has no direct luna equivalent).
 #[test]
@@ -655,7 +655,7 @@ fn loads_eq_rk_chunk() {
     vm.set_puc_bytecode_loading(true);
     let chunk = build_eq_rk_chunk();
     vm.load(&chunk, b"=test")
-        .expect("EQ RK chunk loads (PU Wave 2 punt-6 收回)");
+        .expect("EQ RK chunk loads (PU Wave 2 retired punt-6)");
 }
 
 /// Integration smoke: when an external `luac5.1` is installed, point at

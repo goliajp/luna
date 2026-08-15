@@ -234,12 +234,12 @@ grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
 - [`architecture.md`](architecture.md) §3 — steel/cement/stone
   classification (the `unsafe`-dense stone tier is where the
   `Gc<T>` invariants live)
-- `.dev/rfcs/v1.3-audit-send-vm-design.md` — SendVm Send/Sync
-  rationale
-- `.dev/rfcs/v1.3-audit-trace-bearing-userdata.md` — TB trace_fn
-  monomorphic dispatch SAFETY
-- `~/.claude-shared/global/principles.md` §`code/no-unsolicited-*`
-  — the project-wide stance against speculative `unsafe`
+- [`threading.md`](threading.md) — the `SendVm` Send/Sync rationale
+- The project-wide stance: `unsafe` is written when a specific
+  invariant demands it and is documented at the site, never
+  speculatively or for a performance guess that has not been
+  measured. Every site below exists because something concrete
+  required it.
 
 ---
 

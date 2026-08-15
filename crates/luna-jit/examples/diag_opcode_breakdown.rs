@@ -1,11 +1,9 @@
-//! v1.2 P3 Path A — opcode breakdown validation diag for the interp
-//! dispatcher decomp at `.dev/rfcs/v1.2-audit-interp-decomp.md`.
+//! Opcode-breakdown diagnostic for the interpreter dispatcher.
 //!
-//! Per `~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md`
-//! §2 Phase A: "Decomposition 完成前必须 run 实际 workload 验证 high-level
-//! 计数". The interp decomp's per-iter op mix is statically derived from
-//! Lua 5.4 codegen knowledge — runtime validation closes the methodology
-//! gap the audit's Open Questions §1 self-flagged.
+//! A decomposition must be validated by running the workload before it is
+//! acted on. The interpreter decomposition derived its per-iter op mix
+//! statically, from what Lua 5.4 codegen is known to emit; this counts
+//! what actually executes, which is the only thing that settles it.
 //!
 //! Counts every opcode dispatch on `token_bucket_1k` for a single Vm run.
 //! Divides the total by 1000 (iters) to get per-iter mix; compares against

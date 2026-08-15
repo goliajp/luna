@@ -776,7 +776,7 @@ fn translate_code(
                 out.push(Inst::iabc(Op::SelfOp, inst.a, inst.b, c_val, c_is_k));
             }
             // arith / compare ops — straight RK re-encode, K-on-B lowered
-            // via super::lower_k_via_tmp (PU Wave 2 punt-5 收回).
+            // via super::lower_k_via_tmp (PU Wave 2 retired punt-5).
             OP_ADD => arith(&mut out, Op::Add, inst, &rk, &mut max_temp_bump)?,
             OP_SUB => arith(&mut out, Op::Sub, inst, &rk, &mut max_temp_bump)?,
             OP_MUL => arith(&mut out, Op::Mul, inst, &rk, &mut max_temp_bump)?,
@@ -1196,7 +1196,7 @@ where
     // truthiness (skip when result != k). luna has no RK form on either
     // operand for the comparison ops, so any K-pool operand must be
     // materialised into a tmp register first (LoadK tmp k_idx ; op
-    // <tmp_or_reg> <tmp_or_reg> 0 k). PU Wave 2 punt-6 收回.
+    // <tmp_or_reg> <tmp_or_reg> 0 k). PU Wave 2 retired punt-6.
     let k_flag = inst.a != 0;
     let needs_tmp_b = b_is_k;
     let needs_tmp_c = c_is_k;
