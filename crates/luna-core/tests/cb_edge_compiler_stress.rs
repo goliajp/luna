@@ -1,6 +1,6 @@
 //! v2.0 Phase 1 CB-edge — compiler stress edges.
 //!
-//! Audit (`.dev/rfcs/v2.0-plan-state.md` §Phase 0 Track CB summary):
+//! Audit:
 //! "compiler edge: long fn / deep nesting / many upvals / spread
 //! call site — write 2-3 spot tests".
 //!

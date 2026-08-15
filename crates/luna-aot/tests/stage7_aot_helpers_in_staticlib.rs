@@ -9,7 +9,6 @@
 //!
 //! # Why this exists
 //!
-//! Per `.dev/rfcs/v1.3-rfc-trace-aot-relocation.md`, the deploy-side
 //! staticlib that AOT binaries link against must carry every helper
 //! the embedded `.o`'s Cranelift IR can call into. Workspace
 //! `[profile.release]` has `lto = true`, which (correctly, from the

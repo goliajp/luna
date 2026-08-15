@@ -5,8 +5,9 @@
 #   scripts/perf-gate.sh [BASELINE_JSON] [THRESHOLD]
 #
 # Args:
-#   BASELINE_JSON: path to baseline file
-#     (default: .dev/perf-baselines/v2.6.0-macos-arm64.json)
+#   BASELINE_JSON: path to baseline file. The default lives under
+#     .dev/perf-baselines/, a local developer directory that is not
+#     published — pass your own path if you do not have one.
 #   THRESHOLD: regression factor allowed (default: 1.05 = 5%)
 #
 # Behavior:

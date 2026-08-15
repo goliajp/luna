@@ -1,6 +1,6 @@
 //! v2.0 Phase 1 CB-edge — coroutine + debug.sethook interaction.
 //!
-//! Audit (`.dev/rfcs/v2.0-plan-state.md` §Phase 0 Track CB summary):
+//! Audit:
 //! coroutine.resume + debug.sethook interaction + 5.5 closeable
 //! iterator + coro spot-audit.
 //!
@@ -73,8 +73,6 @@ fn coroutine_hook_isolation_does_not_leak_to_main() {
 /// `self.current = Some(co)`, so neither install arm fired. v2.0 CB
 /// sub-track fix routes `target.is_none()` directly to `install_hook`
 /// on the live VM fields (= the running thread, main or current coro).
-/// Bug doc archived at `.dev/known-bugs/fixed/cb-edge-coroutine-hook-
-/// not-installed-from-body.md`.
 #[test]
 fn coroutine_yield_under_count_hook_preserves_counter() {
     let mut vm = Vm::new(LuaVersion::Lua55);

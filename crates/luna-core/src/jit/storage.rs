@@ -16,7 +16,6 @@
 //! [`NullJitStorage`] default; the concrete `CraneliftJitStorage`
 //! impl lives in `luna_jit::jit_backend::storage`.
 //!
-//! See `.dev/rfcs/v2.0-track-j-b-design.md` for the migration design
 //! (integration pattern, soundness preservation, phase plan).
 //!
 //! Single-thread semantics are preserved by this sub-step; cross-

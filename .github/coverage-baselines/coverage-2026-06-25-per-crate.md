@@ -4,10 +4,10 @@ Baseline JSON: `coverage-2026-06-25.json` (full per-file detail, LLVM
 `--json --summary-only` shape from `cargo llvm-cov 0.8.7`).
 
 > **Note on file location.** Task spec asked for the baseline under
-> `.dev/baselines/`, but `.dev/` is `.gitignore`'d (`.gitignore` line 7).
+> the maintainer's local working area, but that directory is gitignored.
 > A baseline that CI must read against has to live in a *tracked* path,
 > so the canonical copy lives here in `.github/coverage-baselines/`. The
-> `.dev/baselines/` copy still exists locally as a personal reference.
+> The local copy still exists as a personal reference.
 > Surfaced in the implementation report; flagging this for the next
 > session to confirm the location convention.
 
@@ -39,7 +39,7 @@ conversation (many bins are dogfood/smoke harnesses; `luna-aot` and
 LLVM's stable instrumentation only emits region-level data; the
 `branches` column reads 0/0 across the board on stable. CI gate uses
 **regions** as the proxy for branch-style coverage (Phase 2 audit
-decision — see also `.dev/rfcs/v2.0-audit-CV.md`'s self-hosted JSON
+decision — see also the coverage audit's self-hosted JSON
 baseline rationale).
 
 ## Top-3 coverage gaps vs budget (priority for implementation phase)

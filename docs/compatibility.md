@@ -191,7 +191,7 @@ Their module headers document the encoding differences in detail.
 
 ## Known correctness gaps
 
-None open. The `.dev/known-bugs/` open directory is empty as of v3.0.0,
+None open as of v3.0.0,
 and three classes of use-after-free that the arc started with are fixed
 — including one that a previous release had judged impossible to
 reproduce and which turned out to be two all-platform GC bugs.

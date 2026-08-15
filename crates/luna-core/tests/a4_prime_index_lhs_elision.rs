@@ -127,7 +127,7 @@ fn safe_math_min_rhs_elides_snapshot() {
 fn safe_literal_local_rhs_elides_a4prime_snapshot_only() {
     // `bucket.last = now` (now is a local reg). A4' elides the obj
     // snapshot (no Move with src=bucket@r0). With the A4'' bundle
-    // shipped (see `.dev/rfcs/v2.1-a4-triple-double-bundle-verdict.md`),
+    // shipped,
     // the RHS local force-materialization Move (src=now@r1) is ALSO
     // elided — the SetField now reads `now` directly. Both halves
     // assert zero Moves; the SetField uses `now@r1` directly as its

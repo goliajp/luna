@@ -23,7 +23,6 @@
 //! free-list slots carry `Value::Nil` which is a GC no-op, so we don't
 //! bother branching on free vs live in the tracer hot path.
 //!
-//! See `.dev/rfcs/v1.3-audit-slot-recycling.md` for the design rationale.
 
 use crate::runtime::value::Value;
 use crate::vm::exec::Vm;

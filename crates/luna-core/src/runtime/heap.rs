@@ -583,7 +583,6 @@ impl Heap {
                 // hand its pointer back, the budget-paced sweep frees it out
                 // from under the mutator and the next bucket walk dereferences
                 // a libc-recycled slot — the symptom recorded in
-                // `.dev/known-bugs/stringtable-intern-uaf.md` (misaligned ptr
                 // `0x800002a80000002d` deep in `StringTable::intern`).
                 //
                 // Flip the white bits to `current_white` so the upcoming sweep
@@ -1895,7 +1894,7 @@ mod tests {
         );
     }
 
-    /// Regression for `.dev/known-bugs/stringtable-intern-uaf.md`:
+    /// Regression test for a string-table use-after-free:
     /// `StringTable::intern` must NOT return a dead-white (about-to-be-swept)
     /// short-string pointer. Mirrors PUC `luaS_new`'s resurrect-on-hit guard
     /// (lstring.c — `if (isdead(g, ts)) changewhite(ts);`).

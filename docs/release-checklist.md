@@ -6,6 +6,11 @@ Sprint-specific track audits live in `.dev/release-vX.Y.Z-checklist.md`;
 this file stays version-agnostic so the procedure does not rot between
 releases.
 
+> Paths under `.dev/` are the maintainer's local working area — charters,
+> audits, plan state and perf baselines. That directory is gitignored and
+> is not part of any published package, so those steps only apply if you
+> are cutting the release.
+
 Walked for every release through `v3.0.0` (2026-08-14).
 
 Two things this checklist exists to prevent, both of which have actually

@@ -1,6 +1,5 @@
 //! v1.1 B10 Stage 1 — cooperative-yield core for `Vm::eval_async`.
 //!
-//! See `.dev/rfcs/v1.1-rfc-b10-async-embedder.md` (§D1, §D2, §D4, §D5,
 //! §D8) for the full design. This module implements the Stage 1 slice:
 //!
 //! - `DispatchOutcome` — terminal / cooperative-yield enum.

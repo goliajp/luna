@@ -2,7 +2,7 @@
 //!
 //! Standalone, `publish = false` validation crate for the LLVM 18 +
 //! `inkwell` 0.9 toolchain selected by Phase 1K.A
-//! (see `.dev/rfcs/v2.1-phase-1k-a-llvm-jit-selection.md`). The crate
+//!. The crate
 //! JIT-compiles a trivial `add(i64, i64) -> i64` IR and invokes it,
 //! proving the toolchain links + runs on the dev host before Phase
 //! 1K.C+ touches any production luna code.

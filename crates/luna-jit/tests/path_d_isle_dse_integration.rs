@@ -3,7 +3,6 @@
 //! opts/skeleton.isle:48-71`).
 //!
 //! Builds a Cranelift `Function` that replicates the sub-2B Phase F shape
-//! (`.dev/rfcs/v2.0-track-r-r3-3-sub2B-verdict.md` §2.4):
 //!
 //! ```text
 //! block1:

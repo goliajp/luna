@@ -725,7 +725,6 @@ fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
 }
 
 /// Metamethod-safety gate for the Index-LHS snapshot elision attack
-/// described in `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2.
 ///
 /// Returns `true` only when, based purely on AST shape:
 ///

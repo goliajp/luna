@@ -112,7 +112,7 @@ fn main() {
         );
     }
     println!();
-    println!("# Audit's static estimate (from `.dev/rfcs/v1.2-audit-interp-decomp.md`):");
+    println!("# Audit's static estimate:");
     println!("#   GetField: 5/iter, SetField: 2-3/iter, arith: 4-5/iter, Lt/Le: 2/iter,");
     println!("#   GetTabUp: 1/iter, Call: 1/iter, ForLoop: 1/iter, Move/LoadI: ~10/iter.");
     println!("# Divergence >10% on any of these means rederive S## weights and");

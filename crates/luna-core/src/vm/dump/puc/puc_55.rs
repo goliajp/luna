@@ -12,7 +12,6 @@
 //! 0-dep contract: this file uses only the shared `super::super::reader`
 //! primitives (`Reader`, `read_puc_varint`) and stdlib — no
 //! `byteorder` / `leb128` crates per
-//! `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"Cross-dialect risks".
 
 use super::super::reader::{Reader, read_puc_varint};
 use crate::runtime::Value;

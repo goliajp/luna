@@ -144,11 +144,7 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> Result<(), String> {
     if matches!(cli.format, OutMode::Pprof) {
-        return Err(
-            "--format pprof needs `--features flame-graph` (pprof + prost); \
-             see .dev/rfcs/v2.0-plan-state.md § Track TL audit R2"
-                .into(),
-        );
+        return Err("--format pprof needs `--features flame-graph` (pprof + prost)".into());
     }
     if cli.every <= 0 {
         return Err(format!("--every must be > 0, got {}", cli.every));

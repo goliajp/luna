@@ -16,7 +16,6 @@
 //! `LUAC51` env var) when one is installed; CI doesn't gate on it.
 //!
 //! See `crates/luna-core/src/vm/dump/puc/puc_51.rs` and
-//! `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"5.1 risks" for the
 //! translator design + punted features.
 
 use luna_core::version::LuaVersion;

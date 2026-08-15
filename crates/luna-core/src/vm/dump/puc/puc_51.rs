@@ -1,6 +1,6 @@
 //! PUC Lua 5.1 `.luac` → luna `Proto` translator (Phase LB Wave 2).
 //!
-//! 5.1 is **the hardest dialect** per `.dev/rfcs/v1.3-audit-puc-luac-formats.md`
+//! 5.1 is **the hardest dialect**
 //! despite being the oldest, because of three distinguishing features
 //! luna's opcode set doesn't share with the source format:
 //!
@@ -91,7 +91,6 @@
 //! by `puc_54.rs`, so multi-emit lowering helpers can land deltas
 //! correctly via the deferred jump-fixup pass.
 //!
-//! See `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"5.1 risks" for the
 //! full deferred-work list.
 
 use super::super::reader::Reader;

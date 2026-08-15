@@ -102,7 +102,7 @@ dispatch entry; the helpers read it back as
 holds the Vm pointer for the duration of a JIT slice; SAFETY
 annotations cite the guard's lifetime as the validity proof.
 
-The v2.0 Track J audit (`.dev/rfcs/v2.0-plan-state.md` §Track J)
+The v2.0 Track J audit
 plans to move this off `thread_local!` onto a `Vm.VmJitStorage`
 field for cross-thread JIT — gated on Cranelift's
 `JITModule: Send` confirmation.
@@ -173,8 +173,7 @@ discover them.
 | `jit_backend/trace.rs` (chain-inline) | `InlineChainSlot: Send + Sync` | v1.3 AOT Stage 7 polish 6 chain reloc slot type. SAFETY: AOT binary slots are populated once at link time. |
 | `send_vm.rs` | `SendVm: Send + Sync` | v1.3 SendVm newtype. SAFETY: RwLock enforces single-mutator; interior `Vm` single-threaded under each lock. |
 
-Tracked in `.dev/rfcs/v1.3-audit-send-vm-design.md` §1 for
-SendVm rationale + `.dev/rfcs/v1.3-audit-trace-bearing-userdata.md`
+Tracked for the SendVm rationale and the trace-bearing userdata
 for the Send/Sync shape of monomorphic trace_fn.
 
 ## 4. CI enforcement

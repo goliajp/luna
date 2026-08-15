@@ -1,7 +1,6 @@
 //! v1.1 A2 — `JitState` sidecar: JIT-specific Vm state factored out
 //! of the [`crate::vm::Vm`] struct.
 //!
-//! See `.dev/rfcs/v1.1-rfc-vm-jitstate-split.md` for the design
 //! rationale. The interpreter dispatch loop reads `self.heap`,
 //! `self.stack`, `self.frames`, ... as inherent fields; JIT state
 //! lives one field hop away (`self.jit.active_trace` instead of
@@ -134,7 +133,6 @@ pub struct JitState {
     /// collections that used to live in `thread_local!`s on
     /// `luna_jit::jit_backend::{mod,trace}`. Accessed via downcast
     /// from the `CraneliftBackend` trait impls. See
-    /// `.dev/rfcs/v2.0-track-j-b-design.md`.
     pub storage: Box<dyn crate::jit::JitStorage>,
 }
 

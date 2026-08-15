@@ -1,6 +1,6 @@
 //! v1.2 Track B — dogfood §4.1 redis-stub-shape rewrite.
 //!
-//! The kevy v1.0 dogfood report (`.dev/dogfood/2026-06-23-kevy/`) flagged
+//! The kevy v1.0 dogfood report flagged
 //! the "3 steps + 1 unsafe block per table entry" pattern of installing
 //! a populated dispatch table:
 //!

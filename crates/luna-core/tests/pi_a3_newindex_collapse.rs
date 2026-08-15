@@ -12,7 +12,6 @@
 //!   - NilIndex / NanIndex keys still surface as runtime errors via the
 //!     `raw_set` fallback
 //!
-//! See `.dev/rfcs/v2.0-pi-phase2-a3-audit.md` §4 for the case-by-case
 //! semantics analysis.
 
 use luna_core::runtime::Value;

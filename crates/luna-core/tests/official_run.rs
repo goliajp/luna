@@ -17,7 +17,8 @@
 //! `_G.assert` to bump two integer counters (`__luna_assert_total`,
 //! `__luna_assert_hit`). After the chunk completes (or errors) the
 //! counters are read back from the Vm globals and accumulated into a
-//! per-file report written to `.dev/rfcs/v2.0-cb-or-coverage-report.md`.
+//! per-file report written under the workspace's local `.dev/`
+//! directory, which is developer scratch space and is not published.
 //! The report exposes which `_port` / `_soft` / `_noposix` gates are
 //! silently skipping large blocks of `assert(...)` calls so future scope
 //! decisions are evidence-based. The wrapper sits at file scope and
@@ -111,7 +112,7 @@ const BYTE_DIFF_END_MARKER: &[u8] = b"\n===LUNA_BYTE_DIFF_END===\n";
 /// counter wrapper as usual; only the print/io.write shadowing is
 /// omitted.
 ///
-/// Scoping cap: ≤5/dialect per `.dev/rfcs/v2.15-p3-4-*.md` §3.3.
+/// Scoping cap: ≤5/dialect
 /// Current counts (max 3/dialect) comfortably within budget:
 ///
 /// - Lua5.1: `attrib.lua`, `files.lua`
@@ -353,8 +354,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     // fixed in `42f3b76`, and validated by 25x ASAN+gc-verify
     // Linux stress plus 5 consecutive 50-iteration Windows
     // stress runs (uafc-windows-stress.yml) on both native-heap
-    // and 0xDD-poison lanes. History: .dev/known-bugs/fixed/
-    // windows-gc-weak-table-uaf-c.md.
+    // and 0xDD-poison lanes.
     //
     // cwd is the suite dir (set by the caller) so require's ./?.lua finds siblings.
     let raw = match std::fs::read(name) {
@@ -478,7 +478,6 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
             // when `T` is nil, sort's working set is ~50k Values ≈ 1.2 MB) —
             // but pinning it here is defense-in-depth against future
             // additions to the same stress family. Tracked under
-            // `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
             if matches!(
                 label.as_str(),
                 "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
@@ -882,8 +881,8 @@ fn official_suites_expected_pass() {
     );
 }
 
-/// Write `.dev/rfcs/v2.0-cb-or-coverage-report.md` (resolved against the
-/// luna-core manifest dir, i.e. workspace-root + `.dev/rfcs/…`).
+/// Write the coverage report into the workspace's local `.dev/rfcs/`
+/// directory, resolved against the luna-core manifest dir.
 ///
 /// Emits one Markdown table with one row per file (sorted by hit-rate
 /// ascending so low-coverage files surface at the top) plus aggregate
@@ -892,7 +891,7 @@ fn official_suites_expected_pass() {
 /// likely skipping body.
 fn write_coverage_report(coverage: &[FileCoverage]) -> std::io::Result<()> {
     // CARGO_MANIFEST_DIR for luna-core is `<workspace>/crates/luna-core`,
-    // so the report lands at `<workspace>/.dev/rfcs/…` regardless of
+    // so the report lands in the workspace's `.dev/rfcs/` regardless of
     // whether we run from the main checkout or a worktree.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir

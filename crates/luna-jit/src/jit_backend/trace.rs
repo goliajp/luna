@@ -2886,12 +2886,11 @@ struct FlushCtx {
 /// `regs_full`. Sub-3 will insert the R3d stitch_blk base-shift
 /// `iadd_imm(base_var, -8 * recorded_delta)` BETWEEN the cmp brif and
 /// the store-back so the deopt path lands at the caller window
-/// (Risk D1.R2 mitigation in `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §8).
+/// (Risk D1.R2 mitigation).
 ///
 /// Why a helper (not inline `iadd_imm` at each call site): the
 /// op_offset + slot arithmetic is identical across all op-arms and
-/// the LJ source citation in `.dev/rfcs/v2.0-track-r-r3-3-luajit-
-/// study.md` shows arm64's `ldr Xd, [Xn, #imm]` handles the pattern
+/// LuaJIT's own sources show arm64's `ldr Xd, [Xn, #imm]` handles the pattern
 /// in a single addressing mode. Concentrating the math in one helper
 /// keeps the Cranelift mid-end's `iadd_imm` coalescing surface
 /// uniform (Risk D1.R1 mitigation) and lets sub-2 audit codegen at
@@ -3178,7 +3177,6 @@ pub fn last_op_id() -> u8 {
 /// Read by `r3_3_sub1_base_var_scaffold.rs`; production paths
 /// (dispatcher / close handler / vm) never read this.
 ///
-/// See `.dev/rfcs/v2.0-track-r-r3-3-sub1-verdict.md` for the scaffold
 /// shape decision (single-def_var, no audit anchor) + sub-2 handoff
 /// (replace `iconst(0)` init with `reg_state` + migrate Op::Move /
 /// Op::LoadK / Op::LoadNil arms to call `current_base_addr`).
@@ -3201,7 +3199,6 @@ pub fn reset_base_var_scaffold_declared_count() {
 /// Companion of [`super::build_jit_module_with_helpers`] (the int-chunk
 /// counterpart). The AOT pipeline (luna-aot) builds an `ObjectModule`
 /// instead and resolves the same symbols at static-link time — see
-/// `.dev/rfcs/v1.3-audit-luna-aot.md` § "Stage 3: bytecode → Cranelift
 /// IR (the shared lowerer)".
 ///
 /// **Stage 3 status**: both the int-chunk lowerer
@@ -5185,7 +5182,6 @@ pub fn lower_trace_into_named<M: Module>(
 
     // v2.0 Track-R R3.3+ sub-1 — depth-relative `base_var` scaffold.
     //
-    // RFC: `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §6 sub-step 1.
     //
     // Sub-1 is SCAFFOLD-ONLY. The Variable is declared at trace head
     // (here, in the entry block immediately after the reg_state load

@@ -31,7 +31,6 @@
 //! and the interpreter completes the call. No process abort.
 //!
 //! Refs:
-//! - `.dev/known-bugs/fixed/capi-zero-result-callback-from-storage-downcast-sigabrt.md`
 //! - `crates/luna-jit/src/jit_backend/storage.rs` (`from_storage` +
 //!   `StorageMismatch`)
 

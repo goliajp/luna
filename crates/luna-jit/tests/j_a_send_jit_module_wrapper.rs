@@ -5,7 +5,6 @@
 //! 1. **Static assertion** — `SendJitModule: Send`. If a future
 //!    cranelift bump introduces a new `!Send` field that isn't
 //!    `unsafe impl Send` covered (e.g. the audit Sub 3 caveat in
-//!    `.dev/rfcs/v2.0-track-j-prep.md`), this test fails to compile
 //!    and becomes the J-A canary.
 //!
 //! 2. **Cross-thread smoke** — wrap a freshly-built `JITModule`

@@ -3,7 +3,7 @@
 //! Standalone probe: dumps codegen for two candidate "deopt restore" loop
 //! shapes side-by-side, so we can read off whether the Design 2 SnapEntry
 //! walk gets caught by the same Family-1 NEGATIVE pattern that killed
-//! A8 / O04 / hash-polish / S07 (see `.dev/rfcs/v2.0-pi-phase2-closure.md`
+//! A8 / O04 / hash-polish / S07 (
 //! §"Family 1 — LLVM CSE pessimize").
 //!
 //! Family-1 pattern recap: 4 attacks added a cmp/branch/load to the

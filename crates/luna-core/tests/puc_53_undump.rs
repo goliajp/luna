@@ -3,7 +3,6 @@
 //! No `luac5.3` ships on the dev machine (only `luac` 5.5 via Homebrew),
 //! so the in-tree tests hand-craft minimal 5.3 chunks covering the
 //! translator's high-risk features per
-//! `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"5.3 risks":
 //!
 //! 1. 6-bit opcode decode shim (`op:6 | A:8 | C:9 | B:9` layout)
 //! 2. `LUAC_INT` (0x5678) + `LUAC_NUM` (370.5) sanity-byte validation

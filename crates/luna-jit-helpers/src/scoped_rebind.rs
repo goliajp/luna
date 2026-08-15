@@ -43,7 +43,6 @@
 //! single-thread fast path is ever a measured bottleneck again, a
 //! cfg-gated `#[cfg(not(feature = "send"))]` no-op drop variant can
 //! be reintroduced as a `J-E perf polish` follow-up — see
-//! `.dev/rfcs/v2.0-track-j-d-verdict.md` §"J-E handoff".
 
 use luna_core::jit::{JitVmGuard, JitVmRebindRestore};
 use luna_core::runtime::{Gc, LuaClosure};

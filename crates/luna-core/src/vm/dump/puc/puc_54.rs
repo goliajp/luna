@@ -8,7 +8,6 @@
 //! ## Layout
 //!
 //! Reference: PUC `lua-5.4.x/src/lundump.c`, `lopcodes.h`. The audit
-//! `.dev/rfcs/v1.2-audit-luac-body-54.md` is the design spec.
 //!
 //! ## Risk handling (all four audit risks are addressed below)
 //!

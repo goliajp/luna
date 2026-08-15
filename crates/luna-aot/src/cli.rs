@@ -3,7 +3,7 @@
 //! - `luna-aot compile <input.lua> --out <output>` — the scaffold's
 //!   only working command.
 //!
-//! Future v1.3-window commands (per `.dev/rfcs/v1.3-audit-luna-aot.md`):
+//! Future v1.3-window commands:
 //!
 //! - `luna-aot run <input.lua>` — compile + execute in one shot
 //!   (convenience; audit § Open question 7).

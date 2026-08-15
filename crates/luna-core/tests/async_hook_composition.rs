@@ -1,6 +1,5 @@
 //! v1.3 Phase AS — async natives compose with Rust-side B11 debug hooks.
 //!
-//! Audit reference: `.dev/rfcs/v1.3-audit-async-natives.md`. The
 //! dispatcher hot loop already fires Count / Line / Lua-Call /
 //! Lua-Return under `async_mode = true` (those sites are opcode-driven,
 //! not async-mode-aware); the gap was the async-native call boundary

@@ -137,7 +137,6 @@ shelling out to `cc`.
 | 5. embed bytecode + cross-compile via `--target` | shipped — bytecode embed + target-aware ELF/Mach-O/PE magic + per-triple cc + per-OS lib set |
 | 6. link + Alpine no-Lua smoke    | shipped — `cargo build -p luna-runtime-helpers --release [--target T]` bootstrap + final `cc` link; Alpine smoke test skips cleanly when musl cross-cc / docker missing |
 
-See `.dev/rfcs/v1.3-audit-luna-aot.md` for the full audit.
 
 ## Limitations
 

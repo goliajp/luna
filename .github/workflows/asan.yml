@@ -13,11 +13,9 @@
 # - Per-PR is too slow; nightly cron catches drift quickly enough.
 # - workflow_dispatch lets us trigger on-demand when investigating
 #   a specific UAF (the v2.1 → v2.2 investigation used the
-#   .dev/asan-docker/ local repro for the same reason).
 #
 # Required-status promotion: after 30 consecutive nightly greens
 # post-Phase-1-close, this job moves to a required PR check (see
-# .dev/rfcs/v2.2-plan-state.md AS-D).
 
 name: asan
 
@@ -34,7 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # See .dev/asan-docker/Dockerfile for the matching dev env.
       # detect_leaks=0: leak detection on `-Zbuild-std` builds is
       # noisy under emulated linux/amd64 (OrbStack on darwin/arm64)
       # and the same suppressions apply on real linux runners.
@@ -169,7 +166,6 @@ jobs:
       # extrapolates to ~2-3 min. Well within the default job
       # timeout. Charter P3.5 counter starts here: 30 consecutive
       # nightly greens → flip asan job to required PR check
-      # (see .dev/rfcs/v2.15-p3-timing.md for the data).
       - name: ASAN — official_run (all 5 dialects, curated PUC suite)
         run: |
           cargo +nightly test \

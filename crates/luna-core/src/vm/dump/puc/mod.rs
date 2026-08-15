@@ -11,7 +11,6 @@
 //! - `puc_55.rs` — PUC 5.5 (7-bit opcode; PUC MSB-first varint header;
 //!   lowers MMBIN / VARARGPREP / K-imm / I-imm into luna's 65-op set)
 //!
-//! See `.dev/rfcs/v1.3-audit-puc-luac-formats.md` for the full plan.
 //!
 //! ## Shared lowering helpers (Phase 4 PU Wave 1)
 //!

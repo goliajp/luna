@@ -4,8 +4,7 @@
 //! # What sub-piece 2 changes
 //!
 //! Pre-sub-piece-2 the trace lowerer (`crates/luna-jit/src/jit_backend/
-//! trace.rs`, four iconst sites listed in `.dev/rfcs/v1.3-rfc-trace-
-//! aot-relocation.md`) baked the recorder-side `Gc<LuaStr>::as_ptr()`
+//! trace.rs`, four iconst sites) baked the recorder-side `Gc<LuaStr>::as_ptr()`
 //! as `iconst(I64, <addr>)` directly into the IR. That's correct for
 //! the JIT path (`M = JITModule`, lowered mcode runs in-process with
 //! the recorder `Vm`) but garbage for the AOT path — the deploy

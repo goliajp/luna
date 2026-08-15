@@ -10,7 +10,7 @@ use crate::runtime::table::Table;
 /// Type of the per-host trace adapter stored in [`UserdataPayload::Host`].
 /// Captured at `create_userdata::<T>` time as a monomorphic
 /// `trace_fn_for::<T>` whose body calls `T::trace` on the downcast
-/// payload. Phase TB (v1.3) — see `.dev/rfcs/v1.3-audit-trace-bearing-userdata.md`.
+/// payload. Phase TB (v1.3).
 ///
 /// `fn` items are inherently `Send + Sync` and `Copy`, so this type
 /// imposes no auto-trait constraints on `Userdata`. Phase SS (`feature =
@@ -90,7 +90,7 @@ pub enum UserdataPayload {
         /// crate that built a `UserdataPayload::Host` literal under the
         /// v1.2 shape).
         ///
-        /// Phase TB (v1.3) — see `.dev/rfcs/v1.3-audit-trace-bearing-userdata.md`.
+        /// Phase TB (v1.3).
         trace_fn: Option<HostTraceFn>,
     },
 }

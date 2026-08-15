@@ -15,7 +15,7 @@ section spells out:
   signal, not the noise.
 
 Public bench numbers ship with the v2.0 release per Track BM
-(`.dev/rfcs/v2.0-plan-state.md` §Track BM summary). The matrix
+(Track BM). The matrix
 will compare luna_jit / luna_interp / luna_aot vs LuaJIT 2.1 +
 PUC 5.4 + mlua across 13 workloads × 3 host targets, with
 in-process measurement boundaries and ±err bars on every cell.
@@ -33,7 +33,7 @@ sprint onward:
 - **Decomposition before polish.** Any gap > 1.5× a reference impl
   triggers a side-by-side 18-stage decomposition of the workload,
   not surface-level polish iterations. The v2.0 Track PI audit
-  (`.dev/rfcs/v2.0-audit-perf-interp-gap.md`, full 26 KB body
+  (full 26 KB body
   preserved) walks the methodology explicitly for the interp gap
   close work.
 - **Measure both axes.** `luna_jit vs LuaJIT_jit` and `luna_interp
@@ -48,7 +48,7 @@ sprint onward:
 
 ### 2.1 Memory baselines
 
-`.dev/baselines/mem-2026-06-25/` (reproducible via
+a local baseline directory (reproducible via
 [`contributing-mem.md`](contributing-mem.md)). Five workloads measured
 under dhat on macOS aarch64:
 
@@ -65,7 +65,7 @@ increase on any workload signals an unintended layout change.
 
 ### 2.2 Disk + binary size baselines
 
-`.dev/baselines/disk-2026-06-25/` (reproducible via
+a local baseline directory (reproducible via
 [`contributing-disk.md`](contributing-disk.md)). Per-crate publish
 sizes:
 
@@ -86,7 +86,7 @@ AOT output binary sizes:
 | `production_like.lua` (~1.5k LOC) | 12.5 MiB | 6.1 MiB | 4.6 MiB |
 
 Mach-O section breakdown for `production_like.lua` release-stripped
-at `.dev/baselines/disk-2026-06-25/macho-sections.md`.
+in the local disk baseline.
 
 ### 2.3 Compile-time perf
 
@@ -111,7 +111,7 @@ let deopts = vm.trace_deopt_count();
 A workload where `trace_dispatched_count` stays low while
 `trace_aborted_count` climbs is hitting a recorder limit
 (e.g. inline depth or trace length). See `crates/luna-jit/src/jit_backend/`
-for the limits and `.dev/rfcs/v2.0-audit-perf-interp-gap.md` for
+for the limits and
 the methodology used to find them.
 
 ## 3. Tuning knobs
@@ -132,7 +132,7 @@ v1.x perf headlines were historically published as "`vs.X = luna_time
 / X_time` ≤ 0.50 on 41/42 cells" — this framing is the cherry-pick
 optics + subprocess-startup-inflation pair flagged above. v2.0
 replaces it with the BM matrix described in
-`.dev/rfcs/v2.0-plan-state.md` §Track BM (13 workloads × 6 VMs × 3
+the v2.0 Track BM plan (13 workloads × 6 VMs × 3
 host targets, in-process measurement, ±err bars).
 
 The historical `cross_dialect` + `redis_lua_shape` bench harnesses
@@ -146,7 +146,7 @@ numbers should be interpreted in light of:
   span the workload-shape space. The v2.0 BM matrix corrects this.
 
 For the v2.0 sprint's perf attack on the interp gap specifically, see
-`.dev/rfcs/v2.0-audit-perf-interp-gap.md` for the file:line attack
+the interpreter-gap audit for the file:line attack
 targets (`vm/exec.rs:7739-7773` newindex double-walk / `:6706-6709`
 Move opcode / `:6705` dispatcher) and the 18-stage decomposition
 scaffold for `token_bucket_1k`.

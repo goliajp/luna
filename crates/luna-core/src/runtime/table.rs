@@ -123,7 +123,6 @@ impl Node {
 }
 
 /// C3 — SoA Robin Hood meta-word layout (Variant A, see
-/// `.dev/rfcs/v2.0-c3-soa-robinhood-rfc.md` §5.1).
 ///
 /// Each `meta[idx]` slot encodes the open-addressing slot state in a
 /// single u16:
@@ -633,7 +632,6 @@ impl Table {
     /// writes only when the existing slot is non-nil — the exact set the
     /// prior `tb.get(key).is_nil()` gate already excluded from
     /// `__newindex` eligibility. See
-    /// `.dev/rfcs/v2.0-pi-phase2-a3-audit.md` §4 for the case-by-case
     /// semantics check.
     ///
     /// The caller is responsible for firing `Heap::barrier_back` after a
@@ -657,7 +655,6 @@ impl Table {
                 // discipline as `set_norm` — routed through
                 // `clear_existing_slot` so chain-world / future
                 // data-layout cutovers (Phase E SoA) stay aligned.
-                // See `.dev/known-bugs/fixed/`.
                 if val.is_nil() {
                     self.clear_existing_slot(k);
                 } else {
@@ -1344,7 +1341,6 @@ impl Table {
 //     wired in Phase F; for Phase C the counter is always 0 so the
 //     refusal path is unreachable)
 //
-// Refs: `.dev/rfcs/v2.0-c3-soa-robinhood-rfc.md` §5.1 (variant A),
 // §6.2 Phase 1-3 (impl plan).
 // =====================================================================
 

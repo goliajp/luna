@@ -3,7 +3,6 @@
 //! catchable Lua-level error rather than walking the host allocator
 //! off a cliff and SIGSEGV-ing the test runner.
 //!
-//! Tracked at `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
 //!
 //! The PUC shape the gate defends against:
 //!

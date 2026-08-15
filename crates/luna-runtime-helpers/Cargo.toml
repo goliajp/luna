@@ -36,7 +36,6 @@ luna-core = { path = "../luna-core", version = "= 3.0.0" }
 # "undefined reference to `_luna_jit_table_get_field`" et al.
 #
 # Trade-off documented in
-# `.dev/rfcs/v1.3-rfc-trace-aot-relocation.md`:
 #   - Pulls all of `luna-jit` (and transitively cranelift) into the
 #     deploy-side staticlib at build time. `cc -Wl,--gc-sections`
 #     (Linux) and Mach-O dead-strip remove unused cranelift code at

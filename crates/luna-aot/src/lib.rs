@@ -24,7 +24,7 @@
 //!    `stderr` and exits — proving the section is reachable end-to-end.
 //!
 //! What is **deferred to follow-up sessions** within the v1.3 mega
-//! sprint (per `.dev/rfcs/v1.3-audit-luna-aot.md` Stage 3-6):
+//! sprint:
 //!
 //! - **Wiring the [`runtime_stub`] Rust module into the linked binary**
 //!   so the embedded bytecode is `undump`-ed into a [`luna_core::vm::Vm`]

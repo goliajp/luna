@@ -898,7 +898,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
 /// that the polish-6 chain reloc path actually fires at runtime — the
 /// resolver-side probe (`aot_inline_chains_resolved`) only confirms
 /// the slot was populated, not that any AOT mcode dispatch ever
-/// loaded it. See `.dev/rfcs/v2.0-ao-pf-verdict.md`.
+/// loaded it.
 pub static TRACE_MATERIALIZE_FRAMES_FIRES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 

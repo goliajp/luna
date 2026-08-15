@@ -17,7 +17,6 @@
 //!
 //! # Scope-split with Track AO
 //!
-//! Per `.dev/rfcs/v2.0-audit-tl.md`, this functionality eventually
 //! shows up as a `luna-aot inspect` sub-command. Today it ships as
 //! a stand-alone binary so the `luna-tools` infrastructure (clap
 //! parsing, JSON schema, smoke tests) is in place; the Track AO

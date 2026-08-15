@@ -1,6 +1,6 @@
 //! Regression: `io.popen` fd ownership round-trip must not double-close.
 //!
-//! Background — CB1 follow-up (`.dev/known-bugs/fixed/io-safety-fd-double-close.md`).
+//! Background — CB1 follow-up.
 //! After the v1.3 CB1 compiler short-circuit fix (`fae0f9c`), the integration
 //! suite reached PUC's io tests for the first time and tripped Rust's
 //! `IoSafety` runtime check (`fatal runtime error: IO Safety violation: owned

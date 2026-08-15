@@ -468,7 +468,6 @@ impl<'a> Compiler<'a> {
     /// recorded jump destination.
     ///
     /// Consumed by the A4''' Reloc-landing peephole at `assign_name` (see
-    /// `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4) and the A4'' single-
     /// RHS materialization elision at `assign_stat`.
     fn prev_emit_is_safe_peephole_site(&self) -> bool {
         let here = self.here();
@@ -495,8 +494,6 @@ impl<'a> Compiler<'a> {
     /// are already discharged to their final register by `exp_to_reg` —
     /// no Reloc landing happens through assign_name for them.
     ///
-    /// See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4 and
-    /// `.dev/rfcs/v2.1-a4-triple-prime-prereq-verdict.md` §4.2.
     fn assign_name_can_retarget_reloc(&self, vreg: u32) -> Option<usize> {
         if !self.prev_emit_is_safe_peephole_site() {
             return None;
@@ -2659,8 +2656,7 @@ impl<'a> Compiler<'a> {
                 Expr::Index { obj, key } => {
                     let (obj, key) = (*obj, *key);
                     let oe = self.expr(obj)?;
-                    // A4' (`.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2 +
-                    // `.dev/rfcs/v2.1-a4-prime-prereq-verdict.md` §3): when
+                    // A4':
                     // the prereq gate certifies the obj is a non-captured
                     // bare-Name local AND the single RHS contains no
                     // UserOrUnknown call, the unconditional snapshot Move
@@ -2717,7 +2713,6 @@ impl<'a> Compiler<'a> {
         // A4''' inside assign_name, literal/Open RHS never emit a tail
         // Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
         // so a jump landing at the Move's pc is preserved.
-        // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §3.
         let alt_vreg =
             if targets.len() == 1 && exprs.len() == 1 && self.prev_emit_is_safe_peephole_site() {
                 let last_pc = self.here() - 1;
@@ -2796,7 +2791,6 @@ impl<'a> Compiler<'a> {
                     // itself a jump destination, retarget its A field to
                     // `reg` and skip the Move. Mirrors PUC `discharge2reg`'s
                     // A-field rewrite at lcode.c:luaK_dischargevars / setoneret.
-                    // See `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §4.
                     if let Some(prev_pc) = self.assign_name_can_retarget_reloc(vreg) {
                         self.patch_dest(prev_pc, reg);
                     } else {
@@ -3270,8 +3264,6 @@ impl<'a> Compiler<'a> {
 
     /// Compiler-side metamethod-safety gate for the future A4' Index-LHS
     /// object snapshot elision attack (see
-    /// `.dev/rfcs/v2.0-pi-phase11-a4-prime-rfc.md` §2.3 and
-    /// `.dev/rfcs/v2.1-a4-prime-prereq-verdict.md`).
     ///
     /// Returns `true` when, for a single-target Index-LHS assignment
     /// `obj.key = rhs` (or `obj[key] = rhs`), the unconditional

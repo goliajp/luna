@@ -43,7 +43,7 @@ use crate::vm::isa::{Inst, Op};
 ///
 /// A future `feature = "send"` (post-v1.1 sprint) will gate an
 /// opt-in `Arc<RwLock<T>>` mode with a hard ≤8% perf regression
-/// budget. See `.dev/rfcs/v1.1-rfc-vm-send-sync.md` for the design.
+/// budget.
 pub struct Vm {
     /// The GC heap owned by this VM. Embedders normally interact via the
     /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
@@ -203,7 +203,6 @@ pub struct Vm {
     /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
     /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
     /// crosses `isize::MAX` or the host runs out of RAM. Tracked at
-    /// `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
     /// Embedders that genuinely need to load > 256 MiB sources widen the
     /// cap via [`Vm::set_loader_input_budget`].
     pub(crate) loader_input_budget: usize,
@@ -5863,7 +5862,6 @@ impl Vm {
                     // caller resumes). For fire-once cap path this
                     // residual over-root is acceptable; full
                     // per-frame walk was canceled per
-                    // `.dev/rfcs/v2.6-plan-state.md` amendments log
                     // (charter §2.1's strong/weak pass split is
                     // semantically impossible — weak pass depends on
                     // strong-pass marks).
@@ -8814,7 +8812,6 @@ impl Vm {
                     // key is already present with a non-nil value. The
                     // __newindex chain semantics are preserved by the
                     // identity (slot_nil ⇔ fire_newindex); see
-                    // .dev/rfcs/v2.0-pi-phase2-a3-audit.md §4.
                     //
                     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the
                     // heap is single-threaded and the pointer is live as

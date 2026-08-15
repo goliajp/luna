@@ -1628,9 +1628,9 @@ fn debug_line_table_precision() {
 
 #[test]
 fn debug_upvalue_order_and_id() {
-    // v2.0 CB2: the historical plan-state lists this test as a "100 local 不
-    // reproduce 但 CI 特定 allocator state trip" flake. A data-structure audit
-    // (verdict doc `.dev/rfcs/v2.0-cb2-stabilization-verdict.md`) finds every
+    // v2.0 CB2: this test was once listed as a flake that would not
+    // reproduce locally but tripped on some CI allocator state. A
+    // data-structure audit found every
     // code path the assertions ride is deterministic under single-threaded
     // exec — compiler upvalue indexing is a `Vec::position` + `Vec::push`
     // walk, the open-upvalue chain is a slot-sorted `Vec` with
@@ -1643,7 +1643,6 @@ fn debug_upvalue_order_and_id() {
     //
     // Rather than ship a no-op, repeat each sub-check 50× in a single test
     // process. This collapses the "1000× CI runs to archive the flake" cost
-    // documented in `.dev/rfcs/v2.0-plan-state.md` (Top risks R3) into one
     // `cargo test` invocation and gives a fail-fast tripwire if any future
     // allocator / GC tuning ever breaks shared-upvalue identity.
     for _ in 0..50 {
