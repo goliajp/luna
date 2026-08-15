@@ -1,4 +1,4 @@
-//! Stage 4-6 of the AOT pipeline (audit `.dev/rfcs/v1.3-audit-luna-aot.md`):
+//! Stage 4-6 of the AOT pipeline:
 //! parse + compile Lua source → dump luna bytecode → embed into an
 //! object file's `.luna.bytecode` data section → link.
 //!

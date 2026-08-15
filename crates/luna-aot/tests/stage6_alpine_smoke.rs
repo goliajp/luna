@@ -1,5 +1,4 @@
 //! Stage 6 — Alpine no-Lua-installed deploy smoke (charter AOT6 at
-//! `.dev/rfcs/v1.3-audit-luna-aot.md`).
 //!
 //! Builds `hello.lua` for `x86_64-unknown-linux-musl`, then runs the
 //! produced binary inside an Alpine container with **no Lua installed**.

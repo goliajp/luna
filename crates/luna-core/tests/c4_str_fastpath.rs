@@ -14,8 +14,6 @@
 //!     threshold) → bytes-equality fallback in `find_node_str` keeps
 //!     PUC semantics intact
 //!
-//! See `.dev/rfcs/v2.0-value-layout-shrink-rfc.md` §4.4, §6 and
-//! `.dev/baselines/perf-2026-06-27-step5/c4-phase-a-audit.md`.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

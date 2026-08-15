@@ -27,7 +27,7 @@ publish = false
 #
 # `llvm-sys`'s build script reads `LLVM_SYS_181_PREFIX` (note the
 # version-major-minor in the var name) to locate `llvm-config`. The
-# probe's RFC (`.dev/rfcs/v2.1-phase-1k-b-llvm-hello-world.md`) records
+# probe's RFC records
 # the exact env var + install path for Phase 1K.C+ reproducibility.
 inkwell = { version = "0.9", features = ["llvm18-1"] }
 

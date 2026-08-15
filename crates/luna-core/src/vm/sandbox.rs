@@ -1,7 +1,7 @@
 //! Sandbox builder (B1, Phase 2 P2-A) — replaces the 5-line manual
 //! setter sequence with a fluent builder.
 //!
-//! Conservative defaults (per `.dev/rfcs/v1.1-rfc-b-ergo.md` §B1):
+//! Conservative defaults:
 //!
 //! - **No stdlib opened** — the embedder explicitly opts in to each
 //!   safe-by-default subset (`open_base`, `open_math`, `open_string`,

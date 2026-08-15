@@ -58,9 +58,9 @@ Bench cases (four, in two pairs):
 `wrapped / bare` in each pair. That's the **framework tax** the
 SS-B `SendVm` newtype-fork implementation will pay on top of (or
 instead of) the per-`Gc<T>` deref cost decomposed in
-`.dev/rfcs/v1.2-audit-send-cost.md`.
+the send-cost audit.
 
-Audit projections from `.dev/rfcs/v1.3-audit-send-vm-design.md` §3.2:
+Audit projections:
 
 | Arch | Per-deref `Arc<UnsafeCell<T>>` cost | Full SendVm B2 projection |
 |---|---|---|
@@ -87,4 +87,5 @@ cargo bench --bench bench_send_overhead -- --quick   # fast sanity (skip stats)
 cargo bench --bench bench_send_overhead -- wrapped_vm_token_bucket  # filter
 ```
 
-Baseline captures live under `.dev/perf-baselines/<date>-<topic>.md`.
+Baseline captures live under `.dev/perf-baselines/`, a gitignored local
+directory.

@@ -9,7 +9,7 @@
 //! | --- | --- | --- |
 //! | `luna-bin-inspect` | 1 | Real — walks an AOT-produced binary's `.luna.bytecode` / `luna_trace_meta` / `luna_inline_chnx` sections and reports a section table + trace index counts. |
 //! | `luna-heap-dump` | 1 | Real — runs a `.lua` script in a [`luna_jit::Vm`], then prints a per-type snapshot (object count + approximate bytes) using the pure-read accessors in [`luna_jit::inspect`]. |
-//! | `luna-trace-inspect` | 2 | Real — runs a `.lua` script and dumps the resulting [`luna_jit::inspect::JitStateSnapshot`] (counters + active-trace head_pc / ops_len). `--show ir` + `--show mcode` are reserved CLI surface; they exit non-zero today with a pointer to the Track R IR stabilisation / capstone-feature tracking docs per `.dev/rfcs/v2.0-audit-tl.md` § R1. |
+//! | `luna-trace-inspect` | 2 | Real — runs a `.lua` script and dumps the resulting [`luna_jit::inspect::JitStateSnapshot`] (counters + active-trace head_pc / ops_len). `--show ir` + `--show mcode` are reserved CLI surface; they exit non-zero today with a pointer to the Track R IR stabilisation / capstone-feature tracking docs. |
 //! | `luna-profile` | 2 | Real — Count-hook sampling profiler. Text top-N + folded-stack output for `inferno-flamegraph`. `--format pprof` is reserved for the `flame-graph` feature opt-in per audit R2. |
 //! | `luna-repl-polish` | 2 | Stub — `unimplemented!`; rustyline `=14.x` pin lands with the impl per audit R3. |
 //!

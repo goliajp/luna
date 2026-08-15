@@ -1,6 +1,5 @@
 //! Type definitions and small helpers extracted from `trace.rs` for
 //! the luna-core / luna split boundary. See
-//! `.dev/rfcs/v1.1-rfc-crate-split.md` §Migration Step 6.
 //!
 //! Everything here is cranelift-free by construction — the items
 //! ultimately home to `luna-core` in Session C, while `trace.rs`
@@ -69,7 +68,7 @@ pub enum SelfRecKind {
 ///
 /// R1 only collects these records (a side-channel parallel to
 /// [`TraceRecord::ops`]) — the lowerer doesn't consume them yet.
-/// R3's down-rec stitch (see `.dev/rfcs/v2.0-track-r-prep.md` §3)
+/// R3's down-rec stitch
 /// reads them to verify that a side-trace's inlined-frame topology
 /// matches the recorded shape before stitching.
 ///
@@ -333,7 +332,6 @@ pub struct TraceRecord {
     /// recording with `p16_self_link_enabled = true`. Empty on the
     /// ship-default path (p16 off). Lowerer doesn't consume this in
     /// R1 — the records are infrastructure for R3's down-rec stitch
-    /// (see `.dev/rfcs/v2.0-track-r-prep.md` §3).
     pub retfs: Vec<RetfRecord>,
     /// v2.0 Track-R R3a — close marker set by the recorder when a
     /// depth>0 `Op::Return` re-trips the down-rec catch (i.e., the
@@ -1429,7 +1427,6 @@ pub struct CompileOptions {
     /// any AOT trace dispatches. JIT path is unaffected — same
     /// `iconst` it always emitted.
     ///
-    /// See `.dev/rfcs/v1.3-rfc-trace-aot-relocation.md` for the full
     /// scheme; sub-piece 2 (this flag) lands the codegen half — the
     /// deploy-side resolver is sub-piece 3.
     pub aot: bool,

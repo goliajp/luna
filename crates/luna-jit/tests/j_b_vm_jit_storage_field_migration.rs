@@ -17,7 +17,6 @@
 //!    `TRACE_JIT_HANDLES` TLS. Re-evaluating a trace-hot loop on a
 //!    second Vm does not error or share trace handles.
 //!
-//! See `.dev/rfcs/v2.0-track-j-b-design.md` for the migration design.
 
 use luna_core::version::LuaVersion;
 

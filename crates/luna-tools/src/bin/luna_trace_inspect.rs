@@ -13,7 +13,6 @@
 //!   close their traces before the chunk returns).
 //!
 //! IR + mcode dumps are **intentionally deferred** per
-//! `.dev/rfcs/v2.0-audit-tl.md` § R1: the IR shape will refactor in
 //! Track R, so emitting it today would force a flag deprecation
 //! within the same release line. The `--show` CLI surface still
 //! pins `ir` / `mcode` as values so future fills don't break user
@@ -113,14 +112,10 @@ fn run(cli: &Cli) -> Result<(), String> {
     match cli.show {
         ShowMode::Summary => {}
         ShowMode::Ir => {
-            return Err("--show ir is reserved for Track R IR shape stabilising; \
-                 see .dev/rfcs/v2.0-plan-state.md § Track TL audit R1"
-                .into());
+            return Err("--show ir is reserved while the IR shape is still stabilising".into());
         }
         ShowMode::Mcode => {
-            return Err("--show mcode needs `--features mcode-disasm` (capstone); \
-                 see .dev/rfcs/v2.0-plan-state.md § Track TL audit R1"
-                .into());
+            return Err("--show mcode needs `--features mcode-disasm` (capstone)".into());
         }
     }
 

@@ -14,7 +14,6 @@ members = [
     # Sibling of luna-core + luna-jit. Pulls third-party deps
     # (`object`, `clap`) but **not into luna-core's tree** — the
     # 0-third-party-dep contract on luna-core is unaffected.
-    # See `.dev/rfcs/v1.3-audit-luna-aot.md`.
     "crates/luna-aot",
     # v1.3 Phase AOT Stage 4 — `luna-runtime-helpers` staticlib that
     # `luna-aot`-produced binaries statically link against. Exposes
@@ -32,7 +31,7 @@ members = [
     "crates/luna-tools",
     # v2.1 Phase 1K.B — `llvm-jit-probe` standalone validation crate
     # for the LLVM 18 + inkwell 0.9.0 toolchain selected by Phase 1K.A
-    # (see `.dev/rfcs/v2.1-phase-1k-a-llvm-jit-selection.md`). Crate is
+    #. Crate is
     # `publish = false` and never enters the luna-core / luna-jit /
     # luna-aot dep graph — its sole purpose is to prove that the LLVM
     # JIT toolchain links + runs on the dev host before Phase 1K.C+
@@ -76,7 +75,6 @@ exclude = [
     # which redirects luna-jit / luna-aot's `cranelift-*` deps at the
     # path inside this submodule.
     #
-    # See `.dev/rfcs/v2.1-path-d-phase-1a-vendor-fork.md` for the full
     # pipeline setup rationale and Phase 1B handoff.
     "crates/vendored/wasmtime",
 ]
@@ -251,7 +249,6 @@ incompatible_msrv = "allow"
 #   cranelift-object            → cranelift/object
 #   cranelift-srcgen            → cranelift/srcgen
 #
-# See `.dev/rfcs/v2.1-path-d-phase-1a-vendor-fork.md` for full audit
 # trail (vendor strategy rationale, fork pipeline reproducibility,
 # Phase 1B internal-file handoff list).
 [patch.crates-io]

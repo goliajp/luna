@@ -1,6 +1,6 @@
 //! v2.0 Phase 1 CB-edge — GC finalizer edge cases.
 //!
-//! Audit (`.dev/rfcs/v2.0-plan-state.md` §Phase 0 Track CB summary):
+//! Audit:
 //! GC finalizer in finalizer / cycle with weak ref + finalizer /
 //! hashmap key is a newly-collected userdata — 3-5 spot tests.
 //!

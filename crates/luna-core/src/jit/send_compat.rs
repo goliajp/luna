@@ -29,7 +29,6 @@
 //! wrapper methods inline trivially). Size assertions in
 //! `tests/j_c_zero_cost_default.rs` pin this.
 //!
-//! See `.dev/rfcs/v2.1-track-j-c-verdict.md` for the full migration
 //! list + cfg-gating pattern shape.
 
 // ============================================================

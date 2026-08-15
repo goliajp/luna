@@ -33,7 +33,6 @@ luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 3.0.0" }
 # feature flag as `llvm-jit-probe` (`llvm18-1`); requires
 # `LLVM_SYS_181_PREFIX` env var pointing at an LLVM 18.1.x install
 # (e.g. `brew install llvm@18` → `/opt/homebrew/opt/llvm@18`). See
-# `.dev/rfcs/v2.1-phase-1k-b-llvm-hello-world.md` for repro details.
 inkwell = { version = "0.9", features = ["llvm18-1"] }
 
 [dev-dependencies]

@@ -8,7 +8,6 @@
 //! type is **not** auto-`Send` because its
 //! `memory: Box<dyn JITMemoryProvider>` field is a trait object with
 //! no `+ Send` bound (see audit:
-//! `.dev/rfcs/v2.0-track-j-prep.md` §Sub 3). The default concrete
 //! provider — `SystemMemoryProvider` — IS `Send`
 //! (`cranelift-jit-0.124.3/src/memory/system.rs:126 unsafe impl Send
 //! for Memory`), and luna never plugs in a custom provider
@@ -47,7 +46,6 @@ use std::ops::{Deref, DerefMut};
 pub struct SendJitModule(JITModule);
 
 // SAFETY: J-A audit on cranelift_jit 0.124.3 confirmed (per
-// `.dev/rfcs/v2.0-track-j-prep.md` §Sub 3-4) that `JITModule`'s sole
 // `!Send` field is `memory: Box<dyn JITMemoryProvider>`
 // (`backend.rs:175`, the trait object has no `+ Send` bound). The
 // default concrete provider `SystemMemoryProvider` IS `Send`
@@ -59,7 +57,6 @@ pub struct SendJitModule(JITModule);
 // `trace.rs:2497`.
 //
 // Caveat: future cranelift bumps must re-run the
-// `.dev/rfcs/v2.0-track-j-prep.md` §Sub 3 field-by-field table; the
 // static assertion in `tests/j_a_send_jit_module_wrapper.rs` is the
 // canary.
 unsafe impl Send for SendJitModule {}

@@ -83,7 +83,6 @@
 // `SendVm` interp-only (`NullJitBackend`); JIT-aware `SendVm` is a
 // post-v1.3 polish item. Default-feature builds are unchanged —
 // `Vm` stays `!Send + !Sync` and bit-identical with v1.2. See
-// `.dev/rfcs/v1.3-rfc-send-arc.md` for the design, and
 // `docs/threading.md` for the embedder-facing usage patterns.
 
 pub mod compiler;

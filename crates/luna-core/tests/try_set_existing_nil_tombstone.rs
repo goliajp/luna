@@ -28,7 +28,6 @@
 //!     the slot (covering the chain-world "soft tombstone is still
 //!     `find_node`-reachable" contract).
 //!
-//! See `.dev/known-bugs/fixed/try-set-existing-tombstones-nil-val-live-slot.md`.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

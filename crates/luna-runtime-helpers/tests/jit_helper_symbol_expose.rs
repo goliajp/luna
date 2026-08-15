@@ -30,7 +30,7 @@
 //!
 //! - End-to-end "AOT binary fires AOT mcode on hot loop". That's the
 //!   `iconst`-relocation + trace-dispatch-install workstream, scoped
-//!   out per `.dev/rfcs/v1.3-rfc-trace-aot-relocation.md`.
+//!   out.
 
 #![cfg(feature = "jit-helpers")]
 

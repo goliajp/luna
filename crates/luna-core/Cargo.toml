@@ -27,7 +27,7 @@ default = []
 # `luna_core::vm::SendVm`, an `Arc<UnsafeCell<Vm>> + Arc<RwLock<()>>`
 # newtype that is `Send` at the type level and serializes access at
 # runtime. Interp-only at v1.3 ship (JIT-aware SendVm is a post-v1.3
-# polish item — see `.dev/rfcs/v1.3-rfc-send-arc.md`). Default-feature
+# polish item). Default-feature
 # builds (no feature) keep `Vm` `!Send + !Sync` and bit-identical with
 # the v1.2 baseline. luna-core 0-dep contract preserved (Arc, UnsafeCell,
 # RwLock are all stdlib).
@@ -50,7 +50,6 @@ gc-verify = []
 # profiler used by the `mem_baseline` bench. It is gated to
 # `[dev-dependencies]` so prod `cargo tree -p luna-core` still reports
 # exactly 1 crate (luna-core itself), preserving the F1 0-dep contract.
-# See `.dev/baselines/mem-2026-06-25/` for measurement output and
 # `docs/contributing-mem.md` for the workflow.
 dhat = "0.3"
 

@@ -10,7 +10,6 @@
 # (WER disabled on GHA runners), so the test binary runs under
 # Sysinternals procdump (-e: unhandled-exception dump) and the
 # dump is stack-walked with cdb. Dispatch-only diagnostic.
-# Tracking: .dev/known-bugs/windows-gc-weak-table-uaf-c.md
 
 name: uafc-windows-stress
 

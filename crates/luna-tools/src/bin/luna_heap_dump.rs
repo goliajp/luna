@@ -5,8 +5,7 @@
 //! accessors in [`luna_jit::inspect`] — no private fields touched,
 //! no allocations on the hot path of the running script.
 //!
-//! Unified-with-MM-track note: per `.dev/rfcs/v2.0-audit-tl.md`,
-//! heap-dump shares its snapshot schema ([`luna_tools::schema::
+//! Note: heap-dump shares its snapshot schema ([`luna_tools::schema::
 //! HeapSnapshot`]) with the future `luna-heap-diff` tool that Track
 //! MM will land — both sides parse the same JSON.
 

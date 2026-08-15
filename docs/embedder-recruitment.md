@@ -39,7 +39,7 @@ Be upfront about limits, per
 - **NOT LuaJIT-parity perf**. luna's Cranelift-backed JIT
   is architecturally simpler than LuaJIT's SSA-IR
   type-specialized tracing JIT. See v2.9 structural ceiling
-  analysis (`.dev/rfcs/v2.9-decomposition-and-ceiling.md`
+  analysis (
   in the repo). Luna targets PUC interpreter parity, not
   LuaJIT speed.
 - **Windows-specific gc.lua weak-table edge**. Rare pattern

@@ -89,7 +89,6 @@ jobs:
   # wasm32-unknown-unknown, so `io.popen` / `os.execute` are
   # cfg-gated on `any(unix, windows)`; wasi gets a stub that returns
   # the PUC error tuple `(nil, "popen not supported on this platform", -1)`.
-  # See .dev/rfcs/v1.3-audit-wasi-port.md for the gating shape.
   #
   # Smoke (Phase WW4 follow-up, not yet wired): install `wasmtime`
   # via `curl https://wasmtime.dev/install.sh | bash`, build

@@ -3,7 +3,7 @@
 //! Reports min/p50/p95/max for both luna_interp (trace disabled) and
 //! luna_trace (trace JIT enabled), so the numbers line up directly
 //! with the LuaJIT `-joff` / LuaJIT JIT-on / PUC 5.5 data captured
-//! via os.clock() in `.dev/baselines/perf-2026-06-25/token_bucket_1k_timed.lua`.
+//! via os.clock().
 //!
 //! NOT a formal bench. Per perf-decomposition methodology §8 the formal
 //! gate is Linux taskset criterion; this is a directional snapshot.

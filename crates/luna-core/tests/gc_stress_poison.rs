@@ -1,7 +1,7 @@
 //! v2.13 Track WUC Prong A — poison-on-free allocator stress for
 //! UAF-C (Windows gc.lua weak-table STATUS_ACCESS_VIOLATION).
 //!
-//! Hypothesis (v2.8, `.dev/known-bugs/windows-gc-weak-table-uaf-c.md`):
+//! Hypothesis (v2.8):
 //! the UAF exists on all platforms; the Windows Heap Manager's
 //! freed-memory fill pattern makes the weak-table sweep's stale
 //! read *visible* as an AV, while glibc/jemalloc/Apple-malloc leave

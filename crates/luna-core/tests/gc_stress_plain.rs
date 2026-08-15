@@ -3,7 +3,7 @@
 //! Same loop as `gc_stress_poison.rs` but WITHOUT the allocator
 //! override: on Windows this exercises the real Heap Manager
 //! freed-memory behavior that UAF-C manifests under
-//! (`.dev/known-bugs/windows-gc-weak-table-uaf-c.md`). Driven by
+//!. Driven by
 //! `.github/workflows/uafc-windows-stress.yml` on windows-latest
 //! to measure the repro rate; also runnable anywhere for a
 //! baseline.

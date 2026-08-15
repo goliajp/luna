@@ -188,7 +188,7 @@ in wasm hosts.
 
 Out of scope for v1.1. `luna-core` currently depends on `std`
 (`String`, `Vec`, `HashMap`, etc.). A future no_std-capable luna-core
-is a longer-term consideration; see `.dev/discussions/0dep-jit-path.md`
+is a longer-term consideration
 for sibling work.
 
 ---
@@ -254,7 +254,6 @@ substitute `#[tokio::main(flavor = "current_thread")]` or a
 - Cancellation: dropping the future mid-await clears the
   pending-async state but leaves Lua call frames in `vm.frames`.
   Drop the entire Vm when an async eval is cancelled mid-flight.
-  See `.dev/rfcs/v1.1-rfc-b10-async-embedder.md` §"Risks".
 
 ### Async natives + debug hooks (v1.3 Phase AS)
 
@@ -464,7 +463,7 @@ which *is* `Send` but the surface isn't mirrored in v1.3 — open
 the wrapped Vm via the bare API for now).
 
 For a full design + the soundness story, see
-`.dev/rfcs/v1.3-rfc-send-arc.md`.
+the `send` feature's design.
 
 [`vm::Vm`]: ../crates/luna-core/src/vm/exec.rs
 [`vm::SendVm`]: ../crates/luna-core/src/vm/send_vm.rs
@@ -476,7 +475,7 @@ For a full design + the soundness story, see
 `SendVm` has two follow-up axes in the pipeline:
 
 1. **JIT-aware `SendVm`** — lift the interp-only restriction. Cost
-   sketch in `.dev/rfcs/v1.3-audit-send-vm-design.md` §3.3 + §7.3;
+   sketch;
    needs `Proto::traces` `Rc → Arc` migration and a JIT TLS
    redesign. Audit projects ~6 % additional JIT-engaged cost
    beyond the current ~2 % interp-only.
@@ -497,6 +496,3 @@ explicit that the wrapper-shape SendVm is the v1.3 deliverable.
 - [`architecture.md`](architecture.md) — Crate layout, JIT pipeline, threading model overview
 - [`compatibility.md`](compatibility.md) — Per-dialect feature support
 - [`performance.md`](performance.md) — Cross-dialect bench numbers
-- `.dev/rfcs/v1.1-rfc-vm-send-sync.md` — Full design rationale for the v1.1 `!Send` stance
-- `.dev/rfcs/v1.3-audit-send-vm-design.md` — v1.3 SS audit (per-field fork vs wrapper)
-- `.dev/rfcs/v1.3-rfc-send-arc.md` — v1.3 SS-B as-shipped RFC (wrapper design + soundness)

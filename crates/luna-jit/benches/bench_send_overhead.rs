@@ -4,7 +4,7 @@
 //! indirection layer (`Arc<UnsafeCell<Vm>>` plus `unsafe impl Send`) **before
 //! any real Arc-of-fields / RwLock semantics land**. This is the framework
 //! tax that Phase SS-B `SendVm` will pay on top of (or instead of) the
-//! `Gc<T>` per-deref cost decomposed in `.dev/rfcs/v1.2-audit-send-cost.md`.
+//! the per-deref cost of `Gc<T>`.
 //!
 //! ## What this bench is not
 //!
@@ -24,7 +24,7 @@
 //! - `bare_vm_eval` vs `wrapped_vm_eval` — minimal-eval cost ratio
 //! - `bare_vm_token_bucket` vs `wrapped_vm_token_bucket` — real workload ratio
 //!
-//! The audit (`.dev/rfcs/v1.3-audit-send-vm-design.md` §3.2) projects:
+//! The audit projects:
 //!
 //! | arch    | per-deref `Arc<UnsafeCell<T>>` cost | full SendVm regression projection (B2) |
 //! |---------|-------------------------------------|----------------------------------------|

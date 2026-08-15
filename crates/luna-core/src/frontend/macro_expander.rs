@@ -6,7 +6,7 @@
 //! result is fed to [`crate::frontend::parser::parse_tokens`] — the
 //! parser itself is unchanged and never sees macros.
 //!
-//! ## Surface (audit-locked, see `.dev/rfcs/v1.3-audit-macro-lua.md` §3)
+//! ## Surface (audit-locked
 //!
 //! - `@name(arg1, arg2, ...)` — call a registered macro with raw
 //!   token-run arguments (top-level commas split args; nested

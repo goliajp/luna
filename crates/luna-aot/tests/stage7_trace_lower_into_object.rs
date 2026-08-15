@@ -10,7 +10,7 @@
 //!
 //! # Why this is the "load-bearing demo" for Stage 7
 //!
-//! The audit (`.dev/rfcs/v1.3-audit-luna-aot.md`) estimates the
+//! The audit estimates the
 //! end-to-end trace AOT story at ~40 dev-days. The bulk of that work
 //! is **runtime-side**: in-deploy trace registry walk, dispatch-table
 //! install on the embedded `Vm`, and — most painfully — relocating

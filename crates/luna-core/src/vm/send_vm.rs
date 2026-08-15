@@ -49,7 +49,6 @@
 //!
 //! # Interp-only constraint
 //!
-//! Per `.dev/rfcs/v1.3-audit-send-vm-design.md` §3.3, the v1.3 ship
 //! of `SendVm` does **not** install a JIT backend. `SendVm::new`
 //! calls [`Vm::new_minimal`] which leaves `JitState` at
 //! `NullJitBackend`; the dispatcher always falls back to the
@@ -176,7 +175,6 @@ impl SendVm {
     ///    dispatch is sound under the same single-mutator invariant
     ///    that bare `Vm` relies on.
     ///
-    /// See `.dev/rfcs/v2.0-track-j-e-verdict.md` for the J-E ship
     /// notes.
     pub fn from_vm(vm: Vm) -> Self {
         // Same arc_with_non_send_sync pattern as `new()` — the outer

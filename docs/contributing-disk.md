@@ -124,7 +124,8 @@ Save its output as `production_like.lua` next to `hello.lua` and
 
 ## Comparing against the committed baseline
 
-The committed snapshot lives under `.dev/baselines/disk-<date>/`
+The reference snapshot lives under `.dev/baselines/disk-<date>/`, a
+gitignored local directory
 (gitignored locally; future on-tree archive will live at
 `docs/baselines/disk-<date>/` once we promote it). Each snapshot
 contains:

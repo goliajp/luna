@@ -14,7 +14,6 @@
 //! crate) to `crates/luna-core/src/jit/abi.rs` (workspace). The trait
 //! surface itself is unchanged from Session A.
 //!
-//! RFC: `.dev/rfcs/v1.1-rfc-crate-split.md` §D1 + Migration step 6.
 
 use crate::jit::JitVmGuard;
 use crate::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};

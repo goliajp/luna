@@ -18,7 +18,7 @@ After install the following binaries are on `$PATH`:
 | `luna-profile` | shipped (Phase 2) | Sampling profiler driven by a Count debug hook; text top-N or folded-stack output for `inferno-flamegraph`. `--format pprof` is reserved for the `--features flame-graph` opt-in (pprof + prost). |
 | `luna-repl-polish` | Phase 2 stub | Polished REPL (multi-line, completion, smarter `~/.luna_history`). Pins `rustyline =14.x` once shipped to dodge the 14→15 API break. |
 
-The remaining stub (`luna-repl-polish`) exits non-zero on real input with a pointer to `.dev/rfcs/v2.0-plan-state.md`, so the binary name is pinned even before the impl lands.
+The remaining stub (`luna-repl-polish`) exits non-zero on real input with a pointer to the tooling plan, so the binary name is pinned even before the impl lands.
 
 ## `luna-bin-inspect` example
 
@@ -103,4 +103,4 @@ The pure-read accessors used by `luna-heap-dump` and (eventually) `luna-trace-in
 
 ## Scope-split with Track AO
 
-`luna-bin-inspect` currently ships as a stand-alone binary. Per `.dev/rfcs/v2.0-audit-tl.md`, Track AO can later expose the same logic as a `luna-aot inspect` sub-command; both surfaces would share the `luna_tools::schema::BinInspect` formatter.
+`luna-bin-inspect` currently ships as a stand-alone binary. Per the tooling audit, Track AO can later expose the same logic as a `luna-aot inspect` sub-command; both surfaces would share the `luna_tools::schema::BinInspect` formatter.

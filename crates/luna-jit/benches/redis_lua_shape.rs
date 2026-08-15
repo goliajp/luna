@@ -118,7 +118,7 @@ const BENCHES: &[Bench] = &[
     },
     // ── Dict 5k lookup (string-keyed registry) ────────────────────
     //
-    // C3-redux primary workload — per `.dev/rfcs/v2.1-c3-redux-workload-rfc.md`.
+    // C3-redux primary workload.
     // 5000 string-keyed entries (AoS working set 327 KB = 2.55× P-core L1d),
     // then 32000 lookups via an LCG-stride sequence (coprime to 5000 so the
     // sequence covers all keys evenly). Cache-spill signal 2.41× per-lookup

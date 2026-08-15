@@ -100,8 +100,7 @@ Discipline:
   random inputs — `cargo +nightly fuzz run` per target)
 - API breaks require version bump + migration note
 - Cross-platform behavior verified (wasm32 inclusive)
-- Bench + heap baselines: `.dev/baselines/mem-2026-06-25/` +
-  `.dev/baselines/disk-2026-06-25/` pin v1.3-ship numbers
+- Bench and heap baselines pin the v1.3-ship numbers
 
 ### Steel — Lua-domain primitives
 
@@ -117,11 +116,11 @@ Lives in: `luna-core/src/{compiler,frontend}/`,
 Discipline:
 - Integration tests cross-validate against PUC and LuaJIT reference
   behavior (`crates/luna-core/tests/official_run.rs` runs 140 PUC
-  test files; CB-or wrapper at `.dev/rfcs/v2.0-cb-or-coverage-report.md`
+  test files
   pins ≥80% per-file assert hit rate as the v2.0 floor)
 - Per-dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5 / MacroLua) regression
   tests on every change
-- Behavior changes require an audit / RFC entry in `.dev/rfcs/`
+- Behavior changes require an audit or RFC entry
 
 ### Cement — concrete embeddings and host glue
 
@@ -141,7 +140,7 @@ Discipline:
   same sense as the steel/stone tier (the `pub` surface still
   follows semver; this just means breaking changes here cost less)
 - Bug fixes don't require touching steel
-- v2.0 Track SQ refactor (audit at `.dev/rfcs/v2.0-audit-source-quality.md`)
+- v2.0 Track SQ refactor
   consolidates the cement layer's directory layout per this
   classification — sequenced LAST so R/PI/AO refactors don't
   invalidate the layout decisions
@@ -357,7 +356,7 @@ in a `LocalSet` under a multi-thread runtime.
 
 A future `feature = "send"` on `luna-core` is on the v1.x post-sprint
 roadmap — it would flip `Gc<T> → Arc<RwLock<T>>` behind a hard ≤8%
-regression budget. See `.dev/rfcs/v1.1-rfc-vm-send-sync.md` for the
+regression budget. See [`threading.md`](threading.md) for the
 detailed plan.
 
 For canonical embedding patterns and code samples, see

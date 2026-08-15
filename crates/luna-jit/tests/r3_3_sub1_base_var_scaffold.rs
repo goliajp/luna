@@ -28,9 +28,8 @@
 //!    `r3_3_sub0_selflink_relax.rs`. Sub-1's scaffold add must not
 //!    perturb the recorder-side close-cause routing.
 //!
-//! See `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §6 sub-step 1 for the
-//! design contract and `.dev/rfcs/v2.0-track-r-r3-3-sub1-verdict.md`
-//! (this commit) for the scaffold shape decision + sub-2 handoff.
+//! design contract for the scaffold shape decision and the sub-2
+//! handoff.
 
 use luna_jit::version::LuaVersion;
 

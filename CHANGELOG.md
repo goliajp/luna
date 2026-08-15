@@ -489,29 +489,29 @@ read Changed before upgrading.
 > luna-runtime-helpers / luna-aot), 235 commits since v1.3.0.
 > The sprint log below is preserved as shipped-scope record —
 > 14 tracks (J/R/PI/AO/MM/DS/CV/DO/PU/AT/TL/BM/CB/SQ) per
-> `.dev/rfcs/v2.0-charter.md`, collapsed from what would have been
+> the v2.0 charter, collapsed from what would have been
 > v1.4–v1.8 under the `nodefer` directive.
 
 ### Phase 0 — 13 parallel audits (2026-06-25)
 
 - Tracks J / R / PI / AO / MM / DS / CV / DO / PU / AT / TL / BM /
   CB each spawned a read-only audit agent. 13 RFCs landed; PI's
-  full 26 KB body preserved at `.dev/rfcs/v2.0-audit-perf-interp-gap.md`;
+  full 26 KB body preserved;
   12 others' summaries (100–150 word + top-3 risks each) inlined as
-  truth-of-record in `.dev/rfcs/v2.0-plan-state.md`.
+  truth-of-record in the plan state.
 - v2.0 Track SQ (textbook-grade source quality) added as Track 14
   per user request mid-Phase-0, sequenced LAST. Audit at
-  `.dev/rfcs/v2.0-audit-source-quality.md` (45 KB / 821 lines).
+  the source-quality audit (45 KB / 821 lines).
 
 ### Phase 1 — Correctness backfill (CB)
 
 - **CB-pre1** + **CB-pre2** verify-and-archive: pre-existing v1.0
   debug-mode SIGTRAP + `debug_upvalue_order_and_id` flakiness both
   cleared by the v1.3 fix chain (`fae0f9c` / `e5db587` / `f8afd64`);
-  bug docs moved to `.dev/known-bugs/fixed/`.
+  bug docs moved to the fixed pile.
 - **CB-or** assert-counter wrapper at
   `crates/luna-core/tests/official_run.rs` + per-PUC-file coverage
-  report at `.dev/rfcs/v2.0-cb-or-coverage-report.md`. 140 PUC files
+  report. 140 PUC files
   exercised, 2.4M asserts reached, 2.36M passing, 101/140 files at
   ≥80% hit rate, 27/29 below-80% are PUC-internal early-return
   shims, 2 wrapper carve-outs (`errors.lua` / `db.lua` × 5 dialects).
@@ -526,7 +526,7 @@ read Changed before upgrading.
   `target.is_none()` arm was missing — `debug.sethook(…)` called
   from inside a coroutine body silently dropped. Root cause at
   `crates/luna-core/src/vm/exec.rs:2151-2179`; regression test +
-  sibling test landed; known-bug doc moved to `.dev/known-bugs/fixed/`.
+  sibling test landed; the known-bug doc moved to the fixed pile.
 
 ### Phase 2 — Coverage + fuzz infrastructure (CV-infra)
 
@@ -593,7 +593,7 @@ without silent miscompile across the previously-punted opcode shapes.
 - `dhat` dev-dep + `crates/luna-core/benches/mem_baseline.rs`
   exercising 5 workloads (cold_start / repl_idle / host_roots_churn /
   alloc_collect / userdata_lifecycle). Baseline snapshots at
-  `.dev/baselines/mem-2026-06-25/`.
+  a local memory baseline.
 - luna-core prod 0-dep contract preserved via `--edges normal` flag
   on `cargo tree`.
 - Surprising finding: `TraceRecord::start` allocates ~557 KB across
@@ -605,7 +605,7 @@ without silent miscompile across the previously-punted opcode shapes.
 
 #### Disk + binary size (DS)
 
-- Baselines at `.dev/baselines/disk-2026-06-25/` covering per-crate
+- Local baselines covering per-crate
   package sizes, AOT output binary sizes (3 representative scripts ×
   3 build profiles), Mach-O section breakdown, runtime-helpers
   staticlib/rlib. Zero material drift from v1.3 audit values.
@@ -658,7 +658,7 @@ without silent miscompile across the previously-punted opcode shapes.
   polish 6 effectively dead in AOT, **but not the polish itself**:
   the AOT recorder filter (`dispatchable=false` for self-recursive
   traces) keeps input from ever reaching it. Verdict + handoff at
-  `.dev/rfcs/v2.0-ao-pf-verdict.md`. **Not reverted** (JIT side
+  the AO-PF verdict. **Not reverted** (JIT side
   active); recorder fix deferred to Track R landing.
 
 ---
@@ -689,7 +689,7 @@ Headline phases:
   Trace-bearing host payloads, host_roots slot recycling, **luna-aot
   native-binary compile**, **MacroLua dialect support**.
 
-See `.dev/rfcs/v1.3-charter.md` for the full track list, time
+See the v1.3 charter for the full track list, time
 window estimate, and Phase ordering. `nodefer` is the operating
 contract: every line item ships in v1.3 or is documented as
 permanently out-of-scope (currently only the `luna` crates.io name
@@ -812,15 +812,15 @@ bottleneck (interp, not trace) and updates the methodology accordingly.
   never widen to silence drift.
 - `branches: [main]` → `[master, develop]` to track git-flow setup.
 - `docs/release-checklist.md` (new) — version-agnostic checklist
-  template; sprint-specific audits stay under `.dev/`.
-- `.dev/discussions/luna-crate-name-history.md` — archives the
+  template; sprint-specific audits stay in the maintainer's local area.
+- A discussion note archives the
   v1.1.0 ship-time rename story (`luna` → `luna-jit`).
 
 ### Phase B-N — v1.3 expansion in flight
 
 Per the 2026-06-24 `nodefer` directive every item below is **in
 scope** for v1.3 (no longer deferred). Tracked in
-`.dev/rfcs/v1.3-charter.md` + `.dev/rfcs/v1.3-plan-state.md`:
+the v1.3 charter and plan state:
 
 - **Path B math-fold extend** (`min` / `max` 2-arg) — *(landed Phase P2A)*
   `trace.rs::try_match_trace_math_fold` extended with `FoldKind::Min2 /
@@ -907,7 +907,7 @@ scope** for v1.3 (no longer deferred). Tracked in
     section covering when to use vs not, the shape + soundness
     story, the interp-only constraint, and a tokio multi_thread
     embed example (without depending on tokio in luna-core).
-  - **Design RFC**: `.dev/rfcs/v1.3-rfc-send-arc.md` documents
+  - **Design RFC** documents
     the as-shipped wrapper choice + the decision to defer the
     audit's per-field `SendGc<T>` fork to v1.4+.
   - **Unsafe drift**: +5 first-party `unsafe` sites (480 → 485,
@@ -934,7 +934,7 @@ scope** for v1.3 (no longer deferred). Tracked in
 - **Async natives in dispatcher** (B11 hook firing) *(Phase AS
   landed)* — close the v1.1 B10 Stage 2 deferred path so async-marked
   natives compose with Rust-side `[B11]` debug hooks. Audit
-  (`.dev/rfcs/v1.3-audit-async-natives.md`) showed the gap was
+  showed the gap was
   narrower than the v1.1 charter assumed: the dispatcher hot loop's
   `Count` / `Line` / Lua-`Call` / Lua-`Return` sites are opcode-driven
   and already fire correctly under `async_mode = true`; only the
@@ -1110,7 +1110,7 @@ scope** for v1.3 (no longer deferred). Tracked in
     `trace_jit_s1` failures (2 / 4, baseline-drift from the TA3
     `trace_enabled = true` ship default) and the known
     `official_run` SIGABRT (IO Safety fd-double-close, see
-    `.dev/known-bugs/io-safety-fd-double-close.md`) are unchanged
+    the IO-safety known bug) are unchanged
     by this refactor.
   - **Phase AOT Stage 4 — linker + interp-runtime staticlib**
     *(landed in this commit)*. A new sibling crate
@@ -1231,15 +1231,15 @@ scope** for v1.3 (no longer deferred). Tracked in
 - **Reclaim `luna` crate name on crates.io** — abandoned; sticking
   with `luna-jit` for the JIT-equipped crate and `luna-core` for
   the 0-dep interpreter. See
-  `.dev/discussions/luna-crate-name-history.md`.
+  a discussion note kept with the project's private records.
 
 ### Internal — sprint methodology
 
-- `.dev/perf-baselines/2026-06-24-*.md` records the decomp work
+- The perf baselines from 2026-06-24 record the decomp work
   that surfaced "interp not trace" as the true attack surface.
 - The perf-attack methodology gained an anti-pattern catalog drawn
   from the v1.0 fib_28 misdirection.
-- Charter, plan-state, and audit docs live in `.dev/rfcs/v1.2-*.md`
+- Charter, plan-state and audit docs live in the maintainer's local area
   (gitignored); `docs/` stays user-facing.
 
 ---
@@ -1424,9 +1424,9 @@ puts a binary named `luna` on PATH). `luna-core` keeps its name
 - E3 (PUC `luac` body 5.1-5.5 compat — 20-30 day block, charter L)
 - E4 (string.pack/utf8 edge case test gaps)
 - Lint cleanup (`cargo fmt --all` 606 sites + 9 `clippy` errors,
-  see `.dev/known-bugs/historic-fmt-clippy-drift.md`)
+  a known drift in historic fmt/clippy runs)
 - `feature = "send"` `Arc<RwLock<T>>` sprint (see
-  `.dev/rfcs/v1.1-rfc-vm-send-sync.md`)
+  the v1.1 Send/Sync RFC)
 - `LuaUserdata` trait sugar (B8 follow-on; closed-world ships
   v1.1, trait sugar lands later)
 

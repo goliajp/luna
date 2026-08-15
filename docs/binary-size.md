@@ -56,7 +56,7 @@ Section breakdown for `production_like.lua` release-stripped:
 | `__LINKEDIT` | 272 KiB | Symbol table + load commands (post-strip) |
 
 Full breakdown at
-`.dev/baselines/disk-2026-06-25/macho-sections.md`.
+the local disk baseline's section dump.
 
 ## 3. luna-runtime-helpers
 
@@ -76,7 +76,7 @@ which is why the produced binary is ~4.5 MiB instead of ~40 MiB.
 ## 4. Reduction candidates (v2.0 Track DS)
 
 Proposed budgets + lever feasibility, from
-`.dev/rfcs/v2.0-plan-state.md` §Track DS summary + audit:
+The Track DS audit:
 
 | Lever | Estimated effect | Feasibility | Status |
 |---|---|---|---|
@@ -119,7 +119,6 @@ Full reproduction recipe: [`contributing-disk.md`](contributing-disk.md).
 - [`contributing-disk.md`](contributing-disk.md) — local
   reproduction guide
 - [`architecture.md`](architecture.md) — 5-crate workspace layout
-- `.dev/rfcs/v2.0-plan-state.md` §Track DS — full audit + budget
   feasibility tagging
 
 ---

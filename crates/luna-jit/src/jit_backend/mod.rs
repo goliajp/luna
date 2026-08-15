@@ -4112,7 +4112,6 @@ pub struct JitHandle {
 // restore), which works on any OS thread because the TLS slot is
 // captured-and-restored at function scope rather than statically
 // pinned. Track J-E ship doc:
-// `.dev/rfcs/v2.0-track-j-e-verdict.md`.
 unsafe impl Send for JitHandle {}
 
 impl JitHandle {

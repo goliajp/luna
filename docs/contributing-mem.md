@@ -101,7 +101,7 @@ MM_DHAT_OUT="$BASELINE_DIR" cargo bench --bench mem_baseline -p luna-core | tee 
 #      now justified by the data
 ```
 
-The existing `.dev/baselines/mem-2026-06-25/summary.md` is the
+The existing local baseline summary is the
 template — copy its section layout for the new baseline.
 
 ## Why `dhat` is gated to `[dev-dependencies]`
@@ -137,5 +137,5 @@ cannot regress the contract by accident.
 These all depend on layout decisions that follow the Track R IR
 overhaul. The bench + checked-in baseline exist now so any future
 work has ground truth to A/B against — see the audit summary in
-`.dev/rfcs/v2.0-plan-state.md` (Track MM section) for the full
+the Track MM notes for the full
 roadmap.

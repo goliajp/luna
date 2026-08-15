@@ -13,7 +13,6 @@
 //!   `SIZE_C=9`, `SIZE_B=9`; opcode at bit 0; A at 6; C at 14; B at 23)
 //! - `lobject.c` — `luaO_fb2int` for `NEWTABLE` size hints
 //!
-//! Audit: `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"Lua 5.2 (~40 ops)".
 
 use super::super::reader::Reader;
 use crate::runtime::Value;

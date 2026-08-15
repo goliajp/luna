@@ -4,7 +4,6 @@
 //! `Gc<Proto>` whose `code` array uses luna's 7-bit opcode encoding, so
 //! the loaded Proto runs on luna's interpreter / JIT / trace JIT without
 //! any per-dialect dispatch fork (Option A in
-//! `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"Recommended architecture").
 //!
 //! Two cross-cutting decoding shifts vs luna's own body:
 //!
@@ -54,7 +53,6 @@
 //!   the way through. TFORCALL.A is iter_base in both conventions, so
 //!   it passes through unchanged.
 //!
-//! See `.dev/rfcs/v1.3-audit-puc-luac-formats.md` §"Lua 5.3 (~47 ops)"
 //! and §"5.3 risks" for the full per-opcode plan; this file lands the
 //! baseline subset agreed for Wave 2 LB4.
 

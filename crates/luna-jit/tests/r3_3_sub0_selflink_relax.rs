@@ -9,9 +9,8 @@
 //! depth_delta = 1) and bumps the `"selflink-yields-to-downrec"`
 //! close-cause label.
 //!
-//! See `.dev/rfcs/v2.0-track-r-r3-3-rfc.md` §6 sub-step 0 for the
-//! design contract and `.dev/rfcs/v2.0-track-r-r3-2-verdict.md` §4
-//! for the structural barrier this sub-step starts unblocking.
+//! design contract for the structural barrier this sub-step starts
+//! unblocking.
 //!
 //! Test purposes:
 //!   1. Positive — fib(28) p16-on bumps `selflink-yields-to-downrec`

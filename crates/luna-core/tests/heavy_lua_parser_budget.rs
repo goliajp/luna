@@ -3,7 +3,6 @@
 //! `not enough memory` error rather than letting the host allocator
 //! crawl past the host's RAM cap and SIGSEGV.
 //!
-//! Tracked at `.dev/known-bugs/fixed/heavy-lua-sigsegv-under-128mb-loadrep.md`.
 //!
 //! The PUC source the gate defends against:
 //!
