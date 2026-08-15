@@ -20,12 +20,10 @@
 //!    `luna_jit::install_default_jit` from `CraneliftBackend` to
 //!    `LlvmBackend`.
 //!
-//! See `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3 for the
-//! end-to-end selection design.
 //!
 //! ## Why a separate crate (vs. a luna-jit submodule)
 //!
-//! The 1K.C audit (§ 3.5) requires the two backends to ship in
+//! The two backends have to ship in
 //! independent crates so:
 //! - Cranelift is not pulled into the LLVM-only install path.
 //! - LLVM is not pulled into the default Cranelift install path

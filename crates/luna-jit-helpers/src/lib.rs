@@ -11,8 +11,6 @@
 //! paths resolve unchanged. luna-jit-llvm depends on this crate
 //! directly without pulling Cranelift.
 //!
-//! See `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 3.5 + § 5.1 for
-//! the extraction rationale.
 //!
 //! # Invariants
 //!

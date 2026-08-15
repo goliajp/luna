@@ -141,9 +141,8 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 /// | any other value | `panic!` listing the accepted values. |
 ///
 /// The env var is read **once per `install_default_jit` call**; the
-/// selection is then frozen into the Vm. Switching at runtime is
-/// out of scope (see `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md`
-/// § 4.4).
+/// selection is then frozen into the Vm. Switching backends after
+/// that is out of scope.
 pub fn install_default_jit(vm: &mut vm::Vm) {
     let backend = std::env::var("LUNA_JIT_BACKEND").unwrap_or_default();
     match backend.as_str() {
@@ -188,8 +187,7 @@ fn install_llvm_jit(_vm: &mut vm::Vm) {
         "LUNA_JIT_BACKEND=llvm requested but the `llvm-jit` cargo \
          feature is OFF in this build of luna-jit. Rebuild with \
          `cargo build -p luna-jit --features llvm-jit` (or add the \
-         feature to your Cargo.toml's luna-jit dep). See \
-         `.dev/rfcs/v2.1-phase-1k-c-trait-audit.md` § 4.3."
+         feature to your Cargo.toml's luna-jit dep)."
     );
 }
 
