@@ -25,6 +25,7 @@
 mod luna;
 mod puc;
 mod reader;
+mod verify;
 
 use crate::runtime::function::Proto;
 use crate::runtime::heap::{Gc, Heap};
@@ -65,6 +66,10 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 /// `allow_puc` mirrors `Vm::puc_bytecode_loading()`. Default off — PUC
 /// bytecode is a strictly larger trust surface than luna's own (the v1.3
 /// audit calls this out as the embedder gate per §"Cross-dialect risks").
+///
+/// Whichever reader produced it, the prototype tree is verified before it is
+/// returned (see the `verify` module): a chunk breaking an invariant the VM
+/// relies on fails to load with `bad binary format (...)`.
 pub fn undump(
     bytes: &[u8],
     heap: &mut Heap,
@@ -86,13 +91,16 @@ pub fn undump(
     let foreign_puc = puc_signature
         && !luna_body
         && (bytes[4] != written_version_byte || bytes.len() >= tag_at + luna::BODY_TAG.len());
-    if foreign_puc {
-        if !allow_puc {
-            return Err("PUC bytecode loading is disabled \
-                 (call vm.set_puc_bytecode_loading(true) to enable)"
-                .to_string());
-        }
-        return puc::undump_puc(bytes, heap);
+    if foreign_puc && !allow_puc {
+        return Err("PUC bytecode loading is disabled \
+             (call vm.set_puc_bytecode_loading(true) to enable)"
+            .to_string());
     }
-    luna::undump(bytes, heap, version)
+    let proto = if foreign_puc {
+        puc::undump_puc(bytes, heap)?
+    } else {
+        luna::undump(bytes, heap, version)?
+    };
+    verify::verify(&proto)?;
+    Ok(proto)
 }
