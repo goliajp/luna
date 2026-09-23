@@ -572,6 +572,30 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
+/// The method JIT's read of a 5.1/5.2 upvalue that feeds arithmetic: the
+/// compiled code takes the payload as a float, the only number type of
+/// those dialects. Anything else — nil, a numeric string, a table with
+/// `__add` — needs the interpreter, which raises or coerces as the dialect
+/// does, so this parks a deopt and the call is re-run there.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_some() {
+        return 0;
+    }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let cl = unsafe { current_jit_closure() };
+    match vm.upval_get(cl, idx as u32) {
+        luna_core::runtime::Value::Float(f) => f.to_bits() as i64,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: upvalue is not a float"));
+            0
+        }
+    }
+}
+
 /// P12-S7-C — trace JIT helper for `Op::Close A`. Wraps
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
 /// returns 0 to continue the trace, 1 to deopt (handler would run
