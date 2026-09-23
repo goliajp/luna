@@ -3630,8 +3630,9 @@ fn pushglobalfuncname_qualifies_nested_native_arg_error() {
     // setmetatable is invoked from gsub's native replacement loop; PUC
     // finds `_G.setmetatable` and strips the `_G.` prefix.
     check_error("string.gsub('s', 's', setmetatable)", "'setmetatable'");
-    // A direct (non-nested) native arg error keeps the bare name.
-    check_error("table.sort({}, 7)", "'sort'");
+    // A direct (non-nested) native arg error keeps the bare name. (The
+    // array must hold two elements: 5.3+ checks the comparator only then.)
+    check_error("table.sort({2, 1}, 7)", "'sort'");
 }
 
 #[test]
