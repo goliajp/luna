@@ -9972,33 +9972,43 @@ mod s2b_table_ops {
     /// `jit_pending_err` short-circuit (PUC routes the write through
     /// `__newindex`; the helper bypasses it, so the lowerer must
     /// deopt instead).
+    /// A store into a table with a metatable is left to the interpreter:
+    /// the trace exits at that store, after doing the ones before it
+    /// once, with nothing parked for the dispatcher.
     #[test]
-    fn metatable_on_set_i_parks_pending_err() {
+    fn metatable_on_set_i_exits_at_the_store() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        // Pre-allocate the target table with a metatable.
+        let plain = vm.heap.new_table();
         let t = vm.heap.new_table();
         let mt = vm.heap.new_table();
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
-        // Trace: R[0][1] = R[1]. R[0] holds the pre-built table.
-        let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 1, false)]);
+        // R[0][1] = R[1]; R[2][1] = R[1]
+        let rec = closed_record(
+            p,
+            0,
+            &[
+                Inst::iabc(Op::SetI, 0, 1, 1, false),
+                Inst::iabc(Op::SetI, 2, 1, 1, false),
+            ],
+        );
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-        state[0] = t.as_ptr() as i64;
+        state[0] = plain.as_ptr() as i64;
         state[1] = 7;
+        state[2] = t.as_ptr() as i64;
         let r = run_trace(&mut vm, &ct, &mut state);
 
-        assert_eq!(
-            crate::jit_backend::trace::exit_pc(r),
-            0,
-            "trace still returns head_pc"
-        );
-        assert!(
-            vm.jit.pending_err.is_some(),
-            "metatable-bearing table must park a deopt request"
-        );
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
+        assert!(vm.jit.pending_err.is_none());
+        assert!(matches!(
+            plain.get_int(1),
+            luna_core::runtime::Value::Int(7)
+        ));
+        assert!(t.get_int(1).is_nil());
+        assert_eq!(vm.jit.counters.deopt, 1);
     }
 
     #[test]
@@ -10021,58 +10031,39 @@ mod s2b_table_ops {
     }
 
     #[test]
-    fn metatable_on_len_parks_pending_err() {
+    fn metatable_on_len_exits_at_the_len() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
+        let plain = vm.heap.new_table();
         let t = vm.heap.new_table();
         let mt = vm.heap.new_table();
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
-        let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 1, 0, 0, false)]);
-        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
-
-        let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-        state[0] = t.as_ptr() as i64;
-        run_trace(&mut vm, &ct, &mut state);
-
-        assert!(vm.jit.pending_err.is_some(), "Len deopt on metatable");
-    }
-
-    /// Once a helper has parked `jit_pending_err`, subsequent
-    /// helpers in the same trace early-return without touching
-    /// the heap — so the trace can complete safely even though
-    /// every subsequent table-op is bogus.
-    #[test]
-    fn pending_err_short_circuits_downstream_helpers() {
-        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
-        let p = load_proto(&mut vm, WIDE_SRC);
-        let t = vm.heap.new_table();
-        let mt = vm.heap.new_table();
-        unsafe { t.as_mut() }.set_metatable(Some(mt));
-
-        // SetI (parks err) → SetI (short-circuit) → GetI
-        // (short-circuit, returns 0 sentinel).
+        // R[0][1] = R[1]; R[3] = #R[2]
         let rec = closed_record(
             p,
             0,
             &[
                 Inst::iabc(Op::SetI, 0, 1, 1, false),
-                Inst::iabc(Op::SetI, 0, 2, 1, false),
-                Inst::iabc(Op::GetI, 2, 0, 1, false),
+                Inst::iabc(Op::Len, 3, 2, 0, false),
             ],
         );
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-        state[0] = t.as_ptr() as i64;
-        state[1] = 11;
+        state[0] = plain.as_ptr() as i64;
+        state[1] = 7;
+        state[2] = t.as_ptr() as i64;
+        state[3] = 42;
         let r = run_trace(&mut vm, &ct, &mut state);
 
-        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
-        assert!(vm.jit.pending_err.is_some());
-        // GetI short-circuit returns 0 sentinel; trace tail stores
-        // that back into R[2].
-        assert_eq!(state[2], 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
+        assert!(vm.jit.pending_err.is_none());
+        assert!(matches!(
+            plain.get_int(1),
+            luna_core::runtime::Value::Int(7)
+        ));
+        assert_eq!(state[3], 42, "the length was not written");
     }
 
     #[test]
