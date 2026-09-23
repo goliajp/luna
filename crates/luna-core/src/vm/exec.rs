@@ -2645,7 +2645,9 @@ impl Vm {
     /// or full userdata whose metatable carries a string `__name` reports that
     /// (e.g. "FILE*", "My Type") instead of the bare "table"/"userdata".
     pub(crate) fn obj_typename(&self, v: Value) -> String {
-        if matches!(v, Value::Table(_) | Value::Userdata(_))
+        // `__name` (luaT_objtypename) arrived in 5.3
+        if self.version >= LuaVersion::Lua53
+            && matches!(v, Value::Table(_) | Value::Userdata(_))
             && let Value::Str(s) = self.get_mm(v, Mm::Name)
         {
             return String::from_utf8_lossy(s.as_bytes()).into_owned();
