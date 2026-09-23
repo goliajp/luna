@@ -5588,6 +5588,33 @@ impl Vm {
         if self.error_traceback.is_none() {
             self.error_traceback = Some(self.traceback_bytes(1));
         }
+        // An error that no protected call inside the running coroutine will
+        // catch kills it without unwinding: PUC's `lua_resume` leaves the
+        // dead thread's stack as it was, so its pending to-be-closed
+        // variables run only when it is closed (`coroutine.close`, or
+        // `coroutine.wrap` closing it before re-raising). Scoped to the
+        // coroutine's own run (`entry_depth == 1`); a run nested under a
+        // native unwinds as before.
+        if entry_depth == 1
+            && self.version >= LuaVersion::Lua54
+            && self
+                .current
+                .is_some_and(|c| c.status == crate::runtime::CoroStatus::Running)
+            && !self.frames.iter().any(|f| {
+                matches!(
+                    f,
+                    CallFrame::Cont(NativeCont {
+                        kind: ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Close(_),
+                        ..
+                    })
+                )
+            })
+        {
+            while self.frames.len() >= entry_depth {
+                frames_pop_sync(&mut self.frames, &mut self.frames_top);
+            }
+            return Unwound::Propagated(LuaError(err));
+        }
         while self.frames.len() >= entry_depth {
             match *self.frames.last().expect("frame") {
                 // a yieldable-metamethod continuation does not catch: discard the

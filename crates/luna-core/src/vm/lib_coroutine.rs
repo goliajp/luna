@@ -195,6 +195,14 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             let args = collect_args(vm, fs, nargs);
             match vm.resume_coro(co, args) {
                 Ok(vals) => return Ok(vm.nat_return(fs, &vals)),
+                // 5.4+ close a coroutine that died by error before
+                // re-raising, so its pending `__close` handlers run (and one
+                // of them may replace the error)
+                Err(_) if vm.version() >= LuaVersion::Lua54 => match vm.close_coro(co) {
+                    Ok(Some(e)) => death_value(vm, e),
+                    Ok(None) => unreachable!("a coroutine that died by error has an error"),
+                    Err(e) => death_value(vm, e.0),
+                },
                 Err(e) => death_value(vm, e.0),
             }
         }
