@@ -906,7 +906,7 @@ fn load_path(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Result<Value, Value>, L
     }
 }
 
-fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     match load_path(vm, fs, nargs)? {
         Ok(Value::Closure(cl)) => {
             // PUC: `loadfile(filename, mode, env)` overrides upvalue 0 (the

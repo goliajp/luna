@@ -1,366 +1,218 @@
-//! package library: `require` and its searchers, `package.searchpath` /
-//! `loadlib`, and the 5.1/5.2 `module` / `package.seeall`.
+//! package library: `require` and the searchers it runs, `package.path` /
+//! `cpath` / `config` / `loaded` / `preload`, `package.searchpath`,
+//! `package.loadlib`, and 5.1/5.2's `module` / `package.seeall`. Shaped per
+//! dialect after loadlib.c 5.1–5.5 (5.2 with LUA_COMPAT_MODULE and
+//! LUA_COMPAT_LOADERS, as its default build has them).
+//!
+//! luna links no dynamic loader: `package.loadlib` and the C searchers fail
+//! the way a PUC build without dynamic-library support does.
 
-use crate::runtime::Value;
-use crate::vm::builtins::{arg_error, raise_str};
+use crate::runtime::{CallFrame, Gc, Table, UserdataPayload, Value};
+use crate::version::LuaVersion;
+use crate::vm::argcheck::{self, Args};
+use crate::vm::builtins::raise_str;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
+use crate::vm::isa::Op;
+use crate::vm::lib_io::{c_str, os_path};
+
+/// Default search paths. PUC compiles in its install prefix; luna has
+/// none, so only the current-directory templates remain.
+const LUA_PATH_DEFAULT: &[u8] = b"./?.lua;./?/init.lua";
+const LUA_CPATH_DEFAULT: &[u8] = b"";
+
+/// PUC's message and `loadlib` "where" when built without dynamic libraries.
+const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
 
 pub(crate) fn open_package(vm: &mut Vm) {
+    let v = vm.version();
     let pkg = vm.heap.new_table();
-    let loaded = vm.heap.new_table();
-    // prepopulate with the standard libraries (PUC does the same). Must include
-    // every stdlib so e.g. nextvar.lua's "clear globals" test (which keeps any
-    // name present in package.loaded) does not delete `coroutine`.
+    let loaded = registry_table(vm, "_LOADED");
     for name in [
-        "string",
-        "math",
-        "table",
-        "os",
-        "io",
-        "utf8",
-        "debug",
-        "coroutine",
         "_G",
         "package",
+        "coroutine",
+        "table",
+        "io",
+        "os",
+        "string",
+        "bit32",
+        "math",
+        "utf8",
+        "debug",
     ] {
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        let v = if name == "package" {
-            Value::Table(pkg)
-        } else if name == "_G" {
-            Value::Table(vm.globals())
-        } else {
-            let gk = Value::Str(vm.heap.intern(name.as_bytes()));
-            vm.globals().get(gk)
+        let val = match name {
+            "package" => Value::Table(pkg),
+            _ => {
+                let k = Value::Str(vm.heap.intern(name.as_bytes()));
+                vm.globals().get(k)
+            }
         };
+        if !val.is_nil() {
+            raw_set(vm, loaded, name, val);
+        }
+    }
+    raw_set(vm, pkg, "loaded", Value::Table(loaded));
+    // 5.1 keeps preload in the package table only; 5.2 moved it to the
+    // registry
+    let preload = if v == LuaVersion::Lua51 {
+        vm.heap.new_table()
+    } else {
+        registry_table(vm, "_PRELOAD")
+    };
+    raw_set(vm, pkg, "preload", Value::Table(preload));
+
+    let searchers = vm.heap.new_table();
+    let lf = vm.native(crate::vm::lib_os_io::nat_loadfile);
+    let lua_searcher = vm.native_with(searcher_lua, Box::new([Value::Table(pkg), lf]));
+    let fns = [
+        vm.native_with(searcher_preload, Box::new([Value::Table(pkg)])),
+        lua_searcher,
+        vm.native_with(searcher_c, Box::new([Value::Table(pkg)])),
+        vm.native_with(searcher_croot, Box::new([Value::Table(pkg)])),
+    ];
+    for (i, f) in fns.into_iter().enumerate() {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { loaded.as_mut() }
-            .set(&mut vm.heap, k, v)
+        unsafe { searchers.as_mut() }
+            .set(&mut vm.heap, Value::Int(i as i64 + 1), f)
             .expect("valid key");
     }
-    let lk = Value::Str(vm.heap.intern(b"loaded"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, lk, Value::Table(loaded))
-        .expect("valid key");
-    let preload = vm.heap.new_table();
-    let plk = Value::Str(vm.heap.intern(b"preload"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, plk, Value::Table(preload))
-        .expect("valid key");
-    // package.path: PUC default has `./?.lua` and `./?/init.lua`. attrib.lua
-    // rewrites it freely so this is just a sane starting value.
-    let pk = Value::Str(vm.heap.intern(b"path"));
-    let pv = Value::Str(vm.heap.intern(b"./?.lua;./?/init.lua"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, pk, pv)
-        .expect("valid key");
-    // package.cpath: luna does not ship dynamic-library loading, so the
-    // default is empty. attrib.lua's require-message test rewrites it.
-    let ck = Value::Str(vm.heap.intern(b"cpath"));
-    let cv = Value::Str(vm.heap.intern(b""));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, ck, cv)
-        .expect("valid key");
-    // package.config: PUC's five-line POSIX layout — dir-sep "/", path-sep
-    // ";", template mark "?", exec-mark "!", ignore-mark "-".
-    let cfk = Value::Str(vm.heap.intern(b"config"));
-    let cfv = Value::Str(vm.heap.intern(b"/\n;\n?\n!\n-\n"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, cfk, cfv)
-        .expect("valid key");
-    // package.searchers: present as a table so attrib.lua's type checks pass.
-    // luna's `require` does not dispatch through it (the searchers run in a
-    // fixed order inside `nat_require`); this stays a leaf placeholder until
-    // a userland test forces real dispatch.
-    let searchers = vm.heap.new_table();
-    let sk = Value::Str(vm.heap.intern(b"searchers"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, sk, Value::Table(searchers))
-        .expect("valid key");
-    // package.searchpath: pure path-template walker (no I/O side effects
-    // beyond probing readability), shared with userland and exposed here.
-    let sp = vm.native(nat_searchpath);
-    let spk = Value::Str(vm.heap.intern(b"searchpath"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, spk, sp)
-        .expect("valid key");
-    vm.set_global("package", Value::Table(pkg))
-        .expect("stdlib registration");
-    // require reads package.path/cpath from the live `package` table each call
-    // — attrib.lua mutates them inside `do … end` blocks and require must see
-    // the override. Stash no upvalues; fetch from globals on demand.
-    // PUC keeps `_LOADED` / `_PRELOAD` in the registry so a stray
-    // `package = {}` in user code does not unlink the real bookkeeping.
-    // luna captures the same tables as the require-native's own upvalues so
-    // the lookup is stable regardless of `package`'s global identity. Slots:
-    //   [0] = package table (still consulted for `path` / `cpath` overrides
-    //         the user *does* expect to flow through globals);
-    //   [1] = `package.loaded`;
-    //   [2] = `package.preload`.
+    vm.barrier_back_table(searchers);
+    match v {
+        LuaVersion::Lua51 => raw_set(vm, pkg, "loaders", Value::Table(searchers)),
+        LuaVersion::Lua52 => {
+            raw_set(vm, pkg, "searchers", Value::Table(searchers));
+            raw_set(vm, pkg, "loaders", Value::Table(searchers));
+        }
+        _ => raw_set(vm, pkg, "searchers", Value::Table(searchers)),
+    }
+
+    let path = env_path(v, "LUA_PATH", LUA_PATH_DEFAULT);
+    let path = Value::Str(vm.heap.intern(&path));
+    raw_set(vm, pkg, "path", path);
+    let cpath = env_path(v, "LUA_CPATH", LUA_CPATH_DEFAULT);
+    let cpath = Value::Str(vm.heap.intern(&cpath));
+    raw_set(vm, pkg, "cpath", cpath);
+    // dir separator, path separator, template mark, executable-dir mark,
+    // ignore mark; 5.2 added the final newline
+    let config: &[u8] = if v == LuaVersion::Lua51 {
+        b"/\n;\n?\n!\n-"
+    } else {
+        b"/\n;\n?\n!\n-\n"
+    };
+    let config = Value::Str(vm.heap.intern(config));
+    raw_set(vm, pkg, "config", config);
+
+    let f = vm.native(ll_loadlib);
+    raw_set(vm, pkg, "loadlib", f);
+    if v >= LuaVersion::Lua52 {
+        let f = vm.native(ll_searchpath);
+        raw_set(vm, pkg, "searchpath", f);
+    }
+    // 5.1 marks a module being loaded with a sentinel, to catch loops
+    let sentinel = Value::Userdata(vm.heap.new_userdata(UserdataPayload::Empty, false));
     let req = vm.native_with(
-        nat_require,
-        Box::new([
-            Value::Table(pkg),
-            Value::Table(loaded),
-            Value::Table(preload),
-        ]),
+        ll_require,
+        Box::new([Value::Table(pkg), Value::Table(loaded), sentinel]),
     );
     vm.set_global("require", req).expect("stdlib registration");
-    // PUC 5.1 `module(name, ...)` and `package.seeall` (retired in 5.2). The
-    // pair only makes sense alongside `setfenv`; gating on the dialect keeps
-    // the 5.2+ surface clean.
-    if vm.version() == crate::version::LuaVersion::Lua51 {
-        // Same upval-anchored bookkeeping as `require`: the original
-        // `package.loaded` is captured here so `module(...)` survives a
-        // userland `package = {}` reassignment (attrib.lua's `do … end`
-        // preload block does exactly that).
-        let m = vm.native_with(nat_module, Box::new([Value::Table(loaded)]));
+    if v <= LuaVersion::Lua52 {
+        let f = vm.native(ll_seeall);
+        raw_set(vm, pkg, "seeall", f);
+        let m = vm.native_with(ll_module, Box::new([Value::Table(loaded)]));
         vm.set_global("module", m).expect("stdlib registration");
-        let s = vm.native(nat_package_seeall);
-        let sk = Value::Str(vm.heap.intern(b"seeall"));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { pkg.as_mut() }
-            .set(&mut vm.heap, sk, s)
-            .expect("valid key");
     }
-    // PUC's `package.loadlib` opens a shared library and returns the named
-    // symbol. luna ships no dynamic linker — return the PUC failure shape so
-    // attrib.lua's "cannot load dynamic library" path (which prints a notice
-    // and skips the C-only suite) runs rather than blowing up on a nil call.
-    let ll = vm.native(nat_loadlib_stub);
-    let llk = Value::Str(vm.heap.intern(b"loadlib"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { pkg.as_mut() }
-        .set(&mut vm.heap, llk, ll)
-        .expect("valid key");
-    // Once-per-table barriers for the four sub-tables built above —
-    // covers the post-init `Vm::open_package` re-open path (mid-Propagate).
+    vm.set_global("package", Value::Table(pkg))
+        .expect("stdlib registration");
     vm.barrier_back_table(pkg);
     vm.barrier_back_table(loaded);
-    vm.barrier_back_table(preload);
-    vm.barrier_back_table(searchers);
 }
 
-fn nat_loadlib_stub(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    let msg = Value::Str(
-        vm.heap
-            .intern(b"dynamic libraries not enabled; check your Lua installation"),
-    );
-    let when = Value::Str(vm.heap.intern(b"absent"));
-    Ok(vm.nat_return(fs, &[Value::Nil, msg, when]))
+fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
+    let k = Value::Str(vm.heap.intern(k.as_bytes()));
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    unsafe { t.as_mut() }
+        .set(&mut vm.heap, k, v)
+        .expect("valid key");
 }
 
-/// PUC 5.1 `module(name, ...)`: create (or reuse) `package.loaded[name]` as
-/// the module's table, decorate it with `_NAME` / `_M` / `_PACKAGE`, run the
-/// extra option functions (`package.seeall` being the canonical one), and
-/// repoint the caller's `_ENV` cell to the module table. After this, every
-/// global write inside the calling chunk lands in the module table.
-fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let name_v = vm.nat_arg(fs, nargs, 0);
-    let name_bytes = match name_v {
-        Value::Str(s) => s.as_bytes().to_vec(),
-        v => {
-            return Err(arg_error(
-                vm,
-                1,
-                &format!("string expected, got {}", v.type_name()),
-            ));
-        }
+/// `luaL_getsubtable(L, LUA_REGISTRYINDEX, name)`: the registry's table
+/// `name`, created on first use. Without a registry (the debug library
+/// makes it) the table is simply not reachable from there.
+fn registry_table(vm: &mut Vm, name: &str) -> Gc<Table> {
+    let Some(reg) = vm.registry else {
+        return vm.heap.new_table();
     };
-    let name_str = String::from_utf8_lossy(&name_bytes).into_owned();
-    // 1. resolve / create the module table via package.loaded[name]. Reach
-    // for the captured `loaded` upvalue first so a userland `package = {}`
-    // doesn't pull the rug out from under module().
-    let loaded = if vm.nat_upcount(fs) >= 1 {
-        match vm.nat_upval(fs, 0) {
-            Value::Table(t) => t,
-            _ => return Err(raise_str(vm, "'package.loaded' upvalue missing")),
-        }
+    let k = Value::Str(vm.heap.intern(name.as_bytes()));
+    if let Value::Table(t) = reg.get(k) {
+        return t;
+    }
+    let t = vm.heap.new_table();
+    raw_set(vm, reg, name, Value::Table(t));
+    vm.barrier_back_table(reg);
+    t
+}
+
+/// `setpath`: the environment's path (5.2+ try `NAME_5_x` first) with
+/// ";;" replaced by the default, else the default. 5.1–5.3 replace every
+/// ";;"; 5.4 replaces the first and drops a separator left dangling.
+fn env_path(v: LuaVersion, var: &str, dft: &[u8]) -> Vec<u8> {
+    let suffix = match v {
+        LuaVersion::Lua52 => "_5_2",
+        LuaVersion::Lua53 => "_5_3",
+        LuaVersion::Lua54 => "_5_4",
+        LuaVersion::Lua55 => "_5_5",
+        _ => "",
+    };
+    let versioned = format!("{var}{suffix}");
+    let found = if suffix.is_empty() {
+        std::env::var_os(var)
     } else {
-        let pkg_k = Value::Str(vm.heap.intern(b"package"));
-        let Value::Table(pkg) = vm.globals().get(pkg_k) else {
-            return Err(raise_str(vm, "'package' table missing"));
-        };
-        let loaded_k = Value::Str(vm.heap.intern(b"loaded"));
-        let Value::Table(t) = pkg.get(loaded_k) else {
-            return Err(raise_str(vm, "'package.loaded' must be a table"));
-        };
-        t
+        std::env::var_os(&versioned).or_else(|| std::env::var_os(var))
     };
-    let name_key = Value::Str(vm.heap.intern(&name_bytes));
-    let module_tab = match loaded.get(name_key) {
-        Value::Table(t) => t,
-        _ => {
-            // PUC `module()` walks the dotted name in the global table
-            // (`_findtable`): every intermediate key is created if missing
-            // and *reused* if it already maps to a table. The final key is
-            // resolved the same way — when `module("X.a.b")` runs after
-            // `module("X.a.b.c")` has already populated the intermediate
-            // X.a.b table, the existing table is adopted as the module
-            // (carrying its `.c` subtable along) rather than overwritten.
-            let t = resolve_or_create_dotted(vm, &name_bytes)?;
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { loaded.as_mut() }
-                .set(&mut vm.heap, name_key, Value::Table(t))
-                .expect("valid key");
-            t
-        }
+    let Some(path) = found else {
+        return dft.to_vec();
     };
-    // 2. populate _NAME / _M / _PACKAGE. PUC keeps the trailing dot in
-    // `_PACKAGE` for nested modules — `module("P1.xuxu", ...)` ↦ "P1.".
-    let pre_dot = match name_bytes.iter().rposition(|&b| b == b'.') {
-        Some(i) => name_bytes[..=i].to_vec(),
-        None => Vec::new(),
+    let path = os_bytes(&path);
+    if v <= LuaVersion::Lua53 {
+        // ";;" -> ";\1;" -> the default in place of "\1"
+        let marked = replace(&path, b";;", b";\x01;");
+        return replace(&marked, b"\x01", dft);
+    }
+    let Some(at) = path.windows(2).position(|w| w == b";;") else {
+        return path;
     };
-    let name_val = Value::Str(vm.heap.intern(&name_bytes));
-    let pkg_val = Value::Str(vm.heap.intern(&pre_dot));
-    let name_k = Value::Str(vm.heap.intern(b"_NAME"));
-    let m_k = Value::Str(vm.heap.intern(b"_M"));
-    let p_k = Value::Str(vm.heap.intern(b"_PACKAGE"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { module_tab.as_mut() }
-        .set(&mut vm.heap, name_k, name_val)
-        .expect("valid key");
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { module_tab.as_mut() }
-        .set(&mut vm.heap, m_k, Value::Table(module_tab))
-        .expect("valid key");
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { module_tab.as_mut() }
-        .set(&mut vm.heap, p_k, pkg_val)
-        .expect("valid key");
-    // 3. run option functions on the module table
-    for i in 1..nargs {
-        let f = vm.nat_arg(fs, nargs, i);
-        if !f.is_nil() {
-            vm.call_value(f, &[Value::Table(module_tab)])?;
-        }
+    let mut out = Vec::new();
+    if at > 0 {
+        out.extend_from_slice(&path[..at]);
+        out.push(b';');
     }
-    // 4. rewrite the caller's `_ENV` cell to the module table (PUC
-    // `setfenv(2)`). The `_ENV` upvalue is not necessarily at slot 0 —
-    // closures capture upvalues in first-access order — so locate it by
-    // name in the proto's upvalue descriptors.
-    if let Some(cl) = vm.lua_closure_at_level(1) {
-        let mut env_idx = None;
-        for (i, d) in cl.proto.upvals.iter().enumerate() {
-            if &*d.name == "_ENV" {
-                env_idx = Some(i);
-                break;
-            }
-        }
-        let Some(env_idx) = env_idx else {
-            return Err(raise_str(
-                vm,
-                &format!("module '{name_str}' caller has no '_ENV' upvalue"),
-            ));
-        };
-        let uv = cl.upvals()[env_idx];
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { uv.as_mut() }.set_closed(Value::Table(module_tab));
-        vm.barrier_forward_upvalue(uv, Value::Table(module_tab));
-    } else {
-        return Err(raise_str(
-            vm,
-            &format!("module '{name_str}' needs a Lua caller frame"),
-        ));
-    }
-    Ok(vm.nat_return(fs, &[Value::Table(module_tab)]))
-}
-
-/// Resolve `_G.a.b.c…` to its table, creating intermediates AND the leaf
-/// when they are missing. Mirrors PUC `_findtable`: each component is fetched
-/// once; nil components get a fresh table that is then both stored at that
-/// key and used as the next walk root, while existing tables are reused.
-fn resolve_or_create_dotted(
-    vm: &mut Vm,
-    name: &[u8],
-) -> Result<crate::runtime::Gc<crate::runtime::Table>, LuaError> {
-    let mut tab = vm.globals();
-    let mut start = 0;
-    let mut parts: Vec<&[u8]> = Vec::new();
-    for (i, &b) in name.iter().enumerate() {
-        if b == b'.' {
-            parts.push(&name[start..i]);
-            start = i + 1;
-        }
-    }
-    parts.push(&name[start..]);
-    for p in parts.iter() {
-        let k = Value::Str(vm.heap.intern(p));
-        let next = tab.get(k);
-        tab = match next {
-            Value::Table(t) => t,
-            Value::Nil => {
-                let t = vm.heap.new_table();
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { tab.as_mut() }
-                    .set(&mut vm.heap, k, Value::Table(t))
-                    .expect("valid key");
-                t
-            }
-            _ => {
-                // PUC `_findtable` raises "name conflict for module 'X'" when
-                // the dotted path runs into a non-table, non-nil value (e.g.
-                // `module("math.sin")` — `math.sin` is a function). attrib.lua
-                // :172 / :173 require this to surface as a pcall failure.
-                let s = String::from_utf8_lossy(name);
-                return Err(raise_str(vm, &format!("name conflict for module '{s}'")));
-            }
-        };
-    }
-    Ok(tab)
-}
-
-/// PUC 5.1 `package.seeall(module)`: attach a metatable whose `__index` is
-/// `_G`, so any name unresolved in the module table falls back to the global
-/// environment. Used inside `module(...)`'s option list as a convenience.
-fn nat_package_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let m = vm.nat_arg(fs, nargs, 0);
-    let Value::Table(t) = m else {
-        return Err(arg_error(vm, 1, "table expected"));
-    };
-    let mt = vm.heap.new_table();
-    let k = Value::Str(vm.heap.intern(b"__index"));
-    let g = Value::Table(vm.globals());
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { mt.as_mut() }
-        .set(&mut vm.heap, k, g)
-        .expect("valid key");
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }.set_metatable(Some(mt));
-    Ok(vm.nat_return(fs, &[]))
-}
-
-/// Substitute every '?' in `tpl` with `subst`. PUC `luaL_gsub` semantics.
-fn template_expand(tpl: &[u8], subst: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(tpl.len() + subst.len());
-    for &b in tpl {
-        if b == b'?' {
-            out.extend_from_slice(subst);
-        } else {
-            out.push(b);
-        }
+    out.extend_from_slice(dft);
+    if at + 2 < path.len() {
+        out.push(b';');
+        out.extend_from_slice(&path[at + 2..]);
     }
     out
 }
 
-/// Replace every occurrence of `from` in `src` with `to`. Used by
-/// `package.searchpath`'s sep→rep substitution on the module name.
-fn replace_bytes(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    if from.is_empty() {
-        return src.to_vec();
+fn os_bytes(s: &std::ffi::OsStr) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        s.as_bytes().to_vec()
     }
+    #[cfg(not(unix))]
+    {
+        s.to_string_lossy().into_owned().into_bytes()
+    }
+}
+
+/// `luaL_gsub`: replace every `from` in `src` with `to`.
+fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());
     let mut i = 0;
     while i < src.len() {
-        if i + from.len() <= src.len() && &src[i..i + from.len()] == from {
+        if src[i..].starts_with(from) {
             out.extend_from_slice(to);
             i += from.len();
         } else {
@@ -371,243 +223,465 @@ fn replace_bytes(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     out
 }
 
-fn nat_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let Value::Str(name) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "string expected"));
-    };
-    let Value::Str(path) = vm.nat_arg(fs, nargs, 1) else {
-        return Err(arg_error(vm, 2, "string expected"));
-    };
-    let sep: Vec<u8> = match vm.nat_arg(fs, nargs, 2) {
-        Value::Nil => b".".to_vec(),
-        Value::Str(s) => s.as_bytes().to_vec(),
-        _ => return Err(arg_error(vm, 3, "string expected")),
-    };
-    let rep: Vec<u8> = match vm.nat_arg(fs, nargs, 3) {
-        Value::Nil => b"/".to_vec(),
-        Value::Str(s) => s.as_bytes().to_vec(),
-        _ => return Err(arg_error(vm, 4, "string expected")),
-    };
-    let name_bytes = name.as_bytes().to_vec();
-    let path_bytes = path.as_bytes().to_vec();
-    let translated = replace_bytes(&name_bytes, &sep, &rep);
-    let mut err = Vec::new();
-    // PUC `pushnexttemplate` skips runs of separator chars, so `;;` and the
-    // empty trailing template never appear as candidates and never add a
-    // "no file ''" line.
-    for tpl in path_bytes.split(|&b| b == b';') {
-        if tpl.is_empty() {
-            continue;
-        }
-        let expanded = template_expand(tpl, &translated);
-        if std::fs::File::open(std::path::Path::new(
-            std::str::from_utf8(&expanded).unwrap_or(""),
-        ))
-        .is_ok()
-        {
-            let v = Value::Str(vm.heap.intern(&expanded));
-            return Ok(vm.nat_return(fs, &[v]));
-        }
-        err.extend_from_slice(b"\n\tno file '");
-        err.extend_from_slice(&expanded);
-        err.push(b'\'');
-    }
-    let err_v = Value::Str(vm.heap.intern(&err));
-    Ok(vm.nat_return(fs, &[Value::Nil, err_v]))
+// ---- searching the paths ----
+
+/// `readable`: whether `fopen(name, "r")` succeeds.
+fn readable(name: &[u8]) -> bool {
+    std::fs::File::open(os_path(name)).is_ok()
 }
 
-fn nat_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let Value::Str(name) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "string expected"));
-    };
-    let key = Value::Str(name);
-    let name_s = String::from_utf8_lossy(name.as_bytes()).into_owned();
-
-    // PUC's require reads `_LOADED` / `_PRELOAD` from the registry, so the
-    // user reassigning the global `package` cannot disturb the bookkeeping.
-    // luna captures the original tables as native upvalues at startup; fall
-    // back to globals.package only for older callers that constructed the
-    // native without upvals.
-    let (pkg, loaded) = if vm.nat_upcount(fs) >= 2 {
-        let p = match vm.nat_upval(fs, 0) {
-            Value::Table(t) => t,
-            _ => {
-                return Err(raise_str(vm, "'package' upvalue missing"));
-            }
-        };
-        let l = match vm.nat_upval(fs, 1) {
-            Value::Table(t) => t,
-            _ => {
-                return Err(raise_str(vm, "'package.loaded' upvalue missing"));
-            }
-        };
-        (p, l)
+/// `searchpath`: the first readable file among `path`'s templates with
+/// `name` (its `sep`s turned into `dirsep`) in place of each '?', or the
+/// "no file" message listing every candidate. ≤5.3 skip empty templates
+/// and start each entry with "\n\t"; 5.4 keeps empty ones and joins them.
+fn search_path(
+    v: LuaVersion,
+    name: &[u8],
+    path: &[u8],
+    sep: &[u8],
+    dirsep: &[u8],
+) -> Result<Vec<u8>, Vec<u8>> {
+    let name = if sep.is_empty() {
+        name.to_vec()
     } else {
-        let pkg_k = Value::Str(vm.heap.intern(b"package"));
-        let Value::Table(p) = vm.globals().get(pkg_k) else {
-            return Err(raise_str(vm, "'package' table missing"));
-        };
-        let loaded_k = Value::Str(vm.heap.intern(b"loaded"));
-        let Value::Table(l) = p.get(loaded_k) else {
-            return Err(raise_str(vm, "'package.loaded' must be a table"));
-        };
-        (p, l)
+        replace(name, sep, dirsep)
     };
-    let cached = loaded.get(key);
-    // PUC 5.1 `ll_require` keyed the "already loaded" guard on
-    // `lua_toboolean(loaded[name])` — a module whose stored value is false
-    // (e.g. `return false`) was treated as not loaded and re-executed. 5.2+
-    // changed that to `lua_isnil(loaded[name])`, so any non-nil entry blocks
-    // re-execution. attrib.lua's "default option (should reload it)" probe
-    // depends on the 5.1 falsy-as-not-loaded rule.
-    let already_loaded = if vm.version() <= crate::version::LuaVersion::Lua51 {
-        cached.truthy()
-    } else {
-        !cached.is_nil()
-    };
-    if already_loaded {
-        return Ok(vm.nat_return(fs, &[cached]));
+    let mut err = Vec::new();
+    if v <= LuaVersion::Lua53 {
+        for tpl in path.split(|&b| b == b';').filter(|t| !t.is_empty()) {
+            let file = replace(tpl, b"?", &name);
+            if readable(&file) {
+                return Ok(file);
+            }
+            err.extend_from_slice(b"\n\tno file '");
+            err.extend_from_slice(&file);
+            err.push(b'\'');
+        }
+        return Err(err);
     }
+    let expanded = replace(path, b"?", &name);
+    for file in expanded.split(|&b| b == b';') {
+        if readable(file) {
+            return Ok(file.to_vec());
+        }
+    }
+    err.extend_from_slice(b"no file '");
+    err.extend_from_slice(&replace(&expanded, b";", b"'\n\tno file '"));
+    err.push(b'\'');
+    Err(err)
+}
 
-    // Error message is the concatenation of every searcher's miss reason;
-    // PUC's findloader builds it the same way (one '\n\t…' chunk per try).
-    let mut err = String::new();
+fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let name = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
+    let path = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
+    let sep = match argcheck::opt_string(vm, a, 2)? {
+        Some(s) => s.as_bytes().to_vec(),
+        None => b".".to_vec(),
+    };
+    let dirsep = match argcheck::opt_string(vm, a, 3)? {
+        Some(s) => s.as_bytes().to_vec(),
+        None => b"/".to_vec(),
+    };
+    let r = search_path(
+        vm.version(),
+        c_str(&name),
+        c_str(&path),
+        c_str(&sep),
+        c_str(&dirsep),
+    );
+    Ok(match r {
+        Ok(file) => {
+            let f = Value::Str(vm.heap.intern(&file));
+            vm.nat_return(fs, &[f])
+        }
+        Err(msg) => {
+            let m = Value::Str(vm.heap.intern(&msg));
+            vm.nat_return(fs, &[Value::Nil, m])
+        }
+    })
+}
 
-    // preload searcher (PUC: searcher #1, runs before file searchers). Same
-    // upval-vs-globals story as `loaded`: when the captured upvals are
-    // present, read them so a user `package = {}` cannot derail preload.
-    let preload = if vm.nat_upcount(fs) >= 3 {
-        match vm.nat_upval(fs, 2) {
+/// `findfile`: search `package[pname]` (which must be a string) for `name`.
+fn find_file(
+    vm: &mut Vm,
+    pkg: Gc<Table>,
+    name: &[u8],
+    pname: &str,
+) -> Result<Result<Vec<u8>, Vec<u8>>, LuaError> {
+    let k = Value::Str(vm.heap.intern(pname.as_bytes()));
+    let path = vm.index_value(Value::Table(pkg), k)?;
+    let Some(path) = argcheck::to_str_bytes(vm, path) else {
+        return Err(raise_str(
+            vm,
+            &format!("'package.{pname}' must be a string"),
+        ));
+    };
+    // 5.1 turns every '.' of the name into the directory separator itself
+    Ok(search_path(
+        vm.version(),
+        c_str(name),
+        c_str(&path),
+        b".",
+        b"/",
+    ))
+}
+
+/// `loaderror` / `checkload` for a module file that failed to load.
+fn load_error(vm: &mut Vm, name: &[u8], file: &[u8], msg: &[u8]) -> LuaError {
+    let text = format!(
+        "error loading module '{}' from file '{}':\n\t{}",
+        String::from_utf8_lossy(c_str(name)),
+        String::from_utf8_lossy(file),
+        String::from_utf8_lossy(msg)
+    );
+    raise_str(vm, &text)
+}
+
+fn upval_table(vm: &Vm, fs: u32, i: usize) -> Gc<Table> {
+    match vm.nat_upval(fs, i) {
+        Value::Table(t) => t,
+        _ => unreachable!("package natives keep tables in their upvalues"),
+    }
+}
+
+/// Whether `a` is the sentinel userdata `b`.
+fn same(a: Value, b: Value) -> bool {
+    matches!((a, b), (Value::Userdata(x), Value::Userdata(y)) if x.ptr_eq(y))
+}
+
+fn str_value(vm: &mut Vm, b: &[u8]) -> Value {
+    Value::Str(vm.heap.intern(b))
+}
+
+// ---- the searchers ----
+
+fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let v = vm.version();
+    let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
+    let preload = if v == LuaVersion::Lua51 {
+        let pkg = upval_table(vm, fs, 0);
+        let k = Value::Str(vm.heap.intern(b"preload"));
+        match vm.index_value(Value::Table(pkg), k)? {
             Value::Table(t) => t,
-            _ => return Err(raise_str(vm, "'package.preload' upvalue missing")),
+            _ => return Err(raise_str(vm, "'package.preload' must be a table")),
         }
     } else {
-        let preload_k = Value::Str(vm.heap.intern(b"preload"));
-        let Value::Table(t) = pkg.get(preload_k) else {
-            return Err(raise_str(vm, "'package.preload' must be a table"));
-        };
-        t
+        registry_table(vm, "_PRELOAD")
     };
-    let loader = preload.get(key);
-    if !loader.is_nil() {
-        // PUC 5.1's preload loader is called with just the module name as a
-        // single arg; 5.2+ added a "path" arg (`:preload:`). attrib.lua's
-        // `function (...) module(...) end` preload variant in 5.1 passes
-        // `...` straight to `module`, so the extra string would be misread
-        // as an option function and get called against the module table.
-        let pv = Value::Str(vm.heap.intern(b":preload:"));
-        let args: &[Value] = if vm.version() <= crate::version::LuaVersion::Lua51 {
-            &[key]
-        } else {
-            &[key, pv]
-        };
-        let results = vm.call_value(loader, args)?;
-        let returned = results.first().copied().unwrap_or(Value::Nil);
-        // PUC `ll_require`: if the loader returned non-nil, store that. Else
-        // honour whatever the loader may have written into `package.loaded`
-        // (e.g. via `module()` setting `loaded[name] = module_tab`). Only
-        // fall back to `true` when both come up empty. attrib.lua's preload
-        // `module(...)` pattern relies on the second branch — the module
-        // table set by `module()` must survive the require.
-        let value = if !returned.is_nil() {
-            returned
-        } else {
-            let post = loaded.get(key);
-            if !post.is_nil() {
-                post
-            } else {
-                Value::Bool(true)
-            }
-        };
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { loaded.as_mut() }
-            .set(&mut vm.heap, key, value)
-            .expect("valid key");
-        vm.barrier_back_table(loaded);
-        return Ok(vm.nat_return(fs, &[value, pv]));
+    let loader = vm.index_value(Value::Table(preload), Value::Str(name))?;
+    if loader.is_nil() {
+        let lead = if v >= LuaVersion::Lua54 { "" } else { "\n\t" };
+        let msg = format!(
+            "{lead}no field package.preload['{}']",
+            String::from_utf8_lossy(c_str(name.as_bytes()))
+        );
+        let m = str_value(vm, msg.as_bytes());
+        return Ok(vm.nat_return(fs, &[m]));
     }
-    err.push_str(&format!("\n\tno field package.preload['{name_s}']"));
+    if v >= LuaVersion::Lua54 {
+        let data = str_value(vm, b":preload:");
+        return Ok(vm.nat_return(fs, &[loader, data]));
+    }
+    Ok(vm.nat_return(fs, &[loader]))
+}
 
-    // file searcher driven by package.path. attrib.lua sometimes sets
-    // package.path to a non-string to confirm the error mentions it.
-    let path_k = Value::Str(vm.heap.intern(b"path"));
-    let path_v = pkg.get(path_k);
-    let path_bytes = match path_v {
-        Value::Str(s) => s.as_bytes().to_vec(),
-        _ => return Err(raise_str(vm, "'package.path' must be a string")),
+fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?
+        .as_bytes()
+        .to_vec();
+    let pkg = upval_table(vm, fs, 0);
+    let file = match find_file(vm, pkg, &name, "path")? {
+        Ok(f) => f,
+        Err(msg) => {
+            let m = str_value(vm, &msg);
+            return Ok(vm.nat_return(fs, &[m]));
+        }
     };
-    // In a module name like "P1.xuxu", PUC's file searcher first replaces
-    // '.' with the dir-separator before template expansion.
-    let translated_name = replace_bytes(name.as_bytes(), b".", b"/");
-    let mut found: Option<(Vec<u8>, Vec<u8>)> = None;
-    for tpl in path_bytes.split(|&b| b == b';') {
-        if tpl.is_empty() {
+    let loadfile = vm.nat_upval(fs, 1);
+    let fname = str_value(vm, &file);
+    let r = vm.call_value(loadfile, &[fname])?;
+    match r.first() {
+        Some(f @ Value::Closure(_)) => {
+            let f = *f;
+            // 5.1's loader gets only the name; 5.2+ also the file name
+            if vm.version() == LuaVersion::Lua51 {
+                return Ok(vm.nat_return(fs, &[f]));
+            }
+            Ok(vm.nat_return(fs, &[f, fname]))
+        }
+        _ => {
+            let msg = match r.get(1) {
+                Some(&m) => argcheck::to_str_bytes(vm, m).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            Err(load_error(vm, &name, &file, &msg))
+        }
+    }
+}
+
+/// The C searchers: a file found on `cpath` cannot be opened without a
+/// dynamic loader, which is a load error.
+fn searcher_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?
+        .as_bytes()
+        .to_vec();
+    let pkg = upval_table(vm, fs, 0);
+    match find_file(vm, pkg, &name, "cpath")? {
+        Ok(file) => Err(load_error(vm, &name, &file, DLMSG)),
+        Err(msg) => {
+            let m = str_value(vm, &msg);
+            Ok(vm.nat_return(fs, &[m]))
+        }
+    }
+}
+
+/// The all-in-one C searcher: look for the root of a dotted name on
+/// `cpath`; a name without a dot is not its business.
+fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let name = argcheck::check_string(vm, Args::new(fs, nargs), 0)?
+        .as_bytes()
+        .to_vec();
+    let Some(dot) = c_str(&name).iter().position(|&b| b == b'.') else {
+        return Ok(vm.nat_return(fs, &[]));
+    };
+    let pkg = upval_table(vm, fs, 0);
+    match find_file(vm, pkg, &name[..dot], "cpath")? {
+        Ok(file) => Err(load_error(vm, &name, &file, DLMSG)),
+        Err(msg) => {
+            let m = str_value(vm, &msg);
+            Ok(vm.nat_return(fs, &[m]))
+        }
+    }
+}
+
+fn ll_loadlib(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    argcheck::check_string(vm, a, 0)?;
+    argcheck::check_string(vm, a, 1)?;
+    let msg = str_value(vm, DLMSG);
+    let place = str_value(vm, b"absent");
+    Ok(vm.nat_return(fs, &[Value::Nil, msg, place]))
+}
+
+// ---- require ----
+
+/// `findloader`: ask each searcher in turn; the first one to return a
+/// function supplies the loader (and its extra value). The misses are
+/// collected into the "not found" message.
+fn find_loader(vm: &mut Vm, pkg: Gc<Table>, name: Value) -> Result<(Value, Value), LuaError> {
+    let v = vm.version();
+    let field = if v == LuaVersion::Lua51 {
+        "loaders"
+    } else {
+        "searchers"
+    };
+    let k = Value::Str(vm.heap.intern(field.as_bytes()));
+    let Value::Table(searchers) = vm.index_value(Value::Table(pkg), k)? else {
+        return Err(raise_str(vm, &format!("'package.{field}' must be a table")));
+    };
+    let mut msg = Vec::new();
+    for i in 1.. {
+        let s = searchers.get(Value::Int(i));
+        if s.is_nil() {
+            break;
+        }
+        let r = vm.call_value(s, &[name])?;
+        let first = r.first().copied().unwrap_or(Value::Nil);
+        let second = r.get(1).copied().unwrap_or(Value::Nil);
+        if matches!(first, Value::Closure(_) | Value::Native(_)) {
+            return Ok((first, second));
+        }
+        if let Some(text) = argcheck::to_str_bytes(vm, first) {
+            // 5.4 puts the separator between messages itself
+            if v >= LuaVersion::Lua54 {
+                msg.extend_from_slice(b"\n\t");
+            }
+            msg.extend_from_slice(&text);
+        }
+    }
+    let Value::Str(n) = name else {
+        unreachable!("require passes the name as a string");
+    };
+    let text = format!(
+        "module '{}' not found:{}",
+        String::from_utf8_lossy(c_str(n.as_bytes())),
+        String::from_utf8_lossy(&msg)
+    );
+    Err(raise_str(vm, &text))
+}
+
+fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let v = vm.version();
+    let name_s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
+    let name = Value::Str(name_s);
+    let pkg = upval_table(vm, fs, 0);
+    let loaded = upval_table(vm, fs, 1);
+    let sentinel = vm.nat_upval(fs, 2);
+    let cur = vm.index_value(Value::Table(loaded), name)?;
+    if cur.truthy() {
+        if v == LuaVersion::Lua51 && same(cur, sentinel) {
+            let text = format!(
+                "loop or previous error loading module '{}'",
+                String::from_utf8_lossy(c_str(name_s.as_bytes()))
+            );
+            return Err(raise_str(vm, &text));
+        }
+        return Ok(vm.nat_return(fs, &[cur]));
+    }
+    let (loader, data) = find_loader(vm, pkg, name)?;
+    if v == LuaVersion::Lua51 {
+        vm.newindex_value(Value::Table(loaded), name, sentinel)?;
+    }
+    // 5.1 hands the loader only the name
+    let args: &[Value] = if v == LuaVersion::Lua51 {
+        &[name]
+    } else {
+        &[name, data]
+    };
+    let r = vm.call_value(loader, args)?;
+    let res = r.first().copied().unwrap_or(Value::Nil);
+    if !res.is_nil() {
+        vm.newindex_value(Value::Table(loaded), name, res)?;
+    }
+    let mut value = vm.index_value(Value::Table(loaded), name)?;
+    let unset = if v == LuaVersion::Lua51 {
+        same(value, sentinel)
+    } else {
+        value.is_nil()
+    };
+    if unset {
+        value = Value::Bool(true);
+        vm.newindex_value(Value::Table(loaded), name, value)?;
+    }
+    // 5.4 also returns the loader data
+    if v >= LuaVersion::Lua54 {
+        return Ok(vm.nat_return(fs, &[value, data]));
+    }
+    Ok(vm.nat_return(fs, &[value]))
+}
+
+// ---- module / seeall (5.1, 5.2) ----
+
+/// `luaL_findtable` on the globals: walk (raw) the dotted `name`, creating
+/// missing tables; `None` when a part is a non-table value.
+fn find_table(vm: &mut Vm, name: &[u8]) -> Option<Gc<Table>> {
+    let mut t = vm.globals();
+    for part in name.split(|&b| b == b'.') {
+        let k = Value::Str(vm.heap.intern(part));
+        t = match t.get(k) {
+            Value::Table(next) => next,
+            Value::Nil => {
+                let next = vm.heap.new_table();
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                unsafe { t.as_mut() }
+                    .set(&mut vm.heap, k, Value::Table(next))
+                    .expect("valid key");
+                vm.barrier_back_table(t);
+                next
+            }
+            _ => return None,
+        };
+    }
+    Some(t)
+}
+
+fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let v = vm.version();
+    let a = Args::new(fs, nargs);
+    let name_s = argcheck::check_string(vm, a, 0)?;
+    let name = c_str(name_s.as_bytes()).to_vec();
+    let loaded = upval_table(vm, fs, 0);
+    let module = match loaded.get(Value::Str(name_s)) {
+        Value::Table(t) => t,
+        _ => {
+            let Some(t) = find_table(vm, &name) else {
+                let text = format!(
+                    "name conflict for module '{}'",
+                    String::from_utf8_lossy(&name)
+                );
+                return Err(raise_str(vm, &text));
+            };
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            unsafe { loaded.as_mut() }
+                .set(&mut vm.heap, Value::Str(name_s), Value::Table(t))
+                .expect("valid key");
+            vm.barrier_back_table(loaded);
+            t
+        }
+    };
+    let mv = Value::Table(module);
+    let nk = str_value(vm, b"_NAME");
+    if vm.index_value(mv, nk)?.is_nil() {
+        // modinit: _M, _NAME, and _PACKAGE (the name up to its last dot)
+        let mk = str_value(vm, b"_M");
+        vm.newindex_value(mv, mk, mv)?;
+        let nv = str_value(vm, &name);
+        vm.newindex_value(mv, nk, nv)?;
+        let cut = name.iter().rposition(|&b| b == b'.').map_or(0, |i| i + 1);
+        let pk = str_value(vm, b"_PACKAGE");
+        let pv = str_value(vm, &name[..cut]);
+        vm.newindex_value(mv, pk, pv)?;
+    }
+    set_caller_env(vm, mv)?;
+    // options: 5.1 calls every extra argument, 5.2 only the functions
+    for i in 1..nargs {
+        let opt = a.get(vm, i);
+        if v == LuaVersion::Lua52 && !matches!(opt, Value::Closure(_) | Value::Native(_)) {
             continue;
         }
-        let expanded = template_expand(tpl, &translated_name);
-        if found.is_none()
-            && let Ok(src) = std::fs::read(std::str::from_utf8(&expanded).unwrap_or(""))
-        {
-            found = Some((expanded.clone(), src));
-        }
-        err.push_str("\n\tno file '");
-        err.push_str(&String::from_utf8_lossy(&expanded));
-        err.push('\'');
+        vm.call_value(opt, &[mv])?;
     }
+    if v == LuaVersion::Lua51 {
+        return Ok(vm.nat_return(fs, &[]));
+    }
+    Ok(vm.nat_return(fs, &[mv]))
+}
 
-    // C-library searcher: luna has no dynamic-linking backend, but attrib.lua
-    // still inspects the message format. Walk cpath only to append "no file"
-    // lines; never load anything.
-    let cpath_k = Value::Str(vm.heap.intern(b"cpath"));
-    let cpath_v = pkg.get(cpath_k);
-    let cpath_bytes = match cpath_v {
-        Value::Str(s) => s.as_bytes().to_vec(),
-        Value::Nil => Vec::new(),
-        _ => return Err(raise_str(vm, "'package.cpath' must be a string")),
+/// Make `env` the environment of the Lua function that called `module`:
+/// 5.1's `setfenv` rewrites its (per-closure) `_ENV` cell, 5.2's
+/// `lua_setupvalue(f, 1)` its first upvalue.
+fn set_caller_env(vm: &mut Vm, env: Value) -> Result<(), LuaError> {
+    let Some(cl) = lua_caller(vm) else {
+        return Err(raise_str(vm, "'module' not called from a Lua function"));
     };
-    for tpl in cpath_bytes.split(|&b| b == b';') {
-        if tpl.is_empty() {
-            continue;
+    let idx = if vm.version() == LuaVersion::Lua51 {
+        cl.proto.upvals.iter().position(|d| &*d.name == "_ENV")
+    } else {
+        (!cl.upvals().is_empty()).then_some(0)
+    };
+    if let Some(i) = idx {
+        vm.upvalue_set_value(cl, i, env);
+    }
+    Ok(())
+}
+
+/// The Lua function that called the running native (PUC: level 1 of the
+/// stack is a Lua activation), if it was one. A Lua caller is stopped at the
+/// call instruction whose function register is this native's slot; a native
+/// called from another native or from a pcall continuation fails that test.
+fn lua_caller(vm: &Vm) -> Option<Gc<crate::runtime::LuaClosure>> {
+    let &(slot, _) = vm.running_native_slots.last()?;
+    let CallFrame::Lua(f) = vm.inspect_frames().last()? else {
+        return None;
+    };
+    let call = *f.closure.proto.code.get((f.pc as usize).checked_sub(1)?)?;
+    (matches!(call.op(), Op::Call | Op::TailCall) && f.base + call.a() == slot).then_some(f.closure)
+}
+
+fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let t = argcheck::check_table(vm, Args::new(fs, nargs), 0)?;
+    let mt = match t.metatable() {
+        Some(mt) => mt,
+        None => {
+            let mt = vm.heap.new_table();
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            unsafe { t.as_mut() }.set_metatable(Some(mt));
+            mt
         }
-        let expanded = template_expand(tpl, &translated_name);
-        err.push_str("\n\tno file '");
-        err.push_str(&String::from_utf8_lossy(&expanded));
-        err.push('\'');
-    }
-
-    if let Some((path_b, src)) = found {
-        let path_s = String::from_utf8_lossy(&path_b).into_owned();
-        let chunkname = format!("@{path_s}");
-        let src = crate::frontend::lexer::Lexer::strip_shebang_bom(&src);
-        let cl = match vm.load(src, chunkname.as_bytes()) {
-            Ok(cl) => cl,
-            Err(e) => {
-                return Err(raise_str(
-                    vm,
-                    &format!("error loading module '{name_s}' from file '{path_s}':\n\t{e}"),
-                ));
-            }
-        };
-        let pv = Value::Str(vm.heap.intern(path_s.as_bytes()));
-        let results = vm.call_value(Value::Closure(cl), &[key, pv])?;
-        let value = results.first().copied().unwrap_or(Value::Nil);
-        let value = if value.is_nil() {
-            Value::Bool(true)
-        } else {
-            value
-        };
-        // Re-fetch loaded[name]: a preload-style module can have set it
-        // during its own body (attrib.lua's C.lua does `package.loaded[...] =
-        // 25; require'C'`); honour that value over the chunk's return.
-        let post = loaded.get(key);
-        let final_v = if !post.is_nil() { post } else { value };
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { loaded.as_mut() }
-            .set(&mut vm.heap, key, final_v)
-            .expect("valid key");
-        vm.barrier_back_table(loaded);
-        return Ok(vm.nat_return(fs, &[final_v, pv]));
-    }
-
-    Err(raise_str(vm, &format!("module '{name_s}' not found:{err}")))
+    };
+    let g = Value::Table(vm.globals());
+    raw_set(vm, mt, "__index", g);
+    vm.barrier_back_table(mt);
+    Ok(vm.nat_return(fs, &[]))
 }
