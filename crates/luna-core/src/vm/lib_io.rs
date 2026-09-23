@@ -1074,9 +1074,32 @@ fn f_read(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(push_read(vm, fs, r))
 }
 
+/// `BUFSIZ`, the size of the chunks ≤5.2 read a line in (`LUAL_BUFFERSIZE`).
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const BUFSIZ: usize = 1024;
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+)))]
+const BUFSIZ: usize = 8192;
+
 /// `read_line`: up to and excluding (`keep_nl`: including) the newline; nil
 /// when nothing at all was read.
 fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
+    if vm.version() <= LuaVersion::Lua52 {
+        return read_line_fgets(vm, u, keep_nl);
+    }
     let mut buf = Vec::new();
     let mut got_nl = false;
     while let Some(c) = getc(u)? {
@@ -1094,6 +1117,45 @@ fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Val
     } else {
         Value::Nil
     })
+}
+
+/// ≤5.2's `read_line` reads with `fgets` and measures each chunk with
+/// `strlen`: a NUL cuts the chunk short there, and a newline after it is
+/// lost, so the line runs on into the next.
+fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Value> {
+    let mut out = Vec::new();
+    loop {
+        let mut chunk = Vec::new();
+        while chunk.len() < BUFSIZ - 1 {
+            match getc(u)? {
+                Some(c) => {
+                    chunk.push(c);
+                    if c == b'\n' {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        if chunk.is_empty() {
+            return Ok(if out.is_empty() {
+                Value::Nil
+            } else {
+                Value::Str(vm.heap.intern(&out))
+            });
+        }
+        let len = chunk
+            .iter()
+            .position(|&b| b == 0)
+            .map_or(chunk.len(), |n| n);
+        if len == 0 || chunk[len - 1] != b'\n' {
+            out.extend_from_slice(&chunk[..len]);
+        } else {
+            let end = if keep_nl { len } else { len - 1 };
+            out.extend_from_slice(&chunk[..end]);
+            return Ok(Value::Str(vm.heap.intern(&out)));
+        }
+    }
 }
 
 /// `read_all`: never fails (an empty string at end of file).
