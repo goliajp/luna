@@ -1963,8 +1963,26 @@ impl Vm {
         // 5.1's pcall/xpcall are plain C calls (no continuations), so a yield
         // below one crosses the boundary like any other; 5.1 also has a single
         // wording for every case, the main thread included.
+        // 5.1 also calls every metamethod and generic-for iterator through
+        // `luaD_call`, which counts as a C level, so a yield from inside one
+        // is refused as well.
         if self.version <= LuaVersion::Lua51 {
-            if self.current.is_none() || self.nny > 0 || self.pcall_depth > 0 {
+            let inside_call = self.frames.iter().enumerate().any(|(i, f)| match f {
+                CallFrame::Cont(nc) => matches!(nc.kind, ContKind::Meta(_)),
+                CallFrame::Lua(fr) => {
+                    fr.tm.is_some()
+                        || (i > 0
+                            && self.frames[i - 1].lua().is_some_and(|c| {
+                                let pc = (c.pc as usize).wrapping_sub(1);
+                                c.closure
+                                    .proto
+                                    .code
+                                    .get(pc)
+                                    .is_some_and(|ins| ins.op() == Op::TForCall)
+                            }))
+                }
+            });
+            if self.current.is_none() || self.nny > 0 || self.pcall_depth > 0 || inside_call {
                 return Some("attempt to yield across metamethod/C-call boundary");
             }
             return None;
