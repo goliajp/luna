@@ -1120,7 +1120,6 @@ impl Vm {
         self.open_os_io();
         self.open_debug();
         self.open_coroutine();
-        self.open_package();
         // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
         // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
         // library loaded. The diff ground truth is the default build
@@ -1129,6 +1128,8 @@ impl Vm {
         if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.open_bit32();
         }
+        // last, so `package.loaded` lists every library opened before it
+        self.open_package();
     }
 
     /// Install the base library (`print`, `type`, `pairs`, `tostring`,
