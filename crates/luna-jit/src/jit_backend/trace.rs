@@ -362,16 +362,17 @@ fn emit_chain_ptr_arg<M: Module>(
 /// different bytecode window (B≠2) so the pattern matcher rejects
 /// them.
 ///
-/// `atan` is absent: 5.3+ computes `atan2(y, 1)`, which libm does not
-/// round like `atan(y)`, and `pre53` cannot tell 5.3 from 5.2. `floor`
-/// and `ceil` return an integer on 5.3+, so they fold only on 5.4+ (see
-/// the emit).
+/// `pre53` cannot tell 5.3 from 5.2, and two of these differ between
+/// them: 5.3+ `atan(y)` is `atan2(y, 1)`, which libm does not round like
+/// `atan(y)`, and 5.3+ `floor` / `ceil` return integers. Those two fold
+/// only on 5.4+ (see the emit).
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"sin", "sin"),
     (b"cos", "cos"),
     (b"tan", "tan"),
     (b"asin", "asin"),
     (b"acos", "acos"),
+    (b"atan", "atan"),
     (b"exp", "exp"),
     (b"log", "log"),
     (b"sqrt", "sqrt"),
@@ -533,9 +534,10 @@ fn try_match_trace_math_fold(
         .iter()
         .find_map(|&(needle, name)| (needle == fname_bytes).then_some(name))
     {
-        // floor/ceil results are floats on 5.1/5.2 and integers on 5.3;
-        // `pre53` covers both, so leave the call to the interpreter.
-        if pre53 && is_rounding(fn_name) {
+        // floor/ceil results are floats on 5.1/5.2 and integers on 5.3,
+        // atan is atan(y) on 5.1/5.2 and atan2(y, 1) on 5.3; `pre53`
+        // covers both, so leave the call to the interpreter.
+        if pre53 && (is_rounding(fn_name) || fn_name == "atan") {
             return None;
         }
         if i + 3 >= record.ops.len() {
@@ -673,6 +675,43 @@ fn emit_int_floor_div_mod(bcx: &mut FunctionBuilder<'_>, op: Op, m: Value, n: Va
         }
         _ => unreachable!("only IDiv / Mod"),
     }
+}
+
+/// Whether the float `r` (an integral value or NaN / ±inf) converts to
+/// an i64: `-2^63 <= r < 2^63`. NaN fails both comparisons.
+fn emit_f64_fits_i64(bcx: &mut FunctionBuilder<'_>, r: Value) -> Value {
+    let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
+    let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
+    let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
+    let lt_hi = bcx.ins().fcmp(FloatCC::LessThan, r, hi);
+    bcx.ins().band(ge_lo, lt_hi)
+}
+
+/// `i < f` for an integer and a float, exactly (lvm.c `LTintfloat`):
+/// `i < f` iff `i < ceil(f)`, with a NaN `f` false and an `f` beyond the
+/// integer range deciding by its sign.
+fn emit_lt_int_float(bcx: &mut FunctionBuilder<'_>, i: Value, f: Value) -> Value {
+    let c = bcx.ins().ceil(f);
+    let ci = bcx.ins().fcvt_to_sint_sat(types::I64, c);
+    let in_range = emit_f64_fits_i64(bcx, c);
+    let lt = bcx.ins().icmp(IntCC::SignedLessThan, i, ci);
+    let zero = bcx.ins().f64const(0.0);
+    // Out of range (or NaN): true iff f is above every integer.
+    let above = bcx.ins().fcmp(FloatCC::GreaterThan, f, zero);
+    bcx.ins().select(in_range, lt, above)
+}
+
+/// `f < i` for a float and an integer, exactly (lvm.c `LTfloatint`):
+/// `f < i` iff `floor(f) < i`, with a NaN `f` false and an `f` beyond the
+/// integer range deciding by its sign.
+fn emit_lt_float_int(bcx: &mut FunctionBuilder<'_>, f: Value, i: Value) -> Value {
+    let fl = bcx.ins().floor(f);
+    let fi = bcx.ins().fcvt_to_sint_sat(types::I64, fl);
+    let in_range = emit_f64_fits_i64(bcx, fl);
+    let lt = bcx.ins().icmp(IntCC::SignedLessThan, fi, i);
+    let zero = bcx.ins().f64const(0.0);
+    let below = bcx.ins().fcmp(FloatCC::LessThan, f, zero);
+    bcx.ins().select(in_range, lt, below)
 }
 
 /// `x << n` as lvm.c `luaV_shiftl`: a negative `n` shifts right
@@ -5945,15 +5984,27 @@ pub fn lower_trace_into_named<M: Module>(
                             return None;
                         }
                         if is_rounding(fold.fn_name) {
-                            // 5.4+: an integer is its own floor/ceil. A
-                            // float's result is an integer only when it
-                            // fits, a kind this trace cannot hold
-                            // statically, so such a trace is not compiled.
-                            if matches!(arg_kind, RegKind::Float) {
-                                return None;
-                            }
+                            // 5.4+: an integer is its own floor/ceil; a
+                            // float's becomes an integer when it fits.
+                            // When it does not (NaN, the infinities,
+                            // beyond ±2^63) the result is a float, and
+                            // the trace leaves at the GetTabUp — nothing
+                            // of the call has run — for the interpreter.
                             let raw = bcx.use_var(regs[arg_reg as usize]);
-                            bcx.def_var(regs[fold.dst_reg as usize], raw);
+                            let r = if matches!(arg_kind, RegKind::Float) {
+                                let x = use_var_f64(&mut bcx, regs, arg_reg);
+                                let r = if fold.fn_name == "floor" {
+                                    bcx.ins().floor(x)
+                                } else {
+                                    bcx.ins().ceil(x)
+                                };
+                                let fits = emit_f64_fits_i64(&mut bcx, r);
+                                guard!(fits, i, rop.pc);
+                                bcx.ins().fcvt_to_sint(types::I64, r)
+                            } else {
+                                raw
+                            };
+                            bcx.def_var(regs[fold.dst_reg as usize], r);
                             current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
                             continue;
                         }
@@ -5963,7 +6014,21 @@ pub fn lower_trace_into_named<M: Module>(
                             let raw = bcx.use_var(regs[arg_reg as usize]);
                             bcx.ins().fcvt_from_sint(types::F64, raw)
                         };
-                        let call = bcx.ins().call(libm_ref, &[arg_f64]);
+                        let call = if fold.fn_name == "atan" {
+                            // Only on 5.4+ (see the matcher): atan2(y, 1).
+                            let mut atan2_sig = module.make_signature();
+                            atan2_sig.params.push(AbiParam::new(types::F64));
+                            atan2_sig.params.push(AbiParam::new(types::F64));
+                            atan2_sig.returns.push(AbiParam::new(types::F64));
+                            let atan2_id = module
+                                .declare_function("atan2", Linkage::Import, &atan2_sig)
+                                .ok()?;
+                            let atan2_ref = module.declare_func_in_func(atan2_id, bcx.func);
+                            let one = bcx.ins().f64const(1.0);
+                            bcx.ins().call(atan2_ref, &[arg_f64, one])
+                        } else {
+                            bcx.ins().call(libm_ref, &[arg_f64])
+                        };
                         let r = bcx.inst_results(call)[0];
                         def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
                         current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
@@ -5991,6 +6056,40 @@ pub fn lower_trace_into_named<M: Module>(
                         let result_kind = match (k1, k2) {
                             (RegKind::Float, RegKind::Float) => RegKind::Float,
                             (RegKind::Int, RegKind::Int) => RegKind::Int,
+                            (RegKind::Int, RegKind::Float) | (RegKind::Float, RegKind::Int) => {
+                                // The winner keeps its kind, which is
+                                // known only at run time. The trace
+                                // continues when the first argument wins
+                                // (PUC keeps it unless the second is
+                                // strictly better, compared exactly) and
+                                // otherwise leaves for the interpreter
+                                // at the fold's GetTabUp: the folded
+                                // GetTabUp / GetField never filled R[A],
+                                // and the argument set-up in between
+                                // only writes the call's argument slots,
+                                // so running it again is harmless.
+                                let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
+                                let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
+                                let f1 = bcx.ins().bitcast(types::F64, MemFlags::new(), a1);
+                                let f2 = bcx.ins().bitcast(types::F64, MemFlags::new(), a2);
+                                // max: second wins iff a1 < a2; min: iff a2 < a1.
+                                let second_wins = match (fold.kind, k1) {
+                                    (FoldKind::Max2, RegKind::Int) => {
+                                        emit_lt_int_float(&mut bcx, a1, f2)
+                                    }
+                                    (FoldKind::Max2, _) => emit_lt_float_int(&mut bcx, f1, a2),
+                                    (FoldKind::Min2, RegKind::Int) => {
+                                        emit_lt_float_int(&mut bcx, f2, a1)
+                                    }
+                                    (FoldKind::Min2, _) => emit_lt_int_float(&mut bcx, a2, f1),
+                                    (FoldKind::Libm1, _) => unreachable!(),
+                                };
+                                let first_wins = bcx.ins().bxor_imm(second_wins, 1);
+                                guard!(first_wins, i, record.ops[fold.start_idx].pc);
+                                bcx.def_var(regs[fold.dst_reg as usize], a1);
+                                current_kinds[off + fold.dst_reg as usize] = k1;
+                                continue;
+                            }
                             _ => return None,
                         };
                         if matches!(result_kind, RegKind::Float) {

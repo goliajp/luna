@@ -511,10 +511,9 @@ fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
 /// `math.max(...)` use a different bytecode window (B≠2) so the
 /// pattern matcher rejects them.
 ///
-/// The fold always yields a float, which is right for all of these
-/// only on 5.1/5.2: 5.3+ `floor`/`ceil` return integers, and 5.3+
-/// `atan(y)` is `atan2(y, 1)`, rounded differently from libm `atan`.
-/// [`FLOAT_ONLY_LIBM_FNS`] lists the ones that fold on 5.1/5.2 only.
+/// On 5.3+ `floor`/`ceil` return integers ([`is_rounding`]) and
+/// `atan(y)` is `atan2(y, 1)`, rounded differently from libm `atan`;
+/// the emit handles both.
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"sin", "sin"),
     (b"cos", "cos"),
@@ -529,9 +528,12 @@ const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"ceil", "ceil"),
 ];
 
-/// Entries of [`MATH_LIBM_FNS`] whose float result matches PUC only on
-/// 5.1/5.2.
-const FLOAT_ONLY_LIBM_FNS: &[&str] = &["atan", "floor", "ceil"];
+/// `math.floor` / `math.ceil`: floats on 5.1/5.2; from 5.3 an integer
+/// stays itself and a float becomes an integer when the result fits
+/// (`luaV_flttointns`), a float otherwise.
+fn is_rounding(fn_name: &str) -> bool {
+    matches!(fn_name, "floor" | "ceil")
+}
 
 /// P11-S5c.C — `Table` layout constants used by the inline-aset
 /// fast path. Cranelift IR walks past the helper call ABI by
@@ -645,10 +647,22 @@ struct MathFold {
     /// Lua register receiving the libm result (= the `GetTabUp.A` =
     /// `Call.A`).
     dst_reg: u32,
+    /// The result is an integer: 5.3+ `floor` / `ceil`.
+    int_result: bool,
     /// The `"math"` and `"<fn>"` constant keys, for the entry check that
     /// the field still holds the library function.
     math_key: Gc<LuaStr>,
     name_key: Gc<LuaStr>,
+}
+
+impl MathFold {
+    fn result_kind(&self) -> RegKind {
+        if self.int_result {
+            RegKind::Int
+        } else {
+            RegKind::Float
+        }
+    }
 }
 
 /// v1.3 Phase AOT Stage 3 — backend-agnostic metadata describing one
@@ -2188,12 +2202,16 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 Op::Call => {
                     if folded_math[pc] {
-                        // P11-S5b — math libcall result is f64. Pin R[A]
-                        // (= Call.A = libm return slot) to Float.
-                        if !RegKind::unify(&mut reg_kinds[ins.a() as usize], RegKind::Float) {
+                        // P11-S5b — pin R[A] (= Call.A = the fold's
+                        // result slot) to the fold's result kind.
+                        let k = math_folds
+                            .iter()
+                            .find(|f| f.start_pc + 3 == pc)
+                            .map_or(RegKind::Float, MathFold::result_kind);
+                        if !RegKind::unify(&mut reg_kinds[ins.a() as usize], k) {
                             return None;
                         }
-                        latest_writer_kind[ins.a() as usize] = RegKind::Float;
+                        latest_writer_kind[ins.a() as usize] = k;
                         maybe_table[ins.a() as usize] = false;
                         is_nil_writer[ins.a() as usize] = false;
                     } else {
@@ -2598,7 +2616,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 if let Some(fold) = math_folds.iter().find(|f| f.start_pc == p)
                     && let Some(slot) = state.get_mut(fold.dst_reg as usize)
                 {
-                    *slot = RegKind::Float;
+                    *slot = fold.result_kind();
                 }
                 continue;
             }
@@ -3078,36 +3096,89 @@ pub fn lower_int_chunk_into<M: Module>(
                     .copied()
                     .expect("math fold for this PC");
 
-                let mut libm_sig = module.make_signature();
-                libm_sig.params.push(AbiParam::new(types::F64));
-                libm_sig.returns.push(AbiParam::new(types::F64));
-                let libm_id = module
-                    .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
-                    .ok()?;
-                let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
-
                 let arg_kind = a_kind(&reg_kinds, fold.arg_reg);
                 let arg_var = bcx.use_var(regs[fold.arg_reg as usize]);
-                let arg_f64 = match arg_kind {
-                    RegKind::Float => arg_var,
-                    RegKind::Int | RegKind::Unset => bcx.ins().fcvt_from_sint(types::F64, arg_var),
-                    // The fold's `Move` source can only be a Lua
-                    // numeric — the whitelist's `Op::Call B=2` gate
-                    // implies a numeric arg. A Table-typed source
-                    // would have been bailed earlier by the kind
-                    // sweep mismatching the fold's Float result.
-                    RegKind::Table => unreachable!("math fold arg can't be Table"),
+                let result = if fold.int_result {
+                    match arg_kind {
+                        RegKind::Float => {
+                            let r = if fold.fn_name == "floor" {
+                                bcx.ins().floor(arg_var)
+                            } else {
+                                bcx.ins().ceil(arg_var)
+                            };
+                            // An integer when it fits (NaN and the
+                            // infinities do not); otherwise the result
+                            // is a float, a kind this register cannot
+                            // hold, and the interpreter reruns the call.
+                            // Folds only compile in chunks without
+                            // table stores, so nothing has happened yet
+                            // that a rerun would repeat.
+                            let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
+                            let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
+                            let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
+                            let lt_hi = bcx.ins().fcmp(FloatCC::LessThan, r, hi);
+                            let fits = bcx.ins().band(ge_lo, lt_hi);
+                            let ok_blk = bcx.create_block();
+                            let bail_blk = bcx.create_block();
+                            bcx.ins().brif(fits, ok_blk, &[], bail_blk, &[]);
+                            bcx.switch_to_block(bail_blk);
+                            bcx.seal_block(bail_blk);
+                            let park_id = module
+                                .declare_function(
+                                    "luna_jit_park_deopt",
+                                    Linkage::Import,
+                                    &module.make_signature(),
+                                )
+                                .ok()?;
+                            let park_ref = module.declare_func_in_func(park_id, bcx.func);
+                            bcx.ins().call(park_ref, &[]);
+                            let zero = bcx.ins().iconst(types::I64, 0);
+                            bcx.ins().return_(&[zero]);
+                            bcx.switch_to_block(ok_blk);
+                            bcx.seal_block(ok_blk);
+                            bcx.ins().fcvt_to_sint(types::I64, r)
+                        }
+                        // An integer is its own floor and ceiling.
+                        RegKind::Int | RegKind::Unset => arg_var,
+                        RegKind::Table => unreachable!("math fold arg can't be Table"),
+                    }
+                } else {
+                    let arg_f64 = match arg_kind {
+                        RegKind::Float => arg_var,
+                        RegKind::Int | RegKind::Unset => {
+                            bcx.ins().fcvt_from_sint(types::F64, arg_var)
+                        }
+                        // The fold's `Move` source can only be a Lua
+                        // numeric — the whitelist's `Op::Call B=2` gate
+                        // implies a numeric arg. A Table-typed source
+                        // would have been bailed earlier by the kind
+                        // sweep mismatching the fold's Float result.
+                        RegKind::Table => unreachable!("math fold arg can't be Table"),
+                    };
+                    // 5.3+ `atan(y)` is `atan2(y, 1)` (lmathlib.c), which
+                    // libm rounds differently from `atan(y)`.
+                    let atan2 = fold.fn_name == "atan" && !float_only;
+                    let mut libm_sig = module.make_signature();
+                    libm_sig.params.push(AbiParam::new(types::F64));
+                    if atan2 {
+                        libm_sig.params.push(AbiParam::new(types::F64));
+                    }
+                    libm_sig.returns.push(AbiParam::new(types::F64));
+                    let name = if atan2 { "atan2" } else { fold.fn_name };
+                    let libm_id = module
+                        .declare_function(name, Linkage::Import, &libm_sig)
+                        .ok()?;
+                    let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
+                    let call_inst = if atan2 {
+                        let one = bcx.ins().f64const(1.0);
+                        bcx.ins().call(libm_ref, &[arg_f64, one])
+                    } else {
+                        bcx.ins().call(libm_ref, &[arg_f64])
+                    };
+                    bcx.inst_results(call_inst)[0]
                 };
-                let call_inst = bcx.ins().call(libm_ref, &[arg_f64]);
-                let result_f64 = bcx.inst_results(call_inst)[0];
-                aligned_def(
-                    &mut bcx,
-                    &regs,
-                    &reg_kinds,
-                    fold.dst_reg as usize,
-                    result_f64,
-                );
-                current_kinds[fold.dst_reg as usize] = RegKind::Float;
+                aligned_def(&mut bcx, &regs, &reg_kinds, fold.dst_reg as usize, result);
+                current_kinds[fold.dst_reg as usize] = fold.result_kind();
                 current_is_nil[fold.dst_reg as usize] = false;
 
                 pc += 3; // skip GetField + Move + Call; outer `pc += 1` lands past the Call.
@@ -4180,9 +4251,6 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize, float_only: bool) -> Opti
     let fn_name = MATH_LIBM_FNS
         .iter()
         .find_map(|&(needle, name)| (needle == fname.as_bytes()).then_some(name))?;
-    if !float_only && FLOAT_ONLY_LIBM_FNS.contains(&fn_name) {
-        return None;
-    }
 
     // Move R[A+1] = R[arg]. The destination must be the Call's arg
     // slot.
@@ -4201,6 +4269,7 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize, float_only: bool) -> Opti
         fn_name,
         arg_reg,
         dst_reg: a,
+        int_result: !float_only && is_rounding(fn_name),
         math_key: s,
         name_key: fname,
     })

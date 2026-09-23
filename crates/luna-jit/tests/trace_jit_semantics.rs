@@ -159,3 +159,95 @@ fn reassigned_math_function_is_called() {
         assert_eq!(same(v, src), "2510490");
     }
 }
+
+const SHOW: &str = r#"
+local function show(v) return string.format("%.17g", v) .. ":" .. tostring(math.type(v)) end
+"#;
+
+/// 5.4+ `floor` / `ceil` of a float compile: an integer when the result
+/// fits, and a trace exit to the interpreter (which returns the float)
+/// when it does not. Expected values are PUC 5.4.9 / 5.5.1's.
+#[test]
+fn floor_and_ceil_of_floats() {
+    let fits = "local c, x = 0, 0.5 \
+                for i = 1, 3000 do x = x + 1.0 c = c + math.ceil(x) - math.floor(x) end \
+                return tostring(c) .. ' ' .. math.type(math.floor(x))";
+    let huge = format!(
+        "{SHOW} local big, y = 0, 0.0 \
+         for i = 1, 3000 do y = y + 1.0 local z = y if i == 2500 then z = 1e300 end \
+         big = math.floor(z) end return show(big)"
+    );
+    let nan = format!(
+        "{SHOW} local r, y = 0, 0.0 \
+         for i = 1, 3000 do y = y + 1.0 if i == 3000 then y = 0/0 end r = math.ceil(y) end \
+         return show(r)"
+    );
+    for v in INT_DIALECTS {
+        assert_eq!(same(v, fits), "3000 integer");
+        assert_eq!(same(v, &huge), "3000:integer");
+        let out = same(v, &nan);
+        assert!(out.ends_with(":float"), "{v:?}: {out}");
+    }
+}
+
+/// `max` / `min` of an integer and a float return the winning argument
+/// unconverted, compared exactly (2^53 + 1 is not below 2^53 as floats
+/// would say).
+#[test]
+fn max_and_min_of_mixed_kinds() {
+    let cases = [
+        (
+            format!(
+                "{SHOW} local m1, m2 = 0, 0 \
+                 for i = 1, 3000 do m1 = math.max(i, 1500.5) m2 = math.min(i, 2000.25) end \
+                 return show(m1) .. ' ' .. show(m2)"
+            ),
+            "3000:integer 2000.25:float",
+        ),
+        (
+            format!(
+                "{SHOW} local m, f = 0, 0.0 \
+                 for i = 1, 3000 do f = f + 1.0 m = math.max(f, i) end return show(m)"
+            ),
+            "3000:float",
+        ),
+        (
+            format!(
+                "{SHOW} local m = 0 \
+                 for i = 1, 3000 do m = math.min(9007199254740992.0, i + 9007199254740990) end \
+                 return show(m)"
+            ),
+            "9007199254740992:float",
+        ),
+        (
+            format!(
+                "local lo = 0 \
+                 for i = 1, 3000 do lo = math.max(2^53, 9007199254740993) end \
+                 return tostring(lo) .. ':' .. math.type(lo)"
+            ),
+            "9007199254740993:integer",
+        ),
+        (
+            format!(
+                "{SHOW} local z, nz = 0, -0.0 \
+                 for i = 1, 3000 do z = math.max(0, nz) end return show(z)"
+            ),
+            "0:integer",
+        ),
+    ];
+    for (src, expected) in &cases {
+        for v in INT_DIALECTS {
+            assert_eq!(same(v, src), *expected, "{v:?}: {src}");
+        }
+    }
+}
+
+/// 5.4+ `atan(y)` folds as `atan2(y, 1)`, rounded as PUC does.
+#[test]
+fn atan_folds_as_atan2() {
+    let src = "local a, t = 0, 0.00012682450675524315 \
+               for i = 1, 3000 do a = math.atan(t) end return string.format('%.17g', a)";
+    for v in INT_DIALECTS {
+        assert_eq!(same(v, src), "0.00012682450607527543");
+    }
+}
