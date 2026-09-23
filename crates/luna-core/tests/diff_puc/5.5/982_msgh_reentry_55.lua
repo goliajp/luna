@@ -2,7 +2,7 @@
 -- at that point (luaG_errormsg keeps L->errfunc set), so a traceback taken
 -- by the inner run still shows the outer run's frames. Line numbers and the
 -- file name are masked: the diff harness prepends code on luna's side.
-local function mask(s) return (s:gsub("[%w_./-]*%.lua", "F"):gsub(":%d+:", ":N:"):gsub(":%d+>", ":N>")) end
+local function mask(s) return (s:gsub("[%w_./%-]+:%d+", "F:N")) end
 local function h(m)
   if tostring(m):find("inner") then return debug.traceback("H:" .. tostring(m), 1) end
   error("inner", 0)
