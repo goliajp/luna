@@ -1140,6 +1140,30 @@ impl Vm {
         out
     }
 
+    /// The message a chunk that failed to compile leaves, `load`'s second
+    /// result: the syntax error positioned with `luaO_chunkid`. 5.4 on raise
+    /// the parser's "C stack overflow" as a runtime error (`luaE_checkcstack`
+    /// through `luaG_errormsg`), inside a protected parser that keeps the
+    /// running message handler: the handler of the protected call an error
+    /// raised here would reach runs on it, as it would on any error, and its
+    /// result is the message (lua.c's handler appends a traceback).
+    pub(crate) fn load_error_value(
+        &mut self,
+        e: &crate::frontend::error::SyntaxError,
+        chunkname: &[u8],
+    ) -> Value {
+        let id = crate::vm::callstack::syntax_chunk_id(self.version(), chunkname);
+        let msg = Value::Str(self.heap.intern(&e.render(&id)));
+        let stack_overflow = e.line == 0 && e.msg == b"C stack overflow";
+        if self.version() < LuaVersion::Lua54 || !stack_overflow {
+            return msg;
+        }
+        match self.nearest_catcher() {
+            Some(Some(handler)) => self.call_msgh(handler, msg),
+            _ => msg,
+        }
+    }
+
     /// Run an xpcall message handler on `err`. An error inside the handler
     /// calls it again with the new error, as PUC's `luaG_errormsg` re-enters
     /// the handler; after `MAX_C_DEPTH` reruns the error becomes "C stack

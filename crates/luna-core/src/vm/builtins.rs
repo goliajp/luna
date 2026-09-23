@@ -1026,8 +1026,7 @@ fn load_chunk(
             // `e.msg` carries raw bytes (PUC's near-token may be a non-UTF-8
             // byte from the source) — splice it in as-is so 5.1 errors.lua
             // can pattern-match `near '\xff'` etc.
-            let display = crate::vm::callstack::syntax_chunk_id(vm.version(), name);
-            let m = Value::Str(vm.heap.intern(&e.render(&display)));
+            let m = vm.load_error_value(&e, name);
             Ok(vm.nat_return(a.fs, &[Value::Nil, m]))
         }
     }
