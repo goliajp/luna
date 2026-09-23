@@ -58,7 +58,11 @@ pub(crate) fn typename_at(vm: &Vm, a: Args, i: u32) -> String {
     if a.is_none(i) {
         return "no value".to_string();
     }
-    let v = a.get(vm, i);
+    typename_of(vm, a.get(vm, i))
+}
+
+/// The type name `luaL_typeerror` reports for a present value.
+pub(crate) fn typename_of(vm: &Vm, v: Value) -> String {
     if vm.version() >= LuaVersion::Lua53 {
         vm.obj_typename(v)
     } else {
@@ -260,22 +264,30 @@ pub(crate) fn check_function(vm: &mut Vm, a: Args, i: u32) -> Result<Value, LuaE
     }
 }
 
-/// `luaL_checkoption`: the index of argument `i` in `opts`. With a default,
-/// an absent or nil argument selects it; a number converts to its string.
+/// `luaL_checkoption`: the index of argument `i` in `options`, read with
+/// `luaL_optstring(def)` when a default is given, else `luaL_checkstring`.
 pub(crate) fn check_option(
     vm: &mut Vm,
     a: Args,
     i: u32,
-    default: Option<&str>,
-    opts: &[&str],
+    def: Option<&str>,
+    options: &[&str],
 ) -> Result<usize, LuaError> {
-    let name: Vec<u8> = match default {
-        Some(d) if a.is_none_or_nil(vm, i) => d.as_bytes().to_vec(),
-        _ => check_string(vm, a, i)?.as_bytes().to_vec(),
+    let name = match def {
+        Some(d) => match opt_string(vm, a, i)? {
+            Some(s) => s.as_bytes().to_vec(),
+            None => d.as_bytes().to_vec(),
+        },
+        None => check_string(vm, a, i)?.as_bytes().to_vec(),
     };
-    if let Some(k) = opts.iter().position(|o| o.as_bytes() == name.as_slice()) {
+    // The name is a C string to `strcmp` and `%s`: it ends at the first NUL.
+    let name = name
+        .split(|&b| b == 0)
+        .next()
+        .expect("split yields a first piece");
+    if let Some(k) = options.iter().position(|o| o.as_bytes() == name) {
         return Ok(k);
     }
-    let name = String::from_utf8_lossy(&name).into_owned();
-    Err(arg_error(vm, i + 1, &format!("invalid option '{name}'")))
+    let shown = String::from_utf8_lossy(name);
+    Err(arg_error(vm, i + 1, &format!("invalid option '{shown}'")))
 }

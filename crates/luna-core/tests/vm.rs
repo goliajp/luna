@@ -2960,9 +2960,10 @@ fn os_execute_shell_probe_and_command() {
         Value::Int(1) => {}
         v => panic!("5.1 os.execute() expected Int(1), got {v:?}"),
     }
-    // 5.5: a real shell command. `(success, "exit", 0)` on success;
-    // `(false, "exit", N)` on a non-zero exit. Build the assertion from
-    // the triple so we exercise the full return shape.
+    // 5.5: a real shell command. `(true, "exit", 0)` on success;
+    // `(nil, "exit", N)` on a non-zero exit (luaL_execresult pushes fail,
+    // which is nil). Build the assertion from the triple so we exercise the
+    // full return shape.
     check_str(
         "local ok, kind, code = os.execute('true') \
          return tostring(ok)..':'..kind..':'..tostring(code)",
@@ -2971,7 +2972,7 @@ fn os_execute_shell_probe_and_command() {
     check_str(
         "local ok, kind, code = os.execute('exit 7') \
          return tostring(ok)..':'..kind..':'..tostring(code)",
-        b"false:exit:7",
+        b"nil:exit:7",
     );
 }
 
@@ -2997,13 +2998,13 @@ fn io_popen_read_write_and_close_status() {
          return tostring(ok)..':'..kind..':'..tostring(code)",
         b"true:exit:0",
     );
-    // Non-zero exit propagates into close's triple.
+    // Non-zero exit propagates into close's triple, with nil for failure.
     check_str(
         "local f = io.popen('exit 4') \
          f:read('a') \
          local ok, kind, code = f:close() \
          return tostring(ok)..':'..kind..':'..tostring(code)",
-        b"false:exit:4",
+        b"nil:exit:4",
     );
 }
 
@@ -3361,9 +3362,11 @@ fn io_buffered_writes_and_round_trip_time() {
     // the part luna controls: the buffered write returns the file (not a
     // `(nil, msg)` triple) before any flush has happened.
     check_bool(
-        "local f = assert(io.open(os.tmpname(), 'w')) \
+        "local p = os.tmpname() \
+         local f = assert(io.open(p, 'w')) \
          local r = f:write('abcd') \
          f:close() \
+         os.remove(p) \
          return r == f",
         true,
     );

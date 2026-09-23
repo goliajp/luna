@@ -724,6 +724,21 @@ impl From<LuaError> for Error {
     }
 }
 
+impl Vm {
+    /// `lua_close` from inside a running script (`os.exit(code, true)`):
+    /// close the main thread's pending to-be-closed variables, then run every
+    /// finalizer. Both run protected, so their errors are dropped as PUC's
+    /// `close_state` drops them. Inside a coroutine the main thread's stack is
+    /// parked, and only the finalizers run.
+    pub(crate) fn close_state(&mut self) {
+        if self.current.is_none() {
+            let _ = self.close_slots(0, None);
+        }
+        self.heap.queue_all_finalizers();
+        self.run_finalizers();
+    }
+}
+
 impl Drop for Vm {
     fn drop(&mut self) {
         // state close: run `__gc` for every still-registered finalizable before
@@ -1115,7 +1130,6 @@ impl Vm {
         self.open_os_io();
         self.open_debug();
         self.open_coroutine();
-        self.open_package();
         // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
         // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
         // library loaded. The diff ground truth is the default build
@@ -1124,6 +1138,8 @@ impl Vm {
         if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.open_bit32();
         }
+        // last, so `package.loaded` lists every library opened before it
+        self.open_package();
     }
 
     /// Install the base library (`print`, `type`, `pairs`, `tostring`,
@@ -1169,7 +1185,7 @@ impl Vm {
     }
     /// `package` plus the 5.1-only `module` and `package.seeall` aliases.
     pub fn open_package(&mut self) {
-        crate::vm::lib_os_io::open_package(self);
+        crate::vm::lib_package::open_package(self);
     }
     /// 5.2-only `bit32` library (5.3+ retired in favour of native bitwise
     /// ops on 64-bit integers).
@@ -1954,6 +1970,33 @@ impl Vm {
     /// PUC error message — `None` if it may. Distinguishes "not in a coroutine"
     /// from "inside an unyieldable C call" (sort/gsub callback).
     pub(crate) fn yield_barrier(&self) -> Option<&'static str> {
+        // 5.1's pcall/xpcall are plain C calls (no continuations), so a yield
+        // below one crosses the boundary like any other; 5.1 also has a single
+        // wording for every case, the main thread included.
+        // 5.1 also calls every metamethod and generic-for iterator through
+        // `luaD_call`, which counts as a C level, so a yield from inside one
+        // is refused as well.
+        if self.version <= LuaVersion::Lua51 {
+            let inside_call = self.frames.iter().enumerate().any(|(i, f)| match f {
+                CallFrame::Cont(nc) => matches!(nc.kind, ContKind::Meta(_)),
+                CallFrame::Lua(fr) => {
+                    fr.tm.is_some()
+                        || (i > 0
+                            && self.frames[i - 1].lua().is_some_and(|c| {
+                                let pc = (c.pc as usize).wrapping_sub(1);
+                                c.closure
+                                    .proto
+                                    .code
+                                    .get(pc)
+                                    .is_some_and(|ins| ins.op() == Op::TForCall)
+                            }))
+                }
+            });
+            if self.current.is_none() || self.nny > 0 || self.pcall_depth > 0 || inside_call {
+                return Some("attempt to yield across metamethod/C-call boundary");
+            }
+            return None;
+        }
         if self.current.is_none() {
             Some("attempt to yield from outside a coroutine")
         } else if self.nny > 0 {
@@ -5636,6 +5679,33 @@ impl Vm {
         // through nested unwinds (inner→outer) without re-running msgh.
         if self.error_traceback.is_none() {
             self.error_traceback = Some(self.traceback_bytes(1));
+        }
+        // An error that no protected call inside the running coroutine will
+        // catch kills it without unwinding: PUC's `lua_resume` leaves the
+        // dead thread's stack as it was, so its pending to-be-closed
+        // variables run only when it is closed (`coroutine.close`, or
+        // `coroutine.wrap` closing it before re-raising). Scoped to the
+        // coroutine's own run (`entry_depth == 1`); a run nested under a
+        // native unwinds as before.
+        if entry_depth == 1
+            && self.version >= LuaVersion::Lua54
+            && self
+                .current
+                .is_some_and(|c| c.status == crate::runtime::CoroStatus::Running)
+            && !self.frames.iter().any(|f| {
+                matches!(
+                    f,
+                    CallFrame::Cont(NativeCont {
+                        kind: ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Close(_),
+                        ..
+                    })
+                )
+            })
+        {
+            while self.frames.len() >= entry_depth {
+                frames_pop_sync(&mut self.frames, &mut self.frames_top);
+            }
+            return Unwound::Propagated(LuaError(err));
         }
         while self.frames.len() >= entry_depth {
             match *self.frames.last().expect("frame") {

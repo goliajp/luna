@@ -859,6 +859,9 @@ fn main() {
         Err(e) => {
             let msg = vm.error_text(&e);
             print_pretty_error(&mut vm, &msg, &src, color, /*compile=*/ false);
+            // lua.c closes the state after reporting, which finalizes open
+            // files and so writes out what they still buffer
+            drop(vm);
             std::process::exit(1);
         }
     }
