@@ -3,7 +3,7 @@
 //! lives on `Vm` in exec.rs; these are the thin library wrappers, shaped per
 //! dialect after 5.1's lbaselib and 5.2–5.5's lcorolib.
 
-use crate::runtime::{Coro, CoroStatus, Gc, Value};
+use crate::runtime::{Coro, CoroStatus, Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, check_function, type_error};
 use crate::vm::builtins::{arg_error, raise_str};
@@ -21,11 +21,22 @@ pub(crate) fn open_coroutine(vm: &mut Vm) {
             .expect("valid key");
     };
     set(vm, "create", co_create);
-    set(vm, "resume", co_resume);
     set(vm, "yield", co_yield);
     set(vm, "status", co_status);
     set(vm, "running", co_running);
-    set(vm, "wrap", co_wrap);
+    // the threads now inside a wrapped call, which `resume_refusal` needs
+    let in_wrap = Value::Table(vm.heap.new_table());
+    for (name, f) in [
+        ("resume", co_resume as crate::runtime::value::NativeFn),
+        ("wrap", co_wrap),
+    ] {
+        let k = Value::Str(vm.heap.intern(name.as_bytes()));
+        let fv = vm.native_with(f, Box::new([in_wrap]));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        unsafe { t.as_mut() }
+            .set(&mut vm.heap, k, fv)
+            .expect("valid key");
+    }
     if vm.version() >= LuaVersion::Lua53 {
         set(vm, "isyieldable", co_isyieldable);
     }
@@ -78,20 +89,29 @@ fn check_co(vm: &mut Vm, a: Args) -> Result<Gc<Coro>, LuaError> {
 
 /// Why `co` cannot be resumed, as the dialect words it, or `None` if it is
 /// suspended. 5.1's `auxresume` names every status. 5.2/5.3 first report a
-/// thread with an empty frame as dead (`lua_gettop(co) == 0`) — the running
-/// thread seen from inside a wrapped call of its own with no arguments is
-/// such a thread — and leave the rest to `lua_resume`'s "non-suspended".
-fn resume_refusal(vm: &Vm, co: Gc<Coro>, own_frame_empty: bool) -> Option<String> {
+/// thread with an empty frame as dead (`lua_gettop(co) == 0`) and leave the
+/// rest to `lua_resume`'s "non-suspended". Two threads have an empty frame:
+/// the running one inside a wrapped call of its own made without arguments
+/// (`own_frame_empty`), and one waiting in a wrapped call it made, whose
+/// arguments went to the coroutine it resumed (marked in `in_wrap`).
+fn resume_refusal(
+    vm: &Vm,
+    co: Gc<Coro>,
+    own_frame_empty: bool,
+    in_wrap: Gc<Table>,
+) -> Option<String> {
     let status = vm.effective_coro_status(co);
     if status == CoroStatus::Suspended {
         return None;
     }
-    let running_self = vm.current_coro().is_some_and(|c| c.ptr_eq(co));
+    let empty = if vm.current_coro().is_some_and(|c| c.ptr_eq(co)) {
+        own_frame_empty
+    } else {
+        in_wrap.get(Value::Coro(co)).truthy()
+    };
     Some(match vm.version() {
         LuaVersion::Lua51 => format!("cannot resume {} coroutine", vm.coro_status_str(co)),
-        LuaVersion::Lua52 | LuaVersion::Lua53
-            if status == CoroStatus::Dead || (running_self && own_frame_empty) =>
-        {
+        LuaVersion::Lua52 | LuaVersion::Lua53 if status == CoroStatus::Dead || empty => {
             "cannot resume dead coroutine".to_string()
         }
         _ if status == CoroStatus::Dead => "cannot resume dead coroutine".to_string(),
@@ -99,9 +119,32 @@ fn resume_refusal(vm: &Vm, co: Gc<Coro>, own_frame_empty: bool) -> Option<String
     })
 }
 
+fn upval_table(vm: &Vm, fs: u32, i: usize) -> Gc<Table> {
+    match vm.nat_upval(fs, i) {
+        Value::Table(t) => t,
+        _ => unreachable!("coroutine natives keep their state table here"),
+    }
+}
+
+/// Mark or unmark the running thread as waiting in a wrapped call (only
+/// 5.2/5.3 read the mark).
+fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) {
+    if !matches!(vm.version(), LuaVersion::Lua52 | LuaVersion::Lua53) {
+        return;
+    }
+    let me = vm.running_thread().0;
+    let v = if on { Value::Bool(true) } else { Value::Nil };
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    unsafe { in_wrap.as_mut() }
+        .set(&mut vm.heap, me, v)
+        .expect("a thread is a valid key");
+    vm.barrier_back_table(in_wrap);
+}
+
 fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
-    if let Some(msg) = resume_refusal(vm, co, false) {
+    let in_wrap = upval_table(vm, fs, 0);
+    if let Some(msg) = resume_refusal(vm, co, false, in_wrap) {
         let m = Value::Str(vm.heap.intern(msg.as_bytes()));
         return Ok(vm.nat_return(fs, &[Value::Bool(false), m]));
     }
@@ -189,11 +232,15 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Coro(co) = vm.nat_upval(fs, 0) else {
         unreachable!("wrap upvalue is a coroutine");
     };
-    let err = match resume_refusal(vm, co, nargs == 0) {
+    let in_wrap = upval_table(vm, fs, 1);
+    let err = match resume_refusal(vm, co, nargs == 0, in_wrap) {
         Some(msg) => Value::Str(vm.heap.intern(msg.as_bytes())),
         None => {
             let args = collect_args(vm, fs, nargs);
-            match vm.resume_coro(co, args) {
+            mark_in_wrap(vm, in_wrap, true);
+            let r = vm.resume_coro(co, args);
+            mark_in_wrap(vm, in_wrap, false);
+            match r {
                 Ok(vals) => return Ok(vm.nat_return(fs, &vals)),
                 // 5.4+ close a coroutine that died by error before
                 // re-raising, so its pending `__close` handlers run (and one
@@ -229,7 +276,8 @@ fn wrap_where(vm: &mut Vm, err: Value) -> Value {
 fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = check_body(vm, Args::new(fs, nargs))?;
     let co = vm.new_coro(body);
-    let f = vm.native_with(co_wrapped, Box::new([Value::Coro(co)]));
+    let in_wrap = vm.nat_upval(fs, 0);
+    let f = vm.native_with(co_wrapped, Box::new([Value::Coro(co), in_wrap]));
     Ok(vm.nat_return(fs, &[f]))
 }
 
