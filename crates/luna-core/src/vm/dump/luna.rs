@@ -11,6 +11,8 @@
 //! records and upvalue names); line info is always kept because the VM
 //! indexes it for error positions.
 
+use super::error::Bad;
+use super::header;
 use super::reader::Reader;
 use crate::runtime::Value;
 use crate::runtime::function::{LocVar, Proto, UpvalDesc};
@@ -69,13 +71,20 @@ const HEADER_53: &[u8] = &[
 ];
 
 pub(super) fn header_for(version: LuaVersion) -> &'static [u8] {
+    header_and_layout(version).0
+}
+
+/// The header luna writes for `version`, with its PUC field layout.
+fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, Bad)]) {
     match version {
-        LuaVersion::Lua53 => HEADER_53,
-        LuaVersion::Lua54 => HEADER_54,
+        LuaVersion::Lua53 => (HEADER_53, header::LAYOUT_53),
+        LuaVersion::Lua54 => (HEADER_54, header::LAYOUT_54),
         // 5.1 / 5.2 calls.lua does not test binary-chunk header bytes, so
         // route them through the 5.5 layout (luna's own dump round-trips
         // either way, and PUC 5.1/5.2 chunks aren't loadable into luna).
-        _ => HEADER_55,
+        LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua55 | LuaVersion::MacroLua => {
+            (HEADER_55, header::LAYOUT_55)
+        }
     }
 }
 
@@ -216,7 +225,7 @@ fn r_const(
     r: &mut Reader,
     heap: &mut Heap,
     strings: &mut Vec<Gc<crate::runtime::LuaStr>>,
-) -> Result<Value, String> {
+) -> Result<Value, Bad> {
     Ok(match r.u8()? {
         0 => Value::Nil,
         1 => Value::Bool(false),
@@ -234,9 +243,13 @@ fn r_const(
         // a string saved earlier in the chunk (5.5)
         6 => {
             let idx = r.u32()? as usize;
-            Value::Str(*strings.get(idx).ok_or("bad saved-string index")?)
+            Value::Str(
+                *strings
+                    .get(idx)
+                    .ok_or(Bad::Code(format!("saved string {idx} out of range")))?,
+            )
         }
-        t => return Err(format!("bad constant tag {t}")),
+        _ => return Err(Bad::Constant),
     })
 }
 
@@ -245,7 +258,7 @@ fn r_proto(
     heap: &mut Heap,
     parent_source: Option<Gc<crate::runtime::LuaStr>>,
     strings: &mut Vec<Gc<crate::runtime::LuaStr>>,
-) -> Result<Gc<Proto>, String> {
+) -> Result<Gc<Proto>, Bad> {
     let num_params = r.u8()?;
     let is_vararg = r.u8()? != 0;
     let max_stack = r.u8()?;
@@ -350,37 +363,23 @@ fn r_proto(
 /// Validates the running dialect's PUC header byte-for-byte (the calls.lua
 /// corrupted-header test flips a single byte and expects a load failure),
 /// then the luna body tag, then the luna body.
-pub(super) fn undump(
-    bytes: &[u8],
-    heap: &mut Heap,
-    version: LuaVersion,
-) -> Result<Gc<Proto>, String> {
-    let header = header_for(version);
-    if bytes.len() < header.len() {
-        return Err("truncated binary chunk".to_string());
+pub(super) fn undump(bytes: &[u8], heap: &mut Heap, version: LuaVersion) -> Result<Gc<Proto>, Bad> {
+    let (header, layout) = header_and_layout(version);
+    header::check(bytes, header, layout)?;
+    let body = header.len();
+    let tag = bytes
+        .get(body..body + BODY_TAG.len())
+        .ok_or(Bad::Truncated)?;
+    if tag != BODY_TAG {
+        return Err(Bad::Code("not a luna chunk body".to_string()));
     }
-    // Validate everything except the trailing float sanity field (PUC tolerates
-    // long-double padding differences here, and on this build the float
-    // representation matches anyway). The non-float bytes are luna's
-    // contract: a single-byte change must fail the load.
-    let float_off = header.len() - 8;
-    if bytes[..float_off] != header[..float_off] {
-        return Err("bad binary chunk header".to_string());
-    }
-    if bytes[float_off..header.len()] != header[float_off..] {
-        return Err("bad binary chunk float check".to_string());
-    }
-    let pos = header.len();
-    if bytes.len() < pos + BODY_TAG.len() {
-        return Err("truncated binary chunk".to_string());
-    }
-    if &bytes[pos..pos + BODY_TAG.len()] != BODY_TAG {
-        return Err("bad binary chunk body tag".to_string());
-    }
-    let mut r = Reader::at(bytes, pos + BODY_TAG.len());
+    let mut r = Reader::at(bytes, body + BODY_TAG.len());
     let proto = r_proto(&mut r, heap, None, &mut Vec::new())?;
     if r.pos() != bytes.len() {
-        return Err("trailing bytes in chunk".to_string());
+        return Err(Bad::Code(format!(
+            "{} trailing bytes",
+            bytes.len() - r.pos()
+        )));
     }
     Ok(proto)
 }

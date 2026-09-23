@@ -211,10 +211,7 @@ fn rejects_bad_luac_int() {
     chunk[18] = 0xFF;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(
-        s.contains("LUAC_INT") || s.contains("endianness"),
-        "got: {s}"
-    );
+    assert_eq!(s, "test: bad binary format (integer format mismatch)");
 }
 
 #[test]
@@ -227,7 +224,7 @@ fn rejects_bad_sizeof_size_t() {
     chunk[13] = 4;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(s.contains("size_t"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (size_t size mismatch)");
 }
 
 #[test]
@@ -240,7 +237,7 @@ fn rejects_bad_sizeof_int() {
     chunk[12] = 8;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(s.contains("sizeof(int)"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (int size mismatch)");
 }
 
 #[test]
@@ -253,10 +250,7 @@ fn rejects_bad_luac_num() {
     chunk[32] = 0xFF;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(
-        s.contains("LUAC_NUM") || s.contains("float format"),
-        "got: {s}"
-    );
+    assert_eq!(s, "test: bad binary format (float format mismatch)");
 }
 
 #[test]
