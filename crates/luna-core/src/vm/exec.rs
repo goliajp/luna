@@ -5574,7 +5574,7 @@ impl Vm {
             );
         for reg in cands {
             if self.r(f.base, reg).raw_eq(bad) {
-                return match crate::vm::objname::getobjname(p, pc - 1, reg, self.version) {
+                return match crate::vm::objname::getobjname_in(p, pc - 1, reg, self.version) {
                     Some(("constant", _)) if rk_operands => String::new(),
                     Some((kind, name)) => format!(" ({kind} '{name}')"),
                     None => String::new(),
@@ -5617,7 +5617,7 @@ impl Vm {
             Op::Call | Op::TailCall => {
                 let reg = instr.a();
                 if self.r(f.base, reg).raw_eq(bad) {
-                    match crate::vm::objname::getobjname(p, pc - 1, reg, self.version) {
+                    match crate::vm::objname::getobjname_in(p, pc - 1, reg, self.version) {
                         Some((kind, name)) => format!(" ({kind} '{name}')"),
                         None => String::new(),
                     }
@@ -5672,7 +5672,7 @@ impl Vm {
             // the operand without an integer value
             let n = self.arith_operand()(v);
             if no_int(n) {
-                return match crate::vm::objname::getobjname(p, pc - 1, reg, self.version) {
+                return match crate::vm::objname::getobjname_in(p, pc - 1, reg, self.version) {
                     Some((kind, name)) => format!(" ({kind} '{name}')"),
                     None => String::new(),
                 };
