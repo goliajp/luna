@@ -1080,21 +1080,23 @@ fn translate_code(
                 }
                 out[luna_pc] = Inst::isj(Op::Jmp, delta as i32);
             }
+            // luna's ForLoop / ForPrep carry unsigned distances, not sBx:
+            // ForLoop jumps back by `Bx` from the next pc, ForPrep lands on
+            // its ForLoop at `pc + Bx`. Encoding a signed sBx here made the
+            // interpreter jump ~65535 instructions past the end of the code.
             JumpKind::ForLoop(a) => {
-                if !((-crate::vm::isa::MAX_SBX as i64)..=(crate::vm::isa::MAX_SBX as i64))
-                    .contains(&delta)
-                {
-                    return Err(format!("FORLOOP delta {delta} exceeds luna sBx range"));
+                let back = -delta;
+                if !(0..=crate::vm::isa::MAX_BX as i64).contains(&back) {
+                    return Err(format!("FORLOOP back-distance {back} out of luna Bx range"));
                 }
-                out[luna_pc] = Inst::iasbx(Op::ForLoop, a, delta as i32);
+                out[luna_pc] = Inst::iabx(Op::ForLoop, a, back as u32);
             }
             JumpKind::ForPrep(a) => {
-                if !((-crate::vm::isa::MAX_SBX as i64)..=(crate::vm::isa::MAX_SBX as i64))
-                    .contains(&delta)
-                {
-                    return Err(format!("FORPREP delta {delta} exceeds luna sBx range"));
+                let fwd = delta + 1;
+                if !(1..=crate::vm::isa::MAX_BX as i64).contains(&fwd) {
+                    return Err(format!("FORPREP distance {fwd} out of luna Bx range"));
                 }
-                out[luna_pc] = Inst::iasbx(Op::ForPrep, a, delta as i32);
+                out[luna_pc] = Inst::iabx(Op::ForPrep, a, fwd as u32);
             }
             JumpKind::TForLoop(a) => {
                 // luna `Op::TForLoop A Bx` back-jumps by `Bx` instructions
