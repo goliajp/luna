@@ -864,7 +864,7 @@ fn run_debug_command(vm: &mut Vm, line: &[u8]) -> Result<(), Vec<u8>> {
     let f = match vm.load(line, b"=(debug command)") {
         Ok(cl) => cl,
         Err(e) => {
-            let mut msg = chunk_id(b"=(debug command)");
+            let mut msg = crate::vm::callstack::syntax_chunk_id(v, b"=(debug command)");
             msg.extend_from_slice(format!(":{}: ", e.line).as_bytes());
             msg.extend_from_slice(&e.msg);
             return Err(msg);

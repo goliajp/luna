@@ -1008,12 +1008,12 @@ fn load_chunk(
         }
         Err(e) => {
             // PUC formats the syntax error's source prefix via `luaO_chunkid`
-            // (LUA_IDSIZE=60), not as a bare `[string "<name>"]`. This handles
+            // (see `syntax_chunk_id`), not as a bare `[string "<name>"]`. This handles
             // the `@file` / `=name` sigils and head/tail-truncation rules.
             // `e.msg` carries raw bytes (PUC's near-token may be a non-UTF-8
             // byte from the source) — splice it in as-is so 5.1 errors.lua
             // can pattern-match `near '\xff'` etc.
-            let display = crate::vm::lib_debug::chunk_id(name);
+            let display = crate::vm::callstack::syntax_chunk_id(vm.version(), name);
             let mut msg_bytes = display;
             msg_bytes.push(b':');
             msg_bytes.extend_from_slice(e.line.to_string().as_bytes());
