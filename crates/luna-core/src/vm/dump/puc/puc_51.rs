@@ -266,11 +266,11 @@ fn loop_windows(code: &[u32]) -> Result<Vec<Window>, String> {
         }
         let jmp = code.get(p + 1).map(|&w| I51::decode(w));
         let Some(jmp) = jmp.filter(|j| j.op == OP_JMP) else {
-            return Err(format!("{DIALECT} chunk: TFORLOOP without its back-jump (pc {p})").into());
+            return Err(format!("{DIALECT} chunk: TFORLOOP without its back-jump (pc {p})"));
         };
         let body = p as i64 + 2 + jmp.sbx();
         if !(0..=p as i64).contains(&body) {
-            return Err(format!("{DIALECT} chunk: TFORLOOP back-jump to {body} (pc {p})").into());
+            return Err(format!("{DIALECT} chunk: TFORLOOP back-jump to {body} (pc {p})"));
         }
         out.push(Window {
             first: body as usize,
