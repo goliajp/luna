@@ -40,6 +40,7 @@ pub use userdata_trait::{
     LuaUserdata, MetaMethod, MetatableBuilder, UserdataMarker, UserdataMethods,
 };
 pub mod lib_debug;
+pub(crate) mod lib_gc;
 pub mod lib_math;
 pub mod lib_os_io;
 pub mod lib_string;

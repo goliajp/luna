@@ -197,3 +197,23 @@ pub(crate) fn check_function(vm: &mut Vm, a: Args, i: u32) -> Result<Value, LuaE
         _ => Err(type_error(vm, a, i, "function")),
     }
 }
+
+/// `luaL_checkoption`: the index of argument `i` in `opts`. With a default,
+/// an absent or nil argument selects it; a number converts to its string.
+pub(crate) fn check_option(
+    vm: &mut Vm,
+    a: Args,
+    i: u32,
+    default: Option<&str>,
+    opts: &[&str],
+) -> Result<usize, LuaError> {
+    let name: Vec<u8> = match default {
+        Some(d) if a.is_none_or_nil(vm, i) => d.as_bytes().to_vec(),
+        _ => check_string(vm, a, i)?.as_bytes().to_vec(),
+    };
+    if let Some(k) = opts.iter().position(|o| o.as_bytes() == name.as_slice()) {
+        return Ok(k);
+    }
+    let name = String::from_utf8_lossy(&name).into_owned();
+    Err(arg_error(vm, i + 1, &format!("invalid option '{name}'")))
+}

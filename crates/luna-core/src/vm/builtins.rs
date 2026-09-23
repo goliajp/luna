@@ -54,7 +54,7 @@ pub(crate) fn open_base(vm: &mut Vm) {
     let load_obj = vm.native(nat_load);
     vm.set_global("load", load_obj)
         .expect("stdlib registration");
-    let f = vm.native(nat_collectgarbage);
+    let f = vm.native(crate::vm::lib_gc::nat_collectgarbage);
     vm.set_global("collectgarbage", f)
         .expect("stdlib registration");
     // PUC 5.4 introduced the warning system. `warn(msg1, …, msgN)` emits
@@ -767,11 +767,6 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
 }
 
-/// Objects swept per unit of `collectgarbage("step", n)` step size. The PUC
-/// step argument is in KB; we pace the incremental sweep by object count, so
-/// this scales `n` into a per-step object budget.
-const GC_STEP_OBJS: usize = 32;
-
 /// PUC 5.1 `newproxy(...)`: create an empty userdata whose only purpose is to
 /// carry a metatable (for `__index` / `__newindex` / `__gc` hooks).
 ///   - `newproxy()` / `newproxy(false)` ↦ no metatable
@@ -1006,174 +1001,6 @@ pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         vm.emit_warn(p, i + 1 < n);
     }
     Ok(vm.nat_return(fs, &[]))
-}
-
-pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let opt: Vec<u8> = match vm.nat_arg(fs, nargs, 0) {
-        Value::Nil => b"collect".to_vec(),
-        Value::Str(s) => s.as_bytes().to_vec(),
-        v => {
-            return Err(arg_error(
-                vm,
-                1,
-                &format!("string expected, got {}", v.type_name()),
-            ));
-        }
-    };
-    // the collector is not reentrant: called from within a `__gc` finalizer,
-    // collectgarbage reports fail (PUC lua_gc returns -1 → luaL_pushfail).
-    if vm.gc_is_finalizing() {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
-    }
-    let out = match opt.as_slice() {
-        b"collect" => {
-            // PUC 5.1–5.3 propagated the first `__gc` error to the
-            // `collectgarbage` caller; 5.4 introduced the `warn` plumbing
-            // and switched to "warn then continue". gc.lua 5.1 :255, 5.2
-            // :346, and 5.3 :360 all baseline on the older raise behaviour.
-            if vm.version() <= crate::version::LuaVersion::Lua53 {
-                vm.collect_garbage_propagating()?;
-            } else {
-                vm.collect_garbage();
-            }
-            Value::Int(0)
-        }
-        b"count" => {
-            // PUC 5.2/5.3 `LUA_GCCOUNT` reported as two results: kilobytes
-            // (float = total/1024) and the residual bytes (`LUA_GCCOUNTB`,
-            // 0..1024). 5.4 collapsed this to the single kilobytes float —
-            // gc.lua 5.2 :139 asserts `k*1024 == floor(k)*1024 + b` exactly.
-            let bytes = vm.heap.bytes();
-            let kb = bytes as f64 / 1024.0;
-            if vm.version() <= crate::version::LuaVersion::Lua53 {
-                let b = (bytes % 1024) as i64;
-                return Ok(vm.nat_return(fs, &[Value::Float(kb), Value::Int(b)]));
-            }
-            Value::Float(kb)
-        }
-        // "step": advance the collector. In generational mode a step is a minor
-        // collection — a full atomic pass, so weak values created since the last
-        // step are cleared at once. In incremental mode it sweeps a budgeted
-        // chunk (proportional to the explicit step size `n`, or to the stepsize
-        // param when none is given) and returns true once a full cycle finishes;
-        // a larger budget finishes a cycle in fewer steps (stepsize 0 = a single
-        // unbounded step completing the whole cycle, PUC "stop-the-world").
-        b"step" => {
-            if vm.gc_mode_is_generational() {
-                vm.collect_garbage();
-                Value::Bool(false)
-            } else {
-                let budget = if nargs >= 2 {
-                    let v = vm.nat_arg(fs, nargs, 1);
-                    let n = vm.int_from(v, "use as a step size")?.max(0) as usize;
-                    n.saturating_mul(GC_STEP_OBJS).max(GC_STEP_OBJS)
-                } else {
-                    let ss = vm.gc_stepsize();
-                    if ss <= 0 {
-                        usize::MAX
-                    } else {
-                        (ss as usize).saturating_mul(GC_STEP_OBJS)
-                    }
-                };
-                Value::Bool(vm.gc_step(budget))
-            }
-        }
-        // legacy on/off switches (PUC keeps them in 5.5): suspend/resume auto-GC
-        b"stop" => {
-            vm.heap.gc_set_stopped(true);
-            Value::Int(0)
-        }
-        b"restart" => {
-            vm.heap.gc_set_stopped(false);
-            Value::Int(0)
-        }
-        // mode switches report the previous mode (PUC). The collector is still
-        // stop-the-world mark-sweep; the mode is tracked for API fidelity.
-        b"incremental" => {
-            let prev = vm.gc_switch_mode("incremental");
-            Value::Str(vm.heap.intern(prev.as_bytes()))
-        }
-        b"generational" => {
-            let prev = vm.gc_switch_mode("generational");
-            Value::Str(vm.heap.intern(prev.as_bytes()))
-        }
-        b"isrunning" => Value::Bool(!vm.heap.gc_is_stopped()),
-        // PUC 5.1-5.4 pacing-parameter shortcuts (5.5 routes them through
-        // `collectgarbage("param", …)`). Each takes a new value and returns
-        // the previous one as an integer; luna keeps the round-trip but does
-        // not retune the collector, mirroring how the `param` arm already
-        // works. gc.lua 5.4 :31 cycles through `setpause`/`setstepmul`.
-        b"setpause" => {
-            let set = if nargs >= 2 {
-                let v = vm.nat_arg(fs, nargs, 1);
-                Some(vm.int_from(v, "use as a parameter")?)
-            } else {
-                None
-            };
-            Value::Int(vm.gc_param(b"pause", set).unwrap_or(0))
-        }
-        b"setstepmul" => {
-            let set = if nargs >= 2 {
-                let v = vm.nat_arg(fs, nargs, 1);
-                Some(vm.int_from(v, "use as a parameter")?)
-            } else {
-                None
-            };
-            Value::Int(vm.gc_param(b"stepmul", set).unwrap_or(0))
-        }
-        b"setmajorinc" => {
-            let set = if nargs >= 2 {
-                let v = vm.nat_arg(fs, nargs, 1);
-                Some(vm.int_from(v, "use as a parameter")?)
-            } else {
-                None
-            };
-            Value::Int(vm.gc_param(b"majormul", set).unwrap_or(0))
-        }
-        b"setstepsize" => {
-            let set = if nargs >= 2 {
-                let v = vm.nat_arg(fs, nargs, 1);
-                Some(vm.int_from(v, "use as a parameter")?)
-            } else {
-                None
-            };
-            Value::Int(vm.gc_param(b"stepsize", set).unwrap_or(0))
-        }
-        // "param" reads, or sets and returns the previous value of, a pacing
-        // parameter (PUC 5.5 collectgarbage("param", name [,value])). The
-        // collector is stop-the-world, so values only round-trip for fidelity.
-        b"param" => {
-            let name = match vm.nat_arg(fs, nargs, 1) {
-                Value::Str(s) => s.as_bytes().to_vec(),
-                v => {
-                    return Err(arg_error(
-                        vm,
-                        2,
-                        &format!("string expected, got {}", v.type_name()),
-                    ));
-                }
-            };
-            let set = if nargs >= 3 {
-                let v = vm.nat_arg(fs, nargs, 2);
-                Some(vm.int_from(v, "use as a parameter")?)
-            } else {
-                None
-            };
-            match vm.gc_param(&name, set) {
-                Some(prev) => Value::Int(prev),
-                None => {
-                    let n = String::from_utf8_lossy(&name).into_owned();
-                    return Err(arg_error(vm, 2, &format!("invalid parameter '{n}'")));
-                }
-            }
-        }
-        // PUC luaL_checkoption: an unrecognized option is an argument error.
-        opt => {
-            let o = String::from_utf8_lossy(opt).into_owned();
-            return Err(arg_error(vm, 1, &format!("invalid option '{o}'")));
-        }
-    };
-    Ok(vm.nat_return(fs, &[out]))
 }
 
 pub(crate) fn nat_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
