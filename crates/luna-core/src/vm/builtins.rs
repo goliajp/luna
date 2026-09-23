@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crate::runtime::{Table, Value};
+use crate::runtime::Value;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
@@ -132,18 +132,6 @@ pub(crate) fn open_base(vm: &mut Vm) {
     vm.set_global("_VERSION", v).expect("stdlib registration");
     let g = Value::Table(vm.globals());
     vm.set_global("_G", g).expect("stdlib registration");
-}
-
-/// `luaL_checktype(L, 1, LUA_TTABLE)` on a value already read from
-/// argument 1, for the table library's 5.1-only functions.
-pub(crate) fn check_table(vm: &mut Vm, v: Value) -> Result<crate::runtime::Gc<Table>, LuaError> {
-    match v {
-        Value::Table(t) => Ok(t),
-        v => {
-            let got = vm.obj_typename(v);
-            Err(arg_error(vm, 1, &format!("table expected, got {got}")))
-        }
-    }
 }
 
 fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -384,18 +372,10 @@ fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = argcheck::check_table(vm, a, 0)?;
     let k = argcheck::check_any(vm, a, 1)?;
     let v = argcheck::check_any(vm, a, 2)?;
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    match unsafe { t.as_mut() }.set(&mut vm.heap, k, v) {
-        Ok(()) => {
-            vm.barrier_back_table(t);
-            Ok(vm.nat_return(fs, &[Value::Table(t)]))
-        }
-        // `luaG_runerror` inside `lua_rawset`: the running function is C, so
-        // no position is added.
-        Err(crate::runtime::TableError::NilIndex) => Err(vm.plain_err("table index is nil")),
-        Err(crate::runtime::TableError::NanIndex) => Err(vm.plain_err("table index is NaN")),
-        Err(_) => unreachable!(),
-    }
+    // a bad key is the VM's error (`luaH_set` → `luaG_runerror`), raised
+    // while rawset runs, so it carries no position
+    vm.raw_set(t, k, v)?;
+    Ok(vm.nat_return(fs, &[Value::Table(t)]))
 }
 
 fn nat_rawequal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -631,13 +611,7 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// or by pcall, or through an unnamed expression — 5.2+ look the function up
 /// by the name its library registered it under, and 5.1 prints '?'.
 pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
-    let called_from_c = vm.running_native_from_c.last().copied().unwrap_or(false);
-    let call_name = if called_from_c {
-        None
-    } else {
-        vm.running_call_name()
-    };
-    let name = match call_name {
+    let name = match vm.running_call_name() {
         Some(("method", name)) => {
             let n = n - 1; // self is not counted
             if n == 0 {
@@ -1026,18 +1000,13 @@ fn load_chunk(
         }
         Err(e) => {
             // PUC formats the syntax error's source prefix via `luaO_chunkid`
-            // (LUA_IDSIZE=60), not as a bare `[string "<name>"]`. This handles
+            // (see `syntax_chunk_id`), not as a bare `[string "<name>"]`. This handles
             // the `@file` / `=name` sigils and head/tail-truncation rules.
             // `e.msg` carries raw bytes (PUC's near-token may be a non-UTF-8
             // byte from the source) — splice it in as-is so 5.1 errors.lua
             // can pattern-match `near '\xff'` etc.
-            let display = crate::vm::lib_debug::chunk_id(name);
-            let mut msg_bytes = display;
-            msg_bytes.push(b':');
-            msg_bytes.extend_from_slice(e.line.to_string().as_bytes());
-            msg_bytes.extend_from_slice(b": ");
-            msg_bytes.extend_from_slice(&e.msg);
-            let m = Value::Str(vm.heap.intern(&msg_bytes));
+            let display = crate::vm::callstack::syntax_chunk_id(vm.version(), name);
+            let m = Value::Str(vm.heap.intern(&e.render(&display)));
             Ok(vm.nat_return(a.fs, &[Value::Nil, m]))
         }
     }
@@ -1119,14 +1088,14 @@ fn fenv_target(vm: &mut Vm, a: Args, level_optional: bool) -> Result<FenvTarget,
     if level == 0 {
         return Ok(FenvTarget::C);
     }
-    use crate::vm::exec::DbgKind;
+    use crate::vm::callstack::DbgKind;
     match vm.dbg_frame(level as i64) {
         Some(DbgKind::Lua(_)) => Ok(FenvTarget::Lua(
             vm.lua_closure_at_level(level as i64)
                 .expect("a Lua level has a closure"),
         )),
         Some(DbgKind::C(_)) => Ok(FenvTarget::C),
-        Some(DbgKind::Tail(_)) => Err(raise_str(
+        Some(DbgKind::Tail) => Err(raise_str(
             vm,
             &format!("no function environment for tail call at level {level}"),
         )),

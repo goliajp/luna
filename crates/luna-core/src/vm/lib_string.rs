@@ -637,7 +637,7 @@ fn string_arith(
     };
     if let (Some(nx), Some(ny)) = (tonum(x), tonum(y)) {
         let r = match op {
-            Some(op) => arith_num(op, nx, ny).map_err(|msg| vm.plain_err(msg))?,
+            Some(op) => arith_num(vm.version(), op, nx, ny).map_err(|msg| vm.plain_err(msg))?,
             // unary minus works on the second (duplicated) operand
             None => match ny {
                 Num::Int(i) => Value::Int(i.wrapping_neg()),

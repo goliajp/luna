@@ -128,7 +128,9 @@ fn table_reads_check_the_value_type() {
 }
 
 /// `t[k]` with a string key went to the integer-key getter with the
-/// string's pointer as the index, and found nothing.
+/// string's pointer as the index, and found nothing. Such a read is now
+/// left to the interpreter (the trace is not dispatched), so this only
+/// compares results.
 #[test]
 fn table_read_with_a_string_key() {
     let src = r#"
@@ -137,8 +139,11 @@ fn table_read_with_a_string_key() {
         local s = 0
         for n = 1, 300 do for _, k in ipairs(keys) do s = s + m[k] end end
         return tostring(s)"#;
-    for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
-        assert_eq!(same(v, src), "16500");
+    for v in INT_DIALECTS {
+        let (interp, _) = run(v, src, false);
+        let (jit, _) = run(v, src, true);
+        assert_eq!(interp, "16500");
+        assert_eq!(jit, interp, "{v:?}");
     }
 }
 

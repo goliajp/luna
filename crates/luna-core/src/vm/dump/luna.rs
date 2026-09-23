@@ -96,7 +96,12 @@ fn w_bytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(b);
 }
 
-fn w_const(out: &mut Vec<u8>, v: Value) {
+/// Strings already written, for 5.5's `dumpString`, which saves each
+/// distinct string once and refers back to it after that; `None` for the
+/// dialects whose dump repeats them.
+type Saved = Option<std::collections::HashMap<Vec<u8>, u32>>;
+
+fn w_const(out: &mut Vec<u8>, v: Value, saved: &mut Saved) {
     match v {
         Value::Nil => out.push(0),
         Value::Bool(false) => out.push(1),
@@ -110,6 +115,15 @@ fn w_const(out: &mut Vec<u8>, v: Value) {
             out.extend_from_slice(&f.to_bits().to_le_bytes());
         }
         Value::Str(s) => {
+            if let Some(map) = saved {
+                if let Some(&idx) = map.get(s.as_bytes()) {
+                    out.push(6);
+                    w_u32(out, idx);
+                    return;
+                }
+                let idx = map.len() as u32;
+                map.insert(s.as_bytes().to_vec(), idx);
+            }
             out.push(5);
             w_bytes(out, s.as_bytes());
         }
@@ -119,7 +133,13 @@ fn w_const(out: &mut Vec<u8>, v: Value) {
     }
 }
 
-fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8]>) {
+fn w_proto(
+    out: &mut Vec<u8>,
+    p: &Proto,
+    strip: bool,
+    parent_source: Option<&[u8]>,
+    saved: &mut Saved,
+) {
     out.push(p.num_params);
     out.push(p.is_vararg as u8);
     out.push(p.max_stack);
@@ -148,7 +168,7 @@ fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8
 
     w_u32(out, p.consts.len() as u32);
     for &k in p.consts.iter() {
-        w_const(out, k);
+        w_const(out, k, saved);
     }
 
     w_u32(out, p.upvals.len() as u32);
@@ -161,7 +181,7 @@ fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8
 
     w_u32(out, p.protos.len() as u32);
     for sub in p.protos.iter() {
-        w_proto(out, sub, strip, Some(source));
+        w_proto(out, sub, strip, Some(source), saved);
     }
 
     if strip {
@@ -184,14 +204,19 @@ pub(super) fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     let mut out = Vec::with_capacity(header.len() + BODY_TAG.len() + proto.code.len() * 4);
     out.extend_from_slice(header);
     out.extend_from_slice(BODY_TAG);
-    w_proto(&mut out, proto, strip, None);
+    let mut saved: Saved = (version >= LuaVersion::Lua55).then(Default::default);
+    w_proto(&mut out, proto, strip, None, &mut saved);
     out
 }
 
 // `Reader` lives in `super::reader` so the per-dialect PUC translators
 // (`super::puc_5{1,2,3,4,5}` in Wave 2) can share the same primitives.
 
-fn r_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
+fn r_const(
+    r: &mut Reader,
+    heap: &mut Heap,
+    strings: &mut Vec<Gc<crate::runtime::LuaStr>>,
+) -> Result<Value, String> {
     Ok(match r.u8()? {
         0 => Value::Nil,
         1 => Value::Bool(false),
@@ -202,7 +227,14 @@ fn r_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
         ))),
         5 => {
             let b = r.bytes()?;
-            Value::Str(heap.intern(b))
+            let s = heap.intern(b);
+            strings.push(s);
+            Value::Str(s)
+        }
+        // a string saved earlier in the chunk (5.5)
+        6 => {
+            let idx = r.u32()? as usize;
+            Value::Str(*strings.get(idx).ok_or("bad saved-string index")?)
         }
         t => return Err(format!("bad constant tag {t}")),
     })
@@ -212,6 +244,7 @@ fn r_proto(
     r: &mut Reader,
     heap: &mut Heap,
     parent_source: Option<Gc<crate::runtime::LuaStr>>,
+    strings: &mut Vec<Gc<crate::runtime::LuaStr>>,
 ) -> Result<Gc<Proto>, String> {
     let num_params = r.u8()?;
     let is_vararg = r.u8()? != 0;
@@ -240,7 +273,7 @@ fn r_proto(
     let n = r.u32()? as usize;
     let mut consts = Vec::with_capacity(n);
     for _ in 0..n {
-        consts.push(r_const(r, heap)?);
+        consts.push(r_const(r, heap, strings)?);
     }
     let n = r.u32()? as usize;
     let mut upvals = Vec::with_capacity(n);
@@ -259,7 +292,7 @@ fn r_proto(
     let n = r.u32()? as usize;
     let mut protos = Vec::with_capacity(n);
     for _ in 0..n {
-        protos.push(r_proto(r, heap, Some(source))?);
+        protos.push(r_proto(r, heap, Some(source), strings)?);
     }
     let n = r.u32()? as usize;
     let mut locvars = Vec::with_capacity(n);
@@ -344,7 +377,7 @@ pub(super) fn undump(
         return Err("bad binary chunk body tag".to_string());
     }
     let mut r = Reader::at(bytes, pos + BODY_TAG.len());
-    let proto = r_proto(&mut r, heap, None)?;
+    let proto = r_proto(&mut r, heap, None, &mut Vec::new())?;
     if r.pos() != bytes.len() {
         return Err("trailing bytes in chunk".to_string());
     }

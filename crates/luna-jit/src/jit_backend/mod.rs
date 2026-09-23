@@ -2311,9 +2311,14 @@ pub fn lower_int_chunk_into<M: Module>(
                         RegKind::Int | RegKind::Unset => RegKind::Int,
                         RegKind::Table => return None,
                     };
+                    // Likewise a nil-written init / limit / step (`for i =
+                    // 1, nil`, or a declared-uninitialized local): the
+                    // interpreter raises the 'for' error, the JIT would
+                    // loop over the Variable's zero payload.
                     for off in [0usize, 1, 2, 3] {
                         if matches!(latest_writer_kind[a + off], RegKind::Table)
                             || maybe_table[a + off]
+                            || (off < 3 && is_nil_writer[a + off])
                         {
                             return None;
                         }
@@ -3190,13 +3195,13 @@ pub fn lower_int_chunk_into<M: Module>(
                 let a = ins.a() as usize;
                 if is_upval_value_read[pc] {
                     // P11-S5d.J — ValueRead: fetch the upvalue at
-                    // runtime. The dispatcher has pinned `JIT_CL` to
-                    // the active closure for this entry, so the helper
-                    // can resolve the upvalue cell. The sweep pinned
-                    // reg_kinds[a] = Float, so the helper deopts when
-                    // the upvalue holds anything else (a table with
-                    // `__add`, a numeric string): its payload is not a
-                    // float. `aligned_def` bitcasts the bits to F64.
+                    // runtime via `luna_jit_upval_get_float`, which deopts
+                    // on anything but a float. The dispatcher
+                    // has pinned `JIT_CL` to the active closure for
+                    // this entry, so the helper can resolve the
+                    // upvalue cell. Result is the raw 8-byte payload;
+                    // `aligned_def` bitcasts to F64 since the sweep
+                    // pinned reg_kinds[a] = Float.
                     let idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
                     let mut sig = module.make_signature();
                     sig.params.push(AbiParam::new(types::I64));
@@ -3303,14 +3308,16 @@ pub fn lower_int_chunk_into<M: Module>(
 
                         // count = (limit - init) / step (positive-step)
                         //       = (init - limit) / -step (negative-step)
-                        // Both branches yield a non-negative count.
+                        // Both are unsigned (PUC `lua_Unsigned`): the span
+                        // of a loop over most of the integer range does not
+                        // fit an i64.
                         let span = if step_imm > 0 {
                             bcx.ins().isub(limit, init)
                         } else {
                             bcx.ins().isub(init, limit)
                         };
                         let abs_step = bcx.ins().iconst(types::I64, step_imm.abs());
-                        let count = bcx.ins().sdiv(span, abs_step);
+                        let count = bcx.ins().udiv(span, abs_step);
 
                         aligned_def(&mut bcx, &regs, &reg_kinds, a, init);
                         aligned_def(&mut bcx, &regs, &reg_kinds, a + 1, count);
@@ -3458,7 +3465,8 @@ pub fn lower_int_chunk_into<M: Module>(
                     // S5a — 5.4+ Int count form.
                     let count = bcx.use_var(regs[a + 1]);
                     let zero_i = bcx.ins().iconst(types::I64, 0);
-                    let cont = bcx.ins().icmp(IntCC::SignedGreaterThan, count, zero_i);
+                    // unsigned count (see ForPrep)
+                    let cont = bcx.ins().icmp(IntCC::NotEqual, count, zero_i);
 
                     let continue_blk = bcx.create_block();
                     let body_blk = pc_to_block[prep_pc + 1].expect("body BB");

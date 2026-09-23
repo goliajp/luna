@@ -836,7 +836,11 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let result = vm.call_value(Value::Closure(cl), &[]);
+    // lua.c runs every chunk from inside its C function `pmain`, a stack
+    // level scripts can see (one more `debug.getinfo` level, a traceback's
+    // closing `[C]: in ?`); run the chunk the same way.
+    let pmain = vm.native_with(run_chunk, Box::new([Value::Closure(cl)]));
+    let result = vm.call_value(pmain, &[]);
 
     if profile {
         // Pull JIT counters from the JitState sidecar (A2).
@@ -877,6 +881,14 @@ fn main() {
     }
 }
 
+/// The CLI's counterpart of lua.c's `pmain`: call the chunk held in its
+/// upvalue and return what it returns.
+fn run_chunk(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, luna_jit::vm::LuaError> {
+    let chunk = vm.running_native_upvalue(0);
+    let results = vm.call_value(chunk, &[])?;
+    Ok(vm.nat_return(fs, &results))
+}
+
 /// C5 — pretty error rendering with source name / line / context
 /// snippet / color. Uses `Vm::error_source` (B6) for the (chunk_name,
 /// line) pair and `Vm::take_error_traceback` for the Lua-side
@@ -913,7 +925,9 @@ fn print_pretty_error(vm: &mut Vm, msg: &str, src: &[u8], color: bool, compile_t
     }
     if let Some(tb) = vm.take_error_traceback() {
         eprintln!("{dim}traceback:{reset}");
-        for line in tb.lines() {
+        // the level lines each start with a newline; the first would print
+        // as an empty line
+        for line in tb.trim_start_matches('\n').lines() {
             eprintln!("  {line}");
         }
     }

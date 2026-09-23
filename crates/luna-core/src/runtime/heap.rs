@@ -547,6 +547,8 @@ impl Heap {
             resume_at: None,
             error_value: None,
             error_traceback: None,
+            error_levels: None,
+            natives: 0..0,
             stack: Vec::new(),
             frames: Vec::new(),
             open_upvals: Vec::new(),

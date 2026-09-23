@@ -1476,13 +1476,13 @@ fn debug_getinfo_c_frame_boundary() {
 #[test]
 fn debug_getinfo_source_lines_options() {
     // linedefined / lastlinedefined span the function from `function` to `end`;
-    // the function-value form has an empty namewhat and no name.
+    // the function-value form has an empty namewhat and no name ('n' only).
     check_str(
         "local function test (a) \n\
            local x = a \n\
            return x \n\
          end \n\
-         local i = debug.getinfo(test, 'S') \n\
+         local i = debug.getinfo(test, 'Sn') \n\
          return i.what .. ',' .. i.linedefined .. ',' .. i.lastlinedefined \n\
             .. ',' .. i.namewhat .. ',' .. tostring(i.name)",
         b"Lua,1,4,,nil",
@@ -1875,12 +1875,16 @@ fn goto_scope_over_declarations() {
 
 #[test]
 fn lexer_string_escape_near_tokens() {
-    // PUC near-token = raw source of the string read so far; decimal-too-large
-    // includes the char after the digits, utf8-too-large stops at the digit.
-    check_compile_error(r#"return "\999""#, r#"near '\999"'"#);
-    check_compile_error(r#"return "abc\u{100000000}""#, r#"near 'abc\u{100000000'"#);
-    check_compile_error(r#"return "abc\u{11r""#, r#"near 'abc\u{11r'"#);
-    check_compile_error(r#"return "abc\u""#, r#"near 'abc\u"'"#);
+    // PUC near-token = the lex buffer: the string read so far, opening
+    // delimiter included; decimal-too-large includes the char after the
+    // digits, utf8-too-large stops at the digit.
+    check_compile_error(r#"return "\999""#, r#"near '"\999"'"#);
+    check_compile_error(
+        r#"return "abc\u{100000000}""#,
+        r#"UTF-8 value too large near '"abc\u{100000000'"#,
+    );
+    check_compile_error(r#"return "abc\u{11r""#, r#"missing '}' near '"abc\u{11r'"#);
+    check_compile_error(r#"return "abc\u""#, r#"missing '{' near '"abc\u"'"#);
     // unfinished string reports the <eof> token
     check_compile_error("return 'alo", "unfinished string near <eof>");
 }

@@ -905,7 +905,7 @@ fn load_path(vm: &mut Vm, name: Option<&[u8]>, mode: Option<&[u8]>) -> Result<Va
         Ok(cl) => Ok(Value::Closure(cl)),
         Err(e) => {
             // the parser positions its message with `luaO_chunkid`
-            let mut msg = crate::vm::lib_debug::chunk_id(&chunkname);
+            let mut msg = crate::vm::callstack::syntax_chunk_id(vm.version(), &chunkname);
             msg.extend_from_slice(format!(":{}: ", e.line).as_bytes());
             msg.extend_from_slice(&e.msg);
             Err(Value::Str(vm.heap.intern(&msg)))
