@@ -46,9 +46,14 @@ fn integer_floor_division_and_modulo() {
         local mi = math.mininteger
         local e, f = 0, 0
         for i = 1, 2000 do e = mi // -1 f = mi % -1 end
-        return q .. " " .. r .. " " .. e .. " " .. f"#;
+        local g, h = 0, 0
+        for i = 1, 2000 do local x = mi + i - 1 g = x // 7 h = x % 7 end
+        return q .. " " .. r .. " " .. e .. " " .. f .. " " .. g .. " " .. h"#;
     for v in INT_DIALECTS {
-        assert_eq!(same(v, src), "-1715 5 -9223372036854775808 0");
+        assert_eq!(
+            same(v, src),
+            "-1715 5 -9223372036854775808 0 -1317624576693539116 3"
+        );
     }
 }
 

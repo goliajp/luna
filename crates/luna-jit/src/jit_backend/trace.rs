@@ -815,8 +815,26 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
 /// of the other sign than `k`, which for a known sign is one sign test,
 /// done without a compare as an all-ones mask (`|r| < |k|`, so negating
 /// `r` cannot overflow).
+///
+/// For `k > 0` there is a shorter exact form: with `s = x >> 63` (0 or
+/// all ones), `t = x ^ s` is `x` or `-x - 1`, never negative and never
+/// overflowing, and `floor(x / k) = (t / k) ^ s` with an unsigned
+/// division, which Cranelift strength-reduces to a multiply; the
+/// remainder is then `x - k * q` with no sign adjustment.
 fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
     let kv = bcx.ins().iconst(types::I64, k);
+    if k > 0 {
+        let s = bcx.ins().sshr_imm(a, 63);
+        let t = bcx.ins().bxor(a, s);
+        let ut = bcx.ins().udiv(t, kv);
+        let q = bcx.ins().bxor(ut, s);
+        return if op == Op::IDiv {
+            q
+        } else {
+            let qk = bcx.ins().imul(q, kv);
+            bcx.ins().isub(a, qk)
+        };
+    }
     let q = bcx.ins().sdiv(a, kv);
     let qk = bcx.ins().imul(q, kv);
     let r = bcx.ins().isub(a, qk);
