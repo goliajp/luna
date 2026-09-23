@@ -149,6 +149,32 @@ pub(crate) fn to_str_bytes(vm: &Vm, v: Value) -> Option<Vec<u8>> {
     }
 }
 
+/// `(int)luaL_checkinteger` — what `luaL_checkint` (≤5.2) and PUC's explicit
+/// `(int)` casts (e.g. `error`'s level on 5.3+) hand the C code: the integer
+/// truncated to 32 bits, as the cast does on every two's-complement target.
+pub(crate) fn check_int(vm: &mut Vm, a: Args, i: u32) -> Result<i32, LuaError> {
+    check_integer(vm, a, i).map(|x| x as i32)
+}
+
+/// `(int)luaL_optinteger` — see [`check_int`].
+pub(crate) fn opt_int(vm: &mut Vm, a: Args, i: u32, default: i32) -> Result<i32, LuaError> {
+    if a.is_none_or_nil(vm, i) {
+        return Ok(default);
+    }
+    check_int(vm, a, i)
+}
+
+/// `luaL_argexpected(cond, i, tname)` from 5.4 on, and the plain
+/// `luaL_argcheck(cond, i, "<tname> expected")` it replaced: 5.4+ appends
+/// ", got <type>", earlier dialects do not.
+pub(crate) fn arg_expected(vm: &mut Vm, a: Args, i: u32, tname: &str) -> LuaError {
+    if vm.version() >= LuaVersion::Lua54 {
+        type_error(vm, a, i, tname)
+    } else {
+        arg_error(vm, i + 1, &format!("{tname} expected"))
+    }
+}
+
 /// `luaL_checklstring`, returning an interned string. A number argument is
 /// converted with the dialect's rendering.
 pub(crate) fn check_string(

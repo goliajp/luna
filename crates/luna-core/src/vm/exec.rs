@@ -4311,7 +4311,11 @@ impl Vm {
                     }
                     // pairs(t) with a __pairs metamethod calls it yieldably (PUC
                     // luaB_pairs); without one, fall through to the plain native.
-                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn) && nargs >= 1 {
+                    // 5.1 has no `__pairs`.
+                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn)
+                        && nargs >= 1
+                        && self.version >= LuaVersion::Lua52
+                    {
                         let arg = self.stack[(func_slot + 1) as usize];
                         if !self.get_mm(arg, Mm::Pairs).is_nil() {
                             return self.begin_pairs(func_slot, nresults);
@@ -4599,10 +4603,11 @@ impl Vm {
     /// resolved by the loop (even when `f` is a native that already ran inline).
     fn begin_pcall(&mut self, func_slot: u32, nargs: u32, nresults: i32) -> Result<bool, LuaError> {
         if nargs == 0 {
-            return Err(crate::vm::builtins::raise_str(
-                self,
-                "bad argument #1 to 'pcall' (value expected)",
-            ));
+            // `luaL_checkany` fails here: there is no function to call.
+            self.with_native_running(func_slot, nargs, |vm| {
+                let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+                crate::vm::argcheck::check_any(vm, a, 0).map(drop)
+            })?;
         }
         if self.pcall_depth >= MAX_C_DEPTH {
             return Err(self.rt_err("C stack overflow"));
@@ -4633,12 +4638,10 @@ impl Vm {
         nargs: u32,
         nresults: i32,
     ) -> Result<bool, LuaError> {
-        if nargs < 2 {
-            return Err(crate::vm::builtins::raise_str(
-                self,
-                "bad argument #2 to 'xpcall' (value expected)",
-            ));
-        }
+        self.with_native_running(func_slot, nargs, |vm| {
+            let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+            crate::vm::builtins::xpcall_handler(vm, a).map(drop)
+        })?;
         if self.pcall_depth >= MAX_C_DEPTH {
             return Err(self.rt_err("C stack overflow"));
         }
@@ -4676,10 +4679,32 @@ impl Vm {
     /// continuation so a `coroutine.yield` inside it suspends cleanly. The
     /// metamethod is called in `pairs`'s own slot, so its (≤4, nil-padded)
     /// results land exactly where `pairs`'s results belong.
+    /// Run a check of the native at `func_slot` while it counts as the running
+    /// C function, so an argument error names it the way PUC does. pcall and
+    /// xpcall check their arguments in the dispatcher, before the native
+    /// would otherwise be entered.
+    fn with_native_running(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        check: impl FnOnce(&mut Vm) -> Result<(), LuaError>,
+    ) -> Result<(), LuaError> {
+        let Value::Native(nc) = self.stack[func_slot as usize] else {
+            unreachable!("pcall/xpcall dispatch sits on a native")
+        };
+        self.running_natives.push(nc);
+        self.running_native_slots.push((func_slot, nargs));
+        let r = check(self);
+        self.running_natives.pop();
+        self.running_native_slots.pop();
+        r
+    }
+
     fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
-        // layout becomes [mm@func_slot, t@func_slot+1]; call mm(t) wanting 4.
+        // layout becomes [mm@func_slot, t@func_slot+1]; call mm(t) for the
+        // dialect's result count.
         self.stack[func_slot as usize] = mm;
         self.top = func_slot + 2;
         frames_push_sync(
@@ -4691,7 +4716,8 @@ impl Vm {
                 nresults,
             }),
         );
-        self.begin_call(func_slot, Some(1), 4, true)?;
+        let want = crate::vm::builtins::pairs_mm_results(self) as i32;
+        self.begin_call(func_slot, Some(1), want, true)?;
         Ok(true)
     }
 
@@ -5661,7 +5687,14 @@ impl Vm {
                             let mut cur_err = err;
                             let mut iters: u32 = 0;
                             let mut capped = false;
+                            // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once
+                            // when the handler is not a function.
+                            let uncallable = self.version <= LuaVersion::Lua52
+                                && !matches!(handler, Value::Closure(_) | Value::Native(_));
                             loop {
+                                if uncallable {
+                                    break Value::Str(self.heap.intern(b"error in error handling"));
+                                }
                                 if iters >= MSGH_CAP && !capped {
                                     cur_err = Value::Str(self.heap.intern(b"C stack overflow"));
                                     capped = true;
@@ -5933,12 +5966,13 @@ impl Vm {
                     }
                     continue;
                 }
-                // __pairs returned: normalize its results to exactly four
-                // (iterator, state, control, closing) at pairs's slot, where
-                // the metamethod was called, and hand them to pairs's caller.
+                // __pairs returned: normalize its results to exactly the
+                // dialect's count (iterator, state, control, and on 5.5 the
+                // closing value) at pairs's slot, where the metamethod was
+                // called, and hand them to pairs's caller.
                 if let ContKind::Pairs = nc.kind {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let total = 4u32;
+                    let total = crate::vm::builtins::pairs_mm_results(self) as u32;
                     let need = (nc.func_slot + total) as usize;
                     if self.stack.len() < need {
                         self.stack.resize(need, Value::Nil);
