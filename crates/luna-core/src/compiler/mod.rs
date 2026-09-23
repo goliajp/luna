@@ -202,6 +202,10 @@ struct BlockCx {
     /// tail calls so the function returns to run __close. Tracked separately
     /// from `has_tbc` so it doesn't perturb CLOSE-instruction emission.
     tbc_scope: bool,
+    /// 5.4: the loop body's locals (from this index of `locals`) went out
+    /// of scope at this pc, before the loop's per-iteration CLOSE; PUC keeps
+    /// the body in a block of its own and removes its variables first
+    body_end: Option<(usize, u32)>,
 }
 
 struct LabelDef {
@@ -648,40 +652,62 @@ impl<'a> Compiler<'a> {
             collective: None,
             has_tbc: false,
             tbc_scope: false,
+            body_end: None,
         });
     }
 
     fn leave_block(&mut self) -> Result<(), SyntaxError> {
         let b = self.l().blocks.pop().expect("block underflow");
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
-        // The block's CLOSE runs *while* these locals are still in scope: a
-        // `__close` handler can call `debug.getlocal` on the frame and must
-        // see them (5.5.1 locals.lua :1198 pins this for a `repeat` body,
-        // where the exit path's close is the one emitted here). So emit it
-        // before fixing `end_pc` — computing `end_pc` first would leave the
-        // CLOSE at `pc >= end_pc`, and `getlocalname`'s `pc < end_pc` test
-        // would report "(temporary)".
-        if captured || b.has_tbc {
+        // Where the block's CLOSE falls against its locals' `end_pc` is
+        // visible to a `__close` handler reading the frame with
+        // `debug.getlocal` (`getlocalname` tests `pc < end_pc`). 5.4's
+        // `leaveblock` removes the variables first, so the handler finds
+        // "(temporary)"; 5.5 closes while they are still in scope (5.5.1
+        // locals.lua :1198 pins this for a `repeat` body).
+        let v54 = self.version == LuaVersion::Lua54;
+        let before_close = self.lr().code.len() as u32;
+        // 5.4 `break` is a goto to a label placed here, where the loop's
+        // variables are gone; the CLOSE it needs follows the label (see
+        // the `Break` statement)
+        let break_close = v54 && !b.breaks.is_empty();
+        if break_close {
+            for &pc in &b.breaks {
+                self.patch_to_here(pc)?;
+            }
+        }
+        if captured || b.has_tbc || break_close {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         // record debug LocVar entries for the locals leaving scope here
-        let end_pc = self.lr().code.len() as u32;
-        let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[b.first_local..]
+        let end_pc = if v54 {
+            before_close
+        } else {
+            self.lr().code.len() as u32
+        };
+        let first_local = b.first_local;
+        let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[first_local..]
             .iter()
-            .filter(|l| l.konst.is_none())
-            .map(|l| crate::runtime::LocVar {
+            .enumerate()
+            .filter(|(_, l)| l.konst.is_none())
+            .map(|(i, l)| crate::runtime::LocVar {
                 name: l.name.clone(),
                 reg: l.reg,
                 start_pc: l.start_pc,
-                end_pc,
+                end_pc: match b.body_end {
+                    Some((first, pc)) if first_local + i >= first => pc,
+                    _ => end_pc,
+                },
             })
             .collect();
         self.l().locvars.extend(leaving);
         self.l().locals.truncate(b.first_local);
         self.l().avars.truncate(b.first_avar);
         self.set_freereg(b.reg_floor);
-        for pc in b.breaks {
-            self.patch_to_here(pc)?;
+        if !break_close {
+            for pc in b.breaks {
+                self.patch_to_here(pc)?;
+            }
         }
         // propagate unmatched gotos to the enclosing block (the label may
         // appear after this block); a goto leaving a block with captured or
@@ -2423,7 +2449,11 @@ impl<'a> Compiler<'a> {
                 else {
                     return Err(self.err(*line, "break outside a loop"));
                 };
-                self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
+                // 5.4 jumps to the loop's end and closes there (PUC's
+                // "break" label); the others close on the spot
+                if self.version != LuaVersion::Lua54 {
+                    self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
+                }
                 let jmp = self.emit_jump();
                 self.l()
                     .blocks
@@ -3073,6 +3103,16 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    /// A loop's per-iteration CLOSE of its body (from local `first` on). 5.4
+    /// ends the body's scope before it (see [`Compiler::leave_block`]).
+    fn close_body(&mut self, first: usize, floor: u32) {
+        if self.version == LuaVersion::Lua54 {
+            let here = self.here() as u32;
+            self.l().blocks.last_mut().expect("loop block").body_end = Some((first, here));
+        }
+        self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+    }
+
     fn while_stat(&mut self, cond: ExprId, body: &Block) -> Result<(), SyntaxError> {
         let top = self.here();
         let exit = self.cond_jump_false(cond)?;
@@ -3080,7 +3120,8 @@ impl<'a> Compiler<'a> {
         self.stat_block(body)?;
         if self.block_captured() {
             let floor = self.block_floor();
-            self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+            let first = self.l().blocks.last().expect("while block").first_local;
+            self.close_body(first, floor);
         }
         self.jump_back(top)?;
         self.leave_block()?;
@@ -3117,7 +3158,8 @@ impl<'a> Compiler<'a> {
             let cont = self.emit_jump(); // cond FALSE -> close & loop
             let exit = self.emit_jump(); // cond TRUE  -> normal exit
             self.patch_to_here(cont)?;
-            self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+            let first = self.l().blocks.last().expect("repeat block").first_local;
+            self.close_body(first, floor);
             self.jump_back(top)?;
             self.patch_to_here(exit)?;
         } else {
@@ -3165,12 +3207,13 @@ impl<'a> Compiler<'a> {
         self.enter_block(true);
         let var_reg = self.reserve(1)?;
         self.declare_local(var, var_reg, self.version >= LuaVersion::Lua55)?;
+        let body_first = self.lr().locals.len();
         self.last_line = line;
         let prep = self.emit(Inst::iabx(Op::ForPrep, base, 0));
         let body_top = self.here();
         self.stat_block(body)?;
         if self.block_captured() {
-            self.emit(Inst::iabc(Op::Close, var_reg, 0, 0, false));
+            self.close_body(body_first, var_reg);
         }
         let loop_pc = self.here();
         let back = loop_pc - body_top + 1;
@@ -3272,11 +3315,12 @@ impl<'a> Compiler<'a> {
                 i == 0 && self.version >= LuaVersion::Lua55,
             )?;
         }
+        let body_first = self.lr().locals.len();
         let prep = self.emit(Inst::iabx(Op::TForPrep, base, 0));
         let body_top = self.here();
         self.stat_block(body)?;
         if self.block_captured() {
-            self.emit(Inst::iabc(Op::Close, vbase, 0, 0, false));
+            self.close_body(body_first, vbase);
         }
         let tforcall_pc = self.here();
         let skip = tforcall_pc - prep - 1;
