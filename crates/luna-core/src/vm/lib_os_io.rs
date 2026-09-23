@@ -919,12 +919,7 @@ pub(crate) fn load_chunk(
     }
     match vm.load(src, chunkname) {
         Ok(cl) => Ok(Value::Closure(cl)),
-        Err(e) => {
-            // the parser positions its message with `luaO_chunkid`; an
-            // unpositioned one (C stack overflow while parsing) has none
-            let id = crate::vm::callstack::syntax_chunk_id(vm.version(), chunkname);
-            Err(Value::Str(vm.heap.intern(&e.render(&id))))
-        }
+        Err(e) => Err(vm.load_error_value(&e, chunkname)),
     }
 }
 

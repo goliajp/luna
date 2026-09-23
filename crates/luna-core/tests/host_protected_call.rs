@@ -148,3 +148,26 @@ fn metafield_reads_the_metatable_raw() {
     assert!(vm.metafield(r[1], "__name").is_nil());
     assert!(vm.metafield(Value::Int(1), "__name").is_nil());
 }
+
+/// 5.4 on raise the parser's "C stack overflow" through `luaG_errormsg`,
+/// inside a protected parser that keeps the running message handler: the
+/// handler of an enclosing xpcall rewrites the message `load` returns, and
+/// under pcall nothing does. Expected values from PUC 5.4.9 and 5.5.1; 5.2
+/// and 5.3 report a positioned syntax error instead.
+#[test]
+fn deep_load_runs_the_message_handler() {
+    let src = r#"
+local src = string.rep("(", 300) .. "1" .. string.rep(")", 300)
+local _, handled = xpcall(function() local f, e = load(src, "=c"); return e end,
+                          function(m) return "H:" .. m end)
+local _, _, plain = pcall(load, src, "=c")
+return handled, select(2, load(src, "=c")), plain
+"#;
+    for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
+        let mut vm = Vm::new(v);
+        let r = vm.eval(src).expect("eval");
+        assert_eq!(str_of(r[0]), "H:C stack overflow", "{v:?}");
+        assert_eq!(str_of(r[1]), "C stack overflow", "{v:?}");
+        assert_eq!(str_of(r[2]), "C stack overflow", "{v:?}");
+    }
+}

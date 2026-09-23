@@ -1049,3 +1049,45 @@ fn error_in_arg_order() {
         },
     ]);
 }
+/// 5.4 on: the parser's "C stack overflow" is a runtime error raised
+/// inside `load`'s protected parser, which keeps the running message
+/// handler, so lua.c's handler (or an enclosing xpcall's) turns the
+/// message `load` returns into a traceback; under pcall or in a coroutine
+/// there is none.
+#[test]
+fn deep_load() {
+    let case = Case {
+        files: &[(
+            "deep.lua",
+            "local src = string.rep(\"(\", 300) .. \"1\" .. string.rep(\")\", 300)\nlocal f, e = load(src, \"=c\") print(e)\nprint(pcall(load, src, \"=c\"))\nprint(xpcall(function() local f, e = load(src, \"=c\"); return \"ret:\" .. tostring(e) end, function(m) return \"H:\" .. m end))\nlocal co = coroutine.wrap(function() local f, e = load(src, \"=c\"); return e end)\nprint(co())\n",
+        )],
+        args: &["deep.lua"],
+        stdin: None,
+    };
+    case.expect(&[
+        Expect {
+            dialects: &["5.1"],
+            stdout: "",
+            stderr: "lua: deep.lua:2: bad argument #1 to 'load' (function expected, got string)\nstack traceback:\n\t[C]: in function 'load'\n\tdeep.lua:2: in main chunk\n\t[C]: ?\n",
+            status: 1,
+        },
+        Expect {
+            dialects: &["5.2", "5.3"],
+            stdout: "c:1: too many C levels (limit is 200) in main function near '('\ntrue\tnil\tc:1: too many C levels (limit is 200) in main function near '('\ntrue\tret:c:1: too many C levels (limit is 200) in main function near '('\nc:1: too many C levels (limit is 200) in main function near '('\n",
+            stderr: "",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.4"],
+            stdout: "C stack overflow\nstack traceback:\n\t[C]: in function 'load'\n\tdeep.lua:2: in main chunk\n\t[C]: in ?\ntrue\tnil\tC stack overflow\ntrue\tret:H:C stack overflow\nC stack overflow\n",
+            stderr: "",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.5"],
+            stdout: "C stack overflow\nstack traceback:\n\t[C]: in global 'load'\n\tdeep.lua:2: in main chunk\n\t[C]: in ?\ntrue\tnil\tC stack overflow\ntrue\tret:H:C stack overflow\nC stack overflow\n",
+            stderr: "",
+            status: 0,
+        },
+    ]);
+}
