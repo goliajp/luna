@@ -136,6 +136,32 @@ pub(crate) fn opt_integer(vm: &mut Vm, a: Args, i: u32, default: i64) -> Result<
     check_integer(vm, a, i)
 }
 
+/// `luaL_checkint`: `(int)luaL_checkinteger`, keeping the low 32 bits of
+/// whatever the dialect's integer conversion produced.
+pub(crate) fn check_int(vm: &mut Vm, a: Args, i: u32) -> Result<i32, LuaError> {
+    Ok(check_integer(vm, a, i)? as i32)
+}
+
+/// `luaL_optint`.
+pub(crate) fn opt_int(vm: &mut Vm, a: Args, i: u32, default: i32) -> Result<i32, LuaError> {
+    if a.is_none_or_nil(vm, i) {
+        return Ok(default);
+    }
+    check_int(vm, a, i)
+}
+
+/// 5.2 `luaL_checkunsigned`. `lua_Unsigned` is 32 bits there, and every
+/// target PUC 5.2 builds for converts with `LUA_IEEE754TRICK`: add
+/// 1.5 * 2^52 and keep the low word of the double. That rounds to nearest
+/// (ties to even) and wraps modulo 2^32, so `3.5` becomes 4 and `-1`
+/// becomes 0xFFFFFFFF.
+pub(crate) fn check_unsigned52(vm: &mut Vm, a: Args, i: u32) -> Result<u32, LuaError> {
+    match to_num(vm, a.get(vm, i)) {
+        Some(n) if !a.is_none(i) => Ok((n.as_f64() + 6_755_399_441_055_744.0).to_bits() as u32),
+        _ => Err(type_error(vm, a, i, "number")),
+    }
+}
+
 /// `lua_tolstring` on a string or number: the bytes a library function sees.
 /// A number is rendered the way the dialect prints it.
 pub(crate) fn to_str_bytes(vm: &Vm, v: Value) -> Option<Vec<u8>> {
