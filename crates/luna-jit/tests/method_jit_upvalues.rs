@@ -118,3 +118,17 @@ fn reassigned_math_function_in_a_method() {
         same(v, src, "1008.414710");
     }
 }
+
+/// A parameter used in float arithmetic is compiled as a float, and an
+/// integer argument was converted to one on entry: returned unchanged it
+/// came back as `4.0`. From 5.3 such a call runs in the interpreter.
+#[test]
+fn integer_argument_to_a_float_parameter_stays_an_integer() {
+    let src = r#"
+        local function g(x) local y = x * 1.5 return x end
+        local function f(x) if x > 0.5 then return x end return 0 end
+        return tostring(g(4)) .. " " .. tostring(f(3)) .. " " .. tostring(g(2.5))"#;
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        same(v, src, "4 3 2.5");
+    }
+}
