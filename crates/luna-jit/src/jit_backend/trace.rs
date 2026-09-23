@@ -3459,6 +3459,12 @@ fn build_trace_jit_module() -> Option<JITModule> {
     flag_builder.set("use_colocated_libcalls", "false").ok()?;
     flag_builder.set("is_pic", "false").ok()?;
     flag_builder.set("opt_level", "speed").ok()?;
+    // The IR verifier is a quarter of a trace's compile time (token_bucket:
+    // 175 of 720 us of Cranelift passes). Release builds leave it out, as
+    // wasmtime does; debug builds, which the lib tests run, keep it.
+    if !cfg!(debug_assertions) {
+        flag_builder.set("enable_verifier", "false").ok()?;
+    }
     let isa = cranelift_native::builder()
         .ok()?
         .finish(settings::Flags::new(flag_builder))
