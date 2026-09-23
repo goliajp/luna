@@ -137,7 +137,12 @@ fn load_proto_with_field_const(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
 /// helper-path branch at trace.rs:5897 which calls our new
 /// `emit_str_key_arg`.
 fn make_setfield_record(proto: Gc<Proto>) -> TraceRecord {
-    let mut rec = TraceRecord::start(proto, 0, Vec::new(), false);
+    // R[0] enters as a table and R[1] as an integer: a store is lowered
+    // only for a value of known kind, which it tags for the table.
+    use luna_core::runtime::value::raw;
+    let mut tags = vec![raw::INT; proto.max_stack as usize];
+    tags[0] = raw::TABLE;
+    let mut rec = TraceRecord::start(proto, 0, tags, false);
     let pushed = rec.push(RecordedOp {
         proto,
         pc: 0,

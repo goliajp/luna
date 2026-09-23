@@ -142,8 +142,12 @@ fn make_pure_arith_record(proto: Gc<Proto>) -> TraceRecord {
     ];
 
     // head_pc = 0; the trace lowerer treats `head_pc` as a return
-    // value for the clean-close path. Any in-range PC works.
-    let mut rec = TraceRecord::start(proto, 0, Vec::new(), false);
+    // value for the clean-close path. Any in-range PC works. The
+    // registers enter as integers: arithmetic is lowered only for
+    // operands of a known number kind, since anything else holds a
+    // pointer.
+    let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+    let mut rec = TraceRecord::start(proto, 0, tags, false);
     for (i, inst) in ops.iter().copied().enumerate() {
         let pushed = rec.push(RecordedOp {
             proto,
