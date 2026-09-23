@@ -4245,7 +4245,7 @@ impl Vm {
                         }
                         let call_already_cached =
                             proto.traces.borrow().iter().any(|t| t.head_pc == 0);
-                        if c >= crate::jit::trace::CALL_HOT_THRESHOLD
+                        if c >= self.jit.call_hot_threshold
                             && self.jit.active_trace.is_none()
                             && !call_already_cached
                         {
@@ -8148,7 +8148,7 @@ impl Vm {
                         } else {
                             proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
                         };
-                        if c >= crate::jit::trace::TRACE_HOT_THRESHOLD
+                        if c >= self.jit.trace_hot_threshold
                             && self.jit.active_trace.is_none()
                             && !back_edge_already_cached
                         {
@@ -8438,8 +8438,7 @@ impl Vm {
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
                             }
-                            if c == crate::jit::trace::TRACE_HOT_THRESHOLD
-                                && self.jit.active_trace.is_none()
+                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
                             {
                                 // ForLoop's back-edge target = pc
                                 // after `add_pc(-bx)` runs from the
@@ -8501,8 +8500,7 @@ impl Vm {
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
                             }
-                            if c == crate::jit::trace::TRACE_HOT_THRESHOLD
-                                && self.jit.active_trace.is_none()
+                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
                             {
                                 // TForLoop back-edge target = pc after
                                 // `add_pc(-bx)` runs from the already-
