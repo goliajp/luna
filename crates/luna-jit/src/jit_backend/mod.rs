@@ -3062,6 +3062,20 @@ pub fn lower_int_chunk_into<M: Module>(
                 // `reg_kinds` — `current_kinds[a]` reflects pre-write
                 // state and may still be Unset before this op runs.
                 let k = a_kind(&reg_kinds, ins.a());
+                // A float result converts an integer operand first
+                // (`a / b` of two integers, or `i + 0.5`).
+                let (lhs, rhs) = if k == RegKind::Float {
+                    let to_float = |bcx: &mut FunctionBuilder<'_>, v: Value| {
+                        if bcx.func.dfg.value_type(v) == types::I64 {
+                            bcx.ins().fcvt_from_sint(types::F64, v)
+                        } else {
+                            v
+                        }
+                    };
+                    (to_float(&mut bcx, lhs), to_float(&mut bcx, rhs))
+                } else {
+                    (lhs, rhs)
+                };
                 let r = match (ins.op(), k) {
                     (Op::Add, RegKind::Float) => bcx.ins().fadd(lhs, rhs),
                     (Op::Sub, RegKind::Float) => bcx.ins().fsub(lhs, rhs),
