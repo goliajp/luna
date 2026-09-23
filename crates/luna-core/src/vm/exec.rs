@@ -5300,6 +5300,20 @@ impl Vm {
                 }
             }
             Op::Unm | Op::BNot => cands.push(instr.b()),
+            // indexing an upvalue table (`_ENV` for a global): PUC
+            // `getupvalname` finds the value among the closure's upvalues
+            Op::GetTabUp | Op::SetTabUp => {
+                let u = if instr.op() == Op::GetTabUp {
+                    instr.b()
+                } else {
+                    instr.a()
+                };
+                if self.upval_get(f.closure, u).raw_eq(bad)
+                    && let Some(d) = p.upvals.get(u as usize)
+                {
+                    return format!(" (upvalue '{}')", d.name);
+                }
+            }
             Op::Concat => {
                 let a = instr.a();
                 for r in a..a + instr.b() {
@@ -5308,9 +5322,30 @@ impl Vm {
             }
             _ => {}
         }
+        // Up to 5.3 a binary operator takes a constant operand straight
+        // from the constant table (RK), where `varinfo` cannot see it, so a
+        // string constant is not named there; unary operators load it into
+        // a register first and do name it.
+        let rk_operands = self.version <= LuaVersion::Lua53
+            && matches!(
+                instr.op(),
+                Op::Add
+                    | Op::Sub
+                    | Op::Mul
+                    | Op::Div
+                    | Op::Mod
+                    | Op::Pow
+                    | Op::IDiv
+                    | Op::BAnd
+                    | Op::BOr
+                    | Op::BXor
+                    | Op::Shl
+                    | Op::Shr
+            );
         for reg in cands {
             if self.r(f.base, reg).raw_eq(bad) {
-                return match crate::vm::objname::getobjname(p, pc - 1, reg) {
+                return match crate::vm::objname::getobjname(p, pc - 1, reg, self.version) {
+                    Some(("constant", _)) if rk_operands => String::new(),
                     Some((kind, name)) => format!(" ({kind} '{name}')"),
                     None => String::new(),
                 };
@@ -5352,13 +5387,18 @@ impl Vm {
             Op::Call | Op::TailCall => {
                 let reg = instr.a();
                 if self.r(f.base, reg).raw_eq(bad) {
-                    match crate::vm::objname::getobjname(p, pc - 1, reg) {
+                    match crate::vm::objname::getobjname(p, pc - 1, reg, self.version) {
                         Some((kind, name)) => format!(" ({kind} '{name}')"),
                         None => String::new(),
                     }
                 } else {
                     String::new()
                 }
+            }
+            // 5.4 `funcnamefromcode` names the generic-for iterator call
+            // (5.3 had the entry but raised through plain `luaG_typeerror`)
+            Op::TForCall if self.version >= LuaVersion::Lua54 => {
+                " (for iterator 'for iterator')".to_string()
             }
             op => match mm_event_name(op) {
                 Some(ev) => format!(" (metamethod '{ev}')"),
@@ -5398,7 +5438,7 @@ impl Vm {
         for reg in regs {
             let v = self.r(f.base, reg);
             if matches!(v, Value::Float(x) if crate::runtime::value::f2i_exact(x).is_none()) {
-                return match crate::vm::objname::getobjname(p, pc - 1, reg) {
+                return match crate::vm::objname::getobjname(p, pc - 1, reg, self.version) {
                     Some((kind, name)) => format!(" ({kind} '{name}')"),
                     None => String::new(),
                 };
@@ -10411,7 +10451,9 @@ impl Vm {
         let call_pc = (caller.pc as usize).checked_sub(1)?;
         let instr = *p.code.get(call_pc)?;
         match instr.op() {
-            Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
+            Op::Call | Op::TailCall => {
+                crate::vm::objname::getobjname(p, call_pc, instr.a(), self.version)
+            }
             Op::TForCall => Some(("for iterator", "for iterator".to_string())),
             _ => None,
         }
@@ -10442,7 +10484,9 @@ impl Vm {
         let call_pc = (caller.pc as usize).checked_sub(1)?;
         let instr = *p.code.get(call_pc)?;
         match instr.op() {
-            Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
+            Op::Call | Op::TailCall => {
+                crate::vm::objname::getobjname(p, call_pc, instr.a(), self.version)
+            }
             _ => None,
         }
     }
@@ -10571,7 +10615,9 @@ impl Vm {
         let call_pc = (caller.pc as usize).checked_sub(1)?;
         let instr = *p.code.get(call_pc)?;
         match instr.op() {
-            Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
+            Op::Call | Op::TailCall => {
+                crate::vm::objname::getobjname(p, call_pc, instr.a(), self.version)
+            }
             Op::TForCall => Some(("for iterator", "for iterator".to_string())),
             _ => self
                 .pending_tm
@@ -10691,7 +10737,9 @@ impl Vm {
             let call_pc = (caller.pc as usize).checked_sub(1)?;
             let instr = *p.code.get(call_pc)?;
             match instr.op() {
-                Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
+                Op::Call | Op::TailCall => {
+                    crate::vm::objname::getobjname(p, call_pc, instr.a(), self.version)
+                }
                 Op::TForCall => Some(("for iterator", "for iterator".to_string())),
                 _ => None,
             }
