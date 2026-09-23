@@ -6589,6 +6589,12 @@ impl Vm {
                                     if let Some((parent_proto, parent_head_pc, parent_exit_idx)) =
                                         closed_record.side_trace_parent
                                     {
+                                        // The lowerer's own verdict: a trace it
+                                        // compiled but would not dispatch (an
+                                        // untyped table read, an inline abort)
+                                        // is not safe to enter from the parent's
+                                        // exit either.
+                                        let runnable = ct.dispatchable;
                                         ct.dispatchable = false;
                                         let entry_ptr = ct.entry as *const () as *const u8;
                                         let _side_trace_head_pc = closed_record.head_pc;
@@ -6627,15 +6633,16 @@ impl Vm {
                                         } else {
                                             &parent_ct.exit_tags
                                         };
-                                            let shape_ok =
+                                            let shape_matches =
                                                 crate::jit::trace::exit_tags_match_entry_tags(
                                                     &ct.entry_tags,
                                                     parent_exit_tags_slice,
                                                     &parent_ct.entry_tags,
                                                 );
-                                            if !shape_ok {
+                                            if !shape_matches {
                                                 self.jit.counters.side_trace_shape_mismatch += 1;
                                             }
+                                            let shape_ok = runnable && shape_matches;
                                             // P15-A v2-C-A4 — write the child's
                                             // entry fn ptr to BOTH the legacy
                                             // v2-A `exit_side_trace_ptrs[idx]`
