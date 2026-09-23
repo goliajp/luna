@@ -547,6 +547,8 @@ impl Heap {
             resume_at: None,
             error_value: None,
             error_traceback: None,
+            error_levels: None,
+            natives: 0..0,
             stack: Vec::new(),
             frames: Vec::new(),
             open_upvals: Vec::new(),
@@ -1287,6 +1289,19 @@ impl Heap {
                 self.finalize.push(h);
             }
         }
+    }
+
+    /// Every userdata still awaiting finalization, registered or already
+    /// queued. The io library uses it to reach all open files the way C's
+    /// `fflush(NULL)` and `exit` reach every `FILE*`.
+    pub(crate) fn finalizable_userdata(&self) -> Vec<Gc<crate::runtime::Userdata>> {
+        self.finalize
+            .iter()
+            .chain(self.tobefnz.iter())
+            // SAFETY: both lists hold GcHeader pointers of live objects registered for finalization (heap.rs:5-7); a finalizable object is not freed before its finalizer runs.
+            .filter(|&&h| unsafe { (*h).tag } == ObjTag::Userdata)
+            .map(|&h| Gc::from_ptr(h as *mut crate::runtime::Userdata))
+            .collect()
     }
 
     /// Take the objects awaiting their `__gc` call (the VM runs the
