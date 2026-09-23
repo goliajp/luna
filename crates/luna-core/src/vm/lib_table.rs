@@ -42,6 +42,14 @@ pub(crate) fn open_table(vm: &mut Vm) {
         set(vm, "unpack", t_unpack);
         set(vm, "pack", t_pack);
     }
+    // 5.2's default build (LUA_COMPAT_ALL → LUA_COMPAT_UNPACK) also exposes
+    // `table.unpack` as the global `unpack`; like PUC's `luaopen_table`, the
+    // global is the very same function object.
+    if ver == V::Lua52 {
+        let k = Value::Str(vm.heap.intern(b"unpack"));
+        let f = t.get(k);
+        vm.set_global("unpack", f).expect("stdlib registration");
+    }
     // 5.3+ — `table.move`.
     if ver >= V::Lua53 {
         set(vm, "move", t_move);
@@ -69,7 +77,6 @@ pub(crate) fn open_table(vm: &mut Vm) {
     // API can re-open libraries mid-Propagate) demotes `t` back to gray —
     // no-op when phase != Propagate, where t was born current_white.
     vm.barrier_back_table(t);
-    // the global unpack alias exists in 5.1 mode only (P08)
 }
 
 // ── Dialect-aware table-argument handling (v2.18) ──────────────────────
@@ -170,7 +177,7 @@ fn t_setn(vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
 /// 5.1 `table.getn(t)` — synonymous with `#t` (luna's `checked_len`).
 fn t_getn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "getn")?;
+    check_table(vm, tv)?;
     let n = vm.checked_len(tv)?;
     Ok(vm.nat_return(fs, &[Value::Int(n)]))
 }
@@ -179,7 +186,7 @@ fn t_getn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// the first non-nil result the callback produces. Replaced by `pairs` in 5.2+.
 fn t_foreach(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    let t = check_table(vm, tv, "foreach")?;
+    let t = check_table(vm, tv)?;
     let f = vm.nat_arg(fs, nargs, 1);
     let mut key = Value::Nil;
     loop {
@@ -205,7 +212,7 @@ fn t_foreach(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// short-circuit on the first non-nil return. Replaced by `ipairs` in 5.2+.
 fn t_foreachi(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    check_table(vm, tv, "foreachi")?;
+    check_table(vm, tv)?;
     let f = vm.nat_arg(fs, nargs, 1);
     let n = vm.checked_len(tv)?;
     for i in 1..=n {
@@ -224,7 +231,7 @@ fn t_foreachi(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// 5.2; reinstate for the 5.1 suite (closure.lua: tail-recursion test uses it).
 fn t_maxn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let tv = vm.nat_arg(fs, nargs, 0);
-    let t = check_table(vm, tv, "maxn")?;
+    let t = check_table(vm, tv)?;
     let mut max: f64 = 0.0;
     let mut key = Value::Nil;
     loop {

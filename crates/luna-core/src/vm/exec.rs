@@ -4310,7 +4310,11 @@ impl Vm {
                     }
                     // pairs(t) with a __pairs metamethod calls it yieldably (PUC
                     // luaB_pairs); without one, fall through to the plain native.
-                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn) && nargs >= 1 {
+                    // 5.1 has no `__pairs`.
+                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn)
+                        && nargs >= 1
+                        && self.version >= LuaVersion::Lua52
+                    {
                         let arg = self.stack[(func_slot + 1) as usize];
                         if !self.get_mm(arg, Mm::Pairs).is_nil() {
                             return self.begin_pairs(func_slot, nresults);
@@ -4598,10 +4602,11 @@ impl Vm {
     /// resolved by the loop (even when `f` is a native that already ran inline).
     fn begin_pcall(&mut self, func_slot: u32, nargs: u32, nresults: i32) -> Result<bool, LuaError> {
         if nargs == 0 {
-            return Err(crate::vm::builtins::raise_str(
-                self,
-                "bad argument #1 to 'pcall' (value expected)",
-            ));
+            // `luaL_checkany` fails here: there is no function to call.
+            self.with_native_running(func_slot, nargs, |vm| {
+                let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+                crate::vm::argcheck::check_any(vm, a, 0).map(drop)
+            })?;
         }
         if self.pcall_depth >= MAX_C_DEPTH {
             return Err(self.rt_err("C stack overflow"));
@@ -4632,12 +4637,10 @@ impl Vm {
         nargs: u32,
         nresults: i32,
     ) -> Result<bool, LuaError> {
-        if nargs < 2 {
-            return Err(crate::vm::builtins::raise_str(
-                self,
-                "bad argument #2 to 'xpcall' (value expected)",
-            ));
-        }
+        self.with_native_running(func_slot, nargs, |vm| {
+            let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+            crate::vm::builtins::xpcall_handler(vm, a).map(drop)
+        })?;
         if self.pcall_depth >= MAX_C_DEPTH {
             return Err(self.rt_err("C stack overflow"));
         }
@@ -4675,10 +4678,32 @@ impl Vm {
     /// continuation so a `coroutine.yield` inside it suspends cleanly. The
     /// metamethod is called in `pairs`'s own slot, so its (≤4, nil-padded)
     /// results land exactly where `pairs`'s results belong.
+    /// Run a check of the native at `func_slot` while it counts as the running
+    /// C function, so an argument error names it the way PUC does. pcall and
+    /// xpcall check their arguments in the dispatcher, before the native
+    /// would otherwise be entered.
+    fn with_native_running(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        check: impl FnOnce(&mut Vm) -> Result<(), LuaError>,
+    ) -> Result<(), LuaError> {
+        let Value::Native(nc) = self.stack[func_slot as usize] else {
+            unreachable!("pcall/xpcall dispatch sits on a native")
+        };
+        self.running_natives.push(nc);
+        self.running_native_slots.push((func_slot, nargs));
+        let r = check(self);
+        self.running_natives.pop();
+        self.running_native_slots.pop();
+        r
+    }
+
     fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
-        // layout becomes [mm@func_slot, t@func_slot+1]; call mm(t) wanting 4.
+        // layout becomes [mm@func_slot, t@func_slot+1]; call mm(t) for the
+        // dialect's result count.
         self.stack[func_slot as usize] = mm;
         self.top = func_slot + 2;
         frames_push_sync(
@@ -4690,7 +4715,8 @@ impl Vm {
                 nresults,
             }),
         );
-        self.begin_call(func_slot, Some(1), 4, true)?;
+        let want = crate::vm::builtins::pairs_mm_results(self) as i32;
+        self.begin_call(func_slot, Some(1), want, true)?;
         Ok(true)
     }
 
@@ -5408,17 +5434,20 @@ impl Vm {
     }
 
     /// Position prefix of the Lua frame `level` steps up from the running C
-    /// function (PUC `luaL_where(L, level)`): `level == 1` is the immediate
-    /// Lua caller (skipping Cont/C-boundary frames the way `dbg_frame` does),
-    /// `level == 2` its caller, and so on. Used by `error(msg, level)` so the
-    /// caller's frame is reported even across pcall/xpcall continuations.
-    /// `luaL_where(level)` for `error()`: unlike `dbg_frame` (whose 5.2+
-    /// level numbering skips Cont activations to match db.lua's getinfo
-    /// shape), PUC counts EVERY CallInfo — a C caller occupies a level of
-    /// its own. `pcall(pcall, error, "msg")` must therefore resolve
-    /// level 1 to the inner pcall (a C activation, no line info → no
-    /// prefix), not tunnel through to the Lua frame below (v2.13
-    /// CORPUS-IV fixture 239).
+    /// function (PUC `luaL_where(L, level)`): `level == 1` is the function
+    /// that called the running native, `level == 2` its caller, and so on.
+    /// Used by `error(msg, level)`.
+    ///
+    /// PUC counts EVERY CallInfo — a C caller occupies a level of its own
+    /// (`pcall(pcall, error, "msg")` resolves level 1 to the inner pcall, a
+    /// C activation with no line info, v2.13 CORPUS-IV fixture 239). luna
+    /// represents such a C activation either by the `from_c` flag of the Lua
+    /// frame it called, or — when that flag is absent (it called a native
+    /// directly, or a tail call replaced the frame it called) — by its
+    /// pcall/xpcall/pairs continuation frame; each is counted once. A
+    /// metamethod handler is called by the VM itself (Lua to Lua, no C level
+    /// in between), so neither its `from_c` nor its Meta/Close continuation
+    /// counts.
     pub(crate) fn position_prefix_at_level(&self, level: i64) -> Option<String> {
         if level < 1 {
             return None;
@@ -5426,6 +5455,9 @@ impl Vm {
         let v51 = self.version <= LuaVersion::Lua51;
         let mut lvl = level;
         let mut found: Option<usize> = None;
+        // whether the frame visited just before (the one above) already
+        // counted the C activation below it
+        let mut above_counted_c = false;
         'walk: for fi in (0..self.frames.len()).rev() {
             match &self.frames[fi] {
                 CallFrame::Lua(f) => {
@@ -5442,21 +5474,26 @@ impl Vm {
                             }
                         }
                     }
-                    if f.from_c {
+                    above_counted_c = f.from_c && f.tm.is_none();
+                    if above_counted_c {
                         lvl -= 1;
                         if lvl == 0 {
                             return None; // C activation: no line info
                         }
                     }
                 }
-                CallFrame::Cont(_) => {
-                    // A continuation-driven native (pcall/xpcall/close)
-                    // is a C activation — it takes a level and has no
-                    // line info.
-                    lvl -= 1;
-                    if lvl == 0 {
-                        return None;
+                CallFrame::Cont(nc) => {
+                    let c_level = matches!(
+                        nc.kind,
+                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs
+                    ) && !above_counted_c;
+                    if c_level {
+                        lvl -= 1;
+                        if lvl == 0 {
+                            return None;
+                        }
                     }
+                    above_counted_c = false;
                 }
             }
         }
@@ -5649,7 +5686,14 @@ impl Vm {
                             let mut cur_err = err;
                             let mut iters: u32 = 0;
                             let mut capped = false;
+                            // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once
+                            // when the handler is not a function.
+                            let uncallable = self.version <= LuaVersion::Lua52
+                                && !matches!(handler, Value::Closure(_) | Value::Native(_));
                             loop {
+                                if uncallable {
+                                    break Value::Str(self.heap.intern(b"error in error handling"));
+                                }
                                 if iters >= MSGH_CAP && !capped {
                                     cur_err = Value::Str(self.heap.intern(b"C stack overflow"));
                                     capped = true;
@@ -5921,12 +5965,13 @@ impl Vm {
                     }
                     continue;
                 }
-                // __pairs returned: normalize its results to exactly four
-                // (iterator, state, control, closing) at pairs's slot, where
-                // the metamethod was called, and hand them to pairs's caller.
+                // __pairs returned: normalize its results to exactly the
+                // dialect's count (iterator, state, control, and on 5.5 the
+                // closing value) at pairs's slot, where the metamethod was
+                // called, and hand them to pairs's caller.
                 if let ContKind::Pairs = nc.kind {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let total = 4u32;
+                    let total = crate::vm::builtins::pairs_mm_results(self) as u32;
                     let need = (nc.func_slot + total) as usize;
                     if self.stack.len() < need {
                         self.stack.resize(need, Value::Nil);
@@ -9543,20 +9588,32 @@ impl Vm {
         Ok(())
     }
 
-    /// tostring with __tostring / __name support.
+    /// `luaL_tolstring`: `__tostring` (whose result must be a string or a
+    /// number, rendered), else the basic rendering, where 5.3+ names a value
+    /// by a string `__name` metafield.
     pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             return match self.call_mm1(mm, &[v])? {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
+                r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
                 _ => Err(self.rt_err("'__tostring' must return a string")),
             };
         }
-        if let Value::Table(t) = v
+        if self.version >= LuaVersion::Lua53
+            && !matches!(
+                v,
+                Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
             && let Value::Str(name) = self.get_mm(v, Mm::Name)
         {
+            let basic = self.tostring_basic(v);
+            let at = basic
+                .iter()
+                .position(|&c| c == b':')
+                .expect("an object renders as `kind: address`");
             let mut out = name.as_bytes().to_vec();
-            out.extend_from_slice(format!(": {:p}", t.as_ptr()).as_bytes());
+            out.extend_from_slice(&basic[at..]);
             return Ok(out);
         }
         Ok(self.tostring_basic(v))
@@ -9590,7 +9647,7 @@ impl Vm {
             Value::Str(s) => s.as_bytes().to_vec(),
             Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
             Value::Closure(c) => format!("function: {:p}", c.as_ptr()).into_bytes(),
-            Value::Native(n) => format!("function: builtin: {:p}", n.as_ptr()).into_bytes(),
+            Value::Native(n) => format!("function: {:p}", n.as_ptr()).into_bytes(),
             Value::Coro(co) => format!("thread: {:p}", co.as_ptr()).into_bytes(),
             // PUC names file handles `file (0x…)`; a bare userdata is
             // `userdata: 0x…`. The io library overrides this via __tostring.
