@@ -2933,24 +2933,46 @@ fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
     bcx.def_var(var, bits);
 }
 
+/// The checked table-store helpers, by the key's kind.
+struct StoreHelpers {
+    int_key: cranelift_module::FuncId,
+    str_key: cranelift_module::FuncId,
+    any_key: cranelift_module::FuncId,
+}
+
 /// Calls the checked table store `t[key] = v` for a key and a value of
 /// known kinds, returning the helper's status (`1` stored, `0` the
-/// interpreter must do it); the caller side-exits on `0`.
+/// interpreter must do it); the caller side-exits on `0`. Integer and
+/// string keys have their own helpers, which need not rebuild the key
+/// from a tag.
 #[allow(clippy::too_many_arguments)]
 fn emit_table_set<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
     module: &mut M,
-    set_checked_id: cranelift_module::FuncId,
+    helpers: &StoreHelpers,
     t: Value,
     key: Value,
     key_kind: RegKind,
     val: Value,
     val_kind: RegKind,
 ) -> Value {
-    let key_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(key_kind)));
     let val_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(val_kind)));
-    let f = module.declare_func_in_func(set_checked_id, bcx.func);
-    let call = bcx.ins().call(f, &[t, key, key_tag, val, val_tag]);
+    let call = match key_kind {
+        RegKind::Int | RegKind::Str => {
+            let id = if key_kind == RegKind::Int {
+                helpers.int_key
+            } else {
+                helpers.str_key
+            };
+            let f = module.declare_func_in_func(id, bcx.func);
+            bcx.ins().call(f, &[t, key, val, val_tag])
+        }
+        _ => {
+            let key_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(key_kind)));
+            let f = module.declare_func_in_func(helpers.any_key, bcx.func);
+            bcx.ins().call(f, &[t, key, key_tag, val, val_tag])
+        }
+    };
     bcx.inst_results(call)[0]
 }
 
@@ -3465,6 +3487,14 @@ fn build_trace_jit_module() -> Option<JITModule> {
     // misses them without an explicit `builder.symbol(...)`.)
     builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
     // SetI / SetTable / SetList / SetField
+    builder.symbol(
+        "luna_jit_table_set_int_checked",
+        super::luna_jit_table_set_int_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_set_field_checked",
+        super::luna_jit_table_set_field_checked as *const u8,
+    );
     builder.symbol(
         "luna_jit_table_set_checked",
         super::luna_jit_table_set_checked as *const u8,
@@ -5027,16 +5057,31 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_new_table", Linkage::Import, &new_table_sig)
         .ok()?;
 
-    // `fn luna_jit_table_set_checked(t, key_raw, key_tag, val_raw,
-    // val_tag) -> stored`
+    // `fn luna_jit_table_set_{int,field}_checked(t, key, val_raw, val_tag)
+    // -> stored` and `fn luna_jit_table_set_checked(t, key_raw, key_tag,
+    // val_raw, val_tag) -> stored`
     let mut set_sig = module.make_signature();
-    for _ in 0..5 {
+    for _ in 0..4 {
         set_sig.params.push(AbiParam::new(types::I64));
     }
     set_sig.returns.push(AbiParam::new(types::I64));
-    let set_checked_id = module
-        .declare_function("luna_jit_table_set_checked", Linkage::Import, &set_sig)
-        .ok()?;
+    let mut set_any_sig = set_sig.clone();
+    set_any_sig.params.push(AbiParam::new(types::I64));
+    let set_ids = StoreHelpers {
+        int_key: module
+            .declare_function("luna_jit_table_set_int_checked", Linkage::Import, &set_sig)
+            .ok()?,
+        str_key: module
+            .declare_function(
+                "luna_jit_table_set_field_checked",
+                Linkage::Import,
+                &set_sig,
+            )
+            .ok()?,
+        any_key: module
+            .declare_function("luna_jit_table_set_checked", Linkage::Import, &set_any_sig)
+            .ok()?,
+    };
 
     // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
     let mut get_field_sig = module.make_signature();
@@ -7144,7 +7189,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_checked_id,
+                    &set_ids,
                     t,
                     key_arg,
                     RegKind::Str,
@@ -7411,7 +7456,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_checked_id,
+                    &set_ids,
                     t,
                     k_imm,
                     RegKind::Int,
@@ -7456,7 +7501,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_checked_id,
+                    &set_ids,
                     t,
                     key,
                     key_kind,
@@ -7522,7 +7567,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let _ = emit_table_set(
                         &mut bcx,
                         &mut module,
-                        set_checked_id,
+                        &set_ids,
                         t,
                         key,
                         RegKind::Int,
