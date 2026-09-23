@@ -10,6 +10,9 @@
 
 use std::collections::HashMap;
 
+mod ctconst;
+use ctconst::{CtConst, ct_value};
+
 use crate::frontend::ast::{
     self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, Stat, StatId, TableField, UnOp,
     block_uses_vararg,
@@ -158,6 +161,9 @@ struct LocalVar {
     vararg_virtual: bool,
     /// pc at which the variable became visible (for debug LocVar records)
     start_pc: u32,
+    /// a compile-time constant (5.4+): no register (`reg` is meaningless)
+    /// and no debug entry; uses take the value
+    konst: Option<CtConst>,
 }
 
 /// One entry in the function's ordered active-variable sequence used for
@@ -169,6 +175,9 @@ struct LocalVar {
 struct AVar {
     name: Option<Box<str>>,
     reg: Option<u32>,
+    /// a `global` declaration (otherwise a local, which a compile-time
+    /// constant is too, without a register)
+    global: bool,
 }
 
 struct BlockCx {
@@ -213,6 +222,8 @@ struct GotoRef {
 
 enum VarKind {
     Local(u32),
+    /// a compile-time constant local (5.4+)
+    Const(CtConst),
     Upval(u32),
     /// global access; read_only from 5.5 declarations
     Global {
@@ -657,6 +668,7 @@ impl<'a> Compiler<'a> {
         let end_pc = self.lr().code.len() as u32;
         let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[b.first_local..]
             .iter()
+            .filter(|l| l.konst.is_none())
             .map(|l| crate::runtime::LocVar {
                 name: l.name.clone(),
                 reg: l.reg,
@@ -984,12 +996,70 @@ impl<'a> Compiler<'a> {
             captured: false,
             vararg_virtual: false,
             start_pc,
+            konst: None,
         });
         self.l().avars.push(AVar {
             name: Some(name.into()),
             reg: Some(reg),
+            global: false,
         });
         Ok(())
+    }
+
+    /// Declare a compile-time constant local (PUC `RDKCTC`).
+    fn declare_ct_const(&mut self, name: &str, value: CtConst) {
+        let start_pc = self.lr().code.len() as u32;
+        self.l().locals.push(LocalVar {
+            name: name.into(),
+            reg: u32::MAX,
+            read_only: true,
+            captured: false,
+            vararg_virtual: false,
+            start_pc,
+            konst: Some(value),
+        });
+        self.l().avars.push(AVar {
+            name: Some(name.into()),
+            reg: None,
+            global: false,
+        });
+    }
+
+    /// The compile-time constant `name` refers to here, if it does: the
+    /// nearest binding of the name, walking out through the functions, is
+    /// a constant local. No upvalue is created on the way.
+    fn ct_const_named(&self, name: &str) -> Option<CtConst> {
+        for lvl in self.levels.iter().rev() {
+            if lvl
+                .avars
+                .iter()
+                .rev()
+                .find(|a| a.name.as_deref() == Some(name))
+                .is_some_and(|a| a.global)
+            {
+                return None;
+            }
+            if let Some(l) = lvl.locals.iter().rev().find(|l| &*l.name == name) {
+                return l.konst.clone();
+            }
+            if lvl.upvals.iter().any(|u| &*u.name == name) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Materialise a compile-time constant as an expression of the
+    /// function being compiled.
+    fn ct_exp(&mut self, v: CtConst) -> Exp {
+        match v {
+            CtConst::Nil => Exp::Nil,
+            CtConst::Bool(true) => Exp::True,
+            CtConst::Bool(false) => Exp::False,
+            CtConst::Int(i) => Exp::Int(i),
+            CtConst::Float(f) => Exp::Float(f),
+            CtConst::Str(s) => Exp::Const(self.str_const(&s)),
+        }
     }
 
     /// Append a `global` declaration marker to the active-variable sequence so
@@ -999,6 +1069,7 @@ impl<'a> Compiler<'a> {
         self.l().avars.push(AVar {
             name: name.map(|n| n.into()),
             reg: None,
+            global: true,
         });
     }
 
@@ -1024,7 +1095,7 @@ impl<'a> Compiler<'a> {
             .iter()
             .rev()
             .find(|a| a.name.as_deref() == Some(name))
-            && av.reg.is_none()
+            && av.global
         {
             return Ok(VarKind::Global { read_only: false });
         }
@@ -1033,7 +1104,11 @@ impl<'a> Compiler<'a> {
             .iter()
             .rposition(|l| &*l.name == name)
         {
-            return Ok(VarKind::Local(self.levels[li].locals[idx].reg));
+            let local = &self.levels[li].locals[idx];
+            return Ok(match &local.konst {
+                Some(v) => VarKind::Const(v.clone()),
+                None => VarKind::Local(local.reg),
+            });
         }
         if li < self.levels.len() - 1 || li == 0 {
             // upvalue cache applies at every level; main level has _ENV
@@ -1048,6 +1123,8 @@ impl<'a> Compiler<'a> {
         }
         match self.resolve_at(li - 1, name)? {
             VarKind::Global { .. } => Ok(VarKind::Global { read_only: false }),
+            // a constant needs no upvalue
+            VarKind::Const(v) => Ok(VarKind::Const(v)),
             VarKind::Local(reg) => {
                 let mut read_only = false;
                 if let Some(idx) = self.levels[li - 1]
@@ -1149,6 +1226,7 @@ impl<'a> Compiler<'a> {
     fn name_expr(&mut self, name: &str) -> Result<Exp, SyntaxError> {
         match self.resolve_name(name)? {
             VarKind::Local(reg) => Ok(Exp::Reg(reg)),
+            VarKind::Const(v) => Ok(self.ct_exp(v)),
             VarKind::Upval(u) => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetUpval,
                 0,
@@ -1201,7 +1279,7 @@ impl<'a> Compiler<'a> {
             ));
         }
         let c = self.str_const(name.as_bytes());
-        match self.resolve_name("_ENV")? {
+        match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetTabUp,
                 0,
@@ -1226,7 +1304,9 @@ impl<'a> Compiler<'a> {
                     VarKind::Local(r) => {
                         self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
-                    VarKind::Global { .. } => unreachable!("_ENV always resolves"),
+                    VarKind::Global { .. } | VarKind::Const(_) => {
+                        unreachable!("resolve_env gives a register or an upvalue")
+                    }
                 }
                 self.load_const(er + 1, c);
                 self.set_freereg(er);
@@ -1238,6 +1318,18 @@ impl<'a> Compiler<'a> {
                     false,
                 ))))
             }
+        }
+    }
+
+    /// `_ENV` as the table a global access indexes. A compile-time constant
+    /// `_ENV` is loaded into a register first (PUC `luaK_exp2anyregup`).
+    fn resolve_env(&mut self) -> Result<VarKind, SyntaxError> {
+        match self.resolve_name("_ENV")? {
+            VarKind::Const(v) => {
+                let e = self.ct_exp(v);
+                Ok(VarKind::Local(self.exp_to_anyreg(e)?))
+            }
+            k => Ok(k),
         }
     }
 
@@ -2051,7 +2143,7 @@ impl<'a> Compiler<'a> {
             .iter()
             .rev()
             .find(|a| a.name.as_deref() == Some(name))
-            && av.reg.is_none()
+            && av.global
         {
             return false;
         }
@@ -2552,7 +2644,26 @@ impl<'a> Compiler<'a> {
         if let Some(first) = names.first() {
             self.last_line = first.name.line;
         }
-        let base = self.explist_adjust(exprs, n)?;
+        // PUC `localstat`: with as many values as names, a last name that
+        // is <const> and whose value is a compile-time constant is not a
+        // variable (5.4+)
+        let last_const =
+            names.last().and_then(|an| an.attrib.or(collective)) == Some(ast::Attrib::Const);
+        let ct = if self.version >= LuaVersion::Lua54 && last_const && exprs.len() == n as usize {
+            let ast = self.ast;
+            ct_value(ast, exprs[exprs.len() - 1], &mut |name| {
+                self.ct_const_named(name)
+            })
+        } else {
+            None
+        };
+        let all_names = names;
+        let (names, vals) = match ct {
+            Some(_) => (&names[..names.len() - 1], &exprs[..exprs.len() - 1]),
+            None => (names, exprs),
+        };
+        let n = names.len() as u32;
+        let base = self.explist_adjust(vals, n)?;
         let mut tbc: Option<u32> = None;
         for (i, an) in names.iter().enumerate() {
             let reg = base + i as u32;
@@ -2568,6 +2679,9 @@ impl<'a> Compiler<'a> {
                 tbc = Some(reg);
             }
             self.declare_local(&an.name.text, reg, read_only)?;
+        }
+        if let (Some(v), Some(last)) = (ct, all_names.last()) {
+            self.declare_ct_const(&last.name.text, v);
         }
         if let Some(reg) = tbc {
             self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false));
@@ -2787,6 +2901,10 @@ impl<'a> Compiler<'a> {
         // `line` param verbatim so a read-only-assign diagnostic still
         // points at the name.
         match self.resolve_name(text)? {
+            VarKind::Const(_) => Err(self.err(
+                line,
+                format!("attempt to assign to const variable '{text}'"),
+            )),
             VarKind::Local(reg) => {
                 if let Some(name) = self.local_is_read_only(reg) {
                     let name = name.to_string();
@@ -2843,7 +2961,7 @@ impl<'a> Compiler<'a> {
             ));
         }
         let c = self.str_const(text.as_bytes());
-        match self.resolve_name("_ENV")? {
+        match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => {
                 self.emit(Inst::iabc(Op::SetTabUp, u, c, vreg, true));
                 Ok(())
@@ -2862,7 +2980,9 @@ impl<'a> Compiler<'a> {
                     VarKind::Local(r) => {
                         self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
-                    VarKind::Global { .. } => unreachable!("_ENV always resolves"),
+                    VarKind::Global { .. } | VarKind::Const(_) => {
+                        unreachable!("resolve_env gives a register or an upvalue")
+                    }
                 }
                 self.load_const(er + 1, c);
                 self.emit(Inst::iabc(Op::SetTable, er, er + 1, vreg, false));
@@ -3366,7 +3486,7 @@ impl<'a> Compiler<'a> {
             Some(l) => l,
             None => return false,
         };
-        if local.captured || local.vararg_virtual {
+        if local.captured || local.vararg_virtual || local.konst.is_some() {
             return false;
         }
         // AST-side gate (call walker + obj-is-name check).
