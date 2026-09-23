@@ -215,12 +215,12 @@ fn getdetails(
     if opt == KOption::PadAlign {
         // 'X' takes its alignment from the following option, which it consumes.
         if *pos >= fmt.len() {
-            return Err(arg_error(vm, 1, who, "invalid next option for option 'X'"));
+            return Err(arg_error(vm, 1, "invalid next option for option 'X'"));
         }
         let (nopt, nsize) = getoption(vm, h, fmt, pos)?;
         align = nsize;
         if nopt == KOption::Char || align == 0 {
-            return Err(arg_error(vm, 1, who, "invalid next option for option 'X'"));
+            return Err(arg_error(vm, 1, "invalid next option for option 'X'"));
         }
     }
     let ntoalign = if align <= 1 || opt == KOption::Char {
@@ -230,12 +230,7 @@ fn getdetails(
             align = h.maxalign;
         }
         if align & (align - 1) != 0 {
-            return Err(arg_error(
-                vm,
-                1,
-                who,
-                "format asks for alignment not power of 2",
-            ));
+            return Err(arg_error(vm, 1, "format asks for alignment not power of 2"));
         }
         let szmoda = totalsize & (align - 1);
         (align - szmoda) & (align - 1)
@@ -310,12 +305,12 @@ fn unpack_int(
 fn check_int(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<i64, LuaError> {
     match vm.nat_arg(fs, nargs, i) {
         Value::Int(x) => Ok(x),
-        Value::Float(f) => f2i_exact(f)
-            .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
+        Value::Float(f) => {
+            f2i_exact(f).ok_or_else(|| arg_error(vm, i + 1, "number has no integer representation"))
+        }
         v => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("number expected, got {}", v.type_name()),
         )),
     }
@@ -328,7 +323,6 @@ fn check_num(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<f64,
         v => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("number expected, got {}", v.type_name()),
         )),
     }
@@ -345,7 +339,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     while fp < fmt.len() {
         let (opt, size, ntoalign) = getdetails(vm, &mut h, totalsize, &fmt, &mut fp, "pack")?;
         if size + ntoalign > max_size(vm).saturating_sub(totalsize) {
-            return Err(arg_error(vm, argi + 1, "pack", "result too long"));
+            return Err(arg_error(vm, argi + 1, "result too long"));
         }
         totalsize += ntoalign + size;
         out.resize(out.len() + ntoalign as usize, 0);
@@ -355,7 +349,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                 if size < SZINT {
                     let lim = 1i64 << ((size * 8 - 1) as u32);
                     if !(-lim <= n && n < lim) {
-                        return Err(arg_error(vm, argi + 1, "pack", "integer overflow"));
+                        return Err(arg_error(vm, argi + 1, "integer overflow"));
                     }
                 }
                 pack_int(&mut out, n as u64, h.islittle, size as usize, n < 0);
@@ -364,7 +358,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             KOption::Uint => {
                 let n = check_int(vm, fs, nargs, argi, "pack")?;
                 if size < SZINT && (n as u64) >= (1u64 << ((size * 8) as u32)) {
-                    return Err(arg_error(vm, argi + 1, "pack", "unsigned overflow"));
+                    return Err(arg_error(vm, argi + 1, "unsigned overflow"));
                 }
                 pack_int(&mut out, n as u64, h.islittle, size as usize, false);
                 argi += 1;
@@ -392,12 +386,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                 let bytes = s.as_bytes().to_vec();
                 let len = bytes.len() as u64;
                 if len > size {
-                    return Err(arg_error(
-                        vm,
-                        argi + 1,
-                        "pack",
-                        "string longer than given size",
-                    ));
+                    return Err(arg_error(vm, argi + 1, "string longer than given size"));
                 }
                 out.extend_from_slice(&bytes);
                 out.resize(out.len() + (size - len) as usize, 0);
@@ -411,7 +400,6 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                     return Err(arg_error(
                         vm,
                         argi + 1,
-                        "pack",
                         "string length does not fit in given size",
                     ));
                 }
@@ -424,7 +412,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
                 let s = check_str(vm, fs, nargs, argi, "pack")?;
                 let bytes = s.as_bytes().to_vec();
                 if bytes.contains(&0) {
-                    return Err(arg_error(vm, argi + 1, "pack", "string contains zeros"));
+                    return Err(arg_error(vm, argi + 1, "string contains zeros"));
                 }
                 out.extend_from_slice(&bytes);
                 out.push(0);
@@ -448,12 +436,12 @@ pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     while fp < fmt.len() {
         let (opt, size, ntoalign) = getdetails(vm, &mut h, totalsize, &fmt, &mut fp, "packsize")?;
         if opt == KOption::Str || opt == KOption::Zstr {
-            return Err(arg_error(vm, 1, "packsize", "variable-length format"));
+            return Err(arg_error(vm, 1, "variable-length format"));
         }
         let need = size + ntoalign;
         let cap = max_size(vm);
         if need > cap || totalsize > cap - need {
-            return Err(arg_error(vm, 1, "packsize", "format result too large"));
+            return Err(arg_error(vm, 1, "format result too large"));
         }
         totalsize += need;
     }
@@ -494,12 +482,12 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             false
         };
         if !in_range {
-            return Err(arg_error(vm, 3, "unpack", "initial position out of string"));
+            return Err(arg_error(vm, 3, "initial position out of string"));
         }
     }
     let mut pos = posrelat_i(initpos, ld) - 1;
     if pos > ld {
-        return Err(arg_error(vm, 3, "unpack", "initial position out of string"));
+        return Err(arg_error(vm, 3, "initial position out of string"));
     }
     let mut h = Header::new();
     let mut results: Vec<Value> = Vec::new();
@@ -507,7 +495,7 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     while fp < fmt.len() {
         let (opt, size, ntoalign) = getdetails(vm, &mut h, pos, &fmt, &mut fp, "unpack")?;
         if ntoalign + size > ld - pos {
-            return Err(arg_error(vm, 2, "unpack", "data string too short"));
+            return Err(arg_error(vm, 2, "data string too short"));
         }
         pos += ntoalign;
         let p = pos as usize;
@@ -545,7 +533,7 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             KOption::Str => {
                 let len = unpack_int(vm, &data[p..], h.islittle, size as usize, false)? as u64;
                 if len > ld - pos - size {
-                    return Err(arg_error(vm, 2, "unpack", "data string too short"));
+                    return Err(arg_error(vm, 2, "data string too short"));
                 }
                 let st = (pos + size) as usize;
                 let s = vm.heap.intern(&data[st..st + len as usize]);
@@ -559,12 +547,7 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                     pos += len as u64 + 1;
                 }
                 None => {
-                    return Err(arg_error(
-                        vm,
-                        2,
-                        "unpack",
-                        "unfinished string for format 'z'",
-                    ));
+                    return Err(arg_error(vm, 2, "unfinished string for format 'z'"));
                 }
             },
             KOption::Padding | KOption::PadAlign | KOption::Nop => {}

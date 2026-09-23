@@ -260,13 +260,13 @@ fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if let Value::Str(s) = vm.nat_arg(fs, nargs, arg_off + 1) {
         let opt = s.as_bytes();
         if opt.first() == Some(&b'>') {
-            return Err(arg_error(vm, 2, "getinfo", "invalid option '>'"));
+            return Err(arg_error(vm, 2, "invalid option '>'"));
         }
         if opt
             .iter()
             .any(|&c| !matches!(c, b'S' | b'l' | b'n' | b'u' | b't' | b'f' | b'L' | b'r'))
         {
-            return Err(arg_error(vm, 2, "getinfo", "invalid option"));
+            return Err(arg_error(vm, 2, "invalid option"));
         }
         want_lines = opt.contains(&b'L');
         want_transfers = opt.contains(&b'r');
@@ -309,7 +309,6 @@ fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     return Err(arg_error(
                         vm,
                         1,
-                        "getinfo",
                         &format!("function or level expected, got {}", subject.type_name()),
                     ));
                 }
@@ -419,7 +418,6 @@ fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "getinfo",
                 &format!("function or level expected, got {}", v.type_name()),
             ));
         }
@@ -442,7 +440,6 @@ fn check_closure(vm: &mut Vm, v: Value, who: &str) -> Result<Gc<LuaClosure>, Lua
         v => Err(arg_error(
             vm,
             1,
-            who,
             &format!("function expected, got {}", v.type_name()),
         )),
     }
@@ -576,7 +573,7 @@ fn d_upvalueid(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // shared logic below picks the version-correct error path.
     let out_of_range_err = |vm: &mut Vm| -> Result<u32, LuaError> {
         if vm.version() <= crate::version::LuaVersion::Lua53 {
-            Err(arg_error(vm, 2, "upvalueid", "invalid upvalue index"))
+            Err(arg_error(vm, 2, "invalid upvalue index"))
         } else {
             Ok(vm.nat_return(fs, &[Value::Nil]))
         }
@@ -613,20 +610,10 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // — PUC's `db_setuservalue` returns nil in that case. db.lua :434
         // exercises exactly this branch.
         Value::Userdata(_) => Ok(vm.nat_return(fs, &[Value::Nil])),
-        Value::LightUserdata(_) => Err(arg_error(
-            vm,
-            1,
-            "setuservalue",
-            "userdata expected, got light userdata",
-        )),
+        Value::LightUserdata(_) => Err(arg_error(vm, 1, "userdata expected, got light userdata")),
         _ => {
             let got = vm.obj_typename(v);
-            Err(arg_error(
-                vm,
-                1,
-                "setuservalue",
-                &format!("userdata expected, got {got}"),
-            ))
+            Err(arg_error(vm, 1, &format!("userdata expected, got {got}")))
         }
     }
 }
@@ -639,20 +626,10 @@ fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = vm.nat_arg(fs, nargs, 0);
     match v {
         Value::Userdata(_) => Ok(vm.nat_return(fs, &[Value::Nil, Value::Bool(false)])),
-        Value::LightUserdata(_) => Err(arg_error(
-            vm,
-            1,
-            "getuservalue",
-            "userdata expected, got light userdata",
-        )),
+        Value::LightUserdata(_) => Err(arg_error(vm, 1, "userdata expected, got light userdata")),
         _ => {
             let got = vm.obj_typename(v);
-            Err(arg_error(
-                vm,
-                1,
-                "getuservalue",
-                &format!("userdata expected, got {got}"),
-            ))
+            Err(arg_error(vm, 1, &format!("userdata expected, got {got}")))
         }
     }
 }
@@ -839,7 +816,7 @@ fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         let level = vm.int_from(arg1, "use as a level")?;
         let n = vm.int_from(arg2, "use as an index")?;
         if !vm.coro_level_in_range(co, level) {
-            return Err(arg_error(vm, 2, "getlocal", "level out of range"));
+            return Err(arg_error(vm, 2, "level out of range"));
         }
         return match vm.local_at_coro(co, level, n) {
             Some((name, val)) => {
@@ -864,7 +841,7 @@ fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Ok(vm.nat_return(fs, &[nm, val]));
     }
     if !vm.level_in_range(level) {
-        return Err(arg_error(vm, 1, "getlocal", "level out of range"));
+        return Err(arg_error(vm, 1, "level out of range"));
     }
     match vm.local_at(level, n) {
         Some((name, val)) => {
@@ -887,7 +864,7 @@ fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         let level = vm.int_from(level_v, "use as a level")?;
         let n = vm.int_from(n_v, "use as an index")?;
         if !vm.coro_level_in_range(co, level) {
-            return Err(arg_error(vm, 2, "setlocal", "level out of range"));
+            return Err(arg_error(vm, 2, "level out of range"));
         }
         return match vm.local_set_coro(co, level, n, val_v) {
             Some(name) => {
@@ -903,7 +880,7 @@ fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let level = vm.int_from(level_v, "use as a level")?;
     let n = vm.int_from(n_v, "use as an index")?;
     if !vm.level_in_range(level) {
-        return Err(arg_error(vm, 1, "setlocal", "level out of range"));
+        return Err(arg_error(vm, 1, "level out of range"));
     }
     match vm.local_set(level, n, val_v) {
         Some(name) => {
@@ -926,7 +903,7 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let m = match mt {
         Value::Nil => None,
         Value::Table(m) => Some(m),
-        _ => return Err(arg_error(vm, 2, "setmetatable", "nil or table expected")),
+        _ => return Err(arg_error(vm, 2, "nil or table expected")),
     };
     if let Value::Table(t) = v {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -951,7 +928,6 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "setfenv",
                 &format!("table expected, got {}", v.type_name()),
             ));
         }
@@ -995,7 +971,6 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "setfenv",
                 &format!(
                     "function, thread, or userdata expected, got {}",
                     v.type_name()

@@ -249,7 +249,7 @@ fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Ok(vm.nat_return(fs, &[Value::Int(now_secs())]));
     }
     let Value::Table(t) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "time", "table expected"));
+        return Err(arg_error(vm, 1, "table expected"));
     };
     // PUC `os_time` (loslib.c `getfield`/`l_checktime`): required year/month/day,
     // optional hour=12/min=0/sec=0/isdst (the last is unused without libc tz
@@ -385,7 +385,6 @@ fn num_arg(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<f64, L
         v => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("number expected, got {}", v.type_name()),
         )),
     }
@@ -404,7 +403,6 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "date",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -414,7 +412,7 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Int(i) => i,
             Value::Float(f) => f as i64,
             _ => {
-                return Err(arg_error(vm, 2, "date", "integer expected"));
+                return Err(arg_error(vm, 2, "integer expected"));
             }
         }
     } else {
@@ -586,7 +584,7 @@ fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Str(name) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "getenv", "string expected"));
+        return Err(arg_error(vm, 1, "string expected"));
     };
     let name = String::from_utf8_lossy(name.as_bytes()).into_owned();
     let v = match std::env::var_os(&name) {
@@ -633,7 +631,7 @@ fn check_file(vm: &mut Vm, fs: u32, nargs: u32, who: &str) -> Result<Gc<Userdata
         )),
         v => {
             let tn = vm.obj_typename(v);
-            Err(arg_error(vm, 1, who, &format!("FILE* expected, got {tn}")))
+            Err(arg_error(vm, 1, &format!("FILE* expected, got {tn}")))
         }
     }
 }
@@ -685,7 +683,7 @@ fn io_default_arg(
         }
         v => {
             let tn = vm.obj_typename(v);
-            Err(arg_error(vm, 1, who, &format!("FILE* expected, got {tn}")))
+            Err(arg_error(vm, 1, &format!("FILE* expected, got {tn}")))
         }
     }
 }
@@ -707,12 +705,7 @@ fn io_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Userdata(u) => u,
             v => {
                 let tn = vm.obj_typename(v);
-                return Err(arg_error(
-                    vm,
-                    1,
-                    "close",
-                    &format!("FILE* expected, got {tn}"),
-                ));
+                return Err(arg_error(vm, 1, &format!("FILE* expected, got {tn}")));
             }
         }
     } else {
@@ -874,7 +867,6 @@ fn str_arg(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<String
         v => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("string expected, got {}", v.type_name()),
         )),
     }
@@ -890,14 +882,13 @@ fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "open",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
     };
     let Some((opts, writable)) = parse_mode(&mode) else {
         let m = String::from_utf8_lossy(&mode);
-        return Err(arg_error(vm, 2, "open", &format!("invalid mode '{m}'")));
+        return Err(arg_error(vm, 2, &format!("invalid mode '{m}'")));
     };
     match opts.open(&path) {
         Ok(file) => {
@@ -928,7 +919,6 @@ fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "popen",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -940,7 +930,7 @@ fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Some(b'w') => false,
         _ => {
             let m = String::from_utf8_lossy(&mode);
-            return Err(arg_error(vm, 2, "popen", &format!("invalid mode '{m}'")));
+            return Err(arg_error(vm, 2, &format!("invalid mode '{m}'")));
         }
     };
     let mut cmd = if cfg!(windows) {
@@ -996,7 +986,6 @@ fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "popen",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -1069,7 +1058,6 @@ fn gather_write(vm: &mut Vm, fs: u32, nargs: u32, start: u32) -> Result<Vec<u8>,
                 return Err(arg_error(
                     vm,
                     i + 1,
-                    "write",
                     &format!("string expected, got {}", v.type_name()),
                 ));
             }
@@ -1185,7 +1173,6 @@ fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "seek",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -1198,7 +1185,6 @@ fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 3,
-                "seek",
                 &format!("number expected, got {}", v.type_name()),
             ));
         }
@@ -1207,7 +1193,7 @@ fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         b"set" => SeekFrom::Start(off.max(0) as u64),
         b"cur" => SeekFrom::Current(off),
         b"end" => SeekFrom::End(off),
-        _ => return Err(arg_error(vm, 2, "seek", "invalid option")),
+        _ => return Err(arg_error(vm, 2, "invalid option")),
     };
     match seek_handle(u, from) {
         Ok(pos) => Ok(vm.nat_return(fs, &[Value::Int(pos as i64)])),
@@ -1230,7 +1216,6 @@ fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "setvbuf",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -1239,7 +1224,7 @@ fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         b"full" => 0,
         b"line" => 1,
         b"no" => 2,
-        _ => return Err(arg_error(vm, 2, "setvbuf", "invalid option")),
+        _ => return Err(arg_error(vm, 2, "invalid option")),
     };
     // PUC `setvbuf` switches the buffering policy for subsequent writes.
     // luna mirrors the three modes against the existing `write_buf` —
@@ -1481,7 +1466,7 @@ fn read_format(vm: &mut Vm, u: Gc<Userdata>, fmt: Value) -> Result<Value, ReadFa
             }
         }
         Value::Nil => Some(b'l'),
-        _ => return Err(ReadFail::Lua(arg_error(vm, 1, "read", "invalid format"))),
+        _ => return Err(ReadFail::Lua(arg_error(vm, 1, "invalid format"))),
     };
     match f {
         Some(b'l') | Some(b'L') => {
@@ -1525,7 +1510,7 @@ fn read_format(vm: &mut Vm, u: Gc<Userdata>, fmt: Value) -> Result<Value, ReadFa
                 None => Ok(Value::Nil),
             }
         }
-        _ => Err(ReadFail::Lua(arg_error(vm, 1, "read", "invalid format"))),
+        _ => Err(ReadFail::Lua(arg_error(vm, 1, "invalid format"))),
     }
 }
 
@@ -1677,7 +1662,7 @@ fn gather_line_formats(
     who: &str,
 ) -> Result<Vec<Value>, LuaError> {
     if nargs.saturating_sub(start) > MAXARGLINE {
-        return Err(arg_error(vm, MAXARGLINE + 2, who, "too many arguments"));
+        return Err(arg_error(vm, MAXARGLINE + 2, "too many arguments"));
     }
     Ok((start..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect())
 }
@@ -1890,7 +1875,6 @@ fn os_exit(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "exit",
                 &format!("number expected, got {}", v.type_name()),
             ));
         }
@@ -1900,7 +1884,7 @@ fn os_exit(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn load_path(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Result<Value, Value>, LuaError> {
     let Value::Str(path) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "loadfile", "string expected"));
+        return Err(arg_error(vm, 1, "string expected"));
     };
     let path_s = String::from_utf8_lossy(path.as_bytes()).into_owned();
     let mode: Vec<u8> = match vm.nat_arg(fs, nargs, 1) {
@@ -2157,7 +2141,6 @@ fn nat_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "module",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -2312,7 +2295,7 @@ fn resolve_or_create_dotted(
 fn nat_package_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let m = vm.nat_arg(fs, nargs, 0);
     let Value::Table(t) = m else {
-        return Err(arg_error(vm, 1, "seeall", "table expected"));
+        return Err(arg_error(vm, 1, "table expected"));
     };
     let mt = vm.heap.new_table();
     let k = Value::Str(vm.heap.intern(b"__index"));
@@ -2361,20 +2344,20 @@ fn replace_bytes(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 
 fn nat_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Str(name) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "searchpath", "string expected"));
+        return Err(arg_error(vm, 1, "string expected"));
     };
     let Value::Str(path) = vm.nat_arg(fs, nargs, 1) else {
-        return Err(arg_error(vm, 2, "searchpath", "string expected"));
+        return Err(arg_error(vm, 2, "string expected"));
     };
     let sep: Vec<u8> = match vm.nat_arg(fs, nargs, 2) {
         Value::Nil => b".".to_vec(),
         Value::Str(s) => s.as_bytes().to_vec(),
-        _ => return Err(arg_error(vm, 3, "searchpath", "string expected")),
+        _ => return Err(arg_error(vm, 3, "string expected")),
     };
     let rep: Vec<u8> = match vm.nat_arg(fs, nargs, 3) {
         Value::Nil => b"/".to_vec(),
         Value::Str(s) => s.as_bytes().to_vec(),
-        _ => return Err(arg_error(vm, 4, "searchpath", "string expected")),
+        _ => return Err(arg_error(vm, 4, "string expected")),
     };
     let name_bytes = name.as_bytes().to_vec();
     let path_bytes = path.as_bytes().to_vec();
@@ -2406,7 +2389,7 @@ fn nat_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn nat_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let Value::Str(name) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "require", "string expected"));
+        return Err(arg_error(vm, 1, "string expected"));
     };
     let key = Value::Str(name);
     let name_s = String::from_utf8_lossy(name.as_bytes()).into_owned();

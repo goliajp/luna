@@ -10436,6 +10436,21 @@ impl Vm {
         &mut self,
         target: crate::runtime::value::NativeFn,
     ) -> Option<String> {
+        let full = self.loaded_funcname(target)?;
+        Some(match full.strip_prefix("_G.") {
+            Some(rest) => rest.to_string(),
+            None if full == "_G" => String::new(),
+            None => full,
+        })
+    }
+
+    /// The name `package.loaded` knows `target` by, unshortened: `"_G.print"`,
+    /// `"string.rep"`, or a bare module key. PUC 5.2's `pushglobalfuncname`
+    /// reports this as-is; 5.3 started dropping the `"_G."` prefix.
+    pub(crate) fn loaded_funcname(
+        &mut self,
+        target: crate::runtime::value::NativeFn,
+    ) -> Option<String> {
         let pkg_k = Value::Str(self.heap.intern(b"package"));
         let pkg = match self.globals().get(pkg_k) {
             Value::Table(t) => t,
@@ -10455,7 +10470,7 @@ impl Vm {
             let Value::Str(outer) = nk else { continue };
             let outer = String::from_utf8_lossy(outer.as_bytes()).into_owned();
             if matches(nv) {
-                return Some(if outer == "_G" { String::new() } else { outer });
+                return Some(outer);
             }
             if let Value::Table(inner_t) = nv {
                 let mut k2 = Value::Nil;
@@ -10464,12 +10479,8 @@ impl Vm {
                     if matches(nv2)
                         && let Value::Str(inner) = nk2
                     {
-                        let inner = String::from_utf8_lossy(inner.as_bytes()).into_owned();
-                        return Some(if outer == "_G" {
-                            inner
-                        } else {
-                            format!("{outer}.{inner}")
-                        });
+                        let inner = String::from_utf8_lossy(inner.as_bytes());
+                        return Some(format!("{outer}.{inner}"));
                     }
                 }
             }
@@ -10478,8 +10489,10 @@ impl Vm {
     }
 
     /// Name and namewhat of the native currently running on behalf of the top
-    /// Lua frame's call instruction (PUC `lua_getinfo("n")` at level 0). Lets
-    /// `luaL_argerror` rewrite a method call's self-argument error.
+    /// Lua frame (PUC `lua_getinfo("n")` at level 0, `funcnamefromcode`): the
+    /// call instruction's callee name, "for iterator" for a generic-for
+    /// step, or the metamethod event when the native was dispatched as one.
+    /// `None` when the caller gives it no name.
     pub(crate) fn running_call_name(&self) -> Option<(&'static str, String)> {
         let caller = self.frames.iter().rev().find_map(CallFrame::lua)?;
         let p = &caller.closure.proto;
@@ -10487,7 +10500,10 @@ impl Vm {
         let instr = *p.code.get(call_pc)?;
         match instr.op() {
             Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
-            _ => None,
+            Op::TForCall => Some(("for iterator", "for iterator".to_string())),
+            _ => self
+                .pending_tm
+                .map(|tm| ("metamethod", tm_debug_name(self.version, tm))),
         }
     }
 

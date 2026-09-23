@@ -1,5 +1,6 @@
 //! Bytecode VM (P03): instruction set, errors, interpreter, builtins.
 
+pub(crate) mod argcheck;
 pub mod builtins;
 pub mod dump;
 pub mod error;

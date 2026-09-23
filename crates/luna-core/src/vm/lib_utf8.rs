@@ -98,7 +98,6 @@ fn check_strv(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<Vec
         v => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("string expected, got {}", v.type_name()),
         )),
     }
@@ -127,7 +126,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     for i in 0..nargs {
         let c = vm.int_from(vm.nat_arg(fs, nargs, i), "use as a code point")?;
         if !(0..=cap).contains(&c) {
-            return Err(arg_error(vm, i + 1, "char", "value out of range"));
+            return Err(arg_error(vm, i + 1, "value out of range"));
         }
         encode(&mut out, c as u32);
     }
@@ -162,10 +161,10 @@ fn u_codepoint(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         "out of bounds"
     };
     if i < 1 {
-        return Err(arg_error(vm, 2, "codepoint", oob));
+        return Err(arg_error(vm, 2, oob));
     }
     if j > s.len() as i64 {
-        return Err(arg_error(vm, 3, "codepoint", oob));
+        return Err(arg_error(vm, 3, oob));
     }
     let mut out = Vec::new();
     let mut pos = (i - 1) as usize;
@@ -200,10 +199,10 @@ fn u_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let lax = vm.nat_arg(fs, nargs, 3).truthy();
     // PUC utflen bounds: --posi must land in [0, len]; --posj must be < len
     if !(i >= 1 && i - 1 <= s.len() as i64) {
-        return Err(arg_error(vm, 2, "len", "initial position out of bounds"));
+        return Err(arg_error(vm, 2, "initial position out of bounds"));
     }
     if j > s.len() as i64 {
-        return Err(arg_error(vm, 3, "len", "final position out of bounds"));
+        return Err(arg_error(vm, 3, "final position out of bounds"));
     }
     let mut n: i64 = 0;
     let mut pos = (i - 1) as usize;
@@ -248,7 +247,7 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         } else {
             "position out of bounds"
         };
-        return Err(arg_error(vm, 3, "offset", suffix));
+        return Err(arg_error(vm, 3, suffix));
     }
     let mut pos = (i - 1) as usize;
     let mut n = n;
@@ -340,7 +339,6 @@ fn u_codes(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return Err(arg_error(
             vm,
             1,
-            "codes",
             &format!("string expected, got {}", s.type_name()),
         ));
     };

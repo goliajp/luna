@@ -112,12 +112,7 @@ fn checktab(vm: &mut Vm, v: Value, what: u8, argn: u32, who: &str) -> Result<(),
     }
     let reject = |vm: &mut Vm| {
         let got = vm.obj_typename(v);
-        Err(arg_error(
-            vm,
-            argn,
-            who,
-            &format!("table expected, got {got}"),
-        ))
+        Err(arg_error(vm, argn, &format!("table expected, got {got}")))
     };
     if vm.version() <= crate::version::LuaVersion::Lua52 {
         return reject(vm);
@@ -268,7 +263,7 @@ fn t_insert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             let pos = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as a position")?;
             // PUC: (unsigned)pos - 1 < (unsigned)e  (rejects 0 and > e)
             if (pos as u64).wrapping_sub(1) >= e as u64 {
-                return Err(arg_error(vm, 2, "insert", "position out of bounds"));
+                return Err(arg_error(vm, 2, "position out of bounds"));
             }
             let mut i = e;
             while i > pos {
@@ -291,7 +286,7 @@ fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let pos = if nargs >= 2 {
         let pos = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as a position")?;
         if n > 0 && (pos < 1 || pos > n + 1) {
-            return Err(arg_error(vm, 2, "remove", "position out of bounds"));
+            return Err(arg_error(vm, 2, "position out of bounds"));
         }
         pos
     } else {
@@ -330,7 +325,6 @@ fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "concat",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -480,11 +474,11 @@ fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // range or a destination that wraps past maxint is rejected, not
         // looped over
         if !(f > 0 || (e as i128) < i64::MAX as i128 + f as i128) {
-            return Err(arg_error(vm, 3, "move", "too many elements to move"));
+            return Err(arg_error(vm, 3, "too many elements to move"));
         }
         let n = e as i128 - f as i128 + 1;
         if (d as i128) > i64::MAX as i128 - n + 1 {
-            return Err(arg_error(vm, 4, "move", "destination wrap around"));
+            return Err(arg_error(vm, 4, "destination wrap around"));
         }
         if d > f && d <= e && a1v.raw_eq(a2v) {
             // overlapping forward: copy backwards
@@ -507,14 +501,14 @@ fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let n = vm.int_from(vm.nat_arg(fs, nargs, 0), "use as a size")?;
     if !(0..=i32::MAX as i64).contains(&n) {
-        return Err(arg_error(vm, 1, "create", "out of range"));
+        return Err(arg_error(vm, 1, "out of range"));
     }
     let m = match vm.nat_arg(fs, nargs, 1) {
         Value::Nil => 0,
         v => vm.int_from(v, "use as a size")?,
     };
     if !(0..=i32::MAX as i64).contains(&m) {
-        return Err(arg_error(vm, 2, "create", "out of range"));
+        return Err(arg_error(vm, 2, "out of range"));
     }
     // PUC MAXHBITS: a hash part needs ceillog2(m) <= 30 bits; beyond 2^30
     // slots the resize raises "table overflow" rather than attempting it.
@@ -544,14 +538,13 @@ fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "sort",
                 &format!("function expected, got {}", v.type_name()),
             ));
         }
     };
     let n = vm.checked_len(tv)?;
     if n > i64::from(u32::MAX) {
-        return Err(arg_error(vm, 1, "sort", "array too big"));
+        return Err(arg_error(vm, 1, "array too big"));
     }
     // PUC sort uses lua_geti/lua_seti, honouring __index/__newindex.
     // Snapshot the working set into `vm.sort_scratch`, which `gc_roots`

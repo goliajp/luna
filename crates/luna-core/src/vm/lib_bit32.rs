@@ -46,17 +46,12 @@ fn to_u32(vm: &mut Vm, v: Value, n: u32, who: &str) -> Result<u32, LuaError> {
         Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
             Some(crate::numeric::Num::Int(i)) => i as f64,
             Some(crate::numeric::Num::Float(f)) => f,
-            None => return Err(arg_error(vm, n, who, "number expected")),
+            None => return Err(arg_error(vm, n, "number expected")),
         },
-        _ => return Err(arg_error(vm, n, who, "number expected")),
+        _ => return Err(arg_error(vm, n, "number expected")),
     };
     if !f.is_finite() || f.fract() != 0.0 {
-        return Err(arg_error(
-            vm,
-            n,
-            who,
-            "number has no integer representation",
-        ));
+        return Err(arg_error(vm, n, "number has no integer representation"));
     }
     // PUC `b_arg`: cast to `lua_Unsigned` (= unsigned long long) then truncate
     // mod 2^32. Floats outside i64 range fold via wrapping before the mask.
@@ -204,13 +199,12 @@ fn field_args(
     };
     // PUC `fieldargs`: f in [0, 31], w in [1, 32], f + w in [1, 32].
     if !(0..=31).contains(&field) {
-        return Err(arg_error(vm, field_idx + 1, who, "field out of range"));
+        return Err(arg_error(vm, field_idx + 1, "field out of range"));
     }
     if !(1..=32).contains(&width) {
         return Err(arg_error(
             vm,
             field_idx + 2,
-            who,
             "trying to access non-existent bits",
         ));
     }
@@ -218,7 +212,6 @@ fn field_args(
         return Err(arg_error(
             vm,
             field_idx + 1,
-            who,
             "trying to access non-existent bits",
         ));
     }
