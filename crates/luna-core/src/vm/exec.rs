@@ -1397,12 +1397,8 @@ impl Vm {
         }
         let proto = if is_bytecode {
             let allow_puc = self.puc_bytecode_loading;
-            crate::vm::dump::undump(src, &mut self.heap, self.version, allow_puc).map_err(
-                |msg| SyntaxError {
-                    line: 0,
-                    msg: msg.into_bytes(),
-                },
-            )?
+            crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
+                .map_err(SyntaxError::unpositioned)?
         } else if self.version.is_macro_lua() {
             // v1.3 Phase ML — MacroLua dialect: drain the lexer into a
             // token vec, run the macro expander pre-pass against the

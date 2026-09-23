@@ -22,9 +22,12 @@
 //!   both luna and PUC bodies; loader uses this to decide
 //!   "undump vs parse")
 
+mod error;
+mod header;
 mod luna;
 mod puc;
 mod reader;
+mod verify;
 
 use crate::runtime::function::Proto;
 use crate::runtime::heap::{Gc, Heap};
@@ -53,7 +56,7 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 /// `BODY_TAG` sentinel; a PUC chunk has its body there instead. Routing:
 /// - `BODY_TAG` right after a header-sized prefix → `luna::undump`. The
 ///   header bytes are not checked here, so a luna chunk with a corrupted
-///   header reaches luna's own "bad header" errors (calls.lua pins them).
+///   header reaches luna's own header errors (calls.lua pins them).
 /// - shorter than header + tag and not foreign → `luna::undump`, which
 ///   reports the truncation.
 /// - otherwise a `\x1bLua` chunk with a `0x51..0x55` version byte is PUC's
@@ -65,14 +68,64 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 /// `allow_puc` mirrors `Vm::puc_bytecode_loading()`. Default off — PUC
 /// bytecode is a strictly larger trust surface than luna's own (the v1.3
 /// audit calls this out as the embedder gate per §"Cross-dialect risks").
+///
+/// Whichever reader produced it, the prototype tree is verified before it is
+/// returned (see the `verify` module). A refused chunk's message is worded
+/// as the running dialect's `lundump.c` words it, without the chunk-name
+/// prefix `load` adds (see [`undump_named`]).
 pub fn undump(
     bytes: &[u8],
     heap: &mut Heap,
     version: LuaVersion,
     allow_puc: bool,
 ) -> Result<Gc<Proto>, String> {
+    undump_checked(bytes, heap, version, allow_puc).map_err(|r| match r {
+        Refusal::Gate(msg) => msg,
+        Refusal::Bad(bad) => bad.render(version),
+    })
+}
+
+/// [`undump`] as `load` reports it: a malformed chunk's message starts with
+/// `lundump.c`'s chunk name (`chunkname` without a leading `@` or `=`, or
+/// `binary string` for a name starting with the escape byte).
+pub(crate) fn undump_named(
+    bytes: &[u8],
+    heap: &mut Heap,
+    version: LuaVersion,
+    allow_puc: bool,
+    chunkname: &[u8],
+) -> Result<Gc<Proto>, Vec<u8>> {
+    undump_checked(bytes, heap, version, allow_puc).map_err(|r| match r {
+        Refusal::Gate(msg) => msg.into_bytes(),
+        Refusal::Bad(bad) => {
+            let mut out = error::lundump_name(chunkname).to_vec();
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(bad.render(version).as_bytes());
+            out
+        }
+    })
+}
+
+/// A chunk refused by an embedder gate, or found malformed.
+enum Refusal {
+    Gate(String),
+    Bad(error::Bad),
+}
+
+impl From<error::Bad> for Refusal {
+    fn from(bad: error::Bad) -> Refusal {
+        Refusal::Bad(bad)
+    }
+}
+
+fn undump_checked(
+    bytes: &[u8],
+    heap: &mut Heap,
+    version: LuaVersion,
+    allow_puc: bool,
+) -> Result<Gc<Proto>, Refusal> {
     if bytes.first() != Some(&0x1b) {
-        return Err("not a binary chunk".to_string());
+        return Err(Refusal::Gate("not a binary chunk".to_string()));
     }
     let header = luna::header_for(version);
     let tag_at = header.len();
@@ -86,13 +139,18 @@ pub fn undump(
     let foreign_puc = puc_signature
         && !luna_body
         && (bytes[4] != written_version_byte || bytes.len() >= tag_at + luna::BODY_TAG.len());
-    if foreign_puc {
-        if !allow_puc {
-            return Err("PUC bytecode loading is disabled \
-                 (call vm.set_puc_bytecode_loading(true) to enable)"
-                .to_string());
-        }
-        return puc::undump_puc(bytes, heap);
+    if foreign_puc && !allow_puc {
+        return Err(Refusal::Gate(
+            "PUC bytecode loading is disabled \
+             (call vm.set_puc_bytecode_loading(true) to enable)"
+                .to_string(),
+        ));
     }
-    luna::undump(bytes, heap, version)
+    let proto = if foreign_puc {
+        puc::undump_puc(bytes, heap)?
+    } else {
+        luna::undump(bytes, heap, version)?
+    };
+    verify::verify(&proto).map_err(error::Bad::Code)?;
+    Ok(proto)
 }

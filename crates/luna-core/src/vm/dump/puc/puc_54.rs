@@ -18,6 +18,8 @@ use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
 use crate::runtime::string::LuaStr;
+use crate::vm::dump::error::Bad;
+use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
 use crate::vm::isa::Op;
 
@@ -127,63 +129,34 @@ const D54: Dialect = Dialect {
     v55: false,
 };
 
-pub(super) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, String> {
+pub(super) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     // The main closure's upvalue count; its function repeats it.
     r.u8()?;
     let raw = read_proto(&mut r, heap, None)?;
     if r.pos() != bytes.len() {
-        return Err(format!(
-            "{DIALECT} chunk: {} trailing bytes",
-            bytes.len() - r.pos()
-        ));
+        return Err(format!("{DIALECT} chunk: {} trailing bytes", bytes.len() - r.pos()).into());
     }
-    lower::build(heap, raw, &translate)
+    Ok(lower::build(heap, raw, &translate)?)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
     modern::translate(&D54, raw)
 }
 
-fn check_header(bytes: &[u8]) -> Result<(), String> {
-    let Some(h) = bytes.get(..HEADER.len()) else {
-        return Err(format!("{DIALECT} chunk: truncated header"));
-    };
-    match h.iter().zip(HEADER).position(|(a, b)| a != b) {
-        None => Ok(()),
-        Some(5) => Err(format!(
-            "{DIALECT} chunk: unsupported format byte 0x{:02x}",
-            h[5]
-        )),
-        Some(6..=11) => Err(format!("{DIALECT} chunk: corrupted LUAC_DATA")),
-        Some(i @ 12..=14) => Err(format!(
-            "{DIALECT} chunk: {} is {}, luna needs {}",
-            [
-                "sizeof(Instruction)",
-                "sizeof(lua_Integer)",
-                "sizeof(lua_Number)"
-            ][i - 12],
-            h[i],
-            HEADER[i]
-        )),
-        Some(15..=22) => Err(format!(
-            "{DIALECT} chunk: LUAC_INT mismatch (not a little-endian 64-bit integer build)"
-        )),
-        Some(_) => Err(format!(
-            "{DIALECT} chunk: LUAC_NUM mismatch (not an IEEE double lua_Number)"
-        )),
-    }
+fn check_header(bytes: &[u8]) -> Result<(), Bad> {
+    header::check(bytes, HEADER, header::LAYOUT_54)
 }
 
 /// `loadUnsigned`: 7-bit groups, most significant first, the last byte
 /// flagged by its high bit.
-fn read_varint(r: &mut Reader) -> Result<u64, String> {
+fn read_varint(r: &mut Reader) -> Result<u64, Bad> {
     let mut x: u64 = 0;
     loop {
         let b = r.u8()?;
         if x >> 57 != 0 {
-            return Err(format!("{DIALECT} chunk: integer overflow"));
+            return Err(Bad::IntOverflow);
         }
         x = (x << 7) | (b & 0x7F) as u64;
         if b & 0x80 != 0 {
@@ -193,22 +166,22 @@ fn read_varint(r: &mut Reader) -> Result<u64, String> {
 }
 
 /// `loadInt`: a varint that must fit a C `int`.
-fn read_int(r: &mut Reader) -> Result<u32, String> {
+fn read_int(r: &mut Reader) -> Result<u32, Bad> {
     let v = read_varint(r)?;
     u32::try_from(v)
         .ok()
         .filter(|&v| v <= i32::MAX as u32)
-        .ok_or_else(|| format!("{DIALECT} chunk: integer overflow"))
+        .ok_or(Bad::IntOverflow)
 }
 
 /// An element count, checked against the bytes left (see `Reader::count`).
-fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, String> {
+fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
     let n = read_int(r)?;
     r.count(n as u64, min_size)
 }
 
 /// A varint holding length + 1; 0 is PUC's NULL string.
-fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, String> {
+fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, Bad> {
     let size = read_varint(r)?;
     if size == 0 {
         return Ok(None);
@@ -217,7 +190,7 @@ fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, String> {
     Ok(Some(r.take(n)?))
 }
 
-fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
+fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, Bad> {
     // Tags are `makevariant(type, variant)` (lobject.h).
     Ok(match r.u8()? {
         0 => Value::Nil,
@@ -227,9 +200,9 @@ fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
         19 => Value::Float(f64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))),
         4 | 20 => match read_string(r)? {
             Some(s) => Value::Str(heap.intern(s)),
-            None => return Err(format!("{DIALECT} chunk: NULL string constant")),
+            None => return Err(format!("{DIALECT} chunk: NULL string constant").into()),
         },
-        t => return Err(format!("{DIALECT} chunk: bad constant tag {t}")),
+        _ => return Err(Bad::Constant),
     })
 }
 
@@ -240,7 +213,7 @@ fn read_proto(
     r: &mut Reader,
     heap: &mut Heap,
     parent_source: Option<Gc<LuaStr>>,
-) -> Result<RawProto, String> {
+) -> Result<RawProto, Bad> {
     // A nested function's source is dumped as NULL when it equals its
     // parent's; a stripped main chunk has none at all.
     let source = match (read_string(r)?, parent_source) {

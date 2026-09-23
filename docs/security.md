@@ -24,8 +24,11 @@ embedder follows the patterns in §2:
   budget and approximate-byte memory cap force a catchable Lua error
   before the host loses control.
 - **Bytecode-loader escape.** Precompiled chunks bypass the parser's
-  depth and opcode-shape limits; both luna's own dump format and PUC
-  `.luac` loading are off by default in `Vm::sandbox(...)`.
+  depth and opcode-shape limits. Every loaded chunk passes a structural
+  verifier (registers, indices, jump targets, instruction pairing; see
+  [`compatibility.md`](compatibility.md#verification-on-load)), but that
+  is not a sandbox boundary: both luna's own dump format and PUC `.luac`
+  loading are off by default in `Vm::sandbox(...)`.
 - **Unsound `unsafe` at the embedder surface.** Every public
   `cargo doc`-visible API is safe Rust. The four `pub unsafe fn`
   remnants are `#[doc(hidden)]` (see

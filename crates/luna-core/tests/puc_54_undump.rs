@@ -31,8 +31,5 @@ fn header_rejects_corrupted_chunk_with_gate_on() {
     bytes.extend_from_slice(&[0xFF; 64]);
     let err = vm.load(&bytes, b"=t").expect_err("must reject");
     let msg = String::from_utf8_lossy(&err.msg);
-    assert!(
-        msg.contains("PUC 5.4 chunk: corrupted LUAC_DATA"),
-        "unexpected error: {msg}"
-    );
+    assert_eq!(msg, "t: bad binary format (corrupted chunk)");
 }
