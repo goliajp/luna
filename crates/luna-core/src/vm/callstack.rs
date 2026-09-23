@@ -1089,14 +1089,19 @@ impl Vm {
     /// catch an error raised now, if any is in reach.
     fn nearest_catcher(&self) -> Option<Option<Value>> {
         let floor = self.msgh_floor.min(self.frames.len());
-        self.frames[floor..].iter().rev().find_map(|cf| match cf {
-            CallFrame::Cont(nc) => match nc.kind {
-                ContKind::Pcall => Some(None),
-                ContKind::Xpcall { handler } => Some(Some(handler)),
-                _ => None,
-            },
-            CallFrame::Lua(_) => None,
-        })
+        self.frames[floor..]
+            .iter()
+            .rev()
+            .find_map(|cf| match cf {
+                CallFrame::Cont(nc) => match nc.kind {
+                    ContKind::Pcall => Some(None),
+                    ContKind::Xpcall { handler } => Some(Some(handler)),
+                    _ => None,
+                },
+                CallFrame::Lua(_) => None,
+            })
+            // uncaught inside a running handler: that handler again
+            .or(self.msgh_running.map(Some))
     }
 
     /// PUC `luaG_errormsg`, at the point the error reaches the unwinder:
@@ -1164,11 +1169,14 @@ impl Vm {
         }
     }
 
-    /// Run an xpcall message handler on `err`. An error inside the handler
-    /// calls it again with the new error, as PUC's `luaG_errormsg` re-enters
-    /// the handler; after `MAX_C_DEPTH` reruns the error becomes "C stack
-    /// overflow", and if the handler fails on that too, "error in error
-    /// handling" (errors.lua :637).
+    /// Run an xpcall message handler on `err`, as PUC's `luaG_errormsg`
+    /// does: with the handler still installed, so an error the handler
+    /// raises runs it again at that point (nested, the raising frames still
+    /// on the stack), and what that inner run returns is the error thrown
+    /// out of the outer one. At `MAX_C_DEPTH` nested runs the error becomes
+    /// "C stack overflow", handled once more without re-entry; if the
+    /// handler fails on that too, "error in error handling" (errors.lua
+    /// :637).
     pub(crate) fn call_msgh(&mut self, handler: Value, err: Value) -> Value {
         // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once when the handler
         // is not a function
@@ -1177,23 +1185,21 @@ impl Vm {
         {
             return Value::Str(self.heap.intern(b"error in error handling"));
         }
-        let mut cur = err;
-        let mut capped = false;
-        for iter in 0.. {
-            if iter >= crate::vm::exec::MAX_C_DEPTH && !capped {
-                cur = Value::Str(self.heap.intern(b"C stack overflow"));
-                capped = true;
-            }
-            self.msgh_depth += 1;
-            let r = self.call_protected(handler, &[cur]);
-            self.msgh_depth -= 1;
-            match r {
-                Ok(results) => return results.first().copied().unwrap_or(Value::Nil),
-                Err(_) if capped => break,
-                Err(e) => cur = e.0,
-            }
+        let capped = self.msgh_depth >= crate::vm::exec::MAX_C_DEPTH;
+        let (arg, reenter) = if capped {
+            (Value::Str(self.heap.intern(b"C stack overflow")), None)
+        } else {
+            (err, Some(handler))
+        };
+        self.msgh_depth += 1;
+        let r = self.call_protected_with(handler, &[arg], reenter);
+        self.msgh_depth -= 1;
+        match r {
+            Ok(results) => results.first().copied().unwrap_or(Value::Nil),
+            Err(_) if capped => Value::Str(self.heap.intern(b"error in error handling")),
+            // already the result of the handler run nested at that error
+            Err(e) => e.0,
         }
-        Value::Str(self.heap.intern(b"error in error handling"))
     }
 
     /// `call_value` as a protected call made from Rust (PUC `lua_pcall`
@@ -1204,6 +1210,18 @@ impl Vm {
         f: Value,
         args: &[Value],
     ) -> Result<Vec<Value>, crate::vm::error::LuaError> {
+        self.call_protected_with(f, args, None)
+    }
+
+    /// [`Vm::call_protected`] with `handler` as the message handler that is
+    /// running while `f` runs (`L->errfunc` during `luaG_errormsg`'s call).
+    fn call_protected_with(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        handler: Option<Value>,
+    ) -> Result<Vec<Value>, crate::vm::error::LuaError> {
+        let running = std::mem::replace(&mut self.msgh_running, handler);
         let floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
         let applied = self.msgh_applied.take();
         let traceback = self.error_traceback.take();
@@ -1211,6 +1229,7 @@ impl Vm {
         let keep = std::mem::replace(&mut self.keep_error_traceback, false);
         let r = self.call_value(f, args);
         self.keep_error_traceback = keep;
+        self.msgh_running = running;
         self.msgh_floor = floor;
         self.msgh_applied = applied;
         self.error_traceback = traceback;
