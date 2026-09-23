@@ -153,7 +153,7 @@ fn code_param(p: u32) -> u8 {
     if u64::from(p) >= (0x1F_u64 << (0xF - 7 - 1)) * 100 {
         return 0xFF;
     }
-    let p = (p * 128 + 99) / 100;
+    let p = (p * 128).div_ceil(100);
     if p < 0x10 {
         return p as u8;
     }
