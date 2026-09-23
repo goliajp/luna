@@ -131,21 +131,23 @@ fn sqrt_of_a_numeric_string_converts_it() {
 }
 
 /// 5.3+ `math.atan(y)` is `atan2(y, 1)`, which libm rounds differently
-/// from `atan(y)` for some inputs; this is one (PUC 5.4 prints ...543,
-/// libm `atan` gives ...545).
+/// from `atan(y)` for some inputs; this is one on macOS (PUC 5.4 prints
+/// ...543, libm `atan` gives ...545). The expected value comes from the
+/// host's own `atan2`, because libm implementations disagree in the last
+/// place (glibc gives ...545 for both).
 #[test]
 fn atan_rounds_like_atan2() {
-    let src = r#"
-        local x0 = 0.00012682450675524315
+    let x0 = 0.000_126_824_506_755_243_15_f64;
+    let want = x0.atan2(1.0);
+    let src = format!(
+        r#"
+        local x0 = {x0:?}
         local last
         for i = 1, 20000 do local x = x0 last = math.atan(x) end
         local function f(y) local r = math.atan(y) return r end
         local last2
         for i = 1, 20000 do last2 = f(x0) end
-        return string.format("%.17g %.17g", last, last2)"#;
-    same(
-        LuaVersion::Lua54,
-        src,
-        "0.00012682450607527543 0.00012682450607527543",
+        return tostring(last == {want:?}) .. " " .. tostring(last2 == {want:?})"#
     );
+    same(LuaVersion::Lua54, &src, "true true");
 }

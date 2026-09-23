@@ -900,7 +900,8 @@ fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         argcheck::opt_integer(vm, a, 2, 0)?
     };
     match seek_stream(u, op, offset) {
-        Ok(pos) if vm.version() == LuaVersion::Lua52 => {
+        // ≤5.2 has one number type: `lua_pushnumber(ftell(f))`
+        Ok(pos) if vm.version() <= LuaVersion::Lua52 => {
             Ok(vm.nat_return(fs, &[Value::Float(pos as f64)]))
         }
         Ok(pos) => Ok(vm.nat_return(fs, &[Value::Int(pos as i64)])),
