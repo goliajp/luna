@@ -750,18 +750,18 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         }
         Err(e) => {
             // PUC formats the syntax error's source prefix via `luaO_chunkid`
-            // (LUA_IDSIZE=60), not as a bare `[string "<name>"]`. This handles
-            // the `@file` / `=name` sigils and head/tail-truncation rules.
+            // (LUA_IDSIZE=60; 5.1's lexer uses its own MAXSRC=80), not as a
+            // bare `[string "<name>"]`. This handles the `@file` / `=name`
+            // sigils and head/tail-truncation rules.
             // `e.msg` carries raw bytes (PUC's near-token may be a non-UTF-8
             // byte from the source) — splice it in as-is so 5.1 errors.lua
             // can pattern-match `near '\xff'` etc.
-            let display = crate::vm::lib_debug::chunk_id(&name);
-            let mut msg_bytes = display;
-            msg_bytes.push(b':');
-            msg_bytes.extend_from_slice(e.line.to_string().as_bytes());
-            msg_bytes.extend_from_slice(b": ");
-            msg_bytes.extend_from_slice(&e.msg);
-            let m = Value::Str(vm.heap.intern(&msg_bytes));
+            let display = if vm.version() <= crate::version::LuaVersion::Lua51 {
+                crate::frontend::error::chunk_id_51(&name)
+            } else {
+                crate::vm::lib_debug::chunk_id(&name)
+            };
+            let m = Value::Str(vm.heap.intern(&e.render(&display)));
             Ok(vm.nat_return(fs, &[Value::Nil, m]))
         }
     }

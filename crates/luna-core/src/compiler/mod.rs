@@ -537,13 +537,27 @@ impl<'a> Compiler<'a> {
         )
     }
 
+    /// PUC `luaK_checkstack` on overflow: 5.1/5.2 say the expression is too
+    /// complex, 5.3/5.4 that it needs too many registers, 5.5 runs it through
+    /// `errorlimit`. PUC appends the token being read; the AST keeps no
+    /// tokens, so luna cannot.
+    fn regs_error(&self, line: u32) -> SyntaxError {
+        match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 => {
+                self.err(line, "function or expression too complex")
+            }
+            LuaVersion::Lua55 => self.limit_err("registers", 255),
+            _ => self.err(line, "function or expression needs too many registers"),
+        }
+    }
+
     fn reserve(&mut self, n: u32) -> Result<u32, SyntaxError> {
         let line = self.last_line;
         let l = self.l();
         let base = l.freereg;
         l.freereg += n;
         if l.freereg > MAX_REGS {
-            return Err(self.err(line, "function or expression needs too many registers"));
+            return Err(self.regs_error(line));
         }
         if l.freereg > l.max_stack {
             l.max_stack = l.freereg;
@@ -1315,10 +1329,7 @@ impl<'a> Compiler<'a> {
                 // many registers" once the per-function register cap is hit;
                 // a too-wide call site is just one path into it (errors.lua
                 // :740 checkmessage "too many registers").
-                return Err(self.err(
-                    self.last_line,
-                    "function or expression needs too many registers",
-                ));
+                return Err(self.regs_error(self.last_line));
             }
             self.set_freereg(dst);
             let last = i == args.len() - 1;
@@ -2128,7 +2139,7 @@ impl<'a> Compiler<'a> {
                     item_idx += 1;
                     let dst = treg + 1 + pending;
                     if dst >= MAX_REGS {
-                        return Err(self.err(line, "constructor too long"));
+                        return Err(self.regs_error(line));
                     }
                     self.set_freereg(dst);
                     let e = self.expr(*v)?;
@@ -2578,10 +2589,7 @@ impl<'a> Compiler<'a> {
         // bounds check. errors.lua :721's `local a,a,…(500),a = f()` would
         // otherwise slip past the register cap — guard the target window here.
         if base.saturating_add(want) > MAX_REGS {
-            return Err(self.err(
-                self.last_line,
-                "function or expression needs too many registers",
-            ));
+            return Err(self.regs_error(self.last_line));
         }
         if exprs.is_empty() {
             if want > 0 {
@@ -2605,7 +2613,7 @@ impl<'a> Compiler<'a> {
         for (i, &eid) in exprs.iter().enumerate() {
             let dst = base + i as u32;
             if dst >= MAX_REGS {
-                return Err(self.err(self.last_line, "too many values in expression list"));
+                return Err(self.regs_error(self.last_line));
             }
             self.set_freereg(dst);
             let e = self.expr(eid)?;
