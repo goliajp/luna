@@ -71,6 +71,21 @@ fn compiled_upvalue_arithmetic_checks_the_value() {
     }
 }
 
+/// A compiled function whose result is a float converts its integer
+/// operands first: `a / b` of two integers, `a + 0.5`.
+#[test]
+fn compiled_float_arithmetic_converts_integer_operands() {
+    let src = "
+        local function div(a, b) return a / b end
+        local function half(a) return a + 0.5 end
+        local s = 0
+        for i = 1, 300 do s = s + div(i, 4) + half(i) end
+        return s .. ' ' .. div(7, 2) .. ' ' .. half(3) .. ' ' .. div(1, 0)";
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_eq!(run(v, src), "56587.5 3.5 3.5 inf");
+    }
+}
+
 /// Integer `//` and `%` in a compiled loop round toward minus infinity,
 /// a zero divisor raises the interpreter's error instead of trapping,
 /// and shifts of 64 or more give 0 either way.
