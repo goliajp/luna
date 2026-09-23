@@ -203,6 +203,14 @@ struct BlockCx {
     reg_floor: u32,
     is_loop: bool,
     breaks: Vec<usize>,
+    /// 5.4: per entry of `breaks`, the number of active locals at the
+    /// `break`, to tell which blocks with upvalues it leaves
+    break_levels: Vec<usize>,
+    /// 5.4: a `break` left the scope of a local needing a CLOSE (PUC's
+    /// goto `close` flag), so the loop's "break" label closes
+    break_close: bool,
+    /// the pc where the block starts
+    start_pc: usize,
     /// visible labels defined in this block
     labels: Vec<LabelDef>,
     /// forward gotos not yet matched to a label
@@ -669,12 +677,16 @@ impl<'a> Compiler<'a> {
         let floor = self.lr().freereg;
         let first = self.lr().locals.len();
         let first_avar = self.lr().avars.len();
+        let start_pc = self.lr().code.len();
         self.l().blocks.push(BlockCx {
             first_local: first,
             first_avar,
             reg_floor: floor,
             is_loop,
             breaks: Vec::new(),
+            break_levels: Vec::new(),
+            break_close: false,
+            start_pc,
             labels: Vec::new(),
             gotos: Vec::new(),
             gdecls: Vec::new(),
@@ -698,16 +710,29 @@ impl<'a> Compiler<'a> {
         let v54 = self.version == LuaVersion::Lua54;
         let before_close = self.lr().code.len() as u32;
         // 5.4 `break` is a goto to a label placed here, where the loop's
-        // variables are gone; the CLOSE it needs follows the label (see
-        // the `Break` statement)
-        let break_close = v54 && !b.breaks.is_empty();
-        if break_close {
-            for &pc in &b.breaks {
-                self.patch_to_here(pc)?;
+        // variables are gone; a CLOSE follows the label when some break
+        // left active locals of a block with upvalues or to-be-closed
+        // variables (PUC `movegotosout` sets the goto's `close`)
+        let mut break_close = b.break_close;
+        if v54 && (captured || b.has_tbc) {
+            if b.is_loop {
+                break_close |= b.break_levels.iter().any(|&n| n > b.first_local);
+            } else if let Some(lp) = self.l().blocks.iter_mut().rev().find(|x| x.is_loop) {
+                let crossed = lp
+                    .breaks
+                    .iter()
+                    .zip(&lp.break_levels)
+                    .any(|(&pc, &n)| pc >= b.start_pc && n > b.first_local);
+                lp.break_close |= crossed;
             }
         }
         if break_close && let Some(line) = b.end_line {
             self.last_line = line;
+        }
+        if v54 {
+            for &pc in &b.breaks {
+                self.patch_to_here(pc)?;
+            }
         }
         if captured || b.has_tbc || break_close {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
@@ -737,7 +762,7 @@ impl<'a> Compiler<'a> {
         self.l().locals.truncate(b.first_local);
         self.l().avars.truncate(b.first_avar);
         self.set_freereg(b.reg_floor);
-        if !break_close {
+        if !v54 {
             for pc in b.breaks {
                 self.patch_to_here(pc)?;
             }
@@ -2489,14 +2514,16 @@ impl<'a> Compiler<'a> {
                     self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
                 }
                 let jmp = self.emit_jump();
-                self.l()
+                let level = self.lr().locals.len();
+                let lp = self
+                    .l()
                     .blocks
                     .iter_mut()
                     .rev()
                     .find(|b| b.is_loop)
-                    .expect("loop block")
-                    .breaks
-                    .push(jmp);
+                    .expect("loop block");
+                lp.breaks.push(jmp);
+                lp.break_levels.push(level);
                 Ok(())
             }
             Stat::Return { exprs, line } => {
