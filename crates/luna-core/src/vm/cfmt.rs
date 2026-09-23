@@ -176,8 +176,19 @@ pub(crate) fn cstr(out: &mut Vec<u8>, sp: &Spec, s: &[u8]) {
 pub(crate) fn float(out: &mut Vec<u8>, sp: &Spec, conv: u8, x: f64) {
     let upper = conv.is_ascii_uppercase();
     if x.is_nan() {
-        let body: &[u8] = if upper { b"NAN" } else { b"nan" };
-        pad(out, sp, false, b"", body);
+        let (negative, body) = crate::numeric::nan_spelling(x);
+        // Apple's printf drops the sign flags for a NaN as well
+        let sign = if cfg!(target_vendor = "apple") {
+            b""
+        } else {
+            sp.sign(negative)
+        };
+        let body = if upper {
+            body.to_ascii_uppercase().into_bytes()
+        } else {
+            body.as_bytes().to_vec()
+        };
+        pad(out, sp, false, sign, &body);
         return;
     }
     let sign = sp.sign(x.is_sign_negative());
