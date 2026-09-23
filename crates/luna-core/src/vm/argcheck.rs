@@ -21,7 +21,7 @@ use crate::numeric::{self, Num};
 use crate::runtime::Value;
 use crate::runtime::value::f2i_exact;
 use crate::version::LuaVersion;
-use crate::vm::builtins::arg_error;
+use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -136,6 +136,35 @@ pub(crate) fn opt_integer(vm: &mut Vm, a: Args, i: u32, default: i64) -> Result<
     check_integer(vm, a, i)
 }
 
+/// 5.1/5.2 `luaL_checkint`: `luaL_checkinteger` cast to a C `int`, which
+/// keeps the low 32 bits.
+pub(crate) fn check_int(vm: &mut Vm, a: Args, i: u32) -> Result<i32, LuaError> {
+    check_integer(vm, a, i).map(|n| n as i32)
+}
+
+/// 5.1/5.2 `luaL_optint`.
+pub(crate) fn opt_int(vm: &mut Vm, a: Args, i: u32, default: i32) -> Result<i32, LuaError> {
+    opt_integer(vm, a, i, i64::from(default)).map(|n| n as i32)
+}
+
+/// 5.1 `LUAI_MAXCSTACK`: the most slots `lua_checkstack` grants a C
+/// function.
+const MAXCSTACK_51: i64 = 8000;
+
+/// `luaL_checkstack` before a native pushes `n` more values.
+pub(crate) fn check_stack(vm: &mut Vm, a: Args, n: i64, msg: &str) -> Result<(), LuaError> {
+    let fits = if vm.version() == LuaVersion::Lua51 {
+        n <= MAXCSTACK_51 && i64::from(a.n) + n <= MAXCSTACK_51
+    } else {
+        n < vm.stack_room()
+    };
+    if fits {
+        Ok(())
+    } else {
+        Err(raise_str(vm, &format!("stack overflow ({msg})")))
+    }
+}
+
 /// `lua_tolstring` on a string or number: the bytes a library function sees.
 /// A number is rendered the way the dialect prints it.
 pub(crate) fn to_str_bytes(vm: &Vm, v: Value) -> Option<Vec<u8>> {
@@ -150,7 +179,9 @@ pub(crate) fn to_str_bytes(vm: &Vm, v: Value) -> Option<Vec<u8>> {
 }
 
 /// `luaL_checklstring`, returning an interned string. A number argument is
-/// converted with the dialect's rendering.
+/// converted with the dialect's rendering and, as `lua_tolstring` does,
+/// the string replaces it in the argument slot, which keeps it alive for
+/// as long as the native runs.
 pub(crate) fn check_string(
     vm: &mut Vm,
     a: Args,
@@ -161,7 +192,11 @@ pub(crate) fn check_string(
         return Ok(s);
     }
     match to_str_bytes(vm, v) {
-        Some(b) if !a.is_none(i) => Ok(vm.heap.intern(&b)),
+        Some(b) if !a.is_none(i) => {
+            let s = vm.heap.intern(&b);
+            vm.nat_set_arg(a.fs, i, Value::Str(s));
+            Ok(s)
+        }
         _ => Err(type_error(vm, a, i, "string")),
     }
 }
