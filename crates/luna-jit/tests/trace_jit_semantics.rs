@@ -300,3 +300,26 @@ fn pairs_loop_meeting_other_key_kinds() {
         );
     }
 }
+
+/// A numeric string in arithmetic is coerced; the trace added the
+/// string's pointer as an integer.
+#[test]
+fn string_operand_in_arithmetic() {
+    let src = r#"
+        local s, x = "10", 0
+        for i = 1, 200 do x = i + s end
+        local t, y = "7", 0
+        for i = 1, 200 do y = (i % t) + (i // t) end
+        return tostring(x) .. " " .. tostring(y)"#;
+    for v in INT_DIALECTS {
+        let (interp, _) = run(v, src, false);
+        let mut vm = luna_jit::new_with_jit(v);
+        vm.jit.trace_hot_threshold = 1;
+        let jit = match vm.eval(src).expect("eval").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{other:?}"),
+        };
+        assert!(interp.starts_with("210 "), "{v:?}: {interp}");
+        assert_eq!(jit, interp, "{v:?}");
+    }
+}
