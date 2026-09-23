@@ -177,8 +177,20 @@ impl<'s> TokenSource<'s> {
 /// transparently for MacroLua; direct callers feed expanded tokens via
 /// [`parse_tokens`].
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
+    parse_at_depth(src, version, 0)
+}
+
+/// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
+/// counts its nesting on the running thread's `nCcalls`, so a chunk loaded
+/// near the C-call limit fails to *parse* (and `require` reports it as an
+/// error loading the module) before the call that would run it overflows.
+pub(crate) fn parse_at_depth(
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+) -> Result<Chunk, SyntaxError> {
     let lex = Lexer::new(src, version);
-    parse_from_source(TokenSource::Lexer(lex), version)
+    parse_from_source(TokenSource::Lexer(lex), version, c_depth)
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua
@@ -190,6 +202,16 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
+    parse_tokens_at_depth(tokens, src, version, 0)
+}
+
+/// [`parse_tokens`] at a C depth (see [`parse_at_depth`]).
+pub(crate) fn parse_tokens_at_depth(
+    tokens: Vec<TokenInfo>,
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+) -> Result<Chunk, SyntaxError> {
     parse_from_source(
         TokenSource::PreExpanded {
             tokens,
@@ -197,12 +219,14 @@ pub fn parse_tokens(
             src,
         },
         version,
+        c_depth,
     )
 }
 
 fn parse_from_source<'s>(
     mut lex: TokenSource<'s>,
     version: LuaVersion,
+    c_depth: u32,
 ) -> Result<Chunk, SyntaxError> {
     let cur = lex.next_token()?;
     let mut p = Parser {
@@ -214,7 +238,7 @@ fn parse_from_source<'s>(
         exprs: Vec::new(),
         stats: Vec::new(),
         stat_lines: Vec::new(),
-        depth: 0,
+        depth: c_depth,
         version,
         // the main chunk is the bottom-most function context (line 0 → main)
         func_local_count: vec![(0, 0, 0)],
@@ -425,7 +449,14 @@ impl<'s> Parser<'s> {
 
     fn enter(&mut self) -> Result<(), SyntaxError> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH {
+        // 5.1-5.3 `enterlevel` fails past the limit; 5.4+ `luaE_incCstack`
+        // at it
+        let limit = if self.version >= LuaVersion::Lua54 {
+            MAX_DEPTH - 1
+        } else {
+            MAX_DEPTH
+        };
+        if self.depth > limit {
             return Err(self.levels_error());
         }
         Ok(())
@@ -971,6 +1002,7 @@ impl<'s> Parser<'s> {
         // PUC `assignment`/`restassign` check each target as soon as it is
         // parsed, so the near-token is the one following that target.
         let mut targets = vec![first];
+        let mut entered = 0;
         loop {
             let last = *targets.last().expect("one target");
             if !matches!(
@@ -982,17 +1014,37 @@ impl<'s> Parser<'s> {
             if !self.accept(Token::Comma)? {
                 break;
             }
-            // PUC's `restassign` enforces `nvars + nCcalls < LUAI_MAXCCALLS`
-            // (200) at each comma; otherwise a runaway multi-assign would
-            // exhaust the C stack. errors.lua :650 builds a 500-target list
-            // and expects the limit error.
-            if targets.len() >= 200 {
-                return Err(self.levels_error());
-            }
+            // PUC recurses once per extra target and bounds that against
+            // the C-call budget (errors.lua :650 expects the error for 500
+            // targets), after reading the target: 5.1 as a count of
+            // "variables in assignment", 5.2/5.3 as C levels, 5.4+ by
+            // entering a level that stays entered until the statement ends.
+            let nvars = targets.len() as u32;
             targets.push(self.suffixed_expr()?);
+            match self.version {
+                LuaVersion::Lua51 => {
+                    let limit = MAX_DEPTH.saturating_sub(self.depth);
+                    if nvars > limit {
+                        return Err(self.plain_error(format!(
+                            "{} has more than {limit} variables in assignment",
+                            self.where_()
+                        )));
+                    }
+                }
+                LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                    if nvars + self.depth > MAX_DEPTH {
+                        return Err(self.levels_error());
+                    }
+                }
+                _ => {
+                    self.enter()?;
+                    entered += 1;
+                }
+            }
         }
         self.expect(Token::Assign, "=")?;
         let exprs = self.exprlist()?;
+        self.depth -= entered;
         Ok(self.push_stat(Stat::Assign { targets, exprs }))
     }
 
