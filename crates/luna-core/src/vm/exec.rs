@@ -4443,7 +4443,7 @@ impl Vm {
                 }
                 v => {
                     let mm = self.get_mm(v, Mm::Call);
-                    if mm.is_nil() {
+                    if mm.is_nil() || self.call_mm_unusable(mm) {
                         return Err(self.call_err(v));
                     }
                     chain += 1;
@@ -4471,6 +4471,13 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// Up to 5.3 `tryfuncTM` takes one `__call` hop and needs a function
+    /// there; anything else is a call error on the original object. 5.4
+    /// retries the call with whatever `__call` holds, so chains resolve.
+    fn call_mm_unusable(&self, mm: Value) -> bool {
+        self.version <= LuaVersion::Lua53 && !matches!(mm, Value::Closure(_) | Value::Native(_))
     }
 
     fn push_frame(
@@ -8208,7 +8215,7 @@ impl Vm {
                     let mut chain = 0u32;
                     while !matches!(func, Value::Closure(_) | Value::Native(_)) {
                         let mm = self.get_mm(func, Mm::Call);
-                        if mm.is_nil() {
+                        if mm.is_nil() || self.call_mm_unusable(mm) {
                             return Err(self.call_err(func));
                         }
                         chain += 1;
