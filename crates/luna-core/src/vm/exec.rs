@@ -1397,12 +1397,8 @@ impl Vm {
         }
         let proto = if is_bytecode {
             let allow_puc = self.puc_bytecode_loading;
-            crate::vm::dump::undump(src, &mut self.heap, self.version, allow_puc).map_err(
-                |msg| SyntaxError {
-                    line: 0,
-                    msg: msg.into_bytes(),
-                },
-            )?
+            crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
+                .map_err(SyntaxError::unpositioned)?
         } else if self.version.is_macro_lua() {
             // v1.3 Phase ML — MacroLua dialect: drain the lexer into a
             // token vec, run the macro expander pre-pass against the
@@ -3632,21 +3628,17 @@ impl Vm {
 
     /// P12-S7-C — trace JIT path for `Op::Close A`. Predicts whether
     /// `__close` handlers would run (any active tbc slot ≥ from
-    /// holding a non-nil/false Value); if so, parks a deopt sentinel
-    /// in `jit_pending_err` and returns 1 (helper-side bool) so the
-    /// IR branches to the deopt block. Otherwise performs the safe
-    /// part of close — `close_from(from)` to close open upvals +
-    /// drop any drained tbc entries ≥ from — and returns 0.
+    /// holding a non-nil/false Value); if so, returns 1 without doing
+    /// anything and the trace side-exits at the op, so the interpreter
+    /// runs the handlers. Otherwise performs the safe part of close —
+    /// `close_from(from)` to close open upvals + drop any drained tbc
+    /// entries ≥ from — and returns 0.
     ///
     /// Returns are i64-shaped so the cranelift import sig stays
     /// trivial (i64 → i64 mapping).
     #[doc(hidden)]
     pub fn jit_op_close(&mut self, start_offset: u32) -> i64 {
-        if self.jit.pending_err.is_some() {
-            return 1;
-        }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err = Some(self.rt_err("JIT op_close: no Lua frame"));
             return 1;
         };
         let from = f.base + start_offset;
@@ -3657,8 +3649,7 @@ impl Vm {
             }
         });
         if has_handler {
-            self.jit.pending_err =
-                Some(self.rt_err("JIT deopt: Op::Close with active tbc handler"));
+            self.jit.counters.deopt += 1;
             return 1;
         }
         self.close_from(from);
@@ -3714,8 +3705,8 @@ impl Vm {
     /// the iterator function via `begin_call`. v2 only handles
     /// `Value::Native` iterators (the canonical `ipairs_iter` /
     /// `next` builtins) — a Lua-closure iterator would push a Lua
-    /// frame mid-trace, breaking `recording_frame_base`, so we
-    /// deopt by parking a `pending_err` and returning `-1`.
+    /// frame mid-trace, breaking `recording_frame_base`, so it
+    /// returns `-1` and the trace side-exits at the op.
     ///
     /// `slot_offset` is the caller-frame register index (=
     /// `inst.a()` decoded from a u32-wide field). `nvars` is
@@ -3748,22 +3739,19 @@ impl Vm {
     ///
     /// Mirrors the interp arm (this file ~L5112): `self.top =
     /// base + a + n; concat_run(base + a)`. Result lands at
-    /// `vm.stack[base + a]`. Returns `0` on success, `-1` on
-    /// deopt (any error from `concat_run` OR detection that the
-    /// metamethod path was taken — `concat_run` returns `Ok(())`
-    /// after `begin_meta_call` which has pushed a Lua frame the
-    /// trace can't safely continue past).
+    /// `vm.stack[base + a]`. Returns `0` on success, `-1` when the
+    /// interpreter must do it (any error from `concat_run` OR
+    /// detection that the metamethod path was taken — `concat_run`
+    /// returns `Ok(())` after `begin_meta_call` which has pushed a Lua
+    /// frame the trace can't safely continue past); the trace then
+    /// side-exits at the op and the interpreter redoes it, raising the
+    /// error or calling `__concat` itself.
     ///
     /// The frame-push detection uses `pre/post frames.len()` and
-    /// unwinds any pushed frames before deopting, so the
-    /// dispatcher's existing deopt path sees a clean stack.
+    /// unwinds any pushed frames first, so the exit sees a clean stack.
     #[doc(hidden)]
     pub fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64 {
-        if self.jit.pending_err.is_some() {
-            return -1;
-        }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err = Some(self.rt_err("JIT Concat: no Lua frame"));
             return -1;
         };
         let abs_a = f.base + slot_offset;
@@ -3777,12 +3765,8 @@ impl Vm {
         while self.frames.len() > pre_frames {
             frames_pop_sync(&mut self.frames, &mut self.frames_top);
         }
-        if let Err(e) = result {
-            self.jit.pending_err = Some(e);
-            return -1;
-        }
-        if post_frames > pre_frames {
-            self.jit.pending_err = Some(self.rt_err("JIT Concat: __concat metamethod path"));
+        if result.is_err() || post_frames > pre_frames {
+            self.jit.counters.deopt += 1;
             return -1;
         }
         0
@@ -3900,11 +3884,7 @@ impl Vm {
         key_out: *mut i64,
         val_out: *mut i64,
     ) -> i64 {
-        if self.jit.pending_err.is_some() {
-            return -1;
-        }
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err = Some(self.rt_err("JIT TForCall: no Lua frame"));
             return -1;
         };
         let abs = f.base + slot_offset;
@@ -3949,12 +3929,11 @@ impl Vm {
             self.stack[(abs + 4) as usize] = self.stack[abs as usize];
             self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
             self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
-            if !matches!(self.stack[abs as usize], Value::Native(_)) {
-                self.jit.pending_err = Some(self.rt_err("JIT TForCall: non-Native iter (v2 only)"));
-                return -1;
-            }
-            if let Err(e) = self.begin_call(abs + 4, Some(2), nvars, false) {
-                self.jit.pending_err = Some(e);
+            // the interpreter raises the call's error itself
+            if !matches!(self.stack[abs as usize], Value::Native(_))
+                || self.begin_call(abs + 4, Some(2), nvars, false).is_err()
+            {
+                self.jit.counters.deopt += 1;
                 return -1;
             }
         }

@@ -30,18 +30,12 @@ use super::lower::{self, Jump, Lowered, Lowering, RawLocVar, RawProto, Window};
 use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
+use crate::vm::dump::error::Bad;
+use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
 use crate::vm::isa::{Inst, Op};
 
 const DIALECT: &str = "PUC 5.1";
-
-/// The C types whose sizes header bytes 7..=10 record.
-const SIZE_NAMES: [&str; 4] = [
-    "sizeof(int)",
-    "sizeof(size_t)",
-    "sizeof(Instruction)",
-    "sizeof(lua_Number)",
-];
 
 /// Header: signature, version, format, endianness, then the sizes of
 /// `int`, `size_t`, `Instruction`, `lua_Number`, and the integral flag.
@@ -118,55 +112,34 @@ const OP_VARARG: u8 = 37;
 /// The `_ENV` cell every translated function carries at upvalue 0.
 const ENV_UPVAL: u32 = 0;
 
-pub(in crate::vm::dump) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, String> {
+pub(in crate::vm::dump) fn undump(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     let raw = read_proto(&mut r, heap, None)?;
     if r.pos() != bytes.len() {
-        return Err(format!(
-            "{DIALECT} chunk: {} trailing bytes",
-            bytes.len() - r.pos()
-        ));
+        return Err(format!("{DIALECT} chunk: {} trailing bytes", bytes.len() - r.pos()).into());
     }
-    lower::build(heap, raw, &translate)
+    Ok(lower::build(heap, raw, &translate)?)
 }
 
-fn check_header(bytes: &[u8]) -> Result<(), String> {
-    let Some(h) = bytes.get(..HEADER.len()) else {
-        return Err(format!("{DIALECT} chunk: truncated header"));
-    };
-    if h == HEADER {
-        return Ok(());
-    }
-    Err(match h.iter().zip(HEADER).position(|(a, b)| a != b) {
-        Some(5) => format!("{DIALECT} chunk: unsupported format byte 0x{:02x}", h[5]),
-        Some(6) => format!("{DIALECT} chunk: only little-endian chunks load"),
-        Some(11) => format!("{DIALECT} chunk: integral lua_Number builds are not supported"),
-        Some(i @ 7..=10) => format!(
-            "{DIALECT} chunk: {} is {}, luna needs {}",
-            SIZE_NAMES[i - 7],
-            h[i],
-            HEADER[i]
-        ),
-        Some(_) => format!("{DIALECT} chunk: bad signature or version"),
-        None => unreachable!("slices differ"),
-    })
+fn check_header(bytes: &[u8]) -> Result<(), Bad> {
+    header::check(bytes, HEADER, header::LAYOUT_51)
 }
 
-fn read_int(r: &mut Reader) -> Result<u32, String> {
+fn read_int(r: &mut Reader) -> Result<u32, Bad> {
     let v = i32::from_le_bytes(r.take(4)?.try_into().expect("4 bytes"));
-    u32::try_from(v).map_err(|_| format!("{DIALECT} chunk: negative count {v}"))
+    u32::try_from(v).map_err(|_| Bad::IntOverflow)
 }
 
 /// An element count, checked against the bytes left (see `Reader::count`).
-fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, String> {
+fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
     let n = read_int(r)?;
     r.count(n as u64, min_size)
 }
 
 /// `size_t` length then the bytes, including a trailing NUL that luna drops.
 /// Length 0 is PUC's NULL string.
-fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, String> {
+fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, Bad> {
     let n = u64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"));
     if n == 0 {
         return Ok(None);
@@ -176,13 +149,13 @@ fn read_string<'a>(r: &mut Reader<'a>) -> Result<Option<&'a [u8]>, String> {
     Ok(Some(&s[..n - 1]))
 }
 
-fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
+fn read_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, Bad> {
     Ok(match r.u8()? {
         0 => Value::Nil,
         1 => Value::Bool(r.u8()? != 0),
         3 => Value::Float(f64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))),
         4 => Value::Str(heap.intern(read_string(r)?.unwrap_or(b""))),
-        t => return Err(format!("{DIALECT} chunk: bad constant tag {t}")),
+        _ => return Err(Bad::Constant),
     })
 }
 
@@ -193,7 +166,7 @@ fn read_proto(
     r: &mut Reader,
     heap: &mut Heap,
     parent_source: Option<Gc<crate::runtime::string::LuaStr>>,
-) -> Result<RawProto, String> {
+) -> Result<RawProto, Bad> {
     // A nested function's source is dumped as NULL when it equals its
     // parent's.
     let source = match (read_string(r)?, parent_source) {
@@ -237,9 +210,7 @@ fn read_proto(
     let mut upvals = vec![env_upval()];
     let n = read_count(r, 8)?;
     if n != 0 && n != nups {
-        return Err(format!(
-            "{DIALECT} chunk: {n} upvalue names for {nups} upvalues"
-        ));
+        return Err(format!("{DIALECT} chunk: {n} upvalue names for {nups} upvalues").into());
     }
     for i in 0..nups {
         let name = if i < n {
@@ -295,15 +266,11 @@ fn loop_windows(code: &[u32]) -> Result<Vec<Window>, String> {
         }
         let jmp = code.get(p + 1).map(|&w| I51::decode(w));
         let Some(jmp) = jmp.filter(|j| j.op == OP_JMP) else {
-            return Err(format!(
-                "{DIALECT} chunk: TFORLOOP without its back-jump (pc {p})"
-            ));
+            return Err(format!("{DIALECT} chunk: TFORLOOP without its back-jump (pc {p})").into());
         };
         let body = p as i64 + 2 + jmp.sbx();
         if !(0..=p as i64).contains(&body) {
-            return Err(format!(
-                "{DIALECT} chunk: TFORLOOP back-jump to {body} (pc {p})"
-            ));
+            return Err(format!("{DIALECT} chunk: TFORLOOP back-jump to {body} (pc {p})").into());
         }
         out.push(Window {
             first: body as usize,

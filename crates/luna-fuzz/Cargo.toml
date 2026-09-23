@@ -101,3 +101,12 @@ path = "fuzz_targets/fuzz_diff_luajit.rs"
 test = false
 doc = false
 bench = false
+
+# v3.1 — load arbitrary bytes as a binary chunk (through the bytecode
+# verifier) and run what loads. A verified chunk must not crash the VM.
+[[bin]]
+name = "fuzz_dump_exec"
+path = "fuzz_targets/fuzz_dump_exec.rs"
+test = false
+doc = false
+bench = false

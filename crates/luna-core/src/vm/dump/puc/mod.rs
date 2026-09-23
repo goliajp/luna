@@ -15,20 +15,19 @@ mod puc_53;
 mod puc_54;
 mod puc_55;
 
+use super::error::Bad;
 use crate::runtime::function::Proto;
 use crate::runtime::heap::{Gc, Heap};
 
 /// Route a `\x1bLua` chunk to its dialect's undumper by the version byte.
-pub(super) fn undump_puc(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, String> {
+pub(super) fn undump_puc(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     match bytes.get(4) {
         Some(0x51) => puc_51::undump(bytes, heap),
         Some(0x52) => puc_52::undump(bytes, heap),
         Some(0x53) => puc_53::undump_puc_53(bytes, heap),
         Some(0x54) => puc_54::undump(bytes, heap),
         Some(0x55) => puc_55::undump_puc_55(bytes, heap),
-        Some(v) => Err(format!(
-            "unsupported PUC Lua version byte 0x{v:02x} (expected 0x51..0x55)"
-        )),
-        None => Err("truncated PUC binary chunk".to_string()),
+        Some(_) => Err(Bad::Version),
+        None => Err(Bad::Truncated),
     }
 }

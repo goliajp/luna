@@ -3,7 +3,7 @@
 //!
 //! The two versions read their operands differently. 5.2's `lua_Unsigned`
 //! is 32 bits and `luaL_checkunsigned` rounds a float to nearest and wraps
-//! it (see [`argcheck::check_unsigned52`]); 5.3 takes `luaL_checkinteger`
+//! it (see `argcheck::check_unsigned52`); 5.3 takes `luaL_checkinteger`
 //! (so the float must be integral) and trims to 32 bits afterwards. Shift
 //! and field arguments are C `int`s on 5.2 and `lua_Integer`s on 5.3.
 

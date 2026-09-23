@@ -2,7 +2,7 @@
 //! Pure functions over byte slices (stone candidate: no runtime types).
 //!
 //! The matcher is the 5.2+ one (explicit pattern end, `matchdepth` bound);
-//! [`Flavor`] carries the few places where older dialects differ. 5.1's
+//! `Flavor` carries the few places where older dialects differ. 5.1's
 //! NUL-terminated patterns are the caller's business: it passes the pattern
 //! cut at the first NUL.
 

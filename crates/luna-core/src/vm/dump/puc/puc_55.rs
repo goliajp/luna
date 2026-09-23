@@ -20,6 +20,8 @@ use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
 use crate::runtime::string::LuaStr;
+use crate::vm::dump::error::Bad;
+use crate::vm::dump::header;
 use crate::vm::dump::reader::{Reader, read_puc_varint};
 use crate::vm::isa::Op;
 
@@ -137,7 +139,7 @@ const D55: Dialect = Dialect {
     v55: true,
 };
 
-pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, String> {
+pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, Bad> {
     check_header(bytes)?;
     let mut r = Reader::at(bytes, HEADER.len());
     let n_upvals = r.u8()? as usize;
@@ -147,62 +149,40 @@ pub(super) fn undump_puc_55(bytes: &[u8], heap: &mut Heap) -> Result<Gc<Proto>, 
         return Err(format!(
             "{DIALECT} chunk: main closure has {n_upvals} upvalues, its function {}",
             raw.upvals.len()
-        ));
+        )
+        .into());
     }
     if r.pos() != bytes.len() {
-        return Err(format!(
-            "{DIALECT} chunk: {} trailing bytes",
-            bytes.len() - r.pos()
-        ));
+        return Err(format!("{DIALECT} chunk: {} trailing bytes", bytes.len() - r.pos()).into());
     }
-    lower::build(heap, raw, &translate)
+    Ok(lower::build(heap, raw, &translate)?)
 }
 
 fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
     modern::translate(&D55, raw)
 }
 
-fn check_header(bytes: &[u8]) -> Result<(), String> {
-    let Some(h) = bytes.get(..HEADER.len()) else {
-        return Err(format!("{DIALECT} chunk: truncated header"));
-    };
-    match h.iter().zip(HEADER).position(|(a, b)| a != b) {
-        None => Ok(()),
-        Some(5) => Err(format!(
-            "{DIALECT} chunk: unsupported format byte 0x{:02x}",
-            h[5]
-        )),
-        Some(6..=11) => Err(format!("{DIALECT} chunk: corrupted LUAC_DATA")),
-        Some(12..=16) => Err(format!(
-            "{DIALECT} chunk: `int` is not a 4-byte little-endian int"
-        )),
-        Some(17..=21) => Err(format!(
-            "{DIALECT} chunk: Instruction is not 4 bytes little-endian"
-        )),
-        Some(22..=30) => Err(format!(
-            "{DIALECT} chunk: lua_Integer is not a 64-bit little-endian integer"
-        )),
-        Some(_) => Err(format!("{DIALECT} chunk: lua_Number is not an IEEE double")),
-    }
+fn check_header(bytes: &[u8]) -> Result<(), Bad> {
+    header::check(bytes, HEADER, header::LAYOUT_55)
 }
 
 /// `loadInt`: a varint that must fit a C `int`.
-fn read_int(r: &mut Reader) -> Result<u32, String> {
+fn read_int(r: &mut Reader) -> Result<u32, Bad> {
     let v = read_puc_varint(r)?;
     u32::try_from(v)
         .ok()
         .filter(|&v| v <= i32::MAX as u32)
-        .ok_or_else(|| format!("{DIALECT} chunk: integer overflow"))
+        .ok_or(Bad::IntOverflow)
 }
 
 /// An element count, checked against the bytes left (see `Reader::count`).
-fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, String> {
+fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
     let n = read_int(r)?;
     r.count(n as u64, min_size)
 }
 
 /// Skip `loadAlign` padding: offsets count from the start of the chunk.
-fn align(r: &mut Reader, to: usize) -> Result<(), String> {
+fn align(r: &mut Reader, to: usize) -> Result<(), Bad> {
     let pad = (to - r.pos() % to) % to;
     r.take(pad)?;
     Ok(())
@@ -214,7 +194,7 @@ fn read_string(
     r: &mut Reader,
     heap: &mut Heap,
     strings: &mut Vec<Gc<LuaStr>>,
-) -> Result<Option<Gc<LuaStr>>, String> {
+) -> Result<Option<Gc<LuaStr>>, Bad> {
     let size = read_puc_varint(r)?;
     if size == 0 {
         let idx = read_puc_varint(r)?;
@@ -223,7 +203,7 @@ fn read_string(
         }
         return match strings.get(idx as usize - 1) {
             Some(&s) => Ok(Some(s)),
-            None => Err(format!("{DIALECT} chunk: invalid string index {idx}")),
+            None => Err(format!("{DIALECT} chunk: invalid string index {idx}").into()),
         };
     }
     let n = r.count(size, 1)?;
@@ -237,7 +217,7 @@ fn read_name(
     r: &mut Reader,
     heap: &mut Heap,
     strings: &mut Vec<Gc<LuaStr>>,
-) -> Result<Box<str>, String> {
+) -> Result<Box<str>, Bad> {
     Ok(match read_string(r, heap, strings)? {
         Some(s) => String::from_utf8_lossy(s.as_bytes()).into(),
         None => "".into(),
@@ -248,7 +228,7 @@ fn read_const(
     r: &mut Reader,
     heap: &mut Heap,
     strings: &mut Vec<Gc<LuaStr>>,
-) -> Result<Value, String> {
+) -> Result<Value, Bad> {
     // Tags are `makevariant(type, variant)` (lobject.h).
     Ok(match r.u8()? {
         0 => Value::Nil,
@@ -263,9 +243,9 @@ fn read_const(
         19 => Value::Float(f64::from_le_bytes(r.take(8)?.try_into().expect("8 bytes"))),
         4 | 20 => match read_string(r, heap, strings)? {
             Some(s) => Value::Str(s),
-            None => return Err(format!("{DIALECT} chunk: NULL string constant")),
+            None => return Err(format!("{DIALECT} chunk: NULL string constant").into()),
         },
-        t => return Err(format!("{DIALECT} chunk: bad constant tag {t}")),
+        _ => return Err(Bad::Constant),
     })
 }
 
@@ -275,7 +255,7 @@ fn read_proto(
     r: &mut Reader,
     heap: &mut Heap,
     strings: &mut Vec<Gc<LuaStr>>,
-) -> Result<RawProto, String> {
+) -> Result<RawProto, Bad> {
     let line_defined = read_int(r)?;
     let last_line_defined = read_int(r)?;
     let num_params = r.u8()?;
