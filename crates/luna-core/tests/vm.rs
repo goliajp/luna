@@ -3358,9 +3358,11 @@ fn io_buffered_writes_and_round_trip_time() {
     // the part luna controls: the buffered write returns the file (not a
     // `(nil, msg)` triple) before any flush has happened.
     check_bool(
-        "local f = assert(io.open(os.tmpname(), 'w')) \
+        "local p = os.tmpname() \
+         local f = assert(io.open(p, 'w')) \
          local r = f:write('abcd') \
          f:close() \
+         os.remove(p) \
          return r == f",
         true,
     );
