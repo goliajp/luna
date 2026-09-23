@@ -8678,6 +8678,17 @@ pub fn lower_trace_into_named<M: Module>(
     // (probe: `closure_no_upval_for_500k` mac measured 0.53× when
     // the gate was skipped). Closure traces only earn dispatch when
     // body length passes the gate organically.
+    // P12-S4-step3b — InlineAbort traces close before any frame
+    // materialization machinery exists (step 4's job). The interp
+    // can't resume at the inline-abort PC without the matching
+    // CallFrames; gate dispatch off until step 4 adds the helper.
+    // Recorded before the length gate: the first reason is the one
+    // kept, and side-trace wiring tells a trace that is unsafe to run
+    // from one that is only too short to dispatch by it.
+    if inline_abort_idx_opt.is_some() {
+        dispatchable = false;
+        dispatch_off_reason = dispatch_off_reason.or(Some("InlineAbort-gate"));
+    }
     if (call_idx_opt.is_some() || return_idx_opt.is_some())
         && effective_end < min_dispatchable_trunc_body
         && per_exit_inline_vec.is_empty()
@@ -8685,14 +8696,6 @@ pub fn lower_trace_into_named<M: Module>(
     {
         dispatchable = false;
         dispatch_off_reason = dispatch_off_reason.or(Some("length-gate"));
-    }
-    // P12-S4-step3b — InlineAbort traces close before any frame
-    // materialization machinery exists (step 4's job). The interp
-    // can't resume at the inline-abort PC without the matching
-    // CallFrames; gate dispatch off until step 4 adds the helper.
-    if inline_abort_idx_opt.is_some() {
-        dispatchable = false;
-        dispatch_off_reason = dispatch_off_reason.or(Some("InlineAbort-gate"));
     }
 
     // P12-S4-step3b — clean-tail `exit_tags` cover the caller window

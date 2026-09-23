@@ -6593,8 +6593,13 @@ impl Vm {
                                         // compiled but would not dispatch (an
                                         // untyped table read, an inline abort)
                                         // is not safe to enter from the parent's
-                                        // exit either.
-                                        let runnable = ct.dispatchable;
+                                        // exit either — unless the only reason
+                                        // was the length gate, which weighs
+                                        // dispatch overhead, not soundness (the
+                                        // lowerer records the other reasons
+                                        // first).
+                                        let runnable = ct.dispatchable
+                                            || ct.dispatch_off_reason == Some("length-gate");
                                         ct.dispatchable = false;
                                         let entry_ptr = ct.entry as *const () as *const u8;
                                         let _side_trace_head_pc = closed_record.head_pc;
