@@ -1144,10 +1144,8 @@ fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Resu
                 Value::Str(vm.heap.intern(&out))
             });
         }
-        let len = chunk
-            .iter()
-            .position(|&b| b == 0)
-            .map_or(chunk.len(), |n| n);
+        // strlen: up to the first NUL, the whole chunk when there is none
+        let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
         if len == 0 || chunk[len - 1] != b'\n' {
             out.extend_from_slice(&chunk[..len]);
         } else {
