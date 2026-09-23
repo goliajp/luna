@@ -9555,20 +9555,32 @@ impl Vm {
         Ok(())
     }
 
-    /// tostring with __tostring / __name support.
+    /// `luaL_tolstring`: `__tostring` (whose result must be a string or a
+    /// number, rendered), else the basic rendering, where 5.3+ names a value
+    /// by a string `__name` metafield.
     pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             return match self.call_mm1(mm, &[v])? {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
+                r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
                 _ => Err(self.rt_err("'__tostring' must return a string")),
             };
         }
-        if let Value::Table(t) = v
+        if self.version >= LuaVersion::Lua53
+            && !matches!(
+                v,
+                Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
             && let Value::Str(name) = self.get_mm(v, Mm::Name)
         {
+            let basic = self.tostring_basic(v);
+            let at = basic
+                .iter()
+                .position(|&c| c == b':')
+                .expect("an object renders as `kind: address`");
             let mut out = name.as_bytes().to_vec();
-            out.extend_from_slice(format!(": {:p}", t.as_ptr()).as_bytes());
+            out.extend_from_slice(&basic[at..]);
             return Ok(out);
         }
         Ok(self.tostring_basic(v))
@@ -9602,7 +9614,7 @@ impl Vm {
             Value::Str(s) => s.as_bytes().to_vec(),
             Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
             Value::Closure(c) => format!("function: {:p}", c.as_ptr()).into_bytes(),
-            Value::Native(n) => format!("function: builtin: {:p}", n.as_ptr()).into_bytes(),
+            Value::Native(n) => format!("function: {:p}", n.as_ptr()).into_bytes(),
             Value::Coro(co) => format!("thread: {:p}", co.as_ptr()).into_bytes(),
             // PUC names file handles `file (0x…)`; a bare userdata is
             // `userdata: 0x…`. The io library overrides this via __tostring.
