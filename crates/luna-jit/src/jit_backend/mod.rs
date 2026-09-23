@@ -712,6 +712,10 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
     );
     builder.symbol("luna_jit_table_len", luna_jit_table_len as *const u8);
     builder.symbol("luna_jit_upval_get", luna_jit_upval_get as *const u8);
+    builder.symbol(
+        "luna_jit_self_upval_check",
+        luna_jit_self_upval_check as *const u8,
+    );
     Some(JITModule::new(builder))
 }
 
@@ -3926,6 +3930,19 @@ pub fn lower_int_chunk_into<M: Module>(
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
 
+    // The body's self-recursive calls go straight to its own code, which
+    // is the Lua call only while the upvalue they load holds the running
+    // closure; the compiled code is shared by every closure of the proto
+    // (and by protos with the same code), so that is checked on each
+    // entry from the interpreter. The recursive calls enter the body
+    // directly: nothing the body runs can reassign the upvalue.
+    let entry_id = match self_upval_idx {
+        Some(idx) if any_self_call => {
+            define_self_checked_entry(module, &mut ctx, fn_id, idx, num_params)?
+        }
+        _ => fn_id,
+    };
+
     // v1.3 Phase AOT Stage 3 — diag of the lowered chunk's shape
     // (used to live with the JIT finalize step; moved alongside in
     // the runtime wrapper [`try_compile_int_chunk`]). The generic
@@ -3933,7 +3950,7 @@ pub fn lower_int_chunk_into<M: Module>(
     let _ = ret_kind; // tracked for diag in the JIT wrapper; backend-agnostic here.
 
     Some((
-        fn_id,
+        entry_id,
         ChunkMeta {
             num_args: num_params as u8,
             returns_one: sees_return1,
@@ -3943,6 +3960,64 @@ pub fn lower_int_chunk_into<M: Module>(
             ret_is_table,
         },
     ))
+}
+
+/// Defines the entry that runs [`luna_jit_self_upval_check`] before
+/// calling the chunk body `body_id`: on a mismatch it returns at once,
+/// with the deopt the helper parked for the dispatcher.
+fn define_self_checked_entry<M: Module>(
+    module: &mut M,
+    ctx: &mut cranelift_codegen::Context,
+    body_id: FuncId,
+    self_upval_idx: u32,
+    num_params: usize,
+) -> Option<FuncId> {
+    let mut sig = module.make_signature();
+    for _ in 0..num_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let entry_id = module
+        .declare_function("luna_jit_chunk_entry", Linkage::Local, &sig)
+        .ok()?;
+    let mut check_sig = module.make_signature();
+    check_sig.params.push(AbiParam::new(types::I64));
+    check_sig.returns.push(AbiParam::new(types::I64));
+    let check_id = module
+        .declare_function("luna_jit_self_upval_check", Linkage::Import, &check_sig)
+        .ok()?;
+
+    ctx.func.signature = sig;
+    ctx.func.name = UserFuncName::user(0, entry_id.as_u32());
+    let mut fbc = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
+    let entry = bcx.create_block();
+    let run = bcx.create_block();
+    let bail = bcx.create_block();
+    bcx.append_block_params_for_function_params(entry);
+    bcx.switch_to_block(entry);
+    let args: Vec<Value> = bcx.block_params(entry).to_vec();
+    let check_ref = module.declare_func_in_func(check_id, bcx.func);
+    let idx = bcx.ins().iconst(types::I64, i64::from(self_upval_idx));
+    let call = bcx.ins().call(check_ref, &[idx]);
+    let is_self = bcx.inst_results(call)[0];
+    bcx.ins().brif(is_self, run, &[], bail, &[]);
+
+    bcx.switch_to_block(run);
+    let body_ref = module.declare_func_in_func(body_id, bcx.func);
+    let call = bcx.ins().call(body_ref, &args);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().return_(&[r]);
+
+    bcx.switch_to_block(bail);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.seal_all_blocks();
+    bcx.finalize();
+    module.define_function(entry_id, ctx).ok()?;
+    module.clear_context(ctx);
+    Some(entry_id)
 }
 
 /// S3 — align a value with the Variable's declared Cranelift type
