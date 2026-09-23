@@ -3965,6 +3965,10 @@ impl Vm {
     /// `__gc` metamethod (PUC luaC_checkfinalizer at setmetatable time — adding
     /// `__gc` to the metatable afterwards does not retroactively register).
     pub(crate) fn check_finalizer(&mut self, t: Gc<Table>) {
+        // Tables gained finalizers in 5.2; PUC 5.1 runs `__gc` for userdata only.
+        if self.version == crate::version::LuaVersion::Lua51 {
+            return;
+        }
         if !self.get_mm(Value::Table(t), Mm::Gc).is_nil() {
             self.heap.register_finalizable(t);
         }
