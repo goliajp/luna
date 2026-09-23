@@ -904,11 +904,10 @@ fn load_path(vm: &mut Vm, name: Option<&[u8]>, mode: Option<&[u8]>) -> Result<Va
     match vm.load(src, &chunkname) {
         Ok(cl) => Ok(Value::Closure(cl)),
         Err(e) => {
-            // the parser positions its message with `luaO_chunkid`
-            let mut msg = crate::vm::callstack::syntax_chunk_id(vm.version(), &chunkname);
-            msg.extend_from_slice(format!(":{}: ", e.line).as_bytes());
-            msg.extend_from_slice(&e.msg);
-            Err(Value::Str(vm.heap.intern(&msg)))
+            // the parser positions its message with `luaO_chunkid`; an
+            // unpositioned one (C stack overflow while parsing) has none
+            let id = crate::vm::callstack::syntax_chunk_id(vm.version(), &chunkname);
+            Err(Value::Str(vm.heap.intern(&e.render(&id))))
         }
     }
 }
