@@ -1425,8 +1425,8 @@ impl<'s> Parser<'s> {
     /// PUC 5.1 `singlevaraux`-equivalent: resolve `name` against the current
     /// nested-function stack of declared locals, accumulating an upvalue entry
     /// in every intermediate function between the referencing site and the
-    /// owning scope. Returns the PUC "too many upvalues" error the moment a
-    /// link's upvalue set crosses 60. No-op for non-5.1 dialects.
+    /// owning scope. Returns PUC 5.1's "has more than 60 upvalues" error the
+    /// moment a link's upvalue set crosses 60. No-op for non-5.1 dialects.
     fn ident_lookup_51(&mut self, name: &str) -> Result<(), SyntaxError> {
         if !self.track_uv_51() {
             return Ok(());
@@ -1459,10 +1459,10 @@ impl<'s> Parser<'s> {
                 } else {
                     format!("function at line {line_defined}")
                 };
+                // 5.1 `errorlimit`: "<where> has more than <limit> <what>"
                 return Err(SyntaxError {
                     line: self.tok.line,
-                    msg: format!("too many upvalues (limit is {MAXUPVAL}) in {where_}")
-                        .into_bytes(),
+                    msg: format!("{where_} has more than {MAXUPVAL} upvalues").into_bytes(),
                 });
             }
         }

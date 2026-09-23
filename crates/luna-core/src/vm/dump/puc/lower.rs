@@ -18,8 +18,9 @@
 //! - an `ExtraArg` only ever follows `LoadKx` or `SetList` with `k` set.
 //!
 //! A translator must uphold all three for every chunk PUC's own compiler can
-//! produce. It does not re-verify a chunk that PUC's compiler could not have
-//! produced: PUC removed its bytecode verifier in 5.2, and luna follows it.
+//! produce. A chunk PUC's compiler could not have produced is caught after
+//! lowering by the loader's verifier (`super::super::verify`), which checks
+//! these invariants on every loaded function whatever its format.
 //!
 //! luna's operands are also narrower than PUC's in one respect that shapes
 //! most lowerings: apart from the constant *keys* of `GetTabUp`, `GetField`,

@@ -173,9 +173,10 @@ bytecode; a `string.dump` that PUC could load is a separate feature the
 owner has not committed to.
 
 Loading a luna dump is gated by `Vm::set_bytecode_loading(false)` (on by
-default; the `sandbox` builder turns it off). Crafted bytecode bypasses
-checks the compiler enforces, so a host taking untrusted input should
-close it.
+default; the `sandbox` builder turns it off). Every loaded chunk, in
+either format, is verified before it runs; see "Verification on load"
+below. The verifier checks structure, not everything a crafted chunk can
+reach, so a host taking untrusted input should still close the gate.
 
 ### Loading PUC `.luac` files
 
@@ -203,15 +204,58 @@ and runs — matching PUC byte for byte in stdout, and in the error channel
 for the `_err` fixtures — under `diff_puc.rs::diff_puc_bytecode`, on the
 interpreter and (in `luna-jit`) under the JIT.
 
-The translators do not verify a chunk PUC's own compiler could not have
-produced. luna's interpreter reads registers and constants without bounds
-checks, trusting its compiler; the translators uphold that trust for
-every real `.luac`, but a hand-corrupted register field that stays inside
-luna's 8-bit range yet exceeds the frame's `max_stack` is read past the
-stack — a memory-safety fault on crafted input. Closing that needs a
-bytecode verifier (every register against `max_stack`, every constant
-index, every jump target), which luna, like PUC after 5.1, does not ship.
-Keep `set_puc_bytecode_loading` off for untrusted chunks.
+### Verification on load
+
+**luna verifies every binary chunk when it is loaded; PUC Lua does not.**
+PUC removed its bytecode verifier in 5.2, and its manual warns that
+maliciously crafted binary chunks can crash the interpreter. luna runs one
+verifier on the function tree either loader produces (its own dump format,
+or a PUC chunk after translation) before handing it to the VM. There is no
+switch to turn it off. A chunk that fails is refused by
+`load` / `loadfile` / `dofile` / `Vm::load` with a load error of the form
+(5.4 / 5.5 wording)
+
+    binary string: bad binary format (function at line 3, instruction 5 (LoadK): constant 12 out of range (7 constants))
+
+Every binary-load error, from the verifier or from reading a truncated or
+foreign chunk, is worded as the running dialect's `lundump.c` words it,
+behind `lundump.c`'s chunk name (`@`/`=` dropped, `binary string` for a
+chunk loaded from a string under its default name):
+
+| Dialect | Truncated | Other header | Refused by the verifier |
+|---|---|---|---|
+| 5.1 | `unexpected end in precompiled chunk` | `bad header in precompiled chunk` | `bad code in precompiled chunk (<detail>)` |
+| 5.2 | `truncated precompiled chunk` | `not a` / `version mismatch in` / `incompatible` / `corrupted` + ` precompiled chunk` | `corrupted precompiled chunk (<detail>)` |
+| 5.3 | `truncated precompiled chunk` | `not a` / `version mismatch in` / `format mismatch in` / `corrupted` / `<type> size mismatch in` / `endianness mismatch in` / `float format mismatch in` + ` precompiled chunk` | `corrupted precompiled chunk (<detail>)` |
+| 5.4 | `bad binary format (truncated chunk)` | `bad binary format (` `not a binary chunk` / `version mismatch` / `format mismatch` / `corrupted chunk` / `<type> size mismatch` / `integer format mismatch` / `float format mismatch` `)` | `bad binary format (<detail>)` |
+| 5.5 | as 5.4 | as 5.4, with 5.5's `<type> size mismatch` / `<type> format mismatch` names | `bad binary format (<detail>)` |
+
+PUC has no verifier after 5.1, so the last column has no PUC counterpart
+in 5.2+; the category is the nearest one `lundump.c` has, followed by
+luna's detail.
+
+It checks, for every function and nested function:
+
+- the opcode of every instruction;
+- every register an instruction touches (including the runs implied by
+  calls, returns, `LoadNil`, `Concat`, `SetList`, varargs and loops)
+  against the function's stack size, and the parameter count too;
+- constant, upvalue and nested-function indices; the constant key of
+  field and global accesses is a string;
+- that every jump, loop edge and skipped instruction lands inside the
+  code, and that control cannot run off its end;
+- instruction pairing: `LoadKx`/`SetList` and their extra argument (which
+  is never executed), numeric and generic `for` prep/loop pairs,
+  comparisons and tests followed by their `Jmp`;
+- that instructions reading a variable number of values from the stack
+  top directly follow the instruction that set it;
+- line info (empty, or one entry per instruction) and each nested
+  function's upvalue descriptors against its parent.
+
+The verifier does not check register *values* at run time. The debug
+library can change those from plain source too, for example
+`debug.setlocal` on a `for` loop's hidden state. Keep the bytecode gates
+shut for input you do not trust.
 
 Per-dialect translators: `crates/luna-core/src/vm/dump/puc/puc_5{1..5}.rs`,
 sharing `lower.rs` (5.1) with `classic.rs` (5.2/5.3) and `modern.rs`
@@ -265,7 +309,9 @@ messages. What still differs does so on purpose:
   registers after the whole chunk is parsed, so the message stops before
   the `near` part.
 - **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
-  compiler merging `0` and `-0` constants; 5.1 `io.lines(nil)` raising
+  compiler merging `0` and `-0` constants; `debug.getinfo(level, ">…")`
+  before 5.4 treating the option string as the function (5.1 crashes;
+  luna rejects the option, as 5.4 does); 5.1 `io.lines(nil)` raising
   through a stack-index bug; out-of-range float-to-integer conversions
   (5.2 `string.format("%d", 2^63)` raises the range error the 5.2 test
   suite expects); a leaked pattern-matcher depth counter in 5.3's
