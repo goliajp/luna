@@ -7145,6 +7145,15 @@ impl Vm {
 
                 if dispatch_ok {
                     debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
+                    // A recording in progress cannot see what the trace runs
+                    // natively: it would resume after the trace with ops
+                    // missing, and could close as a loop that never ran (a
+                    // side trace of two ops returning its own head, which
+                    // the dispatcher then entered forever). Drop it.
+                    if self.jit.active_trace.take().is_some() {
+                        self.jit.counters.aborted += 1;
+                        self.jit.counters.bump_close_cause("reached-compiled-trace");
+                    }
                     self.jit.pending_err = None;
                     // P12-S4-step4b-C-2 — snapshot the pre-entry frame
                     // count. A cmp@d>0 side-exit calls the materialize

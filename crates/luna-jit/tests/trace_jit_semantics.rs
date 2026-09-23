@@ -323,3 +323,30 @@ fn string_operand_in_arithmetic() {
         assert_eq!(jit, interp, "{v:?}");
     }
 }
+
+/// An outer numeric for around a `while` loop: the while loop's trace
+/// ran natively while the outer loop's side trace was being recorded,
+/// the recording missed it and closed as a two-op "loop" returning its
+/// own head, and the dispatcher re-entered that trace forever.
+#[test]
+fn recording_does_not_span_a_compiled_trace() {
+    let src = r#"
+        local t = {} for i = 1, 1000 do t[i] = i end
+        local s = 0
+        for r = 1, 20 do local i = 1 while i <= 1000 do s = s + t[i] i = i + 1 end end
+        return tostring(s)"#;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for v in INT_DIALECTS {
+            let (jit, dispatched) = run(v, src, true);
+            tx.send((v, jit, dispatched)).expect("send");
+        }
+    });
+    for _ in INT_DIALECTS {
+        let (v, jit, dispatched) = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the JIT run did not finish in 60 s");
+        assert_eq!(jit, "10010000", "{v:?}");
+        assert!(dispatched > 0, "{v:?}: no trace dispatched");
+    }
+}
