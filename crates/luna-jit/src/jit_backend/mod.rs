@@ -696,6 +696,11 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
     flag_builder.set("use_colocated_libcalls", "false").ok();
     flag_builder.set("is_pic", "false").ok();
     flag_builder.set("opt_level", "speed").ok();
+    // Release builds leave the IR verifier out, as the trace JIT does
+    // (see `build_trace_jit_module`).
+    if !cfg!(debug_assertions) {
+        flag_builder.set("enable_verifier", "false").ok();
+    }
     let isa = cranelift_native::builder()
         .ok()?
         .finish(settings::Flags::new(flag_builder))
@@ -1167,8 +1172,15 @@ pub fn lower_int_chunk_into<M: Module>(
                     // P11-S5b — math libcall fold. Emit-side folds the
                     // 4-op window into one cranelift libm call; here
                     // we just clear the per-register trackers.
-                } else if self_upval.get(a).copied().unwrap_or(false) {
-                    // S2c.C — self-recursive call.
+                } else if self_upval.get(a).copied().unwrap_or(false)
+                    && nargs as usize == num_params
+                {
+                    // S2c.C — self-recursive call, lowered as a direct
+                    // call of the compiled body, whose signature takes
+                    // exactly the function's parameters. The upvalue may
+                    // hold another function (the entry check catches that
+                    // at run time), so the call site's count can differ;
+                    // such a call is not lowered.
                     self_call_pcs[pc] = true;
                 } else {
                     return None;
@@ -3050,6 +3062,20 @@ pub fn lower_int_chunk_into<M: Module>(
                 // `reg_kinds` — `current_kinds[a]` reflects pre-write
                 // state and may still be Unset before this op runs.
                 let k = a_kind(&reg_kinds, ins.a());
+                // A float result converts an integer operand first
+                // (`a / b` of two integers, or `i + 0.5`).
+                let (lhs, rhs) = if k == RegKind::Float {
+                    let to_float = |bcx: &mut FunctionBuilder<'_>, v: Value| {
+                        if bcx.func.dfg.value_type(v) == types::I64 {
+                            bcx.ins().fcvt_from_sint(types::F64, v)
+                        } else {
+                            v
+                        }
+                    };
+                    (to_float(&mut bcx, lhs), to_float(&mut bcx, rhs))
+                } else {
+                    (lhs, rhs)
+                };
                 let r = match (ins.op(), k) {
                     (Op::Add, RegKind::Float) => bcx.ins().fadd(lhs, rhs),
                     (Op::Sub, RegKind::Float) => bcx.ins().fsub(lhs, rhs),
