@@ -8976,12 +8976,12 @@ impl Vm {
         if let (Value::Table(_), Value::Table(_)) | (Value::Userdata(_), Value::Userdata(_)) =
             (l, r)
         {
-            // PUC 5.2+ accepts any `__eq` reachable from either operand; 5.1
-            // (and earlier) required the two operands' metatables to expose a
-            // matching `__eq` (`get_compTM`) — `c == d` where `d` has no
-            // metatable falls straight back to raw inequality. events.lua 5.1
-            // :262 bakes this in.
-            let mm = if self.version() <= LuaVersion::Lua51 {
+            // PUC 5.3+ accepts any `__eq` reachable from either operand; 5.1
+            // and 5.2 require the two operands' metatables to expose the same
+            // `__eq` (`get_compTM` / `get_equalTM`) — `c == d` where `d` has
+            // no metatable falls straight back to raw inequality. events.lua
+            // 5.1 :262 bakes this in.
+            let mm = if self.version() <= LuaVersion::Lua52 {
                 self.get_comp_mm(l, r, Mm::Eq)
             } else {
                 let mut m = self.get_mm(l, Mm::Eq);
