@@ -522,15 +522,7 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// or by pcall, or through an unnamed expression — 5.2+ looks the function
 /// up in `package.loaded` and 5.1 prints '?'.
 pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
-    // A nested native, or a pcall/xpcall continuation directly below, means
-    // the level-0 caller is C, which PUC never names.
-    let called_from_c = vm.running_natives.len() >= 2 || vm.caller_is_protected_cont();
-    let call_name = if called_from_c {
-        None
-    } else {
-        vm.running_call_name()
-    };
-    let name = match call_name {
+    let name = match vm.running_call_name() {
         Some(("method", name)) => {
             let n = n - 1; // self is not counted
             if n == 0 {
@@ -951,9 +943,9 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         _ => match level_arg {
             None | Some(0) => None,
             Some(level) => {
-                use crate::vm::exec::DbgKind;
+                use crate::vm::callstack::DbgKind;
                 match vm.dbg_frame(level) {
-                    Some(DbgKind::Tail(_)) => {
+                    Some(DbgKind::Tail) => {
                         return Err(raise_str(vm, "no function environment for tail call"));
                     }
                     Some(DbgKind::Lua(_)) => vm.lua_closure_at_level(level),
