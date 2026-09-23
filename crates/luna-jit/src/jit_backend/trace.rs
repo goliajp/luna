@@ -7754,7 +7754,8 @@ pub fn lower_trace_into_named<M: Module>(
             Op::ForLoop => {
                 let count = bcx.use_var(regs_full[a + 1]);
                 let zero = bcx.ins().iconst(types::I64, 0);
-                let cond = bcx.ins().icmp(IntCC::SignedGreaterThan, count, zero);
+                // the loop count is unsigned (PUC `lua_Unsigned`)
+                let cond = bcx.ins().icmp(IntCC::NotEqual, count, zero);
 
                 let continue_blk = bcx.create_block();
                 let exit_blk = bcx.create_block();

@@ -8263,7 +8263,7 @@ impl Vm {
                         let take_back_edge =
                             match (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2)) {
                                 (Value::Int(_), Value::Int(count), Value::Int(_)) if !pre53 => {
-                                    count > 0
+                                    count != 0
                                 }
                                 (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
                                     let next = cur.wrapping_add(st);
@@ -9208,26 +9208,52 @@ impl Vm {
 
     // ---- numeric for ----
 
+    /// Check and convert a numeric for's control values the way the
+    /// dialect's `OP_FORPREP` does. The integer loop is chosen by the
+    /// values' tags (a numeric string makes it a float loop, 5.3+); the
+    /// check order, wording and the zero-step error differ per version:
+    /// 5.1/5.2 test initial value, limit, step; 5.3+ limit, step, initial
+    /// value; only 5.4+ reject a zero step, and an integer loop does that
+    /// before looking at the limit.
+    fn for_operands(&mut self, base: u32, a: u32) -> Result<(Num, Num, Num), LuaError> {
+        let (init, limit, step) = (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2));
+        let v = self.version();
+        let order = if v <= LuaVersion::Lua52 {
+            [("initial value", init), ("limit", limit), ("step", step)]
+        } else {
+            [("limit", limit), ("step", step), ("initial value", init)]
+        };
+        if v >= LuaVersion::Lua54 && matches!((init, step), (Value::Int(_), Value::Int(0))) {
+            return Err(self.rt_err("'for' step is zero"));
+        }
+        for (what, val) in order {
+            if as_num(val).is_none() {
+                return Err(self.rt_err(&if v >= LuaVersion::Lua54 {
+                    format!(
+                        "bad 'for' {what} (number expected, got {})",
+                        self.obj_typename(val)
+                    )
+                } else {
+                    format!("'for' {what} must be a number")
+                }));
+            }
+        }
+        let n = |val| as_num(val).expect("checked above");
+        let int_loop =
+            v <= LuaVersion::Lua52 || matches!((init, step), (Value::Int(_), Value::Int(_)));
+        if int_loop {
+            return Ok((n(init), n(limit), n(step)));
+        }
+        let (i, l, st) = (n(init).as_f64(), n(limit).as_f64(), n(step).as_f64());
+        if v >= LuaVersion::Lua54 && st == 0.0 {
+            return Err(self.rt_err("'for' step is zero"));
+        }
+        Ok((Num::Float(i), Num::Float(l), Num::Float(st)))
+    }
+
     fn for_prep(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
-        let init = self.r(base, a);
-        let limit = self.r(base, a + 1);
-        let step = self.r(base, a + 2);
-        let (Some(init_n), Some(limit_n), Some(step_n)) =
-            (as_num(init), as_num(limit), as_num(step))
-        else {
-            // PUC luaG_forerror: "bad 'for' <what> (number expected, got <type>)".
-            // PUC checks limit, then step, then initial value.
-            let (what, bad) = if as_num(limit).is_none() {
-                ("limit", limit)
-            } else if as_num(step).is_none() {
-                ("step", step)
-            } else {
-                ("initial value", init)
-            };
-            let tn = self.obj_typename(bad);
-            return Err(self.rt_err(&format!("bad 'for' {what} (number expected, got {tn})")));
-        };
+        let (init_n, limit_n, step_n) = self.for_operands(base, a)?;
         // PUC 5.1–5.3 `OP_FORPREP` stores `i = init - step` and *unconditionally*
         // jumps to the matching `OP_FORLOOP` — the body never runs ahead of the
         // first test, so each successful iteration emits a backward `OP_FORLOOP`
@@ -9238,9 +9264,6 @@ impl Vm {
         let pre53 = self.version() <= LuaVersion::Lua53;
         match (init_n, step_n) {
             (Num::Int(i0), Num::Int(st)) => {
-                if st == 0 {
-                    return Err(self.rt_err("'for' step is zero"));
-                }
                 if pre53 {
                     // PUC 5.3 `forlimit`: int limit passes through; float limit
                     // gets clamped to MIN/MAX with a `stopnow` flag set only
@@ -9254,18 +9277,19 @@ impl Vm {
                     let (lim, stopnow) = match limit_n {
                         Num::Int(l) => (l, false),
                         Num::Float(f) => {
-                            if f.is_nan() {
-                                (0, true)
-                            } else if f >= i64::MAX as f64 + 1.0 {
-                                // beyond +MAX: unreachable for a decreasing loop
+                            // `luaV_tointeger` floors (ceils for a negative
+                            // step); a float it cannot fit is clamped on
+                            // the side of its sign, NaN counting as
+                            // negative (`0 < n` is false).
+                            let conv = if st < 0 { f.ceil() } else { f.floor() };
+                            if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0)
+                                .contains(&conv)
+                            {
+                                (conv as i64, false)
+                            } else if f > 0.0 {
                                 (i64::MAX, st < 0)
-                            } else if f <= i64::MIN as f64 {
-                                // beyond -MIN: unreachable for an increasing loop
-                                (i64::MIN, st >= 0)
-                            } else if st > 0 {
-                                (f.floor() as i64, false)
                             } else {
-                                (f.ceil() as i64, false)
+                                (i64::MIN, st > 0)
                             }
                         }
                     };
@@ -9294,9 +9318,6 @@ impl Vm {
             }
             _ => {
                 let (x0, lim, st) = (init_n.as_f64(), limit_n.as_f64(), step_n.as_f64());
-                if st == 0.0 {
-                    return Err(self.rt_err("'for' step is zero"));
-                }
                 if pre53 {
                     let pre = x0 - st;
                     self.set_r(base, a, Value::Float(pre));
@@ -9348,13 +9369,15 @@ impl Vm {
                 let Value::Int(count) = self.r(base, a + 1) else {
                     unreachable!()
                 };
-                if count > 0 {
+                // the count is unsigned (PUC `lua_Unsigned`): a loop over
+                // more than 2^63 values stores a "negative" one
+                if count != 0 {
                     let Value::Int(st) = self.r(base, a + 2) else {
                         unreachable!()
                     };
                     let next = cur.wrapping_add(st);
                     self.set_r(base, a, Value::Int(next));
-                    self.set_r(base, a + 1, Value::Int(count - 1));
+                    self.set_r(base, a + 1, Value::Int(count.wrapping_sub(1)));
                     self.set_r(base, a + 3, Value::Int(next));
                     self.add_pc(-(inst.bx() as i32));
                 }
@@ -9741,8 +9764,15 @@ fn int_for_limit(limit: Num, init: i64, step: i64) -> (i64, bool) {
             (l, empty)
         }
         Num::Float(f) => {
+            // PUC `forlimit` treats NaN like a limit below the integer
+            // range (`0 < flim` is false): no run upward, down to minint
+            // otherwise.
             if f.is_nan() {
-                return (0, true);
+                return if step > 0 {
+                    (0, true)
+                } else {
+                    (i64::MIN, false)
+                };
             }
             if step > 0 {
                 if f >= 9_223_372_036_854_775_808.0 {
