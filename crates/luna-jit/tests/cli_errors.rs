@@ -479,7 +479,6 @@ fn error_tostring_raises() {
 /// `Vm::call_msgh`), which drops the first three levels below; the same
 /// difference shows with a plain `xpcall` whose handler raises.
 #[test]
-#[ignore = "luna-core re-runs a failing message handler after unwinding, not where the error was raised"]
 fn error_tostring_raises_in_handler() {
     let case = Case {
         files: &[(

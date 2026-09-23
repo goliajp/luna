@@ -259,6 +259,11 @@ pub struct Vm {
     /// an `xpcall` (PUC `L->errfunc`): a protected call made from Rust — a
     /// finalizer, the handler itself — starts a fresh `errfunc` scope.
     pub(crate) msgh_floor: usize,
+    /// The message handler that is running, if any. PUC's `luaG_errormsg`
+    /// calls the handler with `L->errfunc` still set, so an error inside
+    /// the handler (and not caught within it) calls the handler again, at
+    /// the point of that error. Per thread, like `L->errfunc`.
+    pub(crate) msgh_running: Option<Value>,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.
@@ -984,6 +989,7 @@ impl Vm {
             pending_ccmt: 0,
             errored_natives: Vec::new(),
             msgh_floor: 0,
+            msgh_running: None,
             msgh_applied: None,
             keep_error_traceback: true,
             hook_ftransfer: 0,
@@ -2264,6 +2270,7 @@ impl Vm {
         self.natives_base = self.running_natives.len();
         // the coroutine's own frames start a fresh reach for xpcall handlers
         let resumer_msgh_floor = std::mem::replace(&mut self.msgh_floor, 0);
+        let resumer_msgh_running = self.msgh_running.take();
         // a coroutine that dies keeps its traceback for `debug.traceback(co)`
         let resumer_keeps_traceback = std::mem::replace(&mut self.keep_error_traceback, true);
 
@@ -2328,6 +2335,7 @@ impl Vm {
         // save the coroutine's context back and restore the resumer
         self.natives_base = resumer_natives_base;
         self.msgh_floor = resumer_msgh_floor;
+        self.msgh_running = resumer_msgh_running;
         self.keep_error_traceback = resumer_keeps_traceback;
         self.store_coro_ctx(co);
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
