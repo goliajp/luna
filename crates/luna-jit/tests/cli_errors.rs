@@ -474,10 +474,8 @@ fn error_tostring_raises() {
 
 /// 5.2 on: the error `__tostring` raises inside the handler calls the
 /// handler again where it was raised (PUC `luaG_errormsg`), so the final
-/// traceback holds the handler's own frames too. luna runs the handler again
-/// only after that error has unwound out of the first run (luna-core
-/// `Vm::call_msgh`), which drops the first three levels below; the same
-/// difference shows with a plain `xpcall` whose handler raises.
+/// traceback holds the handler's own frames too: the `__tostring` function
+/// and the first handler run's `[C]: in ?`.
 #[test]
 fn error_tostring_raises_in_handler() {
     let case = Case {
