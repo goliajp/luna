@@ -7446,9 +7446,10 @@ pub fn lower_trace_into_named<M: Module>(
                 // as Op::SetI.
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let key = bcx.use_var(regs[ins.b() as usize]);
+                let key_kind = k_op(&current_kinds, off as u32 + ins.b());
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
-                // a value of unknown kind cannot be tagged for the table
-                if matches!(val_kind, RegKind::Unset) {
+                // a key or value of unknown kind cannot be tagged for the table
+                if matches!(key_kind, RegKind::Unset) || matches!(val_kind, RegKind::Unset) {
                     return None;
                 }
                 let val = bcx.use_var(regs[ins.c() as usize]);
@@ -7458,7 +7459,7 @@ pub fn lower_trace_into_named<M: Module>(
                     set_checked_id,
                     t,
                     key,
-                    RegKind::Int,
+                    key_kind,
                     val,
                     val_kind,
                 );
