@@ -5180,6 +5180,33 @@ impl Vm {
         LuaError(Value::Str(self.heap.intern(text.as_bytes())))
     }
 
+    /// PUC `luaG_runerror`: an error the VM itself raises (a type error, a
+    /// bad table key, a comparison it cannot make). The position prefix is
+    /// added only when the running activation is a Lua function; when a
+    /// native is running (`rawset`, `table.sort`'s comparisons, ...) there
+    /// is none. A native's own errors go through [`Vm::rt_err`], which, like
+    /// `luaL_error`, names the calling Lua function's line.
+    pub(crate) fn vm_err(&mut self, msg: &str) -> LuaError {
+        if self.native_running() {
+            self.plain_err(msg)
+        } else {
+            self.rt_err(msg)
+        }
+    }
+
+    /// Is the running activation a native? Natives push no frame; one runs
+    /// above the topmost Lua frame when its function slot lies above that
+    /// frame's (a Lua function it calls back sits above it in turn).
+    fn native_running(&self) -> bool {
+        let Some(&(slot, _)) = self.running_native_slots.last() else {
+            return false;
+        };
+        match self.frames.iter().rev().find_map(CallFrame::lua) {
+            Some(f) => slot > f.func_slot,
+            None => true,
+        }
+    }
+
     /// Error without the `chunk:line:` position prefix. PUC's
     /// `resume_error` (ldo.c) pushes its message as a bare literal,
     /// so `cannot resume dead coroutine` etc. must not be prefixed.
@@ -5191,7 +5218,7 @@ impl Vm {
         let extra = self.subject_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err(what, &tn, &extra);
-        self.rt_err(&msg)
+        self.vm_err(&msg)
     }
 
     /// Assemble a `luaG_typeerror` / `luaG_callerror` message in the dialect's
@@ -5230,6 +5257,10 @@ impl Vm {
     /// current instruction doesn't hold `bad` simply yields "".
     fn subject_varinfo(&self, bad: Value) -> String {
         use crate::vm::isa::Op;
+        // PUC `varinfo` names a variable only for a Lua activation
+        if self.native_running() {
+            return String::new();
+        }
         let Some(f) = self.frames.last().and_then(CallFrame::lua) else {
             return String::new();
         };
@@ -5295,7 +5326,7 @@ impl Vm {
         let extra = self.call_target_varinfo(v);
         let tn = self.obj_typename(v);
         let msg = self.compose_type_err("call", &tn, &extra);
-        self.rt_err(&msg)
+        self.vm_err(&msg)
     }
 
     /// Name the offending call target. A metamethod dispatch pushes a `Cont`
@@ -5304,6 +5335,9 @@ impl Vm {
     /// register, any metamethod-bearing opcode yields "(metamethod 'event')".
     fn call_target_varinfo(&self, bad: Value) -> String {
         use crate::vm::isa::Op;
+        if self.native_running() {
+            return String::new();
+        }
         let Some(f) = self.frames.iter().rev().find_map(CallFrame::lua) else {
             return String::new();
         };
@@ -5338,12 +5372,15 @@ impl Vm {
     /// current arithmetic instruction when it can be recovered from bytecode.
     fn no_int_rep_err(&mut self) -> LuaError {
         let extra = self.bad_operand_varinfo();
-        self.rt_err(&format!("number{extra} has no integer representation"))
+        self.vm_err(&format!("number{extra} has no integer representation"))
     }
 
     /// Inspect the current frame's faulting instruction: find the register
     /// operand holding a float with no integer representation and name it.
     fn bad_operand_varinfo(&self) -> String {
+        if self.native_running() {
+            return String::new();
+        }
         let Some(f) = self.frames.last().and_then(CallFrame::lua) else {
             return String::new();
         };
@@ -8745,7 +8782,7 @@ impl Vm {
                 next => cur = next,
             }
         }
-        Err(self.rt_err("'__index' chain too long; possible loop"))
+        Err(self.vm_err("'__index' chain too long; possible loop"))
     }
 
     pub(crate) fn newindex_value(
@@ -8844,10 +8881,10 @@ impl Vm {
                 next => cur = next,
             }
         }
-        Err(self.rt_err("'__newindex' chain too long; possible loop"))
+        Err(self.vm_err("'__newindex' chain too long; possible loop"))
     }
 
-    fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
+    pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         match unsafe { t.as_mut() }.set(&mut self.heap, key, v) {
             Ok(()) => {
@@ -8855,9 +8892,9 @@ impl Vm {
                     .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
                 Ok(())
             }
-            Err(TableError::NilIndex) => Err(self.rt_err("table index is nil")),
-            Err(TableError::NanIndex) => Err(self.rt_err("table index is NaN")),
-            Err(TableError::Overflow) => Err(self.rt_err("table overflow")),
+            Err(TableError::NilIndex) => Err(self.vm_err("table index is nil")),
+            Err(TableError::NanIndex) => Err(self.vm_err("table index is NaN")),
+            Err(TableError::Overflow) => Err(self.vm_err("table overflow")),
             Err(TableError::InvalidNext) => unreachable!(),
         }
     }
@@ -8983,7 +9020,7 @@ impl Vm {
             (Mul, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_mul(b)),
             (IDiv, Num::Int(a), Num::Int(b)) => {
                 if b == 0 {
-                    return Err(self.rt_err("attempt to divide by zero"));
+                    return Err(self.vm_err("attempt to divide by zero"));
                 }
                 let mut q = a.wrapping_div(b);
                 if (a ^ b) < 0 && q.wrapping_mul(b) != a {
@@ -8993,7 +9030,7 @@ impl Vm {
             }
             (Mod, Num::Int(a), Num::Int(b)) => {
                 if b == 0 {
-                    return Err(self.rt_err("attempt to perform 'n%0'"));
+                    return Err(self.vm_err("attempt to perform 'n%0'"));
                 }
                 let mut m = a.wrapping_rem(b);
                 if m != 0 && (m ^ b) < 0 {
@@ -9185,7 +9222,7 @@ impl Vm {
                     // PUC luaG_ordererror: "two X values" when the operand
                     // types match, "X with Y" otherwise (objtypename-aware).
                     let (t1, t2) = (self.obj_typename(l), self.obj_typename(r));
-                    return Err(self.rt_err(&if t1 == t2 {
+                    return Err(self.vm_err(&if t1 == t2 {
                         format!("attempt to compare two {t1} values")
                     } else {
                         format!("attempt to compare {t1} with {t2}")

@@ -330,16 +330,10 @@ fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let t = check_table(vm, tv, "rawset")?;
     let k = vm.nat_arg(fs, nargs, 1);
     let v = vm.nat_arg(fs, nargs, 2);
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    match unsafe { t.as_mut() }.set(&mut vm.heap, k, v) {
-        Ok(()) => {
-            vm.barrier_back_table(t);
-            Ok(vm.nat_return(fs, &[tv]))
-        }
-        Err(crate::runtime::TableError::NilIndex) => Err(raise_str(vm, "table index is nil")),
-        Err(crate::runtime::TableError::NanIndex) => Err(raise_str(vm, "table index is NaN")),
-        Err(_) => unreachable!(),
-    }
+    // a bad key is the VM's error (`luaH_set` → `luaG_runerror`), raised
+    // while rawset runs, so it carries no position
+    vm.raw_set(t, k, v)?;
+    Ok(vm.nat_return(fs, &[tv]))
 }
 
 fn nat_rawequal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
