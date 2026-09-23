@@ -382,3 +382,23 @@ fn a_failing_trace_is_not_recompiled_on_every_call() {
         assert!(failed <= 10, "{v:?}: {failed} failed compiles");
     }
 }
+
+/// A trace that cannot change `math.min` itself checks it once, before
+/// its loop; a reassignment between two runs of the loop must still be
+/// seen.
+#[test]
+fn math_function_reassigned_between_dispatches() {
+    let src = r#"
+        local function run()
+          local s = 0
+          for i = 1, 300 do s = s + math.min(i, 5) end
+          return s
+        end
+        local a = run()
+        math.min = math.max
+        local b = run()
+        return a .. " " .. b"#;
+    for v in INT_DIALECTS {
+        assert_eq!(same(v, src), "1490 45160", "{v:?}");
+    }
+}
