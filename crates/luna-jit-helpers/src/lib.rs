@@ -572,6 +572,26 @@ pub unsafe extern "C" fn luna_jit_table_get_int_checked(
     unsafe { checked_read(g.get_int(key), want_tag, out) }
 }
 
+/// `t[key]` with a float key (its bits); see `checked_read`. The table
+/// normalises an integral key and finds nothing for a NaN.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_float_checked(
+    t: i64,
+    key_bits: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        return 0;
+    }
+    let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get(k), want_tag, out) }
+}
+
 /// `t[key]` with an interned string key; see `checked_read`.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]

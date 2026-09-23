@@ -63,3 +63,37 @@ fn non_integral_and_out_of_range_float_keys_read_through_the_hash() {
         same(v, src, "nil,nil,nil,nil,f,nil,nil,nil,20,30");
     }
 }
+
+/// The read's result register is typed from how the chunk uses it; a value
+/// of another type (nil for a missing key, a string) must not come back as
+/// that type's zero. The compiled read checked nothing and returned the
+/// raw payload, so `return t[0/0]` gave 0. The chunks return the value
+/// itself: a call to a library function would keep the chunk out of the
+/// method JIT, which compiles only self-recursive calls.
+#[test]
+fn a_read_of_another_type_is_not_reinterpreted() {
+    fn raw(version: LuaVersion, src: &str, jit: bool) -> String {
+        let mut vm = luna_jit::new_with_jit(version);
+        vm.set_jit_enabled(jit);
+        vm.set_trace_jit_enabled(jit);
+        match vm.eval(src).expect("eval").first() {
+            Some(Value::Nil) | None => "nil".into(),
+            Some(Value::Int(i)) => format!("int {i}"),
+            Some(Value::Float(f)) => format!("float {f}"),
+            Some(Value::Str(s)) => format!("str {}", String::from_utf8_lossy(s.as_bytes())),
+            Some(other) => format!("{other:?}"),
+        }
+    }
+    let cases = [
+        ("local t = {} return t[0/0]", "nil"),
+        ("local t = {1, 2} return t[5]", "nil"),
+        ("local t = {1, 'x'} return t[2]", "str x"),
+        ("local t = {1, 2} local k = 2 return t[k]", "int 2"),
+    ];
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        for (src, want) in cases {
+            assert_eq!(raw(v, src, false), want, "{v:?} interpreter: {src}");
+            assert_eq!(raw(v, src, true), want, "{v:?} JIT: {src}");
+        }
+    }
+}

@@ -9601,7 +9601,11 @@ impl Vm {
                     self.add_pc(inst.bx() as i32 - 1);
                     return Ok(());
                 }
-                let runs = if st > 0.0 { x0 <= lim } else { x0 >= lim };
+                // lvm.c `forprep`: skip only when `0 < step ? limit < init :
+                // init < limit`; a NaN makes both false, so the body runs
+                // once (with a NaN step, on the second test's side)
+                let skip = if 0.0 < st { lim < x0 } else { x0 < lim };
+                let runs = !skip;
                 if !runs {
                     self.add_pc(inst.bx() as i32);
                     return Ok(());

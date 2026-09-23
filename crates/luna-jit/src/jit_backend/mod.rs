@@ -748,6 +748,14 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
         luna_jit_math_fn_is_library as *const u8,
     );
     builder.symbol("luna_jit_park_deopt", luna_jit_park_deopt as *const u8);
+    builder.symbol(
+        "luna_jit_table_get_int_checked",
+        luna_jit_table_get_int_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_float_checked",
+        luna_jit_table_get_float_checked as *const u8,
+    );
     Some(JITModule::new(builder))
 }
 
@@ -811,6 +819,110 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
         ret_is_float: meta.ret_is_float,
         ret_is_table: meta.ret_is_table,
     })
+}
+
+/// The tag a method-JIT register of `kind` holds, as `Value::unpack`
+/// reports it.
+fn want_tag(kind: RegKind) -> i64 {
+    match kind {
+        RegKind::Int | RegKind::Unset => RAW_TAG_INT,
+        RegKind::Float => RAW_TAG_FLOAT,
+        RegKind::Table => RAW_TAG_TABLE,
+    }
+}
+
+/// A typed table read, `R[A] = t[key]`, whose register kind was inferred
+/// statically: the value's tag is checked against `want`, and a value of
+/// another type (nil for a missing key, a string, ...) leaves the compiled
+/// call so the interpreter re-runs it, as a metatable does. Reading the
+/// raw payload unchecked turned a nil into integer 0 or float 0.0.
+///
+/// `fast_ok` selects the inline array read (`key - 1` in range, no
+/// metatable); otherwise `slow` names a `*_checked` helper and its key.
+fn emit_checked_get<M: Module>(
+    bcx: &mut FunctionBuilder<'_>,
+    module: &mut M,
+    t: Value,
+    fast_ok: Value,
+    key_minus_1: Value,
+    slow: (&str, Value),
+    want: i64,
+) -> Option<Value> {
+    let fast_blk = bcx.create_block();
+    let slow_blk = bcx.create_block();
+    let deopt_blk = bcx.create_block();
+    let merge_blk = bcx.create_block();
+    bcx.append_block_param(merge_blk, types::I64);
+    bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
+
+    // atags trail the avals: the tag of slot i is at avals_ptr + asize * 8 + i
+    bcx.switch_to_block(fast_blk);
+    bcx.seal_block(fast_blk);
+    let avals_ptr = bcx.ins().load(
+        types::I64,
+        MemFlags::trusted(),
+        t,
+        TABLE_ARRAY_PTR_OFFSET as i32,
+    );
+    let asize = bcx.ins().load(
+        types::I64,
+        MemFlags::trusted(),
+        t,
+        TABLE_ASIZE_OFFSET as i32,
+    );
+    let avals_bytes = bcx.ins().ishl_imm(asize, 3);
+    let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
+    let tag_addr = bcx.ins().iadd(atags_ptr, key_minus_1);
+    let tag = bcx
+        .ins()
+        .uload8(types::I64, MemFlags::trusted(), tag_addr, 0);
+    let tag_ok = bcx.ins().icmp_imm(IntCC::Equal, tag, want);
+    let val_off = bcx.ins().ishl_imm(key_minus_1, 3);
+    let val_addr = bcx.ins().iadd(avals_ptr, val_off);
+    let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
+    bcx.ins().brif(
+        tag_ok,
+        merge_blk,
+        &[BlockArg::Value(fast_bits)],
+        deopt_blk,
+        &[],
+    );
+
+    bcx.switch_to_block(slow_blk);
+    bcx.seal_block(slow_blk);
+    let (helper, key) = slow;
+    let slot = bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+    let out = bcx.ins().stack_addr(types::I64, slot, 0);
+    let mut sig = module.make_signature();
+    for _ in 0..4 {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let id = module
+        .declare_function(helper, Linkage::Import, &sig)
+        .ok()?;
+    let f = module.declare_func_in_func(id, bcx.func);
+    let want_v = bcx.ins().iconst(types::I64, want);
+    let call = bcx.ins().call(f, &[t, key, want_v, out]);
+    let ok = bcx.inst_results(call)[0];
+    let slow_bits = bcx.ins().stack_load(types::I64, slot, 0);
+    bcx.ins()
+        .brif(ok, merge_blk, &[BlockArg::Value(slow_bits)], deopt_blk, &[]);
+
+    bcx.switch_to_block(deopt_blk);
+    bcx.seal_block(deopt_blk);
+    let park_sig = module.make_signature();
+    let park_id = module
+        .declare_function("luna_jit_park_deopt", Linkage::Import, &park_sig)
+        .ok()?;
+    let park = module.declare_func_in_func(park_id, bcx.func);
+    bcx.ins().call(park, &[]);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.switch_to_block(merge_blk);
+    bcx.seal_block(merge_blk);
+    Some(bcx.block_params(merge_blk)[0])
 }
 
 /// v1.3 Phase AOT Stage 3 — backend-agnostic body of the int-chunk
@@ -3872,44 +3984,17 @@ pub fn lower_int_chunk_into<M: Module>(
                 let no_meta = bcx.ins().icmp(IntCC::Equal, metatable, zero_i64);
                 let fast_ok = bcx.ins().band(in_range, no_meta);
 
-                let fast_blk = bcx.create_block();
-                let slow_blk = bcx.create_block();
-                let merge_blk = bcx.create_block();
-                bcx.append_block_param(merge_blk, types::I64);
-                bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
-
-                bcx.switch_to_block(fast_blk);
-                bcx.seal_block(fast_blk);
-                let avals_ptr = bcx.ins().load(
-                    types::I64,
-                    MemFlags::trusted(),
-                    t,
-                    TABLE_ARRAY_PTR_OFFSET as i32,
-                );
-                let three = bcx.ins().iconst(types::I64, 3);
-                let val_off = bcx.ins().ishl(key_minus_1, three);
-                let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-                let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(fast_bits)]);
-
-                bcx.switch_to_block(slow_blk);
-                bcx.seal_block(slow_blk);
                 let key = bcx.ins().iconst(types::I64, key_imm);
-                let mut sig = module.make_signature();
-                sig.params.push(AbiParam::new(types::I64));
-                sig.params.push(AbiParam::new(types::I64));
-                sig.returns.push(AbiParam::new(types::I64));
-                let id = module
-                    .declare_function("luna_jit_table_get_int", Linkage::Import, &sig)
-                    .ok()?;
-                let r = module.declare_func_in_func(id, bcx.func);
-                let call_inst = bcx.ins().call(r, &[t, key]);
-                let slow_bits = bcx.inst_results(call_inst)[0];
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(slow_bits)]);
-
-                bcx.switch_to_block(merge_blk);
-                bcx.seal_block(merge_blk);
-                let v = bcx.block_params(merge_blk)[0];
+                let want = want_tag(reg_kinds.get(a).copied().unwrap_or(RegKind::Int));
+                let v = emit_checked_get(
+                    &mut bcx,
+                    module,
+                    t,
+                    fast_ok,
+                    key_minus_1,
+                    ("luna_jit_table_get_int_checked", key),
+                    want,
+                )?;
                 aligned_def(&mut bcx, &regs, &reg_kinds, a, v);
                 current_kinds[a] = reg_kinds[a];
                 current_is_nil[a] = false;
@@ -3980,49 +4065,14 @@ pub fn lower_int_chunk_into<M: Module>(
                 let bounds_ok = bcx.ins().band(in_range, no_meta);
                 let fast_ok = bcx.ins().band(bounds_ok, key_ok);
 
-                let fast_blk = bcx.create_block();
-                let slow_blk = bcx.create_block();
-                let merge_blk = bcx.create_block();
-                bcx.append_block_param(merge_blk, types::I64);
-                bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
-
-                bcx.switch_to_block(fast_blk);
-                bcx.seal_block(fast_blk);
-                let avals_ptr = bcx.ins().load(
-                    types::I64,
-                    MemFlags::trusted(),
-                    t,
-                    TABLE_ARRAY_PTR_OFFSET as i32,
-                );
-                let three = bcx.ins().iconst(types::I64, 3);
-                let val_off = bcx.ins().ishl(key_minus_1, three);
-                let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-                let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(fast_bits)]);
-
-                bcx.switch_to_block(slow_blk);
-                bcx.seal_block(slow_blk);
-                let (helper_name, key_arg) = if is_float_key {
+                let slow = if is_float_key {
                     let key_bits = bcx.ins().bitcast(types::I64, MemFlags::new(), key_raw);
-                    ("luna_jit_table_get_float", key_bits)
+                    ("luna_jit_table_get_float_checked", key_bits)
                 } else {
-                    ("luna_jit_table_get_int", key_raw)
+                    ("luna_jit_table_get_int_checked", key_raw)
                 };
-                let mut sig = module.make_signature();
-                sig.params.push(AbiParam::new(types::I64));
-                sig.params.push(AbiParam::new(types::I64));
-                sig.returns.push(AbiParam::new(types::I64));
-                let id = module
-                    .declare_function(helper_name, Linkage::Import, &sig)
-                    .ok()?;
-                let r = module.declare_func_in_func(id, bcx.func);
-                let call_inst = bcx.ins().call(r, &[t, key_arg]);
-                let slow_bits = bcx.inst_results(call_inst)[0];
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(slow_bits)]);
-
-                bcx.switch_to_block(merge_blk);
-                bcx.seal_block(merge_blk);
-                let v = bcx.block_params(merge_blk)[0];
+                let want = want_tag(reg_kinds.get(a).copied().unwrap_or(RegKind::Int));
+                let v = emit_checked_get(&mut bcx, module, t, fast_ok, key_minus_1, slow, want)?;
                 aligned_def(&mut bcx, &regs, &reg_kinds, a, v);
                 current_kinds[a] = reg_kinds[a];
                 current_is_nil[a] = false;

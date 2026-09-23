@@ -72,7 +72,7 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 /// Whichever reader produced it, the prototype tree is verified before it is
 /// returned (see the `verify` module). A refused chunk's message is worded
 /// as the running dialect's `lundump.c` words it, without the chunk-name
-/// prefix `load` adds (see [`undump_named`]).
+/// prefix `load` adds (see `undump_named`).
 pub fn undump(
     bytes: &[u8],
     heap: &mut Heap,
