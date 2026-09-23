@@ -3071,8 +3071,38 @@ impl<'a> Compiler<'a> {
         let post_loop = self.here();
         self.mark_target(post_loop);
         self.leave_block()?;
+        // PUC fornum's internal locals, which debug.getlocal lists ahead
+        // of the loop variable: 5.1-5.3 name them after their roles, 5.4
+        // has three "(for state)", 5.5 two.
+        let hidden: &[(&str, u32)] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                &[("(for index)", 0), ("(for limit)", 1), ("(for step)", 2)]
+            }
+            LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1)],
+            _ => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 2)],
+        };
+        self.push_hidden_locals(base, hidden, prep as u32, post_loop as u32);
         self.set_freereg(base);
         Ok(())
+    }
+
+    /// Debug entries for a for loop's internal variables, `(name, offset
+    /// from base)`, live over `start_pc..end_pc`.
+    fn push_hidden_locals(
+        &mut self,
+        base: u32,
+        hidden: &[(&str, u32)],
+        start_pc: u32,
+        end_pc: u32,
+    ) {
+        for &(name, off) in hidden {
+            self.l().locvars.push(crate::runtime::LocVar {
+                name: name.into(),
+                reg: base + off,
+                start_pc,
+                end_pc,
+            });
+        }
     }
 
     fn generic_for(
@@ -3158,29 +3188,31 @@ impl<'a> Compiler<'a> {
         self.leave_block()?;
         // close the iterator's closing value (4th control slot, 5.4+)
         self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
-        // PUC forlist registers three hidden control variables named
-        // "(for state)" (generator, state, to-be-closed); debug.getlocal must
-        // see them. They live across the loop body.
+        // PUC forlist registers hidden control variables that
+        // debug.getlocal lists; they live across the loop body. 5.1-5.3
+        // have three, named after their roles. 5.4 names all four control
+        // slots "(for state)" — generator, state, control, and
+        // to-be-closed; 5.5 dropped the user-control entry so only three
+        // are reported. 5.4 files.lua :443 expects the to-be-closed at the
+        // 4th "(for state)" hit; 5.5 files.lua :433 expects it at the 3rd.
+        // Without the user-control entry on 5.4 the file never gets closed
+        // on `break`.
         let end_pc = self.here() as u32;
-        // PUC 5.4 names ALL four control slots "(for state)" — generator,
-        // state, control, and to-be-closed; 5.5 dropped the user-control
-        // entry so only three are reported. 5.4 files.lua :443 expects the
-        // to-be-closed at the 4th "(for state)" hit; 5.5 files.lua :433
-        // expects it at the 3rd. Without the user-control entry on 5.4 the
-        // file never gets closed on `break`.
-        let regs: &[u32] = if self.version >= LuaVersion::Lua55 {
-            &[base, base + 1, base + 3]
-        } else {
-            &[base, base + 1, base + 2, base + 3]
+        let hidden: &[(&str, u32)] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => &[
+                ("(for generator)", 0),
+                ("(for state)", 1),
+                ("(for control)", 2),
+            ],
+            LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 3)],
+            _ => &[
+                ("(for state)", 0),
+                ("(for state)", 1),
+                ("(for state)", 2),
+                ("(for state)", 3),
+            ],
         };
-        for &reg in regs {
-            self.l().locvars.push(crate::runtime::LocVar {
-                name: "(for state)".into(),
-                reg,
-                start_pc: control_start,
-                end_pc,
-            });
-        }
+        self.push_hidden_locals(base, hidden, control_start, end_pc);
         self.set_freereg(base);
         Ok(())
     }
