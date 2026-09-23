@@ -1677,14 +1677,19 @@ impl Vm {
             return false;
         }
         // Pack args into i64 bit-patterns per the per-slot expected
-        // kind. A Float-typed slot accepts Value::Float verbatim and
-        // promotes Value::Int(x) via i64 → f64; a Table-typed slot
+        // kind. A Float-typed slot accepts Value::Float verbatim (and on
+        // 5.1/5.2 promotes Value::Int(x) via i64 → f64); a Table-typed slot
         // accepts only Value::Table and passes the raw Gc ptr; an
         // Int-typed slot accepts only Value::Int. Any other shape
         // bails to the interpreter so the call's actual dynamics
         // (metamethod dispatch / type-coerce) take over.
         let mut args: [i64; crate::jit::MAX_JIT_ARITY as usize] =
             [0; crate::jit::MAX_JIT_ARITY as usize];
+        // From 5.3 an integer is its own subtype: turned into a float for
+        // a float-typed parameter, it would come back out (returned,
+        // stored, printed) as a float. Only 5.1/5.2, where every number
+        // is a float, may convert it.
+        let int_as_float = self.version() <= crate::version::LuaVersion::Lua52;
         for i in 0..num_args as usize {
             let v = self.stack[(func_slot + 1) as usize + i];
             let want_float = (arg_float_mask >> i) & 1 == 1;
@@ -1693,7 +1698,7 @@ impl Vm {
                 (true, _, Value::Table(t)) => t.as_ptr() as i64,
                 (false, false, Value::Int(x)) => x,
                 (false, true, Value::Float(f)) => f.to_bits() as i64,
-                (false, true, Value::Int(x)) => (x as f64).to_bits() as i64,
+                (false, true, Value::Int(x)) if int_as_float => (x as f64).to_bits() as i64,
                 _ => return false,
             };
         }
@@ -3772,7 +3777,9 @@ impl Vm {
     ///     caller-provided buffers + return R[A+4]'s tag byte. Lets
     ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
     ///     `luna_jit_stack_tag` call by reading the buffer via
-    ///     cranelift `stack_load` IR instead. Returns -1 on deopt.
+    ///     cranelift `stack_load` IR instead. Returns -1 on deopt,
+    ///     else R[A+4]'s tag byte | R[A+5]'s tag byte << 8 (the value's
+    ///     tag only when `nvars >= 2`, 0 otherwise).
     #[doc(hidden)]
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `ctrl_out`/`key_out`/`val_out` are caller-stack buffers from Cranelift-emitted prologue; SAFETY documented below.
     pub fn jit_op_tforcall(
@@ -3850,11 +3857,12 @@ impl Vm {
         let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let key_raw = unsafe { key_rv.zero };
-        let val_raw = if (nvars as usize) >= 2 {
+        let (val_tag, val_raw) = if (nvars as usize) >= 2 {
+            let (tag, rv) = self.stack[(abs + 5) as usize].unpack();
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { self.stack[(abs + 5) as usize].unpack().1.zero }
+            (tag, unsafe { rv.zero })
         } else {
-            0u64
+            (0, 0u64)
         };
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe {
@@ -3862,7 +3870,7 @@ impl Vm {
             key_out.write(key_raw as i64);
             val_out.write(val_raw as i64);
         }
-        key_tag as i64
+        i64::from(key_tag) | i64::from(val_tag) << 8
     }
 
     /// P12-S12-B-v2 — load the raw `i64` payload of
@@ -4261,8 +4269,9 @@ impl Vm {
                             return Ok(true);
                         }
                         let call_already_cached =
-                            proto.traces.borrow().iter().any(|t| t.head_pc == 0);
-                        if c >= crate::jit::trace::CALL_HOT_THRESHOLD
+                            proto.traces.borrow().iter().any(|t| t.head_pc == 0)
+                                || trace_head_abandoned(proto, 0);
+                        if c >= self.jit.call_hot_threshold
                             && self.jit.active_trace.is_none()
                             && !call_already_cached
                         {
@@ -6603,6 +6612,17 @@ impl Vm {
                                     if let Some((parent_proto, parent_head_pc, parent_exit_idx)) =
                                         closed_record.side_trace_parent
                                     {
+                                        // The lowerer's own verdict: a trace it
+                                        // compiled but would not dispatch (an
+                                        // untyped table read, an inline abort)
+                                        // is not safe to enter from the parent's
+                                        // exit either — unless the only reason
+                                        // was the length gate, which weighs
+                                        // dispatch overhead, not soundness (the
+                                        // lowerer records the other reasons
+                                        // first).
+                                        let runnable = ct.dispatchable
+                                            || ct.dispatch_off_reason == Some("length-gate");
                                         ct.dispatchable = false;
                                         let entry_ptr = ct.entry as *const () as *const u8;
                                         let _side_trace_head_pc = closed_record.head_pc;
@@ -6641,15 +6661,16 @@ impl Vm {
                                         } else {
                                             &parent_ct.exit_tags
                                         };
-                                            let shape_ok =
+                                            let shape_matches =
                                                 crate::jit::trace::exit_tags_match_entry_tags(
                                                     &ct.entry_tags,
                                                     parent_exit_tags_slice,
                                                     &parent_ct.entry_tags,
                                                 );
-                                            if !shape_ok {
+                                            if !shape_matches {
                                                 self.jit.counters.side_trace_shape_mismatch += 1;
                                             }
+                                            let shape_ok = runnable && shape_matches;
                                             // P15-A v2-C-A4 — write the child's
                                             // entry fn ptr to BOTH the legacy
                                             // v2-A `exit_side_trace_ptrs[idx]`
@@ -6742,6 +6763,7 @@ impl Vm {
                                 }
                                 None => {
                                     self.jit.counters.compile_failed += 1;
+                                    note_trace_compile_failure(head_proto, closed_record.head_pc);
                                     self.jit
                                         .counters
                                         .compile_failed_reasons
@@ -7017,7 +7039,7 @@ impl Vm {
                             // arm — otherwise the lifted lookup would
                             // immediately re-admit after a force-deopt
                             // and the infinite loop returns.
-                            if is_downrec && downrec_admit_blocked {
+                            if downrec_admit_blocked {
                                 return false;
                             }
                             // Primary arm: `dispatchable=true` traces
@@ -7142,6 +7164,15 @@ impl Vm {
 
                 if dispatch_ok {
                     debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
+                    // A recording in progress cannot see what the trace runs
+                    // natively: it would resume after the trace with ops
+                    // missing, and could close as a loop that never ran (a
+                    // side trace of two ops returning its own head, which
+                    // the dispatcher then entered forever). Drop it.
+                    if self.jit.active_trace.take().is_some() {
+                        self.jit.counters.aborted += 1;
+                        self.jit.counters.bump_close_cause("reached-compiled-trace");
+                    }
                     self.jit.pending_err = None;
                     // P12-S4-step4b-C-2 — snapshot the pre-entry frame
                     // count. A cmp@d>0 side-exit calls the materialize
@@ -7560,7 +7591,19 @@ impl Vm {
                         // hits always take the general path —
                         // their per-side-exit shapes aren't
                         // pre-classified yet.
-                        let fast_path_taken = if using_global_exit_tags {
+                        // A generic-for exit whose TForCall wrote the loop
+                        // variables to the stack with tags the trace did not
+                        // compile for: leave those slots as they are.
+                        let keep_tfor =
+                            if decode_body & crate::jit::trace_types::EXIT_KEEP_TFOR_VARS != 0 {
+                                let call = cl.proto.code[cont_pc as usize - 1];
+                                debug_assert!(matches!(call.op(), crate::vm::isa::Op::TForCall));
+                                let first = call.a() as usize + 4;
+                                first..first + call.c() as usize
+                            } else {
+                                0..0
+                            };
+                        let fast_path_taken = if using_global_exit_tags && keep_tfor.is_empty() {
                             match global_tag_res_kind {
                                 crate::jit::trace::TagResKind::AllUntouched => {
                                     // No-op: vm.stack already
@@ -7585,6 +7628,9 @@ impl Vm {
                         };
                         if !fast_path_taken {
                             for i in 0..slot_count {
+                                if keep_tfor.contains(&i) {
+                                    continue;
+                                }
                                 let tag = match exit_tags_for_pc[i] {
                                     crate::jit::trace::ExitTag::Untouched => {
                                         if i < max_stack {
@@ -8114,8 +8160,9 @@ impl Vm {
                             true
                         } else {
                             proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
+                                || trace_head_abandoned(proto, target_pc)
                         };
-                        if c >= crate::jit::trace::TRACE_HOT_THRESHOLD
+                        if c >= self.jit.trace_hot_threshold
                             && self.jit.active_trace.is_none()
                             && !back_edge_already_cached
                         {
@@ -8410,8 +8457,7 @@ impl Vm {
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
                             }
-                            if c == crate::jit::trace::TRACE_HOT_THRESHOLD
-                                && self.jit.active_trace.is_none()
+                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
                             {
                                 // ForLoop's back-edge target = pc
                                 // after `add_pc(-bx)` runs from the
@@ -8473,8 +8519,7 @@ impl Vm {
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
                             }
-                            if c == crate::jit::trace::TRACE_HOT_THRESHOLD
-                                && self.jit.active_trace.is_none()
+                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
                             {
                                 // TForLoop back-edge target = pc after
                                 // `add_pc(-bx)` runs from the already-
@@ -10286,4 +10331,26 @@ impl Vm {
         }
         out
     }
+}
+
+/// Recordings of one trace head that may fail to compile before the head
+/// is no longer recorded (LuaJIT likewise blacklists a trace start after
+/// repeated failures). A few tries, since a later recording can see
+/// different register kinds.
+const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
+
+fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
+    let mut failures = proto.trace_compile_failures.borrow_mut();
+    match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
+        Some((_, n)) => *n = n.saturating_add(1),
+        None => failures.push((head_pc, 1)),
+    }
+}
+
+fn trace_head_abandoned(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) -> bool {
+    proto
+        .trace_compile_failures
+        .borrow()
+        .iter()
+        .any(|&(pc, n)| pc == head_pc && n >= MAX_TRACE_COMPILE_FAILURES)
 }

@@ -97,6 +97,31 @@ pub(crate) fn open_math(vm: &mut Vm) {
     vm.barrier_back_table(t);
 }
 
+/// The native registered as `math.<name>`, for the functions a JIT may
+/// inline: it replaces the call with its own code only while the field
+/// still holds this function, since a program can assign any value to
+/// it. `None` for other names.
+#[doc(hidden)]
+pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> {
+    let f: Native = match name {
+        b"sin" => m_sin,
+        b"cos" => m_cos,
+        b"tan" => m_tan,
+        b"asin" => m_asin,
+        b"acos" => m_acos,
+        b"atan" => m_atan,
+        b"exp" => m_exp,
+        b"log" => m_log,
+        b"sqrt" => m_sqrt,
+        b"floor" => m_floor,
+        b"ceil" => m_ceil,
+        b"max" => m_max,
+        b"min" => m_min,
+        _ => return None,
+    };
+    Some(f)
+}
+
 /// PUC `pushnumint`: a float that fits an integer becomes one.
 fn push_numint(f: f64) -> Value {
     match f2i_exact(f) {
