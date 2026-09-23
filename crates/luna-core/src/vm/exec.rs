@@ -1662,14 +1662,19 @@ impl Vm {
             return false;
         }
         // Pack args into i64 bit-patterns per the per-slot expected
-        // kind. A Float-typed slot accepts Value::Float verbatim and
-        // promotes Value::Int(x) via i64 → f64; a Table-typed slot
+        // kind. A Float-typed slot accepts Value::Float verbatim (and on
+        // 5.1/5.2 promotes Value::Int(x) via i64 → f64); a Table-typed slot
         // accepts only Value::Table and passes the raw Gc ptr; an
         // Int-typed slot accepts only Value::Int. Any other shape
         // bails to the interpreter so the call's actual dynamics
         // (metamethod dispatch / type-coerce) take over.
         let mut args: [i64; crate::jit::MAX_JIT_ARITY as usize] =
             [0; crate::jit::MAX_JIT_ARITY as usize];
+        // From 5.3 an integer is its own subtype: turned into a float for
+        // a float-typed parameter, it would come back out (returned,
+        // stored, printed) as a float. Only 5.1/5.2, where every number
+        // is a float, may convert it.
+        let int_as_float = self.version() <= crate::version::LuaVersion::Lua52;
         for i in 0..num_args as usize {
             let v = self.stack[(func_slot + 1) as usize + i];
             let want_float = (arg_float_mask >> i) & 1 == 1;
@@ -1678,7 +1683,7 @@ impl Vm {
                 (true, _, Value::Table(t)) => t.as_ptr() as i64,
                 (false, false, Value::Int(x)) => x,
                 (false, true, Value::Float(f)) => f.to_bits() as i64,
-                (false, true, Value::Int(x)) => (x as f64).to_bits() as i64,
+                (false, true, Value::Int(x)) if int_as_float => (x as f64).to_bits() as i64,
                 _ => return false,
             };
         }
