@@ -8,7 +8,7 @@
 //! materializes a local `arg` table (see `proto.has_compat_vararg_arg`).
 
 use crate::compiler::compile_chunk;
-use crate::frontend::{SyntaxError, parse};
+use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
 use crate::runtime::heap::GcHeader;
@@ -1387,10 +1387,14 @@ impl Vm {
             // `parse_tokens` reinserts Eof when it runs out of tokens.
             raw.pop();
             let expanded = self.macro_registry.expand(raw)?;
-            let ast = crate::frontend::parse_tokens(expanded, src, self.version)?;
+            let depth = self.c_depth + self.pcall_depth;
+            let ast =
+                crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
             compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
         } else {
-            let ast = parse(src, self.version)?;
+            // PUC's `nCcalls` counts protected calls as well
+            let depth = self.c_depth + self.pcall_depth;
+            let ast = crate::frontend::parser::parse_at_depth(src, self.version, depth)?;
             compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
         };
         // PUC `lua_load` (lapi.c) only seeds the loaded closure's first
