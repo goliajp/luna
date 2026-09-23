@@ -900,6 +900,21 @@ enum RegKind {
 }
 
 impl RegKind {
+    /// The value tag of a register of this kind; `None` when the kind
+    /// is not known.
+    fn value_tag(self) -> Option<u8> {
+        use luna_core::runtime::value::raw;
+        match self {
+            RegKind::Int => Some(raw::INT),
+            RegKind::Float => Some(raw::FLOAT),
+            RegKind::Table => Some(raw::TABLE),
+            RegKind::Closure => Some(raw::CLOSURE),
+            RegKind::Nil => Some(raw::NIL),
+            RegKind::Str => Some(raw::STR),
+            RegKind::Unset => None,
+        }
+    }
+
     fn from_entry_tag(tag: u8) -> Option<Self> {
         match tag {
             luna_core::runtime::value::raw::INT => Some(RegKind::Int),
@@ -3341,6 +3356,14 @@ fn build_trace_jit_module() -> Option<JITModule> {
         super::luna_jit_table_get_int as *const u8,
     );
     builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
+    builder.symbol(
+        "luna_jit_table_get_tagged",
+        super::luna_jit_table_get_tagged as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_upval_table_get_tagged",
+        super::luna_jit_upval_table_get_tagged as *const u8,
+    );
     // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
     // helper. Reuses the method JIT helper; the trace dispatcher's
     // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
@@ -4898,24 +4921,6 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_table_set_field", Linkage::Import, &set_field_sig)
         .ok()?;
 
-    // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
-    let mut get_field_sig = module.make_signature();
-    get_field_sig.params.push(AbiParam::new(types::I64));
-    get_field_sig.params.push(AbiParam::new(types::I64));
-    get_field_sig.returns.push(AbiParam::new(types::I64));
-    let get_field_id = module
-        .declare_function("luna_jit_table_get_field", Linkage::Import, &get_field_sig)
-        .ok()?;
-
-    // v1.2 D3 Path B — `fn luna_jit_op_get_tab_up(upval_idx, key_ptr) -> raw`.
-    let mut get_tab_up_sig = module.make_signature();
-    get_tab_up_sig.params.push(AbiParam::new(types::I64));
-    get_tab_up_sig.params.push(AbiParam::new(types::I64));
-    get_tab_up_sig.returns.push(AbiParam::new(types::I64));
-    let get_tab_up_id = module
-        .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
-        .ok()?;
-
     // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
     // Returns the new Gc<LuaClosure> raw payload bits.
     let mut op_closure_sig = module.make_signature();
@@ -5066,12 +5071,31 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    let mut get_int_sig = module.make_signature();
-    get_int_sig.params.push(AbiParam::new(types::I64));
-    get_int_sig.params.push(AbiParam::new(types::I64));
-    get_int_sig.returns.push(AbiParam::new(types::I64));
-    let get_int_id = module
-        .declare_function("luna_jit_table_get_int", Linkage::Import, &get_int_sig)
+    // Table reads with the value's tag: `(t, key_raw, key_tag,
+    // tag_out) -> raw` and `(upval_idx, key_ptr, tag_out) -> raw`.
+    let mut get_tagged_sig = module.make_signature();
+    for _ in 0..4 {
+        get_tagged_sig.params.push(AbiParam::new(types::I64));
+    }
+    get_tagged_sig.returns.push(AbiParam::new(types::I64));
+    let get_tagged_id = module
+        .declare_function(
+            "luna_jit_table_get_tagged",
+            Linkage::Import,
+            &get_tagged_sig,
+        )
+        .ok()?;
+    let mut upval_get_tagged_sig = module.make_signature();
+    for _ in 0..3 {
+        upval_get_tagged_sig.params.push(AbiParam::new(types::I64));
+    }
+    upval_get_tagged_sig.returns.push(AbiParam::new(types::I64));
+    let upval_get_tagged_id = module
+        .declare_function(
+            "luna_jit_upval_table_get_tagged",
+            Linkage::Import,
+            &upval_get_tagged_sig,
+        )
         .ok()?;
 
     let mut len_sig = module.make_signature();
@@ -5549,6 +5573,12 @@ pub fn lower_trace_into_named<M: Module>(
     // immediate-form instructions at codegen. See layer-6 doc §3 for
     // attack #2 candidates that ARE structural (block3 dead-slot store
     // elimination, side-exit materialize call ABI consolidation).
+    // Where the tagged table-read helpers write the value's tag.
+    let tag_slot = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+        8,
+        3,
+    ));
     // Side exit from the block the builder is in: resume the interpreter
     // at `$pc` with the state of recorded op `$i`. Materialises the live
     // sunk tables and, at inline depth > 0, the inlined frames, so it is
@@ -5681,6 +5711,37 @@ pub fn lower_trace_into_named<M: Module>(
             side_exit!($i, $pc);
             bcx.switch_to_block(continue_blk);
             bcx.seal_block(continue_blk);
+        }};
+    }
+    // A GetX result (`$raw`, value tag `$tag`) for `R[$a]` of op `$i`
+    // (at `$pc`, register window `$off` / `$regs`):
+    // the kind comes from the next use of the register, and the tag is
+    // guarded against it, leaving the trace at the op when the table
+    // holds something else. With no use to go by, the trace is compiled
+    // but not dispatched.
+    macro_rules! finish_getx {
+        ($i:expr, $pc:expr, $off:expr, $regs:expr, $a:expr, $raw:expr, $tag:expr, $what:expr) => {{
+            let inferred = if $i + 1 < effective_end {
+                infer_getx_exit_lookahead($a, &record.ops[$i + 1..effective_end])
+            } else {
+                None
+            };
+            let kind = match inferred {
+                Some(ExitTag::Int) => Some(RegKind::Int),
+                Some(ExitTag::Table) => Some(RegKind::Table),
+                Some(ExitTag::Float) => Some(RegKind::Float),
+                _ => None,
+            };
+            if let Some(k) = kind {
+                let want = k.value_tag().expect("inferred kinds have a tag");
+                let ok = bcx.ins().icmp_imm(IntCC::Equal, $tag, i64::from(want));
+                guard!(ok, $i, $pc);
+                current_kinds[$off + $a as usize] = k;
+            } else {
+                dispatchable = false;
+                dispatch_off_reason = dispatch_off_reason.or(Some($what));
+            }
+            bcx.def_var($regs[$a as usize], $raw);
         }};
     }
     checkpoint("pre:main-emit-loop");
@@ -6352,48 +6413,40 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.c() as i64);
-                let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, k_imm]);
+                let k_tag = bcx
+                    .ins()
+                    .iconst(types::I64, i64::from(luna_core::runtime::value::raw::INT));
+                let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
+                let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
+                let call = bcx.ins().call(func_ref, &[t, k_imm, k_tag, tag_out]);
                 let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
-                // GetX inference: look at the immediate next op.
-                let inferred = if i + 1 < effective_end {
-                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-                } else {
-                    None
-                };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
-                    _ => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
-                    }
-                }
+                let tag = bcx.ins().stack_load(types::I64, tag_slot, 0);
+                finish_getx!(i, rop.pc, off, regs, ins.a(), v, tag, "GetI:inference-fail");
             }
             Op::GetTable => {
+                // The key goes to the helper with its tag: a string or
+                // float key read as an integer finds nothing.
+                let Some(key_tag) = k_op(&current_kinds, off as u32 + ins.c()).value_tag() else {
+                    return None;
+                };
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key = bcx.use_var(regs[ins.c() as usize]);
-                let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, key]);
+                let k_tag = bcx.ins().iconst(types::I64, i64::from(key_tag));
+                let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
+                let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
+                let call = bcx.ins().call(func_ref, &[t, key, k_tag, tag_out]);
                 let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
-                let inferred = if i + 1 < effective_end {
-                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-                } else {
-                    None
-                };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
-                    _ => {
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetTable:inference-fail"));
-                    }
-                }
+                let tag = bcx.ins().stack_load(types::I64, tag_slot, 0);
+                finish_getx!(
+                    i,
+                    rop.pc,
+                    off,
+                    regs,
+                    ins.a(),
+                    v,
+                    tag,
+                    "GetTable:inference-fail"
+                );
             }
             Op::SetField => {
                 // P12-S11-B-v1 — sunk path: when escape sweep tagged
@@ -6527,6 +6580,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let slow_blk = bcx.create_block();
                     let merge_blk = bcx.create_block();
                     bcx.append_block_param(merge_blk, types::I64);
+                    bcx.append_block_param(merge_blk, types::I64);
 
                     bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
 
@@ -6574,42 +6628,51 @@ pub fn lower_trace_into_named<M: Module>(
                         node_addr,
                         super::NODE_VAL_RAW_OFFSET as i32,
                     );
-                    bcx.ins().jump(merge_blk, &[val_raw.into()]);
+                    bcx.ins().jump(merge_blk, &[val_raw.into(), val_tag.into()]);
 
-                    // --- slow: fall back to existing helper ---
+                    // --- slow: fall back to the helper ---
                     bcx.switch_to_block(slow_blk);
                     bcx.seal_block(slow_blk);
-                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                    let v_slow = bcx.inst_results(call)[0];
-                    bcx.ins().jump(merge_blk, &[v_slow.into()]);
+                    let (v_slow, tag_slow) = {
+                        let k_tag = bcx
+                            .ins()
+                            .iconst(types::I64, i64::from(luna_core::runtime::value::raw::STR));
+                        let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
+                        let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key_arg, k_tag, tag_out]);
+                        let v = bcx.inst_results(call)[0];
+                        (v, bcx.ins().stack_load(types::I64, tag_slot, 0))
+                    };
+                    bcx.ins().jump(merge_blk, &[v_slow.into(), tag_slow.into()]);
 
                     // --- merge ---
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
-                    bcx.block_params(merge_blk)[0]
+                    (
+                        bcx.block_params(merge_blk)[0],
+                        bcx.block_params(merge_blk)[1],
+                    )
                 } else {
-                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                    bcx.inst_results(call)[0]
+                    let k_tag = bcx
+                        .ins()
+                        .iconst(types::I64, i64::from(luna_core::runtime::value::raw::STR));
+                    let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
+                    let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, key_arg, k_tag, tag_out]);
+                    let v = bcx.inst_results(call)[0];
+                    (v, bcx.ins().stack_load(types::I64, tag_slot, 0))
                 };
-                bcx.def_var(regs[ins.a() as usize], v);
-
-                let inferred = if i + 1 < effective_end {
-                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-                } else {
-                    None
-                };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
-                    _ => {
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetField:inference-fail"));
-                    }
-                }
+                let (v, tag) = v;
+                finish_getx!(
+                    i,
+                    rop.pc,
+                    off,
+                    regs,
+                    ins.a(),
+                    v,
+                    tag,
+                    "GetField:inference-fail"
+                );
             }
             Op::GetTabUp => {
                 // v1.2 D3 Path B — `R[A] := upvals[B][K[C]:string]`.
@@ -6625,25 +6688,21 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
+                let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
+                let func_ref = module.declare_func_in_func(upval_get_tagged_id, bcx.func);
+                let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg, tag_out]);
                 let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
-                let inferred = if i + 1 < effective_end {
-                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-                } else {
-                    None
-                };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
-                    _ => {
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetTabUp:inference-fail"));
-                    }
-                }
+                let tag = bcx.ins().stack_load(types::I64, tag_slot, 0);
+                finish_getx!(
+                    i,
+                    rop.pc,
+                    off,
+                    regs,
+                    ins.a(),
+                    v,
+                    tag,
+                    "GetTabUp:inference-fail"
+                );
             }
             Op::SetI => {
                 // P12-S8-B — sunk path: when escape sweep tagged

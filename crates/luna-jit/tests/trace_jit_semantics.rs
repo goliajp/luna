@@ -85,3 +85,59 @@ fn shifts_by_any_count() {
         same(v, src);
     }
 }
+
+/// A table read takes the kind its next use implies; the value was used
+/// as that kind unchecked, so a table where an integer was expected was
+/// added as its pointer bits.
+#[test]
+fn table_reads_check_the_value_type() {
+    const ALL_INT: &[LuaVersion] = &[LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55];
+    let cases: [(&str, &[LuaVersion]); 4] = [
+        // GetTable in a while loop (5.3 records these; its numeric for
+        // loops are not compiled)
+        (
+            "local t = {} for i = 1, 2000 do t[i] = i end t[1999] = {} \
+             local i, s = 1, 0 while i <= 2000 do s = s + t[i] i = i + 1 end return tostring(s)",
+            ALL_INT,
+        ),
+        // GetField
+        (
+            "local t = {} for i = 1, 2000 do t[i] = {v = i} end t[1999] = {v = {}} \
+             local s = 0 for i = 1, 2000 do s = s + t[i].v end return tostring(s)",
+            &INT_DIALECTS,
+        ),
+        // GetTabUp: a global that changes type
+        (
+            "g = 1 local s = 0 for i = 1, 2000 do if i == 1999 then g = {} end s = s + g end \
+             return tostring(s)",
+            &INT_DIALECTS,
+        ),
+        // GetI
+        (
+            "local s = 0 local t = {} for i = 1, 2000 do t[i] = {i} end t[1999] = {{}} \
+             for i = 1, 2000 do s = s + t[i][1] end return tostring(s)",
+            &INT_DIALECTS,
+        ),
+    ];
+    for (src, dialects) in cases {
+        for &v in dialects {
+            let out = same(v, src);
+            assert!(out.starts_with("error: "), "{v:?}: {out}");
+        }
+    }
+}
+
+/// `t[k]` with a string key went to the integer-key getter with the
+/// string's pointer as the index, and found nothing.
+#[test]
+fn table_read_with_a_string_key() {
+    let src = r#"
+        local m = {a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8, i = 9, j = 10}
+        local keys = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+        local s = 0
+        for n = 1, 300 do for _, k in ipairs(keys) do s = s + m[k] end end
+        return tostring(s)"#;
+    for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_eq!(same(v, src), "16500");
+    }
+}

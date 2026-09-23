@@ -377,6 +377,80 @@ pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
+/// Trace-JIT table read that also reports the value's tag: `t[key]`,
+/// the key given as `(key_tag, key_raw)`, the result's raw payload
+/// returned and its tag written to `*tag_out`. The trace guards the tag
+/// against the kind it compiled the rest of the body for; the plain
+/// getters return only the payload, so a string or a table sitting where
+/// an integer was expected was used as one. A metatable parks a deopt,
+/// as in the other getters.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_tagged(
+    t: i64,
+    key_raw: i64,
+    key_tag: i64,
+    tag_out: *mut i64,
+) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_some() {
+        return 0;
+    }
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: table has metatable"));
+        return 0;
+    }
+    // SAFETY: the trace passes `key_tag` from the key register's kind, which it keeps in lockstep with the register's payload, so the pair is a valid packed Value.
+    let key = unsafe {
+        luna_core::runtime::Value::pack(
+            key_tag as u8,
+            luna_core::runtime::value::RawVal {
+                zero: key_raw as u64,
+            },
+        )
+    };
+    let (tag, raw) = g.get(key).unpack();
+    // SAFETY: `tag_out` is the address of an 8-byte stack slot in the calling trace's frame.
+    unsafe { *tag_out = i64::from(tag) };
+    // SAFETY: every RawVal variant is 8 bytes of plain data; reading it as `zero` reinterprets the payload bits.
+    unsafe { raw.zero as i64 }
+}
+
+/// [`luna_jit_table_get_tagged`] on the table in upvalue `upval_idx` of
+/// the running closure, with a string key (`GetTabUp`). A non-table
+/// upvalue or a metatable parks a deopt.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_table_get_tagged(
+    upval_idx: i64,
+    key_ptr: i64,
+    tag_out: *mut i64,
+) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_some() {
+        return 0;
+    }
+    // SAFETY: the trace dispatcher enters with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    let luna_core::runtime::Value::Table(g) = vm.upval_get(cl, upval_idx as u32) else {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: GetTabUp upval not Table"));
+        return 0;
+    };
+    // SAFETY: forwarded under the same JIT entry; `key_ptr` is an interned string the trace baked in, so (STR, key_ptr) is a valid packed Value.
+    unsafe {
+        luna_jit_table_get_tagged(
+            g.as_ptr() as i64,
+            key_ptr,
+            i64::from(luna_core::runtime::value::raw::STR),
+            tag_out,
+        )
+    }
+}
+
 /// v1.2 D3 Path B — read `upvals[upval_idx][key_str]` and return raw
 /// payload bits. Mirrors `luna_jit_table_get_field` but resolves the
 /// table via the trace head closure's upvalue list first (the trace
