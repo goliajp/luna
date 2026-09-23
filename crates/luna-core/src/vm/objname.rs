@@ -9,6 +9,7 @@
 
 use crate::runtime::Value;
 use crate::runtime::function::Proto;
+use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, Op};
 
 /// The string constant at index `c`, if it is a string.
@@ -160,29 +161,49 @@ pub fn getlocalname(proto: &Proto, reg: u32, pc: usize) -> Option<&str> {
 
 /// Name and kind for `reg` as of `lastpc`, e.g. ("field", "huge"). None when
 /// the register has no recoverable source-level name.
-pub fn getobjname(proto: &Proto, lastpc: usize, reg: u32) -> Option<(&'static str, String)> {
+///
+/// The dialect decides a few spellings: 5.1 has no "constant" kind and names
+/// only a constant string key (anything else is `'?'`); 5.2/5.3 also follow a
+/// key register back to a string constant; `t[1]`'s "integer index" is 5.4's
+/// (older versions index with a non-string constant, so `'?'`).
+pub fn getobjname(
+    proto: &Proto,
+    lastpc: usize,
+    reg: u32,
+    version: LuaVersion,
+) -> Option<(&'static str, String)> {
     // PUC order: a live local takes precedence over symbolic execution
     if let Some(name) = getlocalname(proto, reg, lastpc) {
         return Some(("local", name.to_string()));
     }
     let setpc = find_setreg(proto, lastpc, reg)?;
     let i = proto.code[setpc];
+    let unknown = || "?".to_string();
     match i.op() {
         Op::Move => {
             let b = i.b();
             // trace the source register, but only backwards to avoid cycles
             if b < i.a() {
-                getobjname(proto, setpc, b)
+                getobjname(proto, setpc, b, version)
             } else {
                 None
             }
         }
         Op::GetUpval => upvalname(proto, i.b()).map(|n| ("upvalue", n)),
+        Op::LoadK | Op::LoadKx if version >= LuaVersion::Lua52 => {
+            basicgetobjname(proto, lastpc, reg)
+        }
         Op::GetTabUp => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, true), n)),
         Op::GetField => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, false), n)),
         // a register-keyed read (global with a constant index past the GETFIELD
         // C-operand limit, or an explicit `t[k]`): name from the key register.
-        Op::GetTable => Some((gxf(proto, setpc, i, false), rname(proto, setpc, i.c()))),
+        Op::GetTable => match gxf(proto, setpc, i, false) {
+            // 5.1 reads a global with GETGLOBAL, which takes any constant;
+            // its GETTABLE only names an RK string constant key
+            "field" if version <= LuaVersion::Lua51 => Some(("field", unknown())),
+            kind => Some((kind, rname(proto, setpc, i.c()))),
+        },
+        Op::GetI if version <= LuaVersion::Lua53 => Some(("field", unknown())),
         Op::GetI => Some(("field", "integer index".to_string())),
         // A named-vararg table read (`function f(...t) ... t.k ...`) compiles
         // to VARGIDX rather than GETFIELD: there is no table object to index,

@@ -11,7 +11,9 @@ use std::fmt;
 /// emit those bytes without UTF-8 enforcement getting in the way.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SyntaxError {
-    /// 1-based source line where the error was detected.
+    /// 1-based source line where the error was detected. `0` marks a
+    /// message that PUC raises without a position prefix (e.g. 5.4's
+    /// "C stack overflow" while parsing, or a memory error).
     pub line: u32,
     /// Message bytes (PUC-style; may contain non-UTF-8 source bytes).
     pub msg: Vec<u8>,
@@ -26,6 +28,29 @@ impl SyntaxError {
         }
     }
 
+    /// An error PUC reports with no `chunk:line:` prefix.
+    pub fn unpositioned(msg: impl Into<Vec<u8>>) -> Self {
+        SyntaxError {
+            line: 0,
+            msg: msg.into(),
+        }
+    }
+
+    /// The complete message as `load` returns it: `<chunkid>:<line>: msg`,
+    /// or the bare message for an unpositioned error. `chunkid` is the
+    /// chunk name already rendered by `luaO_chunkid`.
+    pub fn render(&self, chunkid: &[u8]) -> Vec<u8> {
+        if self.line == 0 {
+            return self.msg.clone();
+        }
+        let mut out = chunkid.to_vec();
+        out.push(b':');
+        out.extend_from_slice(self.line.to_string().as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(&self.msg);
+        out
+    }
+
     /// Lossy `&str` for Rust-side display (PUC `luaG_addinfo` only cares
     /// about the bytes; this is for unit tests / panic messages).
     pub fn msg_str(&self) -> std::borrow::Cow<'_, str> {
@@ -35,6 +60,9 @@ impl SyntaxError {
 
 impl fmt::Display for SyntaxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.line == 0 {
+            return f.write_str(&self.msg_str());
+        }
         write!(f, "{}: {}", self.line, self.msg_str())
     }
 }

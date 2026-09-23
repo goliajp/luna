@@ -20,8 +20,8 @@
 //! - **`NEWTABLE`** always carries an `EXTRAARG`, which luna's `NewTable`
 //!   (it ignores size hints) does not consume, so both become one op.
 //! - **`VARARGPREP`**: luna adjusts varargs at call time; in 5.5 it also
-//!   materialises a named vararg table (`PF_VATAB`), which becomes
-//!   `GetVarg`.
+//!   sets the vararg parameter's register — a table (`PF_VATAB`, becomes
+//!   `GetVarg`) or nil (`LoadNil`).
 //!
 //! 5.5 differs from 5.4 in its opcode numbering, in 6/10-bit `NEWTABLE` /
 //! `SETLIST` operands, in `SELF` always taking a constant key, and in giving
@@ -513,12 +513,20 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 }
                 lw.emit(Inst::iabx(Op::ErrNNil, a, i.bx()));
             }
-            Kind::VarargPrep => {
+            // luna adjusts varargs at call time. 5.5 keeps the vararg
+            // parameter in register `num_params`: a table built here
+            // (PF_VATAB), otherwise nil. Emitting that store, rather than
+            // nothing, also keeps the parameter's local — declared after
+            // this instruction — from looking live at function entry.
+            Kind::VarargPrep if d.v55 => {
+                let a = lw.r(raw.num_params as u32)?;
                 if raw.vararg_table {
-                    let a = lw.r(raw.num_params as u32)?;
                     lw.emit(Inst::iabc(Op::GetVarg, a, 0, 0, false));
+                } else {
+                    lw.emit(Inst::iabc(Op::LoadNil, a, 0, 0, false));
                 }
             }
+            Kind::VarargPrep => {}
             Kind::ExtraArg => return Err(lw.err("EXTRAARG without an instruction to extend")),
         }
         pc += 1;

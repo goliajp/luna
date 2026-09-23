@@ -469,7 +469,7 @@ pub fn compile_and_link(
     // triple it's `cargo build --target=<triple>` and the resulting
     // staticlib lives under `target/<triple>/release-aot-helpers/`.
     // The `release-aot-helpers` profile (workspace `Cargo.toml`) has
-    // `lto = "off"` so the 27 `luna_jit_*` Cranelift trace-mcode
+    // `lto = "off"` so the 35 `luna_jit_*` Cranelift trace-mcode
     // helpers survive the rlib → staticlib bundling step.
     let staticlib = build_runtime_helpers_staticlib(target.triple_for_cargo())?;
 
@@ -645,7 +645,7 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
         // v1.3 Stage 7 follow-on — dedicated `release-aot-helpers`
         // profile (defined in workspace `Cargo.toml`) turns LTO off
         // for this staticlib build. Workspace `[profile.release]`
-        // has `lto = true`, which strips the 27 `luna_jit_*`
+        // has `lto = true`, which strips the 35 `luna_jit_*`
         // Cranelift trace-mcode helper symbols from the staticlib
         // bundle (the cross-crate optimizer correctly observes they
         // are never *called* from the staticlib's Rust-side surface

@@ -64,7 +64,11 @@ pub(crate) fn typename_at(vm: &Vm, a: Args, i: u32) -> String {
 /// The type name `luaL_typeerror` reports for a present value.
 pub(crate) fn typename_of(vm: &Vm, v: Value) -> String {
     if vm.version() >= LuaVersion::Lua53 {
-        vm.obj_typename(v)
+        // `luaL_typeerror` singles out light userdata once `__name` fails
+        match v {
+            Value::LightUserdata(_) => "light userdata".to_string(),
+            _ => vm.obj_typename(v),
+        }
     } else {
         v.type_name().to_string()
     }
@@ -90,10 +94,7 @@ pub(crate) fn to_num(vm: &Vm, v: Value) -> Option<Num> {
     match v {
         Value::Int(x) => Some(Num::Int(x)),
         Value::Float(f) => Some(Num::Float(f)),
-        Value::Str(s) => {
-            let int_ok = vm.version() >= LuaVersion::Lua53;
-            numeric::str2num(s.as_bytes(), int_ok, true)
-        }
+        Value::Str(s) => crate::vm::exec::str_to_num(s.as_bytes(), vm.version()),
         _ => None,
     }
 }

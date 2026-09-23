@@ -239,6 +239,135 @@ pub fn str2num(s: &[u8], int_ok: bool, hex_float_ok: bool) -> Option<Num> {
     Some(if neg { n.negate() } else { n })
 }
 
+/// C99 `strtod` applied to a C string, accepting the numeral only when
+/// nothing but whitespace follows it: PUC 5.1's `luaO_str2d`. Unlike
+/// [`str2num`] it reads `inf`/`infinity`/`nan` (any case, `nan(...)` too),
+/// always yields a float, and stops at the first NUL, as C sees the string
+/// end there. (5.1's retry with `strtoul` when `strtod` stops at an `x`
+/// can never finish the string, so it is not modelled.)
+pub fn strtod_str(s: &[u8]) -> Option<f64> {
+    let is_space = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r');
+    let s = &s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())];
+    let mut i = 0;
+    while i < s.len() && is_space(s[i]) {
+        i += 1;
+    }
+    let neg = match s.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    let rest = &s[i..];
+    let starts = |w: &[u8]| rest.len() >= w.len() && rest[..w.len()].eq_ignore_ascii_case(w);
+    let (v, used) = if starts(b"infinity") {
+        (f64::INFINITY, 8)
+    } else if starts(b"inf") {
+        (f64::INFINITY, 3)
+    } else if starts(b"nan") {
+        let mut n = 3;
+        // `nan(n-char-sequence)`
+        if rest.get(3) == Some(&b'(') {
+            let close = rest[4..]
+                .iter()
+                .position(|&c| !(c.is_ascii_alphanumeric() || c == b'_'));
+            if let Some(k) = close
+                && rest[4 + k] == b')'
+            {
+                n = 5 + k;
+            }
+        }
+        (f64::NAN, n)
+    } else if rest.len() > 2
+        && rest[0] == b'0'
+        && matches!(rest[1], b'x' | b'X')
+        && let Some((v, n)) = hex_prefix(&rest[2..])
+    {
+        (v, 2 + n)
+    } else {
+        dec_prefix(rest)?
+    };
+    if !rest[used..].iter().all(|&c| is_space(c)) {
+        return None;
+    }
+    Some(if neg { -v } else { v })
+}
+
+/// The longest decimal float numeral at the start of `s` (`strtod`'s
+/// subject sequence) and its length.
+fn dec_prefix(s: &[u8]) -> Option<(f64, usize)> {
+    let digits = |s: &[u8], mut i: usize| {
+        while i < s.len() && s[i].is_ascii_digit() {
+            i += 1;
+        }
+        i
+    };
+    let int_end = digits(s, 0);
+    let mut i = int_end;
+    let mut frac = 0;
+    if i < s.len() && s[i] == b'.' {
+        let e = digits(s, i + 1);
+        frac = e - (i + 1);
+        i = e;
+    }
+    if int_end + frac == 0 {
+        return None;
+    }
+    if i < s.len() && matches!(s[i], b'e' | b'E') {
+        let mut j = i + 1;
+        if j < s.len() && matches!(s[j], b'+' | b'-') {
+            j += 1;
+        }
+        let e = digits(s, j);
+        if e > j {
+            i = e;
+        }
+    }
+    let text = str::from_utf8(&s[..i]).expect("ascii numeral");
+    Some((text.parse::<f64>().ok()?, i))
+}
+
+/// The longest hex float numeral after `0x` at the start of `s`, and its
+/// length; `None` when no hex digit follows (strtod then reads just "0").
+fn hex_prefix(s: &[u8]) -> Option<(f64, usize)> {
+    let hexes = |mut i: usize| {
+        while i < s.len() && hex_digit(s[i]).is_some() {
+            i += 1;
+        }
+        i
+    };
+    let int_end = hexes(0);
+    let mut i = int_end;
+    let mut frac = 0;
+    if i < s.len() && s[i] == b'.' {
+        let e = hexes(i + 1);
+        frac = e - (i + 1);
+        i = e;
+    }
+    if int_end + frac == 0 {
+        return None;
+    }
+    if i < s.len() && matches!(s[i], b'p' | b'P') {
+        let mut j = i + 1;
+        if j < s.len() && matches!(s[j], b'+' | b'-') {
+            j += 1;
+        }
+        let mut e = j;
+        while e < s.len() && s[e].is_ascii_digit() {
+            e += 1;
+        }
+        if e > j {
+            i = e;
+        }
+    }
+    hex_literal(&s[..i], false, true).map(|n| (n.as_f64(), i))
+}
+
 /// Round a 64-bit mantissa (+sticky) to f64 and scale by 2^exp.
 fn compose_f64(mant: u64, sticky: bool, exp: i64) -> f64 {
     if mant == 0 {
@@ -409,6 +538,23 @@ fn float_to_string(f: f64, fmt: FloatFmt) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strtod_str_reads_what_c_strtod_reads() {
+        assert_eq!(strtod_str(b"  10  "), Some(10.0));
+        assert_eq!(strtod_str(b"10\0zz"), Some(10.0));
+        assert_eq!(strtod_str(b"-inf"), Some(f64::NEG_INFINITY));
+        assert_eq!(strtod_str(b"Infinity"), Some(f64::INFINITY));
+        assert!(strtod_str(b"nan").is_some_and(f64::is_nan));
+        assert!(strtod_str(b"nan(123)").is_some_and(f64::is_nan));
+        assert_eq!(strtod_str(b"0x1p4"), Some(16.0));
+        assert_eq!(strtod_str(b"0x.8"), Some(0.5));
+        assert_eq!(strtod_str(b".5e1"), Some(5.0));
+        assert_eq!(strtod_str(b"0x"), None);
+        assert_eq!(strtod_str(b"1e"), None);
+        assert_eq!(strtod_str(b"infx"), None);
+        assert_eq!(strtod_str(b""), None);
+    }
+
     use super::*;
 
     #[test]

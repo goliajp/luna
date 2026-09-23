@@ -637,46 +637,6 @@ fn try_match_trace_math_fold(
     })
 }
 
-/// `math.floor` / `math.ceil`: on 5.3+ they keep integers integral and
-/// turn a float into an integer when it fits.
-fn is_rounding(fn_name: &str) -> bool {
-    matches!(fn_name, "floor" | "ceil")
-}
-
-/// `m // n` or `m % n` for integers, `n != 0`, as lvm.c `luaV_idiv` /
-/// `luaV_mod`: the quotient rounds toward minus infinity and the
-/// remainder takes the divisor's sign. `n == -1` is special-cased there
-/// (`m // -1` wraps to `-m`, `m % -1` is 0) because `sdiv` traps on
-/// `minint / -1`; dividing by 1 instead gives the same remainder.
-fn emit_int_floor_div_mod(bcx: &mut FunctionBuilder<'_>, op: Op, m: Value, n: Value) -> Value {
-    let one = bcx.ins().iconst(types::I64, 1);
-    let is_neg1 = bcx.ins().icmp_imm(IntCC::Equal, n, -1);
-    let d = bcx.ins().select(is_neg1, one, n);
-    let q = bcx.ins().sdiv(m, d);
-    let r = bcx.ins().srem(m, d);
-    // The truncated result is off by one step when the remainder is
-    // non-zero and has the other sign from the divisor.
-    let r_nonzero = bcx.ins().icmp_imm(IntCC::NotEqual, r, 0);
-    let sign_differs = {
-        let x = bcx.ins().bxor(r, n);
-        bcx.ins().icmp_imm(IntCC::SignedLessThan, x, 0)
-    };
-    let adjust = bcx.ins().band(r_nonzero, sign_differs);
-    match op {
-        Op::IDiv => {
-            let q_floor = bcx.ins().isub(q, one);
-            let q = bcx.ins().select(adjust, q_floor, q);
-            let neg_m = bcx.ins().ineg(m);
-            bcx.ins().select(is_neg1, neg_m, q)
-        }
-        Op::Mod => {
-            let r_floor = bcx.ins().iadd(r, n);
-            bcx.ins().select(adjust, r_floor, r)
-        }
-        _ => unreachable!("only IDiv / Mod"),
-    }
-}
-
 /// Whether the float `r` (an integral value or NaN / ±inf) converts to
 /// an i64: `-2^63 <= r < 2^63`. NaN fails both comparisons.
 fn emit_f64_fits_i64(bcx: &mut FunctionBuilder<'_>, r: Value) -> Value {
@@ -714,23 +674,10 @@ fn emit_lt_float_int(bcx: &mut FunctionBuilder<'_>, f: Value, i: Value) -> Value
     bcx.ins().select(in_range, lt, below)
 }
 
-/// `x << n` as lvm.c `luaV_shiftl`: a negative `n` shifts right
-/// (logically) by `-n`, and a count of 64 or more either way gives 0.
-/// `x >> n` is this with `-n` (wrapping), as `luaV_shiftr` does.
-/// Cranelift masks the count to 6 bits, hence the explicit range tests.
-fn emit_lua_shift_left(bcx: &mut FunctionBuilder<'_>, x: Value, n: Value) -> Value {
-    let zero = bcx.ins().iconst(types::I64, 0);
-    let left = bcx.ins().ishl(x, n);
-    let left_out = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, n, 64);
-    let left = bcx.ins().select(left_out, zero, left);
-    let neg_n = bcx.ins().ineg(n);
-    let right = bcx.ins().ushr(x, neg_n);
-    let right_out = bcx
-        .ins()
-        .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, neg_n, 64);
-    let right = bcx.ins().select(right_out, zero, right);
-    let is_right = bcx.ins().icmp_imm(IntCC::SignedLessThan, n, 0);
-    bcx.ins().select(is_right, right, left)
+/// `math.floor` / `math.ceil`: on 5.3+ they keep integers integral and
+/// turn a float into an integer when it fits.
+fn is_rounding(fn_name: &str) -> bool {
+    matches!(fn_name, "floor" | "ceil")
 }
 
 /// Single-op classifier — the per-op decision logic used by the
@@ -863,6 +810,67 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
     None
 }
 
+/// [`emit_floor_divmod`] for a divisor `k` known to be neither 0 nor -1:
+/// the truncated remainder needs adjusting exactly when it is nonzero and
+/// of the other sign than `k`, which for a known sign is one sign test,
+/// done without a compare as an all-ones mask (`|r| < |k|`, so negating
+/// `r` cannot overflow).
+fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
+    let kv = bcx.ins().iconst(types::I64, k);
+    let q = bcx.ins().sdiv(a, kv);
+    let qk = bcx.ins().imul(q, kv);
+    let r = bcx.ins().isub(a, qk);
+    let wrong_sign = if k > 0 { r } else { bcx.ins().ineg(r) };
+    let mask = bcx.ins().sshr_imm(wrong_sign, 63);
+    if op == Op::IDiv {
+        bcx.ins().iadd(q, mask)
+    } else {
+        let adj = bcx.ins().band_imm(mask, k);
+        bcx.ins().iadd(r, adj)
+    }
+}
+
+/// Lua's integer `//` or `%` for a nonzero divisor: rounded toward minus
+/// infinity (the remainder takes the divisor's sign), and `x // -1` wraps
+/// where a machine division by -1 would trap on minint.
+fn emit_floor_divmod(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, b: Value) -> Value {
+    let minus_one = bcx.ins().iconst(types::I64, -1);
+    let one = bcx.ins().iconst(types::I64, 1);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    let is_m1 = bcx.ins().icmp(IntCC::Equal, b, minus_one);
+    let safe_b = bcx.ins().select(is_m1, one, b);
+    let q = bcx.ins().sdiv(a, safe_b);
+    let qb = bcx.ins().imul(q, safe_b);
+    let r = bcx.ins().isub(a, qb);
+    // a nonzero remainder whose sign differs from the divisor's
+    let r_nz = bcx.ins().icmp(IntCC::NotEqual, r, zero);
+    let signs = bcx.ins().bxor(r, b);
+    let differ = bcx.ins().icmp(IntCC::SignedLessThan, signs, zero);
+    let adjust = bcx.ins().band(r_nz, differ);
+    if op == Op::IDiv {
+        let q1 = bcx.ins().isub(q, one);
+        let floored = bcx.ins().select(adjust, q1, q);
+        let neg = bcx.ins().ineg(a);
+        bcx.ins().select(is_m1, neg, floored)
+    } else {
+        let rb = bcx.ins().iadd(r, b);
+        let floored = bcx.ins().select(adjust, rb, r);
+        bcx.ins().select(is_m1, zero, floored)
+    }
+}
+
+/// The kind a GetX result is typed as, from its inferred use, and the
+/// value tag its checked read demands (`None`: the use is not typed).
+fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
+    use luna_core::runtime::value::raw;
+    match tag {
+        Some(ExitTag::Int) => Some((RegKind::Int, raw::INT)),
+        Some(ExitTag::Table) => Some((RegKind::Table, raw::TABLE)),
+        Some(ExitTag::Float) => Some((RegKind::Float, raw::FLOAT)),
+        _ => None,
+    }
+}
+
 /// P12-S4-step2c — forward-look exit-tag inference for `Op::GetUpval`.
 /// Walks the recorded ops following the GetUpval until either:
 /// - an `Op::Call` with `A == getupval_a` is found → the upval is
@@ -939,21 +947,6 @@ enum RegKind {
 }
 
 impl RegKind {
-    /// The value tag of a register of this kind; `None` when the kind
-    /// is not known.
-    fn value_tag(self) -> Option<u8> {
-        use luna_core::runtime::value::raw;
-        match self {
-            RegKind::Int => Some(raw::INT),
-            RegKind::Float => Some(raw::FLOAT),
-            RegKind::Table => Some(raw::TABLE),
-            RegKind::Closure => Some(raw::CLOSURE),
-            RegKind::Nil => Some(raw::NIL),
-            RegKind::Str => Some(raw::STR),
-            RegKind::Unset => None,
-        }
-    }
-
     fn from_entry_tag(tag: u8) -> Option<Self> {
         match tag {
             luna_core::runtime::value::raw::INT => Some(RegKind::Int),
@@ -3164,6 +3157,42 @@ fn emit_store_back_and_return(
     );
 }
 
+/// A depth-0 side exit restoring through `per_exit_tags[tags_idx]`: the
+/// return value names the snapshot, since exits resuming at the same pc
+/// can carry different register kinds (see `decode_exit_shape`). An exit
+/// to the trace's own head has not run the head op, so it also stops the
+/// dispatcher from re-entering the trace before the interpreter has.
+fn emit_tagged_exit<M: Module>(
+    bcx: &mut FunctionBuilder<'_>,
+    module: &mut M,
+    suppress_admit_id: cranelift_module::FuncId,
+    regs: &[Variable],
+    reg_state: Value,
+    pc: u32,
+    head_pc: u32,
+    tags_idx: u32,
+    flush_ctx: Option<&FlushCtx>,
+    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
+) {
+    if pc == head_pc {
+        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+        bcx.ins().call(r, &[]);
+    }
+    let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
+        | (u64::from(tags_idx) << 32)
+        | u64::from(pc);
+    emit_store_back_and_return(
+        bcx,
+        regs,
+        reg_state,
+        ret as i64,
+        flush_ctx,
+        0i64,
+        trace_fn_sig_ref,
+        encode_side_sentinel(SIDE_SENT_KIND_TAG, tags_idx),
+    );
+}
+
 /// P12-S4-step4b-C-2 — inline cmp@d>0 side-exit return shape. The
 /// upper 32 bits encode `site_idx + 1` (1-based; 0 means "no
 /// inline site, look up via cont_pc in `per_exit_tags`"); the lower
@@ -3418,15 +3447,20 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_table_get_int",
         super::luna_jit_table_get_int as *const u8,
     );
+    // Checked reads: the typed GetI / GetTable / GetField / GetTabUp.
+    builder.symbol(
+        "luna_jit_table_get_int_checked",
+        super::luna_jit_table_get_int_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_field_checked",
+        super::luna_jit_table_get_field_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_op_get_tab_up_checked",
+        super::luna_jit_op_get_tab_up_checked as *const u8,
+    );
     builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
-    builder.symbol(
-        "luna_jit_table_get_tagged",
-        super::luna_jit_table_get_tagged as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_upval_table_get_tagged",
-        super::luna_jit_upval_table_get_tagged as *const u8,
-    );
     builder.symbol(
         "luna_jit_math_fn_is_library",
         super::luna_jit_math_fn_is_library as *const u8,
@@ -4992,6 +5026,53 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_table_set_field", Linkage::Import, &set_field_sig)
         .ok()?;
 
+    // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
+    let mut get_field_sig = module.make_signature();
+    get_field_sig.params.push(AbiParam::new(types::I64));
+    get_field_sig.params.push(AbiParam::new(types::I64));
+    get_field_sig.returns.push(AbiParam::new(types::I64));
+    let get_field_id = module
+        .declare_function("luna_jit_table_get_field", Linkage::Import, &get_field_sig)
+        .ok()?;
+
+    // v1.2 D3 Path B — `fn luna_jit_op_get_tab_up(upval_idx, key_ptr) -> raw`.
+    let mut get_tab_up_sig = module.make_signature();
+    get_tab_up_sig.params.push(AbiParam::new(types::I64));
+    get_tab_up_sig.params.push(AbiParam::new(types::I64));
+    get_tab_up_sig.returns.push(AbiParam::new(types::I64));
+    let get_tab_up_id = module
+        .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
+        .ok()?;
+
+    // Checked table reads (`luna_jit_table_get_int_checked` et al.):
+    // `fn(table_or_upval, key, want_tag, out: *mut i64) -> ok`.
+    let mut get_checked_sig = module.make_signature();
+    for _ in 0..4 {
+        get_checked_sig.params.push(AbiParam::new(types::I64));
+    }
+    get_checked_sig.returns.push(AbiParam::new(types::I64));
+    let get_int_checked_id = module
+        .declare_function(
+            "luna_jit_table_get_int_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+    let get_field_checked_id = module
+        .declare_function(
+            "luna_jit_table_get_field_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+    let get_tab_up_checked_id = module
+        .declare_function(
+            "luna_jit_op_get_tab_up_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+
     // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
     // Returns the new Gc<LuaClosure> raw payload bits.
     let mut op_closure_sig = module.make_signature();
@@ -5142,31 +5223,12 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    // Table reads with the value's tag: `(t, key_raw, key_tag,
-    // tag_out) -> raw` and `(upval_idx, key_ptr, tag_out) -> raw`.
-    let mut get_tagged_sig = module.make_signature();
-    for _ in 0..4 {
-        get_tagged_sig.params.push(AbiParam::new(types::I64));
-    }
-    get_tagged_sig.returns.push(AbiParam::new(types::I64));
-    let get_tagged_id = module
-        .declare_function(
-            "luna_jit_table_get_tagged",
-            Linkage::Import,
-            &get_tagged_sig,
-        )
-        .ok()?;
-    let mut upval_get_tagged_sig = module.make_signature();
-    for _ in 0..3 {
-        upval_get_tagged_sig.params.push(AbiParam::new(types::I64));
-    }
-    upval_get_tagged_sig.returns.push(AbiParam::new(types::I64));
-    let upval_get_tagged_id = module
-        .declare_function(
-            "luna_jit_upval_table_get_tagged",
-            Linkage::Import,
-            &upval_get_tagged_sig,
-        )
+    let mut get_int_sig = module.make_signature();
+    get_int_sig.params.push(AbiParam::new(types::I64));
+    get_int_sig.params.push(AbiParam::new(types::I64));
+    get_int_sig.returns.push(AbiParam::new(types::I64));
+    let get_int_id = module
+        .declare_function("luna_jit_table_get_int", Linkage::Import, &get_int_sig)
         .ok()?;
 
     let suppress_admit_id = module
@@ -5663,30 +5725,14 @@ pub fn lower_trace_into_named<M: Module>(
     // immediate-form instructions at codegen. See layer-6 doc §3 for
     // attack #2 candidates that ARE structural (block3 dead-slot store
     // elimination, side-exit materialize call ABI consolidation).
-    // Where the tagged table-read helpers write the value's tag.
-    let tag_slot = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-        8,
-        3,
-    ));
-    // Side exit from the block the builder is in: resume the interpreter
-    // at `$pc` with the state of recorded op `$i`. Materialises the live
-    // sunk tables and, at inline depth > 0, the inlined frames, so it is
-    // valid anywhere in the body; it records the register kinds of this
-    // point for the dispatcher's restore.
-    macro_rules! side_exit {
-        ($i:expr, $pc:expr) => {{
+    // A guard that fails leaves the trace at `$pc` (the op being
+    // guarded, re-executed by the interpreter) exactly as a cmp side
+    // exit does: live sunk tables are materialised and, when the op sits
+    // in an inlined frame, the frames are rebuilt first.
+    macro_rules! guard_exit {
+        ($pc:expr, $i:expr) => {{
             let side_exit_pc: u32 = $pc;
             if !call_chain.is_empty() {
-                // Capture head's resume pc BEFORE the innermost
-                // override — `call_chain[0].pc` is the outermost
-                // self-rec Call's `pc + 1` (= trace head's
-                // post-Call resume). Each exit site has its own chain
-                // (the v1 single-global-array attempt looped fib
-                // forever because sibling Calls produced wrong chains
-                // under the depth-indexed lookup); the innermost
-                // frame's pc is this exit's, so the materialize helper
-                // stays PC-agnostic.
                 let head_resume_pc = call_chain[0].pc;
                 let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
                 if let Some(last) = snapshot.last_mut() {
@@ -5696,11 +5742,6 @@ pub fn lower_trace_into_named<M: Module>(
                 let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                 let chain_len = chain_rc.len() as i64;
                 let site_idx = per_exit_inline_vec.len() as u32;
-                // P12-S10-B — materialise live Sinkable sites BEFORE
-                // the frame-mat helper pushes the inline frames. The
-                // window-sized snapshot updates in-place so
-                // per_exit_inline's kinds entry reflects materialised
-                // slots.
                 let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
                 let mat_count = emit_materialize_live_sunk(
                     &mut bcx,
@@ -5718,14 +5759,14 @@ pub fn lower_trace_into_named<M: Module>(
                     &mut defined_aot_data,
                 );
                 materialize_emit_count += mat_count;
-                let inline_side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
                 let chain_for_helper = chain_rc.clone();
                 per_exit_inline_vec.push((
                     side_exit_pc,
                     head_resume_pc,
                     kinds_snapshot,
                     chain_rc,
-                    inline_side_box,
+                    side_box,
                 ));
                 let n_arg = bcx.ins().iconst(types::I64, chain_len);
                 let ptr_arg = emit_chain_ptr_arg(
@@ -5749,11 +5790,6 @@ pub fn lower_trace_into_named<M: Module>(
                     trace_fn_sig_ref,
                 );
             } else {
-                // P12-S5-C / S10-A — materialise every live Sinkable
-                // site at this depth=0 exit. The snapshot carries
-                // `RegKind::Table` for each materialised caller-window
-                // slot so the dispatcher unpacks the heap pointer
-                // correctly on deopt.
                 let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
                 let mat_count = emit_materialize_live_sunk(
                     &mut bcx,
@@ -5771,78 +5807,80 @@ pub fn lower_trace_into_named<M: Module>(
                     &mut defined_aot_data,
                 );
                 materialize_emit_count += mat_count;
-                let tag_side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
                 let tag_side_local = per_exit_kinds.len() as u32;
-                per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box));
-                if side_exit_pc == record.head_pc {
-                    let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
-                    bcx.ins().call(r, &[]);
-                }
-                let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
-                    | (u64::from(tag_side_local) << 32)
-                    | u64::from(side_exit_pc);
-                // store_back only writes caller window — depth>0 scratch
-                // slots stay out of the dispatcher's reg_state restore.
-                emit_store_back_and_return(
+                per_exit_kinds.push((side_exit_pc, snapshot, side_box));
+                emit_tagged_exit(
                     &mut bcx,
+                    &mut module,
+                    suppress_admit_id,
                     &regs_full[..max_stack],
                     reg_state,
-                    ret as i64,
+                    side_exit_pc,
+                    record.head_pc,
+                    tag_side_local,
                     flush_ctx.as_ref(),
-                    0i64,
                     trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local),
                 );
             }
         }};
     }
+    // Call a checked read helper; on failure leave the trace at `$pc`,
+    // otherwise evaluate to the payload it wrote.
+    macro_rules! checked_read {
+        ($id:expr, $a0:expr, $a1:expr, $want:expr, $pc:expr, $i:expr) => {{
+            let out_ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+            let out_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+            let want = bcx.ins().iconst(types::I64, $want as i64);
+            let fref = module.declare_func_in_func($id, bcx.func);
+            let call = bcx.ins().call(fref, &[$a0, $a1, want, out_addr]);
+            let ok = bcx.inst_results(call)[0];
+            let cont_blk = bcx.create_block();
+            let exit_blk = bcx.create_block();
+            bcx.ins().brif(ok, cont_blk, &[], exit_blk, &[]);
+            bcx.switch_to_block(exit_blk);
+            bcx.seal_block(exit_blk);
+            guard_exit!($pc, $i);
+            bcx.switch_to_block(cont_blk);
+            bcx.seal_block(cont_blk);
+            bcx.ins().stack_load(types::I64, out_ss, 0)
+        }};
+    }
     // Continue in a new block when `$cond` holds, else take a
-    // `side_exit!` to `$pc`.
+    // `guard_exit!` to `$pc`.
     macro_rules! guard {
         ($cond:expr, $i:expr, $pc:expr) => {{
             let continue_blk = bcx.create_block();
-            let side_exit_blk = bcx.create_block();
-            bcx.ins().brif($cond, continue_blk, &[], side_exit_blk, &[]);
-            bcx.switch_to_block(side_exit_blk);
-            bcx.seal_block(side_exit_blk);
-            side_exit!($i, $pc);
+            let exit_blk = bcx.create_block();
+            bcx.ins().brif($cond, continue_blk, &[], exit_blk, &[]);
+            bcx.switch_to_block(exit_blk);
+            bcx.seal_block(exit_blk);
+            guard_exit!($pc, $i);
             bcx.switch_to_block(continue_blk);
             bcx.seal_block(continue_blk);
         }};
     }
-    // A GetX result (`$raw`, value tag `$tag`) for `R[$a]` of op `$i`
-    // (at `$pc`, register window `$off` / `$regs`):
-    // the kind comes from the next use of the register, and the tag is
-    // guarded against it, leaving the trace at the op when the table
-    // holds something else. With no use to go by, the trace is compiled
-    // but not dispatched.
-    macro_rules! finish_getx {
-        ($i:expr, $pc:expr, $off:expr, $regs:expr, $a:expr, $raw:expr, $tag:expr, $what:expr) => {{
-            let inferred = if $i + 1 < effective_end {
-                infer_getx_exit_lookahead($a, &record.ops[$i + 1..effective_end])
-            } else {
-                None
-            };
-            let kind = match inferred {
-                Some(ExitTag::Int) => Some(RegKind::Int),
-                Some(ExitTag::Table) => Some(RegKind::Table),
-                Some(ExitTag::Float) => Some(RegKind::Float),
-                _ => None,
-            };
-            if let Some(k) = kind {
-                let want = k.value_tag().expect("inferred kinds have a tag");
-                let ok = bcx.ins().icmp_imm(IntCC::Equal, $tag, i64::from(want));
-                guard!(ok, $i, $pc);
-                current_kinds[$off + $a as usize] = k;
-            } else {
-                dispatchable = false;
-                dispatch_off_reason = dispatch_off_reason.or(Some($what));
-            }
-            bcx.def_var($regs[$a as usize], $raw);
-        }};
-    }
+    // Integer constants the registers hold at this point of the trace
+    // (from LoadI / LoadK earlier in the same pass), so a `//`, `%` or shift
+    // by a constant needs no runtime guard.
+    let mut known_int: Vec<Option<i64>> = vec![None; window_size_us];
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
+        // R[C] of a register-operand op, read before this op's own write
+        // forgets it (`x = x % 7` divides by the old value)
+        let rc_const = known_int
+            .get(op_offsets[i] as usize + rop.inst.c() as usize)
+            .copied()
+            .flatten();
+        for w in op_writes_at_offset(rop, op_offsets[i]) {
+            if let Some(slot) = known_int.get_mut(w as usize) {
+                *slot = None;
+            }
+        }
         // P12-S4-step3b — `off` is the start of this op's register
         // window inside reg_state_buf. `regs` is shadowed to the
         // matching slice of `regs_full`, so existing `regs[ins.X()]`
@@ -6151,6 +6189,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let v = bcx.ins().iconst(types::I64, imm);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
+                known_int[off + ins.a() as usize] = Some(imm);
             }
             Op::LoadF => {
                 // R[A] := sBx as f64. Bitcast result to i64
@@ -6178,6 +6217,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let bx = ins.bx() as usize;
                 let (v, k) = match head_proto.consts[bx] {
                     luna_core::runtime::Value::Int(n) => {
+                        known_int[off + ins.a() as usize] = Some(n);
                         (bcx.ins().iconst(types::I64, n), RegKind::Int)
                     }
                     luna_core::runtime::Value::Float(f) => {
@@ -6264,38 +6304,77 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = RegKind::Int;
                 }
             }
-            // 3-reg integer ops, with Lua's integer semantics (lvm.c
-            // luaV_idiv / luaV_mod / luaV_shiftl): `//` and `%` round
-            // toward minus infinity, a shift by a negative count shifts
-            // the other way and one by 64 or more gives 0. A zero
-            // divisor raises an error, so it leaves the trace and the
-            // interpreter runs the op.
+            // 3-reg Int ops. The cases the machine instruction gets
+            // wrong for Lua — a zero divisor (Lua raises), a shift count
+            // outside 0..=63 (Lua shifts the other way or gives 0) — leave
+            // the trace at the op so the interpreter does them; a -1
+            // divisor (the machine traps on minint) is done inline.
             Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
-                // On a float or any non-integer operand these ops
-                // convert, coerce or raise; only two integers are
-                // lowered.
+                // Int-only ops. Bail if either operand is Float —
+                // Lua's IDiv would coerce to Float (different
+                // semantics) and bitwise ops on Floats are
+                // type-errors at runtime.
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
                 let kc = k_op(&current_kinds, off as u32 + ins.c());
-                if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
+                if matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float) {
                     return None;
                 }
                 let lhs = bcx.use_var(regs[ins.b() as usize]);
                 let rhs = bcx.use_var(regs[ins.c() as usize]);
-                let r = match op {
-                    Op::IDiv | Op::Mod => {
-                        let nonzero = bcx.ins().icmp_imm(IntCC::NotEqual, rhs, 0);
-                        guard!(nonzero, i, rop.pc);
-                        emit_int_floor_div_mod(&mut bcx, op, lhs, rhs)
+                let r = match (op, rc_const) {
+                    // a constant divisor needs neither guard (and the
+                    // machine division by a constant is strength-reduced)
+                    (Op::IDiv | Op::Mod, Some(k)) if k != 0 && k != -1 => {
+                        emit_floor_divmod_by(&mut bcx, op, lhs, k)
                     }
-                    Op::BAnd => bcx.ins().band(lhs, rhs),
-                    Op::BOr => bcx.ins().bor(lhs, rhs),
-                    Op::BXor => bcx.ins().bxor(lhs, rhs),
-                    Op::Shl => emit_lua_shift_left(&mut bcx, lhs, rhs),
-                    Op::Shr => {
-                        let neg = bcx.ins().ineg(rhs);
-                        emit_lua_shift_left(&mut bcx, lhs, neg)
+                    // a constant shift count is a single machine shift
+                    (Op::Shl | Op::Shr, Some(k)) => {
+                        let n = if op == Op::Shr { k.wrapping_neg() } else { k };
+                        if n <= -64 || n >= 64 {
+                            bcx.ins().iconst(types::I64, 0)
+                        } else if n >= 0 {
+                            bcx.ins().ishl_imm(lhs, n)
+                        } else {
+                            bcx.ins().ushr_imm(lhs, -n)
+                        }
                     }
-                    _ => unreachable!("whitelist gated above"),
+                    _ => match op {
+                        Op::IDiv | Op::Mod => {
+                            // A zero divisor is the interpreter's error to
+                            // raise: leave the trace at this op.
+                            let zero = bcx.ins().iconst(types::I64, 0);
+                            let is_zero = bcx.ins().icmp(IntCC::Equal, rhs, zero);
+                            let cont_blk = bcx.create_block();
+                            let exit_blk = bcx.create_block();
+                            bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
+                            bcx.switch_to_block(exit_blk);
+                            bcx.seal_block(exit_blk);
+                            guard_exit!(rop.pc, i);
+                            bcx.switch_to_block(cont_blk);
+                            bcx.seal_block(cont_blk);
+                            emit_floor_divmod(&mut bcx, op, lhs, rhs)
+                        }
+                        Op::BAnd => bcx.ins().band(lhs, rhs),
+                        Op::BOr => bcx.ins().bor(lhs, rhs),
+                        Op::BXor => bcx.ins().bxor(lhs, rhs),
+                        Op::Shl | Op::Shr => {
+                            let wide = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThan, rhs, 63);
+                            let cont_blk = bcx.create_block();
+                            let exit_blk = bcx.create_block();
+                            bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
+                            bcx.switch_to_block(exit_blk);
+                            bcx.seal_block(exit_blk);
+                            guard_exit!(rop.pc, i);
+                            bcx.switch_to_block(cont_blk);
+                            bcx.seal_block(cont_blk);
+                            if op == Op::Shl {
+                                bcx.ins().ishl(lhs, rhs)
+                            } else {
+                                bcx.ins().ushr(lhs, rhs)
+                            }
+                        }
+                        _ => unreachable!("whitelist gated above"),
+                    },
                 };
                 bcx.def_var(regs[ins.a() as usize], r);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
@@ -6359,10 +6438,130 @@ pub fn lower_trace_into_named<M: Module>(
                     _ => unreachable!("pre-emit gates Int / Float const only"),
                 };
 
+                let continue_blk = bcx.create_block();
+                let side_exit_blk = bcx.create_block();
+                bcx.ins().brif(cond, continue_blk, &[], side_exit_blk, &[]);
+
+                bcx.switch_to_block(side_exit_blk);
+                bcx.seal_block(side_exit_blk);
+                let side_exit_pc = rop.pc + 2;
                 // P12-S4-step4b-C-2 — at depth>0, the side-exit must
                 // materialise the inlined frames before the interp can
-                // resume at the cmp's PC (see `side_exit!`).
-                guard!(cond, i, rop.pc + 2);
+                // resume at the cmp's PC. See the matching Lt/Le/Eq
+                // arm below for the chain-build details.
+                if !call_chain.is_empty() {
+                    // Capture head's resume pc BEFORE the innermost
+                    // override — `call_chain[0].pc` is the outermost
+                    // self-rec Call's `pc + 1` (= trace head's
+                    // post-Call resume).
+                    let head_resume_pc = call_chain[0].pc;
+                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                    if let Some(last) = snapshot.last_mut() {
+                        last.pc = side_exit_pc;
+                    }
+                    let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                    let chain_len = chain_rc.len() as i64;
+                    let site_idx = per_exit_inline_vec.len() as u32;
+                    // P12-S10-B — materialise live Sinkable sites
+                    // BEFORE the frame_materialize_frames helper
+                    // pushes the inline frames. The window-sized
+                    // snapshot updates in-place so per_exit_inline's
+                    // kinds entry reflects materialised slots.
+                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                    let mat_count = emit_materialize_live_sunk(
+                        &mut bcx,
+                        &mut module,
+                        mat_sunk_id,
+                        &escape,
+                        &virt_vars,
+                        &virt_kinds,
+                        &regs_full,
+                        &op_offsets,
+                        i,
+                        &mut kinds_snapshot,
+                        head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    materialize_emit_count += mat_count;
+                    let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
+                    let chain_for_helper = chain_rc.clone();
+                    per_exit_inline_vec.push((
+                        side_exit_pc,
+                        head_resume_pc,
+                        kinds_snapshot,
+                        chain_rc,
+                        inline_side_box_0,
+                    ));
+                    let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                    let ptr_arg = emit_chain_ptr_arg(
+                        &mut module,
+                        &mut bcx,
+                        &chain_for_helper,
+                        chain_ptr,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
+                    let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                    emit_store_back_and_return_site(
+                        &mut bcx,
+                        &regs_full[..window_size_us],
+                        reg_state,
+                        site_idx,
+                        side_exit_pc,
+                        flush_ctx.as_ref(),
+                        0i64,
+                        trace_fn_sig_ref,
+                    );
+                } else {
+                    // P12-S5-C / S10-A — materialise every live
+                    // Sinkable site at this depth=0 cmp side-exit.
+                    // The snapshot carries `RegKind::Table` for each
+                    // materialised caller-window slot so the
+                    // dispatcher unpacks the heap pointer correctly
+                    // on deopt.
+                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                    let mat_count = emit_materialize_live_sunk(
+                        &mut bcx,
+                        &mut module,
+                        mat_sunk_id,
+                        &escape,
+                        &virt_vars,
+                        &virt_kinds,
+                        &regs_full,
+                        &op_offsets,
+                        i,
+                        &mut snapshot,
+                        head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    materialize_emit_count += mat_count;
+                    let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
+                    let tag_side_local_0 = per_exit_kinds.len() as u32;
+                    per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_0));
+                    // store_back only writes caller window — depth>0 scratch
+                    // slots stay out of the dispatcher's reg_state restore.
+                    emit_tagged_exit(
+                        &mut bcx,
+                        &mut module,
+                        suppress_admit_id,
+                        &regs_full[..max_stack],
+                        reg_state,
+                        side_exit_pc,
+                        record.head_pc,
+                        tag_side_local_0,
+                        flush_ctx.as_ref(),
+                        trace_fn_sig_ref,
+                    );
+                }
+
+                bcx.switch_to_block(continue_blk);
+                bcx.seal_block(continue_blk);
             }
             Op::Test => {
                 // P12-S12-A v1 / v3 — `if (not R[A] == K) then pc++`.
@@ -6548,6 +6747,10 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.ins().icmp(int_cc, lhs, rhs)
                 };
 
+                let continue_blk = bcx.create_block();
+                let side_exit_blk = bcx.create_block();
+                bcx.ins().brif(cond, continue_blk, &[], side_exit_blk, &[]);
+
                 // Side-exit PC depends on the recorded direction:
                 //   TookJmp    → interp's `pc++` lands at cmp_pc + 2.
                 //   SkippedJmp → interp would have taken the Jmp;
@@ -6561,7 +6764,119 @@ pub fn lower_trace_into_named<M: Module>(
                         (pc_after_jmp + jmp_inst.sj() as i64) as u32
                     }
                 };
-                guard!(cond, i, side_exit_pc);
+                bcx.switch_to_block(side_exit_blk);
+                bcx.seal_block(side_exit_blk);
+                // P12-S4-step4b-C-2 — at depth>0, snapshot the live
+                // `call_chain` (each cmp@d>0 site has its OWN chain;
+                // the v1 single-global-array attempt looped fib
+                // forever because sibling Calls produced wrong
+                // chains under the depth-indexed lookup). The
+                // innermost frame's pc is overwritten with this
+                // site's side-exit PC so the materialize helper
+                // stays PC-agnostic — it just pushes whatever
+                // metadata says.
+                if !call_chain.is_empty() {
+                    let head_resume_pc = call_chain[0].pc;
+                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                    if let Some(last) = snapshot.last_mut() {
+                        last.pc = side_exit_pc;
+                    }
+                    let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                    let chain_len = chain_rc.len() as i64;
+                    let site_idx = per_exit_inline_vec.len() as u32;
+                    // P12-S10-B — materialise live Sinkable sites
+                    // (depth=0 + depth>0) before frame-mat helper
+                    // pushes the inline frames.
+                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                    let mat_count = emit_materialize_live_sunk(
+                        &mut bcx,
+                        &mut module,
+                        mat_sunk_id,
+                        &escape,
+                        &virt_vars,
+                        &virt_kinds,
+                        &regs_full,
+                        &op_offsets,
+                        i,
+                        &mut kinds_snapshot,
+                        head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    materialize_emit_count += mat_count;
+                    let inline_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _inline_side_cell_addr_1 = (&*inline_side_box_1) as *const TCellPtr as i64;
+                    let chain_for_helper = chain_rc.clone();
+                    per_exit_inline_vec.push((
+                        side_exit_pc,
+                        head_resume_pc,
+                        kinds_snapshot,
+                        chain_rc,
+                        inline_side_box_1,
+                    ));
+                    let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                    let ptr_arg = emit_chain_ptr_arg(
+                        &mut module,
+                        &mut bcx,
+                        &chain_for_helper,
+                        chain_ptr,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
+                    let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                    emit_store_back_and_return_site(
+                        &mut bcx,
+                        &regs_full[..window_size_us],
+                        reg_state,
+                        site_idx,
+                        side_exit_pc,
+                        flush_ctx.as_ref(),
+                        0i64,
+                        trace_fn_sig_ref,
+                    );
+                } else {
+                    // P12-S5-C / S10-A — materialise-on-deopt for
+                    // depth=0 cmp's live Sinkable sites.
+                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                    let mat_count = emit_materialize_live_sunk(
+                        &mut bcx,
+                        &mut module,
+                        mat_sunk_id,
+                        &escape,
+                        &virt_vars,
+                        &virt_kinds,
+                        &regs_full,
+                        &op_offsets,
+                        i,
+                        &mut snapshot,
+                        head_proto,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    materialize_emit_count += mat_count;
+                    let tag_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
+                    let _tag_side_cell_addr_1 = (&*tag_side_box_1) as *const TCellPtr as i64;
+                    let tag_side_local_1 = per_exit_kinds.len() as u32;
+                    per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_1));
+                    emit_tagged_exit(
+                        &mut bcx,
+                        &mut module,
+                        suppress_admit_id,
+                        &regs_full[..max_stack],
+                        reg_state,
+                        side_exit_pc,
+                        record.head_pc,
+                        tag_side_local_1,
+                        flush_ctx.as_ref(),
+                        trace_fn_sig_ref,
+                    );
+                }
+
+                // Continue: subsequent ops emit here.
+                bcx.switch_to_block(continue_blk);
+                bcx.seal_block(continue_blk);
             }
             Op::NewTable => {
                 // P12-S5-B — sunk path: skip the heap alloc helper.
@@ -6602,40 +6917,53 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.c() as i64);
-                let k_tag = bcx
-                    .ins()
-                    .iconst(types::I64, i64::from(luna_core::runtime::value::raw::INT));
-                let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
-                let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, k_imm, k_tag, tag_out]);
-                let v = bcx.inst_results(call)[0];
-                let tag = bcx.ins().stack_load(types::I64, tag_slot, 0);
-                finish_getx!(i, rop.pc, off, regs, ins.a(), v, tag, "GetI:inference-fail");
+                // GetX inference: look at the immediate next op. The read
+                // is checked against it, so a value of another type (or
+                // a table with a metatable) leaves the trace here.
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
+                } else {
+                    None
+                };
+                if let Some((kind, want)) = getx_want(inferred) {
+                    let v = checked_read!(get_int_checked_id, t, k_imm, want, rop.pc, i);
+                    bcx.def_var(regs[ins.a() as usize], v);
+                    current_kinds[off + ins.a() as usize] = kind;
+                } else {
+                    let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, k_imm]);
+                    let v = bcx.inst_results(call)[0];
+                    bcx.def_var(regs[ins.a() as usize], v);
+                    dispatchable = false;
+                    dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
+                }
             }
             Op::GetTable => {
-                // The key goes to the helper with its tag: a string or
-                // float key read as an integer finds nothing.
-                let Some(key_tag) = k_op(&current_kinds, off as u32 + ins.c()).value_tag() else {
-                    return None;
-                };
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key = bcx.use_var(regs[ins.c() as usize]);
-                let k_tag = bcx.ins().iconst(types::I64, i64::from(key_tag));
-                let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
-                let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, key, k_tag, tag_out]);
-                let v = bcx.inst_results(call)[0];
-                let tag = bcx.ins().stack_load(types::I64, tag_slot, 0);
-                finish_getx!(
-                    i,
-                    rop.pc,
-                    off,
-                    regs,
-                    ins.a(),
-                    v,
-                    tag,
-                    "GetTable:inference-fail"
-                );
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
+                } else {
+                    None
+                };
+                // the helper reads the key as an integer
+                let key_is_int = matches!(k_op(&current_kinds, off as u32 + ins.c()), RegKind::Int);
+                match getx_want(inferred) {
+                    Some((kind, want)) if key_is_int => {
+                        let v = checked_read!(get_int_checked_id, t, key, want, rop.pc, i);
+                        bcx.def_var(regs[ins.a() as usize], v);
+                        current_kinds[off + ins.a() as usize] = kind;
+                    }
+                    _ => {
+                        let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key]);
+                        let v = bcx.inst_results(call)[0];
+                        bcx.def_var(regs[ins.a() as usize], v);
+                        dispatchable = false;
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetTable:inference-fail"));
+                    }
+                }
             }
             Op::SetField => {
                 // P12-S11-B-v1 — sunk path: when escape sweep tagged
@@ -6714,6 +7042,12 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
+                } else {
+                    None
+                };
+                let want = getx_want(inferred);
 
                 // v2.1 Phase 1I.B — table-field IC scaffold.
                 //
@@ -6730,11 +7064,21 @@ pub fn lower_trace_into_named<M: Module>(
                 // atomic load inside `field_ic_enabled()`; the IC
                 // emission produces zero additional IR when the
                 // gate is off.
+                // The IC's tag guard only stands in for the checked read
+                // when the cached tag is the one the trace types it as.
                 let ic_active = luna_core::jit::trace_types::field_ic_enabled()
-                    && record
-                        .field_ic_snapshot
-                        .as_ref()
-                        .is_some_and(|s| s.op_idx as usize == i);
+                    && record.field_ic_snapshot.as_ref().is_some_and(|s| {
+                        s.op_idx as usize == i
+                            && want.is_none_or(|(k, _)| {
+                                use luna_core::runtime::value::tag;
+                                let enum_tag = match k {
+                                    RegKind::Int => tag::INT,
+                                    RegKind::Float => tag::FLOAT,
+                                    _ => tag::TABLE,
+                                };
+                                enum_tag == s.cached_val_tag
+                            })
+                    });
 
                 let v = if ic_active {
                     let snap = record
@@ -6768,7 +7112,6 @@ pub fn lower_trace_into_named<M: Module>(
                     let fast_blk = bcx.create_block();
                     let slow_blk = bcx.create_block();
                     let merge_blk = bcx.create_block();
-                    bcx.append_block_param(merge_blk, types::I64);
                     bcx.append_block_param(merge_blk, types::I64);
 
                     bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
@@ -6817,51 +7160,43 @@ pub fn lower_trace_into_named<M: Module>(
                         node_addr,
                         super::NODE_VAL_RAW_OFFSET as i32,
                     );
-                    bcx.ins().jump(merge_blk, &[val_raw.into(), val_tag.into()]);
+                    bcx.ins().jump(merge_blk, &[val_raw.into()]);
 
                     // --- slow: fall back to the helper ---
                     bcx.switch_to_block(slow_blk);
                     bcx.seal_block(slow_blk);
-                    let (v_slow, tag_slow) = {
-                        let k_tag = bcx
-                            .ins()
-                            .iconst(types::I64, i64::from(luna_core::runtime::value::raw::STR));
-                        let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
-                        let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
-                        let call = bcx.ins().call(func_ref, &[t, key_arg, k_tag, tag_out]);
-                        let v = bcx.inst_results(call)[0];
-                        (v, bcx.ins().stack_load(types::I64, tag_slot, 0))
+                    let v_slow = if let Some((_, w)) = want {
+                        checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
+                    } else {
+                        let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                        bcx.inst_results(call)[0]
                     };
-                    bcx.ins().jump(merge_blk, &[v_slow.into(), tag_slow.into()]);
+                    bcx.ins().jump(merge_blk, &[v_slow.into()]);
 
                     // --- merge ---
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
-                    (
-                        bcx.block_params(merge_blk)[0],
-                        bcx.block_params(merge_blk)[1],
-                    )
+                    bcx.block_params(merge_blk)[0]
+                } else if let Some((_, w)) = want {
+                    checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
                 } else {
-                    let k_tag = bcx
-                        .ins()
-                        .iconst(types::I64, i64::from(luna_core::runtime::value::raw::STR));
-                    let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
-                    let func_ref = module.declare_func_in_func(get_tagged_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, key_arg, k_tag, tag_out]);
-                    let v = bcx.inst_results(call)[0];
-                    (v, bcx.ins().stack_load(types::I64, tag_slot, 0))
+                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                    bcx.inst_results(call)[0]
                 };
-                let (v, tag) = v;
-                finish_getx!(
-                    i,
-                    rop.pc,
-                    off,
-                    regs,
-                    ins.a(),
-                    v,
-                    tag,
-                    "GetField:inference-fail"
-                );
+                bcx.def_var(regs[ins.a() as usize], v);
+
+                match inferred {
+                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
+                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
+                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                    _ => {
+                        dispatchable = false;
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetField:inference-fail"));
+                    }
+                }
             }
             Op::GetTabUp => {
                 // v1.2 D3 Path B — `R[A] := upvals[B][K[C]:string]`.
@@ -6877,21 +7212,29 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let tag_out = bcx.ins().stack_addr(types::I64, tag_slot, 0);
-                let func_ref = module.declare_func_in_func(upval_get_tagged_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg, tag_out]);
-                let v = bcx.inst_results(call)[0];
-                let tag = bcx.ins().stack_load(types::I64, tag_slot, 0);
-                finish_getx!(
-                    i,
-                    rop.pc,
-                    off,
-                    regs,
-                    ins.a(),
-                    v,
-                    tag,
-                    "GetTabUp:inference-fail"
-                );
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
+                } else {
+                    None
+                };
+                let v = if let Some((_, w)) = getx_want(inferred) {
+                    checked_read!(get_tab_up_checked_id, upval_idx_arg, key_arg, w, rop.pc, i)
+                } else {
+                    let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
+                    bcx.inst_results(call)[0]
+                };
+                bcx.def_var(regs[ins.a() as usize], v);
+                match inferred {
+                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
+                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
+                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                    _ => {
+                        dispatchable = false;
+                        dispatch_off_reason =
+                            dispatch_off_reason.or(Some("GetTabUp:inference-fail"));
+                    }
+                }
             }
             Op::SetI => {
                 // P12-S8-B — sunk path: when escape sweep tagged
@@ -7983,7 +8326,8 @@ pub fn lower_trace_into_named<M: Module>(
             Op::ForLoop => {
                 let count = bcx.use_var(regs_full[a + 1]);
                 let zero = bcx.ins().iconst(types::I64, 0);
-                let cond = bcx.ins().icmp(IntCC::SignedGreaterThan, count, zero);
+                // the loop count is unsigned (PUC `lua_Unsigned`)
+                let cond = bcx.ins().icmp(IntCC::NotEqual, count, zero);
 
                 let continue_blk = bcx.create_block();
                 let exit_blk = bcx.create_block();
@@ -8085,15 +8429,17 @@ pub fn lower_trace_into_named<M: Module>(
                 let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
                 let tag_side_local_2 = per_exit_kinds.len() as u32;
                 per_exit_kinds.push((rop.pc + 1, nil_snapshot, tag_side_box_2));
-                emit_store_back_and_return_pc(
+                emit_tagged_exit(
                     &mut bcx,
+                    &mut module,
+                    suppress_admit_id,
                     caller_regs,
                     reg_state,
                     rop.pc + 1,
+                    record.head_pc,
+                    tag_side_local_2,
                     flush_ctx.as_ref(),
-                    0i64,
                     trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local_2),
                 );
 
                 // Non-Nil branch: check it's Int (v2 only handles

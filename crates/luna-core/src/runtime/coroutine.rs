@@ -47,6 +47,12 @@ pub struct Coro {
     /// dead-with-error coroutine still shows the error site (PUC's
     /// `luaG_errormsg` flow plus a per-thread `errfunc` snapshot).
     pub error_traceback: Option<Vec<u8>>,
+    /// the same snapshot one line per stack level, so `debug.traceback(co,
+    /// msg, level)` can start at any level
+    pub(crate) error_levels: Option<Vec<Vec<u8>>>,
+    /// while it waits on a coroutine it resumed (status normal): its own
+    /// running natives, as indices into the Vm's `running_natives`
+    pub(crate) natives: std::ops::Range<usize>,
     // ---- saved execution context (valid while suspended/normal) ----
     /// Saved value stack.
     pub stack: Vec<Value>,
