@@ -64,14 +64,14 @@ fn load(vm: &mut Vm, src: &str) -> Value {
 #[test]
 fn call_with_handler_returns_the_results() {
     let mut vm = Vm::new(LuaVersion::Lua54);
-    let f = load(&mut vm, "return ..., 'z'");
+    let f = load(&mut vm, "return 'z', ...");
     let h = vm.globals().get(Value::Str(vm.heap.intern(b"print")));
     let r = vm
         .call_value_with_handler(f, &[Value::Int(1), Value::Int(2)], h)
         .expect("no error");
     assert_eq!(r.len(), 3);
-    assert!(matches!(r[0], Value::Int(1)) && matches!(r[1], Value::Int(2)));
-    assert_eq!(str_of(r[2]), "z");
+    assert_eq!(str_of(r[0]), "z");
+    assert!(matches!(r[1], Value::Int(1)) && matches!(r[2], Value::Int(2)));
     let none = load(&mut vm, "local x = 1");
     let r = vm.call_value_with_handler(none, &[], h).expect("no error");
     assert!(r.is_empty());
