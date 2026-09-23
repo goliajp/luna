@@ -1207,15 +1207,23 @@ pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 /// `xpcall` reached through `call_value`; a call from Lua goes through
 /// `Vm::begin_xpcall` instead, which makes the protected call yieldable.
 pub(crate) fn nat_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // 5.1 `xpcall(f, err)` calls `f` with no arguments.
+    xpcall_native(vm, fs, nargs, vm.version() > LuaVersion::Lua51)
+}
+
+/// The C level of a host's protected call (`Vm::call_value_with_handler`):
+/// an `xpcall` that passes its extra arguments on in every dialect, as
+/// `lua_pcall` does. The dispatcher runs it as it runs `xpcall`; this body
+/// only runs for a call that reaches it through `call_value`.
+pub(crate) fn nat_host_xpcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    xpcall_native(vm, fs, nargs, true)
+}
+
+fn xpcall_native(vm: &mut Vm, fs: u32, nargs: u32, forward: bool) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let h = xpcall_handler(vm, a)?;
     let f = vm.nat_arg(fs, nargs, 0);
-    // 5.1 `xpcall(f, err)` calls `f` with no arguments.
-    let first_arg = if vm.version() == LuaVersion::Lua51 {
-        nargs
-    } else {
-        2
-    };
+    let first_arg = if forward { 2 } else { nargs };
     let args: Vec<Value> = (first_arg..nargs)
         .map(|i| vm.nat_arg(fs, nargs, i))
         .collect();

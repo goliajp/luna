@@ -852,7 +852,11 @@ fn env_locale(cat: &str) -> Vec<u8> {
 /// PUC `luaL_loadfilex`: compile the file `name` (stdin when `None`) and
 /// return the function, or the message `loadfile` returns after its nil.
 /// `mode` limits the chunk to text and/or binary (`None` allows both).
-fn load_path(vm: &mut Vm, name: Option<&[u8]>, mode: Option<&[u8]>) -> Result<Value, Value> {
+pub(crate) fn load_path(
+    vm: &mut Vm,
+    name: Option<&[u8]>,
+    mode: Option<&[u8]>,
+) -> Result<Value, Value> {
     let (read, chunkname) = match name {
         Some(n) => {
             let mut chunkname = vec![b'@'];
@@ -889,6 +893,18 @@ fn load_path(vm: &mut Vm, name: Option<&[u8]>, mode: Option<&[u8]>) -> Result<Va
         }
         _ => src,
     };
+    load_chunk(vm, src, &chunkname, mode)
+}
+
+/// PUC `luaL_loadbufferx`: compile `src` under `chunkname`, the chunk kind
+/// limited by `mode` as in `load_path`; a syntax error comes back as its
+/// positioned message.
+pub(crate) fn load_chunk(
+    vm: &mut Vm,
+    src: &[u8],
+    chunkname: &[u8],
+    mode: Option<&[u8]>,
+) -> Result<Value, Value> {
     // `checkmode` (ldo.c): the kind of chunk must be allowed by the mode.
     let binary = crate::vm::dump::is_binary_chunk(src);
     if let Some(mode) = mode
@@ -901,12 +917,12 @@ fn load_path(vm: &mut Vm, name: Option<&[u8]>, mode: Option<&[u8]>) -> Result<Va
         );
         return Err(Value::Str(vm.heap.intern(msg.as_bytes())));
     }
-    match vm.load(src, &chunkname) {
+    match vm.load(src, chunkname) {
         Ok(cl) => Ok(Value::Closure(cl)),
         Err(e) => {
             // the parser positions its message with `luaO_chunkid`; an
             // unpositioned one (C stack overflow while parsing) has none
-            let id = crate::vm::callstack::syntax_chunk_id(vm.version(), &chunkname);
+            let id = crate::vm::callstack::syntax_chunk_id(vm.version(), chunkname);
             Err(Value::Str(vm.heap.intern(&e.render(&id))))
         }
     }
