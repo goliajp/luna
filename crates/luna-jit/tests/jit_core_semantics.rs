@@ -70,3 +70,48 @@ fn compiled_upvalue_arithmetic_checks_the_value() {
         );
     }
 }
+
+/// Integer `//` and `%` in a compiled loop round toward minus infinity,
+/// a zero divisor raises the interpreter's error instead of trapping,
+/// and shifts of 64 or more give 0 either way.
+#[test]
+fn compiled_integer_division_and_shifts_follow_lua() {
+    let src = "
+        local s = 0
+        for i = 1, 2000 do local a = i - 1000 s = s + a // 7 + a // -7 + a % 7 + a % -7 end
+        local x = 0
+        for i = 1, 2000 do local k = i % 140 - 70 x = x ~ (1 << k) ~ (-1 >> k) end
+        local function f(a, b) return a // b end
+        local ok, e = pcall(function() local t = 0 for i = 1, 2000 do t = t + f(i, 2000 - i) end end)
+        local ok2, e2 = pcall(function() local t = 0 for i = 1, 2000 do t = t + 5 % (2000 - i) end end)
+        return s .. ' ' .. x .. ' | ' .. e .. ' | ' .. e2";
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_eq!(
+            run(v, src),
+            "-1710 6148914690878603264 | c:6: attempt to divide by zero | \
+             c:8: attempt to perform 'n%0'"
+        );
+    }
+}
+
+/// A table read typed by its use (an addend, an indexed table) is checked:
+/// a value of another type late in a compiled loop raises as in the
+/// interpreter rather than being read as the expected type's bits.
+#[test]
+fn compiled_table_reads_check_the_value_type() {
+    let src = "
+        local ok, e = pcall(load([[local t = {} for i = 1, 2000 do t[i] = i end t[1999] = {}
+            local i, s = 1, 0 while i <= 2000 do s = s + t[i] i = i + 1 end return s]], '=w'))
+        local ok2, e2 = pcall(load([[local u = {} for i = 1, 2000 do u[i] = {v = i} end u[1999] = 7
+            local s = 0 for i = 1, 2000 do s = s + u[i].v end return s]], '=f'))
+        local w = {} for i = 1, 2000 do w[i] = i end w[1999] = 2.5
+        local s3 = 0 for i = 1, 2000 do s3 = s3 + w[i] end
+        return e .. ' | ' .. e2 .. ' | ' .. s3";
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_eq!(
+            run(v, src),
+            "w:2: attempt to perform arithmetic on a table value (field '?') | \
+             f:2: attempt to index a number value (field '?') | 1999003.5"
+        );
+    }
+}

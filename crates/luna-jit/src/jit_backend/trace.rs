@@ -755,6 +755,64 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
     None
 }
 
+/// Lua's integer `//` or `%` for a nonzero divisor: rounded toward minus
+/// infinity (the remainder takes the divisor's sign), and `x // -1` wraps
+/// where a machine division by -1 would trap on minint.
+fn emit_floor_divmod(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, b: Value) -> Value {
+    let minus_one = bcx.ins().iconst(types::I64, -1);
+    let one = bcx.ins().iconst(types::I64, 1);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    let is_m1 = bcx.ins().icmp(IntCC::Equal, b, minus_one);
+    let safe_b = bcx.ins().select(is_m1, one, b);
+    let q = bcx.ins().sdiv(a, safe_b);
+    let r = bcx.ins().srem(a, safe_b);
+    // a nonzero remainder whose sign differs from the divisor's
+    let r_nz = bcx.ins().icmp(IntCC::NotEqual, r, zero);
+    let signs = bcx.ins().bxor(r, b);
+    let differ = bcx.ins().icmp(IntCC::SignedLessThan, signs, zero);
+    let adjust = bcx.ins().band(r_nz, differ);
+    if op == Op::IDiv {
+        let q1 = bcx.ins().isub(q, one);
+        let floored = bcx.ins().select(adjust, q1, q);
+        let neg = bcx.ins().ineg(a);
+        bcx.ins().select(is_m1, neg, floored)
+    } else {
+        let rb = bcx.ins().iadd(r, b);
+        let floored = bcx.ins().select(adjust, rb, r);
+        bcx.ins().select(is_m1, zero, floored)
+    }
+}
+
+/// Lua's `a << n` (`luaV_shiftl`): logical, a negative count shifts right,
+/// and a count of 64 or more either way gives 0 (a machine shift would
+/// take the count modulo 64).
+fn emit_lua_shift_left(bcx: &mut FunctionBuilder<'_>, a: Value, n: Value) -> Value {
+    let zero = bcx.ins().iconst(types::I64, 0);
+    let left = bcx.ins().ishl(a, n);
+    let neg_n = bcx.ins().ineg(n);
+    let right = bcx.ins().ushr(a, neg_n);
+    let is_neg = bcx.ins().icmp(IntCC::SignedLessThan, n, zero);
+    let shifted = bcx.ins().select(is_neg, right, left);
+    // -63 <= n <= 63
+    let biased = bcx.ins().iadd_imm(n, 63);
+    let in_range = bcx
+        .ins()
+        .icmp_imm(IntCC::UnsignedLessThanOrEqual, biased, 126);
+    bcx.ins().select(in_range, shifted, zero)
+}
+
+/// The kind a GetX result is typed as, from its inferred use, and the
+/// value tag its checked read demands (`None`: the use is not typed).
+fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
+    use luna_core::runtime::value::raw;
+    match tag {
+        Some(ExitTag::Int) => Some((RegKind::Int, raw::INT)),
+        Some(ExitTag::Table) => Some((RegKind::Table, raw::TABLE)),
+        Some(ExitTag::Float) => Some((RegKind::Float, raw::FLOAT)),
+        _ => None,
+    }
+}
+
 /// P12-S4-step2c — forward-look exit-tag inference for `Op::GetUpval`.
 /// Walks the recorded ops following the GetUpval until either:
 /// - an `Op::Call` with `A == getupval_a` is found → the upval is
@@ -3271,6 +3329,19 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_table_get_int",
         super::luna_jit_table_get_int as *const u8,
     );
+    // Checked reads: the typed GetI / GetTable / GetField / GetTabUp.
+    builder.symbol(
+        "luna_jit_table_get_int_checked",
+        super::luna_jit_table_get_int_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_field_checked",
+        super::luna_jit_table_get_field_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_op_get_tab_up_checked",
+        super::luna_jit_op_get_tab_up_checked as *const u8,
+    );
     builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
     // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
     // helper. Reuses the method JIT helper; the trace dispatcher's
@@ -4847,6 +4918,35 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
         .ok()?;
 
+    // Checked table reads (`luna_jit_table_get_int_checked` et al.):
+    // `fn(table_or_upval, key, want_tag, out: *mut i64) -> ok`.
+    let mut get_checked_sig = module.make_signature();
+    for _ in 0..4 {
+        get_checked_sig.params.push(AbiParam::new(types::I64));
+    }
+    get_checked_sig.returns.push(AbiParam::new(types::I64));
+    let get_int_checked_id = module
+        .declare_function(
+            "luna_jit_table_get_int_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+    let get_field_checked_id = module
+        .declare_function(
+            "luna_jit_table_get_field_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+    let get_tab_up_checked_id = module
+        .declare_function(
+            "luna_jit_op_get_tab_up_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+
     // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
     // Returns the new Gc<LuaClosure> raw payload bits.
     let mut op_closure_sig = module.make_signature();
@@ -5480,6 +5580,129 @@ pub fn lower_trace_into_named<M: Module>(
     // immediate-form instructions at codegen. See layer-6 doc §3 for
     // attack #2 candidates that ARE structural (block3 dead-slot store
     // elimination, side-exit materialize call ABI consolidation).
+    // A guard that fails leaves the trace at `$pc` (the op being
+    // guarded, re-executed by the interpreter) exactly as a cmp side
+    // exit does: live sunk tables are materialised and, when the op sits
+    // in an inlined frame, the frames are rebuilt first.
+    macro_rules! guard_exit {
+        ($pc:expr, $i:expr) => {{
+            let side_exit_pc: u32 = $pc;
+            if !call_chain.is_empty() {
+                let head_resume_pc = call_chain[0].pc;
+                let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                if let Some(last) = snapshot.last_mut() {
+                    last.pc = side_exit_pc;
+                }
+                let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                let chain_len = chain_rc.len() as i64;
+                let site_idx = per_exit_inline_vec.len() as u32;
+                let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                let mat_count = emit_materialize_live_sunk(
+                    &mut bcx,
+                    &mut module,
+                    mat_sunk_id,
+                    &escape,
+                    &virt_vars,
+                    &virt_kinds,
+                    &regs_full,
+                    &op_offsets,
+                    $i,
+                    &mut kinds_snapshot,
+                    head_proto,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                materialize_emit_count += mat_count;
+                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let chain_for_helper = chain_rc.clone();
+                per_exit_inline_vec.push((
+                    side_exit_pc,
+                    head_resume_pc,
+                    kinds_snapshot,
+                    chain_rc,
+                    side_box,
+                ));
+                let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                let ptr_arg = emit_chain_ptr_arg(
+                    &mut module,
+                    &mut bcx,
+                    &chain_for_helper,
+                    chain_ptr,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
+                let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                emit_store_back_and_return_site(
+                    &mut bcx,
+                    &regs_full[..window_size_us],
+                    reg_state,
+                    site_idx,
+                    side_exit_pc,
+                    flush_ctx.as_ref(),
+                    0i64,
+                    trace_fn_sig_ref,
+                );
+            } else {
+                let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                let mat_count = emit_materialize_live_sunk(
+                    &mut bcx,
+                    &mut module,
+                    mat_sunk_id,
+                    &escape,
+                    &virt_vars,
+                    &virt_kinds,
+                    &regs_full,
+                    &op_offsets,
+                    $i,
+                    &mut snapshot,
+                    head_proto,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                materialize_emit_count += mat_count;
+                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let tag_side_local = per_exit_kinds.len() as u32;
+                per_exit_kinds.push((side_exit_pc, snapshot, side_box));
+                emit_store_back_and_return_pc(
+                    &mut bcx,
+                    &regs_full[..max_stack],
+                    reg_state,
+                    side_exit_pc,
+                    flush_ctx.as_ref(),
+                    0i64,
+                    trace_fn_sig_ref,
+                    encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local),
+                );
+            }
+        }};
+    }
+    // Call a checked read helper; on failure leave the trace at `$pc`,
+    // otherwise evaluate to the payload it wrote.
+    macro_rules! checked_read {
+        ($id:expr, $a0:expr, $a1:expr, $want:expr, $pc:expr, $i:expr) => {{
+            let out_ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+            let out_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+            let want = bcx.ins().iconst(types::I64, $want as i64);
+            let fref = module.declare_func_in_func($id, bcx.func);
+            let call = bcx.ins().call(fref, &[$a0, $a1, want, out_addr]);
+            let ok = bcx.inst_results(call)[0];
+            let cont_blk = bcx.create_block();
+            let exit_blk = bcx.create_block();
+            bcx.ins().brif(ok, cont_blk, &[], exit_blk, &[]);
+            bcx.switch_to_block(exit_blk);
+            bcx.seal_block(exit_blk);
+            guard_exit!($pc, $i);
+            bcx.switch_to_block(cont_blk);
+            bcx.seal_block(cont_blk);
+            bcx.ins().stack_load(types::I64, out_ss, 0)
+        }};
+    }
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // P12-S4-step3b — `off` is the start of this op's register
@@ -5825,13 +6048,29 @@ pub fn lower_trace_into_named<M: Module>(
                 let lhs = bcx.use_var(regs[ins.b() as usize]);
                 let rhs = bcx.use_var(regs[ins.c() as usize]);
                 let r = match op {
-                    Op::IDiv => bcx.ins().sdiv(lhs, rhs),
-                    Op::Mod => bcx.ins().srem(lhs, rhs),
+                    Op::IDiv | Op::Mod => {
+                        // A zero divisor is the interpreter's error to
+                        // raise: leave the trace at this op.
+                        let zero = bcx.ins().iconst(types::I64, 0);
+                        let is_zero = bcx.ins().icmp(IntCC::Equal, rhs, zero);
+                        let cont_blk = bcx.create_block();
+                        let exit_blk = bcx.create_block();
+                        bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
+                        bcx.switch_to_block(exit_blk);
+                        bcx.seal_block(exit_blk);
+                        guard_exit!(rop.pc, i);
+                        bcx.switch_to_block(cont_blk);
+                        bcx.seal_block(cont_blk);
+                        emit_floor_divmod(&mut bcx, op, lhs, rhs)
+                    }
                     Op::BAnd => bcx.ins().band(lhs, rhs),
                     Op::BOr => bcx.ins().bor(lhs, rhs),
                     Op::BXor => bcx.ins().bxor(lhs, rhs),
-                    Op::Shl => bcx.ins().ishl(lhs, rhs),
-                    Op::Shr => bcx.ins().ushr(lhs, rhs),
+                    Op::Shl => emit_lua_shift_left(&mut bcx, lhs, rhs),
+                    Op::Shr => {
+                        let n = bcx.ins().ineg(rhs);
+                        emit_lua_shift_left(&mut bcx, lhs, n)
+                    }
                     _ => unreachable!("whitelist gated above"),
                 };
                 bcx.def_var(regs[ins.a() as usize], r);
@@ -6371,43 +6610,48 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.c() as i64);
-                let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, k_imm]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
-                // GetX inference: look at the immediate next op.
+                // GetX inference: look at the immediate next op. The read
+                // is checked against it, so a value of another type (or
+                // a table with a metatable) leaves the trace here.
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
-                    _ => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
-                    }
+                if let Some((kind, want)) = getx_want(inferred) {
+                    let v = checked_read!(get_int_checked_id, t, k_imm, want, rop.pc, i);
+                    bcx.def_var(regs[ins.a() as usize], v);
+                    current_kinds[off + ins.a() as usize] = kind;
+                } else {
+                    let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, k_imm]);
+                    let v = bcx.inst_results(call)[0];
+                    bcx.def_var(regs[ins.a() as usize], v);
+                    dispatchable = false;
+                    dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
                 }
             }
             Op::GetTable => {
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key = bcx.use_var(regs[ins.c() as usize]);
-                let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, key]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                // the helper reads the key as an integer
+                let key_is_int = matches!(k_op(&current_kinds, off as u32 + ins.c()), RegKind::Int);
+                match getx_want(inferred) {
+                    Some((kind, want)) if key_is_int => {
+                        let v = checked_read!(get_int_checked_id, t, key, want, rop.pc, i);
+                        bcx.def_var(regs[ins.a() as usize], v);
+                        current_kinds[off + ins.a() as usize] = kind;
+                    }
                     _ => {
+                        let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key]);
+                        let v = bcx.inst_results(call)[0];
+                        bcx.def_var(regs[ins.a() as usize], v);
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetTable:inference-fail"));
@@ -6491,6 +6735,12 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
+                } else {
+                    None
+                };
+                let want = getx_want(inferred);
 
                 // v2.1 Phase 1I.B — table-field IC scaffold.
                 //
@@ -6507,11 +6757,21 @@ pub fn lower_trace_into_named<M: Module>(
                 // atomic load inside `field_ic_enabled()`; the IC
                 // emission produces zero additional IR when the
                 // gate is off.
+                // The IC's tag guard only stands in for the checked read
+                // when the cached tag is the one the trace types it as.
                 let ic_active = luna_core::jit::trace_types::field_ic_enabled()
-                    && record
-                        .field_ic_snapshot
-                        .as_ref()
-                        .is_some_and(|s| s.op_idx as usize == i);
+                    && record.field_ic_snapshot.as_ref().is_some_and(|s| {
+                        s.op_idx as usize == i
+                            && want.is_none_or(|(k, _)| {
+                                use luna_core::runtime::value::tag;
+                                let enum_tag = match k {
+                                    RegKind::Int => tag::INT,
+                                    RegKind::Float => tag::FLOAT,
+                                    _ => tag::TABLE,
+                                };
+                                enum_tag == s.cached_val_tag
+                            })
+                    });
 
                 let v = if ic_active {
                     let snap = record
@@ -6595,18 +6855,24 @@ pub fn lower_trace_into_named<M: Module>(
                     );
                     bcx.ins().jump(merge_blk, &[val_raw.into()]);
 
-                    // --- slow: fall back to existing helper ---
+                    // --- slow: fall back to the helper ---
                     bcx.switch_to_block(slow_blk);
                     bcx.seal_block(slow_blk);
-                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                    let v_slow = bcx.inst_results(call)[0];
+                    let v_slow = if let Some((_, w)) = want {
+                        checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
+                    } else {
+                        let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                        bcx.inst_results(call)[0]
+                    };
                     bcx.ins().jump(merge_blk, &[v_slow.into()]);
 
                     // --- merge ---
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
                     bcx.block_params(merge_blk)[0]
+                } else if let Some((_, w)) = want {
+                    checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
                 } else {
                     let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
                     let call = bcx.ins().call(func_ref, &[t, key_arg]);
@@ -6614,11 +6880,6 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 bcx.def_var(regs[ins.a() as usize], v);
 
-                let inferred = if i + 1 < effective_end {
-                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-                } else {
-                    None
-                };
                 match inferred {
                     Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
                     Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
@@ -6644,15 +6905,19 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
+                let v = if let Some((_, w)) = getx_want(inferred) {
+                    checked_read!(get_tab_up_checked_id, upval_idx_arg, key_arg, w, rop.pc, i)
+                } else {
+                    let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
+                    bcx.inst_results(call)[0]
+                };
+                bcx.def_var(regs[ins.a() as usize], v);
                 match inferred {
                     Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
                     Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
