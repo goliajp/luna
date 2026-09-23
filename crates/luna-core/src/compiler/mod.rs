@@ -3161,6 +3161,7 @@ impl<'a> Compiler<'a> {
             }
         }
         self.set_freereg(base + 3);
+        let control_start = self.here() as u32;
         self.enter_block(true);
         let var_reg = self.reserve(1)?;
         self.declare_local(var, var_reg, self.version >= LuaVersion::Lua55)?;
@@ -3201,7 +3202,7 @@ impl<'a> Compiler<'a> {
             LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1)],
             _ => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 2)],
         };
-        self.push_hidden_locals(base, hidden, prep as u32, post_loop as u32);
+        self.push_hidden_locals(base, hidden, control_start, post_loop as u32);
         self.set_freereg(base);
         Ok(())
     }
