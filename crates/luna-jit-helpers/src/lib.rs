@@ -441,7 +441,7 @@ unsafe fn checked_read(v: luna_core::runtime::Value, want_tag: i64, out: *mut i6
     1
 }
 
-/// `t[key]` with an integer key; see [`checked_read`].
+/// `t[key]` with an integer key; see `checked_read`.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_get_int_checked(
@@ -459,7 +459,7 @@ pub unsafe extern "C" fn luna_jit_table_get_int_checked(
     unsafe { checked_read(g.get_int(key), want_tag, out) }
 }
 
-/// `t[key]` with an interned string key; see [`checked_read`].
+/// `t[key]` with an interned string key; see `checked_read`.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_get_field_checked(
@@ -480,7 +480,7 @@ pub unsafe extern "C" fn luna_jit_table_get_field_checked(
 }
 
 /// `upvals[upval_idx][key]` (a global read through `_ENV`); see
-/// [`checked_read`]. An upvalue that is not a plain table also fails.
+/// `checked_read`. An upvalue that is not a plain table also fails.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_op_get_tab_up_checked(
