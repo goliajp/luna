@@ -151,10 +151,10 @@ fn luna_trace_inspect_runs_simple_script() {
 }
 
 #[test]
-fn luna_trace_inspect_rejects_show_ir_for_track_r() {
-    // --show ir is reserved for Track R IR shape stabilising
-    // (audit R1). Confirm the binary still exits non-zero with
-    // a tracking-doc pointer instead of pretending to render.
+fn luna_trace_inspect_rejects_show_ir_while_unstable() {
+    // --show ir is reserved until the trace IR shape stabilises.
+    // Confirm the binary still exits non-zero and says why, instead of
+    // pretending to render.
     let dir = tempfile::tempdir().expect("tempdir");
     let script_path = dir.path().join("noop.lua");
     std::fs::write(&script_path, "return 1\n").expect("write script");
@@ -168,8 +168,8 @@ fn luna_trace_inspect_rejects_show_ir_for_track_r() {
     assert!(!out.status.success(), "expected --show ir to fail today");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("Track R") || stderr.contains("audit R1"),
-        "expected R1 tracking pointer; got stderr:\n{stderr}"
+        stderr.contains("--show ir is reserved"),
+        "expected the reservation notice; got stderr:\n{stderr}"
     );
 }
 
