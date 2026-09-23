@@ -94,7 +94,8 @@ fn mask_addresses(s: &str) -> String {
 }
 
 fn masked(r: Result<String, String>) -> Result<String, String> {
-    r.map(|s| mask_addresses(&s)).map_err(|s| mask_addresses(&s))
+    r.map(|s| mask_addresses(&s))
+        .map_err(|s| mask_addresses(&s))
 }
 
 #[test]
