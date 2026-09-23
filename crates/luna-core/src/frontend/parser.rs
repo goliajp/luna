@@ -177,7 +177,16 @@ impl<'s> TokenSource<'s> {
 /// transparently for MacroLua; direct callers feed expanded tokens via
 /// [`parse_tokens`].
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
-    parse_at_depth(src, version, 0)
+    parse_at_depth(src, version, 0).map(|p| p.chunk)
+}
+
+/// A parsed chunk with what the public [`Chunk`] has no place for.
+pub(crate) struct Parsed {
+    pub(crate) chunk: Chunk,
+    /// the line of the closing `end` of each `while` / `for` statement, by
+    /// `StatId` (0 for other statements): PUC attributes the code it emits
+    /// after reading that `end` to its line
+    pub(crate) end_lines: Vec<u32>,
 }
 
 /// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
@@ -188,7 +197,7 @@ pub(crate) fn parse_at_depth(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
-) -> Result<Chunk, SyntaxError> {
+) -> Result<Parsed, SyntaxError> {
     let lex = Lexer::new(src, version);
     parse_from_source(TokenSource::Lexer(lex), version, c_depth)
 }
@@ -202,7 +211,7 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
-    parse_tokens_at_depth(tokens, src, version, 0)
+    parse_tokens_at_depth(tokens, src, version, 0).map(|p| p.chunk)
 }
 
 /// [`parse_tokens`] at a C depth (see [`parse_at_depth`]).
@@ -211,7 +220,7 @@ pub(crate) fn parse_tokens_at_depth(
     src: &[u8],
     version: LuaVersion,
     c_depth: u32,
-) -> Result<Chunk, SyntaxError> {
+) -> Result<Parsed, SyntaxError> {
     parse_from_source(
         TokenSource::PreExpanded {
             tokens,
@@ -227,7 +236,7 @@ fn parse_from_source<'s>(
     mut lex: TokenSource<'s>,
     version: LuaVersion,
     c_depth: u32,
-) -> Result<Chunk, SyntaxError> {
+) -> Result<Parsed, SyntaxError> {
     let cur = lex.next_token()?;
     let mut p = Parser {
         lex,
@@ -238,6 +247,7 @@ fn parse_from_source<'s>(
         exprs: Vec::new(),
         stats: Vec::new(),
         stat_lines: Vec::new(),
+        end_lines: Vec::new(),
         depth: c_depth,
         version,
         // the main chunk is the bottom-most function context (line 0 → main)
@@ -266,12 +276,15 @@ fn parse_from_source<'s>(
     }
     p.close_function()?;
     let end_line = p.prev_line;
-    Ok(Chunk {
-        exprs: p.exprs,
-        stats: p.stats,
-        stat_lines: p.stat_lines,
-        block,
-        end_line,
+    Ok(Parsed {
+        chunk: Chunk {
+            exprs: p.exprs,
+            stats: p.stats,
+            stat_lines: p.stat_lines,
+            block,
+            end_line,
+        },
+        end_lines: p.end_lines,
     })
 }
 
@@ -297,6 +310,8 @@ struct Parser<'s> {
     /// starting source line of each statement (by StatId), for precise per-
     /// instruction line info in the compiler
     stat_lines: Vec<u32>,
+    /// see [`Parsed::end_lines`]
+    end_lines: Vec<u32>,
     depth: u32,
     version: LuaVersion,
     /// One entry per function context (main chunk + nested functions): the
@@ -500,6 +515,15 @@ impl<'s> Parser<'s> {
     fn push_stat(&mut self, s: Stat) -> StatId {
         self.stats.push(s);
         StatId((self.stats.len() - 1) as u32)
+    }
+
+    /// Push a statement that ended with the `end` just read.
+    fn push_ended_stat(&mut self, s: Stat) -> StatId {
+        let id = self.push_stat(s);
+        let idx = id.0 as usize;
+        self.end_lines.resize(idx + 1, 0);
+        self.end_lines[idx] = self.prev_line;
+        id
     }
 
     // ---- blocks & statements ----
@@ -763,7 +787,7 @@ impl<'s> Parser<'s> {
         self.expect(Token::Do, "do")?;
         let body = self.loop_block(&[])?;
         self.expect_match(Token::End, "end", "while", line)?;
-        Ok(self.push_stat(Stat::While { cond, body }))
+        Ok(self.push_ended_stat(Stat::While { cond, body }))
     }
 
     fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -794,7 +818,7 @@ impl<'s> Parser<'s> {
                 self.add_local_51(&first.text);
                 let body = self.loop_block(std::slice::from_ref(&first))?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_stat(Stat::NumericFor {
+                Ok(self.push_ended_stat(Stat::NumericFor {
                     var: first,
                     start,
                     limit,
@@ -816,7 +840,7 @@ impl<'s> Parser<'s> {
                 }
                 let body = self.loop_block(&vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_stat(Stat::GenericFor {
+                Ok(self.push_ended_stat(Stat::GenericFor {
                     vars,
                     exprs,
                     body,
