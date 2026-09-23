@@ -218,10 +218,13 @@ fn nat_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 /// Raise a string-ish error with the caller's position prefix (PUC level 1).
+/// PUC `luaL_error`: a string message gets `luaL_where(L, 1)`, the position
+/// of whatever called the running native — including a Lua frame that
+/// reached it as a metamethod — and nothing when that caller is C.
 fn raise(vm: &mut Vm, msg: Value) -> LuaError {
     match msg {
         Value::Str(s) => {
-            let text = match vm.position_prefix() {
+            let text = match vm.position_prefix_at_level(1) {
                 Some(p) => {
                     let mut t = p.into_bytes();
                     t.extend_from_slice(s.as_bytes());
@@ -617,9 +620,7 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// or by pcall, or through an unnamed expression — 5.2+ look the function up
 /// by the name its library registered it under, and 5.1 prints '?'.
 pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
-    // A nested native, or a pcall/xpcall continuation directly below, means
-    // the level-0 caller is C, which PUC never names.
-    let called_from_c = vm.running_natives.len() >= 2 || vm.caller_is_protected_cont();
+    let called_from_c = vm.running_native_from_c.last().copied().unwrap_or(false);
     let call_name = if called_from_c {
         None
     } else {

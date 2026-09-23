@@ -280,6 +280,11 @@ pub struct Vm {
     /// the native's argument-window head and width, so `debug.getlocal`
     /// can index it like PUC's `luaG_findlocal` `(C temporary)` path.
     pub(crate) running_native_slots: Vec<(u32, u32)>,
+    /// Parallel to `running_natives`: whether each native was entered from C
+    /// (another native, or a protected call) rather than by a Lua call or as
+    /// a metamethod. PUC's `lua_getinfo("n")` gives no name to a function
+    /// whose caller is C, which is what `luaL_argerror` falls back on.
+    pub(crate) running_native_from_c: Vec<bool>,
     // v1.1 A2 — was: jit_pending_err, jit_reg_state_buf, jit_str_buf_pool,
     // jit_str_buf_pool_cap, jit_entry_tags_buf, chunk_compiler,
     // trace_compiler — all moved to JitState. See `jit` below.
@@ -977,6 +982,7 @@ impl Vm {
             public_call_depth: 0,
             running_natives: Vec::new(),
             running_native_slots: Vec::new(),
+            running_native_from_c: Vec::new(),
             // v1.1 A2 — JIT-specific state factored into `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
             // `install_jit_backend` / `luaL_newstate` swap in
@@ -4303,10 +4309,10 @@ impl Vm {
                     // inside it is preserved with the thread's saved frames.
                     use crate::runtime::value::NativeFn;
                     if std::ptr::fn_addr_eq(nc.f, nat_pcall as NativeFn) {
-                        return self.begin_pcall(func_slot, nargs, nresults);
+                        return self.begin_pcall(func_slot, nargs, nresults, from_c);
                     }
                     if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
-                        return self.begin_xpcall(func_slot, nargs, nresults);
+                        return self.begin_xpcall(func_slot, nargs, nresults, from_c);
                     }
                     // pairs(t) with a __pairs metamethod calls it yieldably (PUC
                     // luaB_pairs); without one, fall through to the plain native.
@@ -4335,6 +4341,10 @@ impl Vm {
                     // through a scope guard.
                     self.running_natives.push(nc);
                     self.running_native_slots.push((func_slot, nargs));
+                    // A metamethod dispatch also enters with `from_c`, but PUC
+                    // names it by its event, so it does not count as C here.
+                    self.running_native_from_c
+                        .push(from_c && self.pending_tm.is_none());
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -4353,6 +4363,7 @@ impl Vm {
                     // Err and the matching "return" hook fires on resume instead.
                     if let Err(e) = self.hook_call(true, nargs) {
                         self.running_natives.pop();
+                        self.running_native_from_c.pop();
                         self.running_native_slots.pop();
                         return Err(e);
                     }
@@ -4389,6 +4400,7 @@ impl Vm {
                             self.errored_native =
                                 Some(self.pushglobalfuncname(nc.f).unwrap_or_else(|| "?".into()));
                             self.running_natives.pop();
+                            self.running_native_from_c.pop();
                             self.running_native_slots.pop();
                             return Err(e);
                         }
@@ -4432,10 +4444,12 @@ impl Vm {
                                 self.stack[(res_dst + i) as usize];
                         }
                         self.running_natives.pop();
+                        self.running_native_from_c.pop();
                         self.running_native_slots.pop();
                         hr?;
                     } else {
                         self.running_natives.pop();
+                        self.running_native_from_c.pop();
                         self.running_native_slots.pop();
                     }
                     self.finish_results(func_slot, nret, nresults);
@@ -4600,10 +4614,16 @@ impl Vm {
     /// the loop head then writes `true` at `func_slot` to form `true, results…`.
     /// Always returns `Ok(true)`: a continuation is now on the stack to be
     /// resolved by the loop (even when `f` is a native that already ran inline).
-    fn begin_pcall(&mut self, func_slot: u32, nargs: u32, nresults: i32) -> Result<bool, LuaError> {
+    fn begin_pcall(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+        from_c: bool,
+    ) -> Result<bool, LuaError> {
         if nargs == 0 {
             // `luaL_checkany` fails here: there is no function to call.
-            self.with_native_running(func_slot, nargs, |vm| {
+            self.with_native_running(func_slot, nargs, from_c, |vm| {
                 let a = crate::vm::argcheck::Args::new(func_slot, nargs);
                 crate::vm::argcheck::check_any(vm, a, 0).map(drop)
             })?;
@@ -4636,8 +4656,9 @@ impl Vm {
         func_slot: u32,
         nargs: u32,
         nresults: i32,
+        from_c: bool,
     ) -> Result<bool, LuaError> {
-        self.with_native_running(func_slot, nargs, |vm| {
+        self.with_native_running(func_slot, nargs, from_c, |vm| {
             let a = crate::vm::argcheck::Args::new(func_slot, nargs);
             crate::vm::builtins::xpcall_handler(vm, a).map(drop)
         })?;
@@ -4686,6 +4707,7 @@ impl Vm {
         &mut self,
         func_slot: u32,
         nargs: u32,
+        from_c: bool,
         check: impl FnOnce(&mut Vm) -> Result<(), LuaError>,
     ) -> Result<(), LuaError> {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
@@ -4693,8 +4715,11 @@ impl Vm {
         };
         self.running_natives.push(nc);
         self.running_native_slots.push((func_slot, nargs));
+        self.running_native_from_c
+            .push(from_c && self.pending_tm.is_none());
         let r = check(self);
         self.running_natives.pop();
+        self.running_native_from_c.pop();
         self.running_native_slots.pop();
         r
     }
@@ -10468,26 +10493,6 @@ impl Vm {
         nr.checked_sub(n_above)
     }
 
-    /// PUC `pushglobalfuncname`: walk `package.loaded` to depth 2 looking for a
-    /// native whose function pointer matches `target`, and return its qualified
-    /// name (e.g. `"table.sort"`). A `_G.X` match is stripped to `"X"`. Returns
-    /// `None` if no match is found. Used by `arg_error` when the running native
-    /// was invoked from another native (PUC `ar.name == NULL` at level 0).
-    /// True when the innermost call frame is a pcall/xpcall
-    /// continuation — i.e. the currently-running native was invoked
-    /// DIRECTLY by pcall/xpcall rather than by Lua code. PUC's
-    /// luaL_argerror sees ar.name == NULL there (the caller is C)
-    /// and qualifies the name via pushglobalfuncname — so
-    /// `pcall(coroutine.resume, 42)` blames 'coroutine.resume'
-    /// (v2.14 fixture 5.5/365).
-    pub(crate) fn caller_is_protected_cont(&self) -> bool {
-        matches!(
-            self.frames.last(),
-            Some(CallFrame::Cont(nc))
-                if matches!(nc.kind, ContKind::Pcall | ContKind::Xpcall { .. })
-        )
-    }
-
     pub(crate) fn pushglobalfuncname(
         &mut self,
         target: crate::runtime::value::NativeFn,
@@ -10543,9 +10548,15 @@ impl Vm {
         let p = &caller.closure.proto;
         let call_pc = (caller.pc as usize).checked_sub(1)?;
         let instr = *p.code.get(call_pc)?;
+        // 5.1's getfuncname names only CALL, TAILCALL and TFORLOOP, the last
+        // through the generator's register — the hidden "(for generator)"
+        // local — and knows no metamethod names.
+        let v51 = self.version == LuaVersion::Lua51;
         match instr.op() {
             Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
+            Op::TForCall if v51 => crate::vm::objname::getobjname(p, call_pc, instr.a()),
             Op::TForCall => Some(("for iterator", "for iterator".to_string())),
+            _ if v51 => None,
             _ => self
                 .pending_tm
                 .map(|tm| ("metamethod", tm_debug_name(self.version, tm))),
