@@ -27,6 +27,7 @@
 
 #![allow(dead_code)] // remaining dialect stubs may not be wired yet
 
+mod classic;
 mod lower;
 mod puc_51;
 mod puc_52;
