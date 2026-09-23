@@ -10436,21 +10436,6 @@ impl Vm {
         &mut self,
         target: crate::runtime::value::NativeFn,
     ) -> Option<String> {
-        let full = self.loaded_funcname(target)?;
-        Some(match full.strip_prefix("_G.") {
-            Some(rest) => rest.to_string(),
-            None if full == "_G" => String::new(),
-            None => full,
-        })
-    }
-
-    /// The name `package.loaded` knows `target` by, unshortened: `"_G.print"`,
-    /// `"string.rep"`, or a bare module key. PUC 5.2's `pushglobalfuncname`
-    /// reports this as-is; 5.3 started dropping the `"_G."` prefix.
-    pub(crate) fn loaded_funcname(
-        &mut self,
-        target: crate::runtime::value::NativeFn,
-    ) -> Option<String> {
         let pkg_k = Value::Str(self.heap.intern(b"package"));
         let pkg = match self.globals().get(pkg_k) {
             Value::Table(t) => t,
@@ -10470,7 +10455,7 @@ impl Vm {
             let Value::Str(outer) = nk else { continue };
             let outer = String::from_utf8_lossy(outer.as_bytes()).into_owned();
             if matches(nv) {
-                return Some(outer);
+                return Some(if outer == "_G" { String::new() } else { outer });
             }
             if let Value::Table(inner_t) = nv {
                 let mut k2 = Value::Nil;
@@ -10479,8 +10464,12 @@ impl Vm {
                     if matches(nv2)
                         && let Value::Str(inner) = nk2
                     {
-                        let inner = String::from_utf8_lossy(inner.as_bytes());
-                        return Some(format!("{outer}.{inner}"));
+                        let inner = String::from_utf8_lossy(inner.as_bytes()).into_owned();
+                        return Some(if outer == "_G" {
+                            inner
+                        } else {
+                            format!("{outer}.{inner}")
+                        });
                     }
                 }
             }

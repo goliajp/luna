@@ -519,8 +519,8 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// so `local f = string.rep; f()` blames 'f'. A method call does not count
 /// the self argument: a bad `#1` there becomes "calling 'm' on bad self".
 /// When the caller gives no name — the native was called by another native
-/// or by pcall, or through an unnamed expression — 5.2+ looks the function
-/// up in `package.loaded` and 5.1 prints '?'.
+/// or by pcall, or through an unnamed expression — 5.2+ look the function up
+/// by the name its library registered it under, and 5.1 prints '?'.
 pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
     // A nested native, or a pcall/xpcall continuation directly below, means
     // the level-0 caller is C, which PUC never names.
@@ -544,9 +544,13 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
     raise_str(vm, &format!("bad argument #{n} to '{name}' ({extra})"))
 }
 
-/// `luaL_argerror`'s fallback when `ar.name` is NULL: '?' on 5.1; otherwise
-/// the running native's `package.loaded` name — kept whole on 5.2
-/// (`'_G.tonumber'`), without the `_G.` prefix from 5.3 on — or '?'.
+/// `luaL_argerror`'s fallback when `ar.name` is NULL: '?' on 5.1, otherwise
+/// the running native's library name, or '?'.
+///
+/// 5.2 finds the name by walking the global table, whose string hashes are
+/// seeded per run, so it prints `'_G.tonumber'` on some runs and `'tonumber'`
+/// on others (measured on stock 5.2.4). luna gives the short form, the one
+/// 5.3 settled on.
 fn unnamed_native_name(vm: &mut Vm) -> String {
     if vm.version() == crate::version::LuaVersion::Lua51 {
         return "?".to_string();
@@ -554,12 +558,8 @@ fn unnamed_native_name(vm: &mut Vm) -> String {
     let Some(target) = vm.running_natives.last().map(|nc| nc.f) else {
         return "?".to_string();
     };
-    let name = if vm.version() == crate::version::LuaVersion::Lua52 {
-        vm.loaded_funcname(target)
-    } else {
-        vm.pushglobalfuncname(target)
-    };
-    name.unwrap_or_else(|| "?".to_string())
+    vm.pushglobalfuncname(target)
+        .unwrap_or_else(|| "?".to_string())
 }
 
 pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
