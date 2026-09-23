@@ -141,3 +141,21 @@ fn table_read_with_a_string_key() {
         assert_eq!(same(v, src), "16500");
     }
 }
+
+/// `math.<fn>(x)` is replaced by inline code, which is right only while
+/// the field holds the library function; assigning another function to
+/// it mid-loop kept the inline code running.
+#[test]
+fn reassigned_math_function_is_called() {
+    let src = r#"
+        local s = 0
+        local m = math
+        for i = 1, 3000 do
+          s = s + math.min(i, 5)
+          if i == 2000 then m.min = m.max end
+        end
+        return tostring(s)"#;
+    for v in INT_DIALECTS {
+        assert_eq!(same(v, src), "2510490");
+    }
+}

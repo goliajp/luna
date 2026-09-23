@@ -102,3 +102,19 @@ fn yielding_metamethod_on_an_upvalue() {
     );
     same(LuaVersion::Lua52, src, "true add");
 }
+
+/// A method chunk replaces `math.<fn>(x)` by inline code; it has to see
+/// a later assignment to the field.
+#[test]
+fn reassigned_math_function_in_a_method() {
+    let src = r#"
+        local function g(x) local y = math.sin(x) return y end
+        local s = 0
+        for i = 1, 10 do s = s + g(1) end
+        math.sin = function() return 100 end
+        for i = 1, 10 do s = s + g(1) end
+        return string.format("%.6f", s)"#;
+    for v in ALL {
+        same(v, src, "1008.414710");
+    }
+}
