@@ -70,11 +70,17 @@ fn deep_recursion_no_longer_aborts_traces() {
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(1400)));
 
     // Step4a flipped both abort paths (depth-cap, returned-past-head)
-    // to clean close. There are no other abort sources for this
-    // workload, so aborted_count stays zero.
+    // to clean close. The one other abort source for this workload is a
+    // recording that reaches a trace the dispatcher runs natively (the
+    // recording cannot see its ops), so only those may be counted.
+    let reached = vm
+        .trace_close_cause_counts()
+        .get("reached-compiled-trace")
+        .copied()
+        .unwrap_or(0);
     assert_eq!(
         vm.trace_aborted_count(),
-        0,
+        reached,
         "step4a turned MAX_INLINE_DEPTH + returned-past-head aborts \
          into clean closes; got aborted={}",
         vm.trace_aborted_count(),

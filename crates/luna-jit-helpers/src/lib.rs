@@ -678,6 +678,84 @@ pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
     }
 }
 
+/// Method-JIT entry check for a chunk compiled with self-recursive
+/// calls: they are direct calls to the chunk's own code, which is right
+/// only while `upvals[idx]` holds the running closure. A forward-declared
+/// local (`local a, b; a = function() ... b() end`) or a reassigned one
+/// holds another function, so the call is parked as a deopt and the
+/// interpreter runs it. Returns 1 when the upvalue is the running
+/// closure, 0 after parking the deopt.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: the method-JIT dispatcher enters with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    match vm.upval_get(cl, idx as u32) {
+        luna_core::runtime::Value::Closure(c) if c.ptr_eq(cl) => 1,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: callee is not the running closure"));
+            0
+        }
+    }
+}
+
+/// A trace side exit that resumes at the trace's own head: the op there
+/// has not run, so the dispatcher must let the interpreter run it before
+/// admitting the trace again, or the two would hand the same pc back and
+/// forth forever.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    vm.jit.suppress_downrec_admit_once = true;
+}
+
+/// Parks a deopt for the running method-JIT call, which then returns at
+/// once: the dispatcher discards its result and runs the call in the
+/// interpreter. Used where compiled code finds, before doing anything
+/// observable, that it cannot compute the result.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_park_deopt() {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_none() {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: compiled code cannot run this call"));
+    }
+}
+
+/// Whether `_ENV.math.<name>` of the running closure is still the
+/// library function the JIT inlined for `math.<name>(...)`: 1 if it is,
+/// 0 otherwise. Raw reads suffice: a field that is present is found
+/// before any `__index`, and an absent one is not the library function.
+/// The keys are interned strings the compiled code baked in; `_ENV` is
+/// upvalue 0, as the fold matchers require.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i64) -> i64 {
+    use luna_core::runtime::{Gc, LuaStr, Value};
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: both dispatchers enter with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    let Value::Table(env) = vm.upval_get(cl, 0) else {
+        return 0;
+    };
+    let math_key = Gc::from_ptr(math_key as *mut LuaStr);
+    let Value::Table(math) = env.get(Value::Str(math_key)) else {
+        return 0;
+    };
+    let name_key = Gc::from_ptr(name_key as *mut LuaStr);
+    let Value::Native(f) = math.get(Value::Str(name_key)) else {
+        return 0;
+    };
+    let lib = luna_core::vm::lib_math::inlinable_native(name_key.as_bytes());
+    i64::from(lib.is_some_and(|lib| std::ptr::fn_addr_eq(f.f, lib)))
+}
+
 /// P12-S7-C — trace JIT helper for `Op::Close A`. Wraps
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
 /// returns 0 to continue the trace, 1 to deopt (handler would run
