@@ -2933,51 +2933,38 @@ fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
     bcx.def_var(var, bits);
 }
 
-/// Emit a store-back of every `regs[i]` Variable to
-/// `reg_state[i * 8]`, followed by `return iconst(pc)`. Used by both
-/// the clean-close tail (pc = head_pc) and every cmp's side-exit
-/// block (pc = failing_pc).
-/// P12-S7-C — central dispatch for `t[key] = v` helper-path emit.
-/// Picks the right specialized helper by the source register's
-/// `RegKind`. Without the kind-aware dispatch a Closure / Table /
-/// Float src would be silently wrapped as `Value::Int(raw_bits)`
-/// by the legacy `set_int` helper.
+/// Calls the checked table store `t[key] = v` for a key and a value of
+/// known kinds, returning the helper's status (`1` stored, `0` the
+/// interpreter must do it); the caller side-exits on `0`.
+#[allow(clippy::too_many_arguments)]
 fn emit_table_set<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
     module: &mut M,
-    set_int_id: cranelift_module::FuncId,
-    set_nil_id: cranelift_module::FuncId,
-    set_raw_id: cranelift_module::FuncId,
+    set_checked_id: cranelift_module::FuncId,
     t: Value,
     key: Value,
+    key_kind: RegKind,
+    val: Value,
     val_kind: RegKind,
-    val_var: Variable,
-) {
+) -> Value {
+    let key_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(key_kind)));
+    let val_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(val_kind)));
+    let f = module.declare_func_in_func(set_checked_id, bcx.func);
+    let call = bcx.ins().call(f, &[t, key, key_tag, val, val_tag]);
+    bcx.inst_results(call)[0]
+}
+
+/// The value tag (`runtime::value::raw`) of a register of kind `k`.
+fn kind_tag(k: RegKind) -> u8 {
     use luna_core::runtime::value::raw;
-    match val_kind {
-        RegKind::Nil => {
-            let f = module.declare_func_in_func(set_nil_id, bcx.func);
-            bcx.ins().call(f, &[t, key]);
-        }
+    match k {
+        RegKind::Int => raw::INT,
+        RegKind::Float => raw::FLOAT,
+        RegKind::Table => raw::TABLE,
+        RegKind::Closure => raw::CLOSURE,
+        RegKind::Str => raw::STR,
+        RegKind::Nil => raw::NIL,
         RegKind::Unset => unreachable!("callers do not lower a store of an unknown kind"),
-        RegKind::Int => {
-            let v = bcx.use_var(val_var);
-            let f = module.declare_func_in_func(set_int_id, bcx.func);
-            bcx.ins().call(f, &[t, key, v]);
-        }
-        other => {
-            let tag = match other {
-                RegKind::Float => raw::FLOAT,
-                RegKind::Table => raw::TABLE,
-                RegKind::Closure => raw::CLOSURE,
-                RegKind::Str => raw::STR,
-                RegKind::Nil | RegKind::Int | RegKind::Unset => unreachable!("matched above"),
-            };
-            let v = bcx.use_var(val_var);
-            let tag_v = bcx.ins().iconst(types::I64, tag as i64);
-            let f = module.declare_func_in_func(set_raw_id, bcx.func);
-            bcx.ins().call(f, &[t, key, v, tag_v]);
-        }
     }
 }
 
@@ -3477,31 +3464,13 @@ fn build_trace_jit_module() -> Option<JITModule> {
     // like `cargo test`, so the default `dlsym(RTLD_DEFAULT)` resolver
     // misses them without an explicit `builder.symbol(...)`.)
     builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
+    // SetI / SetTable / SetList / SetField
     builder.symbol(
-        "luna_jit_table_set_int",
-        super::luna_jit_table_set_int as *const u8,
+        "luna_jit_table_set_checked",
+        super::luna_jit_table_set_checked as *const u8,
     );
-    // P12-S6-A2 — Nil-valued SetList/SetI/SetTable helper. Trace JIT
-    // emits a call here when an Op::LoadNil-written source register
-    // is fed into a (non-sunk) table write.
-    builder.symbol(
-        "luna_jit_table_set_nil",
-        super::luna_jit_table_set_nil as *const u8,
-    );
-    // P12-S7-C — generalised SetTable/SetI/SetList helper for any
-    // (tag, raw_bits) pair. Used for Closure / Table / non-Int/Nil
-    // sources where the legacy set_int helper would mis-wrap as
-    // Value::Int(ptr_bits).
-    builder.symbol(
-        "luna_jit_table_set_raw",
-        super::luna_jit_table_set_raw as *const u8,
-    );
-    // P12-S11-A — SetField + GetField helpers (string key from
-    // Proto.consts; raw pointer baked into IR at emit time).
-    builder.symbol(
-        "luna_jit_table_set_field",
-        super::luna_jit_table_set_field as *const u8,
-    );
+    // GetField helper (string key from Proto.consts; raw pointer baked
+    // into IR at emit time).
     builder.symbol(
         "luna_jit_table_get_field",
         super::luna_jit_table_get_field as *const u8,
@@ -3528,7 +3497,10 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_op_get_tab_up_checked",
         super::luna_jit_op_get_tab_up_checked as *const u8,
     );
-    builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
+    builder.symbol(
+        "luna_jit_table_len_checked",
+        super::luna_jit_table_len_checked as *const u8,
+    );
     builder.symbol(
         "luna_jit_math_fn_is_library",
         super::luna_jit_math_fn_is_library as *const u8,
@@ -5055,43 +5027,15 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_new_table", Linkage::Import, &new_table_sig)
         .ok()?;
 
-    let mut set_int_sig = module.make_signature();
-    set_int_sig.params.push(AbiParam::new(types::I64));
-    set_int_sig.params.push(AbiParam::new(types::I64));
-    set_int_sig.params.push(AbiParam::new(types::I64));
-    let set_int_id = module
-        .declare_function("luna_jit_table_set_int", Linkage::Import, &set_int_sig)
-        .ok()?;
-
-    // P12-S6-A2 — `fn luna_jit_table_set_nil(t: i64, key: i64)`.
-    // Returns nothing; writes `Value::Nil` to t[key].
-    let mut set_nil_sig = module.make_signature();
-    set_nil_sig.params.push(AbiParam::new(types::I64));
-    set_nil_sig.params.push(AbiParam::new(types::I64));
-    let set_nil_id = module
-        .declare_function("luna_jit_table_set_nil", Linkage::Import, &set_nil_sig)
-        .ok()?;
-
-    // P12-S7-C — `fn luna_jit_table_set_raw(t, key, raw_bits, tag)`.
-    // Writes Value::pack(tag, raw_bits) to t[key]. Used for any
-    // src kind other than Int / Nil (Closure / Table / Float / etc.).
-    let mut set_raw_sig = module.make_signature();
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    let set_raw_id = module
-        .declare_function("luna_jit_table_set_raw", Linkage::Import, &set_raw_sig)
-        .ok()?;
-
-    // P12-S11-A — `fn luna_jit_table_set_field(t, key_ptr, raw, tag)`.
-    let mut set_field_sig = module.make_signature();
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    let set_field_id = module
-        .declare_function("luna_jit_table_set_field", Linkage::Import, &set_field_sig)
+    // `fn luna_jit_table_set_checked(t, key_raw, key_tag, val_raw,
+    // val_tag) -> stored`
+    let mut set_sig = module.make_signature();
+    for _ in 0..5 {
+        set_sig.params.push(AbiParam::new(types::I64));
+    }
+    set_sig.returns.push(AbiParam::new(types::I64));
+    let set_checked_id = module
+        .declare_function("luna_jit_table_set_checked", Linkage::Import, &set_sig)
         .ok()?;
 
     // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
@@ -5321,8 +5265,8 @@ pub fn lower_trace_into_named<M: Module>(
     let mut len_sig = module.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
-    let len_id = module
-        .declare_function("luna_jit_table_len", Linkage::Import, &len_sig)
+    let len_checked_id = module
+        .declare_function("luna_jit_table_len_checked", Linkage::Import, &len_sig)
         .ok()?;
 
     // P12-S4-step2b — `fn luna_jit_upval_get(idx: i64) -> i64`. The
@@ -7192,20 +7136,22 @@ pub fn lower_trace_into_named<M: Module>(
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
-                let val_tag = match val_kind {
-                    RegKind::Int => luna_core::runtime::value::raw::INT,
-                    RegKind::Float => luna_core::runtime::value::raw::FLOAT,
-                    RegKind::Table => luna_core::runtime::value::raw::TABLE,
-                    RegKind::Closure => luna_core::runtime::value::raw::CLOSURE,
-                    RegKind::Str => luna_core::runtime::value::raw::STR,
-                    RegKind::Nil => luna_core::runtime::value::raw::NIL,
-                    // a value of unknown kind cannot be tagged for the table
-                    RegKind::Unset => return None,
-                };
-                let val_raw = bcx.use_var(regs[ins.c() as usize]);
-                let tag_arg = bcx.ins().iconst(types::I64, val_tag as i64);
-                let func_ref = module.declare_func_in_func(set_field_id, bcx.func);
-                bcx.ins().call(func_ref, &[t, key_arg, val_raw, tag_arg]);
+                // a value of unknown kind cannot be tagged for the table
+                if matches!(val_kind, RegKind::Unset) {
+                    return None;
+                }
+                let val = bcx.use_var(regs[ins.c() as usize]);
+                let done = emit_table_set(
+                    &mut bcx,
+                    &mut module,
+                    set_checked_id,
+                    t,
+                    key_arg,
+                    RegKind::Str,
+                    val,
+                    val_kind,
+                );
+                guard!(done, i, rop.pc);
             }
             Op::GetField => {
                 // P12-S11-B-v1 — sunk path: use_var the virt slot
@@ -7461,17 +7407,18 @@ pub fn lower_trace_into_named<M: Module>(
                 if matches!(val_kind, RegKind::Unset) {
                     return None;
                 }
-                emit_table_set(
+                let val = bcx.use_var(regs[ins.c() as usize]);
+                let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_int_id,
-                    set_nil_id,
-                    set_raw_id,
+                    set_checked_id,
                     t,
                     k_imm,
+                    RegKind::Int,
+                    val,
                     val_kind,
-                    regs[ins.c() as usize],
                 );
+                guard!(done, i, rop.pc);
             }
             Op::SetTable => {
                 // P12-S8-C — sunk path: escape sweep tagged
@@ -7504,17 +7451,18 @@ pub fn lower_trace_into_named<M: Module>(
                 if matches!(val_kind, RegKind::Unset) {
                     return None;
                 }
-                emit_table_set(
+                let val = bcx.use_var(regs[ins.c() as usize]);
+                let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_int_id,
-                    set_nil_id,
-                    set_raw_id,
+                    set_checked_id,
                     t,
                     key,
+                    RegKind::Int,
+                    val,
                     val_kind,
-                    regs[ins.c() as usize],
                 );
+                guard!(done, i, rop.pc);
             }
             Op::SetList => {
                 // P12-S5-B / P12-S9-C — `R[A][C+i] := R[A+i]` for i in
@@ -7567,25 +7515,30 @@ pub fn lower_trace_into_named<M: Module>(
                     if matches!(src_kind, RegKind::Unset) {
                         return None;
                     }
-                    emit_table_set(
+                    let val = bcx.use_var(regs[a + ii]);
+                    // Always stored: SetList fills the fresh table of a
+                    // constructor, which has no metatable, at integer keys.
+                    let _ = emit_table_set(
                         &mut bcx,
                         &mut module,
-                        set_int_id,
-                        set_nil_id,
-                        set_raw_id,
+                        set_checked_id,
                         t,
                         key,
+                        RegKind::Int,
+                        val,
                         src_kind,
-                        regs[a + ii],
                     );
                 }
             }
             Op::Len => {
                 // R[A] := #R[B] — call luna_jit_table_len(t) -> i64.
                 let t = bcx.use_var(regs[ins.b() as usize]);
-                let func_ref = module.declare_func_in_func(len_id, bcx.func);
+                let func_ref = module.declare_func_in_func(len_checked_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[t]);
                 let v = bcx.inst_results(call)[0];
+                // -1: the table has a metatable
+                let ok = bcx.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, v, 0);
+                guard!(ok, i, rop.pc);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
             }
@@ -7676,29 +7629,10 @@ pub fn lower_trace_into_named<M: Module>(
                 let func_ref = module.declare_func_in_func(op_close_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[a_arg]);
                 let status = bcx.inst_results(call)[0];
-                let continue_blk = bcx.create_block();
-                let deopt_blk = bcx.create_block();
-                bcx.ins().brif(status, deopt_blk, &[], continue_blk, &[]);
-                bcx.switch_to_block(deopt_blk);
-                bcx.seal_block(deopt_blk);
-                // Deopt: store back full caller window so interp
-                // resumes Op::Close with the trace's mid-stream values
-                // in vm.stack. dispatcher's pending_err check will
-                // unwind without restoring reg_state; interp re-runs
-                // Op::Close → idempotent close_from + handler dispatch.
-                emit_store_back_and_return_pc(
-                    &mut bcx,
-                    &regs_full[..max_stack],
-                    &stored,
-                    reg_state,
-                    rop.pc,
-                    flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                );
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                // 1: a `__close` handler would run; the interpreter
+                // redoes the op and runs it
+                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                guard!(ok, i, rop.pc);
             }
             Op::GetUpval => {
                 // R[A] := UpVal[B]. The helper reads JIT_CL's
@@ -7890,57 +7824,45 @@ pub fn lower_trace_into_named<M: Module>(
                 // Allocates the 3-slot buffer, calls the helper,
                 // brif-checks the result, def_vars regs + tag from
                 // the buffer.
-                let emit_helper_call = |bcx: &mut FunctionBuilder<'_>, module: &mut M| -> () {
-                    let out_ss =
-                        bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            24,
-                            3,
-                        ));
-                    let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
-                    let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
-                    let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
-                    let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
-                    let nvars_arg = bcx.ins().iconst(types::I64, nvars);
-                    let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
-                    let call_inst = bcx
-                        .ins()
-                        .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
-                    let status_or_tag = bcx.inst_results(call_inst)[0];
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status_or_tag, zero);
-                    let cont_blk = bcx.create_block();
-                    let deopt_blk = bcx.create_block();
-                    bcx.ins().brif(is_err, deopt_blk, &[], cont_blk, &[]);
-                    bcx.switch_to_block(deopt_blk);
-                    bcx.seal_block(deopt_blk);
-                    emit_store_back_and_return_pc(
-                        bcx,
-                        &regs_full[..max_stack],
-                        &stored,
-                        reg_state,
-                        rop.pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                    );
-                    bcx.switch_to_block(cont_blk);
-                    bcx.seal_block(cont_blk);
-                    // key tag | value tag << 8 (Vm::jit_op_tforcall)
-                    let key_tag = bcx.ins().band_imm(status_or_tag, 0xff);
-                    let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
-                    bcx.def_var(tforcall_tag_var, key_tag);
-                    bcx.def_var(tforcall_val_tag_var, val_tag);
-                    let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
-                    let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
-                    let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
-                    bcx.def_var(regs[a_us + 2], ctrl_raw);
-                    bcx.def_var(regs[a_us + 4], key_raw);
-                    if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                        bcx.def_var(regs[a_us + 5], val_raw);
-                    }
-                };
+                macro_rules! emit_helper_call {
+                    () => {{
+                        let out_ss =
+                            bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                24,
+                                3,
+                            ));
+                        let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+                        let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
+                        let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
+                        let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
+                        let nvars_arg = bcx.ins().iconst(types::I64, nvars);
+                        let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
+                        let call_inst = bcx
+                            .ins()
+                            .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
+                        let status_or_tag = bcx.inst_results(call_inst)[0];
+                        // -1: not a native iterator, or it raised; the
+                        // interpreter redoes the op
+                        let ok =
+                            bcx.ins()
+                                .icmp_imm(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
+                        guard!(ok, i, rop.pc);
+                        // key tag | value tag << 8 (Vm::jit_op_tforcall)
+                        let key_tag = bcx.ins().band_imm(status_or_tag, 0xff);
+                        let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
+                        bcx.def_var(tforcall_tag_var, key_tag);
+                        bcx.def_var(tforcall_val_tag_var, val_tag);
+                        let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
+                        let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
+                        let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
+                        bcx.def_var(regs[a_us + 2], ctrl_raw);
+                        bcx.def_var(regs[a_us + 4], key_raw);
+                        if (nvars as usize) >= 2 && a_us + 5 < max_stack {
+                            bcx.def_var(regs[a_us + 5], val_raw);
+                        }
+                    }};
+                }
 
                 if is_ipairs_trace {
                     // Inline aget fast path. The recorder confirmed
@@ -8085,14 +8007,14 @@ pub fn lower_trace_into_named<M: Module>(
                     // value. R[A]/R[A+1] still hold their entry
                     // values in vm.stack.
                     spill_slot(&mut bcx, a_us + 2);
-                    emit_helper_call(&mut bcx, module);
+                    emit_helper_call!();
                     bcx.ins().jump(merge_blk, &[]);
 
                     // ----- merge_blk -----
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
                 } else {
-                    emit_helper_call(&mut bcx, module);
+                    emit_helper_call!();
                 }
 
                 current_kinds[off + a_us + 2] = RegKind::Unset;
@@ -8138,26 +8060,9 @@ pub fn lower_trace_into_named<M: Module>(
                 let func_ref = module.declare_func_in_func(op_concat_id, bcx.func);
                 let call_inst = bcx.ins().call(func_ref, &[a_arg, n_arg]);
                 let status = bcx.inst_results(call_inst)[0];
-                let zero = bcx.ins().iconst(types::I64, 0);
-                let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status, zero);
-                let continue_blk = bcx.create_block();
-                let deopt_blk = bcx.create_block();
-                bcx.ins().brif(is_err, deopt_blk, &[], continue_blk, &[]);
-                bcx.switch_to_block(deopt_blk);
-                bcx.seal_block(deopt_blk);
-                emit_store_back_and_return_pc(
-                    &mut bcx,
-                    &regs_full[..max_stack],
-                    &stored,
-                    reg_state,
-                    rop.pc,
-                    flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                );
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                // -1: an error or `__concat`; the interpreter redoes the op
+                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                guard!(ok, i, rop.pc);
                 // Reload regs[A] (= result Str) from vm.stack via
                 // luna_jit_stack_load helper. The helper deopts on the
                 // `__concat` path, so a result here is always a string.
