@@ -9550,20 +9550,27 @@ impl Vm {
         Ok(())
     }
 
-    /// tostring with __tostring / __name support.
+    /// `luaL_tolstring`: `__tostring`, then (5.3+) `__name`, then the
+    /// basic rendering. A number returned by `__tostring` is a string for
+    /// `lua_isstring`, so it is accepted and converted.
     pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             return match self.call_mm1(mm, &[v])? {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
+                n @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(n)),
                 _ => Err(self.rt_err("'__tostring' must return a string")),
             };
         }
-        if let Value::Table(t) = v
+        if self.version >= LuaVersion::Lua53
+            && matches!(v, Value::Table(_) | Value::Userdata(_))
             && let Value::Str(name) = self.get_mm(v, Mm::Name)
         {
+            let basic = self.tostring_basic(v);
+            let addr = basic.rsplit(|&b| b == b' ').next().unwrap_or(&[]);
             let mut out = name.as_bytes().to_vec();
-            out.extend_from_slice(format!(": {:p}", t.as_ptr()).as_bytes());
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(addr);
             return Ok(out);
         }
         Ok(self.tostring_basic(v))

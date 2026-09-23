@@ -1366,7 +1366,7 @@ fn string_format() {
         true,
     );
     check_str("return string.format('%q', 0/0)", b"(0/0)");
-    check_str("return string.format('%q', 2.0)", b"2.0");
+    check_str("return string.format('%q', 2.0)", b"0x1p+1");
     // tostring path honors __tostring in %s
     check_str(
         "local t = setmetatable({}, {__tostring = function() return 'T' end}) \
