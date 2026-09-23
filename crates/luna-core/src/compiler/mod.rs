@@ -3084,8 +3084,20 @@ impl<'a> Compiler<'a> {
     ) -> Result<(), SyntaxError> {
         let line = vars[0].line;
         self.last_line = line;
-        // control slots: iterator, state, control, closing (<close>: slice 5)
-        let base = self.explist_adjust(exprs, 4)?;
+        // control slots: iterator, state, control, closing (<close>: slice 5).
+        // Before 5.4 the list is cut to three values (PUC `forlist`'s
+        // `adjust_assign(ls, 3, ...)`) and the fourth slot stays nil, so a
+        // fourth value is evaluated and dropped rather than closed.
+        let tbc = self.version >= LuaVersion::Lua54;
+        let base = if tbc {
+            self.explist_adjust(exprs, 4)?
+        } else {
+            let base = self.explist_adjust(exprs, 3)?;
+            self.set_freereg(base + 3);
+            self.reserve(1)?;
+            self.emit(Inst::iabc(Op::LoadNil, base + 3, 0, 0, false));
+            base
+        };
         self.set_freereg(base + 4);
         let control_start = self.here() as u32;
         self.enter_block(true);
@@ -3093,7 +3105,7 @@ impl<'a> Compiler<'a> {
         // a `return f()` in the body must not be a tail call, *and* a `goto`
         // leaving this block must close the iterator's closing value via a
         // trampoline (locals.lua:1219 nested-for goto regression).
-        {
+        if tbc {
             let b = self.l().blocks.last_mut().expect("no block");
             b.tbc_scope = true;
             b.has_tbc = true;
