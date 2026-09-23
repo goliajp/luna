@@ -864,10 +864,8 @@ fn run_debug_command(vm: &mut Vm, line: &[u8]) -> Result<(), Vec<u8>> {
     let f = match vm.load(line, b"=(debug command)") {
         Ok(cl) => cl,
         Err(e) => {
-            let mut msg = crate::vm::callstack::syntax_chunk_id(v, b"=(debug command)");
-            msg.extend_from_slice(format!(":{}: ", e.line).as_bytes());
-            msg.extend_from_slice(&e.msg);
-            return Err(msg);
+            let id = crate::vm::callstack::syntax_chunk_id(v, b"=(debug command)");
+            return Err(e.render(&id));
         }
     };
     let err = match vm.call_protected(Value::Closure(f), &[]) {
