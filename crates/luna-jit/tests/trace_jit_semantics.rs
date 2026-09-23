@@ -425,6 +425,28 @@ fn same_hot(v: LuaVersion, src: &str) -> String {
     interp
 }
 
+/// A generic-for over a native iterator ends with the value slot holding
+/// what the iterator's last call left (nil), but the trace restored it
+/// under its entry tag: a string with a null pointer (panic "gc pointer
+/// must be non-null" on the string_pattern probe's gmatch loop).
+#[test]
+fn generic_for_exit_restores_the_loop_variables_as_nil() {
+    let src = r#"
+        local out = {}
+        for rep = 1, 3 do
+          local r = {}
+          for a, b in string.gmatch("abcdef", "()(.)") do r[#r + 1] = a .. b end
+          out[#out + 1] = table.concat(r, ",")
+        end
+        return table.concat(out, " | ")"#;
+    for v in INT_DIALECTS {
+        assert_eq!(
+            same_hot(v, src),
+            "1a,2b,3c,4d,5e,6f | 1a,2b,3c,4d,5e,6f | 1a,2b,3c,4d,5e,6f"
+        );
+    }
+}
+
 /// When the next value has another kind than the loop body was compiled
 /// for, the trace leaves at the TForLoop; the dispatcher then re-tagged
 /// the helper's new value with the old kind.

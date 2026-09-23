@@ -2959,11 +2959,8 @@ fn emit_table_set<M: Module>(
             let f = module.declare_func_in_func(set_nil_id, bcx.func);
             bcx.ins().call(f, &[t, key]);
         }
-        // Int / Unset → set_int (legacy fast path; synth tests +
-        // un-snapshotted slots default to Int payload, which matches
-        // the pre-S7-C behaviour). Production traces with proper
-        // kind tracking pin Int explicitly here.
-        RegKind::Int | RegKind::Unset => {
+        RegKind::Unset => unreachable!("callers do not lower a store of an unknown kind"),
+        RegKind::Int => {
             let v = bcx.use_var(val_var);
             let f = module.declare_func_in_func(set_int_id, bcx.func);
             bcx.ins().call(f, &[t, key, v]);
@@ -2974,7 +2971,7 @@ fn emit_table_set<M: Module>(
                 RegKind::Table => raw::TABLE,
                 RegKind::Closure => raw::CLOSURE,
                 RegKind::Str => raw::STR,
-                RegKind::Nil | RegKind::Int | RegKind::Unset => unreachable!(),
+                RegKind::Nil | RegKind::Int | RegKind::Unset => unreachable!("matched above"),
             };
             let v = bcx.use_var(val_var);
             let tag_v = bcx.ins().iconst(types::I64, tag as i64);
@@ -6871,7 +6868,8 @@ pub fn lower_trace_into_named<M: Module>(
                     if recorded_passed {
                         let v = bcx.use_var(regs[ins.b() as usize]);
                         bcx.def_var(regs[ins.a() as usize], v);
-                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] =
+                            k_op(&current_kinds, off as u32 + ins.b());
                     }
                 }
             }
@@ -7185,7 +7183,8 @@ pub fn lower_trace_into_named<M: Module>(
                     RegKind::Closure => luna_core::runtime::value::raw::CLOSURE,
                     RegKind::Str => luna_core::runtime::value::raw::STR,
                     RegKind::Nil => luna_core::runtime::value::raw::NIL,
-                    RegKind::Unset => luna_core::runtime::value::raw::INT,
+                    // a value of unknown kind cannot be tagged for the table
+                    RegKind::Unset => return None,
                 };
                 let val_raw = bcx.use_var(regs[ins.c() as usize]);
                 let tag_arg = bcx.ins().iconst(types::I64, val_tag as i64);
@@ -7442,6 +7441,10 @@ pub fn lower_trace_into_named<M: Module>(
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.b() as i64);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
+                // a value of unknown kind cannot be tagged for the table
+                if matches!(val_kind, RegKind::Unset) {
+                    return None;
+                }
                 emit_table_set(
                     &mut bcx,
                     &mut module,
@@ -7481,6 +7484,10 @@ pub fn lower_trace_into_named<M: Module>(
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let key = bcx.use_var(regs[ins.b() as usize]);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
+                // a value of unknown kind cannot be tagged for the table
+                if matches!(val_kind, RegKind::Unset) {
+                    return None;
+                }
                 emit_table_set(
                     &mut bcx,
                     &mut module,
@@ -7540,6 +7547,10 @@ pub fn lower_trace_into_named<M: Module>(
                 for ii in 1..=effective_b {
                     let key = bcx.ins().iconst(types::I64, c_off + ii as i64);
                     let src_kind = k_op(&current_kinds, (off + a + ii) as u32);
+                    // a value of unknown kind cannot be tagged for the table
+                    if matches!(src_kind, RegKind::Unset) {
+                        return None;
+                    }
                     emit_table_set(
                         &mut bcx,
                         &mut module,
@@ -8132,15 +8143,14 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.switch_to_block(continue_blk);
                 bcx.seal_block(continue_blk);
                 // Reload regs[A] (= result Str) from vm.stack via
-                // luna_jit_stack_load helper. current_kinds = Unset
-                // since RegKind doesn't carry Str (string raw bits
-                // round-trip via the dispatcher's per-slot tag path).
+                // luna_jit_stack_load helper. The helper deopts on the
+                // `__concat` path, so a result here is always a string.
                 let stack_load_ref = module.declare_func_in_func(stack_load_id, bcx.func);
                 let a_arg_reload = bcx.ins().iconst(types::I64, a_us as i64);
                 let reload_inst = bcx.ins().call(stack_load_ref, &[a_arg_reload]);
                 let result_raw = bcx.inst_results(reload_inst)[0];
                 bcx.def_var(regs[a_us], result_raw);
-                current_kinds[off + a_us] = RegKind::Unset;
+                current_kinds[off + a_us] = RegKind::Str;
             }
             // P12-S12-B-v2 — generic-for prep is the leading pc-bump
             // before body_top. Recorder enters at body_top, so this
