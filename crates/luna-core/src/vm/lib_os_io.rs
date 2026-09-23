@@ -1882,71 +1882,105 @@ fn os_exit(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     std::process::exit(code);
 }
 
-fn load_path(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Result<Value, Value>, LuaError> {
-    let Value::Str(path) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(arg_error(vm, 1, "string expected"));
-    };
-    let path_s = String::from_utf8_lossy(path.as_bytes()).into_owned();
-    let mode: Vec<u8> = match vm.nat_arg(fs, nargs, 1) {
-        Value::Nil => b"bt".to_vec(),
-        Value::Str(s) => s.as_bytes().to_vec(),
-        _ => b"bt".to_vec(),
-    };
-    if mode.iter().any(|c| !matches!(c, b'b' | b't')) {
-        return Err(raise_str(
-            vm,
-            &format!("invalid mode '{}'", String::from_utf8_lossy(&mode)),
-        ));
-    }
-    match std::fs::read(&path_s) {
-        Ok(src) => {
+/// PUC `luaL_loadfilex`: compile the file `name` (stdin when `None`) and
+/// return the function, or the message `loadfile` returns after its nil.
+/// `mode` limits the chunk to text and/or binary (`None` allows both).
+fn load_path(vm: &mut Vm, name: Option<&[u8]>, mode: Option<&[u8]>) -> Result<Value, Value> {
+    let (read, chunkname) = match name {
+        Some(n) => {
             let mut chunkname = vec![b'@'];
-            chunkname.extend_from_slice(path.as_bytes());
-            let src = crate::frontend::lexer::Lexer::strip_shebang_bom(&src);
-            // PUC `luaL_loadfilex`: when a `#` comment line precedes a binary
-            // chunk, the leading line-terminator left by the comment skip is
-            // dropped so undump sees a clean `\x1bLua…` head (files.lua :594).
-            let src: &[u8] = match src {
-                [b'\n', rest @ ..] | [b'\r', b'\n', rest @ ..] | [b'\r', rest @ ..]
-                    if rest.first() == Some(&0x1b) =>
-                {
-                    rest
-                }
-                _ => src,
-            };
-            // PUC `luaL_loadfilex` checks the mode the chunk reports against
-            // what the caller allowed and rejects the mismatching kind.
-            let binary = crate::vm::dump::is_binary_chunk(src);
-            if binary && !mode.contains(&b'b') || !binary && !mode.contains(&b't') {
-                let kind = if binary { "binary" } else { "text" };
-                let msg = format!(
-                    "attempt to load a {kind} chunk (mode is '{}')",
-                    String::from_utf8_lossy(&mode)
-                );
-                return Ok(Err(Value::Str(vm.heap.intern(msg.as_bytes()))));
-            }
-            match vm.load(src, &chunkname) {
-                Ok(cl) => Ok(Ok(Value::Closure(cl))),
-                Err(e) => {
-                    let msg = format!("{path_s}:{e}");
-                    Ok(Err(Value::Str(vm.heap.intern(msg.as_bytes()))))
-                }
-            }
+            chunkname.extend_from_slice(n);
+            (
+                std::fs::read(String::from_utf8_lossy(n).as_ref()),
+                chunkname,
+            )
         }
+        None => {
+            let mut buf = Vec::new();
+            let r = std::io::stdin().read_to_end(&mut buf).map(|_| buf);
+            (r, b"=stdin".to_vec())
+        }
+    };
+    // `errfile`: the name shown is the chunk name without its '@' / '='.
+    let shown = String::from_utf8_lossy(&chunkname[1..]).into_owned();
+    let src = match read {
+        Ok(src) => src,
         Err(e) => {
-            let msg = format!("cannot open {path_s} ({e})");
-            Ok(Err(Value::Str(vm.heap.intern(msg.as_bytes()))))
+            let msg = format!("cannot open {shown}: {}", os_error_text(&e));
+            return Err(Value::Str(vm.heap.intern(msg.as_bytes())));
+        }
+    };
+    let src = crate::frontend::lexer::Lexer::strip_shebang_bom(&src);
+    // PUC `luaL_loadfilex`: when a `#` comment line precedes a binary
+    // chunk, the leading line-terminator left by the comment skip is
+    // dropped so undump sees a clean `\x1bLua…` head (files.lua :594).
+    let src: &[u8] = match src {
+        [b'\n', rest @ ..] | [b'\r', b'\n', rest @ ..] | [b'\r', rest @ ..]
+            if rest.first() == Some(&0x1b) =>
+        {
+            rest
+        }
+        _ => src,
+    };
+    // `checkmode` (ldo.c): the kind of chunk must be allowed by the mode.
+    let binary = crate::vm::dump::is_binary_chunk(src);
+    if let Some(mode) = mode
+        && !mode.contains(if binary { &b'b' } else { &b't' })
+    {
+        let kind = if binary { "binary" } else { "text" };
+        let msg = format!(
+            "attempt to load a {kind} chunk (mode is '{}')",
+            String::from_utf8_lossy(mode)
+        );
+        return Err(Value::Str(vm.heap.intern(msg.as_bytes())));
+    }
+    match vm.load(src, &chunkname) {
+        Ok(cl) => Ok(Value::Closure(cl)),
+        Err(e) => {
+            // the parser positions its message with `luaO_chunkid`
+            let mut msg = crate::vm::lib_debug::chunk_id(&chunkname);
+            msg.extend_from_slice(format!(":{}: ", e.line).as_bytes());
+            msg.extend_from_slice(&e.msg);
+            Err(Value::Str(vm.heap.intern(&msg)))
         }
     }
 }
 
+/// C `strerror` for an OS error: Rust renders it as
+/// "<strerror text> (os error N)"; PUC prints the text alone.
+fn os_error_text(e: &std::io::Error) -> String {
+    let full = e.to_string();
+    match (e.raw_os_error(), full.rfind(" (os error ")) {
+        (Some(_), Some(at)) => full[..at].to_string(),
+        _ => full,
+    }
+}
+
+/// `loadfile([filename [, mode [, env]]])`; 5.1 takes the filename only.
 fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    match load_path(vm, fs, nargs)? {
+    use crate::version::LuaVersion;
+    use crate::vm::argcheck::{self, Args};
+    let a = Args::new(fs, nargs);
+    let name = argcheck::opt_string(vm, a, 0)?;
+    let mode = if vm.version() >= LuaVersion::Lua52 {
+        argcheck::opt_string(vm, a, 1)?
+    } else {
+        None
+    };
+    // 5.5 `getMode`: Lua code cannot ask for a fixed-buffer ('B') chunk.
+    if vm.version() >= LuaVersion::Lua55 && mode.is_some_and(|m| m.as_bytes().contains(&b'B')) {
+        return Err(arg_error(vm, 2, "invalid mode"));
+    }
+    match load_path(
+        vm,
+        name.as_ref().map(|n| n.as_bytes()),
+        mode.as_ref().map(|m| m.as_bytes()),
+    ) {
         Ok(Value::Closure(cl)) => {
-            // PUC: `loadfile(filename, mode, env)` overrides upvalue 0 (the
-            // chunk's `_ENV`) with the env table — same convention as `load`.
-            if nargs >= 3 {
-                let env = vm.nat_arg(fs, nargs, 2);
+            // `load_aux`: a given env (even nil) becomes the first upvalue,
+            // when the function has one.
+            if vm.version() >= LuaVersion::Lua52 && !a.is_none(2) && !cl.upvals().is_empty() {
+                let env = a.get(vm, 2);
                 let uv = vm.heap.new_upvalue(crate::runtime::UpvalState::Closed(env));
                 // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 unsafe { cl.as_mut() }.upvals_mut()[0] = uv;
@@ -1958,20 +1992,17 @@ fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
 }
 
+/// `dofile([filename])`: a load failure is raised as is (`lua_error`, no
+/// position added).
 fn nat_dofile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    match load_path(vm, fs, nargs)? {
+    use crate::vm::argcheck::{self, Args};
+    let name = argcheck::opt_string(vm, Args::new(fs, nargs), 0)?;
+    match load_path(vm, name.as_ref().map(|n| n.as_bytes()), None) {
         Ok(f) => {
             let results = vm.call_value(f, &[])?;
             Ok(vm.nat_return(fs, &results))
         }
-        Err(msg) => Err(raise_str(vm, &vm_text(vm, msg))),
-    }
-}
-
-fn vm_text(_vm: &Vm, v: Value) -> String {
-    match v {
-        Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-        _ => format!("(error object is a {} value)", v.type_name()),
+        Err(msg) => Err(LuaError(msg)),
     }
 }
 
