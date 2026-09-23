@@ -2736,7 +2736,10 @@ impl<'a> Compiler<'a> {
             } else {
                 None
             };
-        for (i, plan) in plans.into_iter().enumerate() {
+        // PUC `restassign` stores on the way back out of its recursion: the
+        // last target first. The order is visible through `__newindex` and
+        // when a target repeats (`a, a = 1, 2` leaves 1).
+        for (i, plan) in plans.into_iter().enumerate().rev() {
             let vreg = alt_vreg.unwrap_or(base + i as u32);
             match plan {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
