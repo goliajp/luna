@@ -59,6 +59,11 @@ jobs:
           echo "PUC_LUA_52=/tmp/puc-multi/lua-5.2.4/src/lua" >> "$GITHUB_ENV"
           echo "PUC_LUA_53=/tmp/puc-multi/lua-5.3.6/src/lua" >> "$GITHUB_ENV"
           echo "PUC_LUA_54=/tmp/puc-multi/lua-5.4.9/src/lua" >> "$GITHUB_ENV"
+          # The same builds' compilers, for the bytecode half of the diff.
+          echo "PUC_LUAC_51=/tmp/puc-multi/lua-5.1.5/src/luac" >> "$GITHUB_ENV"
+          echo "PUC_LUAC_52=/tmp/puc-multi/lua-5.2.4/src/luac" >> "$GITHUB_ENV"
+          echo "PUC_LUAC_53=/tmp/puc-multi/lua-5.3.6/src/luac" >> "$GITHUB_ENV"
+          echo "PUC_LUAC_54=/tmp/puc-multi/lua-5.4.9/src/luac" >> "$GITHUB_ENV"
 
       - name: Show dialect interpreter versions
         # v3.1 W2: the 5.4 pin is exact, like 5.5's below. A patch
@@ -66,6 +71,7 @@ jobs:
         # edit here, never a side effect of the download.
         run: |
           $PUC_LUA_51 -v && $PUC_LUA_52 -v && $PUC_LUA_53 -v && $PUC_LUA_54 -v
+          $PUC_LUAC_51 -v && $PUC_LUAC_52 -v && $PUC_LUAC_53 -v && $PUC_LUAC_54 -v
           GOT=$($PUC_LUA_54 -v 2>&1)
           case "$GOT" in
             "Lua 5.4.9"*) echo "PUC 5.4 pin OK: $GOT" ;;
@@ -101,15 +107,18 @@ jobs:
           sudo make install INSTALL_TOP=/usr/local
           echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
           echo "PUC_LUA_55=/usr/local/bin/lua" >> "$GITHUB_ENV"
+          echo "PUC_LUAC_55=/usr/local/bin/luac" >> "$GITHUB_ENV"
 
       - name: Assert the 5.5 interpreter is exactly 5.5.1
         run: |
           set -euo pipefail
-          GOT=$(/usr/local/bin/lua -v 2>&1)
-          case "$GOT" in
-            "Lua 5.5.1"*) echo "PUC 5.5 pin OK: $GOT" ;;
-            *) echo "::error::expected Lua 5.5.1, got: $GOT"; exit 1 ;;
-          esac
+          for bin in /usr/local/bin/lua /usr/local/bin/luac; do
+            GOT=$($bin -v 2>&1)
+            case "$GOT" in
+              "Lua 5.5.1"*) echo "PUC 5.5 pin OK ($bin): $GOT" ;;
+              *) echo "::error::expected Lua 5.5.1 from $bin, got: $GOT"; exit 1 ;;
+            esac
+          done
 
       - name: Show PUC version
         run: $PUC_LUA -v
@@ -130,4 +139,19 @@ jobs:
         # via luna's Vm::eval, normalizes both outputs, and
         # asserts byte-equality. Failures dump both outputs +
         # the normalized diff for triage.
+        #
+        # It then repeats the corpus as bytecode: each fixture compiled
+        # by its dialect's luac, run on PUC and loaded into luna.
+        # LUNA_DIFF_PUC_REQUIRE_ALL makes a missing interpreter or luac
+        # fail the run; without it the test skips that dialect, which on
+        # this job would pass a check that never ran.
+        env:
+          LUNA_DIFF_PUC_REQUIRE_ALL: "1"
         run: cargo test --release -p luna-core --test diff_puc -- --nocapture
+
+      - name: cargo test --release -p luna-jit --test puc_bytecode_jit
+        # The same bytecode corpus on a JIT-equipped Vm, compared with
+        # luna's interpreter on the same chunks.
+        env:
+          LUNA_DIFF_PUC_REQUIRE_ALL: "1"
+        run: cargo test --release -p luna-jit --test puc_bytecode_jit -- --nocapture
