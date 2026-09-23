@@ -5622,6 +5622,39 @@ pub fn lower_trace_into_named<M: Module>(
         });
     }
 
+    // Whether each math fold's field has been checked in this dispatch.
+    // Nothing in the trace can reassign `math.<fn>` unless it stores a
+    // field of that name or `math` itself, or stores under a key it does
+    // not know (SetTable); calls end the trace and the table helpers
+    // deopt on `__newindex`. Without such a store one check per dispatch
+    // covers every iteration.
+    let fold_check_once = !record.ops[..effective_end].iter().any(|rop| {
+        let key = |k: u32| match head_proto.consts.get(k as usize) {
+            Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
+            _ => None,
+        };
+        match rop.inst.op() {
+            Op::SetTable => true,
+            // the key is K[B] for both
+            Op::SetField | Op::SetTabUp => match key(rop.inst.b()) {
+                Some(name) => {
+                    name == b"math" || math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
+                }
+                None => true,
+            },
+            _ => false,
+        }
+    });
+    let fold_checked: Vec<Variable> = math_folds
+        .iter()
+        .map(|_| {
+            let v = bcx.declare_var(types::I64);
+            let zero = bcx.ins().iconst(types::I64, 0);
+            bcx.def_var(v, zero);
+            v
+        })
+        .collect();
+
     let body_loop = bcx.create_block();
     bcx.ins().jump(body_loop, &[]);
     bcx.switch_to_block(body_loop);
@@ -5979,7 +6012,8 @@ pub fn lower_trace_into_named<M: Module>(
             if let Some(fold) = fold {
                 // The fold stands for the library function; leave the
                 // trace at the GetTabUp, before anything of the call
-                // has run, when `math.<fn>` holds something else.
+                // has run, when `math.<fn>` holds something else (checked
+                // once per dispatch when `fold_check_once`).
                 if fold.start_idx == i {
                     let math_key = head_proto.consts[record.ops[i].inst.c() as usize];
                     let name_key = head_proto.consts[record.ops[i + 1].inst.c() as usize];
@@ -5990,6 +6024,21 @@ pub fn lower_trace_into_named<M: Module>(
                     else {
                         unreachable!("the fold matcher took both keys as strings");
                     };
+                    let checked_var = math_folds
+                        .iter()
+                        .position(|f| f.start_idx == i)
+                        .map(|k| fold_checked[k])
+                        .expect("fold is in math_folds");
+                    let check_blk = bcx.create_block();
+                    let done_blk = bcx.create_block();
+                    if fold_check_once {
+                        let done = bcx.use_var(checked_var);
+                        bcx.ins().brif(done, done_blk, &[], check_blk, &[]);
+                    } else {
+                        bcx.ins().jump(check_blk, &[]);
+                    }
+                    bcx.switch_to_block(check_blk);
+                    bcx.seal_block(check_blk);
                     let m = emit_str_key_arg(
                         module,
                         &mut bcx,
@@ -6008,6 +6057,11 @@ pub fn lower_trace_into_named<M: Module>(
                     let call = bcx.ins().call(check_ref, &[m, k]);
                     let is_library = bcx.inst_results(call)[0];
                     guard!(is_library, i, rop.pc);
+                    let one = bcx.ins().iconst(types::I64, 1);
+                    bcx.def_var(checked_var, one);
+                    bcx.ins().jump(done_blk, &[]);
+                    bcx.switch_to_block(done_blk);
+                    bcx.seal_block(done_blk);
                 }
                 match fold.kind {
                     FoldKind::Libm1 if fold.start_idx == i => {
