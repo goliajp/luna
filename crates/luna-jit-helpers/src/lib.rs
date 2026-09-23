@@ -423,6 +423,88 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
     unsafe { raw.zero as i64 }
 }
 
+/// Trace-JIT table reads that check what they read. The trace types a
+/// read's result from how the next ops use it (arithmetic → Int, indexing
+/// → Table, ...) and compiles the rest of the trace for that type. These
+/// variants return `1` and write the payload through `out` only when the
+/// value has tag `want_tag` and the table has no metatable (whose
+/// `__index` the helper would bypass); otherwise they return `0` and the
+/// caller side-exits at the reading op, so the interpreter performs it.
+unsafe fn checked_read(v: luna_core::runtime::Value, want_tag: i64, out: *mut i64) -> i64 {
+    let (tag, raw) = v.unpack();
+    if tag as i64 != want_tag {
+        return 0;
+    }
+    // SAFETY: `out` is a stack slot of the calling trace, valid for one
+    // i64 write; `raw` was just unpacked from a live Value.
+    unsafe { *out = raw.zero as i64 };
+    1
+}
+
+/// `t[key]` with an integer key; see [`checked_read`].
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_int_checked(
+    t: i64,
+    key: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        return 0;
+    }
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get_int(key), want_tag, out) }
+}
+
+/// `t[key]` with an interned string key; see [`checked_read`].
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_field_checked(
+    t: i64,
+    key_ptr: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        return 0;
+    }
+    let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
+        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get(luna_core::runtime::Value::Str(key)), want_tag, out) }
+}
+
+/// `upvals[upval_idx][key]` (a global read through `_ENV`); see
+/// [`checked_read`]. An upvalue that is not a plain table also fails.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_op_get_tab_up_checked(
+    upval_idx: i64,
+    key_ptr: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: called only from Cranelift-emitted JIT code; `enter_jit(vm, Some(cl))` pinned JIT_CL for the dispatch window.
+    let cl = unsafe { current_jit_closure() };
+    let luna_core::runtime::Value::Table(g) = vm.upval_get(cl, upval_idx as u32) else {
+        return 0;
+    };
+    if g.metatable().is_some() {
+        return 0;
+    }
+    let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
+        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get(luna_core::runtime::Value::Str(key)), want_tag, out) }
+}
+
 /// P12-S6-A2 — write `Value::Nil` to `t[key]` (Int key). Used by
 /// trace JIT when a SetList/SetI/SetTable's source register is a
 /// `RegKind::Nil` (e.g. Lua's `local t = {nil, nil}` table
