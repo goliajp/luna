@@ -4314,12 +4314,12 @@ impl Vm {
                     if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
                         return self.begin_xpcall(func_slot, nargs, nresults, from_c);
                     }
-                    // pairs(t) with a __pairs metamethod calls it yieldably (PUC
-                    // luaB_pairs); without one, fall through to the plain native.
-                    // 5.1 has no `__pairs`.
+                    // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
+                    // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
+                    // lua_call, and 5.1 has no `__pairs`: the native handles those.
                     if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn)
                         && nargs >= 1
-                        && self.version >= LuaVersion::Lua52
+                        && self.version >= LuaVersion::Lua54
                     {
                         let arg = self.stack[(func_slot + 1) as usize];
                         if !self.get_mm(arg, Mm::Pairs).is_nil() {
@@ -9603,7 +9603,9 @@ impl Vm {
     pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
-            return match self.call_mm1(mm, &[v])? {
+            // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
+            let r = self.call_noyield(mm, &[v])?;
+            return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
                 r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
                 _ => Err(self.rt_err("'__tostring' must return a string")),
