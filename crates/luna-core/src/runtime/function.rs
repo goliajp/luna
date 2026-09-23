@@ -367,6 +367,11 @@ pub struct Proto {
     /// on the Proto, mirroring the `JitProtoState::Failed`
     /// invariant.
     pub trace_gave_up: std::cell::Cell<bool>,
+    /// Trace heads (pc) whose recordings failed to compile, with the
+    /// number of failures. The hot counters are not reset after a
+    /// recording, so without this every later call or back-edge would
+    /// record and compile the same failing trace again.
+    pub(crate) trace_compile_failures: crate::jit::send_compat::TRefLock<Vec<(u32, u8)>>,
     /// P12-S2 — compiled trace cache for this Proto. A successful
     /// `compile_trace(record)` (S2.B) parks its `CompiledTrace` here;
     /// `Vm::run`'s S3 dispatcher (next phase) iterates this on each

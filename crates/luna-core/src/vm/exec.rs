@@ -4254,7 +4254,8 @@ impl Vm {
                             return Ok(true);
                         }
                         let call_already_cached =
-                            proto.traces.borrow().iter().any(|t| t.head_pc == 0);
+                            proto.traces.borrow().iter().any(|t| t.head_pc == 0)
+                                || trace_head_abandoned(proto, 0);
                         if c >= self.jit.call_hot_threshold
                             && self.jit.active_trace.is_none()
                             && !call_already_cached
@@ -6745,6 +6746,7 @@ impl Vm {
                                 }
                                 None => {
                                     self.jit.counters.compile_failed += 1;
+                                    note_trace_compile_failure(head_proto, closed_record.head_pc);
                                     self.jit
                                         .counters
                                         .compile_failed_reasons
@@ -8126,6 +8128,7 @@ impl Vm {
                             true
                         } else {
                             proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
+                                || trace_head_abandoned(proto, target_pc)
                         };
                         if c >= self.jit.trace_hot_threshold
                             && self.jit.active_trace.is_none()
@@ -10288,4 +10291,26 @@ impl Vm {
         }
         out
     }
+}
+
+/// Recordings of one trace head that may fail to compile before the head
+/// is no longer recorded (LuaJIT likewise blacklists a trace start after
+/// repeated failures). A few tries, since a later recording can see
+/// different register kinds.
+const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
+
+fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
+    let mut failures = proto.trace_compile_failures.borrow_mut();
+    match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
+        Some((_, n)) => *n = n.saturating_add(1),
+        None => failures.push((head_pc, 1)),
+    }
+}
+
+fn trace_head_abandoned(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) -> bool {
+    proto
+        .trace_compile_failures
+        .borrow()
+        .iter()
+        .any(|&(pc, n)| pc == head_pc && n >= MAX_TRACE_COMPILE_FAILURES)
 }
