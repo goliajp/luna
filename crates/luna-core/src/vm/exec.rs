@@ -7591,7 +7591,19 @@ impl Vm {
                         // hits always take the general path —
                         // their per-side-exit shapes aren't
                         // pre-classified yet.
-                        let fast_path_taken = if using_global_exit_tags {
+                        // A generic-for exit whose TForCall wrote the loop
+                        // variables to the stack with tags the trace did not
+                        // compile for: leave those slots as they are.
+                        let keep_tfor =
+                            if decode_body & crate::jit::trace_types::EXIT_KEEP_TFOR_VARS != 0 {
+                                let call = cl.proto.code[cont_pc as usize - 1];
+                                debug_assert!(matches!(call.op(), crate::vm::isa::Op::TForCall));
+                                let first = call.a() as usize + 4;
+                                first..first + call.c() as usize
+                            } else {
+                                0..0
+                            };
+                        let fast_path_taken = if using_global_exit_tags && keep_tfor.is_empty() {
                             match global_tag_res_kind {
                                 crate::jit::trace::TagResKind::AllUntouched => {
                                     // No-op: vm.stack already
@@ -7616,6 +7628,9 @@ impl Vm {
                         };
                         if !fast_path_taken {
                             for i in 0..slot_count {
+                                if keep_tfor.contains(&i) {
+                                    continue;
+                                }
                                 let tag = match exit_tags_for_pc[i] {
                                     crate::jit::trace::ExitTag::Untouched => {
                                         if i < max_stack {

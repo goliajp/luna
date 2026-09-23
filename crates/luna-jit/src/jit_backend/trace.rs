@@ -8629,9 +8629,12 @@ pub fn lower_trace_into_named<M: Module>(
                 // = Nil, then store back + return tforloop.pc + 1.
                 bcx.switch_to_block(nil_exit_blk);
                 bcx.seal_block(nil_exit_blk);
+                // Every loop variable restores as nil: the key is nil, and
+                // the value slots hold what the iterator's last call left
+                // (nil in the helper path), which the loop no longer reads.
                 let mut nil_snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
-                if a + 4 < nil_snapshot.len() {
-                    nil_snapshot[a + 4] = RegKind::Nil;
+                for k in (a + 4)..(a + 4 + nvars).min(nil_snapshot.len()) {
+                    nil_snapshot[k] = RegKind::Nil;
                 }
                 let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
                 let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
@@ -8664,17 +8667,20 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.ins()
                     .brif(same_kinds, continue_blk, &[], deopt_blk, &[]);
 
-                // Deopt: unsupported iter return kind. Store back +
-                // return TForLoop.pc so the interp re-executes the
-                // back-edge in the slow path.
+                // Deopt: the next key or value has another kind than the
+                // body was compiled for. Store back + return TForLoop.pc
+                // so the interp re-executes the back-edge.
                 bcx.switch_to_block(deopt_blk);
                 bcx.seal_block(deopt_blk);
-                emit_store_back_and_return_pc(
+                // The helper already wrote the loop variables to the stack
+                // with their tags, which are not the ones the registers
+                // were compiled for; the dispatcher must leave them there.
+                emit_store_back_and_return(
                     &mut bcx,
                     caller_regs,
                     &store_mask,
                     reg_state,
-                    rop.pc,
+                    (luna_core::jit::trace_types::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
                     flush_ctx.as_ref(),
                     0i64,
                     trace_fn_sig_ref,

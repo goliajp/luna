@@ -402,3 +402,44 @@ fn math_function_reassigned_between_dispatches() {
         assert_eq!(same(v, src), "1490 45160", "{v:?}");
     }
 }
+
+/// Run `src` on a Vm that records traces after one back-edge or call and
+/// compare with the interpreter.
+fn same_hot(v: LuaVersion, src: &str) -> String {
+    let (interp, _) = run(v, src, false);
+    let mut vm = luna_jit::new_with_jit(v);
+    vm.jit.trace_hot_threshold = 1;
+    vm.jit.call_hot_threshold = 1;
+    let jit = match vm.eval(src) {
+        Ok(r) => match r.first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{other:?}"),
+        },
+        Err(e) => format!("error: {}", vm.error_text(&e)),
+    };
+    assert_eq!(jit, interp, "{v:?}");
+    assert!(
+        vm.trace_dispatched_count() > 0,
+        "{v:?}: no trace dispatched"
+    );
+    interp
+}
+
+/// When the next value has another kind than the loop body was compiled
+/// for, the trace leaves at the TForLoop; the dispatcher then re-tagged
+/// the helper's new value with the old kind.
+#[test]
+fn generic_for_value_changing_kind() {
+    let src = r#"
+        local r = {}
+        for k, v in pairs({10, 20, 30, "x", "y", 60, 70, 80}) do r[#r + 1] = v end
+        local out = {}
+        for i = 1, #r do out[i] = type(r[i]) .. ":" .. tostring(r[i]) end
+        return table.concat(out, ",")"#;
+    for v in INT_DIALECTS {
+        assert_eq!(
+            same_hot(v, src),
+            "number:10,number:20,number:30,string:x,string:y,number:60,number:70,number:80"
+        );
+    }
+}
