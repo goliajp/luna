@@ -88,7 +88,6 @@ pub(crate) fn check_str(
         v => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("string expected, got {}", v.type_name()),
         )),
     }
@@ -108,21 +107,16 @@ fn opt_int(
         Value::Nil => Ok(default),
         Value::Int(x) => Ok(x),
         Value::Float(f) => crate::runtime::value::f2i_exact(f)
-            .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
+            .ok_or_else(|| arg_error(vm, i + 1, "number has no integer representation")),
         Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
             Some(Num::Int(x)) => Ok(x),
             Some(Num::Float(f)) => crate::runtime::value::f2i_exact(f)
-                .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
-            None => Err(arg_error(vm, i + 1, who, "number expected, got string")),
+                .ok_or_else(|| arg_error(vm, i + 1, "number has no integer representation")),
+            None => Err(arg_error(vm, i + 1, "number expected, got string")),
         },
         v => {
             let tn = vm.obj_typename(v);
-            Err(arg_error(
-                vm,
-                i + 1,
-                who,
-                &format!("number expected, got {tn}"),
-            ))
+            Err(arg_error(vm, i + 1, &format!("number expected, got {tn}")))
         }
     }
 }
@@ -228,7 +222,6 @@ pub(crate) fn check_int_arg(
         None => Err(arg_error(
             vm,
             i + 1,
-            who,
             &format!("number expected, got {}", v.type_name()),
         )),
     }
@@ -246,7 +239,6 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 3,
-                "rep",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -308,7 +300,7 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     for i in 0..nargs {
         let c = vm.int_from(vm.nat_arg(fs, nargs, i), "use as a character code")?;
         if !(0..=255).contains(&c) {
-            return Err(arg_error(vm, i + 1, "char", "value out of range"));
+            return Err(arg_error(vm, i + 1, "value out of range"));
         }
         out.push(c as u8);
     }
@@ -480,7 +472,6 @@ fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 3,
-                "gsub",
                 &format!("string/function/table expected, got {}", v.type_name()),
             ));
         }
@@ -1118,7 +1109,7 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             ));
         }
         if argi >= nargs && conv != b'%' {
-            return Err(arg_error(vm, argi + 1, "format", "no value"));
+            return Err(arg_error(vm, argi + 1, "no value"));
         }
         let arg = vm.nat_arg(fs, nargs, argi);
         argi += 1;
@@ -1162,17 +1153,13 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                             Value::Int(i) => Ok(i),
                             Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
                                 Some(i) => Ok(i),
-                                None => Err(arg_error(
-                                    vm,
-                                    argi,
-                                    "format",
-                                    "number has no integer representation",
-                                )),
+                                None => {
+                                    Err(arg_error(vm, argi, "number has no integer representation"))
+                                }
                             },
                             v => Err(arg_error(
                                 vm,
                                 argi,
-                                "format",
                                 &format!("number expected, got {}", v.type_name()),
                             )),
                         }
@@ -1217,17 +1204,13 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                         Value::Int(i) => Ok(i),
                         Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
                             Some(i) => Ok(i),
-                            None => Err(arg_error(
-                                vm,
-                                argi,
-                                "format",
-                                "number has no integer representation",
-                            )),
+                            None => {
+                                Err(arg_error(vm, argi, "number has no integer representation"))
+                            }
                         },
                         v => Err(arg_error(
                             vm,
                             argi,
-                            "format",
                             &format!("number expected, got {}", v.type_name()),
                         )),
                     }
@@ -1269,14 +1252,11 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     Value::Float(n) => n,
                     Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true)
                         .map(|n| n.as_f64())
-                        .ok_or_else(|| {
-                            arg_error(vm, argi, "format", "number expected, got string")
-                        })?,
+                        .ok_or_else(|| arg_error(vm, argi, "number expected, got string"))?,
                     v => {
                         return Err(arg_error(
                             vm,
                             argi,
-                            "format",
                             &format!("number expected, got {}", v.type_name()),
                         ));
                     }
@@ -1341,7 +1321,7 @@ fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                 // spec is validated against the string flag set.
                 if form.len() > 2 {
                     if bytes.contains(&0) {
-                        return Err(arg_error(vm, argi, "format", "string contains zeros"));
+                        return Err(arg_error(vm, argi, "string contains zeros"));
                     }
                     checkformat(vm, &form, b"-", true)?;
                 }

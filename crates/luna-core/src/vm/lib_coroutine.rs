@@ -43,12 +43,7 @@ fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         } else {
             vm.nat_arg(fs, nargs, 0).type_name().to_string()
         };
-        return Err(arg_error(
-            vm,
-            1,
-            "create",
-            &format!("function expected, got {got}"),
-        ));
+        return Err(arg_error(vm, 1, &format!("function expected, got {got}")));
     }
     let co = vm.new_coro(body);
     Ok(vm.nat_return(fs, &[Value::Coro(co)]))
@@ -63,7 +58,7 @@ fn thread_expected(vm: &mut Vm, fs: u32, nargs: u32, who: &str) -> LuaError {
     } else {
         vm.nat_arg(fs, nargs, 0).type_name().to_string()
     };
-    arg_error(vm, 1, who, &format!("thread expected, got {got}"))
+    arg_error(vm, 1, &format!("thread expected, got {got}"))
 }
 
 fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -148,7 +143,7 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let body = vm.nat_arg(fs, nargs, 0);
     if !matches!(body, Value::Closure(_) | Value::Native(_)) {
-        return Err(arg_error(vm, 1, "wrap", "function expected"));
+        return Err(arg_error(vm, 1, "function expected"));
     }
     let co = vm.new_coro(body);
     let f = vm.native_with(co_wrapped, Box::new([Value::Coro(co)]));

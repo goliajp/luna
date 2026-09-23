@@ -83,15 +83,10 @@ fn check_num(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<Num,
         Value::Int(x) => Ok(Num::Int(x)),
         Value::Float(x) => Ok(Num::Float(x)),
         Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true)
-            .ok_or_else(|| arg_error(vm, i + 1, who, "number expected, got string")),
+            .ok_or_else(|| arg_error(vm, i + 1, "number expected, got string")),
         v => {
             let tn = vm.obj_typename(v);
-            Err(arg_error(
-                vm,
-                i + 1,
-                who,
-                &format!("number expected, got {tn}"),
-            ))
+            Err(arg_error(vm, i + 1, &format!("number expected, got {tn}")))
         }
     }
 }
@@ -104,7 +99,7 @@ fn check_int(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<i64,
     match check_num(vm, fs, nargs, i, who)? {
         Num::Int(x) => Ok(x),
         Num::Float(f) => crate::runtime::value::f2i_exact(f)
-            .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
+            .ok_or_else(|| arg_error(vm, i + 1, "number has no integer representation")),
     }
 }
 
@@ -247,7 +242,7 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = match (a, b) {
         (Num::Int(a), Num::Int(b)) => {
             if b == 0 {
-                return Err(arg_error(vm, 2, "fmod", "zero"));
+                return Err(arg_error(vm, 2, "zero"));
             }
             // C fmod truncates (unlike the % operator's floor semantics)
             Value::Int(a.wrapping_rem(b))
@@ -365,7 +360,7 @@ fn m_random(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         _ => return Err(raise_str(vm, "wrong number of arguments")),
     };
     if lo > hi {
-        return Err(arg_error(vm, nargs.min(2), "random", "interval is empty"));
+        return Err(arg_error(vm, nargs.min(2), "interval is empty"));
     }
     // PUC 5.3 `math.random`: bounds the interval by `up <= MAXINTEGER + low`
     // (lmathlib.c). 5.4 rebuilt random on a 64-bit RNG and dropped the
@@ -374,7 +369,7 @@ fn m_random(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // PUC condition keeps both the success and the :819+ failure cases.
     if vm.version() <= crate::version::LuaVersion::Lua53 && lo < 0 && hi > i64::MAX.wrapping_add(lo)
     {
-        return Err(arg_error(vm, nargs.min(2), "random", "interval too large"));
+        return Err(arg_error(vm, nargs.min(2), "interval too large"));
     }
     // PUC project(): uniform in [0, range] by rejection
     let range = (hi as u64).wrapping_sub(lo as u64);

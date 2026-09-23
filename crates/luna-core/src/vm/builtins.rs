@@ -134,7 +134,7 @@ pub(crate) fn check_table_at(
         Value::Table(t) => Ok(t),
         v => {
             let got = vm.obj_typename(v);
-            Err(arg_error(vm, n, who, &format!("table expected, got {got}")))
+            Err(arg_error(vm, n, &format!("table expected, got {got}")))
         }
     }
 }
@@ -145,7 +145,7 @@ fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // "bad argument #1 to 'assert' (value expected)" rather than the plain
     // "assertion failed!" string. errors.lua :672 looks for "value expected".
     if nargs == 0 {
-        return Err(arg_error(vm, 1, "assert", "value expected"));
+        return Err(arg_error(vm, 1, "value expected"));
     }
     let v = vm.nat_arg(fs, nargs, 0);
     if v.truthy() {
@@ -290,7 +290,7 @@ fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if nargs == 0 {
-        return Err(arg_error(vm, 1, "tostring", "value expected"));
+        return Err(arg_error(vm, 1, "value expected"));
     }
     let v = vm.nat_arg(fs, nargs, 0);
     // PUC ≤5.2: `tostring(x)` returns whatever `__tostring` returns — even
@@ -513,38 +513,58 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 // ---- shared helpers for the library modules ----
 
-/// PUC luaL_argerror shape: bad argument #n to 'who' (extra). When the running
-/// function was invoked as a method (`obj:m()`), the self argument isn't
-/// counted: a bad `#1` becomes "calling 'm' on bad self". When the running
-/// native was itself called from another native (PUC ar.name == NULL at level
-/// 0, because the level-0 caller is C), the name is qualified via
-/// `pushglobalfuncname` (e.g. `'sort'` → `'table.sort'`).
-pub(crate) fn arg_error(vm: &mut Vm, n: u32, who: &str, extra: &str) -> LuaError {
-    if let Some(("method", name)) = vm.running_call_name() {
-        let n = n - 1; // self is not counted
-        if n == 0 {
-            return raise_str(vm, &format!("calling '{name}' on bad self ({extra})"));
-        }
-        return raise_str(vm, &format!("bad argument #{n} to '{name}' ({extra})"));
-    }
-    // The running native is the topmost on `running_natives`; a nested call
-    // (depth ≥ 2) means the level-0 caller is another native, not Lua —
-    // PUC walks package.loaded to qualify the running function's name.
-    // A pcall/xpcall Cont caller is the same situation (pcall is a C
-    // function in PUC), but lives as a frame, not a running native.
-    let name = if vm.running_natives.len() >= 2 || vm.caller_is_protected_cont() {
-        let target = vm.running_natives.last().expect("nested native").f;
-        vm.pushglobalfuncname(target)
-            .unwrap_or_else(|| who.to_string())
+/// PUC `luaL_argerror`: "bad argument #n to 'name' (extra)".
+///
+/// The name is the one the caller used (`lua_getinfo(L, "n")` at level 0),
+/// so `local f = string.rep; f()` blames 'f'. A method call does not count
+/// the self argument: a bad `#1` there becomes "calling 'm' on bad self".
+/// When the caller gives no name — the native was called by another native
+/// or by pcall, or through an unnamed expression — 5.2+ looks the function
+/// up in `package.loaded` and 5.1 prints '?'.
+pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
+    // A nested native, or a pcall/xpcall continuation directly below, means
+    // the level-0 caller is C, which PUC never names.
+    let called_from_c = vm.running_natives.len() >= 2 || vm.caller_is_protected_cont();
+    let call_name = if called_from_c {
+        None
     } else {
-        who.to_string()
+        vm.running_call_name()
+    };
+    let name = match call_name {
+        Some(("method", name)) => {
+            let n = n - 1; // self is not counted
+            if n == 0 {
+                return raise_str(vm, &format!("calling '{name}' on bad self ({extra})"));
+            }
+            return raise_str(vm, &format!("bad argument #{n} to '{name}' ({extra})"));
+        }
+        Some((_, name)) => name,
+        None => unnamed_native_name(vm),
     };
     raise_str(vm, &format!("bad argument #{n} to '{name}' ({extra})"))
 }
 
+/// `luaL_argerror`'s fallback when `ar.name` is NULL: '?' on 5.1; otherwise
+/// the running native's `package.loaded` name — kept whole on 5.2
+/// (`'_G.tonumber'`), without the `_G.` prefix from 5.3 on — or '?'.
+fn unnamed_native_name(vm: &mut Vm) -> String {
+    if vm.version() == crate::version::LuaVersion::Lua51 {
+        return "?".to_string();
+    }
+    let Some(target) = vm.running_natives.last().map(|nc| nc.f) else {
+        return "?".to_string();
+    };
+    let name = if vm.version() == crate::version::LuaVersion::Lua52 {
+        vm.loaded_funcname(target)
+    } else {
+        vm.pushglobalfuncname(target)
+    };
+    name.unwrap_or_else(|| "?".to_string())
+}
+
 pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if nargs == 0 {
-        return Err(arg_error(vm, 1, "tonumber", "value expected"));
+        return Err(arg_error(vm, 1, "value expected"));
     }
     let v = vm.nat_arg(fs, nargs, 0);
     if nargs < 2 || vm.nat_arg(fs, nargs, 1).is_nil() {
@@ -566,13 +586,12 @@ pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     }
     let base = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as a base")?;
     if !(2..=36).contains(&base) {
-        return Err(arg_error(vm, 2, "tonumber", "base out of range"));
+        return Err(arg_error(vm, 2, "base out of range"));
     }
     let Value::Str(s) = v else {
         return Err(arg_error(
             vm,
             1,
-            "tonumber",
             &format!("string expected, got {}", v.type_name()),
         ));
     };
@@ -688,7 +707,6 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             return Err(arg_error(
                 vm,
                 1,
-                "load",
                 &format!("string expected, got {}", chunk.type_name()),
             ));
         }
@@ -775,7 +793,6 @@ fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "newproxy",
                 &format!("boolean or proxy expected, got {}", v.type_name()),
             ));
         }
@@ -815,7 +832,6 @@ fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 2,
-                "setfenv",
                 &format!("table expected, got {}", v.type_name()),
             ));
         }
@@ -849,18 +865,13 @@ fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             let level = i;
             match vm.lua_closure_at_level(level) {
                 Some(c) => c,
-                None => return Err(arg_error(vm, 1, "setfenv", "invalid level")),
+                None => return Err(arg_error(vm, 1, "invalid level")),
             }
         }
         Value::Float(f) => {
             let i = f as i64;
             if (i as f64) != f {
-                return Err(arg_error(
-                    vm,
-                    1,
-                    "setfenv",
-                    "number has no integer representation",
-                ));
+                return Err(arg_error(vm, 1, "number has no integer representation"));
             }
             if i == 0 {
                 if let Value::Table(t) = env_table {
@@ -871,14 +882,13 @@ fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             let level = i;
             match vm.lua_closure_at_level(level) {
                 Some(c) => c,
-                None => return Err(arg_error(vm, 1, "setfenv", "invalid level")),
+                None => return Err(arg_error(vm, 1, "invalid level")),
             }
         }
         v => {
             return Err(arg_error(
                 vm,
                 1,
-                "setfenv",
                 &format!("number expected, got {}", v.type_name()),
             ));
         }
@@ -924,12 +934,7 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Float(f) => {
             let i = f as i64;
             if (i as f64) != f {
-                return Err(arg_error(
-                    vm,
-                    1,
-                    "getfenv",
-                    "number has no integer representation",
-                ));
+                return Err(arg_error(vm, 1, "number has no integer representation"));
             }
             Some(i)
         }
@@ -937,7 +942,6 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(
                 vm,
                 1,
-                "getfenv",
                 &format!("number expected, got {}", v.type_name()),
             ));
         }
@@ -981,7 +985,7 @@ fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// the line at the tail call (mirrors `lbaselib.c::luaB_warn`).
 pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if nargs == 0 {
-        return Err(arg_error(vm, 1, "warn", "string expected, got no value"));
+        return Err(arg_error(vm, 1, "string expected, got no value"));
     }
     let mut parts: Vec<Vec<u8>> = Vec::with_capacity(nargs as usize);
     for i in 0..nargs {
@@ -992,7 +996,6 @@ pub(crate) fn nat_warn(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                 return Err(arg_error(
                     vm,
                     i + 1u32,
-                    "warn",
                     &format!("string expected, got {}", v.type_name()),
                 ));
             }
@@ -1013,7 +1016,6 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
             return Err(arg_error(
                 vm,
                 1,
-                "collectgarbage",
                 &format!("string expected, got {}", v.type_name()),
             ));
         }
@@ -1147,7 +1149,6 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
                     return Err(arg_error(
                         vm,
                         2,
-                        "collectgarbage",
                         &format!("string expected, got {}", v.type_name()),
                     ));
                 }
@@ -1162,24 +1163,14 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
                 Some(prev) => Value::Int(prev),
                 None => {
                     let n = String::from_utf8_lossy(&name).into_owned();
-                    return Err(arg_error(
-                        vm,
-                        2,
-                        "collectgarbage",
-                        &format!("invalid parameter '{n}'"),
-                    ));
+                    return Err(arg_error(vm, 2, &format!("invalid parameter '{n}'")));
                 }
             }
         }
         // PUC luaL_checkoption: an unrecognized option is an argument error.
         opt => {
             let o = String::from_utf8_lossy(opt).into_owned();
-            return Err(arg_error(
-                vm,
-                1,
-                "collectgarbage",
-                &format!("invalid option '{o}'"),
-            ));
+            return Err(arg_error(vm, 1, &format!("invalid option '{o}'")));
         }
     };
     Ok(vm.nat_return(fs, &[out]))
