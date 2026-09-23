@@ -239,7 +239,12 @@ fn raise(vm: &mut Vm, msg: Value) -> LuaError {
 }
 
 pub(crate) fn raise_str(vm: &mut Vm, msg: &str) -> LuaError {
-    let s = Value::Str(vm.heap.intern(msg.as_bytes()));
+    raise_bytes(vm, msg.as_bytes())
+}
+
+/// `luaL_error` with a message that need not be UTF-8.
+pub(crate) fn raise_bytes(vm: &mut Vm, msg: &[u8]) -> LuaError {
+    let s = Value::Str(vm.heap.intern(msg));
     raise(vm, s)
 }
 

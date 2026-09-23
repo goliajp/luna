@@ -2,6 +2,7 @@
 
 pub(crate) mod argcheck;
 pub mod builtins;
+pub(crate) mod cfmt;
 pub mod dump;
 pub mod error;
 pub mod exec;
@@ -43,6 +44,7 @@ pub mod lib_debug;
 pub(crate) mod lib_gc;
 pub mod lib_math;
 pub mod lib_os_io;
+pub(crate) mod lib_strformat;
 pub mod lib_string;
 pub mod lib_strpack;
 pub mod lib_table;

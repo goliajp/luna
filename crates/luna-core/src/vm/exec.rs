@@ -5411,9 +5411,13 @@ impl Vm {
         if !instr.k() {
             regs.push(instr.c());
         }
+        let no_int = |n: Option<Num>| matches!(n, Some(Num::Float(x)) if crate::runtime::value::f2i_exact(x).is_none());
         for reg in regs {
             let v = self.r(f.base, reg);
-            if matches!(v, Value::Float(x) if crate::runtime::value::f2i_exact(x).is_none()) {
+            // before 5.4 a numeric string is converted first, so "2.5" is
+            // the operand without an integer value
+            let n = self.arith_operand()(v);
+            if no_int(n) {
                 return match crate::vm::objname::getobjname(p, pc - 1, reg) {
                     Some((kind, name)) => format!(" ({kind} '{name}')"),
                     None => String::new(),
@@ -5429,7 +5433,16 @@ impl Vm {
     /// native call), PUC pushes no prefix — match that by looking only at the
     /// topmost frame directly and bailing if it is anything but a Lua frame.
     pub(crate) fn position_prefix(&self) -> Option<String> {
-        let f = self.frames.last().and_then(CallFrame::lua)?;
+        let f = match self.frames.last()? {
+            CallFrame::Lua(f) => f,
+            // a native metamethod runs above the Meta continuation of the
+            // instruction that triggered it: that Lua function is its caller
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Meta(_),
+                ..
+            }) => self.frames.iter().rev().nth(1)?.lua()?,
+            CallFrame::Cont(_) => return None,
+        };
         let proto = f.closure.proto;
         if proto.source.as_bytes().is_empty() {
             return Some(self.stripped_prefix());
@@ -7944,7 +7957,7 @@ impl Vm {
                 Op::Shr => self.arith_rr(inst, base, ArithOp::Shr)?,
                 Op::Unm => {
                     let v = self.r(base, inst.b());
-                    match coerce_num(v) {
+                    match self.unary_operand(v) {
                         Some(Num::Int(i)) => {
                             self.set_r(base, inst.a(), Value::Int(i.wrapping_neg()))
                         }
@@ -7961,9 +7974,11 @@ impl Vm {
                 }
                 Op::BNot => {
                     let v = self.r(base, inst.b());
-                    match coerce_num(v) {
+                    match self.arith_operand()(v) {
                         Some(n) => {
-                            let i = self.int_from_num(n)?;
+                            let Some(i) = int_of(n) else {
+                                return Err(self.no_int_rep_err());
+                            };
                             self.set_r(base, inst.a(), Value::Int(!i));
                         }
                         None => {
@@ -9012,86 +9027,73 @@ impl Vm {
         Ok(())
     }
 
+    /// The number a unary `-` operand stands for: 5.4+ leaves strings to
+    /// the string metatable, 5.3 converts them to floats (PUC `tonumber`).
+    fn unary_operand(&self, v: Value) -> Option<Num> {
+        let n = self.arith_operand()(v);
+        if self.version == LuaVersion::Lua53 && matches!(v, Value::Str(_)) {
+            n.map(|n| Num::Float(n.as_f64()))
+        } else {
+            n
+        }
+    }
+
+    /// How an arithmetic operand becomes a number: 5.4+ takes numbers only
+    /// (strings go to their metatable), 5.3 converts numeric strings, and
+    /// 5.1/5.2, which have only floats, convert them to floats.
+    fn arith_operand(&self) -> fn(Value) -> Option<Num> {
+        if self.version >= LuaVersion::Lua54 {
+            as_number
+        } else if self.version == LuaVersion::Lua53 {
+            coerce_num
+        } else {
+            coerce_num_float
+        }
+    }
+
     /// Fast path for an arithmetic/bitwise op: `Ok(Some(v))` when computed
     /// directly, `Ok(None)` when a metamethod is required (the caller decides
     /// whether to call it synchronously or yieldably).
     fn arith_fast(&mut self, op: ArithOp, l: Value, r: Value) -> Result<Option<Value>, LuaError> {
         use ArithOp::*;
-        match op {
-            BAnd | BOr | BXor | Shl | Shr => {
-                // strings coerce for bitwise too (PUC tointegerns via cvt2num)
-                match (coerce_num(l), coerce_num(r)) {
-                    (Some(a), Some(b)) => {
-                        let to_int = |n: Num| match n {
-                            Num::Int(i) => Some(i),
-                            Num::Float(f) => crate::runtime::value::f2i_exact(f),
-                        };
-                        let (Some(a), Some(b)) = (to_int(a), to_int(b)) else {
-                            // PUC luaG_tointerror: name the offending operand
-                            return Err(self.no_int_rep_err());
-                        };
-                        let v = match op {
-                            BAnd => a & b,
-                            BOr => a | b,
-                            BXor => a ^ b,
-                            Shl => shift_left(a, b),
-                            Shr => shift_left(a, b.wrapping_neg()),
-                            _ => unreachable!(),
-                        };
-                        return Ok(Some(Value::Int(v)));
-                    }
-                    _ => return Ok(None),
-                }
-            }
-            _ => {}
+        // 5.4 moved string->number coercion out of the VM: a string operand
+        // goes to the string metatable's `__add` etc., and bitwise operators
+        // have no string metamethods at all.
+        let num = self.arith_operand();
+        if let BAnd | BOr | BXor | Shl | Shr = op {
+            let (Some(a), Some(b)) = (num(l), num(r)) else {
+                return Ok(None);
+            };
+            let (Some(a), Some(b)) = (int_of(a), int_of(b)) else {
+                // PUC luaG_tointerror: name the offending operand
+                return Err(self.no_int_rep_err());
+            };
+            let v = match op {
+                BAnd => a & b,
+                BOr => a | b,
+                BXor => a ^ b,
+                Shl => shift_left(a, b),
+                Shr => shift_left(a, b.wrapping_neg()),
+                _ => unreachable!(),
+            };
+            return Ok(Some(Value::Int(v)));
         }
-        let (ln, rn) = match (coerce_num(l), coerce_num(r)) {
-            (Some(a), Some(b)) => (a, b),
-            _ => return Ok(None),
+        let (Some(mut ln), Some(mut rn)) = (num(l), num(r)) else {
+            return Ok(None);
         };
-        let v = match (op, ln, rn) {
-            (Add, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_add(b)),
-            (Sub, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_sub(b)),
-            (Mul, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_mul(b)),
-            (IDiv, Num::Int(a), Num::Int(b)) => {
-                if b == 0 {
-                    return Err(self.rt_err("attempt to divide by zero"));
-                }
-                let mut q = a.wrapping_div(b);
-                if (a ^ b) < 0 && q.wrapping_mul(b) != a {
-                    q -= 1;
-                }
-                Value::Int(q)
-            }
-            (Mod, Num::Int(a), Num::Int(b)) => {
-                if b == 0 {
-                    return Err(self.rt_err("attempt to perform 'n%0'"));
-                }
-                let mut m = a.wrapping_rem(b);
-                if m != 0 && (m ^ b) < 0 {
-                    m += b;
-                }
-                Value::Int(m)
-            }
-            (Add, a, b) => Value::Float(a.as_f64() + b.as_f64()),
-            (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
-            (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
-            (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
-            (Pow, a, b) => Value::Float(a.as_f64().powf(b.as_f64())),
-            (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
-            (Mod, a, b) => {
-                let (x, y) = (a.as_f64(), b.as_f64());
-                // PUC luai_nummod: correct fmod's sign without the `m*y`
-                // product, which underflows to 0 for tiny denormals
-                let mut m = x % y;
-                if (m > 0.0 && y < 0.0) || (m < 0.0 && y > 0.0) {
-                    m += y;
-                }
-                Value::Float(m)
-            }
-            _ => unreachable!(),
-        };
-        Ok(Some(v))
+        // PUC 5.3 takes the integer path only when both operands are
+        // integers (`ttisinteger`); a converted string goes through
+        // `tonumber`, which yields a float.
+        if self.version == LuaVersion::Lua53
+            && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
+        {
+            ln = Num::Float(ln.as_f64());
+            rn = Num::Float(rn.as_f64());
+        }
+        match arith_num(op, ln, rn) {
+            Ok(v) => Ok(Some(v)),
+            Err(msg) => Err(self.rt_err(msg)),
+        }
     }
 
     pub(crate) fn int_from(&mut self, v: Value, what: &str) -> Result<i64, LuaError> {
@@ -9102,16 +9104,6 @@ impl Vm {
                 None => Err(self.rt_err("number has no integer representation")),
             },
             v => Err(self.type_err(what, v)),
-        }
-    }
-
-    fn int_from_num(&mut self, n: Num) -> Result<i64, LuaError> {
-        match n {
-            Num::Int(i) => Ok(i),
-            Num::Float(f) => match crate::runtime::value::f2i_exact(f) {
-                Some(i) => Ok(i),
-                None => Err(self.rt_err("number has no integer representation")),
-            },
         }
     }
 
@@ -9141,33 +9133,15 @@ impl Vm {
             let what = if matches!(op, BAnd | BOr | BXor | Shl | Shr) {
                 "perform bitwise operation on"
             } else {
-                // 5.4+ report string-involved arithmetic faults through
-                // lstrlib's string-metatable arithmetic handlers, which
-                // emit the per-op wording `attempt to add a 'string'
-                // with a 'number'` (operands in syntactic order, quoted
-                // type names, no varinfo). Non-string faults (nil+1,
-                // {}+{}) keep the classic VM wording on every dialect —
-                // v2.14 HC.4, probed against stock 5.1.5-5.5.0.
-                if self.version >= crate::version::LuaVersion::Lua54
-                    && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
-                {
-                    let verb = match op {
-                        Add => "add",
-                        Sub => "sub",
-                        Mul => "mul",
-                        Div => "div",
-                        Mod => "mod",
-                        Pow => "pow",
-                        IDiv => "idiv",
-                        BAnd | BOr | BXor | Shl | Shr => unreachable!(),
-                    };
-                    let t1 = self.obj_typename(l);
-                    let t2 = self.obj_typename(r);
-                    return Err(self.rt_err(&format!("attempt to {verb} a '{t1}' with a '{t2}'")));
-                }
                 "perform arithmetic on"
             };
-            let bad = if coerce_num(l).is_none() { l } else { r };
+            // luaG_opinterror blames the first operand that is not a number;
+            // before 5.4 a numeric string counts as one.
+            let bad = if self.arith_operand()(l).is_none() {
+                l
+            } else {
+                r
+            };
             return Err(self.type_err(what, bad));
         }
         Ok(mm)
@@ -9285,8 +9259,14 @@ impl Vm {
         let init = self.r(base, a);
         let limit = self.r(base, a + 1);
         let step = self.r(base, a + 2);
+        // only a real integer init and step make an integer loop; a numeric
+        // string is converted with `tonumber`, to a float (5.3+ forprep)
+        let float_str = |v: Value| match v {
+            Value::Str(_) => as_num(v).map(|n| Num::Float(n.as_f64())),
+            v => as_num(v),
+        };
         let (Some(init_n), Some(limit_n), Some(step_n)) =
-            (as_num(init), as_num(limit), as_num(step))
+            (float_str(init), as_num(limit), float_str(step))
         else {
             // PUC luaG_forerror: "bad 'for' <what> (number expected, got <type>)".
             // PUC checks limit, then step, then initial value.
@@ -9498,6 +9478,12 @@ impl Vm {
         }
     }
 
+    /// Overwrite the i-th argument slot of the running native (the in-place
+    /// conversion `lua_tolstring` performs on a number argument).
+    pub(crate) fn nat_set_arg(&mut self, func_slot: u32, i: u32, v: Value) {
+        self.stack[(func_slot + 1 + i) as usize] = v;
+    }
+
     /// Push the return values of a `NativeFn` and return their count
     /// (analogous to pushing N values then `return N` from a C function).
     /// Public so embedders can author their own natives.
@@ -9685,7 +9671,7 @@ impl Vm {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ArithOp {
+pub(crate) enum ArithOp {
     Add,
     Sub,
     Mul,
@@ -9760,7 +9746,81 @@ fn type_mt_slot(v: Value) -> Option<usize> {
     }
 }
 
-/// Number, or string coerced to number (5.5 default string-arith coercion).
+/// A number operand as-is; strings stay non-numbers (5.4+ `tonumberns`).
+fn as_number(v: Value) -> Option<Num> {
+    match v {
+        Value::Int(i) => Some(Num::Int(i)),
+        Value::Float(f) => Some(Num::Float(f)),
+        _ => None,
+    }
+}
+
+/// Arithmetic (not bitwise) on two numbers, PUC `luaO_rawarith`: integer
+/// results for integer operands except `/` and `^`. The error is the
+/// message of a zero integer divisor.
+pub(crate) fn arith_num(op: ArithOp, ln: Num, rn: Num) -> Result<Value, &'static str> {
+    use ArithOp::*;
+    Ok(match (op, ln, rn) {
+        (Add, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_add(b)),
+        (Sub, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_sub(b)),
+        (Mul, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_mul(b)),
+        (IDiv, Num::Int(a), Num::Int(b)) => {
+            if b == 0 {
+                return Err("attempt to divide by zero");
+            }
+            let mut q = a.wrapping_div(b);
+            if (a ^ b) < 0 && q.wrapping_mul(b) != a {
+                q -= 1;
+            }
+            Value::Int(q)
+        }
+        (Mod, Num::Int(a), Num::Int(b)) => {
+            if b == 0 {
+                return Err("attempt to perform 'n%0'");
+            }
+            let mut m = a.wrapping_rem(b);
+            if m != 0 && (m ^ b) < 0 {
+                m += b;
+            }
+            Value::Int(m)
+        }
+        (Add, a, b) => Value::Float(a.as_f64() + b.as_f64()),
+        (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
+        (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
+        (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
+        (Pow, a, b) => Value::Float(a.as_f64().powf(b.as_f64())),
+        (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
+        (Mod, a, b) => {
+            let (x, y) = (a.as_f64(), b.as_f64());
+            // PUC luai_nummod: correct fmod's sign without the `m*y`
+            // product, which underflows to 0 for tiny denormals
+            let mut m = x % y;
+            if (m > 0.0 && y < 0.0) || (m < 0.0 && y > 0.0) {
+                m += y;
+            }
+            Value::Float(m)
+        }
+        (BAnd | BOr | BXor | Shl | Shr, ..) => unreachable!("bitwise op in arith_num"),
+    })
+}
+
+/// A number's integer value, if it has one.
+fn int_of(n: Num) -> Option<i64> {
+    match n {
+        Num::Int(i) => Some(i),
+        Num::Float(f) => crate::runtime::value::f2i_exact(f),
+    }
+}
+
+/// A number, or a numeric string read as a float (5.1/5.2).
+fn coerce_num_float(v: Value) -> Option<Num> {
+    match v {
+        Value::Str(s) => numeric::str2num(s.as_bytes(), false, true),
+        v => as_number(v),
+    }
+}
+
+/// Number, or string coerced to number (5.3 string-arith coercion).
 fn coerce_num(v: Value) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),
