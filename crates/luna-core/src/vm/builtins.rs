@@ -562,14 +562,10 @@ pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     }
     let v = vm.nat_arg(fs, nargs, 0);
     if nargs < 2 || vm.nat_arg(fs, nargs, 1).is_nil() {
-        // ≤5.2 has no integer subtype, so `tonumber("0xff…")` must return a
-        // Float (PUC's `lua_strx2number` uses a double accumulator). 5.3+
-        // keeps the int parse path so big hex wraps modulo 2^64 (matching
-        // luna's literal lexer).
-        let int_ok = vm.version() >= crate::version::LuaVersion::Lua53;
+        // the dialect's own string conversion (the one arithmetic uses)
         let out = match v {
             Value::Int(_) | Value::Float(_) => v,
-            Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), int_ok, true) {
+            Value::Str(s) => match crate::vm::exec::str_to_num(s.as_bytes(), vm.version()) {
                 Some(crate::numeric::Num::Int(i)) => Value::Int(i),
                 Some(crate::numeric::Num::Float(f)) => Value::Float(f),
                 None => Value::Nil,
