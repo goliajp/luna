@@ -3134,7 +3134,7 @@ fn emit_store_back_and_return_pc(
     emit_store_back_and_return(
         bcx,
         regs,
-        &store_mask,
+        store_mask,
         reg_state,
         i64::from(pc),
         flush_ctx,
@@ -3211,7 +3211,7 @@ fn emit_tagged_exit<M: Module>(
     emit_store_back_and_return(
         bcx,
         regs,
-        &store_mask,
+        store_mask,
         reg_state,
         ret as i64,
         flush_ctx,
