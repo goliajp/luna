@@ -6,6 +6,7 @@
 
 use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::table::Table;
+use crate::runtime::value::Value;
 
 /// Type of the per-host trace adapter stored in [`UserdataPayload::Host`].
 /// Captured at `create_userdata::<T>` time as a monomorphic
@@ -31,6 +32,8 @@ pub struct Userdata {
     /// one-byte read pushback (ungetc) for `file:read("n")`, which must peek one
     /// past the numeral and return it to the stream
     pub(crate) peeked: Option<u8>,
+    /// 5.2/5.3 `lua_getuservalue`/`lua_setuservalue` slot (nil until set)
+    pub(crate) user_value: Value,
     /// User-space write buffer for `FileHandle::File` (PUC's stdio FILE*).
     /// A `:write` only appends here; the buffer is drained to the OS by
     /// `:flush` / `:seek` / `:close` (and before a `:read` on the same handle).
@@ -135,6 +138,7 @@ impl Userdata {
             metatable: None,
             payload,
             peeked: None,
+            user_value: Value::Nil,
             write_buf: Vec::new(),
             writable,
             buf_mode: 0,
@@ -156,6 +160,7 @@ impl Userdata {
         if let Some(mt) = self.metatable {
             m.header(mt.as_ptr() as *mut GcHeader);
         }
+        m.value(self.user_value);
         // Phase TB (v1.3): recurse into the host payload via the
         // captured monomorphic trace adapter. The adapter's body
         // downcasts to the concrete `T` (paired with `type_id` at

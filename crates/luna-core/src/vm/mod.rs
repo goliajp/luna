@@ -2,6 +2,7 @@
 
 pub(crate) mod argcheck;
 pub mod builtins;
+pub(crate) mod callstack;
 pub mod dump;
 pub mod error;
 pub mod exec;
