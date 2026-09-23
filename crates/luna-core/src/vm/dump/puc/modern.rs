@@ -425,10 +425,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 let a = lw.run(i.a(), i.b().max(1))?;
                 lw.emit(Inst::iabc(Op::TailCall, a, i.b(), 0, false));
             }
-            Kind::Return => {
-                let a = lw.run(i.a(), i.b().saturating_sub(1).max(1))?;
-                lw.emit(Inst::iabc(Op::Return, a, i.b(), 0, false));
-            }
+            Kind::Return => lw.ret(i.a(), i.b())?,
             Kind::Return0 => lw.emit(Inst::iabc(Op::Return0, 0, 0, 0, false)),
             Kind::Return1 => {
                 let a = lw.r(i.a())?;
