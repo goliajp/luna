@@ -4,6 +4,7 @@
 
 use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
+use crate::frontend::goto_check::GotoCheck;
 use crate::frontend::lexer::{Lexed, Lexer};
 use crate::frontend::span::Span;
 use crate::frontend::token::{Near, Token, TokenInfo, near_text};
@@ -220,8 +221,9 @@ fn parse_from_source<'s>(
         funcs: vec![FnFlow {
             vararg: true,
             loops: 0,
-            pending_break: None,
         }],
+        gotos: GotoCheck::new(version),
+        last_line: 1,
         upval_chain_51: if version <= LuaVersion::Lua51 {
             vec![FnUvSlot {
                 line_defined: 0,
@@ -231,6 +233,9 @@ fn parse_from_source<'s>(
             Vec::new()
         },
     };
+    if let Some(g) = p.gotos.as_mut() {
+        g.enter_function();
+    }
     let block = p.block()?;
     if p.tok.tok != Token::Eof {
         return Err(p.error_expected("<eof>"));
@@ -255,6 +260,12 @@ struct Parser<'s> {
     /// Per open function (main chunk first): what `...` and `break` are
     /// checked against while parsing, as PUC does.
     funcs: Vec<FnFlow>,
+    /// Gotos (and 5.2-5.4 `break`) are resolved while parsing; see
+    /// [`GotoCheck`].
+    gotos: Option<GotoCheck>,
+    /// PUC `ls->lastline`: where the scanner stood before reading the
+    /// current token, i.e. the line the last consumed token ended on.
+    last_line: u32,
     /// line of the previously consumed token (for the 5.1 ambiguity check)
     prev_line: u32,
     exprs: Vec<Expr>,
@@ -289,9 +300,6 @@ struct FnFlow {
     vararg: bool,
     /// Loops enclosing the current position inside this function.
     loops: u32,
-    /// 5.2–5.4 treat `break` as a goto whose label is never found; the
-    /// error comes when the function closes, naming the first such break.
-    pending_break: Option<u32>,
 }
 
 #[derive(Default)]
@@ -305,6 +313,7 @@ impl<'s> Parser<'s> {
     // ---- token plumbing ----
 
     fn advance(&mut self) -> Result<TokenInfo, SyntaxError> {
+        self.last_line = self.lex.line();
         let next = match self.peeked.take() {
             Some(t) => t,
             None => self.lex.next_token()?,
@@ -479,8 +488,22 @@ impl<'s> Parser<'s> {
         // short blocks; without this the cap fires spuriously).
         let local_snapshot = self.func_local_count.last().expect("func ctx").0;
         let locals_51_snap = self.snap_locals_51();
+        self.goto_step(|g| {
+            g.enter_block(false);
+            Ok(())
+        })?;
         let mut stats = Vec::new();
         loop {
+            // labels wait for the no-op statements that follow them
+            if self.gotos.as_ref().is_some_and(GotoCheck::has_open_labels)
+                && !matches!(self.tok.tok, Token::Semi | Token::DColon)
+            {
+                let last = matches!(
+                    self.tok.tok,
+                    Token::Else | Token::Elseif | Token::End | Token::Eof
+                );
+                self.goto_step(|g| g.finish_labels(last))?;
+            }
             if self.block_follow() {
                 break;
             }
@@ -503,6 +526,7 @@ impl<'s> Parser<'s> {
                 self.accept(Token::Semi)?;
             }
         }
+        self.goto_step(GotoCheck::leave_block)?;
         self.leave();
         self.func_local_count.last_mut().expect("func ctx").0 = local_snapshot;
         self.restore_locals_51(locals_51_snap);
@@ -568,6 +592,8 @@ impl<'s> Parser<'s> {
             Token::DColon => {
                 self.advance()?;
                 let name = self.expect_name()?;
+                let text = name.text.clone();
+                self.goto_step(|g| g.label_before_close(&text, start_line))?;
                 self.expect(Token::DColon, "::")?;
                 Some(self.push_stat(Stat::Label(name)))
             }
@@ -577,8 +603,18 @@ impl<'s> Parser<'s> {
                 Some(self.push_stat(Stat::Break { line }))
             }
             Token::Goto => {
+                // 5.4 reads the goto's line after skipping the keyword, 5.5
+                // takes the statement's
+                let mut line = self.lex.line();
                 self.advance()?;
+                if self.version >= LuaVersion::Lua55 {
+                    line = start_line;
+                } else if self.version >= LuaVersion::Lua54 {
+                    line = self.lex.line();
+                }
                 let name = self.expect_name()?;
+                let text = name.text.clone();
+                self.goto_step(|g| g.goto_stat(&text, line))?;
                 Some(self.push_stat(Stat::Goto(name)))
             }
             _ => Some(self.expr_stat()?),
@@ -598,48 +634,70 @@ impl<'s> Parser<'s> {
     }
 
     /// Consume `break`, checking it the way the dialect does: 5.1 and 5.5
-    /// on the spot (5.1 after skipping the keyword, 5.5 before), 5.2–5.4
-    /// when the function closes (see [`Parser::close_function`]).
+    /// on the spot (5.1 after skipping the keyword, 5.5 before); 5.2–5.4
+    /// treat it as a goto to the loop's end, so a break outside a loop is
+    /// an unresolved goto when the function closes.
     fn break_stat(&mut self) -> Result<(), SyntaxError> {
-        let line = self.tok.line;
+        let line = self.lex.line();
         let in_loop = self.funcs.last().expect("func ctx").loops > 0;
         if !in_loop && self.version >= LuaVersion::Lua55 {
             return Err(self.error("break outside loop"));
         }
         self.advance()?;
-        if !in_loop {
-            if self.version <= LuaVersion::Lua51 {
-                return Err(self.error("no loop to break"));
-            }
-            self.funcs
-                .last_mut()
-                .expect("func ctx")
-                .pending_break
-                .get_or_insert(line);
+        if !in_loop && self.version <= LuaVersion::Lua51 {
+            return Err(self.error("no loop to break"));
         }
-        Ok(())
+        if self.version >= LuaVersion::Lua55 {
+            return Ok(());
+        }
+        self.goto_step(|g| g.goto_stat("break", line))
     }
 
-    fn loop_block(&mut self) -> Result<Block, SyntaxError> {
+    /// A loop body with the loop's own variables (`vars`) in scope: PUC's
+    /// loop block, which places the "break" label, around a block for the
+    /// declared variables.
+    fn loop_block(&mut self, vars: &[Name]) -> Result<Block, SyntaxError> {
         self.funcs.last_mut().expect("func ctx").loops += 1;
-        let body = self.block();
+        self.goto_step(|g| {
+            g.enter_block(true);
+            g.enter_block(false);
+            for v in vars {
+                g.declare(&v.text);
+            }
+            Ok(())
+        })?;
+        let body = self.block()?;
+        self.goto_step(|g| {
+            g.leave_block()?;
+            g.leave_block()
+        })?;
         self.funcs.last_mut().expect("func ctx").loops -= 1;
-        body
+        Ok(body)
     }
 
     /// PUC `close_func` → `leaveblock` of the function's outer block, which
-    /// runs after the closing token has been consumed: a `break` that found
-    /// no loop is reported there, at the scanner's line.
+    /// runs after the closing token has been consumed: a goto (or 5.2-5.4
+    /// `break`) that found no label is reported there, at the scanner's
+    /// line.
     fn close_function(&mut self) -> Result<(), SyntaxError> {
-        let flow = self.funcs.pop().expect("func ctx");
-        match flow.pending_break {
-            Some(line) if self.version >= LuaVersion::Lua54 => {
-                Err(self.plain_error(format!("break outside loop at line {line}")))
-            }
-            Some(line) => {
-                Err(self.plain_error(format!("<break> at line {line} not inside a loop")))
-            }
-            None => Ok(()),
+        let _ = self.funcs.pop().expect("func ctx");
+        self.goto_step(GotoCheck::leave_block)
+    }
+
+    /// Run a step of the goto check (dialects that have one), turning its
+    /// error into a syntax error without a near-token (PUC `semerror`),
+    /// which 5.5 reports at the line of the last token consumed.
+    fn goto_step(
+        &mut self,
+        step: impl FnOnce(&mut GotoCheck) -> Result<(), String>,
+    ) -> Result<(), SyntaxError> {
+        match self.gotos.as_mut().map(step) {
+            Some(Err(msg)) if self.version >= LuaVersion::Lua55 => Err(SyntaxError {
+                line: self.last_line,
+                msg: msg.into_bytes(),
+            }),
+            Some(Err(msg)) => Err(self.plain_error(msg)),
+            _ => Ok(()),
         }
     }
 
@@ -672,7 +730,7 @@ impl<'s> Parser<'s> {
         self.advance()?;
         let cond = self.expr()?;
         self.expect(Token::Do, "do")?;
-        let body = self.loop_block()?;
+        let body = self.loop_block(&[])?;
         self.expect_match(Token::End, "end", "while", line)?;
         Ok(self.push_stat(Stat::While { cond, body }))
     }
@@ -680,7 +738,7 @@ impl<'s> Parser<'s> {
     fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
         let line = self.tok.line;
         self.advance()?;
-        let body = self.loop_block()?;
+        let body = self.loop_block(&[])?;
         self.expect_match(Token::Until, "until", "repeat", line)?;
         let cond = self.expr()?;
         Ok(self.push_stat(Stat::Repeat { body, cond }))
@@ -703,7 +761,7 @@ impl<'s> Parser<'s> {
                 };
                 self.expect(Token::Do, "do")?;
                 self.add_local_51(&first.text);
-                let body = self.loop_block()?;
+                let body = self.loop_block(std::slice::from_ref(&first))?;
                 self.expect_match(Token::End, "end", "for", line)?;
                 Ok(self.push_stat(Stat::NumericFor {
                     var: first,
@@ -725,7 +783,7 @@ impl<'s> Parser<'s> {
                 for v in &vars {
                     self.add_local_51(&v.text);
                 }
-                let body = self.loop_block()?;
+                let body = self.loop_block(&vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
                 Ok(self.push_stat(Stat::GenericFor {
                     vars,
@@ -814,11 +872,22 @@ impl<'s> Parser<'s> {
             self.new_local()?;
             self.activate_locals()?;
             self.add_local_51(&name.text);
+            let text = name.text.clone();
+            self.goto_step(|g| {
+                g.declare(&text);
+                Ok(())
+            })?;
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::LocalFunction { name, body }));
         }
         let (collective, names, exprs) = self.attnamelist()?;
         self.activate_locals()?;
+        self.goto_step(|g| {
+            for an in &names {
+                g.declare(&an.name.text);
+            }
+            Ok(())
+        })?;
         for an in &names {
             self.add_local_51(&an.name.text);
         }
@@ -834,12 +903,21 @@ impl<'s> Parser<'s> {
         if self.accept(Token::Function)? {
             let line = self.prev_line;
             let name = self.expect_name()?;
+            let text = name.text.clone();
+            self.goto_step(|g| {
+                g.declare(&text);
+                Ok(())
+            })?;
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
         }
         // `global [attrib] '*'`
         let leading = self.attrib()?;
         if self.accept(Token::Star)? {
+            self.goto_step(|g| {
+                g.declare("*");
+                Ok(())
+            })?;
             return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
         }
         let mut names = Vec::new();
@@ -856,6 +934,13 @@ impl<'s> Parser<'s> {
         } else {
             Vec::new()
         };
+        // the declared names come into scope after their initializers
+        self.goto_step(|g| {
+            for an in &names {
+                g.declare(&an.name.text);
+            }
+            Ok(())
+        })?;
         Ok(self.push_stat(Stat::Global {
             collective: leading,
             names,
@@ -1187,11 +1272,17 @@ impl<'s> Parser<'s> {
             }
         }
         self.activate_locals()?;
+        self.goto_step(|g| {
+            g.enter_function();
+            for p in &params {
+                g.declare(&p.text);
+            }
+            Ok(())
+        })?;
         self.expect(Token::RParen, ")")?;
         self.funcs.push(FnFlow {
             vararg: !matches!(vararg, Vararg::None),
             loops: 0,
-            pending_break: None,
         });
         let block = self.block()?;
         let end_line = self.tok.line; // the `end` token's line, before consuming
