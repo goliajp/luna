@@ -18,3 +18,9 @@ local ok2, e2 = xpcall(f, function(m) n = n + 1 error("again", 0) end)
 print(ok2, e2, n > 100)
 -- the inner run's result is what the outer run throws
 print(xpcall(f, function(m) if m == "outer" then error({}) end return "T:" .. type(m) end))
+-- a native handler that raises at once (no Lua frame to unwind) still runs
+-- again on its own error, down to "error in error handling"
+print(xpcall(error, error))
+print(xpcall(error, function(m) error(m) end))
+-- a handler returning nothing runs once; 5.5 then names the missing object
+print(select("#", xpcall(error, function(m) io.write("h:", tostring(m), "\n") end)))

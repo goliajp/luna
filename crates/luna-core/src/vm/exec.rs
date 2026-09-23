@@ -264,6 +264,9 @@ pub struct Vm {
     /// the handler (and not caught within it) calls the handler again, at
     /// the point of that error. Per thread, like `L->errfunc`.
     pub(crate) msgh_running: Option<Value>,
+    /// How many message-handler runs have started; lets a run tell whether
+    /// the error it got back was already handled by a nested run.
+    pub(crate) msgh_runs: u64,
     /// The value the last `xpcall` handler produced for the error in
     /// flight, so the unwind that carries it to the `xpcall` does not
     /// run the handler again.
@@ -990,6 +993,7 @@ impl Vm {
             errored_natives: Vec::new(),
             msgh_floor: 0,
             msgh_running: None,
+            msgh_runs: 0,
             msgh_applied: None,
             keep_error_traceback: true,
             hook_ftransfer: 0,

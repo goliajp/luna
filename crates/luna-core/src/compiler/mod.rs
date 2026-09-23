@@ -126,7 +126,16 @@ pub fn compile_chunk_with_last_target(
     ))
 }
 
-const MAX_REGS: u32 = 254;
+/// PUC `luaK_checkstack`'s register cap, as the most registers a function
+/// may use: 5.1/5.2 fail at `newstack >= 250` (`MAXSTACK`/`MAXREGS` 250),
+/// 5.3/5.4 at `newstack >= 255`, 5.5 at `newstack > 255`.
+fn max_regs(version: LuaVersion) -> u32 {
+    match version {
+        LuaVersion::Lua51 | LuaVersion::Lua52 => 249,
+        LuaVersion::Lua53 | LuaVersion::Lua54 => 254,
+        _ => 255,
+    }
+}
 /// PUC `LUAI_MAXUPVAL`: the per-function upvalue cap. 5.1 set this to 60;
 /// 5.2+ raised it to 255 because the bytecode encoding gained the room.
 /// Errors raised at this boundary use the standard "too many upvalues
@@ -622,10 +631,11 @@ impl<'a> Compiler<'a> {
 
     fn reserve(&mut self, n: u32) -> Result<u32, SyntaxError> {
         let line = self.last_line;
+        let cap = max_regs(self.version);
         let l = self.l();
         let base = l.freereg;
         l.freereg += n;
-        if l.freereg > MAX_REGS {
+        if l.freereg > cap {
             return Err(self.regs_error(line));
         }
         if l.freereg > l.max_stack {
@@ -1517,7 +1527,7 @@ impl<'a> Compiler<'a> {
     ) -> Result<(u32, bool), SyntaxError> {
         for (i, &a) in args.iter().enumerate() {
             let dst = argbase + i as u32;
-            if dst >= MAX_REGS {
+            if dst >= max_regs(self.version) {
                 // PUC `checkstack` raises "function or expression needs too
                 // many registers" once the per-function register cap is hit;
                 // a too-wide call site is just one path into it (errors.lua
@@ -2331,7 +2341,7 @@ impl<'a> Compiler<'a> {
                 TableField::Item(v) => {
                     item_idx += 1;
                     let dst = treg + 1 + pending;
-                    if dst >= MAX_REGS {
+                    if dst >= max_regs(self.version) {
                         return Err(self.regs_error(line));
                     }
                     self.set_freereg(dst);
@@ -2810,7 +2820,7 @@ impl<'a> Compiler<'a> {
         // to deliver up to `want` results, bypassing the per-expr `reserve`'s
         // bounds check. errors.lua :721's `local a,a,…(500),a = f()` would
         // otherwise slip past the register cap — guard the target window here.
-        if base.saturating_add(want) > MAX_REGS {
+        if base.saturating_add(want) > max_regs(self.version) {
             return Err(self.regs_error(self.last_line));
         }
         if exprs.is_empty() {
@@ -2834,7 +2844,7 @@ impl<'a> Compiler<'a> {
         let n = exprs.len() as u32;
         for (i, &eid) in exprs.iter().enumerate() {
             let dst = base + i as u32;
-            if dst >= MAX_REGS {
+            if dst >= max_regs(self.version) {
                 return Err(self.regs_error(self.last_line));
             }
             self.set_freereg(dst);
