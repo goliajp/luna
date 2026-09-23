@@ -9007,16 +9007,7 @@ impl Vm {
             (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
             (Pow, a, b) => Value::Float(a.as_f64().powf(b.as_f64())),
             (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
-            (Mod, a, b) => {
-                let (x, y) = (a.as_f64(), b.as_f64());
-                // PUC luai_nummod: correct fmod's sign without the `m*y`
-                // product, which underflows to 0 for tiny denormals
-                let mut m = x % y;
-                if (m > 0.0 && y < 0.0) || (m < 0.0 && y > 0.0) {
-                    m += y;
-                }
-                Value::Float(m)
-            }
+            (Mod, a, b) => Value::Float(float_mod(self.version(), a.as_f64(), b.as_f64())),
             _ => unreachable!(),
         };
         Ok(Some(v))
@@ -9668,6 +9659,23 @@ fn as_num(v: Value) -> Option<Num> {
         Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true),
         _ => None,
     }
+}
+
+/// Float `%` as each dialect's `luai_nummod` defines it. 5.1/5.2 compute
+/// `a - floor(a/b)*b` (so `5 % math.huge` is nan); 5.3 fixes `fmod`'s sign
+/// when `m*b < 0`; 5.4 compares signs instead, because that product
+/// underflows to zero for tiny operands.
+fn float_mod(version: LuaVersion, a: f64, b: f64) -> f64 {
+    if version <= LuaVersion::Lua52 {
+        return a - (a / b).floor() * b;
+    }
+    let m = a % b;
+    let fix = if version == LuaVersion::Lua53 {
+        m * b < 0.0
+    } else {
+        (m > 0.0 && b < 0.0) || (m < 0.0 && b > 0.0)
+    };
+    if fix { m + b } else { m }
 }
 
 /// A concatenable operand's byte form (string, or a number coerced to its
