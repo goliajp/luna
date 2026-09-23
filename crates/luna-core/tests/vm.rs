@@ -149,9 +149,9 @@ fn division_by_zero() {
 fn concat_result_as_binop_operand() {
     // A CONCAT result is a temporary at the top of the stack; the enclosing
     // binary op must not let the right operand reuse and clobber its register.
-    check_int("return (1 .. 2) << 1", 24); // "12" -> 12, 12<<1
+    check_int("return (1 .. 2) * 2", 24); // "12" -> 12 via the string __mul
     check_int("return (1 .. 2) + 1", 13);
-    check_int("return (\"7\" .. 3) << 1", 146);
+    check_int("return (\"7\" .. 3) * 2", 146);
     check_bool("return \"a\" .. \"b\" > \"a\"", true);
     check_bool("return not(2+1 > 3*1) and \"a\"..\"b\" > \"a\"", true);
 }
@@ -701,7 +701,11 @@ fn mm_arithmetic_and_string_coercion() {
     check_float("return '2.5' * 2", 5.0);
     check_int("return '0x10' + 0", 16);
     check_int("return '8' // '3'", 2);
-    check_int("return '12' & 4", 4);
+    // bitwise operators do not convert strings from 5.4 on
+    check_error(
+        "return '12' & 4",
+        "attempt to perform bitwise operation on a string value",
+    );
     // 5.4+ (the default Vm dialect is 5.5) reports string-involved
     // arithmetic faults with lstrlib's per-op wording; dialect fixtures
     // 5.3/541 + 5.4/551 + 5.5/252 pin the full matrix (v2.14 HC.4).
@@ -1366,7 +1370,7 @@ fn string_format() {
         true,
     );
     check_str("return string.format('%q', 0/0)", b"(0/0)");
-    check_str("return string.format('%q', 2.0)", b"2.0");
+    check_str("return string.format('%q', 2.0)", b"0x1p+1");
     // tostring path honors __tostring in %s
     check_str(
         "local t = setmetatable({}, {__tostring = function() return 'T' end}) \
@@ -1960,7 +1964,7 @@ fn string_dump_round_trips() {
         10,
     );
     // only Lua functions can be dumped
-    check_error("string.dump(print)", "unable to dump given function");
+    check_error("string.dump(print)", "Lua function expected");
 }
 
 #[test]
