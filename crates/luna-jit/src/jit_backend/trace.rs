@@ -755,6 +755,26 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
     None
 }
 
+/// [`emit_floor_divmod`] for a divisor `k` known to be neither 0 nor -1:
+/// the truncated remainder needs adjusting exactly when it is nonzero and
+/// of the other sign than `k`, which for a known sign is one sign test,
+/// done without a compare as an all-ones mask (`|r| < |k|`, so negating
+/// `r` cannot overflow).
+fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
+    let kv = bcx.ins().iconst(types::I64, k);
+    let q = bcx.ins().sdiv(a, kv);
+    let qk = bcx.ins().imul(q, kv);
+    let r = bcx.ins().isub(a, qk);
+    let wrong_sign = if k > 0 { r } else { bcx.ins().ineg(r) };
+    let mask = bcx.ins().sshr_imm(wrong_sign, 63);
+    if op == Op::IDiv {
+        bcx.ins().iadd(q, mask)
+    } else {
+        let adj = bcx.ins().band_imm(mask, k);
+        bcx.ins().iadd(r, adj)
+    }
+}
+
 /// Lua's integer `//` or `%` for a nonzero divisor: rounded toward minus
 /// infinity (the remainder takes the divisor's sign), and `x // -1` wraps
 /// where a machine division by -1 would trap on minint.
@@ -765,7 +785,8 @@ fn emit_floor_divmod(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, b: Value) 
     let is_m1 = bcx.ins().icmp(IntCC::Equal, b, minus_one);
     let safe_b = bcx.ins().select(is_m1, one, b);
     let q = bcx.ins().sdiv(a, safe_b);
-    let r = bcx.ins().srem(a, safe_b);
+    let qb = bcx.ins().imul(q, safe_b);
+    let r = bcx.ins().isub(a, qb);
     // a nonzero remainder whose sign differs from the divisor's
     let r_nz = bcx.ins().icmp(IntCC::NotEqual, r, zero);
     let signs = bcx.ins().bxor(r, b);
@@ -781,24 +802,6 @@ fn emit_floor_divmod(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, b: Value) 
         let floored = bcx.ins().select(adjust, rb, r);
         bcx.ins().select(is_m1, zero, floored)
     }
-}
-
-/// Lua's `a << n` (`luaV_shiftl`): logical, a negative count shifts right,
-/// and a count of 64 or more either way gives 0 (a machine shift would
-/// take the count modulo 64).
-fn emit_lua_shift_left(bcx: &mut FunctionBuilder<'_>, a: Value, n: Value) -> Value {
-    let zero = bcx.ins().iconst(types::I64, 0);
-    let left = bcx.ins().ishl(a, n);
-    let neg_n = bcx.ins().ineg(n);
-    let right = bcx.ins().ushr(a, neg_n);
-    let is_neg = bcx.ins().icmp(IntCC::SignedLessThan, n, zero);
-    let shifted = bcx.ins().select(is_neg, right, left);
-    // -63 <= n <= 63
-    let biased = bcx.ins().iadd_imm(n, 63);
-    let in_range = bcx
-        .ins()
-        .icmp_imm(IntCC::UnsignedLessThanOrEqual, biased, 126);
-    bcx.ins().select(in_range, shifted, zero)
 }
 
 /// The kind a GetX result is typed as, from its inferred use, and the
@@ -5703,8 +5706,23 @@ pub fn lower_trace_into_named<M: Module>(
             bcx.ins().stack_load(types::I64, out_ss, 0)
         }};
     }
+    // Integer constants the registers hold at this point of the trace
+    // (from LoadI / LoadK earlier in the same pass), so a `//`, `%` or shift
+    // by a constant needs no runtime guard.
+    let mut known_int: Vec<Option<i64>> = vec![None; window_size_us];
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
+        // R[C] of a register-operand op, read before this op's own write
+        // forgets it (`x = x % 7` divides by the old value)
+        let rc_const = known_int
+            .get(op_offsets[i] as usize + rop.inst.c() as usize)
+            .copied()
+            .flatten();
+        for w in op_writes_at_offset(rop, op_offsets[i]) {
+            if let Some(slot) = known_int.get_mut(w as usize) {
+                *slot = None;
+            }
+        }
         // P12-S4-step3b — `off` is the start of this op's register
         // window inside reg_state_buf. `regs` is shadowed to the
         // matching slice of `regs_full`, so existing `regs[ins.X()]`
@@ -5917,6 +5935,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let v = bcx.ins().iconst(types::I64, imm);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
+                known_int[off + ins.a() as usize] = Some(imm);
             }
             Op::LoadF => {
                 // R[A] := sBx as f64. Bitcast result to i64
@@ -5944,6 +5963,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let bx = ins.bx() as usize;
                 let (v, k) = match head_proto.consts[bx] {
                     luna_core::runtime::Value::Int(n) => {
+                        known_int[off + ins.a() as usize] = Some(n);
                         (bcx.ins().iconst(types::I64, n), RegKind::Int)
                     }
                     luna_core::runtime::Value::Float(f) => {
@@ -6030,11 +6050,11 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = RegKind::Int;
                 }
             }
-            // 3-reg Int ops. Cranelift's signed div / mod panic on
-            // divide-by-zero — Lua wraps the same way (raises an
-            // error). The recorder picked a sample run where these
-            // didn't fault, but a runtime zero divisor would crash
-            // the trace. Future hardening could trap-then-deopt.
+            // 3-reg Int ops. The cases the machine instruction gets
+            // wrong for Lua — a zero divisor (Lua raises), a shift count
+            // outside 0..=63 (Lua shifts the other way or gives 0) — leave
+            // the trace at the op so the interpreter does them; a -1
+            // divisor (the machine traps on minint) is done inline.
             Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
                 // Int-only ops. Bail if either operand is Float —
                 // Lua's IDiv would coerce to Float (different
@@ -6047,31 +6067,60 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 let lhs = bcx.use_var(regs[ins.b() as usize]);
                 let rhs = bcx.use_var(regs[ins.c() as usize]);
-                let r = match op {
-                    Op::IDiv | Op::Mod => {
-                        // A zero divisor is the interpreter's error to
-                        // raise: leave the trace at this op.
-                        let zero = bcx.ins().iconst(types::I64, 0);
-                        let is_zero = bcx.ins().icmp(IntCC::Equal, rhs, zero);
-                        let cont_blk = bcx.create_block();
-                        let exit_blk = bcx.create_block();
-                        bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
-                        bcx.switch_to_block(exit_blk);
-                        bcx.seal_block(exit_blk);
-                        guard_exit!(rop.pc, i);
-                        bcx.switch_to_block(cont_blk);
-                        bcx.seal_block(cont_blk);
-                        emit_floor_divmod(&mut bcx, op, lhs, rhs)
+                let r = match (op, rc_const) {
+                    // a constant divisor needs neither guard (and the
+                    // machine division by a constant is strength-reduced)
+                    (Op::IDiv | Op::Mod, Some(k)) if k != 0 && k != -1 => {
+                        emit_floor_divmod_by(&mut bcx, op, lhs, k)
                     }
-                    Op::BAnd => bcx.ins().band(lhs, rhs),
-                    Op::BOr => bcx.ins().bor(lhs, rhs),
-                    Op::BXor => bcx.ins().bxor(lhs, rhs),
-                    Op::Shl => emit_lua_shift_left(&mut bcx, lhs, rhs),
-                    Op::Shr => {
-                        let n = bcx.ins().ineg(rhs);
-                        emit_lua_shift_left(&mut bcx, lhs, n)
+                    // a constant shift count is a single machine shift
+                    (Op::Shl | Op::Shr, Some(k)) => {
+                        let n = if op == Op::Shr { k.wrapping_neg() } else { k };
+                        if n <= -64 || n >= 64 {
+                            bcx.ins().iconst(types::I64, 0)
+                        } else if n >= 0 {
+                            bcx.ins().ishl_imm(lhs, n)
+                        } else {
+                            bcx.ins().ushr_imm(lhs, -n)
+                        }
                     }
-                    _ => unreachable!("whitelist gated above"),
+                    _ => match op {
+                        Op::IDiv | Op::Mod => {
+                            // A zero divisor is the interpreter's error to
+                            // raise: leave the trace at this op.
+                            let zero = bcx.ins().iconst(types::I64, 0);
+                            let is_zero = bcx.ins().icmp(IntCC::Equal, rhs, zero);
+                            let cont_blk = bcx.create_block();
+                            let exit_blk = bcx.create_block();
+                            bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
+                            bcx.switch_to_block(exit_blk);
+                            bcx.seal_block(exit_blk);
+                            guard_exit!(rop.pc, i);
+                            bcx.switch_to_block(cont_blk);
+                            bcx.seal_block(cont_blk);
+                            emit_floor_divmod(&mut bcx, op, lhs, rhs)
+                        }
+                        Op::BAnd => bcx.ins().band(lhs, rhs),
+                        Op::BOr => bcx.ins().bor(lhs, rhs),
+                        Op::BXor => bcx.ins().bxor(lhs, rhs),
+                        Op::Shl | Op::Shr => {
+                            let wide = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThan, rhs, 63);
+                            let cont_blk = bcx.create_block();
+                            let exit_blk = bcx.create_block();
+                            bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
+                            bcx.switch_to_block(exit_blk);
+                            bcx.seal_block(exit_blk);
+                            guard_exit!(rop.pc, i);
+                            bcx.switch_to_block(cont_blk);
+                            bcx.seal_block(cont_blk);
+                            if op == Op::Shl {
+                                bcx.ins().ishl(lhs, rhs)
+                            } else {
+                                bcx.ins().ushr(lhs, rhs)
+                            }
+                        }
+                        _ => unreachable!("whitelist gated above"),
+                    },
                 };
                 bcx.def_var(regs[ins.a() as usize], r);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;

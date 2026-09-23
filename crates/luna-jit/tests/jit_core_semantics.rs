@@ -94,6 +94,20 @@ fn compiled_integer_division_and_shifts_follow_lua() {
     }
 }
 
+/// A divisor or shift count the trace knows as a constant is divided or
+/// shifted by directly; that constant must be the value the register held
+/// before the op, also when the op overwrites it (`x = x % 7`).
+#[test]
+fn compiled_division_and_shifts_by_constants_follow_lua() {
+    let src = "
+        local function g() local s = 0 for i = -1000, 1000 do local x = i * 7919 x = x % 7 s = s + x local y = i * 7919 y = y // -3 s = s + y end return s end
+        local function h() local s = 0 for i = -1000, 1000 do s = s + (i * 31) // -1 + (i * 31) % -1 + (i << 3) + (i >> 70) + (i >> -2) end return s end
+        return g() .. ' ' .. h()";
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        assert_eq!(run(v, src), "5339 0");
+    }
+}
+
 /// A table read typed by its use (an addend, an indexed table) is checked:
 /// a value of another type late in a compiled loop raises as in the
 /// interpreter rather than being read as the expected type's bits.
