@@ -225,11 +225,10 @@ fn max_and_min_of_mixed_kinds() {
             "9007199254740992:float",
         ),
         (
-            format!(
-                "local lo = 0 \
-                 for i = 1, 3000 do lo = math.max(2^53, 9007199254740993) end \
-                 return tostring(lo) .. ':' .. math.type(lo)"
-            ),
+            "local lo = 0 \
+             for i = 1, 3000 do lo = math.max(2^53, 9007199254740993) end \
+             return tostring(lo) .. ':' .. math.type(lo)"
+                .to_string(),
             "9007199254740993:integer",
         ),
         (
