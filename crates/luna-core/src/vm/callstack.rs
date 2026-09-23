@@ -1119,11 +1119,11 @@ impl Vm {
         }
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
+        let mut handled = false;
         let out = match catcher {
             Some(Some(handler)) if !self.msgh_applied.is_some_and(|v| v.raw_eq(err)) => {
-                let r = self.call_msgh(handler, err);
-                self.msgh_applied = Some(r);
-                r
+                handled = true;
+                self.call_msgh(handler, err)
             }
             None => {
                 if self.keep_error_traceback && self.error_traceback.is_none() {
@@ -1140,6 +1140,11 @@ impl Vm {
         } else {
             out
         };
+        // the value that leaves here is the handled one: it must not be
+        // handled again as it unwinds past further frames
+        if handled {
+            self.msgh_applied = Some(out);
+        }
         self.running_natives.truncate(base);
         self.running_native_acts.truncate(base);
         out
@@ -1191,14 +1196,32 @@ impl Vm {
         } else {
             (err, Some(handler))
         };
+        self.msgh_runs += 1;
+        let runs = self.msgh_runs;
         self.msgh_depth += 1;
         let r = self.call_protected_with(handler, &[arg], reenter);
-        self.msgh_depth -= 1;
         match r {
-            Ok(results) => results.first().copied().unwrap_or(Value::Nil),
-            Err(_) if capped => Value::Str(self.heap.intern(b"error in error handling")),
+            Ok(results) => {
+                self.msgh_depth -= 1;
+                results.first().copied().unwrap_or(Value::Nil)
+            }
+            Err(_) if capped => {
+                self.msgh_depth -= 1;
+                Value::Str(self.heap.intern(b"error in error handling"))
+            }
             // already the result of the handler run nested at that error
-            Err(e) => e.0,
+            Err(e) if self.msgh_runs != runs => {
+                self.msgh_depth -= 1;
+                e.0
+            }
+            // raised with no Lua frame to unwind (a native handler such as
+            // `error` failing at once): no nested run saw it, so run the
+            // handler on it here, one level deeper
+            Err(e) => {
+                let r = self.call_msgh(handler, e.0);
+                self.msgh_depth -= 1;
+                r
+            }
         }
     }
 
