@@ -3,6 +3,7 @@
 
 pub mod ast;
 pub mod error;
+mod goto_check;
 pub mod lexer;
 pub mod macro_expander;
 pub mod parser;
