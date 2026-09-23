@@ -282,6 +282,8 @@ messages. What still differs does so on purpose:
 
 ## CLI
 
+luna's own options:
+
 | Flag | Behaviour |
 |---|---|
 | `--lua=5.X` | Dialect: 5.1 / 5.2 / 5.3 / 5.4 / 5.5 (default 5.5) |
@@ -289,16 +291,38 @@ messages. What still differs does so on purpose:
 | `--budget=N` | Cap dispatched instructions before raising |
 | `--no-jit` | Install `NullJitBackend` — interpreter only |
 | `--profile` | Print trace-JIT counters when the script finishes |
-| `-e "<code>"` | Run inline code instead of a file |
-| `-` | Read source from stdin |
-| *(no args)* | Interactive REPL |
+| `-h`, `--help` | Print the help |
+
+They may appear anywhere before the script. Everything else follows the
+selected dialect's standalone interpreter, `lua.c`: the options `-e`,
+`-l`, `-i`, `-v`, `-E` (5.2 on), `-W` (5.4 on), `--` and `-`; the `arg`
+table and the script's `...`; and running stdin as a program when there
+is no script and stdin is not a terminal (the REPL starts when it is).
+
+Errors are reported as `lua.c` reports them. An uncaught error prints
+`<argv[0]>: <message>` on stderr followed by the traceback of `lua.c`'s
+message handler (5.1 calls the global `debug.traceback`; 5.2 on take
+`luaL_traceback`, and a non-string error object goes through its
+`__tostring` or becomes `(error object is a <type> value)`), and the
+exit status is 1. A script or `-e` chunk that does not compile, a file
+that cannot be opened (`cannot open <name>: <reason>`), and a bad option
+(the dialect's usage message) are reported the same way, without a
+traceback. `os.exit` exits with the status it is given. As in `lua.c`,
+an error in a program read from stdin without `-` is reported but leaves
+the exit status 0. `crates/luna-jit/tests/cli_errors.rs` pins each case
+to the text the PUC interpreters print.
+
+Two things differ from `lua.c`: `-v` prints luna's version line, and the
+values a script or `-e` chunk returns are printed after it (`=> value`).
+`LUA_INIT` is not read.
 
 The REPL evaluates each line first as an expression (prefixed with
 `return`), then retries it as a statement on syntax error, so both
 expressions and assignments work. It has multi-line continuation and
 history at `~/.luna_history`, honours `--lua=X`, and exits on Ctrl-D.
 Tab completion and syntax highlighting are behind the
-`repl-line-editor` feature.
+`repl-line-editor` feature. It reports errors in its own format
+(`error: <message>`, no traceback), unlike `lua.c`'s REPL.
 
 ## Quick verification
 
