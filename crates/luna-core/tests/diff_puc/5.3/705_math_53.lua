@@ -3,10 +3,7 @@ local function clean(s)
 end
 local function fmt(v)
   if type(v) == "number" then
-    -- the sign of a NaN is printed by the host libc (glibc "-nan", Apple
-    -- "nan", MSVC "-nan(ind)"), so PUC's own output differs by platform
-    local s = v ~= v and "nan" or string.format("%.17g", v)
-    return s .. (math.type and (":" .. math.type(v)) or "")
+    return string.format("%.17g", v) .. (math.type and (":" .. math.type(v)) or "")
   end
   return clean(v)
 end
