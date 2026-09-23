@@ -44,6 +44,18 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
+    /// A dumped element count, refused when the chunk has fewer than
+    /// `min_size` bytes left per element — the count sizes an allocation,
+    /// and a corrupt one must not request gigabytes before the reads that
+    /// would have caught the truncation.
+    pub(super) fn count(&self, n: u64, min_size: usize) -> Result<usize, String> {
+        let left = (self.b.len() - self.p) as u64;
+        match n.checked_mul(min_size as u64) {
+            Some(need) if need <= left => Ok(n as usize),
+            _ => Err("truncated chunk".to_string()),
+        }
+    }
+
     pub(super) fn bytes(&mut self) -> Result<&'a [u8], String> {
         let n = self.u32()? as usize;
         self.take(n)
