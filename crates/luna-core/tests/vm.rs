@@ -1476,13 +1476,13 @@ fn debug_getinfo_c_frame_boundary() {
 #[test]
 fn debug_getinfo_source_lines_options() {
     // linedefined / lastlinedefined span the function from `function` to `end`;
-    // the function-value form has an empty namewhat and no name.
+    // the function-value form has an empty namewhat and no name ('n' only).
     check_str(
         "local function test (a) \n\
            local x = a \n\
            return x \n\
          end \n\
-         local i = debug.getinfo(test, 'S') \n\
+         local i = debug.getinfo(test, 'Sn') \n\
          return i.what .. ',' .. i.linedefined .. ',' .. i.lastlinedefined \n\
             .. ',' .. i.namewhat .. ',' .. tostring(i.name)",
         b"Lua,1,4,,nil",

@@ -64,7 +64,11 @@ pub(crate) fn typename_at(vm: &Vm, a: Args, i: u32) -> String {
 /// The type name `luaL_typeerror` reports for a present value.
 pub(crate) fn typename_of(vm: &Vm, v: Value) -> String {
     if vm.version() >= LuaVersion::Lua53 {
-        vm.obj_typename(v)
+        // `luaL_typeerror` singles out light userdata once `__name` fails
+        match v {
+            Value::LightUserdata(_) => "light userdata".to_string(),
+            _ => vm.obj_typename(v),
+        }
     } else {
         v.type_name().to_string()
     }

@@ -631,13 +631,7 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// or by pcall, or through an unnamed expression — 5.2+ look the function up
 /// by the name its library registered it under, and 5.1 prints '?'.
 pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
-    let called_from_c = vm.running_native_from_c.last().copied().unwrap_or(false);
-    let call_name = if called_from_c {
-        None
-    } else {
-        vm.running_call_name()
-    };
-    let name = match call_name {
+    let name = match vm.running_call_name() {
         Some(("method", name)) => {
             let n = n - 1; // self is not counted
             if n == 0 {
@@ -1119,14 +1113,14 @@ fn fenv_target(vm: &mut Vm, a: Args, level_optional: bool) -> Result<FenvTarget,
     if level == 0 {
         return Ok(FenvTarget::C);
     }
-    use crate::vm::exec::DbgKind;
+    use crate::vm::callstack::DbgKind;
     match vm.dbg_frame(level as i64) {
         Some(DbgKind::Lua(_)) => Ok(FenvTarget::Lua(
             vm.lua_closure_at_level(level as i64)
                 .expect("a Lua level has a closure"),
         )),
         Some(DbgKind::C(_)) => Ok(FenvTarget::C),
-        Some(DbgKind::Tail(_)) => Err(raise_str(
+        Some(DbgKind::Tail) => Err(raise_str(
             vm,
             &format!("no function environment for tail call at level {level}"),
         )),
