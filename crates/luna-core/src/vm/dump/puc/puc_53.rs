@@ -412,8 +412,11 @@ fn translate_code(puc_code: &[u32]) -> Result<Translated, String> {
                 Inst::isj(Op::Jmp, delta as i32)
             }
             FixupKind::ForPrep => {
-                // Forward jump — `pc += Bx` per luna ForPrep dispatcher.
-                if delta < 0 {
+                // luna's ForPrep lands on its ForLoop at `pc + Bx` (the
+                // dispatcher adds `Bx - 1` to the already-advanced pc), so
+                // Bx is one more than the next-pc delta.
+                let delta = delta + 1;
+                if delta < 1 {
                     return Err(format!(
                         "PUC 5.3 FORPREP at luna pc {} resolved to backward delta {} \
                          (FORPREP must jump forward)",

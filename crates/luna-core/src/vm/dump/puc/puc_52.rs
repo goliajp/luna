@@ -946,14 +946,27 @@ fn translate_one(
         // return R(A), ..., R(A+B-2)
         P_RETURN => out.push(Inst::iabc(Op::Return, a, p.b, 0, false)),
         // numeric-for (sBx form on FORPREP / FORLOOP)
+        // luna's ForPrep / ForLoop carry unsigned distances, not sBx:
+        // ForPrep lands on its ForLoop at `pc + Bx`, ForLoop jumps back by
+        // `Bx` from the next pc. A signed sBx here sent the interpreter
+        // ~65535 instructions past the end of the code.
         P_FORPREP => {
-            let sj = remap_jump(src_pc, p.sbx(), src_to_dst)?;
-            // luna's ForPrep takes `A sBx` — re-encode the offset.
-            out.push(Inst::iasbx(Op::ForPrep, a, sj));
+            let fwd = remap_jump(src_pc, p.sbx(), src_to_dst)? + 1;
+            if !(1..=isa::MAX_BX as i32).contains(&fwd) {
+                return Err(format!(
+                    "PUC 5.2 translator: FORPREP distance {fwd} out of luna Bx range"
+                ));
+            }
+            out.push(Inst::iabx(Op::ForPrep, a, fwd as u32));
         }
         P_FORLOOP => {
-            let sj = remap_jump(src_pc, p.sbx(), src_to_dst)?;
-            out.push(Inst::iasbx(Op::ForLoop, a, sj));
+            let back = -remap_jump(src_pc, p.sbx(), src_to_dst)?;
+            if !(0..=isa::MAX_BX as i32).contains(&back) {
+                return Err(format!(
+                    "PUC 5.2 translator: FORLOOP back-distance {back} out of luna Bx range"
+                ));
+            }
+            out.push(Inst::iabx(Op::ForLoop, a, back as u32));
         }
         // R(A+3), ..., R(A+2+C) := R(A)(R(A+1), R(A+2))
         P_TFORCALL => out.push(Inst::iabc(Op::TForCall, a, 0, p.c, false)),
