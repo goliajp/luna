@@ -4803,18 +4803,15 @@ impl Vm {
             return Ok(()); // nil and false are silently ignored
         }
         if self.get_mm(v, Mm::Close).is_nil() {
-            // PUC `checkclosemth`: "variable '<name>' got a non-closable value
-            // (a <type> value)"; the local's name comes from the running
-            // frame's locvars at this pc.
-            let tn = v.type_name();
+            // PUC `checkclosemth`: "variable '<name>' got a non-closable
+            // value", the name as `luaG_findlocal` gives it — the frame's
+            // locvars at this pc, else "(temporary)".
             let f = self.top_frame();
             let reg = slot - f.base;
             let pc = (f.pc as usize).saturating_sub(1);
-            let where_ = match crate::vm::objname::getlocalname(&f.closure.proto, reg, pc) {
-                Some(n) => format!("variable '{n}'"),
-                None => "to-be-closed slot".to_string(),
-            };
-            return Err(self.rt_err(&format!("{where_} got a non-closable value (a {tn} value)")));
+            let name = crate::vm::objname::getlocalname(&f.closure.proto, reg, pc)
+                .unwrap_or("(temporary)");
+            return Err(self.rt_err(&format!("variable '{name}' got a non-closable value")));
         }
         debug_assert!(self.tbc.last().is_none_or(|&s| s < slot));
         self.tbc.push(slot);
