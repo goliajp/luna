@@ -3080,6 +3080,30 @@ fn emit_store_back_and_return_pc(
     trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
     sentinel_code: u32,
 ) {
+    emit_store_back_and_return(
+        bcx,
+        regs,
+        reg_state,
+        i64::from(pc),
+        flush_ctx,
+        side_trace_cell_addr,
+        trace_fn_sig_ref,
+        sentinel_code,
+    );
+}
+
+/// [`emit_store_back_and_return_pc`] returning `ret`, an encoded exit
+/// (see `decode_exit_shape`), instead of a bare pc.
+fn emit_store_back_and_return(
+    bcx: &mut FunctionBuilder<'_>,
+    regs: &[Variable],
+    reg_state: Value,
+    ret: i64,
+    flush_ctx: Option<&FlushCtx>,
+    side_trace_cell_addr: i64,
+    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
+    sentinel_code: u32,
+) {
     if let Some(ctx) = flush_ctx {
         emit_flush_buf(bcx, ctx, regs);
     }
@@ -3095,8 +3119,8 @@ fn emit_store_back_and_return_pc(
         trace_fn_sig_ref,
         sentinel_code,
         |bcx| {
-            let pc_val = bcx.ins().iconst(types::I64, pc as i64);
-            bcx.ins().return_(&[pc_val]);
+            let ret_val = bcx.ins().iconst(types::I64, ret);
+            bcx.ins().return_(&[ret_val]);
         },
     );
 }
@@ -3363,6 +3387,10 @@ fn build_trace_jit_module() -> Option<JITModule> {
     builder.symbol(
         "luna_jit_upval_table_get_tagged",
         super::luna_jit_upval_table_get_tagged as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_suppress_trace_admit",
+        super::luna_jit_suppress_trace_admit as *const u8,
     );
     // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
     // helper. Reuses the method JIT helper; the trace dispatcher's
@@ -5098,6 +5126,13 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
+    let suppress_admit_id = module
+        .declare_function(
+            "luna_jit_suppress_trace_admit",
+            Linkage::Import,
+            &module.make_signature(),
+        )
+        .ok()?;
     let mut len_sig = module.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
@@ -5684,13 +5719,20 @@ pub fn lower_trace_into_named<M: Module>(
                 let tag_side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
                 let tag_side_local = per_exit_kinds.len() as u32;
                 per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box));
+                if side_exit_pc == record.head_pc {
+                    let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+                    bcx.ins().call(r, &[]);
+                }
+                let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
+                    | (u64::from(tag_side_local) << 32)
+                    | u64::from(side_exit_pc);
                 // store_back only writes caller window — depth>0 scratch
                 // slots stay out of the dispatcher's reg_state restore.
-                emit_store_back_and_return_pc(
+                emit_store_back_and_return(
                     &mut bcx,
                     &regs_full[..max_stack],
                     reg_state,
-                    side_exit_pc,
+                    ret as i64,
                     flush_ctx.as_ref(),
                     0i64,
                     trace_fn_sig_ref,

@@ -693,6 +693,18 @@ pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
     }
 }
 
+/// A trace side exit that resumes at the trace's own head: the op there
+/// has not run, so the dispatcher must let the interpreter run it before
+/// admitting the trace again, or the two would hand the same pc back and
+/// forth forever.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    vm.jit.suppress_downrec_admit_once = true;
+}
+
 /// P12-S7-C — trace JIT helper for `Op::Close A`. Wraps
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
 /// returns 0 to continue the trace, 1 to deopt (handler would run

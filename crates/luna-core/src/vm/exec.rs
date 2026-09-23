@@ -7050,7 +7050,7 @@ impl Vm {
                             // arm — otherwise the lifted lookup would
                             // immediately re-admit after a force-deopt
                             // and the infinite loop returns.
-                            if is_downrec && downrec_admit_blocked {
+                            if downrec_admit_blocked {
                                 return false;
                             }
                             // Primary arm: `dispatchable=true` traces
