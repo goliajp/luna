@@ -9268,19 +9268,26 @@ impl Vm {
                     }
                     m
                 };
-                // PUC ≤5.3: `a <= b` falls back to `not (b < a)` when neither
-                // operand carries `__le`. 5.4 dropped the synthesis (now
-                // requires an explicit `__le`). events.lua 5.2/5.3 :172 relies
-                // on the synthesis — its metatable defines only `__lt`.
-                // The fallback calls `__lt(r, l)` synchronously (the suite's
+                // PUC ≤5.4: `a <= b` falls back to `not (b < a)` when neither
+                // operand carries `__le` (5.4 through its default build's
+                // LUA_COMPAT_LT_LE); 5.5 requires an explicit `__le`.
+                // events.lua 5.2/5.3 :172 relies on the synthesis — its
+                // metatable defines only `__lt`. The `__lt` is looked up as
+                // for `b < a`: on `b` first (5.1: the same one on both). The
+                // fallback calls `__lt(r, l)` synchronously (the suite's
                 // `__lt` doesn't yield) and negates the result; the yieldable
                 // `__lt` path stays reserved for the explicit `<` operator.
-                if mm.is_nil() && or_eq && self.version <= crate::version::LuaVersion::Lua53 {
-                    let lt = Mm::Lt;
-                    let mut mm_lt = self.get_mm(l, lt);
-                    if mm_lt.is_nil() {
-                        mm_lt = self.get_mm(r, lt);
-                    }
+                if mm.is_nil() && or_eq && self.version < LuaVersion::Lua55 {
+                    let mm_lt = if self.version <= LuaVersion::Lua51 {
+                        self.get_comp_mm(r, l, Mm::Lt)
+                    } else {
+                        let m = self.get_mm(r, Mm::Lt);
+                        if m.is_nil() {
+                            self.get_mm(l, Mm::Lt)
+                        } else {
+                            m
+                        }
+                    };
                     if !mm_lt.is_nil() {
                         return Ok(MmOut::CompareSynth { func: mm_lt });
                     }
