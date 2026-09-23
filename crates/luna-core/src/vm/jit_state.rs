@@ -40,6 +40,14 @@ pub struct JitState {
     /// while the sprint develops.
     pub trace_enabled: bool,
 
+    /// Back-edge visits before a loop is recorded as a trace, and calls
+    /// before a function is. [`crate::jit::trace::TRACE_HOT_THRESHOLD`]
+    /// and [`crate::jit::trace::CALL_HOT_THRESHOLD`] by default; tests
+    /// lower them so that short programs exercise the trace JIT.
+    pub trace_hot_threshold: u32,
+    /// See [`Self::trace_hot_threshold`].
+    pub call_hot_threshold: u32,
+
     /// P16-A — opt-in flag for the self-link cycle catch (was
     /// `Vm::p16_self_link_enabled`). Default `false` —
     /// SHIPPED-DISABLED in v1.0 due to P16-B correctness blocker.
@@ -348,6 +356,8 @@ impl JitState {
         JitState {
             enabled: true,
             trace_enabled: true,
+            trace_hot_threshold: crate::jit::trace::TRACE_HOT_THRESHOLD,
+            call_hot_threshold: crate::jit::trace::CALL_HOT_THRESHOLD,
             p16_self_link_enabled: false,
             active_trace: None,
             recording_frame_base: 0,

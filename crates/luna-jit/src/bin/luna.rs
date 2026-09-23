@@ -804,6 +804,16 @@ fn main() {
     if let Some(n) = budget {
         vm.set_instr_budget(Some(n));
     }
+    // Test knob, deliberately left out of --help: record traces after N
+    // back-edges / calls instead of 64, so that short programs (the
+    // differential corpora) run through the trace JIT.
+    if let Some(n) = std::env::var("LUNA_JIT_HOT")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        vm.jit.trace_hot_threshold = n;
+        vm.jit.call_hot_threshold = n;
+    }
 
     populate_arg(&mut vm, script_for_arg.as_deref(), &extra);
 
