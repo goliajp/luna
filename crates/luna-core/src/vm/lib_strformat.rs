@@ -130,7 +130,7 @@ fn item51(
                 // value (the reference test suite asserts it for 2^63)
                 LuaVersion::Lua52 => {
                     let x = argcheck::check_number(vm, a, arg)?;
-                    if !(x >= -TWO63 && x < TWO63) {
+                    if !(-TWO63..TWO63).contains(&x) {
                         return Err(arg_error(vm, arg + 1, "not a number in proper range"));
                     }
                     x as i64

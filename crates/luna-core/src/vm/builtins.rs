@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crate::runtime::{Table, Value};
+use crate::runtime::Value;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
@@ -132,18 +132,6 @@ pub(crate) fn open_base(vm: &mut Vm) {
     vm.set_global("_VERSION", v).expect("stdlib registration");
     let g = Value::Table(vm.globals());
     vm.set_global("_G", g).expect("stdlib registration");
-}
-
-/// `luaL_checktype(L, 1, LUA_TTABLE)` on a value already read from
-/// argument 1, for the table library's 5.1-only functions.
-pub(crate) fn check_table(vm: &mut Vm, v: Value) -> Result<crate::runtime::Gc<Table>, LuaError> {
-    match v {
-        Value::Table(t) => Ok(t),
-        v => {
-            let got = vm.obj_typename(v);
-            Err(arg_error(vm, 1, &format!("table expected, got {got}")))
-        }
-    }
 }
 
 fn nat_assert(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
