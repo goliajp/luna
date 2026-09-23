@@ -6237,6 +6237,13 @@ pub fn lower_trace_into_named<M: Module>(
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
                 let kc = k_op(&current_kinds, off as u32 + ins.c());
+                // A string operand is coerced (or has `__add` & co. in its
+                // metatable); only numbers are lowered, since the payload of
+                // anything else is a pointer.
+                let number = |k| matches!(k, RegKind::Int | RegKind::Float);
+                if !number(kb) || !number(kc) {
+                    return None;
+                }
                 // Op::Pow always returns Float in Lua 5.4+ (matches
                 // `pow(f64, f64) -> f64`); coerce Int operands to
                 // Float via fcvt_from_sint.
@@ -6314,13 +6321,12 @@ pub fn lower_trace_into_named<M: Module>(
             // the trace at the op so the interpreter does them; a -1
             // divisor (the machine traps on minint) is done inline.
             Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
-                // Int-only ops. Bail if either operand is Float —
-                // Lua's IDiv would coerce to Float (different
-                // semantics) and bitwise ops on Floats are
-                // type-errors at runtime.
+                // Lowered for two integers only: a float operand makes
+                // `//` and `%` float ops and the bitwise ops convert or
+                // raise; a string is coerced.
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
                 let kc = k_op(&current_kinds, off as u32 + ins.c());
-                if matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float) {
+                if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
                     return None;
                 }
                 let lhs = bcx.use_var(regs[ins.b() as usize]);
@@ -6385,7 +6391,9 @@ pub fn lower_trace_into_named<M: Module>(
             }
             Op::Unm | Op::BNot => {
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
-                if matches!(op, Op::BNot) && matches!(kb, RegKind::Float) {
+                if !matches!(kb, RegKind::Int)
+                    && !(matches!(op, Op::Unm) && matches!(kb, RegKind::Float))
+                {
                     return None;
                 }
                 if matches!(op, Op::Unm) && matches!(kb, RegKind::Float) {
