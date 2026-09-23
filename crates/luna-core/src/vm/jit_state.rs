@@ -123,15 +123,15 @@ pub struct JitState {
     pub stitch_depth_remaining: u32,
 
     /// v2.0 Track-R R3c — one-shot suppression flag for the
-    /// dispatcher's downrec-admit predicate (`t.downrec_link.is_
-    /// some()` arm). Set by the dispatcher when it force-deopts a
-    /// downrec entry (guard miss OR cycle-budget exhausted) so the
-    /// NEXT interpreter loop iteration skips the admit and lets
-    /// interp run the op at `head_pc`, advancing `pc` past
-    /// `head_pc` and breaking the otherwise-infinite admit loop.
-    /// Consumed (cleared) the first time the dispatcher reads it.
-    /// The `dispatchable=true` admit path is untouched by this
-    /// flag — only the R3c-added downrec admit gate respects it.
+    /// dispatcher's trace admit. Set when a trace hands control back
+    /// at its own `head_pc` without having run the op there: the
+    /// dispatcher when it force-deopts a downrec entry (guard miss OR
+    /// cycle-budget exhausted), and a trace side exit taken before the
+    /// head op (through `luna_jit_suppress_trace_admit`). The NEXT
+    /// interpreter loop iteration skips the admit and lets interp run
+    /// the op at `head_pc`, advancing `pc` past `head_pc` and breaking
+    /// the otherwise-infinite admit loop. Consumed (cleared) the first
+    /// time the dispatcher reads it.
     pub suppress_downrec_admit_once: bool,
 
     /// v2.0 Track J sub-step J-B — per-`Vm` JIT storage holder.
