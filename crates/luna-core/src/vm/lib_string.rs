@@ -1,133 +1,74 @@
-//! string library: core byte-string functions and the pattern-based family
-//! (find/match/gmatch/gsub) on top of src/pattern.rs. Installs the shared
-//! string metatable so `("x"):len()` method syntax works.
+//! string library: byte-string functions, the pattern-based family
+//! (find/match/gmatch/gsub) on top of src/pattern.rs, and the shared string
+//! metatable for method syntax.
 
-use crate::numeric::Num;
-use crate::pattern::{self, Cap};
+use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
 use crate::runtime::{Gc, LuaStr, Value};
+use crate::version::LuaVersion;
+use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
+type NativeFn = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
+
 pub(crate) fn open_string(vm: &mut Vm) {
     let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, f| {
-        let fv = vm.native(f);
+    let v = vm.version();
+    let set = |vm: &mut Vm, t: Gc<crate::runtime::Table>, name: &str, fv: Value| {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
     };
-    set(vm, "len", s_len);
-    set(vm, "sub", s_sub);
-    set(vm, "upper", s_upper);
-    set(vm, "lower", s_lower);
-    set(vm, "rep", s_rep);
-    set(vm, "reverse", s_reverse);
-    set(vm, "byte", s_byte);
-    set(vm, "char", s_char);
-    set(vm, "find", s_find);
-    set(vm, "match", s_match);
-    // gmatch needs to be reused as 5.1's `gfind`; the suite identity-tests
-    // them, so the *same* Value::Native has to land in both slots.
-    let gmatch_v = vm.native(s_gmatch);
-    let k = Value::Str(vm.heap.intern(b"gmatch"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { t.as_mut() }
-        .set(&mut vm.heap, k, gmatch_v)
-        .expect("valid key");
-    if vm.version() == crate::version::LuaVersion::Lua51 {
-        let k = Value::Str(vm.heap.intern(b"gfind"));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, gmatch_v)
-            .expect("valid key");
+    let mut fns: Vec<(&str, NativeFn)> = vec![
+        ("len", s_len),
+        ("sub", s_sub),
+        ("upper", s_upper),
+        ("lower", s_lower),
+        ("rep", s_rep),
+        ("reverse", s_reverse),
+        ("byte", s_byte),
+        ("char", s_char),
+        ("find", s_find),
+        ("match", s_match),
+        ("gsub", s_gsub),
+        ("format", crate::vm::lib_strformat::s_format),
+        ("dump", s_dump),
+    ];
+    if v >= LuaVersion::Lua53 {
+        fns.push(("pack", crate::vm::lib_strpack::s_pack));
+        fns.push(("unpack", crate::vm::lib_strpack::s_unpack));
+        fns.push(("packsize", crate::vm::lib_strpack::s_packsize));
     }
-    set(vm, "gsub", s_gsub);
-    set(vm, "format", crate::vm::lib_strformat::s_format);
-    set(vm, "dump", s_dump);
-    // string.pack/unpack/packsize landed in 5.3 — 5.1/5.2 should not see them
-    if vm.version() >= crate::version::LuaVersion::Lua53 {
-        set(vm, "pack", crate::vm::lib_strpack::s_pack);
-        set(vm, "unpack", crate::vm::lib_strpack::s_unpack);
-        set(vm, "packsize", crate::vm::lib_strpack::s_packsize);
+    for (name, f) in fns {
+        let fv = vm.native(f);
+        set(vm, t, name, fv);
+    }
+    // 5.1's LUA_COMPAT_GFIND keeps `gfind` as the very same function as
+    // `gmatch`; the suite identity-tests them.
+    let gmatch_v = vm.native(s_gmatch);
+    set(vm, t, "gmatch", gmatch_v);
+    if v == LuaVersion::Lua51 {
+        set(vm, t, "gfind", gmatch_v);
     }
     vm.set_global("string", Value::Table(t))
         .expect("stdlib registration");
     vm.barrier_back_table(t);
-    // shared string metatable: methods resolve through the library table
     let mt = vm.heap.new_table();
-    let idx = Value::Str(vm.heap.intern(b"__index"));
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { mt.as_mut() }
-        .set(&mut vm.heap, idx, Value::Table(t))
-        .expect("valid key");
+    set(vm, mt, "__index", Value::Table(t));
     vm.barrier_back_table(mt);
     vm.set_string_metatable(Some(mt));
 }
 
-pub(crate) fn check_str(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-    i: u32,
-    who: &str,
-) -> Result<Gc<LuaStr>, LuaError> {
-    match vm.nat_arg(fs, nargs, i) {
-        Value::Str(s) => Ok(s),
-        // numbers coerce to strings in string functions (PUC luaL_tolstring path)
-        Value::Int(x) => {
-            let s = crate::numeric::num_to_string(Num::Int(x));
-            Ok(vm.heap.intern(s.as_bytes()))
-        }
-        Value::Float(x) => {
-            let s = crate::numeric::num_to_string(Num::Float(x));
-            Ok(vm.heap.intern(s.as_bytes()))
-        }
-        v => Err(arg_error(
-            vm,
-            i + 1,
-            &format!("string expected, got {}", v.type_name()),
-        )),
-    }
-}
-
-/// PUC luaL_optinteger for a position argument: accepts integers, integral
-/// floats, and numeric strings; otherwise a "bad argument #n to 'who'" error.
-fn opt_int(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-    i: u32,
-    who: &str,
-    default: i64,
-) -> Result<i64, LuaError> {
-    match vm.nat_arg(fs, nargs, i) {
-        Value::Nil => Ok(default),
-        Value::Int(x) => Ok(x),
-        Value::Float(f) => crate::runtime::value::f2i_exact(f)
-            .ok_or_else(|| arg_error(vm, i + 1, "number has no integer representation")),
-        Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
-            Some(Num::Int(x)) => Ok(x),
-            Some(Num::Float(f)) => crate::runtime::value::f2i_exact(f)
-                .ok_or_else(|| arg_error(vm, i + 1, "number has no integer representation")),
-            None => Err(arg_error(vm, i + 1, "number expected, got string")),
-        },
-        v => {
-            let tn = vm.obj_typename(v);
-            Err(arg_error(vm, i + 1, &format!("number expected, got {tn}")))
-        }
-    }
-}
-
-/// PUC posrelat: translate 1-based/negative positions.
+/// PUC ≤5.3 `posrelat`: a negative position counts from the end, and one
+/// before the start becomes 0. Callers clamp; 5.4's `posrelatI` /
+/// `getendpos` come to the same after clamping.
 fn posrelat(pos: i64, len: usize) -> i64 {
     if pos >= 0 {
         pos
-    // i64::MIN's magnitude exceeds i64::MAX, so `(-pos) as usize` would
-    // overflow in debug. Compare via the unsigned magnitude instead.
-    } else if pos.unsigned_abs() as usize > len {
+    } else if pos.unsigned_abs() > len as u64 {
         0
     } else {
         len as i64 + pos + 1
@@ -135,315 +76,330 @@ fn posrelat(pos: i64, len: usize) -> i64 {
 }
 
 fn s_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "len")?;
-    let n = s.len() as i64;
-    Ok(vm.nat_return(fs, &[Value::Int(n)]))
-}
-
-fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    // only Lua functions can be dumped (PUC str_dump); a strip flag drops the
-    // debug names from the serialised chunk.
-    let Value::Closure(cl) = vm.nat_arg(fs, nargs, 0) else {
-        return Err(raise_str(vm, "unable to dump given function"));
-    };
-    let strip = vm.nat_arg(fs, nargs, 1).truthy();
-    let bytes = crate::vm::dump::dump(&cl.proto, strip, vm.version());
-    let v = Value::Str(vm.heap.intern(&bytes));
-    Ok(vm.nat_return(fs, &[v]))
+    let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
+    Ok(vm.nat_return(fs, &[Value::Int(s.len() as i64)]))
 }
 
 fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "sub")?;
-    let len = s.len();
-    let mut i = posrelat(opt_int(vm, fs, nargs, 1, "sub", 1)?, len);
-    let mut j = posrelat(opt_int(vm, fs, nargs, 2, "sub", -1)?, len);
-    if i < 1 {
-        i = 1;
-    }
-    if j > len as i64 {
-        j = len as i64;
-    }
-    let out = if i > j {
-        Vec::new()
+    let a = Args::new(fs, nargs);
+    let s = argcheck::check_string(vm, a, 0)?;
+    let l = s.len();
+    let start = posrelat(argcheck::check_integer(vm, a, 1)?, l).max(1);
+    let end = posrelat(argcheck::opt_integer(vm, a, 2, -1)?, l).min(l as i64);
+    let bytes: &[u8] = if start <= end {
+        &s.as_bytes()[(start - 1) as usize..end as usize]
     } else {
-        s.as_bytes()[(i - 1) as usize..j as usize].to_vec()
+        b""
     };
-    let v = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[v]))
+    let r = Value::Str(vm.heap.intern(bytes));
+    Ok(vm.nat_return(fs, &[r]))
 }
 
 fn s_upper(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "upper")?;
-    let out: Vec<u8> = s
-        .as_bytes()
-        .iter()
-        .map(|c| c.to_ascii_uppercase())
-        .collect();
-    let v = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[v]))
+    let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
+    let out = s.as_bytes().to_ascii_uppercase();
+    let r = Value::Str(vm.heap.intern(&out));
+    Ok(vm.nat_return(fs, &[r]))
 }
 
 fn s_lower(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "lower")?;
-    let out: Vec<u8> = s
-        .as_bytes()
-        .iter()
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    let v = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[v]))
-}
-
-/// PUC `luaL_checkinteger` semantics for a numeric argument: ints
-/// pass, integral floats convert, numeric STRINGS convert (the libc
-/// `lua_tointegerx` string leg), and anything else raises the
-/// standard `bad argument #N to 'who' (number expected, got T)` —
-/// not a bespoke wording (v2.14 CV.2, fixture 5.5/330).
-pub(crate) fn check_int_arg(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-    i: u32,
-    who: &str,
-) -> Result<i64, LuaError> {
-    let v = vm.nat_arg(fs, nargs, i);
-    let num = match v {
-        Value::Int(n) => Some(crate::numeric::Num::Int(n)),
-        Value::Float(f) => Some(crate::numeric::Num::Float(f)),
-        Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true),
-        _ => None,
-    };
-    match num {
-        Some(crate::numeric::Num::Int(n)) => Ok(n),
-        Some(crate::numeric::Num::Float(f)) => match crate::runtime::value::f2i_exact(f) {
-            Some(n) => Ok(n),
-            None => Err(vm.rt_err("number has no integer representation")),
-        },
-        None => Err(arg_error(
-            vm,
-            i + 1,
-            &format!("number expected, got {}", v.type_name()),
-        )),
-    }
-}
-
-const MAX_STR: usize = 1 << 30;
-
-fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "rep")?;
-    let n = check_int_arg(vm, fs, nargs, 1, "rep")?;
-    let sep: Vec<u8> = match vm.nat_arg(fs, nargs, 2) {
-        Value::Nil => Vec::new(),
-        Value::Str(x) => x.as_bytes().to_vec(),
-        v => {
-            return Err(arg_error(
-                vm,
-                3,
-                &format!("string expected, got {}", v.type_name()),
-            ));
-        }
-    };
-    let piece = s.len() + sep.len();
-    // `piece == 0` (both the string and the separator are empty) must
-    // short-circuit alongside `n <= 0`: the result is the empty string for
-    // any `n`, but the loop below would otherwise spin `n` times copying
-    // zero bytes — `string.rep("", math.maxinteger, "")` hangs the VM.
-    // The size check does not catch it, since `0 * n` never exceeds
-    // MAX_STR. Matches PUC 5.5.1's `if (n <= 0 || (len | lsep) == 0)`
-    // (lstrlib.c:144); PUC 5.5.0 and earlier hang here exactly as we did.
-    if n <= 0 || piece == 0 {
-        let v = Value::Str(vm.heap.intern(b""));
-        return Ok(vm.nat_return(fs, &[v]));
-    }
-    if piece.saturating_mul(n as usize) > MAX_STR {
-        return Err(raise_str(vm, "resulting string too large"));
-    }
-    let mut out = Vec::with_capacity(piece * n as usize);
-    for k in 0..n {
-        out.extend_from_slice(s.as_bytes());
-        if k < n - 1 {
-            out.extend_from_slice(&sep);
-        }
-    }
-    let v = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[v]))
+    let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
+    let out = s.as_bytes().to_ascii_lowercase();
+    let r = Value::Str(vm.heap.intern(&out));
+    Ok(vm.nat_return(fs, &[r]))
 }
 
 fn s_reverse(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "reverse")?;
+    let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     let mut out = s.as_bytes().to_vec();
     out.reverse();
-    let v = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[v]))
+    let r = Value::Str(vm.heap.intern(&out));
+    Ok(vm.nat_return(fs, &[r]))
+}
+
+/// The longest string the library builds (1 GiB). Past each dialect's own
+/// size check PUC goes on to ask the allocator; luna stops here and reports
+/// what a failing allocator would.
+pub(crate) const MAX_STR: u64 = 1 << 30;
+
+fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let v = vm.version();
+    let s = argcheck::check_string(vm, a, 0)?;
+    let n = if v <= LuaVersion::Lua52 {
+        i64::from(argcheck::check_int(vm, a, 1)?)
+    } else {
+        argcheck::check_integer(vm, a, 1)?
+    };
+    // 5.1 has no separator argument
+    let sep = if v == LuaVersion::Lua51 {
+        None
+    } else {
+        argcheck::opt_string(vm, a, 2)?
+    };
+    let (l, lsep) = (s.len() as u128, sep.map_or(0, |x| x.len()) as u128);
+    // the result is empty for any count when both pieces are; PUC before
+    // 5.5 spins `n` times producing it
+    if n <= 0 || l + lsep == 0 {
+        let r = Value::Str(vm.heap.intern(b""));
+        return Ok(vm.nat_return(fs, &[r]));
+    }
+    let n = n as u128;
+    // each dialect's own "too large" test; 5.1 has none
+    let too_large = if v == LuaVersion::Lua51 {
+        false
+    } else if v == LuaVersion::Lua52 {
+        l + lsep >= (usize::MAX >> 1) as u128 / n
+    } else if v < LuaVersion::Lua55 {
+        l + lsep > i32::MAX as u128 / n
+    } else {
+        l + lsep > i64::MAX as u128 / n
+    };
+    if too_large {
+        return Err(raise_str(vm, "resulting string too large"));
+    }
+    let total = n * (l + lsep) - lsep;
+    if total > u128::from(MAX_STR) {
+        return Err(vm.plain_err("not enough memory"));
+    }
+    let mut out = Vec::with_capacity(total as usize);
+    for k in 0..n {
+        out.extend_from_slice(s.as_bytes());
+        if let Some(sep) = sep
+            && k + 1 < n
+        {
+            out.extend_from_slice(sep.as_bytes());
+        }
+    }
+    let r = Value::Str(vm.heap.intern(&out));
+    Ok(vm.nat_return(fs, &[r]))
 }
 
 fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "byte")?;
-    let len = s.len();
-    // PUC: clamp AFTER both translations; j defaults to the raw i position
-    let pi = posrelat(opt_int(vm, fs, nargs, 1, "byte", 1)?, len);
-    let pj = posrelat(opt_int(vm, fs, nargs, 2, "byte", pi)?, len);
-    let i = pi.max(1);
-    let j = pj.min(len as i64);
-    if i > j {
+    let a = Args::new(fs, nargs);
+    let s = argcheck::check_string(vm, a, 0)?;
+    let l = s.len();
+    let pi = posrelat(argcheck::opt_integer(vm, a, 1, 1)?, l);
+    let pose = posrelat(argcheck::opt_integer(vm, a, 2, pi)?, l).min(l as i64);
+    let posi = pi.max(1);
+    if posi > pose {
         return Ok(0);
     }
-    let vals: Vec<Value> = s.as_bytes()[(i - 1) as usize..j as usize]
-        .iter()
-        .map(|&b| Value::Int(b as i64))
-        .collect();
+    let bytes = &s.as_bytes()[(posi - 1) as usize..pose as usize];
+    if let [b] = bytes {
+        return Ok(vm.nat_return(fs, &[Value::Int(i64::from(*b))]));
+    }
+    argcheck::check_stack(vm, a, bytes.len() as i64, "string slice too long")?;
+    let vals: Vec<Value> = bytes.iter().map(|&b| Value::Int(i64::from(b))).collect();
     Ok(vm.nat_return(fs, &vals))
 }
 
 fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let v = vm.version();
     let mut out = Vec::with_capacity(nargs as usize);
     for i in 0..nargs {
-        let c = vm.int_from(vm.nat_arg(fs, nargs, i), "use as a character code")?;
+        let c = if v <= LuaVersion::Lua52 {
+            i64::from(argcheck::check_int(vm, a, i)?)
+        } else {
+            argcheck::check_integer(vm, a, i)?
+        };
         if !(0..=255).contains(&c) {
-            return Err(arg_error(vm, i + 1, "value out of range"));
+            let msg = if v == LuaVersion::Lua51 {
+                "invalid value"
+            } else {
+                "value out of range"
+            };
+            return Err(arg_error(vm, i + 1, msg));
         }
         out.push(c as u8);
     }
-    let v = Value::Str(vm.heap.intern(&out));
-    Ok(vm.nat_return(fs, &[v]))
+    let r = Value::Str(vm.heap.intern(&out));
+    Ok(vm.nat_return(fs, &[r]))
 }
 
-// ---- pattern-based functions ----
+fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let v = vm.version();
+    // the strip flag arrived in 5.3
+    let strip = v >= LuaVersion::Lua53 && a.get(vm, 1).truthy();
+    let cl = if v >= LuaVersion::Lua55 {
+        match a.get(vm, 0) {
+            Value::Closure(cl) => cl,
+            _ => return Err(arg_error(vm, 1, "Lua function expected")),
+        }
+    } else {
+        match argcheck::check_function(vm, a, 0)? {
+            Value::Closure(cl) => cl,
+            _ => return Err(raise_str(vm, "unable to dump given function")),
+        }
+    };
+    let bytes = crate::vm::dump::dump(&cl.proto, strip, v);
+    let r = Value::Str(vm.heap.intern(&bytes));
+    Ok(vm.nat_return(fs, &[r]))
+}
 
-fn pat_err(vm: &mut Vm, e: pattern::PatError) -> LuaError {
+// ---- pattern matching ----
+
+fn flavor(v: LuaVersion) -> Flavor {
+    match v {
+        LuaVersion::Lua51 => Flavor::Lua51,
+        LuaVersion::Lua52 => Flavor::Lua52,
+        _ => Flavor::Lua53,
+    }
+}
+
+/// 5.1 reads patterns as C strings: a zero byte ends them.
+fn pattern_bytes(v: LuaVersion, p: &[u8]) -> &[u8] {
+    match (v, p.iter().position(|&b| b == 0)) {
+        (LuaVersion::Lua51, Some(z)) => &p[..z],
+        _ => p,
+    }
+}
+
+fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
     raise_str(vm, &e.0)
 }
 
-/// Captures → Lua values; an empty capture list yields the whole match.
-fn push_captures(vm: &mut Vm, src: &[u8], m: &pattern::Match, out: &mut Vec<Value>) {
-    if m.caps.is_empty() {
-        let s = Value::Str(vm.heap.intern(&src[m.start..m.end]));
-        out.push(s);
-        return;
-    }
-    for &c in &m.caps {
-        match c {
-            Cap::Span(a, b) => {
-                let s = Value::Str(vm.heap.intern(&src[a..b]));
-                out.push(s);
-            }
-            Cap::Pos(p) => out.push(Value::Int(p as i64 + 1)),
-        }
+fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Value {
+    match c {
+        CapValue::Span(a, b) => Value::Str(vm.heap.intern(&src[a..b])),
+        CapValue::Pos(p) => Value::Int(p as i64 + 1),
     }
 }
 
-/// Common init handling: 1-based, negative-from-end, clamped.
-fn init_offset(
+/// PUC `push_captures`: every capture, or the whole match `[s, e)` when
+/// there are none and `whole` is set.
+fn push_captures(
     vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-    arg: u32,
-    who: &str,
-    len: usize,
-) -> Result<Option<usize>, LuaError> {
-    let raw = posrelat(opt_int(vm, fs, nargs, arg, who, 1)?, len);
-    if raw > len as i64 + 1 {
-        return Ok(None); // past the end: no match possible
+    ms: &MatchState,
+    src: &[u8],
+    s: usize,
+    e: usize,
+    whole: bool,
+    out: &mut Vec<Value>,
+) -> Result<(), LuaError> {
+    let n = if ms.level() == 0 && whole {
+        1
+    } else {
+        ms.level()
+    };
+    for i in 0..n {
+        let c = ms.get_capture(i, s, e).map_err(|err| pat_err(vm, err))?;
+        out.push(cap_value(vm, src, c));
     }
-    Ok(Some((raw.max(1) - 1) as usize))
+    Ok(())
+}
+
+/// PUC `nospecials`: no byte from `SPECIALS` (5.1 stops looking at a zero).
+fn no_specials(v: LuaVersion, p: &[u8]) -> bool {
+    !pattern::has_specials(pattern_bytes(v, p))
+}
+
+fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let v = vm.version();
+    let s = argcheck::check_string(vm, a, 0)?;
+    let p = argcheck::check_string(vm, a, 1)?;
+    let (src, pat) = (s.as_bytes(), p.as_bytes());
+    let ls = src.len();
+    let init = posrelat(argcheck::opt_integer(vm, a, 2, 1)?, ls);
+    let init = if v == LuaVersion::Lua51 {
+        // 5.1 clamps a start past the end instead of failing
+        (init - 1).clamp(0, ls as i64) as usize
+    } else if init > ls as i64 + 1 {
+        return Ok(vm.nat_return(fs, &[Value::Nil]));
+    } else {
+        (init.max(1) - 1) as usize
+    };
+    if find && (a.get(vm, 3).truthy() || no_specials(v, pat)) {
+        return Ok(match pattern::plain_find(src, pat, init) {
+            Some(at) => {
+                let r = [
+                    Value::Int(at as i64 + 1),
+                    Value::Int((at + pat.len()) as i64),
+                ];
+                vm.nat_return(fs, &r)
+            }
+            None => vm.nat_return(fs, &[Value::Nil]),
+        });
+    }
+    let pat = pattern_bytes(v, pat);
+    let (anchor, body) = pattern::anchor_split(pat);
+    let mut ms = MatchState::new(src, body, flavor(v));
+    let mut s1 = init;
+    loop {
+        if let Some(e) = ms.try_at(s1).map_err(|err| pat_err(vm, err))? {
+            let mut out = Vec::new();
+            if find {
+                out.push(Value::Int(s1 as i64 + 1));
+                out.push(Value::Int(e as i64));
+            }
+            push_captures(vm, &ms, src, s1, e, !find, &mut out)?;
+            return Ok(vm.nat_return(fs, &out));
+        }
+        if anchor || s1 >= ls {
+            return Ok(vm.nat_return(fs, &[Value::Nil]));
+        }
+        s1 += 1;
+    }
 }
 
 fn s_find(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "find")?;
-    let p = check_str(vm, fs, nargs, 1, "find")?;
-    let src = s.as_bytes().to_vec();
-    let pat = p.as_bytes().to_vec();
-    let Some(init) = init_offset(vm, fs, nargs, 2, "find", src.len())? else {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
-    };
-    let plain = vm.nat_arg(fs, nargs, 3).truthy();
-    if plain || !pattern::has_specials(&pat) {
-        return match pattern::plain_find(&src, &pat, init) {
-            Some(at) => {
-                let st = Value::Int(at as i64 + 1);
-                let en = Value::Int((at + pat.len()) as i64);
-                Ok(vm.nat_return(fs, &[st, en]))
-            }
-            None => Ok(vm.nat_return(fs, &[Value::Nil])),
-        };
-    }
-    match pattern::find(&src, &pat, init).map_err(|e| pat_err(vm, e))? {
-        Some(m) => {
-            let mut out = vec![Value::Int(m.start as i64 + 1), Value::Int(m.end as i64)];
-            if !m.caps.is_empty() {
-                push_captures(vm, &src, &m, &mut out);
-            }
-            Ok(vm.nat_return(fs, &out))
-        }
-        None => Ok(vm.nat_return(fs, &[Value::Nil])),
-    }
+    find_aux(vm, fs, nargs, true)
 }
 
 fn s_match(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "match")?;
-    let p = check_str(vm, fs, nargs, 1, "match")?;
-    let src = s.as_bytes().to_vec();
-    let pat = p.as_bytes().to_vec();
-    let Some(init) = init_offset(vm, fs, nargs, 2, "match", src.len())? else {
-        return Ok(vm.nat_return(fs, &[Value::Nil]));
-    };
-    match pattern::find(&src, &pat, init).map_err(|e| pat_err(vm, e))? {
-        Some(m) => {
-            let mut out = Vec::new();
-            push_captures(vm, &src, &m, &mut out);
-            Ok(vm.nat_return(fs, &out))
-        }
-        None => Ok(vm.nat_return(fs, &[Value::Nil])),
-    }
+    find_aux(vm, fs, nargs, false)
 }
 
-/// gmatch iterator: upvalues [src, pat, pos, lastmatch]. `lastmatch` is the
-/// end of the previous match (-1 = none); PUC gmatch_aux rejects an empty
-/// match whose end coincides with it, scanning one byte forward instead, so
-/// `gmatch("ab", "()%s*()")` advances cleanly past empty matches.
+/// gmatch iterator; upvalues [subject, pattern, next start, end of the last
+/// match or -1]. A '^' in the pattern is an ordinary character here.
+///
+/// Before 5.3 an empty match simply moves the next start one byte on; 5.3
+/// instead rejects a match ending where the previous one ended.
 fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    let Value::Str(s) = vm.nat_upval(fs, 0) else {
-        unreachable!()
+    let (Value::Str(s), Value::Str(p), Value::Int(pos), Value::Int(last)) = (
+        vm.nat_upval(fs, 0),
+        vm.nat_upval(fs, 1),
+        vm.nat_upval(fs, 2),
+        vm.nat_upval(fs, 3),
+    ) else {
+        unreachable!("gmatch state")
     };
-    let Value::Str(p) = vm.nat_upval(fs, 1) else {
-        unreachable!()
-    };
-    let Value::Int(pos) = vm.nat_upval(fs, 2) else {
-        unreachable!()
-    };
-    let last = match vm.nat_upval(fs, 3) {
-        Value::Int(x) if x >= 0 => Some(x as usize),
-        _ => None,
-    };
-    let src = s.as_bytes().to_vec();
-    let pat = p.as_bytes().to_vec();
-    let (anchor, body) = pattern::anchor_split(&pat);
-    let mut sp = pos as usize;
-    while sp <= src.len() {
-        if let Some(m) = pattern::match_at(&src, body, sp).map_err(|e| pat_err(vm, e))?
-            && last != Some(m.end)
+    let v = vm.version();
+    let src = s.as_bytes();
+    let mut ms = MatchState::new(src, pattern_bytes(v, p.as_bytes()), flavor(v));
+    let legacy = v <= LuaVersion::Lua52;
+    let mut from = pos as usize;
+    while from <= src.len() {
+        let m = ms.try_at(from).map_err(|err| pat_err(vm, err))?;
+        if let Some(e) = m
+            && (legacy || last != e as i64)
         {
-            vm.nat_set_upval(fs, 2, Value::Int(m.end as i64));
-            vm.nat_set_upval(fs, 3, Value::Int(m.end as i64));
+            let next = if legacy && e == from { e + 1 } else { e };
+            vm.nat_set_upval(fs, 2, Value::Int(next as i64));
+            vm.nat_set_upval(fs, 3, Value::Int(e as i64));
             let mut out = Vec::new();
-            push_captures(vm, &src, &m, &mut out);
+            push_captures(vm, &ms, src, from, e, true, &mut out)?;
             return Ok(vm.nat_return(fs, &out));
         }
-        if anchor {
-            break;
-        }
-        sp += 1;
+        from += 1;
     }
-    Ok(vm.nat_return(fs, &[Value::Nil]))
+    Ok(0)
 }
 
 fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "gmatch")?;
-    let p = check_str(vm, fs, nargs, 1, "gmatch")?;
-    // optional 1-based init (5.4): clamp; past the end means no iterations
-    let init = match init_offset(vm, fs, nargs, 2, "gmatch", s.len())? {
-        Some(off) => off as i64,
-        None => s.len() as i64 + 1,
+    let a = Args::new(fs, nargs);
+    let s = argcheck::check_string(vm, a, 0)?;
+    let p = argcheck::check_string(vm, a, 1)?;
+    // the start position arrived in 5.4
+    let init = if vm.version() >= LuaVersion::Lua54 {
+        let ls = s.len() as i64;
+        let i = posrelat(argcheck::opt_integer(vm, a, 2, 1)?, s.len()).max(1) - 1;
+        i.min(ls + 1)
+    } else {
+        0
     };
     let it = vm.native_with(
         gmatch_iter,
@@ -458,52 +414,63 @@ fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let s = check_str(vm, fs, nargs, 0, "gsub")?;
-    let p = check_str(vm, fs, nargs, 1, "gsub")?;
-    let repl = vm.nat_arg(fs, nargs, 2);
-    match repl {
-        Value::Str(_)
-        | Value::Int(_)
-        | Value::Float(_)
-        | Value::Table(_)
-        | Value::Closure(_)
-        | Value::Native(_) => {}
-        v => {
-            return Err(arg_error(
-                vm,
-                3,
-                &format!("string/function/table expected, got {}", v.type_name()),
-            ));
-        }
-    }
-    let max_n = match vm.nat_arg(fs, nargs, 3) {
-        Value::Nil => i64::MAX,
-        _ => check_int_arg(vm, fs, nargs, 3, "gsub")?,
+    let a = Args::new(fs, nargs);
+    let v = vm.version();
+    let s = argcheck::check_string(vm, a, 0)?;
+    let p = argcheck::check_string(vm, a, 1)?;
+    let repl = a.get(vm, 2);
+    let srcl = s.len() as i64;
+    let max_s: i128 = match v {
+        LuaVersion::Lua51 => i128::from(argcheck::opt_int(vm, a, 3, (srcl + 1) as i32)?),
+        // 5.2 keeps the count in a size_t: a negative one is huge
+        LuaVersion::Lua52 => i128::from(argcheck::opt_integer(vm, a, 3, srcl + 1)? as u64),
+        _ => i128::from(argcheck::opt_integer(vm, a, 3, srcl + 1)?),
     };
-    let src = s.as_bytes().to_vec();
-    let pat = p.as_bytes().to_vec();
-    let (anchor, body) = pattern::anchor_split(&pat);
-    let body = body.to_vec();
+    let repl_ok = matches!(
+        repl,
+        Value::Str(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Table(_)
+            | Value::Closure(_)
+            | Value::Native(_)
+    );
+    if !repl_ok {
+        return Err(if v >= LuaVersion::Lua54 {
+            argcheck::type_error(vm, a, 2, "string/function/table")
+        } else {
+            arg_error(vm, 3, "string/function/table expected")
+        });
+    }
+    // a string or number replacement is a template
+    let template = match repl {
+        Value::Str(t) => Some(t),
+        Value::Int(_) | Value::Float(_) => Some(argcheck::check_string(vm, a, 2)?),
+        _ => None,
+    };
+    let src = s.as_bytes();
+    let (anchor, body) = pattern::anchor_split(pattern_bytes(v, p.as_bytes()));
+    let mut ms = MatchState::new(src, body, flavor(v));
     let mut out: Vec<u8> = Vec::new();
     let mut pos = 0usize;
-    let mut count: i64 = 0;
-    // PUC str_gsub: match anchored at the current position; reject an empty
-    // match whose end coincides with the previous match (so " *" over "a b"
-    // yields "-a-b-", not "-a--b-"); otherwise copy one byte and advance.
-    let mut last_match: Option<usize> = None;
-    // PUC reuses the original string when nothing actually changed (no match,
-    // or every function/table replacement returned nil/false). `count` still
-    // counts matches; `changed` gates the reuse.
+    let mut n: i128 = 0;
+    let mut last: Option<usize> = None;
     let mut changed = false;
-    while count < max_n {
-        let m = pattern::match_at(&src, &body, pos).map_err(|e| pat_err(vm, e))?;
+    while n < max_s {
+        let m = ms.try_at(pos).map_err(|err| pat_err(vm, err))?;
+        // 5.3 rejects an empty match right after the previous match; earlier
+        // versions take it and then copy a byte
+        let m = match m {
+            Some(e) if v >= LuaVersion::Lua53 && last == Some(e) => None,
+            m => m,
+        };
+        if let Some(e) = m {
+            n += 1;
+            changed |= add_value(vm, &ms, src, pos, e, repl, template, &mut out)?;
+            last = Some(e);
+        }
         match m {
-            Some(m) if last_match != Some(m.end) => {
-                count += 1;
-                changed |= gsub_one(vm, &src, &m, repl, &mut out)?;
-                pos = m.end;
-                last_match = Some(m.end);
-            }
+            Some(e) if v >= LuaVersion::Lua53 || e > pos => pos = e,
             _ if pos < src.len() => {
                 out.push(src[pos]);
                 pos += 1;
@@ -514,118 +481,107 @@ fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             break;
         }
     }
-    let res = if changed {
+    // 5.4 hands back the subject itself when nothing was replaced
+    let res = if v >= LuaVersion::Lua54 && !changed {
+        Value::Str(s)
+    } else {
         out.extend_from_slice(&src[pos..]);
         Value::Str(vm.heap.intern(&out))
-    } else {
-        Value::Str(s)
     };
-    Ok(vm.nat_return(fs, &[res, Value::Int(count)]))
+    Ok(vm.nat_return(fs, &[res, Value::Int(n as i64)]))
 }
 
-/// One replacement (PUC add_value): string template, table lookup, or call.
-fn gsub_one(
+/// PUC `add_value`: append the replacement for the match `[s, e)`; false
+/// when a function or table kept the original text.
+#[allow(clippy::too_many_arguments)]
+fn add_value(
     vm: &mut Vm,
+    ms: &MatchState,
     src: &[u8],
-    m: &pattern::Match,
+    s: usize,
+    e: usize,
     repl: Value,
+    template: Option<Gc<LuaStr>>,
     out: &mut Vec<u8>,
 ) -> Result<bool, LuaError> {
-    let whole = &src[m.start..m.end];
-    let cap_value = |vm: &mut Vm, idx: usize| -> Result<Value, LuaError> {
-        if m.caps.is_empty() {
-            if idx == 0 {
-                return Ok(Value::Str(vm.heap.intern(whole)));
-            }
-            return Err(raise_str(
-                vm,
-                &format!("invalid capture index %{}", idx + 1),
-            ));
+    if let Some(t) = template {
+        add_s(vm, ms, src, s, e, t.as_bytes(), out)?;
+        return Ok(true);
+    }
+    let r = match repl {
+        Value::Table(_) => {
+            let k = ms.get_capture(0, s, e).map_err(|err| pat_err(vm, err))?;
+            let k = cap_value(vm, src, k);
+            vm.index_value(repl, k)?
         }
-        match m.caps.get(idx) {
-            Some(Cap::Span(a, b)) => Ok(Value::Str(vm.heap.intern(&src[*a..*b]))),
-            Some(Cap::Pos(p)) => Ok(Value::Int(*p as i64 + 1)),
-            None => Err(raise_str(
-                vm,
-                &format!("invalid capture index %{}", idx + 1),
-            )),
-        }
-    };
-    let result = match repl {
-        Value::Str(r) => {
-            let t = r.as_bytes().to_vec();
-            let mut i = 0;
-            while i < t.len() {
-                if t[i] == b'%' {
-                    i += 1;
-                    match t.get(i) {
-                        Some(b'%') => out.push(b'%'),
-                        Some(&d @ b'0'..=b'9') => {
-                            if d == b'0' {
-                                out.extend_from_slice(whole);
-                            } else {
-                                let v = cap_value(vm, (d - b'1') as usize)?;
-                                append_value(vm, v, out)?;
-                            }
-                        }
-                        _ => {
-                            return Err(raise_str(vm, "invalid use of '%' in replacement string"));
-                        }
-                    }
-                    i += 1;
-                } else {
-                    out.push(t[i]);
-                    i += 1;
-                }
-            }
-            return Ok(true);
-        }
-        Value::Int(_) | Value::Float(_) => {
-            let bytes = vm.tostring_basic(repl);
-            out.extend_from_slice(&bytes);
-            return Ok(true);
-        }
-        Value::Table(t) => {
-            // PUC gsub uses lua_gettable: the lookup honours __index
-            let k = cap_value(vm, 0)?;
-            vm.index_value(Value::Table(t), k)?
-        }
-        f @ (Value::Closure(_) | Value::Native(_)) => {
+        f => {
             let mut args = Vec::new();
-            push_captures(vm, src, m, &mut args);
-            // gsub is an unprotected C call: the replacement runs non-yieldable.
+            push_captures(vm, ms, src, s, e, true, &mut args)?;
+            // an unprotected C call: the replacement cannot yield
             vm.call_noyield(f, &args)?
                 .first()
                 .copied()
                 .unwrap_or(Value::Nil)
         }
-        _ => unreachable!(),
     };
-    match result {
-        // function/table returning nil/false keeps the original text unchanged
+    match r {
         Value::Nil | Value::Bool(false) => {
-            out.extend_from_slice(whole);
+            out.extend_from_slice(&src[s..e]);
             Ok(false)
         }
-        v => {
-            append_value(vm, v, out)?;
+        Value::Str(x) => {
+            out.extend_from_slice(x.as_bytes());
             Ok(true)
         }
+        n @ (Value::Int(_) | Value::Float(_)) => {
+            let b = vm.tostring_basic(n);
+            out.extend_from_slice(&b);
+            Ok(true)
+        }
+        other => Err(raise_str(
+            vm,
+            &format!("invalid replacement value (a {})", other.type_name()),
+        )),
     }
 }
 
-fn append_value(vm: &mut Vm, v: Value, out: &mut Vec<u8>) -> Result<(), LuaError> {
-    match v {
-        Value::Str(s) => out.extend_from_slice(s.as_bytes()),
-        Value::Int(_) | Value::Float(_) => {
-            let b = vm.tostring_basic(v);
-            out.extend_from_slice(&b);
+/// PUC `add_s`: expand `%0`-`%9` and `%%` in a template. 5.1 copies any
+/// other escaped byte literally; later versions reject it.
+fn add_s(
+    vm: &mut Vm,
+    ms: &MatchState,
+    src: &[u8],
+    s: usize,
+    e: usize,
+    t: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<(), LuaError> {
+    let lenient = vm.version() == LuaVersion::Lua51;
+    let mut i = 0;
+    while i < t.len() {
+        let c = t[i];
+        i += 1;
+        if c != b'%' {
+            out.push(c);
+            continue;
         }
-        v => {
-            return Err(raise_str(
-                vm,
-                &format!("invalid replacement value (a {})", v.type_name()),
-            ));
+        // the template's terminating zero follows a final '%'
+        let d = t.get(i).copied().unwrap_or(0);
+        i += 1;
+        match d {
+            b'0' => out.extend_from_slice(&src[s..e]),
+            b'1'..=b'9' => {
+                let c = ms
+                    .get_capture((d - b'1') as usize, s, e)
+                    .map_err(|err| pat_err(vm, err))?;
+                match c {
+                    CapValue::Span(a, b) => out.extend_from_slice(&src[a..b]),
+                    CapValue::Pos(p) => out.extend_from_slice((p + 1).to_string().as_bytes()),
+                }
+            }
+            b'%' => out.push(b'%'),
+            d if lenient => out.push(d),
+            _ => return Err(raise_str(vm, "invalid use of '%' in replacement string")),
         }
     }
     Ok(())

@@ -1960,7 +1960,7 @@ fn string_dump_round_trips() {
         10,
     );
     // only Lua functions can be dumped
-    check_error("string.dump(print)", "unable to dump given function");
+    check_error("string.dump(print)", "Lua function expected");
 }
 
 #[test]
