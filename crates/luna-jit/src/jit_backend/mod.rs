@@ -510,6 +510,11 @@ fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
 /// numerics only; `math.log(x, base)` / `math.atan(y, x)` /
 /// `math.max(...)` use a different bytecode window (B≠2) so the
 /// pattern matcher rejects them.
+///
+/// The fold always yields a float, which is right for all of these
+/// only on 5.1/5.2: 5.3+ `floor`/`ceil` return integers, and 5.3+
+/// `atan(y)` is `atan2(y, 1)`, rounded differently from libm `atan`.
+/// [`FLOAT_ONLY_LIBM_FNS`] lists the ones that fold on 5.1/5.2 only.
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"sin", "sin"),
     (b"cos", "cos"),
@@ -523,6 +528,10 @@ const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"floor", "floor"),
     (b"ceil", "ceil"),
 ];
+
+/// Entries of [`MATH_LIBM_FNS`] whose float result matches PUC only on
+/// 5.1/5.2.
+const FLOAT_ONLY_LIBM_FNS: &[&str] = &["atan", "floor", "ceil"];
 
 /// P11-S5c.C — `Table` layout constants used by the inline-aset
 /// fast path. Cranelift IR walks past the helper call ABI by
@@ -902,7 +911,7 @@ pub fn lower_int_chunk_into<M: Module>(
     if env_upval_present {
         let mut try_pc = 0usize;
         while try_pc + 3 < n {
-            if let Some(fold) = try_match_math_fold(&proto, try_pc) {
+            if let Some(fold) = try_match_math_fold(&proto, try_pc, float_only) {
                 folded_math[try_pc] = true;
                 folded_math[try_pc + 1] = true;
                 folded_math[try_pc + 2] = true;
@@ -3970,7 +3979,7 @@ fn aligned_def(
 /// promotion. Caller (`try_compile_int_chunk`'s pre-scan) marks the
 /// participating PCs in `folded_math[]` and pushes the fold to
 /// `math_folds`.
-fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
+fn try_match_math_fold(proto: &Proto, start_pc: usize, float_only: bool) -> Option<MathFold> {
     let code = &proto.code;
     let i0 = *code.get(start_pc)?;
     let i1 = *code.get(start_pc + 1)?;
@@ -4018,6 +4027,9 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
     let fn_name = MATH_LIBM_FNS
         .iter()
         .find_map(|&(needle, name)| (needle == fname.as_bytes()).then_some(name))?;
+    if !float_only && FLOAT_ONLY_LIBM_FNS.contains(&fn_name) {
+        return None;
+    }
 
     // Move R[A+1] = R[arg]. The destination must be the Call's arg
     // slot.
