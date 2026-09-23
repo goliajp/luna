@@ -177,7 +177,7 @@ fn refused(src: &str, mutate: impl FnOnce(&mut P), want: &str) {
     mutate(&mut p);
     let msg = load_err(&chunk(&header, &p));
     assert!(
-        msg.starts_with("bad binary format (") && msg.contains(want),
+        msg.starts_with("crafted: bad binary format (") && msg.contains(want),
         "unexpected error: {msg}"
     );
 }

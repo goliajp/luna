@@ -10,7 +10,8 @@
 //!
 //! The verifier knows only the `Proto` / instruction invariants below. Each
 //! is what some part of the VM assumes; a chunk that breaks one is refused
-//! with a `bad binary format (...)` load error.
+//! with a load error (`bad binary format (...)` in 5.4/5.5; see
+//! `super::error` for the other dialects' wording).
 //!
 //! Per function:
 //! - the code is non-empty (the first fetch is unchecked);
@@ -60,10 +61,10 @@ mod operands;
 use crate::runtime::function::Proto;
 use crate::vm::isa::{Inst, NUM_OPS, Op};
 
-/// Check `proto` and every function nested in it; `Err` carries the
-/// complete load-error message.
+/// Check `proto` and every function nested in it; `Err` says where and
+/// what (the caller words it for the running dialect).
 pub(super) fn verify(proto: &Proto) -> Result<(), String> {
-    verify_proto(proto, None).map_err(|e| format!("bad binary format ({e})"))
+    verify_proto(proto, None)
 }
 
 fn verify_proto(p: &Proto, parent: Option<&Proto>) -> Result<(), String> {

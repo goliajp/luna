@@ -213,8 +213,26 @@ verifier on the function tree either loader produces (its own dump format,
 or a PUC chunk after translation) before handing it to the VM. There is no
 switch to turn it off. A chunk that fails is refused by
 `load` / `loadfile` / `dofile` / `Vm::load` with a load error of the form
+(5.4 / 5.5 wording)
 
-    bad binary format (function at line 3, instruction 5 (LoadK): constant 12 out of range (7 constants))
+    binary string: bad binary format (function at line 3, instruction 5 (LoadK): constant 12 out of range (7 constants))
+
+Every binary-load error, from the verifier or from reading a truncated or
+foreign chunk, is worded as the running dialect's `lundump.c` words it,
+behind `lundump.c`'s chunk name (`@`/`=` dropped, `binary string` for a
+chunk loaded from a string under its default name):
+
+| Dialect | Truncated | Other header | Refused by the verifier |
+|---|---|---|---|
+| 5.1 | `unexpected end in precompiled chunk` | `bad header in precompiled chunk` | `bad code in precompiled chunk (<detail>)` |
+| 5.2 | `truncated precompiled chunk` | `not a` / `version mismatch in` / `incompatible` / `corrupted` + ` precompiled chunk` | `corrupted precompiled chunk (<detail>)` |
+| 5.3 | `truncated precompiled chunk` | `not a` / `version mismatch in` / `format mismatch in` / `corrupted` / `<type> size mismatch in` / `endianness mismatch in` / `float format mismatch in` + ` precompiled chunk` | `corrupted precompiled chunk (<detail>)` |
+| 5.4 | `bad binary format (truncated chunk)` | `bad binary format (` `not a binary chunk` / `version mismatch` / `format mismatch` / `corrupted chunk` / `<type> size mismatch` / `integer format mismatch` / `float format mismatch` `)` | `bad binary format (<detail>)` |
+| 5.5 | as 5.4 | as 5.4, with 5.5's `<type> size mismatch` / `<type> format mismatch` names | `bad binary format (<detail>)` |
+
+PUC has no verifier after 5.1, so the last column has no PUC counterpart
+in 5.2+; the category is the nearest one `lundump.c` has, followed by
+luna's detail.
 
 It checks, for every function and nested function:
 

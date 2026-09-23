@@ -201,7 +201,7 @@ fn rejects_big_endian_header() {
     chunk[6] = 0x00; // flip endian flag to BE
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = err.to_string();
-    assert!(s.contains("little-endian"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (integer format mismatch)");
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn rejects_bad_sizeof_int() {
     chunk[7] = 8; // sizeof(int) = 8 — luna requires 4
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = err.to_string();
-    assert!(s.contains("sizeof(int)"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (int size mismatch)");
 }
 
 #[test]
