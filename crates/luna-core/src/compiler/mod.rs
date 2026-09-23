@@ -584,10 +584,26 @@ impl<'a> Compiler<'a> {
         } else {
             format!("function at line {line_defined}")
         };
-        self.err(
-            self.last_line,
-            format!("too many {what} (limit is {limit}) in {where_}"),
-        )
+        let msg = if self.version <= LuaVersion::Lua51 {
+            format!("{where_} has more than {limit} {what}")
+        } else {
+            format!("too many {what} (limit is {limit}) in {where_}")
+        };
+        self.err(self.last_line, msg)
+    }
+
+    /// Upvalues a level already holds that count against the limit. A 5.1
+    /// function's slot 0 is the `_ENV` cell luna adds for `setfenv`; PUC 5.1
+    /// keeps a function's environment outside its upvalues, so that slot is
+    /// not one of the 60.
+    fn counted_upvals(&self, li: usize) -> u32 {
+        let n = self.levels[li].upvals.len() as u32;
+        let hidden_env = self.version == LuaVersion::Lua51
+            && self.levels[li]
+                .upvals
+                .first()
+                .is_some_and(|u| &*u.name == "_ENV");
+        n - u32::from(hidden_env)
     }
 
     /// PUC `luaK_checkstack` on overflow: 5.1/5.2 say the expression is too
@@ -1221,7 +1237,7 @@ impl<'a> Compiler<'a> {
                     read_only = self.levels[li - 1].locals[idx].read_only;
                 }
                 let ui = self.levels[li].upvals.len() as u32;
-                if ui >= max_upvals(self.version) {
+                if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
                 self.levels[li].upvals.push(UpvalDesc {
@@ -1235,7 +1251,7 @@ impl<'a> Compiler<'a> {
             VarKind::Upval(pidx) => {
                 let read_only = self.levels[li - 1].upvals[pidx as usize].read_only;
                 let ui = self.levels[li].upvals.len() as u32;
-                if ui >= max_upvals(self.version) {
+                if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
                 self.levels[li].upvals.push(UpvalDesc {
@@ -3523,11 +3539,16 @@ impl<'a> Compiler<'a> {
                 self.emit(Inst::iabc(Op::Return1, r, 0, 0, false));
             }
             n if n > 254 => {
-                // PUC `OP_RETURN`'s B field is a byte (`b = nret + 1`), so the
-                // statement supports at most 254 fixed return values
-                // (calls.lua :573). Report the limit explicitly rather than
-                // letting it surface as the generic register-pressure error.
-                return Err(self.err(self.last_line, "too many returns"));
+                // `OP_RETURN`'s B field is a byte (`b = nret + 1`): at most
+                // 254 fixed values. PUC places every value in a register
+                // first, so the register limit speaks first unless the
+                // values fit: only 5.5 allows 255 registers and then checks
+                // the count, with `errorlimit` (5.5 calls.lua :591).
+                let base = self.lr().freereg as usize;
+                if self.version >= LuaVersion::Lua55 && base + n <= 255 {
+                    return Err(self.limit_err("returns", 255));
+                }
+                return Err(self.regs_error(self.last_line));
             }
             n => {
                 let base = self.lr().freereg;
