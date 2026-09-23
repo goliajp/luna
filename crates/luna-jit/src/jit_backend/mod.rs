@@ -713,6 +713,10 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
     builder.symbol("luna_jit_table_len", luna_jit_table_len as *const u8);
     builder.symbol("luna_jit_upval_get", luna_jit_upval_get as *const u8);
     builder.symbol(
+        "luna_jit_upval_get_float",
+        luna_jit_upval_get_float as *const u8,
+    );
+    builder.symbol(
         "luna_jit_self_upval_check",
         luna_jit_self_upval_check as *const u8,
     );
@@ -3094,18 +3098,19 @@ pub fn lower_int_chunk_into<M: Module>(
                 let a = ins.a() as usize;
                 if is_upval_value_read[pc] {
                     // P11-S5d.J — ValueRead: fetch the upvalue at
-                    // runtime via `luna_jit_upval_get`. The dispatcher
-                    // has pinned `JIT_CL` to the active closure for
-                    // this entry, so the helper can resolve the
-                    // upvalue cell. Result is the raw 8-byte payload;
-                    // `aligned_def` bitcasts to F64 since the sweep
-                    // pinned reg_kinds[a] = Float.
+                    // runtime. The dispatcher has pinned `JIT_CL` to
+                    // the active closure for this entry, so the helper
+                    // can resolve the upvalue cell. The sweep pinned
+                    // reg_kinds[a] = Float, so the helper deopts when
+                    // the upvalue holds anything else (a table with
+                    // `__add`, a numeric string): its payload is not a
+                    // float. `aligned_def` bitcasts the bits to F64.
                     let idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
                     let mut sig = module.make_signature();
                     sig.params.push(AbiParam::new(types::I64));
                     sig.returns.push(AbiParam::new(types::I64));
                     let id = module
-                        .declare_function("luna_jit_upval_get", Linkage::Import, &sig)
+                        .declare_function("luna_jit_upval_get_float", Linkage::Import, &sig)
                         .ok()?;
                     let r = module.declare_func_in_func(id, bcx.func);
                     let call_inst = bcx.ins().call(r, &[idx_arg]);

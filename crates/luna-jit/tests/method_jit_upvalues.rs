@@ -66,3 +66,39 @@ fn reassigned_recursive_local_calls_the_new_function() {
         same(v, src, "5 101");
     }
 }
+
+/// 5.1/5.2 read a numeric upvalue as a float without a check; a table
+/// with `__add` or a numeric string is not one.
+#[test]
+fn non_number_upvalue_in_arithmetic() {
+    let add = r#"
+        local t = setmetatable({}, {__add = function(a, b) return 40 end})
+        local function f() return t + 1 end
+        return tostring(f())"#;
+    let coerce = r#"
+        local k = "10"
+        local function h(x) return x + k end
+        return tostring(h(1))"#;
+    for v in [LuaVersion::Lua51, LuaVersion::Lua52] {
+        same(v, add, "40");
+        same(v, coerce, "11");
+    }
+}
+
+/// The report that found the upvalue read: a metamethod that yields,
+/// reached from a compiled coroutine body (5.2 can yield there, 5.1
+/// cannot).
+#[test]
+fn yielding_metamethod_on_an_upvalue() {
+    let src = r#"
+        local t = setmetatable({}, {__add = function(a, b) coroutine.yield("add") return 2 end})
+        local co = coroutine.create(function() local r = t + 1; return r end)
+        local ok, v = coroutine.resume(co)
+        return tostring(ok) .. " " .. tostring(v)"#;
+    same(
+        LuaVersion::Lua51,
+        src,
+        "false attempt to yield across metamethod/C-call boundary",
+    );
+    same(LuaVersion::Lua52, src, "true add");
+}

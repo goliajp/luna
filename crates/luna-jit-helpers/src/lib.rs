@@ -572,6 +572,30 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
+/// Method-JIT `R[A] = upvals[idx]` read of a value the chunk uses as a
+/// float (5.1/5.2, where every number is one). A non-number reaches
+/// arithmetic only through coercion or a metamethod, which compiled
+/// code does not run: it parks a deopt, and the dispatcher reruns the
+/// call in the interpreter.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_some() {
+        return 0;
+    }
+    // SAFETY: the method-JIT dispatcher enters with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    match vm.upval_get(cl, idx as u32) {
+        luna_core::runtime::Value::Float(f) => f.to_bits() as i64,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: upvalue is not a float"));
+            0
+        }
+    }
+}
+
 /// Method-JIT entry check for a chunk compiled with self-recursive
 /// calls: they are direct calls to the chunk's own code, which is right
 /// only while `upvals[idx]` holds the running closure. A forward-declared
