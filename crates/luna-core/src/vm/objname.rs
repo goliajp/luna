@@ -159,6 +159,12 @@ pub fn getlocalname(proto: &Proto, reg: u32, pc: usize) -> Option<&str> {
         .map(|lv| &*lv.name)
 }
 
+/// [`getobjname_in`] with 5.4/5.5's spellings, the ones this function
+/// gave before the dialect was a parameter.
+pub fn getobjname(proto: &Proto, lastpc: usize, reg: u32) -> Option<(&'static str, String)> {
+    getobjname_in(proto, lastpc, reg, LuaVersion::Lua55)
+}
+
 /// Name and kind for `reg` as of `lastpc`, e.g. ("field", "huge"). None when
 /// the register has no recoverable source-level name.
 ///
@@ -166,7 +172,7 @@ pub fn getlocalname(proto: &Proto, reg: u32, pc: usize) -> Option<&str> {
 /// only a constant string key (anything else is `'?'`); 5.2/5.3 also follow a
 /// key register back to a string constant; `t[1]`'s "integer index" is 5.4's
 /// (older versions index with a non-string constant, so `'?'`).
-pub fn getobjname(
+pub fn getobjname_in(
     proto: &Proto,
     lastpc: usize,
     reg: u32,
@@ -184,7 +190,7 @@ pub fn getobjname(
             let b = i.b();
             // trace the source register, but only backwards to avoid cycles
             if b < i.a() {
-                getobjname(proto, setpc, b, version)
+                getobjname_in(proto, setpc, b, version)
             } else {
                 None
             }
