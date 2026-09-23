@@ -33,9 +33,24 @@ pub fn compile_chunk(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
+    compile_parsed(ast, &[], version, source_name, heap)
+}
+
+/// [`compile_chunk`] with the `end` lines the parser recorded for loops
+/// ([`crate::frontend::parser::Parsed::end_lines`]); a [`Chunk`] carries no
+/// such lines, so code PUC emits after a loop's `end` is placed on that
+/// line only when they are given.
+pub(crate) fn compile_parsed(
+    ast: &Chunk,
+    end_lines: &[u32],
+    version: LuaVersion,
+    source_name: &[u8],
+    heap: &mut Heap,
+) -> Result<Gc<Proto>, SyntaxError> {
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
+        end_lines,
         heap,
         version,
         source,
@@ -81,6 +96,7 @@ pub fn compile_chunk_with_last_target(
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
+        end_lines: &[],
         heap,
         version,
         source,
@@ -206,6 +222,9 @@ struct BlockCx {
     /// of scope at this pc, before the loop's per-iteration CLOSE; PUC keeps
     /// the body in a block of its own and removes its variables first
     body_end: Option<(usize, u32)>,
+    /// the line of the loop's closing `end`, when known: the CLOSE after a
+    /// 5.4 `break` label is emitted there
+    end_line: Option<u32>,
 }
 
 struct LabelDef {
@@ -365,6 +384,8 @@ impl Level {
 
 struct Compiler<'a> {
     ast: &'a Chunk,
+    /// see [`compile_parsed`]
+    end_lines: &'a [u32],
     heap: &'a mut Heap,
     version: LuaVersion,
     source: Gc<LuaStr>,
@@ -386,6 +407,14 @@ struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     // ---- infrastructure ----
+
+    /// The `end` line the parser recorded for statement `sid`.
+    fn stat_end_line(&self, sid: StatId) -> Option<u32> {
+        self.end_lines
+            .get(sid.0 as usize)
+            .copied()
+            .filter(|&l| l != 0)
+    }
 
     fn l(&mut self) -> &mut Level {
         self.levels.last_mut().expect("no level")
@@ -653,6 +682,7 @@ impl<'a> Compiler<'a> {
             has_tbc: false,
             tbc_scope: false,
             body_end: None,
+            end_line: None,
         });
     }
 
@@ -675,6 +705,9 @@ impl<'a> Compiler<'a> {
             for &pc in &b.breaks {
                 self.patch_to_here(pc)?;
             }
+        }
+        if break_close && let Some(line) = b.end_line {
+            self.last_line = line;
         }
         if captured || b.has_tbc || break_close {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
@@ -2407,7 +2440,7 @@ impl<'a> Compiler<'a> {
             }
             Stat::While { cond, body } => {
                 let (cond, body) = (*cond, body.clone());
-                self.while_stat(cond, &body)
+                self.while_stat(cond, &body, self.stat_end_line(sid))
             }
             Stat::Repeat { body, cond } => {
                 let (body, cond) = (body.clone(), *cond);
@@ -2423,7 +2456,8 @@ impl<'a> Compiler<'a> {
                 let var = var.clone();
                 let (start, limit, step) = (*start, *limit, *step);
                 let body = body.clone();
-                self.numeric_for(&var.text, var.line, start, limit, step, &body)
+                let end = self.stat_end_line(sid);
+                self.numeric_for(&var.text, var.line, (start, limit, step), &body, end)
             }
             Stat::GenericFor {
                 vars,
@@ -2435,7 +2469,7 @@ impl<'a> Compiler<'a> {
                 let exprs: Vec<ExprId> = exprs.clone();
                 let body = body.clone();
                 let expr_line = *expr_line;
-                self.generic_for(&vars, &exprs, &body, expr_line)
+                self.generic_for(&vars, &exprs, &body, expr_line, self.stat_end_line(sid))
             }
             Stat::Break { line } => {
                 self.last_line = *line;
@@ -3113,7 +3147,12 @@ impl<'a> Compiler<'a> {
         self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
     }
 
-    fn while_stat(&mut self, cond: ExprId, body: &Block) -> Result<(), SyntaxError> {
+    fn while_stat(
+        &mut self,
+        cond: ExprId,
+        body: &Block,
+        end_line: Option<u32>,
+    ) -> Result<(), SyntaxError> {
         let top = self.here();
         let exit = self.cond_jump_false(cond)?;
         self.enter_block(true);
@@ -3124,6 +3163,7 @@ impl<'a> Compiler<'a> {
             self.close_body(first, floor);
         }
         self.jump_back(top)?;
+        self.l().blocks.last_mut().expect("while block").end_line = end_line;
         self.leave_block()?;
         self.patch_to_here(exit)?;
         Ok(())
@@ -3173,10 +3213,9 @@ impl<'a> Compiler<'a> {
         &mut self,
         var: &str,
         line: u32,
-        start: ExprId,
-        limit: ExprId,
-        step: Option<ExprId>,
+        (start, limit, step): (ExprId, ExprId, Option<ExprId>),
         body: &Block,
+        end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         self.last_line = line;
         let base = self.lr().freereg;
@@ -3234,6 +3273,7 @@ impl<'a> Compiler<'a> {
         self.mark_target(body_top);
         let post_loop = self.here();
         self.mark_target(post_loop);
+        self.l().blocks.last_mut().expect("for block").end_line = end_line;
         self.leave_block()?;
         // PUC fornum's internal locals, which debug.getlocal lists ahead
         // of the loop variable: 5.1-5.3 name them after their roles, 5.4
@@ -3275,6 +3315,7 @@ impl<'a> Compiler<'a> {
         exprs: &[ExprId],
         body: &Block,
         expr_line: u32,
+        end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         let line = vars[0].line;
         self.last_line = line;
@@ -3349,9 +3390,18 @@ impl<'a> Compiler<'a> {
         // value at `base + 3` (which sits BELOW the for-body's user-locals
         // floor `base + 4`). PUC's lparser does the same via `leavelevel` to
         // `f->level + 4` minus the to-be-closed control width.
-        self.l().blocks.last_mut().expect("no block").reg_floor = base;
+        let blk = self.l().blocks.last_mut().expect("no block");
+        blk.reg_floor = base;
+        blk.end_line = end_line;
         self.leave_block()?;
-        // close the iterator's closing value (4th control slot, 5.4+)
+        // close the iterator's closing value (4th control slot, 5.4+). PUC
+        // emits it in `leaveblock` after reading the loop's `end`, so a line
+        // hook sees that line once as the loop exits.
+        if self.version >= LuaVersion::Lua54
+            && let Some(line) = end_line
+        {
+            self.last_line = line;
+        }
         self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
         // PUC forlist registers hidden control variables that
         // debug.getlocal lists; they live across the loop body. 5.1-5.3
