@@ -341,7 +341,7 @@ pub fn run_bytecode(bytecode: &[u8]) -> i32 {
     run_inner(bytecode)
 }
 
-// v1.3 Stage 7 follow-on — re-export of the 37 `luna_jit_*` Cranelift
+// v1.3 Stage 7 follow-on — re-export of the 39 `luna_jit_*` Cranelift
 // trace-mcode helpers from `luna-jit::jit_backend`. AOT binaries whose
 // embedded `.o` calls these helpers (any trace that does table get/set,
 // upvalue read, concat, etc.) needs them resolvable as strong externs
@@ -364,7 +364,7 @@ pub fn run_bytecode(bytecode: &[u8]) -> i32 {
 //
 // Verified post-build:
 //   `nm target/release/libluna_runtime_helpers.a | grep " T _luna_jit_" | wc -l`
-//   reports 37 (one per helper).
+//   reports 39 (one per helper).
 // Re-export the helpers at the crate root. This pulls them into our
 // `pub` surface so rustc treats them as kept symbols. The
 // `extern "C"` + `#[no_mangle]` on the upstream definitions means
@@ -384,9 +384,10 @@ pub use luna_jit::jit_backend::{
     luna_jit_suppress_trace_admit, luna_jit_table_get_field, luna_jit_table_get_field_checked,
     luna_jit_table_get_float, luna_jit_table_get_int, luna_jit_table_get_int_checked,
     luna_jit_table_len, luna_jit_table_len_checked, luna_jit_table_set_checked,
-    luna_jit_table_set_field, luna_jit_table_set_float_float, luna_jit_table_set_int,
-    luna_jit_table_set_nil, luna_jit_table_set_raw, luna_jit_trace_materialize_frames,
-    luna_jit_upval_get, luna_jit_upval_get_float,
+    luna_jit_table_set_field, luna_jit_table_set_field_checked, luna_jit_table_set_float_float,
+    luna_jit_table_set_int, luna_jit_table_set_int_checked, luna_jit_table_set_nil,
+    luna_jit_table_set_raw, luna_jit_trace_materialize_frames, luna_jit_upval_get,
+    luna_jit_upval_get_float,
 };
 
 #[cfg(feature = "jit-helpers")]
@@ -412,15 +413,15 @@ mod jit_helpers_pin {
     /// static alive in the final object — which transitively pins each
     /// `luna_jit_*` symbol the static references.
     ///
-    /// The number of entries (37) must match the number of
+    /// The number of entries (39) must match the number of
     /// `pub unsafe extern "C" fn luna_jit_*` in
     /// `crates/luna-jit/src/jit_backend/mod.rs`. If a future luna-jit
-    /// commit adds a 38th helper, this array must grow in lock-step
+    /// commit adds a 40th helper, this array must grow in lock-step
     /// or AOT trace `.o`s referencing the new symbol will fail to
     /// link with `undefined reference to luna_jit_<new>`.
     #[used]
     #[unsafe(no_mangle)]
-    static LUNA_AOT_HELPER_PIN: [PinnedFn; 37] = [
+    static LUNA_AOT_HELPER_PIN: [PinnedFn; 39] = [
         PinnedFn(jb::luna_jit_new_table as AnyFn),
         PinnedFn(jb::luna_jit_new_table_sized as AnyFn),
         PinnedFn(jb::luna_jit_materialize_sunk_table as AnyFn),
@@ -457,6 +458,8 @@ mod jit_helpers_pin {
         PinnedFn(jb::luna_jit_park_deopt as AnyFn),
         PinnedFn(jb::luna_jit_suppress_trace_admit as AnyFn),
         PinnedFn(jb::luna_jit_table_set_checked as AnyFn),
+        PinnedFn(jb::luna_jit_table_set_int_checked as AnyFn),
+        PinnedFn(jb::luna_jit_table_set_field_checked as AnyFn),
         PinnedFn(jb::luna_jit_table_len_checked as AnyFn),
     ];
 
@@ -572,6 +575,8 @@ mod jit_helpers_pin {
                 jb::luna_jit_park_deopt();
                 jb::luna_jit_suppress_trace_admit();
                 let _ = jb::luna_jit_table_set_checked(0, 0, 0, 0, 0);
+                let _ = jb::luna_jit_table_set_int_checked(0, 0, 0, 0);
+                let _ = jb::luna_jit_table_set_field_checked(0, 0, 0, 0);
                 let _ = jb::luna_jit_table_len_checked(0);
             }
         }
@@ -581,7 +586,7 @@ mod jit_helpers_pin {
     }
 }
 
-/// v1.3 Stage 7 follow-on — pull all 37 `luna_jit_*` Cranelift
+/// v1.3 Stage 7 follow-on — pull all 39 `luna_jit_*` Cranelift
 /// trace-mcode helper symbols into the deploy-side staticlib's
 /// linkmap. Called by the AOT-generated C `main` stub or by the
 /// integration tests to make sure the helper symbols are still
@@ -592,9 +597,9 @@ mod jit_helpers_pin {
 /// `luna-jit` from its dep graph and this function from its API
 /// surface — interp-only AOT binaries pay zero cranelift cost.
 ///
-/// Returns the number of helper symbols pinned (always 37 with the
+/// Returns the number of helper symbols pinned (always 39 with the
 /// current `luna-jit` shape; will need to be bumped in lock-step
-/// any time `crates/luna-jit/src/jit_backend/mod.rs` adds a 38th
+/// any time `crates/luna-jit/src/jit_backend/mod.rs` adds a 40th
 /// `pub unsafe extern "C" fn luna_jit_*`).
 ///
 /// # Implementation note

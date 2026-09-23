@@ -3,17 +3,17 @@
 //! `luna-runtime-helpers` is the staticlib that AOT-produced binaries
 //! statically link against. When the embedded `.o` (Cranelift-lowered
 //! trace mcode) calls `luna_jit_*` helpers (table set/get, op_concat,
-//! upval_get, …), the link step needs those 37 symbols to be present
+//! upval_get, …), the link step needs those 39 symbols to be present
 //! as strong externs in the staticlib.
 //!
 //! This test pins that contract in two layers:
 //!
-//! 1. **Rust-level reachability** — each of the 37 helpers is
+//! 1. **Rust-level reachability** — each of the 39 helpers is
 //!    re-exported via `pub use luna_runtime_helpers::luna_jit_*`
 //!    (lib.rs). The test takes the address of each one to fail
 //!    compilation if the re-export ever drifts.
 //!
-//! 2. **`force_link_jit_helpers` returns 37** — confirms the
+//! 2. **`force_link_jit_helpers` returns 39** — confirms the
 //!    `LUNA_AOT_HELPER_PIN` static is alive and indexes every helper
 //!    once. A future PR that adds a 36th `pub unsafe extern "C" fn
 //!    luna_jit_*` to `crates/luna-jit/src/jit_backend/mod.rs` will
@@ -36,16 +36,16 @@
 
 use luna_runtime_helpers as lrh;
 
-/// The 37 helper symbols, re-checked via the crate's `pub use`
+/// The 39 helper symbols, re-checked via the crate's `pub use`
 /// re-exports. Compile-fails if any name drifts out of upstream
 /// `luna-jit::jit_backend`.
 #[test]
-fn all_37_helpers_reexported() {
+fn all_39_helpers_reexported() {
     // Address-of each helper — forces the compiler to resolve every
     // `pub use` re-export at type-check time. If any helper is renamed
     // or removed upstream, this test fails to build with a clear
     // "cannot find function in crate" message.
-    let helpers: [*const (); 37] = [
+    let helpers: [*const (); 39] = [
         lrh::luna_jit_new_table as *const (),
         lrh::luna_jit_new_table_sized as *const (),
         lrh::luna_jit_materialize_sunk_table as *const (),
@@ -82,6 +82,8 @@ fn all_37_helpers_reexported() {
         lrh::luna_jit_park_deopt as *const (),
         lrh::luna_jit_suppress_trace_admit as *const (),
         lrh::luna_jit_table_set_checked as *const (),
+        lrh::luna_jit_table_set_int_checked as *const (),
+        lrh::luna_jit_table_set_field_checked as *const (),
         lrh::luna_jit_table_len_checked as *const (),
     ];
     // Sanity-check non-null. `*const ()` for an `extern "C"` symbol
@@ -98,11 +100,11 @@ fn all_37_helpers_reexported() {
 /// The pin array length must match the helper count. Doubles as the
 /// "did we forget to grow the array when adding a 36th helper" gate.
 #[test]
-fn force_link_jit_helpers_reports_37() {
+fn force_link_jit_helpers_reports_39() {
     let n = lrh::force_link_jit_helpers();
     assert_eq!(
-        n, 37,
-        "LUNA_AOT_HELPER_PIN must hold all 37 helper symbols; if you \
+        n, 39,
+        "LUNA_AOT_HELPER_PIN must hold all 39 helper symbols; if you \
          added a `pub unsafe extern \"C\" fn luna_jit_*` upstream, \
          grow both `luna-runtime-helpers/src/lib.rs::LUNA_AOT_HELPER_PIN` \
          AND this assertion."
