@@ -265,7 +265,9 @@ messages. What still differs does so on purpose:
   registers after the whole chunk is parsed, so the message stops before
   the `near` part.
 - **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
-  compiler merging `0` and `-0` constants; 5.1 `io.lines(nil)` raising
+  compiler merging `0` and `-0` constants; `debug.getinfo(level, ">…")`
+  before 5.4 treating the option string as the function (5.1 crashes;
+  luna rejects the option, as 5.4 does); 5.1 `io.lines(nil)` raising
   through a stack-index bug; out-of-range float-to-integer conversions
   (5.2 `string.format("%d", 2^63)` raises the range error the 5.2 test
   suite expects); a leaked pattern-matcher depth counter in 5.3's
