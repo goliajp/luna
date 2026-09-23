@@ -3757,7 +3757,9 @@ impl Vm {
     ///     caller-provided buffers + return R[A+4]'s tag byte. Lets
     ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
     ///     `luna_jit_stack_tag` call by reading the buffer via
-    ///     cranelift `stack_load` IR instead. Returns -1 on deopt.
+    ///     cranelift `stack_load` IR instead. Returns -1 on deopt,
+    ///     else R[A+4]'s tag byte | R[A+5]'s tag byte << 8 (the value's
+    ///     tag only when `nvars >= 2`, 0 otherwise).
     #[doc(hidden)]
     #[allow(clippy::not_unsafe_ptr_arg_deref)] // JIT helper: `ctrl_out`/`key_out`/`val_out` are caller-stack buffers from Cranelift-emitted prologue; SAFETY documented below.
     pub fn jit_op_tforcall(
@@ -3835,11 +3837,12 @@ impl Vm {
         let (key_tag, key_rv) = self.stack[(abs + 4) as usize].unpack();
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let key_raw = unsafe { key_rv.zero };
-        let val_raw = if (nvars as usize) >= 2 {
+        let (val_tag, val_raw) = if (nvars as usize) >= 2 {
+            let (tag, rv) = self.stack[(abs + 5) as usize].unpack();
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { self.stack[(abs + 5) as usize].unpack().1.zero }
+            (tag, unsafe { rv.zero })
         } else {
-            0u64
+            (0, 0u64)
         };
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe {
@@ -3847,7 +3850,7 @@ impl Vm {
             key_out.write(key_raw as i64);
             val_out.write(val_raw as i64);
         }
-        key_tag as i64
+        i64::from(key_tag) | i64::from(val_tag) << 8
     }
 
     /// P12-S12-B-v2 — load the raw `i64` payload of
