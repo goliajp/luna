@@ -3893,10 +3893,11 @@ pub fn lower_int_chunk_into<M: Module>(
                 // path shape as the GetI inline aget (S5d.K), but the
                 // key sits in a register rather than as an immediate.
                 // Float keys (5.1/5.2 `t[1.0]`) get an exactness check
-                // (fcvt_to_sint + fcvt_from_sint == original) before
-                // the bounds + metatable guards; non-exact / fractional
-                // keys fall through to the helper which walks the
-                // hash part. Int keys (5.3+) skip the fcvt round-trip.
+                // (in the i64 range, and fcvt + fcvt back == original)
+                // before the bounds + metatable guards; NaN, infinite,
+                // out-of-range and fractional keys fall through to the
+                // helper which walks the hash part. Int keys (5.3+) skip
+                // the fcvt round-trip.
                 let a = ins.a() as usize;
                 let b = ins.b() as usize;
                 let c = ins.c() as usize;
@@ -3917,9 +3918,15 @@ pub fn lower_int_chunk_into<M: Module>(
                 // is the fast-path eligibility flag for the key's
                 // numeric form.
                 let (key_i64, key_ok) = if is_float_key {
-                    let key_int = bcx.ins().fcvt_to_sint(types::I64, key_raw);
+                    // the saturating form: the trapping one kills the
+                    // process on a NaN or out-of-range key
+                    let key_int = bcx.ins().fcvt_to_sint_sat(types::I64, key_raw);
                     let key_back = bcx.ins().fcvt_from_sint(types::F64, key_int);
-                    let exact = bcx.ins().fcmp(FloatCC::Equal, key_raw, key_back);
+                    let round_trips = bcx.ins().fcmp(FloatCC::Equal, key_raw, key_back);
+                    // 2^63 saturates to i64::MAX, which converts back to
+                    // 2^63: only the range check tells it apart
+                    let fits = trace::emit_f64_fits_i64(&mut bcx, key_raw);
+                    let exact = bcx.ins().band(round_trips, fits);
                     (key_int, exact)
                 } else {
                     // Int key — always "exact" by construction.

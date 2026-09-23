@@ -639,7 +639,7 @@ fn try_match_trace_math_fold(
 
 /// Whether the float `r` (an integral value or NaN / ±inf) converts to
 /// an i64: `-2^63 <= r < 2^63`. NaN fails both comparisons.
-fn emit_f64_fits_i64(bcx: &mut FunctionBuilder<'_>, r: Value) -> Value {
+pub(super) fn emit_f64_fits_i64(bcx: &mut FunctionBuilder<'_>, r: Value) -> Value {
     let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
     let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
     let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
