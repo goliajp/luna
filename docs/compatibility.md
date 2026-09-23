@@ -30,9 +30,9 @@ single binary. The dialect is chosen per-`Vm` at construction
 (`Vm::new(LuaVersion::Lua55)`); one process can host several Vms on
 different dialects concurrently without interference.
 
-Each dialect's frontend emits bytecode in PUC's binary format for that
-dialect, so PUC-compiled `.luac` files load directly (see
-[below](#loading-puc-luac-files)).
+PUC-compiled `.luac` files of any dialect load through the per-dialect
+translators (see [below](#loading-puc-luac-files)); luna's own
+`string.dump` uses a luna-specific body format, not PUC's.
 
 ### Per-dialect feature matrix
 
@@ -152,42 +152,58 @@ richer than the C one — see [`embedding.md`](embedding.md).
 
 ### luna's own dumps
 
-luna emits per-dialect bytecode in PUC's binary format — same header,
-same instruction encoding, same constant-pool layout — so a chunk dumped
-by luna loads in PUC and vice versa, within that dialect's instruction
-set.
+`string.dump` and `Vm::dump` emit luna's own binary format: the running
+dialect's PUC header, then a `"\x00LunaV1\x00"` sentinel and a body in
+luna's 65-op instruction set. It is **not** PUC's body format — a luna
+dump loads back into luna, not into PUC, and a PUC `.luac` is read by the
+translators below, not by this loader. luna does not emit PUC-format
+bytecode; a `string.dump` that PUC could load is a separate feature the
+owner has not committed to.
 
-Loading is **off by default** (`Vm::set_bytecode_loading(true)` to
-enable). Crafted bytecode can bypass checks the compiler enforces, so
-a host running untrusted input should leave it closed.
+Loading a luna dump is gated by `Vm::set_bytecode_loading(false)` (on by
+default; the `sandbox` builder turns it off). Crafted bytecode bypasses
+checks the compiler enforces, so a host taking untrusted input should
+close it.
 
 ### Loading PUC `.luac` files
 
-Opt in with `Vm::set_puc_bytecode_loading(true)`, also **off by
-default**. The translator decodes a PUC chunk and re-encodes its body
-into luna's 65-op set; the resulting Proto then runs on luna's
+Opt in with `Vm::set_puc_bytecode_loading(true)`, **off by default**. The
+translator decodes a PUC chunk of any of the five dialects and re-encodes
+its body into luna's 65-op set; the resulting Proto then runs on luna's
 interpreter and JIT like any other. This is a strictly larger trust
 surface than luna's own loader — an embedder taking untrusted chunks
-should keep both gates shut.
+should keep both gates shut, and read the safety note below.
 
-Every dialect loads. What each translator still refuses is narrow, and
-is a rejection with a diagnostic rather than a misinterpretation:
+Every dialect loads. A translator's refusals are the chunk shapes luna's
+instruction set cannot hold, each a rejection with a diagnostic rather
+than a misinterpretation:
 
 | Dialect | Refuses |
 |---|---|
-| 5.1 | `GETGLOBAL` / `SETGLOBAL` with `Bx > 255` (the `EXTRAARG` form); unknown opcodes |
-| 5.2 | integral `lua_Number` builds; `CONCAT` with `A != B`; `SETTABUP` with a register key; forward-jumping `TFORLOOP`; unknown opcodes |
-| 5.3 | `TFORLOOP.A < 2` (no luna `iter_base` equivalent); non-zero format byte |
-| 5.4 | nothing functional — only malformed chunks, and lowerings that would need a temp register above 255 |
-| 5.5 | nothing functional — only malformed chunks and unknown opcodes |
+| 5.1 | integral `lua_Number` builds; big-endian chunks; a mapped register, constant index or jump distance past luna's field width; unknown opcodes |
+| 5.2 | integral `lua_Number` builds; the same field-width limits; unknown opcodes |
+| 5.3 | non-zero format byte; a `lua_Integer` / `lua_Number` representation other than little-endian 64-bit; the same field-width limits; unknown opcodes |
+| 5.4 | the same field-width limits; unknown opcodes |
+| 5.5 | the same field-width limits; unknown opcodes |
 
-The v2.1 opcode-shape work collapsed the twenty-four gaps an earlier
-audit had listed, which is why this table is much shorter than it once
-was. Generic `for`, RK operands, `LOADBOOL true+skip` and the immediate
-arithmetic forms are all handled now.
+The whole diff_puc corpus, compiled by each dialect's stock `luac`, loads
+and runs — matching PUC byte for byte in stdout, and in the error channel
+for the `_err` fixtures — under `diff_puc.rs::diff_puc_bytecode`, on the
+interpreter and (in `luna-jit`) under the JIT.
 
-Per-dialect translators: `crates/luna-core/src/vm/dump/puc/puc_5{1..5}.rs`.
-Their module headers document the encoding differences in detail.
+The translators do not verify a chunk PUC's own compiler could not have
+produced. luna's interpreter reads registers and constants without bounds
+checks, trusting its compiler; the translators uphold that trust for
+every real `.luac`, but a hand-corrupted register field that stays inside
+luna's 8-bit range yet exceeds the frame's `max_stack` is read past the
+stack — a memory-safety fault on crafted input. Closing that needs a
+bytecode verifier (every register against `max_stack`, every constant
+index, every jump target), which luna, like PUC after 5.1, does not ship.
+Keep `set_puc_bytecode_loading` off for untrusted chunks.
+
+Per-dialect translators: `crates/luna-core/src/vm/dump/puc/puc_5{1..5}.rs`,
+sharing `lower.rs` (5.1) with `classic.rs` (5.2/5.3) and `modern.rs`
+(5.4/5.5); `lower.rs`'s module header states what the interpreter trusts.
 
 ## Known correctness gaps
 
