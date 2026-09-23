@@ -5,7 +5,7 @@
 
 use crate::runtime::{Coro, CoroStatus, Gc, Value};
 use crate::version::LuaVersion;
-use crate::vm::argcheck::{Args, type_error};
+use crate::vm::argcheck::{Args, check_function, type_error};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
@@ -53,10 +53,7 @@ fn check_body(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
             _ => Err(arg_error(vm, 1, "Lua function expected")),
         };
     }
-    match v {
-        Value::Closure(_) | Value::Native(_) if !a.is_none(0) => Ok(v),
-        _ => Err(type_error(vm, a, 0, "function")),
-    }
+    check_function(vm, a, 0)
 }
 
 fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

@@ -716,6 +716,21 @@ impl From<LuaError> for Error {
     }
 }
 
+impl Vm {
+    /// `lua_close` from inside a running script (`os.exit(code, true)`):
+    /// close the main thread's pending to-be-closed variables, then run every
+    /// finalizer. Both run protected, so their errors are dropped as PUC's
+    /// `close_state` drops them. Inside a coroutine the main thread's stack is
+    /// parked, and only the finalizers run.
+    pub(crate) fn close_state(&mut self) {
+        if self.current.is_none() {
+            let _ = self.close_slots(0, None);
+        }
+        self.heap.queue_all_finalizers();
+        self.run_finalizers();
+    }
+}
+
 impl Drop for Vm {
     fn drop(&mut self) {
         // state close: run `__gc` for every still-registered finalizable before
@@ -1159,7 +1174,7 @@ impl Vm {
     }
     /// `package` plus the 5.1-only `module` and `package.seeall` aliases.
     pub fn open_package(&mut self) {
-        crate::vm::lib_os_io::open_package(self);
+        crate::vm::lib_package::open_package(self);
     }
     /// 5.2-only `bit32` library (5.3+ retired in favour of native bitwise
     /// ops on 64-bit integers).
