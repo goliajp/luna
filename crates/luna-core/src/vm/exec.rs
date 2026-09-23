@@ -7,8 +7,7 @@
 //! expands from it and `...name` binds it. 5.1 LUAI_COMPAT_VARARG also
 //! materializes a local `arg` table (see `proto.has_compat_vararg_arg`).
 
-use crate::compiler::compile_chunk;
-use crate::frontend::{SyntaxError, parse};
+use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
 use crate::runtime::heap::GcHeader;
@@ -1387,11 +1386,27 @@ impl Vm {
             // `parse_tokens` reinserts Eof when it runs out of tokens.
             raw.pop();
             let expanded = self.macro_registry.expand(raw)?;
-            let ast = crate::frontend::parse_tokens(expanded, src, self.version)?;
-            compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
+            let depth = self.c_depth + self.pcall_depth;
+            let parsed =
+                crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
+            crate::compiler::compile_parsed(
+                &parsed.chunk,
+                &parsed.end_lines,
+                self.version,
+                chunkname,
+                &mut self.heap,
+            )?
         } else {
-            let ast = parse(src, self.version)?;
-            compile_chunk(&ast, self.version, chunkname, &mut self.heap)?
+            // PUC's `nCcalls` counts protected calls as well
+            let depth = self.c_depth + self.pcall_depth;
+            let parsed = crate::frontend::parser::parse_at_depth(src, self.version, depth)?;
+            crate::compiler::compile_parsed(
+                &parsed.chunk,
+                &parsed.end_lines,
+                self.version,
+                chunkname,
+                &mut self.heap,
+            )?
         };
         // PUC `lua_load` (lapi.c) only seeds the loaded closure's first
         // upvalue with the globals table when the closure has *exactly* one
@@ -4399,7 +4414,9 @@ impl Vm {
                             func_slot,
                             nargs,
                             depth: self.frames.len() as u32,
-                            ccmt: chain as u8,
+                            // a tail call resolved its `__call` chain before
+                            // calling here and passed the count in tail_ccmt
+                            ccmt: tail_ccmt + chain as u8,
                         });
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
@@ -8346,6 +8363,10 @@ impl Vm {
                         // results land at `abs..self.top` and the next op (the
                         // fallback `Op::Return`) forwards them. `wanted = -1`
                         // because the caller will multret them through Return.
+                        // PUC's precallC gives the C call this tail call's own
+                        // `__call` count (5.5 extraargs); the chain was already
+                        // resolved above, so hand it over.
+                        self.pending_ccmt = chain as u8;
                         self.begin_call(abs, Some(nargs), -1, false)?;
                     }
                 }
@@ -9693,7 +9714,11 @@ impl Vm {
             return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
                 r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
-                _ => Err(self.rt_err("'__tostring' must return a string")),
+                // luaL_error: positioned at whatever called the library function
+                _ => Err(crate::vm::builtins::raise_str(
+                    self,
+                    "'__tostring' must return a string",
+                )),
             };
         }
         if self.version >= LuaVersion::Lua53

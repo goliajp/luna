@@ -14,14 +14,17 @@ section spells out:
 - "41/42 green" cherry-picks the wins; the one outlier is the
   signal, not the noise.
 
-Public bench numbers ship with the v2.0 release per Track BM
-(Track BM). The matrix
-will compare luna_jit / luna_interp / luna_aot vs LuaJIT 2.1 +
-PUC 5.4 + mlua across 13 workloads × 3 host targets, with
-in-process measurement boundaries and ±err bars on every cell.
-**BM is sequenced LAST** in the v2.0 phase order specifically to
-prevent baseline lock-in around currently-suboptimal attack
-surfaces.
+No public comparison matrix is published. One was planned for v2.0
+(luna_jit / luna_interp / luna_aot against LuaJIT 2.1, PUC 5.4 and
+mlua, with in-process measurement boundaries and error bars on every
+cell) and deliberately scheduled after the interpreter and JIT redesigns
+so it would not lock in a baseline around code about to change; it has
+not shipped. What guards performance release over release is the CI
+perf-gate: each push runs the `redis_lua_shape` benchmark on the same
+runner for both the previous release (`PERF_REF` in `ci.yml`) and the
+pushed commit, and fails when any cell is more than 5% slower (a commit
+can waive it with `[perf-allow]` in its message). It covers that one
+workload, not luna's performance in general.
 
 ---
 
@@ -44,7 +47,7 @@ sprint onward:
   See methodology §1 trigger-word list for the full set of
   rationalizations that get flagged in code review.
 
-## 2. What's measured today (v1.3 ship)
+## 2. Baselines measured at v1.3
 
 ### 2.1 Memory baselines
 
