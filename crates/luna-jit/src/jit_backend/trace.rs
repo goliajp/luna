@@ -3105,6 +3105,7 @@ fn emit_side_trace_or_return(
 fn emit_store_back_and_return_pc(
     bcx: &mut FunctionBuilder<'_>,
     regs: &[Variable],
+    store_mask: &[bool],
     reg_state: Value,
     pc: u32,
     flush_ctx: Option<&FlushCtx>,
@@ -3115,6 +3116,7 @@ fn emit_store_back_and_return_pc(
     emit_store_back_and_return(
         bcx,
         regs,
+        &store_mask,
         reg_state,
         i64::from(pc),
         flush_ctx,
@@ -3129,6 +3131,7 @@ fn emit_store_back_and_return_pc(
 fn emit_store_back_and_return(
     bcx: &mut FunctionBuilder<'_>,
     regs: &[Variable],
+    store_mask: &[bool],
     reg_state: Value,
     ret: i64,
     flush_ctx: Option<&FlushCtx>,
@@ -3140,6 +3143,11 @@ fn emit_store_back_and_return(
         emit_flush_buf(bcx, ctx, regs);
     }
     for (idx, v) in regs.iter().copied().enumerate() {
+        // A register the trace never writes still holds its entry
+        // value in reg_state.
+        if !store_mask[idx] {
+            continue;
+        }
         let val = bcx.use_var(v);
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlags::new(), val, reg_state, offset);
@@ -3167,6 +3175,7 @@ fn emit_tagged_exit<M: Module>(
     module: &mut M,
     suppress_admit_id: cranelift_module::FuncId,
     regs: &[Variable],
+    store_mask: &[bool],
     reg_state: Value,
     pc: u32,
     head_pc: u32,
@@ -3184,6 +3193,7 @@ fn emit_tagged_exit<M: Module>(
     emit_store_back_and_return(
         bcx,
         regs,
+        &store_mask,
         reg_state,
         ret as i64,
         flush_ctx,
@@ -3210,6 +3220,7 @@ pub(crate) fn exit_pc(ret: i64) -> i64 {
 fn emit_store_back_and_return_site(
     bcx: &mut FunctionBuilder<'_>,
     regs: &[Variable],
+    store_mask: &[bool],
     reg_state: Value,
     site_idx: u32,
     cont_pc: u32,
@@ -3221,6 +3232,11 @@ fn emit_store_back_and_return_site(
         emit_flush_buf(bcx, ctx, regs);
     }
     for (idx, v) in regs.iter().copied().enumerate() {
+        // A register the trace never writes still holds its entry
+        // value in reg_state.
+        if !store_mask[idx] {
+            continue;
+        }
         let val = bcx.use_var(v);
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlags::new(), val, reg_state, offset);
@@ -3751,6 +3767,36 @@ pub fn lower_trace_into_named<M: Module>(
         }
     }
     let window_size_us = window_size as usize;
+    // Which registers an exit must store back. The dispatcher marshals
+    // every caller-window register into reg_state on entry, so one the
+    // trace never writes already holds its value there. The write sets
+    // come from `op_reads_writes`, which lists TForCall's control slot
+    // only under TForLoop and does not bound a variable result count;
+    // a trace with such an op stores everything. Inline-frame slots
+    // (past max_stack) are always stored: the reused reg_state buffer
+    // is not cleared there.
+    let store_mask: Vec<bool> = {
+        let open_ended = record.ops.iter().any(|rop| match rop.inst.op() {
+            Op::Vararg | Op::GetVarg | Op::TailCall => true,
+            Op::Call => rop.inst.c() == 0,
+            _ => false,
+        });
+        let mut mask = vec![open_ended; window_size_us];
+        for m in mask.iter_mut().skip(max_stack) {
+            *m = true;
+        }
+        for (i, rop) in record.ops.iter().enumerate() {
+            let off = op_offsets.get(i).copied().unwrap_or(0) as usize;
+            let (_, writes) = op_reads_writes(rop.inst);
+            let extra = matches!(rop.inst.op(), Op::TForCall).then_some(rop.inst.a() + 2);
+            for w in writes.into_iter().chain(extra) {
+                if let Some(m) = mask.get_mut(off + w as usize) {
+                    *m = true;
+                }
+            }
+        }
+        mask
+    };
 
     // P15-A v2-E — SMART side-trace gate (replaces the v2-C-A6-5
     // back-edge bail). Compute the child's read-before-write live-
@@ -5826,6 +5872,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_site(
                     &mut bcx,
                     &regs_full[..window_size_us],
+                    &store_mask,
                     reg_state,
                     site_idx,
                     side_exit_pc,
@@ -5859,6 +5906,7 @@ pub fn lower_trace_into_named<M: Module>(
                     &mut module,
                     suppress_admit_id,
                     &regs_full[..max_stack],
+                    &store_mask,
                     reg_state,
                     side_exit_pc,
                     record.head_pc,
@@ -5965,6 +6013,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     &regs_full[..max_stack],
+                    &store_mask,
                     reg_state,
                     rop.pc,
                     flush_ctx.as_ref(),
@@ -6582,6 +6631,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_site(
                         &mut bcx,
                         &regs_full[..window_size_us],
+                        &store_mask,
                         reg_state,
                         site_idx,
                         side_exit_pc,
@@ -6624,6 +6674,7 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut module,
                         suppress_admit_id,
                         &regs_full[..max_stack],
+                        &store_mask,
                         reg_state,
                         side_exit_pc,
                         record.head_pc,
@@ -6691,6 +6742,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
+                        &store_mask,
                         reg_state,
                         rop.pc,
                         flush_ctx.as_ref(),
@@ -6756,6 +6808,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
+                        &store_mask,
                         reg_state,
                         rop.pc,
                         flush_ctx.as_ref(),
@@ -6902,6 +6955,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_site(
                         &mut bcx,
                         &regs_full[..window_size_us],
+                        &store_mask,
                         reg_state,
                         site_idx,
                         side_exit_pc,
@@ -6938,6 +6992,7 @@ pub fn lower_trace_into_named<M: Module>(
                         &mut module,
                         suppress_admit_id,
                         &regs_full[..max_stack],
+                        &store_mask,
                         reg_state,
                         side_exit_pc,
                         record.head_pc,
@@ -7557,6 +7612,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     &regs_full[..max_stack],
+                    &store_mask,
                     reg_state,
                     rop.pc,
                     flush_ctx.as_ref(),
@@ -7784,6 +7840,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         bcx,
                         &regs_full[..max_stack],
+                        &store_mask,
                         reg_state,
                         rop.pc,
                         flush_ctx.as_ref(),
@@ -7906,6 +7963,7 @@ pub fn lower_trace_into_named<M: Module>(
                         emit_store_back_and_return_pc(
                             &mut bcx,
                             &regs_full[..max_stack],
+                            &store_mask,
                             reg_state,
                             rop.pc,
                             flush_ctx.as_ref(),
@@ -8013,6 +8071,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     &regs_full[..max_stack],
+                    &store_mask,
                     reg_state,
                     rop.pc,
                     flush_ctx.as_ref(),
@@ -8238,6 +8297,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &store_mask,
             reg_state,
             record.head_pc,
             flush_ctx.as_ref(),
@@ -8333,6 +8393,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &store_mask,
             reg_state,
             record.head_pc,
             flush_ctx.as_ref(),
@@ -8346,6 +8407,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &store_mask,
             reg_state,
             record.ops[call_idx].pc,
             flush_ctx.as_ref(),
@@ -8361,6 +8423,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &store_mask,
             reg_state,
             record.ops[inline_abort_idx].pc,
             flush_ctx.as_ref(),
@@ -8377,6 +8440,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &store_mask,
             reg_state,
             record.ops[return_idx].pc,
             flush_ctx.as_ref(),
@@ -8417,6 +8481,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     caller_regs,
+                    &store_mask,
                     reg_state,
                     rop.pc + 1,
                     flush_ctx.as_ref(),
@@ -8457,6 +8522,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         caller_regs,
+                        &store_mask,
                         reg_state,
                         body_pc,
                         flush_ctx.as_ref(),
@@ -8526,6 +8592,7 @@ pub fn lower_trace_into_named<M: Module>(
                     &mut module,
                     suppress_admit_id,
                     caller_regs,
+                    &store_mask,
                     reg_state,
                     rop.pc + 1,
                     record.head_pc,
@@ -8555,6 +8622,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     caller_regs,
+                    &store_mask,
                     reg_state,
                     rop.pc,
                     flush_ctx.as_ref(),
@@ -8575,6 +8643,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         caller_regs,
+                        &store_mask,
                         reg_state,
                         record.head_pc,
                         flush_ctx.as_ref(),
@@ -8592,6 +8661,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &store_mask,
             reg_state,
             record.head_pc,
             flush_ctx.as_ref(),
