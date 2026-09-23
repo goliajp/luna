@@ -51,6 +51,14 @@ pub struct Vm {
     pub heap: Heap,
     pub(crate) stack: Vec<Value>,
     pub(crate) frames: Vec<CallFrame>,
+    /// How many `__call` metamethods were resolved to reach each Lua frame,
+    /// by index into `frames`; each adds one argument (PUC 5.5 `CIST_CCMT`
+    /// bits, reported as `getinfo("t").extraargs`). Written whenever a Lua
+    /// frame is pushed, so the entry for a live frame is always its own;
+    /// entries past `frames.len()` are stale and never read. Kept beside
+    /// `frames` rather than in `Frame` because `Frame` is public with all
+    /// fields public, where a new field is a breaking change.
+    pub(crate) frame_ccmt: Vec<u8>,
     /// P17-D Week 1 shadow — frames_top mirrors `self.frames.len()`.
     /// Synced on every push/pop in `frames_push_sync`/`frames_pop_sync`
     /// helpers (debug-asserted on use). NOT consumed by readers yet;
@@ -500,6 +508,7 @@ pub const HOOK_MASK_COUNT: u32 = 8;
 struct SavedCtx {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
+    frame_ccmt: Vec<u8>,
     open_upvals: Vec<(u32, Gc<Upvalue>)>,
     tbc: Vec<u32>,
     top: u32,
@@ -917,6 +926,7 @@ impl Vm {
             heap,
             stack: Vec::new(),
             frames: Vec::new(),
+            frame_ccmt: Vec::new(),
             frames_top: 0,
             open_upvals: Vec::new(),
             tbc: Vec::new(),
@@ -1924,6 +1934,7 @@ impl Vm {
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
+                m.frame_ccmt = rctx.frame_ccmt;
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
@@ -1959,6 +1970,7 @@ impl Vm {
             m.status = CoroStatus::Dead;
             m.stack = Vec::new();
             m.frames = Vec::new();
+            m.frame_ccmt = Vec::new();
             m.open_upvals = Vec::new();
             m.tbc = Vec::new();
             m.top = 0;
@@ -2065,6 +2077,7 @@ impl Vm {
         let saved = SavedCtx {
             stack: std::mem::take(&mut self.stack),
             frames: std::mem::take(&mut self.frames),
+            frame_ccmt: std::mem::take(&mut self.frame_ccmt),
             open_upvals: std::mem::take(&mut self.open_upvals),
             tbc: std::mem::take(&mut self.tbc),
             top: self.top,
@@ -2079,6 +2092,7 @@ impl Vm {
     fn put_ctx(&mut self, c: SavedCtx) {
         self.stack = c.stack;
         self.frames = c.frames;
+        self.frame_ccmt = c.frame_ccmt;
         self.open_upvals = c.open_upvals;
         self.tbc = c.tbc;
         self.top = c.top;
@@ -2094,6 +2108,7 @@ impl Vm {
         let m = unsafe { co.as_mut() };
         self.stack = std::mem::take(&mut m.stack);
         self.frames = std::mem::take(&mut m.frames);
+        self.frame_ccmt = std::mem::take(&mut m.frame_ccmt);
         self.open_upvals = std::mem::take(&mut m.open_upvals);
         self.tbc = std::mem::take(&mut m.tbc);
         self.top = m.top;
@@ -2110,6 +2125,7 @@ impl Vm {
         let m = unsafe { co.as_mut() };
         m.stack = c.stack;
         m.frames = c.frames;
+        m.frame_ccmt = c.frame_ccmt;
         m.open_upvals = c.open_upvals;
         m.tbc = c.tbc;
         m.top = c.top;
@@ -2148,6 +2164,7 @@ impl Vm {
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
+                m.frame_ccmt = rctx.frame_ccmt;
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
@@ -3927,6 +3944,7 @@ impl Vm {
         pc: u32,
         nresults: i32,
     ) {
+        self.set_frame_ccmt(0);
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -3945,7 +3963,6 @@ impl Vm {
                 tm: None,
                 is_hook: false,
                 tailcalls: 0,
-                ccmt: 0,
             }),
         );
     }
@@ -4614,6 +4631,8 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..need)
                 .fill(Value::Nil);
         }
+        let ccmt = std::mem::take(&mut self.pending_ccmt);
+        self.set_frame_ccmt(ccmt);
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -4633,7 +4652,6 @@ impl Vm {
                 // hook so its frame reports `namewhat = "hook"` via getinfo.
                 is_hook: std::mem::take(&mut self.pending_is_hook),
                 tailcalls: std::mem::take(&mut self.pending_tailcalls),
-                ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
         // PUC 5.1 `LUAI_COMPAT_VARARG`: populate the hidden `arg` local with
@@ -4824,6 +4842,15 @@ impl Vm {
     /// frame is on top — a continuation frame is never the running frame (it is
     /// consumed the instant the call it protects unwinds onto it).
     #[inline]
+    /// Records the `__call` count of the Lua frame about to be pushed.
+    fn set_frame_ccmt(&mut self, ccmt: u8) {
+        let i = self.frames.len();
+        if self.frame_ccmt.len() <= i {
+            self.frame_ccmt.resize(i + 1, 0);
+        }
+        self.frame_ccmt[i] = ccmt;
+    }
+
     fn top_frame(&self) -> &Frame {
         self.frames
             .last()
@@ -8365,7 +8392,7 @@ impl Vm {
                         // recursive tail calls and expects to see the
                         // synthetic tail level for every one of them.
                         self.pending_tailcalls = fr.tailcalls.saturating_add(1);
-                        self.pending_ccmt = fr.ccmt;
+                        self.pending_ccmt = self.frame_ccmt[self.frames.len() - 1];
                         frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
                             && self.frames.len() < entry_depth
