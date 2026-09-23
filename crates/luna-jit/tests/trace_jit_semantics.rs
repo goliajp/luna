@@ -256,3 +256,47 @@ fn atan_folds_as_atan2() {
         assert_eq!(same(v, src), "0.00012682450607527543");
     }
 }
+
+/// A `pairs` loop compiled over string keys ran its body again for an
+/// integer key (the back-edge only asked for an integer tag), storing
+/// the key tagged as a string; `table.sort` then read it as a string
+/// pointer and crashed. The back-edge now requires the tags the body was
+/// compiled for. Recording starts early, as it would in a longer run.
+#[test]
+fn pairs_loop_meeting_other_key_kinds() {
+    let src = r#"
+        local function keys(t)
+          local ks = {}
+          for k in pairs(t) do ks[#ks + 1] = k end
+          table.sort(ks, function(a, b) return tostring(a) < tostring(b) end)
+          local out = {}
+          for i = 1, #ks do out[i] = tostring(ks[i]) .. ":" .. type(ks[i]) end
+          return table.concat(out, ",")
+        end
+        local vals = {}
+        local function vals_of(t)
+          local s = 0
+          for _, v in pairs(t) do s = s + (type(v) == "number" and v or 100) end
+          return s
+        end
+        local tabs = {{a = 1, b = 2}, {a = 1, b = 2, c = 3}, {x = 1}, {y = 1, z = 2},
+                      {[3] = true, [4] = true}, {[5] = true}, {q = 1}, {p = "s", r = 2}}
+        local res = {}
+        for _, t in ipairs(tabs) do res[#res + 1] = keys(t) .. "/" .. vals_of(t) end
+        return table.concat(res, " ")"#;
+    for v in INT_DIALECTS {
+        let (interp, _) = run(v, src, false);
+        let mut vm = luna_jit::new_with_jit(v);
+        vm.jit.trace_hot_threshold = 1;
+        vm.jit.call_hot_threshold = 1;
+        let jit = match vm.eval(src).expect("eval").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(jit, interp, "{v:?}");
+        assert!(
+            vm.trace_dispatched_count() > 0,
+            "{v:?}: no trace dispatched"
+        );
+    }
+}

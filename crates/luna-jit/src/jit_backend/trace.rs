@@ -5420,9 +5420,13 @@ pub fn lower_trace_into_named<M: Module>(
     // unconditionally — only def_var'd if the trace actually has a
     // TForCall (otherwise unused, cranelift tree-shakes).
     let tforcall_tag_var = bcx.declare_var(types::I64);
+    // The tag of the value TForCall produced (R[A+5]), for the TForLoop
+    // back-edge check.
+    let tforcall_val_tag_var = bcx.declare_var(types::I64);
     {
         let z = bcx.ins().iconst(types::I64, 0);
         bcx.def_var(tforcall_tag_var, z);
+        bcx.def_var(tforcall_val_tag_var, z);
     }
 
     // v2.0 Track-R R3.3+ sub-1 — depth-relative `base_var` scaffold.
@@ -7720,7 +7724,11 @@ pub fn lower_trace_into_named<M: Module>(
                     );
                     bcx.switch_to_block(cont_blk);
                     bcx.seal_block(cont_blk);
-                    bcx.def_var(tforcall_tag_var, status_or_tag);
+                    // key tag | value tag << 8 (Vm::jit_op_tforcall)
+                    let key_tag = bcx.ins().band_imm(status_or_tag, 0xff);
+                    let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
+                    bcx.def_var(tforcall_tag_var, key_tag);
+                    bcx.def_var(tforcall_val_tag_var, val_tag);
                     let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
                     let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
                     let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
@@ -7861,6 +7869,7 @@ pub fn lower_trace_into_named<M: Module>(
                         bcx.def_var(regs[a_us + 5], chosen_v5);
                     }
                     bcx.def_var(tforcall_tag_var, r4_tag);
+                    bcx.def_var(tforcall_val_tag_var, val_tag);
                     bcx.ins().jump(merge_blk, &[]);
 
                     // ----- slow_blk: helper fallback -----
@@ -8395,8 +8404,10 @@ pub fn lower_trace_into_named<M: Module>(
                 //                           //     batched helper
                 //                           //     return value
                 //   if tag == NIL:  side-exit at tforloop.pc + 1
-                //   elif tag == INT: R[A+2]=R[A+4] + back-edge
-                //   else: deopt (unsupported iter return kind)
+                //   elif the key's (and value's) tag is the one the
+                //        body was compiled for: R[A+2]=R[A+4] +
+                //        back-edge
+                //   else: deopt (the interpreter runs the TForLoop)
                 //
                 // The Nil branch reuses the existing dispatcher
                 // restore path; push a per_exit_kinds snapshot with
@@ -8405,13 +8416,25 @@ pub fn lower_trace_into_named<M: Module>(
                 // dispatcher without override would restore as Int
                 // — wrong for Nil).
                 let tag = bcx.use_var(tforcall_tag_var);
+                // The body was lowered for the head's entry tags; the
+                // back-edge runs it again only with a key (and, when the
+                // loop has one, a value) of those tags. A pairs loop
+                // over string keys meeting an integer key (or the
+                // reverse) stored the new key under the old tag.
+                let nvars = match record.ops[for_loop_idx - 1].inst.op() {
+                    Op::TForCall => record.ops[for_loop_idx - 1].inst.c() as usize,
+                    _ => return None,
+                };
+                let key_tag = *record.entry_tags.get(a + 4)?;
+                let val_tag = if nvars >= 2 {
+                    Some(*record.entry_tags.get(a + 5)?)
+                } else {
+                    None
+                };
 
                 let nil_const = bcx
                     .ins()
                     .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
-                let int_const = bcx
-                    .ins()
-                    .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
                 let is_nil = bcx.ins().icmp(IntCC::Equal, tag, nil_const);
                 let nil_exit_blk = bcx.create_block();
                 let not_nil_blk = bcx.create_block();
@@ -8442,14 +8465,18 @@ pub fn lower_trace_into_named<M: Module>(
                     trace_fn_sig_ref,
                 );
 
-                // Non-Nil branch: check it's Int (v2 only handles
-                // Int-key iters like ipairs / numeric pairs).
                 bcx.switch_to_block(not_nil_blk);
                 bcx.seal_block(not_nil_blk);
-                let is_int = bcx.ins().icmp(IntCC::Equal, tag, int_const);
+                let mut same_kinds = bcx.ins().icmp_imm(IntCC::Equal, tag, i64::from(key_tag));
+                if let Some(val_tag) = val_tag {
+                    let v = bcx.use_var(tforcall_val_tag_var);
+                    let same_val = bcx.ins().icmp_imm(IntCC::Equal, v, i64::from(val_tag));
+                    same_kinds = bcx.ins().band(same_kinds, same_val);
+                }
                 let continue_blk = bcx.create_block();
                 let deopt_blk = bcx.create_block();
-                bcx.ins().brif(is_int, continue_blk, &[], deopt_blk, &[]);
+                bcx.ins()
+                    .brif(same_kinds, continue_blk, &[], deopt_blk, &[]);
 
                 // Deopt: unsupported iter return kind. Store back +
                 // return TForLoop.pc so the interp re-executes the
