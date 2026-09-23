@@ -3,17 +3,18 @@
 //! Extends `try_match_trace_math_fold` (`trace.rs`) with `Min2 /
 //! Max2` arms. The fold collapses the `GetTabUp _ENV "math" +
 //! GetField "min"|"max" + ...arg-prep... + Call(B=3,C=2)` window
-//! into one Cranelift `smin/smax` (Int/Int) or `fmin/fmax` (Float
-//! or mixed) IR op.
+//! into one Cranelift `smin/smax` (Int/Int) or `fcmp` + `select`
+//! (Float/Float) sequence; any other operand pair is not compiled
+//! (see `math_fold_semantics.rs`).
 //!
 //! These tests pin:
 //!   1. The compiled-trace dispatch engages on the canonical
 //!      `math.min(K, expr)` Redis-Lua idiom (the audit's headline
 //!      win — `trace_dispatched_count > 0`).
 //!   2. The fold preserves operand-type semantics:
-//!      Int  / Int   → Int  result (`smin/smax`)
-//!      Float/ Float → Float result (`fmin/fmax`)
-//!      mixed         → Float result (Int promoted to Float)
+//!      Int  / Int   → Int  result
+//!      Float/ Float → Float result
+//!      mixed         → the interpreter's result
 //!   3. The fold result matches the interp / PUC-shape reference
 //!      across a battery of inputs incl. negatives and edges.
 //!   4. The pre-existing single-arg libm fold (Libm1) still
