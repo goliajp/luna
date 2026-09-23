@@ -431,11 +431,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                 let a = lw.run(i.a, b.max(1))?;
                 lw.emit(Inst::iabc(Op::TailCall, a, b, 0, false));
             }
-            OP_RETURN => {
-                let b = lw.byte(i.b, "RETURN B")?;
-                let a = lw.run(i.a, b.saturating_sub(1).max(1))?;
-                lw.emit(Inst::iabc(Op::Return, a, b, 0, false));
-            }
+            OP_RETURN => lw.ret(i.a, i.b)?,
             // FORPREP jumps to its FORLOOP; FORLOOP jumps back to the body.
             OP_FORPREP => {
                 let a = lw.run(i.a, 4)?;

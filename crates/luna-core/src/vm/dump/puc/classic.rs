@@ -275,11 +275,7 @@ pub(super) fn translate(
                 let a = lw.run(i.a, b.max(1))?;
                 lw.emit(Inst::iabc(Op::TailCall, a, b, 0, false));
             }
-            Kind::Return => {
-                let b = lw.byte(i.b, "RETURN B")?;
-                let a = lw.run(i.a, b.saturating_sub(1).max(1))?;
-                lw.emit(Inst::iabc(Op::Return, a, b, 0, false));
-            }
+            Kind::Return => lw.ret(i.a, i.b)?,
             // FORPREP jumps to its FORLOOP; FORLOOP jumps back to the body.
             Kind::ForPrep => {
                 let a = lw.run(i.a, 4)?;

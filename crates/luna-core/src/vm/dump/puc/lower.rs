@@ -426,6 +426,21 @@ impl Lowering {
         Ok(())
     }
 
+    /// `return R[a], ..., R[a+b-2]` (`b == 0`: up to the stack top), in the
+    /// form luna's own compiler uses for zero and one value. The three
+    /// return ops behave alike in the interpreter; the JIT compiles only the
+    /// short forms.
+    pub(super) fn ret(&mut self, a: u32, b: u32) -> Result<(), String> {
+        let b = self.byte(b, "RETURN B")?;
+        let a = self.run(a, b.saturating_sub(1).max(1))?;
+        self.emit(match b {
+            1 => Inst::iabc(Op::Return0, 0, 0, 0, false),
+            2 => Inst::iabc(Op::Return1, a, 0, 0, false),
+            _ => Inst::iabc(Op::Return, a, b, 0, false),
+        });
+        Ok(())
+    }
+
     /// `SetList` storing `n` values from `R[a+1..]` after the first `offset`
     /// array slots.
     pub(super) fn set_list(&mut self, a: u32, n: u32, offset: u64) -> Result<(), String> {
