@@ -3389,6 +3389,10 @@ fn build_trace_jit_module() -> Option<JITModule> {
         super::luna_jit_upval_table_get_tagged as *const u8,
     );
     builder.symbol(
+        "luna_jit_math_fn_is_library",
+        super::luna_jit_math_fn_is_library as *const u8,
+    );
+    builder.symbol(
         "luna_jit_suppress_trace_admit",
         super::luna_jit_suppress_trace_admit as *const u8,
     );
@@ -5133,6 +5137,18 @@ pub fn lower_trace_into_named<M: Module>(
             &module.make_signature(),
         )
         .ok()?;
+    let mut math_fn_check_sig = module.make_signature();
+    math_fn_check_sig.params.push(AbiParam::new(types::I64));
+    math_fn_check_sig.params.push(AbiParam::new(types::I64));
+    math_fn_check_sig.returns.push(AbiParam::new(types::I64));
+    let math_fn_check_id = module
+        .declare_function(
+            "luna_jit_math_fn_is_library",
+            Linkage::Import,
+            &math_fn_check_sig,
+        )
+        .ok()?;
+
     let mut len_sig = module.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
@@ -5873,6 +5889,38 @@ pub fn lower_trace_into_named<M: Module>(
                         && (f.start_idx + 1 == i || f.call_idx == i))
             });
             if let Some(fold) = fold {
+                // The fold stands for the library function; leave the
+                // trace at the GetTabUp, before anything of the call
+                // has run, when `math.<fn>` holds something else.
+                if fold.start_idx == i {
+                    let math_key = head_proto.consts[record.ops[i].inst.c() as usize];
+                    let name_key = head_proto.consts[record.ops[i + 1].inst.c() as usize];
+                    let (
+                        luna_core::runtime::Value::Str(math_key),
+                        luna_core::runtime::Value::Str(name_key),
+                    ) = (math_key, name_key)
+                    else {
+                        unreachable!("the fold matcher took both keys as strings");
+                    };
+                    let m = emit_str_key_arg(
+                        module,
+                        &mut bcx,
+                        math_key,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    let k = emit_str_key_arg(
+                        module,
+                        &mut bcx,
+                        name_key,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    let check_ref = module.declare_func_in_func(math_fn_check_id, bcx.func);
+                    let call = bcx.ins().call(check_ref, &[m, k]);
+                    let is_library = bcx.inst_results(call)[0];
+                    guard!(is_library, i, rop.pc);
+                }
                 match fold.kind {
                     FoldKind::Libm1 if fold.start_idx == i => {
                         // Declare libm fn fresh per fold (cranelift

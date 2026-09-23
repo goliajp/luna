@@ -24,9 +24,9 @@ use luna_core::jit::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
     MAX_JIT_ARITY, TraceCompiler,
 };
-use luna_core::runtime::Gc;
 use luna_core::runtime::Value as LuaValue;
 use luna_core::runtime::function::Proto;
+use luna_core::runtime::{Gc, LuaStr};
 use luna_core::vm::isa::{Inst, Op};
 
 /// P11-S3 — per-Lua-register type lattice. `Unset` is the bottom;
@@ -645,6 +645,10 @@ struct MathFold {
     /// Lua register receiving the libm result (= the `GetTabUp.A` =
     /// `Call.A`).
     dst_reg: u32,
+    /// The `"math"` and `"<fn>"` constant keys, for the entry check that
+    /// the field still holds the library function.
+    math_key: Gc<LuaStr>,
+    name_key: Gc<LuaStr>,
 }
 
 /// v1.3 Phase AOT Stage 3 — backend-agnostic metadata describing one
@@ -720,6 +724,11 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
         "luna_jit_self_upval_check",
         luna_jit_self_upval_check as *const u8,
     );
+    builder.symbol(
+        "luna_jit_math_fn_is_library",
+        luna_jit_math_fn_is_library as *const u8,
+    );
+    builder.symbol("luna_jit_park_deopt", luna_jit_park_deopt as *const u8);
     Some(JITModule::new(builder))
 }
 
@@ -930,6 +939,18 @@ pub fn lower_int_chunk_into<M: Module>(
                 try_pc += 1;
             }
         }
+    }
+    // The folds are checked once, at entry; a table store in the body
+    // could reassign a math field after that.
+    if !math_folds.is_empty()
+        && proto.code.iter().any(|i| {
+            matches!(
+                i.op(),
+                Op::SetTable | Op::SetI | Op::SetField | Op::SetTabUp
+            )
+        })
+    {
+        return None;
     }
 
     let mut pc = 0;
@@ -3937,15 +3958,27 @@ pub fn lower_int_chunk_into<M: Module>(
 
     // The body's self-recursive calls go straight to its own code, which
     // is the Lua call only while the upvalue they load holds the running
-    // closure; the compiled code is shared by every closure of the proto
-    // (and by protos with the same code), so that is checked on each
-    // entry from the interpreter. The recursive calls enter the body
-    // directly: nothing the body runs can reassign the upvalue.
-    let entry_id = match self_upval_idx {
-        Some(idx) if any_self_call => {
-            define_self_checked_entry(module, &mut ctx, fn_id, idx, num_params)?
+    // closure, and its math folds replace `math.<fn>(...)` by inline code,
+    // which is the Lua call only while the field holds the library
+    // function. The compiled code is shared by every closure of the proto
+    // (and by protos with the same code), so both are checked on each
+    // entry from the interpreter. Recursive calls enter the body directly:
+    // nothing the body runs can reassign the upvalue or, with no table
+    // stores (checked above), a field.
+    let mut math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)> = Vec::new();
+    for fold in &math_folds {
+        if !math_fns.iter().any(|&(_, n)| n.ptr_eq(fold.name_key)) {
+            math_fns.push((fold.math_key, fold.name_key));
         }
-        _ => fn_id,
+    }
+    let checks = EntryChecks {
+        self_upval: self_upval_idx.filter(|_| any_self_call),
+        math_fns,
+    };
+    let entry_id = if checks.self_upval.is_some() || !checks.math_fns.is_empty() {
+        define_checked_entry(module, &mut ctx, fn_id, &checks, num_params)?
+    } else {
+        fn_id
     };
 
     // v1.3 Phase AOT Stage 3 — diag of the lowered chunk's shape
@@ -3967,14 +4000,22 @@ pub fn lower_int_chunk_into<M: Module>(
     ))
 }
 
-/// Defines the entry that runs [`luna_jit_self_upval_check`] before
-/// calling the chunk body `body_id`: on a mismatch it returns at once,
-/// with the deopt the helper parked for the dispatcher.
-fn define_self_checked_entry<M: Module>(
+/// What a chunk's entry verifies before running the body.
+struct EntryChecks {
+    /// Upvalue the self-recursive calls go through.
+    self_upval: Option<u32>,
+    /// `("math", name)` key pairs of the folded `math.<name>` calls.
+    math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)>,
+}
+
+/// Defines the entry that runs `checks` before calling the chunk body
+/// `body_id`: when one fails it returns at once with a deopt parked, and
+/// the dispatcher runs the call in the interpreter.
+fn define_checked_entry<M: Module>(
     module: &mut M,
     ctx: &mut cranelift_codegen::Context,
     body_id: FuncId,
-    self_upval_idx: u32,
+    checks: &EntryChecks,
     num_params: usize,
 ) -> Option<FuncId> {
     let mut sig = module.make_signature();
@@ -3985,11 +4026,25 @@ fn define_self_checked_entry<M: Module>(
     let entry_id = module
         .declare_function("luna_jit_chunk_entry", Linkage::Local, &sig)
         .ok()?;
-    let mut check_sig = module.make_signature();
-    check_sig.params.push(AbiParam::new(types::I64));
-    check_sig.returns.push(AbiParam::new(types::I64));
-    let check_id = module
-        .declare_function("luna_jit_self_upval_check", Linkage::Import, &check_sig)
+    let mut self_sig = module.make_signature();
+    self_sig.params.push(AbiParam::new(types::I64));
+    self_sig.returns.push(AbiParam::new(types::I64));
+    let self_check_id = module
+        .declare_function("luna_jit_self_upval_check", Linkage::Import, &self_sig)
+        .ok()?;
+    let mut math_sig = module.make_signature();
+    math_sig.params.push(AbiParam::new(types::I64));
+    math_sig.params.push(AbiParam::new(types::I64));
+    math_sig.returns.push(AbiParam::new(types::I64));
+    let math_check_id = module
+        .declare_function("luna_jit_math_fn_is_library", Linkage::Import, &math_sig)
+        .ok()?;
+    let park_id = module
+        .declare_function(
+            "luna_jit_park_deopt",
+            Linkage::Import,
+            &module.make_signature(),
+        )
         .ok()?;
 
     ctx.func.signature = sig;
@@ -3997,24 +4052,42 @@ fn define_self_checked_entry<M: Module>(
     let mut fbc = FunctionBuilderContext::new();
     let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
     let entry = bcx.create_block();
-    let run = bcx.create_block();
     let bail = bcx.create_block();
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
     let args: Vec<Value> = bcx.block_params(entry).to_vec();
-    let check_ref = module.declare_func_in_func(check_id, bcx.func);
-    let idx = bcx.ins().iconst(types::I64, i64::from(self_upval_idx));
-    let call = bcx.ins().call(check_ref, &[idx]);
-    let is_self = bcx.inst_results(call)[0];
-    bcx.ins().brif(is_self, run, &[], bail, &[]);
-
-    bcx.switch_to_block(run);
+    // luna_jit_self_upval_check parks its own deopt; the math check
+    // leaves that to the bail block.
+    let park_on_bail = !checks.math_fns.is_empty();
+    if let Some(idx) = checks.self_upval {
+        let check_ref = module.declare_func_in_func(self_check_id, bcx.func);
+        let idx = bcx.ins().iconst(types::I64, i64::from(idx));
+        let call = bcx.ins().call(check_ref, &[idx]);
+        let ok = bcx.inst_results(call)[0];
+        let next = bcx.create_block();
+        bcx.ins().brif(ok, next, &[], bail, &[]);
+        bcx.switch_to_block(next);
+    }
+    for &(math_key, name_key) in &checks.math_fns {
+        let check_ref = module.declare_func_in_func(math_check_id, bcx.func);
+        let m = bcx.ins().iconst(types::I64, math_key.as_ptr() as i64);
+        let k = bcx.ins().iconst(types::I64, name_key.as_ptr() as i64);
+        let call = bcx.ins().call(check_ref, &[m, k]);
+        let ok = bcx.inst_results(call)[0];
+        let next = bcx.create_block();
+        bcx.ins().brif(ok, next, &[], bail, &[]);
+        bcx.switch_to_block(next);
+    }
     let body_ref = module.declare_func_in_func(body_id, bcx.func);
     let call = bcx.ins().call(body_ref, &args);
     let r = bcx.inst_results(call)[0];
     bcx.ins().return_(&[r]);
 
     bcx.switch_to_block(bail);
+    if park_on_bail {
+        let park_ref = module.declare_func_in_func(park_id, bcx.func);
+        bcx.ins().call(park_ref, &[]);
+    }
     let zero = bcx.ins().iconst(types::I64, 0);
     bcx.ins().return_(&[zero]);
 
@@ -4128,6 +4201,8 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize, float_only: bool) -> Opti
         fn_name,
         arg_reg,
         dst_reg: a,
+        math_key: s,
+        name_key: fname,
     })
 }
 
