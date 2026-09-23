@@ -103,9 +103,10 @@ fn max_with_nan_first_returns_nan() {
         local last
         local nan, one = 0/0, 1.0
         for i = 1, 20000 do last = math.max(nan, one) end
-        return show(last)"
+        -- a NaN's printed sign is the host printf's, so test for NaN itself
+        return tostring(last ~= last) .. ':' .. math.type(last)"
     );
-    same(LuaVersion::Lua54, &src, "nan:float");
+    same(LuaVersion::Lua54, &src, "true:float");
 }
 
 #[test]
