@@ -279,9 +279,10 @@ fn rejects_wrong_version_byte() {
     let mut chunk = build_return_42_chunk();
     chunk[4] = 0x52; // pretend to be 5.2 — should route elsewhere
     let err = vm.load(&chunk, b"=test").unwrap_err();
-    // routes to 5.2 stub which says "not yet implemented"
+    // the 5.2 reader meets 5.3's LUAC_DATA where 5.2 keeps its endianness
+    // flag (header byte 6)
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(s.contains("5.2") || s.contains("LB5"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (integer format mismatch)");
 }
 
 /// End-to-end: invoke the loaded chunk and check the returned value is
