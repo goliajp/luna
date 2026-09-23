@@ -18,6 +18,7 @@ use crate::runtime::{
 };
 use crate::version::LuaVersion;
 use crate::vm::builtins::{nat_pairs, nat_pcall, nat_xpcall};
+use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
 
@@ -49,8 +50,8 @@ pub struct Vm {
     /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
     /// the heap directly.
     pub heap: Heap,
-    stack: Vec<Value>,
-    frames: Vec<CallFrame>,
+    pub(crate) stack: Vec<Value>,
+    pub(crate) frames: Vec<CallFrame>,
     /// P17-D Week 1 shadow — frames_top mirrors `self.frames.len()`.
     /// Synced on every push/pop in `frames_push_sync`/`frames_pop_sync`
     /// helpers (debug-asserted on use). NOT consumed by readers yet;
@@ -93,7 +94,7 @@ pub struct Vm {
     /// loop)` then matches. PUC tracks this via the soft-cap window
     /// `nCcalls >= MAXCCALLS/10*11`; luna's c_depth is strict, so we mark the
     /// scope explicitly.
-    msgh_depth: u32,
+    pub(crate) msgh_depth: u32,
     /// set by a coroutine closing itself (`coroutine.close()` on the running
     /// thread): the to-be-closed handlers have already run; the thread must now
     /// terminate. `Some(None)` is a clean close, `Some(Some(e))` a handler
@@ -110,7 +111,7 @@ pub struct Vm {
     closing_err: Option<Value>,
     /// the coroutine whose context is currently live in the fields above;
     /// `None` while the main thread runs (P05)
-    current: Option<Gc<crate::runtime::Coro>>,
+    pub(crate) current: Option<Gc<crate::runtime::Coro>>,
     /// the main thread's saved execution context while a coroutine runs
     main_ctx: Option<SavedCtx>,
     /// set by `coroutine.yield` to suspend the running coroutine: the yielded
@@ -237,12 +238,27 @@ pub struct Vm {
     /// own tailcalls + 1 before begin_call so deeply tail-recursive chains
     /// accumulate the count instead of capping at 1.
     pub(crate) pending_tailcalls: u32,
+    /// arms the next Lua frame's `ccmt` (its `__call` chain length), consumed
+    /// by `push_frame`. `OP_TailCall` sets it to the reused activation's
+    /// count; `begin_call` otherwise sets the chain it just resolved.
+    pending_ccmt: u8,
     /// Name of the C native that just propagated an error (captured before
     /// the native is popped from `running_natives`). Lets a dying coroutine
     /// preserve `[C]: in function '<name>'` at the top of its traceback
     /// snapshot — PUC walks `luaG_funcnamefrompc` over a still-live ci, but
     /// luna's native frames are off-stack so we stash the name explicitly.
-    pub(crate) errored_native: Option<String>,
+    pub(crate) errored_natives: Vec<crate::vm::callstack::ErroredNative>,
+    /// Frames below this index are out of reach of the error handler of
+    /// an `xpcall` (PUC `L->errfunc`): a protected call made from Rust — a
+    /// finalizer, the handler itself — starts a fresh `errfunc` scope.
+    pub(crate) msgh_floor: usize,
+    /// The value the last `xpcall` handler produced for the error in
+    /// flight, so the unwind that carries it to the `xpcall` does not
+    /// run the handler again.
+    pub(crate) msgh_applied: Option<Value>,
+    /// Whether an error nothing catches should keep its traceback: not
+    /// inside a protected call made from Rust, which discards it.
+    pub(crate) keep_error_traceback: bool,
     /// PUC `CallInfo.u2.transferinfo`: index of the first transferred value
     /// (relative to the activation's func slot) and the number transferred.
     /// Set just before firing a call/return hook, read by `getinfo("r")`.
@@ -257,14 +273,12 @@ pub struct Vm {
     /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
     /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
     pending_is_hook: bool,
-    /// traceback snapshot taken at the error point (the first `unwind` entry
-    /// for the in-flight error), so that an `xpcall` msgh — which runs *after*
-    /// the failed frames are popped — can still see the error point's stack
-    /// via `debug.traceback`. PUC `luaG_errormsg` instead runs msgh with the
-    /// stack intact; we approximate by snapshotting the string and letting
-    /// `d_traceback` consume it. Cleared on Cont catch and at host-level
+    /// traceback of an error nothing in its thread catches, one line per
+    /// stack level, taken where it was raised (see `raise_to_handler`): what
+    /// the host gets from `take_error_traceback`, and what `debug.traceback`
+    /// shows of the coroutine it kills. Cleared on a catch and at host-level
     /// `call_value` entry (`public_call_depth == 0`).
-    pub(crate) error_traceback: Option<Vec<u8>>,
+    pub(crate) error_traceback: Option<Vec<Vec<u8>>>,
     /// nesting depth of public `call_value` entries (host vs. internal). The
     /// outermost entry (depth 0) resets per-error state (`error_traceback`);
     /// internal calls (e.g. xpcall msgh, sort callback) preserve it.
@@ -276,15 +290,13 @@ pub struct Vm {
     /// caller is C, not Lua) and qualify the running function's name via
     /// `pushglobalfuncname` (e.g. `'sort'` → `'table.sort'`).
     pub(crate) running_natives: Vec<Gc<NativeClosure>>,
-    /// Parallel to `running_natives`: each entry's `(func_slot, nargs)` is
-    /// the native's argument-window head and width, so `debug.getlocal`
-    /// can index it like PUC's `luaG_findlocal` `(C temporary)` path.
-    pub(crate) running_native_slots: Vec<(u32, u32)>,
-    /// Parallel to `running_natives`: whether each native was entered from C
-    /// (another native, or a protected call) rather than by a Lua call or as
-    /// a metamethod. PUC's `lua_getinfo("n")` gives no name to a function
-    /// whose caller is C, which is what `luaL_argerror` falls back on.
-    pub(crate) running_native_from_c: Vec<bool>,
+    /// Parallel to `running_natives`: where each native sits on the value
+    /// and frame stacks, so the debug interface can place it among the Lua
+    /// activations as PUC's CallInfo chain would (see `callstack`).
+    pub(crate) running_native_acts: Vec<crate::vm::callstack::NativeAct>,
+    /// Index into `running_natives` where the running thread's own natives
+    /// begin; the ones below belong to the threads that resumed it.
+    pub(crate) natives_base: usize,
     // v1.1 A2 — was: jit_pending_err, jit_reg_state_buf, jit_str_buf_pool,
     // jit_str_buf_pool_cap, jit_entry_tags_buf, chunk_compiler,
     // trace_compiler — all moved to JitState. See `jit` below.
@@ -512,22 +524,6 @@ enum Unwound {
     Propagated(LuaError),
 }
 
-/// A resolved debug stack level: a real Lua frame (by index into `frames`) or a
-/// synthetic C frame for a call_value boundary.
-pub(crate) enum DbgKind {
-    Lua(usize),
-    /// a synthetic C level; the index is the `from_c` Lua frame it sits below,
-    /// used to name the native via its invoking call instruction.
-    C(usize),
-    /// PUC `CIST_TAIL` placeholder — a Lua-to-Lua tail call collapsed the
-    /// caller's activation, so `debug.getinfo(level)` at this slot returns
-    /// `what = "tail"` / `short_src = "(tail call)"` / `linedefined = -1` /
-    /// `func = nil` and `getfenv(level)` errors (5.1 db.lua :336/:341 pin
-    /// both shapes). The index points at the *tail-called* frame whose
-    /// `is_tail` flag induced this synthetic level.
-    Tail(#[allow(dead_code)] usize),
-}
-
 /// Outcome of an index/newindex/comparison fast path: either a directly
 /// computed result, or a metamethod (with the receiver it resolved against) the
 /// caller must invoke — synchronously (C context) or yieldably (VM opcode).
@@ -610,23 +606,6 @@ const MM_NAMES: [&str; 28] = [
     "__pairs",
 ];
 
-/// Debug-name spelling for a metamethod event tag (the bare `"index"` /
-/// `"gc"` / … stored in `Frame.tm`), as `getinfo("n").name` reports it.
-///
-/// PUC 5.2/5.3 keep the leading `"__"` for every event; 5.4+ strips it for
-/// every event *except* `__gc` (`funcnamefromcall` returns the literal
-/// `"__gc"` string for `CIST_FIN`, whereas `funcnamefromcode` does
-/// `getstr(tmname[tm]) + 2` to skip the `__`).
-fn tm_debug_name(version: LuaVersion, tm: &str) -> String {
-    if version <= LuaVersion::Lua53 {
-        format!("__{tm}")
-    } else if tm == "gc" {
-        "__gc".to_string()
-    } else {
-        tm.to_string()
-    }
-}
-
 /// The metamethod event an opcode dispatches, without the `__` prefix (PUC
 /// funcnamefromcode), for "(metamethod 'event')" call-error suffixes.
 fn mm_event_name(op: crate::vm::isa::Op) -> Option<&'static str> {
@@ -664,7 +643,12 @@ const MAX_TAG_LOOP: u32 = 2000;
 /// earlier `15` here was tight enough to fire on calls.lua :194 (N=20).
 const MAX_CCMT: u32 = 200;
 /// PUC LUAI_MAXCCALLS analogue: native↔Lua nesting bound.
-const MAX_C_DEPTH: u32 = 200;
+pub(crate) const MAX_C_DEPTH: u32 = 200;
+/// Stack an xpcall handler may use past `MAX_LUA_STACK` while handling a
+/// stack overflow: PUC's 200 extra `ERRORSTACKSIZE` slots, plus the frame
+/// reserve (256) the overflowing call was refused, so the handler's first
+/// frame fits where that one did not.
+const ERROR_STACK_EXTRA: u32 = 200 + 256;
 /// luna's engine-level VM stack cap (used by call-site overflow checks).
 /// Slightly larger than PUC's `LUAI_MAXSTACK` so engine internals have a
 /// little headroom above any single library push.
@@ -988,7 +972,11 @@ impl Vm {
             hook: HookState::default(),
             in_hook: false,
             pending_tailcalls: 0,
-            errored_native: None,
+            pending_ccmt: 0,
+            errored_natives: Vec::new(),
+            msgh_floor: 0,
+            msgh_applied: None,
+            keep_error_traceback: true,
             hook_ftransfer: 0,
             hook_ntransfer: 0,
             pending_tm: None,
@@ -996,8 +984,8 @@ impl Vm {
             error_traceback: None,
             public_call_depth: 0,
             running_natives: Vec::new(),
-            running_native_slots: Vec::new(),
-            running_native_from_c: Vec::new(),
+            running_native_acts: Vec::new(),
+            natives_base: 0,
             // v1.1 A2 — JIT-specific state factored into `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
             // `install_jit_backend` / `luaL_newstate` swap in
@@ -1755,7 +1743,15 @@ impl Vm {
         from_c: bool,
     ) -> Result<Vec<Value>, LuaError> {
         if self.c_depth >= MAX_C_DEPTH {
-            return Err(self.rt_err("stack overflow"));
+            // PUC `luaE_checkcstack`: at the limit the call fails; an xpcall
+            // handler running on the error gets a tenth more room before its
+            // own failure is "error in error handling"
+            if self.msgh_depth == 0 {
+                return Err(self.runerror("C stack overflow"));
+            }
+            if self.c_depth >= MAX_C_DEPTH / 10 * 11 {
+                return Err(self.plain_err("error in error handling"));
+            }
         }
         self.c_depth += 1;
         let func_slot = self.stack.len() as u32;
@@ -1917,7 +1913,13 @@ impl Vm {
         }
         self.load_coro_ctx(co);
         self.current = Some(co);
+        // PUC `luaE_resetthread` closes with no message handler, whatever
+        // xpcall the coroutine was suspended in
+        let natives_base = std::mem::replace(&mut self.natives_base, self.running_natives.len());
+        let msgh_floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
         let result = self.close_slots(0, death_err);
+        self.natives_base = natives_base;
+        self.msgh_floor = msgh_floor;
         // discard the (now-closed) coroutine context and restore the caller
         let _ = self.take_ctx();
         match resumer {
@@ -1943,6 +1945,8 @@ impl Vm {
             m.pcall_depth = 0;
             m.resume_at = None;
             m.error_value = None;
+            m.error_traceback = None;
+            m.error_levels = None;
         }
         result.map(|()| death_err)
     }
@@ -2130,6 +2134,7 @@ impl Vm {
                 m.pcall_depth = rctx.pcall_depth;
                 m.globals = rctx.globals;
                 m.status = CoroStatus::Normal;
+                m.natives = self.natives_base..self.running_natives.len();
                 // bulk overwrite of every traced field on r — mirror
                 // store_coro_ctx's barrier_back so propagate re-traces r.
                 self.heap
@@ -2150,6 +2155,12 @@ impl Vm {
         self.heap
             .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
         self.current = Some(co);
+        let resumer_natives_base = self.natives_base;
+        self.natives_base = self.running_natives.len();
+        // the coroutine's own frames start a fresh reach for xpcall handlers
+        let resumer_msgh_floor = std::mem::replace(&mut self.msgh_floor, 0);
+        // a coroutine that dies keeps its traceback for `debug.traceback(co)`
+        let resumer_keeps_traceback = std::mem::replace(&mut self.keep_error_traceback, true);
 
         // drive it
         let drive = if co.started {
@@ -2185,24 +2196,18 @@ impl Vm {
                 None => {
                     // died: a return is clean, an error is remembered so a later
                     // `coroutine.close` can report it (PUC lua_closethread).
-                    // Capture the error-point traceback (set by `unwind` before
-                    // popping the failing frames) and prepend a synthetic
-                    // top entry for the C native that initiated the error
-                    // (PUC `[C]: in function '<name>'`) so `debug.traceback(co)`
-                    // on the dead coroutine still shows the error site
-                    // (db.lua :848 family).
+                    // Keep the error-point traceback (taken by `unwind` before
+                    // popping the failing frames) so `debug.traceback(co)` on
+                    // the dead coroutine still shows the error site, as PUC's
+                    // untouched dead stack does (db.lua :848 family).
                     if drive.is_err() {
-                        let mut tb = self.error_traceback.take().unwrap_or_default();
-                        if let Some(nm) = self.errored_native.take() {
-                            let mut prefixed: Vec<u8> = Vec::new();
-                            prefixed.extend_from_slice(
-                                format!("\n\t[C]: in function '{nm}'").as_bytes(),
-                            );
-                            prefixed.extend(tb);
-                            tb = prefixed;
-                        }
+                        let levels = self.error_traceback.take().unwrap_or_default();
+                        let tb =
+                            crate::vm::callstack::traceback_from_lines(self.version, &levels, 0);
                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        unsafe { co.as_mut() }.error_traceback = Some(tb);
+                        let m = unsafe { co.as_mut() };
+                        m.error_traceback = Some(tb);
+                        m.error_levels = Some(levels);
                     }
                     if let Err(e) = drive {
                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -2216,6 +2221,9 @@ impl Vm {
         };
 
         // save the coroutine's context back and restore the resumer
+        self.natives_base = resumer_natives_base;
+        self.msgh_floor = resumer_msgh_floor;
+        self.keep_error_traceback = resumer_keeps_traceback;
         self.store_coro_ctx(co);
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { co.as_mut() }.status = status;
@@ -2359,6 +2367,12 @@ impl Vm {
         line: Option<i64>,
         from_native: bool,
     ) -> Result<(), LuaError> {
+        // line and count events transfer no values (PUC `luaD_hook(L,
+        // event, line, 0, 0)`); call and return hooks set theirs first
+        if matches!(event, b"line" | b"count") {
+            self.hook_ftransfer = 0;
+            self.hook_ntransfer = 0;
+        }
         // v1.1 B11 — Rust hook fires first (no Vm reentrancy via call_value;
         // synchronous fn pointer call). Both Rust and Lua hooks may be
         // installed; both observe each event.
@@ -3906,6 +3920,7 @@ impl Vm {
                 tm: None,
                 is_hook: false,
                 tailcalls: 0,
+                ccmt: 0,
             }),
         );
     }
@@ -3962,9 +3977,9 @@ impl Vm {
     /// `call_value`/`eval`/`call`/etc. — the next public `call_value`
     /// entry clears it. Returns `None` if no error was in flight.
     pub fn take_error_traceback(&mut self) -> Option<String> {
-        self.error_traceback
-            .take()
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
+        let levels = self.error_traceback.take()?;
+        let tb = crate::vm::callstack::traceback_from_lines(self.version, &levels, 0);
+        Some(String::from_utf8_lossy(&tb).into_owned())
     }
 
     /// Arm the soft memory cap (P09 embedding). The run loop checks the
@@ -4068,25 +4083,9 @@ impl Vm {
                 // `"__"` debug prefix for 5.2/5.3, drop it for 5.4+. Matches
                 // the convention used by `__close`, `__index`, …
                 let saved_tm = self.pending_tm.replace("gc");
-                // PUC `GCTM` also sets `CIST_FIN` on the CALLER's ci before
-                // pcall, so `getinfo(2).namewhat` inside the finalizer reads
-                // "metamethod" (5.3 db.lua :720 wires up exactly this probe).
-                // luna mirrors by temporarily tagging the current top Lua
-                // frame's `tm` to "__gc" for the duration of the call.
-                let caller_tm_idx = self
-                    .frames
-                    .iter()
-                    .rposition(|cf| matches!(cf, CallFrame::Lua(_)));
-                let saved_caller_tm = caller_tm_idx.and_then(|i| {
-                    if let CallFrame::Lua(fr) = &mut self.frames[i] {
-                        let prev = fr.tm;
-                        fr.tm = Some("gc");
-                        Some(prev)
-                    } else {
-                        None
-                    }
-                });
-                if let Err(e) = self.call_value(gc, &[obj]) {
+                // PUC `GCTM` runs the finalizer with `luaD_pcall` and no
+                // message handler
+                if let Err(e) = self.call_protected(gc, &[obj]) {
                     // PUC 5.1 GCTM raised the finalizer's error to the
                     // explicit `collectgarbage()` caller (`gc.lua 5.1 :255`
                     // baselines on `not pcall(collectgarbage)`). 5.2/5.3
@@ -4114,11 +4113,6 @@ impl Vm {
                     }
                 }
                 self.pending_tm = saved_tm;
-                if let (Some(i), Some(prev)) = (caller_tm_idx, saved_caller_tm)
-                    && let Some(CallFrame::Lua(fr)) = self.frames.get_mut(i)
-                {
-                    fr.tm = prev; // prev is Option<&'static str>; restore exactly
-                }
             }
         }
         self.gc_finalizing = false;
@@ -4186,6 +4180,7 @@ impl Vm {
         // begin_call's frame; restore it just before push_frame for the Lua
         // arm so its meaning is preserved across __call chaining.
         let tailcalls = std::mem::take(&mut self.pending_tailcalls);
+        let tail_ccmt = std::mem::take(&mut self.pending_ccmt);
         // resolve __call handlers iteratively (PUC tryfuncTM loop): each handler
         // is inserted before the value so it becomes the first argument, and a
         // chain of `__call` tables resolves down to a real function.
@@ -4202,6 +4197,11 @@ impl Vm {
                         return Ok(false);
                     }
                     self.pending_tailcalls = tailcalls;
+                    self.pending_ccmt = if tailcalls > 0 {
+                        tail_ccmt
+                    } else {
+                        chain as u8
+                    };
                     self.push_frame(cl, func_slot, nargs, nresults, from_c)?;
                     // P12-S4-step0 — trace-on-call trigger. The frame
                     // we just pushed is the callee whose body the
@@ -4352,10 +4352,10 @@ impl Vm {
                     // inside it is preserved with the thread's saved frames.
                     use crate::runtime::value::NativeFn;
                     if std::ptr::fn_addr_eq(nc.f, nat_pcall as NativeFn) {
-                        return self.begin_pcall(func_slot, nargs, nresults, from_c);
+                        return self.begin_pcall(func_slot, nargs, nresults);
                     }
                     if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
-                        return self.begin_xpcall(func_slot, nargs, nresults, from_c);
+                        return self.begin_xpcall(func_slot, nargs, nresults);
                     }
                     // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
                     // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
@@ -4383,11 +4383,13 @@ impl Vm {
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
                     self.running_natives.push(nc);
-                    self.running_native_slots.push((func_slot, nargs));
-                    // A metamethod dispatch also enters with `from_c`, but PUC
-                    // names it by its event, so it does not count as C here.
-                    self.running_native_from_c
-                        .push(from_c && self.pending_tm.is_none());
+                    self.running_native_acts
+                        .push(crate::vm::callstack::NativeAct {
+                            func_slot,
+                            nargs,
+                            depth: self.frames.len() as u32,
+                            ccmt: chain as u8,
+                        });
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -4406,8 +4408,7 @@ impl Vm {
                     // Err and the matching "return" hook fires on resume instead.
                     if let Err(e) = self.hook_call(true, nargs) {
                         self.running_natives.pop();
-                        self.running_native_from_c.pop();
-                        self.running_native_slots.pop();
+                        self.running_native_acts.pop();
                         return Err(e);
                     }
                     // P09: trap a Rust panic in the native and surface it as
@@ -4435,16 +4436,12 @@ impl Vm {
                     let nret = match result {
                         Ok(n) => n,
                         Err(e) => {
-                            // Stash the offending native's name BEFORE the
-                            // pop so a dying coroutine's traceback snapshot
-                            // can prepend `[C]: in function '<name>'`. Use
-                            // pushglobalfuncname (PUC walks package.loaded
-                            // to qualify); fall back to "?".
-                            self.errored_native =
-                                Some(self.pushglobalfuncname(nc.f).unwrap_or_else(|| "?".into()));
+                            // PUC raises with the native still on the stack;
+                            // remember it for the handler and traceback of the
+                            // error (see `raise_to_handler`)
+                            let act = self.running_native_acts.pop().expect("pushed above");
                             self.running_natives.pop();
-                            self.running_native_from_c.pop();
-                            self.running_native_slots.pop();
+                            self.note_errored_native(nc, act, e.0);
                             return Err(e);
                         }
                     };
@@ -4474,12 +4471,12 @@ impl Vm {
                                 self.stack[(func_slot + i) as usize];
                         }
                         // widen the C-frame's argument window for getlocal
-                        if let Some(slot) = self.running_native_slots.last_mut() {
-                            slot.1 = nargs + nret;
+                        if let Some(act) = self.running_native_acts.last_mut() {
+                            act.nargs = nargs + nret;
                         }
                         let hr = self.hook_return(true, nargs + 1, nret);
-                        if let Some(slot) = self.running_native_slots.last_mut() {
-                            slot.1 = nargs;
+                        if let Some(act) = self.running_native_acts.last_mut() {
+                            act.nargs = nargs;
                         }
                         // restore results into the slot finish_results expects
                         for i in 0..nret {
@@ -4487,13 +4484,11 @@ impl Vm {
                                 self.stack[(res_dst + i) as usize];
                         }
                         self.running_natives.pop();
-                        self.running_native_from_c.pop();
-                        self.running_native_slots.pop();
+                        self.running_native_acts.pop();
                         hr?;
                     } else {
                         self.running_natives.pop();
-                        self.running_native_from_c.pop();
-                        self.running_native_slots.pop();
+                        self.running_native_acts.pop();
                     }
                     self.finish_results(func_slot, nret, nresults);
                     // the native may have allocated; collect with the results as
@@ -4542,18 +4537,16 @@ impl Vm {
         from_c: bool,
     ) -> Result<(), LuaError> {
         if func_slot + 256 > MAX_LUA_STACK {
-            // PUC `stackerror`: a stack overflow that surfaces while the
-            // current activation is inside an xpcall message handler is
-            // translated by `luaD_seterrorobj` (LUA_ERRERR) to "error in
-            // error handling". errors.lua :606 expects the inner pcall(loop)
-            // it runs from within `xpcall(loop, msgh)`'s msgh to fail with a
-            // message matching "error handling".
-            let msg = if self.msgh_depth > 0 {
-                "error in error handling"
-            } else {
-                "stack overflow"
-            };
-            return Err(self.rt_err(msg));
+            // PUC `luaD_growstack`: the overflow raises "stack overflow" and
+            // leaves ERRORSTACKSIZE's extra slots for the xpcall handler that
+            // runs on it; overflowing those is LUA_ERRERR, "error in error
+            // handling" (errors.lua :606, cstack.lua :29).
+            if self.msgh_depth == 0 {
+                return Err(self.rt_err("stack overflow"));
+            }
+            if func_slot + 256 > MAX_LUA_STACK + ERROR_STACK_EXTRA {
+                return Err(self.plain_err("error in error handling"));
+            }
         }
         let proto = cl.proto;
         let nparams = proto.num_params as u32;
@@ -4605,6 +4598,7 @@ impl Vm {
                 // hook so its frame reports `namewhat = "hook"` via getinfo.
                 is_hook: std::mem::take(&mut self.pending_is_hook),
                 tailcalls: std::mem::take(&mut self.pending_tailcalls),
+                ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
         // PUC 5.1 `LUAI_COMPAT_VARARG`: populate the hidden `arg` local with
@@ -4657,22 +4651,17 @@ impl Vm {
     /// the loop head then writes `true` at `func_slot` to form `true, results…`.
     /// Always returns `Ok(true)`: a continuation is now on the stack to be
     /// resolved by the loop (even when `f` is a native that already ran inline).
-    fn begin_pcall(
-        &mut self,
-        func_slot: u32,
-        nargs: u32,
-        nresults: i32,
-        from_c: bool,
-    ) -> Result<bool, LuaError> {
+    fn begin_pcall(&mut self, func_slot: u32, nargs: u32, nresults: i32) -> Result<bool, LuaError> {
         if nargs == 0 {
             // `luaL_checkany` fails here: there is no function to call.
-            self.with_native_running(func_slot, nargs, from_c, |vm| {
+            self.with_native_running(func_slot, nargs, |vm| {
                 let a = crate::vm::argcheck::Args::new(func_slot, nargs);
                 crate::vm::argcheck::check_any(vm, a, 0).map(drop)
             })?;
         }
         if self.pcall_depth >= MAX_C_DEPTH {
-            return Err(self.rt_err("C stack overflow"));
+            // raised inside pcall, a C function: no position
+            return Err(self.plain_err("C stack overflow"));
         }
         self.pcall_depth += 1;
         frames_push_sync(
@@ -4699,14 +4688,14 @@ impl Vm {
         func_slot: u32,
         nargs: u32,
         nresults: i32,
-        from_c: bool,
     ) -> Result<bool, LuaError> {
-        self.with_native_running(func_slot, nargs, from_c, |vm| {
+        self.with_native_running(func_slot, nargs, |vm| {
             let a = crate::vm::argcheck::Args::new(func_slot, nargs);
             crate::vm::builtins::xpcall_handler(vm, a).map(drop)
         })?;
         if self.pcall_depth >= MAX_C_DEPTH {
-            return Err(self.rt_err("C stack overflow"));
+            // raised inside pcall, a C function: no position
+            return Err(self.plain_err("C stack overflow"));
         }
         self.pcall_depth += 1;
         // layout: [xpcall@func_slot, f@+1, msgh@+2, a1@+3, ...]. Stash msgh and
@@ -4750,30 +4739,38 @@ impl Vm {
         &mut self,
         func_slot: u32,
         nargs: u32,
-        from_c: bool,
         check: impl FnOnce(&mut Vm) -> Result<(), LuaError>,
     ) -> Result<(), LuaError> {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
         self.running_natives.push(nc);
-        self.running_native_slots.push((func_slot, nargs));
-        self.running_native_from_c
-            .push(from_c && self.pending_tm.is_none());
+        self.running_native_acts
+            .push(crate::vm::callstack::NativeAct {
+                func_slot,
+                nargs,
+                depth: self.frames.len() as u32,
+                ccmt: 0,
+            });
         let r = check(self);
         self.running_natives.pop();
-        self.running_native_from_c.pop();
-        self.running_native_slots.pop();
+        self.running_native_acts.pop();
         r
     }
 
     fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
-        // layout becomes [mm@func_slot, t@func_slot+1]; call mm(t) for the
-        // dialect's result count.
-        self.stack[func_slot as usize] = mm;
-        self.top = func_slot + 2;
+        // layout becomes [pairs@func_slot, mm@func_slot+1, t@func_slot+2]:
+        // `pairs` keeps its slot so the debug interface can report it as the
+        // C function running below the metamethod. Call mm(t) wanting 4.
+        let need = (func_slot + 3) as usize;
+        if self.stack.len() < need {
+            self.stack.resize(need, Value::Nil);
+        }
+        self.stack[(func_slot + 2) as usize] = arg;
+        self.stack[(func_slot + 1) as usize] = mm;
+        self.top = func_slot + 3;
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -4784,7 +4781,7 @@ impl Vm {
             }),
         );
         let want = crate::vm::builtins::pairs_mm_results(self) as i32;
-        self.begin_call(func_slot, Some(1), want, true)?;
+        self.begin_call(func_slot + 1, Some(1), want, true)?;
         Ok(true)
     }
 
@@ -5514,90 +5511,27 @@ impl Vm {
         }
     }
 
-    /// Position prefix of the Lua frame `level` steps up from the running C
-    /// function (PUC `luaL_where(L, level)`): `level == 1` is the function
-    /// that called the running native, `level == 2` its caller, and so on.
-    /// Used by `error(msg, level)`.
-    ///
-    /// PUC counts EVERY CallInfo — a C caller occupies a level of its own
-    /// (`pcall(pcall, error, "msg")` resolves level 1 to the inner pcall, a
-    /// C activation with no line info, v2.13 CORPUS-IV fixture 239). luna
-    /// represents such a C activation either by the `from_c` flag of the Lua
-    /// frame it called, or — when that flag is absent (it called a native
-    /// directly, or a tail call replaced the frame it called) — by its
-    /// pcall/xpcall/pairs continuation frame; each is counted once. A
-    /// metamethod handler is called by the VM itself (Lua to Lua, no C level
-    /// in between), so neither its `from_c` nor its Meta/Close continuation
-    /// counts.
+    /// PUC `luaL_where(L, level)`: `"short_src:line: "` for the function at
+    /// `level` (0 = the running native), or `None` when that level does not
+    /// exist or has no line information (a C function, a stripped chunk).
     pub(crate) fn position_prefix_at_level(&self, level: i64) -> Option<String> {
-        if level < 1 {
+        let ts = self.thread_stack(None);
+        let i = usize::try_from(level).ok()?;
+        if i >= ts.levels.len() {
             return None;
         }
-        let v51 = self.version <= LuaVersion::Lua51;
-        let mut lvl = level;
-        let mut found: Option<usize> = None;
-        // whether the frame visited just before (the one above) already
-        // counted the C activation below it
-        let mut above_counted_c = false;
-        'walk: for fi in (0..self.frames.len()).rev() {
-            match &self.frames[fi] {
-                CallFrame::Lua(f) => {
-                    lvl -= 1;
-                    if lvl == 0 {
-                        found = Some(fi);
-                        break 'walk;
-                    }
-                    if v51 {
-                        for _ in 0..f.tailcalls {
-                            lvl -= 1;
-                            if lvl == 0 {
-                                return None; // synthetic tail level: no line info
-                            }
-                        }
-                    }
-                    above_counted_c = f.from_c && f.tm.is_none();
-                    if above_counted_c {
-                        lvl -= 1;
-                        if lvl == 0 {
-                            return None; // C activation: no line info
-                        }
-                    }
-                }
-                CallFrame::Cont(nc) => {
-                    let c_level = matches!(
-                        nc.kind,
-                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs
-                    ) && !above_counted_c;
-                    if c_level {
-                        lvl -= 1;
-                        if lvl == 0 {
-                            return None;
-                        }
-                    }
-                    above_counted_c = false;
-                }
-            }
-        }
-        let fi = found?;
-        let f = self.frames[fi].lua()?;
-        let proto = f.closure.proto;
-        // PUC luaG_addinfo: a stripped chunk has no source — see
-        // `stripped_prefix` for the per-version wording (5.5 vs ≤5.4).
-        if proto.source.as_bytes().is_empty() {
-            return Some(self.stripped_prefix());
-        }
-        // a stripped chunk carries no per-instruction line info
-        if proto.lines.is_empty() {
+        let line = ts.currentline(i);
+        if line <= 0 {
             return None;
         }
-        let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
-        // PUC `luaG_addinfo` renders source via `luaO_chunkid` (LUA_IDSIZE=60),
-        // not the raw chunk name — handles `@file`/`=name` sigils + truncation.
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        let raw = unsafe { crate::runtime::string::bytes_of(proto.source.as_ptr()) };
-        let display = crate::vm::lib_debug::chunk_id(raw);
-        let src = String::from_utf8_lossy(&display).into_owned();
-        Some(format!("{src}:{line}: "))
+        let DbgKind::Lua(fi) = ts.levels[i] else {
+            return None;
+        };
+        let ar = self.closure_ar(ts.lua(fi).closure);
+        Some(format!(
+            "{}:{line}: ",
+            String::from_utf8_lossy(&ar.short_src)
+        ))
     }
 
     // ---- the interpreter ----
@@ -5668,18 +5602,7 @@ impl Vm {
         // error point was at the stack limit (cause: the next `call_value_impl`
         // picks `func_slot = stack.len()` which would otherwise re-overflow).
         let saved_len = self.stack.len();
-        // Snapshot the traceback at the error point — before any frame is
-        // popped — so an `xpcall` msgh (which runs after the failed frames are
-        // gone) can still describe the error site. The handler frame about to
-        // be popped (e.g. a `__close` handler with `tm = Some("close")`) is
-        // visible here; once popped, `debug.traceback` would miss it.
-        // PUC instead runs msgh with the failed stack intact (luaG_errormsg);
-        // but doing so when the stack is near `MAX_LUA_STACK` (true overflow
-        // recovery — locals.lua:659) re-overflows. Capture-once propagates
-        // through nested unwinds (inner→outer) without re-running msgh.
-        if self.error_traceback.is_none() {
-            self.error_traceback = Some(self.traceback_bytes(1));
-        }
+        err = self.raise_to_handler(err);
         // An error that no protected call inside the running coroutine will
         // catch kills it without unwinding: PUC's `lua_resume` leaves the
         // dead thread's stack as it was, so its pending to-be-closed
@@ -5762,7 +5685,11 @@ impl Vm {
                         }
                         Ok(None) => return Unwound::Caught,
                         Err(e) => {
-                            err = e.0;
+                            // the drained close re-raises `err`; only an
+                            // error a handler raised is new
+                            if !e.0.raw_eq(err) {
+                                err = self.raise_to_handler(e.0);
+                            }
                             continue;
                         }
                     }
@@ -5771,61 +5698,18 @@ impl Vm {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top);
                     self.pcall_depth -= 1;
                     let result = match nc.kind {
-                        ContKind::Pcall => err,
+                        ContKind::Pcall => {
+                            self.msgh_applied = None;
+                            err
+                        }
+                        // the handler ran where the error was raised (see
+                        // `raise_to_handler`); one raised past the handler's
+                        // reach (by the unwind itself) meets it here
                         ContKind::Xpcall { handler } => {
-                            // PUC keeps `L->errfunc` set across the handler's
-                            // call: `luaG_errormsg` re-fires the handler when
-                            // it raises (so `xpcall(error, err, 170)` lets the
-                            // chain bottom out at err(0) → "END"). luna mirrors
-                            // that by looping until the handler returns or
-                            // luna's `iters` cap forces termination.
-                            //
-                            // The cap models PUC's nCcalls soft window
-                            // (MAXCCALLS/10*11): once tripped, `stackerror`
-                            // raises "C stack overflow" via `luaG_runerror`
-                            // which itself re-enters `luaG_errormsg`, so the
-                            // handler runs once more with that string and
-                            // naturally returns it (errors.lua :637 at N=300).
-                            // We count iterations per Cont::Xpcall rather than
-                            // a global counter — nested xpcalls each get their
-                            // own budget, matching the way PUC's stack frames
-                            // accumulate per dispatch path.
-                            const MSGH_CAP: u32 = MAX_C_DEPTH;
-                            let mut cur_err = err;
-                            let mut iters: u32 = 0;
-                            let mut capped = false;
-                            // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once
-                            // when the handler is not a function.
-                            let uncallable = self.version <= LuaVersion::Lua52
-                                && !matches!(handler, Value::Closure(_) | Value::Native(_));
-                            loop {
-                                if uncallable {
-                                    break Value::Str(self.heap.intern(b"error in error handling"));
-                                }
-                                if iters >= MSGH_CAP && !capped {
-                                    cur_err = Value::Str(self.heap.intern(b"C stack overflow"));
-                                    capped = true;
-                                }
-                                iters += 1;
-                                self.msgh_depth += 1;
-                                let r = self.call_value(handler, &[cur_err]);
-                                self.msgh_depth -= 1;
-                                match r {
-                                    Ok(hr) => {
-                                        break hr.first().copied().unwrap_or(Value::Nil);
-                                    }
-                                    Err(_) if capped => {
-                                        // the handler still errored on the
-                                        // synthesized "C stack overflow"; fall
-                                        // back to PUC's LUA_ERRERR string.
-                                        break Value::Str(
-                                            self.heap.intern(b"error in error handling"),
-                                        );
-                                    }
-                                    Err(e) => {
-                                        cur_err = e.0;
-                                    }
-                                }
+                            if self.msgh_applied.take().is_some_and(|v| v.raw_eq(err)) {
+                                err
+                            } else {
+                                self.call_msgh(handler, err)
                             }
                         }
                         ContKind::Meta(_) | ContKind::Pairs | ContKind::Close(_) => {
@@ -5942,7 +5826,11 @@ impl Vm {
                         }
                         Ok(None) => return Unwound::Caught,
                         Err(e) => {
-                            err = e.0;
+                            // the drained close re-raises `err`; only an
+                            // error a handler raised is new
+                            if !e.0.raw_eq(err) {
+                                err = self.raise_to_handler(e.0);
+                            }
                             continue;
                         }
                     }
@@ -6084,7 +5972,13 @@ impl Vm {
                     if self.stack.len() < need {
                         self.stack.resize(need, Value::Nil);
                     }
-                    for s in self.top..(nc.func_slot + total) {
+                    // the metamethod ran one slot above pairs's own
+                    let first = nc.func_slot + 1;
+                    let n = (self.top - first).min(total);
+                    for i in 0..n {
+                        self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
+                    }
+                    for s in (nc.func_slot + n)..(nc.func_slot + total) {
                         self.stack[s as usize] = Value::Nil;
                     }
                     self.top = nc.func_slot + total;
@@ -8351,6 +8245,7 @@ impl Vm {
                         // recursive tail calls and expects to see the
                         // synthetic tail level for every one of them.
                         self.pending_tailcalls = fr.tailcalls.saturating_add(1);
+                        self.pending_ccmt = fr.ccmt;
                         frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
                             && self.frames.len() < entry_depth
@@ -9152,17 +9047,6 @@ impl Vm {
         match arith_num(op, ln, rn) {
             Ok(v) => Ok(Some(v)),
             Err(msg) => Err(self.rt_err(msg)),
-        }
-    }
-
-    pub(crate) fn int_from(&mut self, v: Value, what: &str) -> Result<i64, LuaError> {
-        match v {
-            Value::Int(i) => Ok(i),
-            Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
-                Some(i) => Ok(i),
-                None => Err(self.rt_err("number has no integer representation")),
-            },
-            v => Err(self.type_err(what, v)),
         }
     }
 
@@ -9987,423 +9871,7 @@ fn int_for_limit(limit: Num, init: i64, step: i64) -> (i64, bool) {
     }
 }
 
-/// Strip the load-prefix sigil from a chunk name for messages (PUC keeps
-/// `@file` / `=name` markers in `source`).
-fn chunk_display_name(p: *const crate::runtime::LuaStr) -> &'static [u8] {
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    let b = unsafe { crate::runtime::string::bytes_of(p) };
-    match b.first() {
-        Some(b'@') | Some(b'=') => &b[1..],
-        _ => b,
-    }
-}
-
 impl Vm {
-    /// Frame introspection for debug.getinfo: `level` 1 = the Lua function
-    /// that called the current native. Returns (closure, current line,
-    /// extra vararg count).
-    /// Name (and kind: local/global/field/upvalue/method/for iterator) of the
-    /// function running at `level`, recovered from the caller's call
-    /// instruction (PUC funcnamefromcode). None for the main chunk or a
-    /// tail/anonymous call with no recoverable name.
-    /// A debug-level position: either a real Lua frame (by index) or a synthetic
-    /// C frame standing for a call_value boundary (metamethod / pcall / __close /
-    /// coroutine body), which `debug.getinfo` and traceback report as "C".
-    /// PUC lua_getlocal: the `n`-th (1-based) local variable active at the Lua
-    /// frame at `level`'s current pc, as (name, value). Locals are visited in
-    /// registration order (start pc, then register) to match luaF_getlocalname.
-    pub(crate) fn local_at(&self, level: i64, n: i64) -> Option<(String, Value)> {
-        if n == 0 {
-            return None;
-        }
-        let fi = match self.dbg_frame(level)? {
-            DbgKind::Lua(fi) => fi,
-            // Tail-call placeholder has no real frame backing it — no locals
-            // exist to read or write here. PUC `findlocal` returns NULL on
-            // a CIST_TAIL activation.
-            DbgKind::Tail(_) => return None,
-            // PUC's `luaG_findlocal` on a C activation returns `(C temporary)`
-            // for slot `n` inside the argument window (db.lua :408-:413, and
-            // the call/return hook reads of math.sin / select args via
-            // `getinfo("r")` + `getlocal`). Negative `n` (vararg) is not
-            // meaningful for a C frame here.
-            DbgKind::C(fi) => {
-                if n < 1 {
-                    return None;
-                }
-                let (func_slot, nargs) = self.c_frame_native_slots(fi)?;
-                if (n as u32) > nargs {
-                    return None;
-                }
-                let slot = (func_slot + n as u32) as usize;
-                let val = self.stack.get(slot).copied().unwrap_or(Value::Nil);
-                return Some((self.temporary_locvar_name().to_string(), val));
-            }
-        };
-        let f = self.frames[fi].lua()?;
-        // PUC `lua_getlocal` with a negative `n` indexes the varargs: `-1`
-        // is the first extra arg passed to the function (`...[1]`), `-2` the
-        // second, etc. The 5.5 stack layout parks varargs in
-        // [func_slot + 1, base), so the i-th is at `func_slot + i`.
-        if n < 0 {
-            let i = (-n) as u32;
-            if i == 0 || i > f.n_varargs {
-                return None;
-            }
-            let val = self
-                .stack
-                .get((f.func_slot + i) as usize)
-                .copied()
-                .unwrap_or(Value::Nil);
-            return Some((self.vararg_locvar_name().to_string(), val));
-        }
-        let proto = f.closure.proto;
-        // PUC's parser injects a hidden `(vararg table)` locvar for an
-        // anonymous-vararg function (lparser.c new_localvarliteral), sitting
-        // right after the fixed parameters (`numparams + 1`). Main chunks
-        // and `(...t)` named-vararg funcs do NOT get one — gate on the
-        // compiler-set flag, not on `is_vararg`. luna keeps user locals in
-        // their declared registers (no shadow slot allocated), so we expose
-        // that hidden index purely in this debug view.
-        let num_params = proto.num_params as i64;
-        let vararg_slot = if proto.has_vararg_table_pseudo {
-            Some(num_params + 1)
-        } else {
-            None
-        };
-        if vararg_slot == Some(n) {
-            return Some(("(vararg table)".to_string(), Value::Nil));
-        }
-        let pc = (f.pc as usize).saturating_sub(1);
-        let mut active: Vec<&crate::runtime::LocVar> = proto
-            .locvars
-            .iter()
-            .filter(|lv| (lv.start_pc as usize) <= pc && pc < lv.end_pc as usize)
-            .collect();
-        active.sort_by_key(|lv| (lv.start_pc, lv.reg));
-        let mut idx: i64 = n - 1;
-        if let Some(vs) = vararg_slot
-            && n > vs
-        {
-            idx -= 1;
-        }
-        let idx = idx as usize;
-        if let Some(lv) = active.get(idx) {
-            let val = self
-                .stack
-                .get((f.base + lv.reg) as usize)
-                .copied()
-                .unwrap_or(Value::Nil);
-            return Some((lv.name.to_string(), val));
-        }
-        // PUC `luaG_findlocal` fallback: `n` is past the named locals but
-        // still inside the frame's live register window — report a
-        // "(temporary)" (e.g. an arithmetic intermediate). The limit is
-        // the next frame's func slot (`ci->next->func.p`) so the
-        // temporary window stops where the callee's frame begins
-        // (db.lua :416/:417 distinguish a live temporary `(a+1)` from
-        // an out-of-range slot).
-        let limit = self
-            .frames
-            .get(fi + 1)
-            .and_then(|cf| cf.lua())
-            .map(|nf| nf.func_slot)
-            .unwrap_or_else(|| self.top.max(f.base));
-        let temp_reg = idx as u32;
-        if f.base + temp_reg < limit {
-            let val = self
-                .stack
-                .get((f.base + temp_reg) as usize)
-                .copied()
-                .unwrap_or(Value::Nil);
-            return Some((self.lua_temporary_locvar_name().to_string(), val));
-        }
-        None
-    }
-
-    /// `debug.setlocal`'s underlying write (PUC `lua_setlocal`). Returns
-    /// the local / vararg name on success, `None` when the slot does not
-    /// resolve. Mirrors `local_at`'s indexing exactly.
-    pub(crate) fn local_set(&mut self, level: i64, n: i64, v: Value) -> Option<String> {
-        if n == 0 {
-            return None;
-        }
-        let DbgKind::Lua(fi) = self.dbg_frame(level)? else {
-            return None;
-        };
-        let f = self.frames[fi].lua()?;
-        if n < 0 {
-            let i = (-n) as u32;
-            if i == 0 || i > f.n_varargs {
-                return None;
-            }
-            let slot = (f.func_slot + i) as usize;
-            if let Some(s) = self.stack.get_mut(slot) {
-                *s = v;
-            }
-            return Some(self.vararg_locvar_name().to_string());
-        }
-        let proto = f.closure.proto;
-        let num_params = proto.num_params as i64;
-        let vararg_slot = if proto.has_vararg_table_pseudo {
-            Some(num_params + 1)
-        } else {
-            None
-        };
-        if vararg_slot == Some(n) {
-            // hidden (vararg table) slot has no real storage — accept the
-            // write as a no-op for PUC parity (db.lua doesn't write to it).
-            return Some("(vararg table)".to_string());
-        }
-        let pc = (f.pc as usize).saturating_sub(1);
-        let mut active: Vec<&crate::runtime::LocVar> = proto
-            .locvars
-            .iter()
-            .filter(|lv| (lv.start_pc as usize) <= pc && pc < lv.end_pc as usize)
-            .collect();
-        active.sort_by_key(|lv| (lv.start_pc, lv.reg));
-        let mut idx: i64 = n - 1;
-        if let Some(vs) = vararg_slot
-            && n > vs
-        {
-            idx -= 1;
-        }
-        let idx = idx as usize;
-        let (name, reg) = if let Some(lv) = active.get(idx) {
-            (lv.name.to_string(), lv.reg)
-        } else {
-            // PUC `luaG_findlocal` fallback into the temporary window —
-            // bounded by the next frame's func slot (see local_at).
-            let limit = self
-                .frames
-                .get(fi + 1)
-                .and_then(|cf| cf.lua())
-                .map(|nf| nf.func_slot)
-                .unwrap_or_else(|| self.top.max(f.base));
-            let temp_reg = idx as u32;
-            if f.base + temp_reg >= limit {
-                return None;
-            }
-            (self.lua_temporary_locvar_name().to_string(), temp_reg)
-        };
-        let slot = (f.base + reg) as usize;
-        if let Some(s) = self.stack.get_mut(slot) {
-            *s = v;
-        }
-        Some(name)
-    }
-
-    /// `debug.getlocal(thread, level, n)`: read frame `level` of the suspended
-    /// coroutine `co`. Walks `co.frames` (the saved Lua activation stack) and
-    /// reads from `co.stack`. Returns `None` for out-of-range, for negative
-    /// vararg indexing past `n_varargs`, or for a register past the live
-    /// window. Naming follows the same priority as `local_at`: named locals,
-    /// then `(vararg)` for negative `n`, then `(vararg table)` for the
-    /// explicit-`(...)` pseudo, else `(temporary)` in the live register
-    /// window.
-    pub(crate) fn local_at_coro(
-        &self,
-        co: Gc<crate::runtime::Coro>,
-        level: i64,
-        n: i64,
-    ) -> Option<(String, Value)> {
-        if level < 1 || n == 0 {
-            return None;
-        }
-        let frames = &co.frames;
-        // Logical level: iterate Lua frames from the top.
-        let lua_indices: Vec<usize> = (0..frames.len())
-            .rev()
-            .filter(|&i| frames[i].lua().is_some())
-            .collect();
-        let fi = *lua_indices.get((level - 1) as usize)?;
-        let f = frames[fi].lua()?;
-        if n < 0 {
-            let i = (-n) as u32;
-            if i == 0 || i > f.n_varargs {
-                return None;
-            }
-            let val = co
-                .stack
-                .get((f.func_slot + i) as usize)
-                .copied()
-                .unwrap_or(Value::Nil);
-            return Some((self.vararg_locvar_name().to_string(), val));
-        }
-        let proto = f.closure.proto;
-        let num_params = proto.num_params as i64;
-        let vararg_slot = if proto.has_vararg_table_pseudo {
-            Some(num_params + 1)
-        } else {
-            None
-        };
-        if vararg_slot == Some(n) {
-            return Some(("(vararg table)".to_string(), Value::Nil));
-        }
-        let pc = (f.pc as usize).saturating_sub(1);
-        let mut active: Vec<&crate::runtime::LocVar> = proto
-            .locvars
-            .iter()
-            .filter(|lv| (lv.start_pc as usize) <= pc && pc < lv.end_pc as usize)
-            .collect();
-        active.sort_by_key(|lv| (lv.start_pc, lv.reg));
-        let mut idx: i64 = n - 1;
-        if let Some(vs) = vararg_slot
-            && n > vs
-        {
-            idx -= 1;
-        }
-        let idx = idx as usize;
-        if let Some(lv) = active.get(idx) {
-            let val = co
-                .stack
-                .get((f.base + lv.reg) as usize)
-                .copied()
-                .unwrap_or(Value::Nil);
-            return Some((lv.name.to_string(), val));
-        }
-        let limit = frames
-            .get(fi + 1)
-            .and_then(|cf| cf.lua())
-            .map(|nf| nf.func_slot)
-            .unwrap_or(co.top.max(f.base));
-        let temp_reg = idx as u32;
-        if f.base + temp_reg < limit {
-            let val = co
-                .stack
-                .get((f.base + temp_reg) as usize)
-                .copied()
-                .unwrap_or(Value::Nil);
-            return Some((self.lua_temporary_locvar_name().to_string(), val));
-        }
-        None
-    }
-
-    /// `debug.setlocal(thread, level, n, value)`: write into frame `level` of
-    /// suspended `co`. Mirrors `local_at_coro`'s indexing exactly.
-    pub(crate) fn local_set_coro(
-        &mut self,
-        co: Gc<crate::runtime::Coro>,
-        level: i64,
-        n: i64,
-        v: Value,
-    ) -> Option<String> {
-        if level < 1 || n == 0 {
-            return None;
-        }
-        let lua_indices: Vec<usize> = (0..co.frames.len())
-            .rev()
-            .filter(|&i| co.frames[i].lua().is_some())
-            .collect();
-        let fi = *lua_indices.get((level - 1) as usize)?;
-        let (func_slot, n_varargs, base, proto, top_for_temp, next_func_slot) = {
-            let f = co.frames[fi].lua()?;
-            (
-                f.func_slot,
-                f.n_varargs,
-                f.base,
-                f.closure.proto,
-                co.top.max(f.base),
-                co.frames
-                    .get(fi + 1)
-                    .and_then(|cf| cf.lua())
-                    .map(|nf| nf.func_slot),
-            )
-        };
-        if n < 0 {
-            let i = (-n) as u32;
-            if i == 0 || i > n_varargs {
-                return None;
-            }
-            let slot = (func_slot + i) as usize;
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            let stack = unsafe { &mut co.as_mut().stack };
-            if let Some(s) = stack.get_mut(slot) {
-                *s = v;
-            }
-            // co.stack values are traced — once-per-call barrier so propagate
-            // sees the new value if co was already BLACK this cycle.
-            self.heap
-                .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
-            return Some(self.vararg_locvar_name().to_string());
-        }
-        let num_params = proto.num_params as i64;
-        let vararg_slot = if proto.has_vararg_table_pseudo {
-            Some(num_params + 1)
-        } else {
-            None
-        };
-        if vararg_slot == Some(n) {
-            return Some("(vararg table)".to_string());
-        }
-        let pc = (co.frames[fi].lua().unwrap().pc as usize).saturating_sub(1);
-        let mut active: Vec<&crate::runtime::LocVar> = proto
-            .locvars
-            .iter()
-            .filter(|lv| (lv.start_pc as usize) <= pc && pc < lv.end_pc as usize)
-            .collect();
-        active.sort_by_key(|lv| (lv.start_pc, lv.reg));
-        let mut idx: i64 = n - 1;
-        if let Some(vs) = vararg_slot
-            && n > vs
-        {
-            idx -= 1;
-        }
-        let idx = idx as usize;
-        let (name, reg) = if let Some(lv) = active.get(idx) {
-            (lv.name.to_string(), lv.reg)
-        } else {
-            let limit = next_func_slot.unwrap_or(top_for_temp);
-            let temp_reg = idx as u32;
-            if base + temp_reg >= limit {
-                return None;
-            }
-            (self.lua_temporary_locvar_name().to_string(), temp_reg)
-        };
-        let slot = (base + reg) as usize;
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        let stack = unsafe { &mut co.as_mut().stack };
-        if let Some(s) = stack.get_mut(slot) {
-            *s = v;
-        }
-        // co.stack values are traced — once-per-call barrier so propagate
-        // sees the new value if co was already BLACK this cycle.
-        self.heap
-            .barrier_back(co.as_ptr() as *mut crate::runtime::heap::GcHeader);
-        Some(name)
-    }
-
-    /// Frame info for a level on a suspended coroutine (PUC
-    /// `lua_getinfo(L1, "Sl...", &ar)` after `lua_getstack(L1, level, &ar)`).
-    /// Returns the closure + currentline + extraargs + istailcall for the
-    /// level-th Lua activation in `co.frames`. None if level overshoots.
-    pub(crate) fn coro_frame_info(
-        &self,
-        co: Gc<crate::runtime::Coro>,
-        level: i64,
-    ) -> Option<(Gc<LuaClosure>, u32, i64, bool)> {
-        if level < 1 {
-            return None;
-        }
-        let lua_indices: Vec<usize> = (0..co.frames.len())
-            .rev()
-            .filter(|&i| co.frames[i].lua().is_some())
-            .collect();
-        let fi = *lua_indices.get((level - 1) as usize)?;
-        let f = co.frames[fi].lua()?;
-        let proto = f.closure.proto;
-        let pc = (f.pc as usize)
-            .saturating_sub(1)
-            .min(proto.lines.len().saturating_sub(1));
-        let line = proto.lines.get(pc).copied().unwrap_or(0);
-        Some((f.closure, line, f.n_varargs as i64, f.tailcalls > 0))
-    }
-
-    /// Whether `level` resolves to any live activation (PUC lua_getstack).
-    pub(crate) fn level_in_range(&self, level: i64) -> bool {
-        self.dbg_frame(level).is_some()
-    }
-
     /// PUC's debug-API placeholder for an unnamed vararg slot returned by
     /// `debug.getlocal(_, -n)`. 5.2/5.3 spelled it `"(*vararg)"`; 5.4
     /// dropped the asterisk in favour of `"(vararg)"`. db.lua 5.2 :189 /
@@ -10450,179 +9918,11 @@ impl Vm {
         }
     }
 
-    /// The Lua closure running at `level` on the current thread, or `None`
-    /// when the frame is a synthetic C boundary. PUC 5.1 `getfenv`/`setfenv`
-    /// need this to reach the function whose env they read or rewrite.
-    pub(crate) fn lua_closure_at_level(&self, level: i64) -> Option<Gc<LuaClosure>> {
-        // `DbgKind::Tail` also falls into the else branch — a tail-call
-        // placeholder has no closure of its own, so PUC's `lua_getstack` +
-        // `getfunc` for that level returns no function, and `getfenv(level)`
-        // / `setfenv(level)` raise an error (5.1 db.lua :336/:341).
-        let DbgKind::Lua(fi) = self.dbg_frame(level)? else {
-            return None;
-        };
-        Some(self.frames[fi].lua()?.closure)
-    }
-
-    pub(crate) fn coro_level_in_range(&self, co: Gc<crate::runtime::Coro>, level: i64) -> bool {
-        if level < 1 {
-            return false;
-        }
-        let count = co.frames.iter().filter(|cf| cf.lua().is_some()).count();
-        (level as usize) <= count
-    }
-
-    pub(crate) fn dbg_frame(&self, level: i64) -> Option<DbgKind> {
-        if level < 1 {
-            return None;
-        }
-        // PUC 5.1's `lua_getstack` walks the full `ci` chain — each C
-        // activation counts as a level, and each Lua activation's
-        // `tailcalls` adds an extra synthetic level (CIST_TAIL). 5.2+
-        // dropped the synthetic shape: `istailcall` becomes a flag on the
-        // real frame and Cont activations no longer count separately.
-        // 5.1 db.lua :336-:343 pin the 5.1 shape; 5.2/5.3/5.5 db.lua's
-        // `getinfo(2).func == g1` pins the 5.2+ shape.
-        let v51 = self.version <= LuaVersion::Lua51;
-        let mut lvl = level;
-        for fi in (0..self.frames.len()).rev() {
-            match &self.frames[fi] {
-                CallFrame::Lua(f) => {
-                    lvl -= 1;
-                    if lvl == 0 {
-                        return Some(DbgKind::Lua(fi));
-                    }
-                    if v51 {
-                        // 5.1 reports one synthetic CIST_TAIL level per
-                        // collapsed tail call (PUC `lua_getstack` subtracts
-                        // `ci->u.l.tailcalls` from the remaining level).
-                        for _ in 0..f.tailcalls {
-                            lvl -= 1;
-                            if lvl == 0 {
-                                return Some(DbgKind::Tail(fi));
-                            }
-                        }
-                    }
-                    if f.from_c {
-                        lvl -= 1;
-                        if lvl == 0 {
-                            return Some(DbgKind::C(fi));
-                        }
-                    }
-                }
-                CallFrame::Cont(_) => {
-                    if !v51 {
-                        continue;
-                    }
-                    lvl -= 1;
-                    if lvl == 0 {
-                        let parent = (0..fi)
-                            .rev()
-                            .find(|&j| matches!(self.frames[j], CallFrame::Lua(_)));
-                        return Some(DbgKind::C(parent.unwrap_or(fi.saturating_sub(1))));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    pub(crate) fn frame_name(&self, fi: usize) -> Option<(&'static str, String)> {
-        let f = self.frames[fi].lua()?;
-        // metamethod handler frames carry the event tag (e.g. "close" for
-        // `__close`); PUC `funcnamefromcall` reads `ci->u.l.tm`.
-        if f.is_hook {
-            return Some(("hook", "?".to_string()));
-        }
-        if let Some(tm) = f.tm {
-            return Some(("metamethod", tm_debug_name(self.version, tm)));
-        }
-        // a frame entered across a C boundary has no naming call instruction
-        if fi == 0 || f.from_c {
-            return None;
-        }
-        // the caller's call instruction names this frame; a continuation frame
-        // just below (pcall/xpcall) is itself a C boundary, so f.from_c above
-        // already short-circuits those.
-        let caller = self.frames[fi - 1].lua()?;
-        let caller_proto = caller.closure.proto;
-        let p: &crate::runtime::Proto = &caller_proto;
-        let call_pc = (caller.pc as usize).checked_sub(1)?;
-        let instr = *p.code.get(call_pc)?;
-        match instr.op() {
-            Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
-            Op::TForCall => Some(("for iterator", "for iterator".to_string())),
-            _ => None,
-        }
-    }
-
-    /// Name the synthetic C level sitting below the `from_c` Lua frame at `fi`
-    /// (PUC names a C function from the call instruction that invoked it). The
-    /// native was called by the nearest Lua frame below `fi` (skipping pcall/
-    /// xpcall continuations); that frame's call instruction names it.
-    pub(crate) fn c_frame_name(&self, fi: usize) -> Option<(&'static str, String)> {
-        // PUC `GCTM` sets `CIST_FIN` on the calling ci, so when getinfo names
-        // the synthetic C edge between the __gc finalizer (top Lua frame, has
-        // `tm = "gc"`) and its triggering Lua frame it reports "metamethod"
-        // "__gc" — 5.3 db.lua :720's `getinfo(2).namewhat == "metamethod"`
-        // pin. Restricted to the `__gc` event: `__close` (`tm = "close"`)
-        // sets the tag on the handler frame only, so level 2 there still
-        // names the calling Lua frame's call instruction (5.5 locals.lua
-        // :514 pins `getinfo(2).name == "pcall"` from a __close handler).
-        if let Some(fr) = self.frames.get(fi).and_then(|cf| cf.lua())
-            && fr.tm == Some("gc")
-        {
-            let name = tm_debug_name(self.version, "gc");
-            return Some(("metamethod", name));
-        }
-        let caller_fi = (0..fi).rev().find(|&i| self.frames[i].lua().is_some())?;
-        let caller = self.frames[caller_fi].lua()?;
-        let p = &caller.closure.proto;
-        let call_pc = (caller.pc as usize).checked_sub(1)?;
-        let instr = *p.code.get(call_pc)?;
-        match instr.op() {
-            Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
-            _ => None,
-        }
-    }
-
-    /// Native value currently sitting on the synthetic C edge identified by
-    /// `DbgKind::C(fi)`. The walk counts how many `from_c` Lua frames live
-    /// above `fi` (each one corresponds to one native pushing the hook) and
-    /// indexes into `running_natives` from the top, also skipping the caller
-    /// of `getinfo` itself (the native that is currently asking).
-    /// db.lua :344 reads `debug.getinfo(2, "f").func` from a call hook and
-    /// expects the just-entered C function.
-    pub(crate) fn c_frame_func(&self, fi: usize) -> Option<Value> {
-        let idx = self.c_frame_native_idx(fi)?;
-        Some(Value::Native(self.running_natives[idx]))
-    }
-
-    /// `(func_slot, nargs)` for the synthetic C edge identified by `C(fi)`,
-    /// so `local_at` can index the native's argument window like PUC's
-    /// `(C temporary)` path. Returns `None` when no matching native exists
-    /// (e.g. the C edge corresponds to a non-native boundary).
-    pub(crate) fn c_frame_native_slots(&self, fi: usize) -> Option<(u32, u32)> {
-        let idx = self.c_frame_native_idx(fi)?;
-        self.running_native_slots.get(idx).copied()
-    }
-
-    fn c_frame_native_idx(&self, fi: usize) -> Option<usize> {
-        let n_above = self.frames[fi..]
-            .iter()
-            .filter_map(CallFrame::lua)
-            .filter(|f| f.from_c)
-            .count();
-        if n_above == 0 {
-            return None;
-        }
-        // running_natives.last() is the native currently executing (the one
-        // that called getinfo). Pop it conceptually, then take the n_above-th
-        // entry from the top of what remains.
-        let nr = self.running_natives.len().checked_sub(1)?;
-        nr.checked_sub(n_above)
-    }
-
+    /// PUC `pushglobalfuncname`: walk `package.loaded` to depth 2 looking for a
+    /// native whose function pointer matches `target`, and return its qualified
+    /// name (e.g. `"table.sort"`). A `_G.X` match is stripped to `"X"`. Returns
+    /// `None` if no match is found. Used by `arg_error` when the running native
+    /// was invoked from another native (PUC `ar.name == NULL` at level 0).
     pub(crate) fn pushglobalfuncname(
         &mut self,
         target: crate::runtime::value::NativeFn,
@@ -10668,43 +9968,14 @@ impl Vm {
         None
     }
 
-    /// Name and namewhat of the native currently running on behalf of the top
-    /// Lua frame (PUC `lua_getinfo("n")` at level 0, `funcnamefromcode`): the
-    /// call instruction's callee name, "for iterator" for a generic-for
-    /// step, or the metamethod event when the native was dispatched as one.
-    /// `None` when the caller gives it no name.
+    /// How the caller named the running native (PUC `lua_getinfo("n")` at
+    /// level 0): `None` when it gives no name, as when the caller is C.
     pub(crate) fn running_call_name(&self) -> Option<(&'static str, String)> {
-        let caller = self.frames.iter().rev().find_map(CallFrame::lua)?;
-        let p = &caller.closure.proto;
-        let call_pc = (caller.pc as usize).checked_sub(1)?;
-        let instr = *p.code.get(call_pc)?;
-        // 5.1's getfuncname names only CALL, TAILCALL and TFORLOOP, the last
-        // through the generator's register — the hidden "(for generator)"
-        // local — and knows no metamethod names.
-        let v51 = self.version == LuaVersion::Lua51;
-        match instr.op() {
-            Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
-            Op::TForCall if v51 => crate::vm::objname::getobjname(p, call_pc, instr.a()),
-            Op::TForCall => Some(("for iterator", "for iterator".to_string())),
-            _ if v51 => None,
-            _ => self
-                .pending_tm
-                .map(|tm| ("metamethod", tm_debug_name(self.version, tm))),
+        let ts = self.thread_stack(None);
+        if ts.levels.is_empty() {
+            return None;
         }
-    }
-
-    pub(crate) fn frame_info(&mut self, fi: usize) -> (Gc<LuaClosure>, u32, i64, bool) {
-        let f = self.frames[fi].lua().expect("Lua frame");
-        let proto = f.closure.proto;
-        let pc = (f.pc as usize)
-            .saturating_sub(1)
-            .min(proto.lines.len().saturating_sub(1));
-        let line = proto.lines.get(pc).copied().unwrap_or(0);
-        // PUC CallInfo.nextraargs: the original extra-arg count, fixed at call
-        // (independent of any later write to a materialized vararg table's `n`).
-        // `istailcall` mirrors PUC `CIST_TAIL` for `debug.getinfo(_, "t")` —
-        // any nonzero `tailcalls` count flips it true.
-        (f.closure, line, f.n_varargs as i64, f.tailcalls > 0)
+        self.level_name(&ts, 0)
     }
 
     /// Read an upvalue cell of a closure (debug.getupvalue).
@@ -10727,242 +9998,6 @@ impl Vm {
                     .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, v);
             }
         }
-    }
-
-    /// Lines for debug.traceback (PUC `luaL_traceback` / `pushfuncname`).
-    /// Per Lua frame, emits `"\n\t<src>:<line>: in <funcname>"` where
-    /// `<funcname>` is, in priority order: `"metamethod 'event'"` if the frame
-    /// is a metamethod handler (e.g. `__close`); else `"<namewhat> '<name>'"`
-    /// from the caller's call instruction (`getobjname`); else `"main chunk"`;
-    /// else `"function <src:line_defined>"` for an anonymous Lua function.
-    /// Traceback of a suspended coroutine (PUC `debug.traceback(L1, msg, lvl)`).
-    /// Walks the coroutine's saved frames and prepends a synthetic C-level
-    /// `'yield'` entry when the coroutine paused at a `coroutine.yield` call
-    /// (its `resume_at` marker is set). `level` skips entries from the top
-    /// (level 0 includes the yield frame; level 1 starts at the deepest Lua
-    /// frame; etc.). db.lua :764-:768 sample several levels.
-    pub(crate) fn coro_traceback(&self, co: Gc<crate::runtime::Coro>, mut level: i64) -> Vec<u8> {
-        use crate::runtime::CoroStatus;
-        const LEVELS1: usize = 10;
-        const LEVELS2: usize = 11;
-        #[derive(Clone, Copy)]
-        enum VFrame<'a> {
-            Lua(&'a crate::runtime::function::Frame),
-            CPcall,
-            CXpcall,
-            CYield,
-            /// Synthetic CIST_TAIL placeholder under 5.1 — one per tail
-            /// call collapsed into the next Lua frame down the chain.
-            Tail,
-        }
-        let v51 = self.version <= LuaVersion::Lua51;
-        let mut visible: Vec<VFrame<'_>> = Vec::new();
-        // PUC's level 0 entry on a suspended coroutine is the C call where it
-        // paused — `coroutine.yield` for a yielded thread.
-        if matches!(co.status, CoroStatus::Suspended) && co.resume_at.is_some() {
-            visible.push(VFrame::CYield);
-        }
-        for cf in co.frames.iter().rev() {
-            match cf {
-                CallFrame::Lua(f) => {
-                    visible.push(VFrame::Lua(f));
-                    if v51 {
-                        for _ in 0..f.tailcalls {
-                            visible.push(VFrame::Tail);
-                        }
-                    }
-                }
-                CallFrame::Cont(nc) => match nc.kind {
-                    ContKind::Pcall => visible.push(VFrame::CPcall),
-                    ContKind::Xpcall { .. } => visible.push(VFrame::CXpcall),
-                    _ => {}
-                },
-            }
-        }
-        if level < 0 {
-            level = 0;
-        }
-        if (level as usize) >= visible.len() {
-            return Vec::new();
-        }
-        let visible = &visible[level as usize..];
-        let total = visible.len();
-        let mut out = Vec::new();
-        // To name a Lua frame, PUC consults the caller's OP_CALL via
-        // getobjname: find the index `fi` of the current frame in co.frames,
-        // then look at frames[fi-1] (the caller) and read its `code[pc-1]`.
-        let coro_frame_name = |frames: &[CallFrame],
-                               target: &crate::runtime::function::Frame|
-         -> Option<(&'static str, String)> {
-            let fi = frames
-                .iter()
-                .position(|cf| matches!(cf, CallFrame::Lua(f) if std::ptr::eq(f, target)))?;
-            if fi == 0 || target.from_c {
-                return None;
-            }
-            let caller = frames[fi - 1].lua()?;
-            let p = &caller.closure.proto;
-            let call_pc = (caller.pc as usize).checked_sub(1)?;
-            let instr = *p.code.get(call_pc)?;
-            match instr.op() {
-                Op::Call | Op::TailCall => crate::vm::objname::getobjname(p, call_pc, instr.a()),
-                Op::TForCall => Some(("for iterator", "for iterator".to_string())),
-                _ => None,
-            }
-        };
-        let frames = &co.frames;
-        let emit = |out: &mut Vec<u8>, v: VFrame<'_>| match v {
-            VFrame::Lua(f) => {
-                let proto = f.closure.proto;
-                let src = chunk_display_name(proto.source.as_ptr());
-                let pc = (f.pc as usize)
-                    .saturating_sub(1)
-                    .min(proto.lines.len().saturating_sub(1));
-                let line = proto.lines.get(pc).copied().unwrap_or(0);
-                out.extend_from_slice(b"\n\t");
-                out.extend_from_slice(src);
-                out.extend_from_slice(format!(":{line}: in ").as_bytes());
-                if let Some((namewhat, name)) = coro_frame_name(frames, f) {
-                    out.extend_from_slice(format!("{namewhat} '{name}'").as_bytes());
-                } else if proto.line_defined == 0 {
-                    out.extend_from_slice(b"main chunk");
-                } else {
-                    out.extend_from_slice(
-                        format!(
-                            "function <{}:{}>",
-                            String::from_utf8_lossy(src),
-                            proto.line_defined
-                        )
-                        .as_bytes(),
-                    );
-                }
-            }
-            VFrame::CPcall => out.extend_from_slice(b"\n\t[C]: in function 'pcall'"),
-            VFrame::CXpcall => out.extend_from_slice(b"\n\t[C]: in function 'xpcall'"),
-            VFrame::CYield => {
-                // PUC `pushglobalfuncname` reports `yield` as
-                // `'coroutine.yield'` under 5.3 and 5.4 (5.3 :566 / 5.4 :830
-                // `checktraceback` baselines). 5.1/5.2/5.5 emit the bare
-                // `'yield'` (5.5 :841).
-                let qualified = matches!(self.version, LuaVersion::Lua53 | LuaVersion::Lua54);
-                if qualified {
-                    out.extend_from_slice(b"\n\t[C]: in function 'coroutine.yield'");
-                } else {
-                    out.extend_from_slice(b"\n\t[C]: in function 'yield'");
-                }
-            }
-            VFrame::Tail => {
-                // 5.1 traceback synthetic CIST_TAIL entry — luaG_addinfo
-                // / luaO_chunkid format: `(...tail calls...)`. 5.1 db.lua
-                // :403 asserts these appear once per collapsed tail call.
-                out.extend_from_slice(b"\n\t(...tail calls...)");
-            }
-        };
-        if total <= LEVELS1 + LEVELS2 {
-            for &v in visible {
-                emit(&mut out, v);
-            }
-        } else {
-            for &v in &visible[..LEVELS1] {
-                emit(&mut out, v);
-            }
-            let skip = total - LEVELS1 - LEVELS2;
-            out.extend_from_slice(format!("\n\t...\t(skipping {skip} levels)").as_bytes());
-            for &v in &visible[total - LEVELS2..] {
-                emit(&mut out, v);
-            }
-        }
-        out
-    }
-
-    pub(crate) fn traceback_bytes(&self, level: i64) -> Vec<u8> {
-        // PUC `luaL_traceback` shows up to LEVELS1 (10) top frames + LEVELS2
-        // (11) bottom frames; if there are more, the middle is collapsed into
-        // a `"...\t(skipping N levels)"` marker. Without this, a stack-
-        // overflow traceback would balloon to tens of megabytes (errors.lua's
-        // stack-overflow test ran string.gmatch over the resulting buffer).
-        const LEVELS1: usize = 10;
-        const LEVELS2: usize = 11;
-        // Collect visible frames in top-down order (deepest first). Both Lua
-        // activations and pcall/xpcall continuations (which stand in for a
-        // C-level pcall on the stack) are visible; PUC's traceback enumerates
-        // both via lua_getstack. db.lua :715 expects "pcall" to appear.
-        #[derive(Clone, Copy)]
-        enum VFrame {
-            Lua(usize),
-            CPcall,
-            CXpcall,
-        }
-        let mut visible: Vec<VFrame> = Vec::new();
-        for (fi, cf) in self.frames.iter().enumerate().rev() {
-            match cf {
-                CallFrame::Lua(_) => visible.push(VFrame::Lua(fi)),
-                CallFrame::Cont(nc) => match nc.kind {
-                    ContKind::Pcall => visible.push(VFrame::CPcall),
-                    ContKind::Xpcall { .. } => visible.push(VFrame::CXpcall),
-                    _ => {}
-                },
-            }
-        }
-        // PUC `luaL_traceback` starts enumerating at the given `level` (in
-        // terms of L1's CallInfo chain). For the running-thread case the C
-        // frame for debug.traceback itself is level 0 and luna's `visible`
-        // doesn't include it — so level=1 (PUC default) means "emit from the
-        // innermost Lua frame" (visible[0..]); level=k skips k-1 frames from
-        // the top. level<=0 emits nothing extra here (d_traceback handles the
-        // "[C]: in function 'traceback'" prefix for level==0 separately).
-        let skip = (level - 1).max(0) as usize;
-        if skip >= visible.len() {
-            return Vec::new();
-        }
-        let visible = &visible[skip..];
-        let total = visible.len();
-        let mut out = Vec::new();
-        let emit_frame = |out: &mut Vec<u8>, v: VFrame, this: &Vm| match v {
-            VFrame::Lua(fi) => {
-                let f = this.frames[fi].lua().expect("Lua frame");
-                let proto = f.closure.proto;
-                let src = chunk_display_name(proto.source.as_ptr());
-                let pc = (f.pc as usize)
-                    .saturating_sub(1)
-                    .min(proto.lines.len().saturating_sub(1));
-                let line = proto.lines.get(pc).copied().unwrap_or(0);
-                out.extend_from_slice(b"\n\t");
-                out.extend_from_slice(src);
-                out.extend_from_slice(format!(":{line}: in ").as_bytes());
-                if let Some((namewhat, name)) = this.frame_name(fi) {
-                    out.extend_from_slice(format!("{namewhat} '{name}'").as_bytes());
-                } else if proto.line_defined == 0 {
-                    out.extend_from_slice(b"main chunk");
-                } else {
-                    out.extend_from_slice(
-                        format!(
-                            "function <{}:{}>",
-                            String::from_utf8_lossy(src),
-                            proto.line_defined
-                        )
-                        .as_bytes(),
-                    );
-                }
-            }
-            VFrame::CPcall => out.extend_from_slice(b"\n\t[C]: in function 'pcall'"),
-            VFrame::CXpcall => out.extend_from_slice(b"\n\t[C]: in function 'xpcall'"),
-        };
-        if total <= LEVELS1 + LEVELS2 {
-            for &v in visible {
-                emit_frame(&mut out, v, self);
-            }
-        } else {
-            for &v in &visible[..LEVELS1] {
-                emit_frame(&mut out, v, self);
-            }
-            let dropped = total - LEVELS1 - LEVELS2;
-            out.extend_from_slice(format!("\n\t...\t(skipping {dropped} levels)").as_bytes());
-            for &v in &visible[total - LEVELS2..] {
-                emit_frame(&mut out, v, self);
-            }
-        }
-        out
     }
 }
 

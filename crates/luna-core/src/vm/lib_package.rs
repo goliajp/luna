@@ -7,13 +7,12 @@
 //! luna links no dynamic loader: `package.loadlib` and the C searchers fail
 //! the way a PUC build without dynamic-library support does.
 
-use crate::runtime::{CallFrame, Gc, Table, UserdataPayload, Value};
+use crate::runtime::{Gc, Table, UserdataPayload, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::raise_str;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
-use crate::vm::isa::Op;
 use crate::vm::lib_io::{c_str, os_path};
 
 /// Default search paths. PUC compiles in its install prefix; luna has
@@ -657,16 +656,9 @@ fn set_caller_env(vm: &mut Vm, env: Value) -> Result<(), LuaError> {
 }
 
 /// The Lua function that called the running native (PUC: level 1 of the
-/// stack is a Lua activation), if it was one. A Lua caller is stopped at the
-/// call instruction whose function register is this native's slot; a native
-/// called from another native or from a pcall continuation fails that test.
+/// stack is a Lua activation), if it was one.
 fn lua_caller(vm: &Vm) -> Option<Gc<crate::runtime::LuaClosure>> {
-    let &(slot, _) = vm.running_native_slots.last()?;
-    let CallFrame::Lua(f) = vm.inspect_frames().last()? else {
-        return None;
-    };
-    let call = *f.closure.proto.code.get((f.pc as usize).checked_sub(1)?)?;
-    (matches!(call.op(), Op::Call | Op::TailCall) && f.base + call.a() == slot).then_some(f.closure)
+    vm.lua_closure_at_level(1)
 }
 
 fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

@@ -163,7 +163,8 @@ fn sandbox_error_traceback_exposed() {
     let err = run(&mut vm, b"local function inner() error('boom') end inner()").unwrap_err();
     assert!(vm.error_text(&err).contains("boom"));
     let tb = vm.take_error_traceback().expect("traceback captured");
-    assert!(tb.contains("in local 'inner'"), "tb: {tb}");
+    // 5.1's traceback names every function "function 'name'"
+    assert!(tb.contains("in function 'inner'"), "tb: {tb}");
     assert!(tb.contains("in main chunk"), "tb: {tb}");
 }
 

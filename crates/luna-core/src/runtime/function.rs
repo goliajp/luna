@@ -29,12 +29,14 @@ pub struct Frame {
     /// `u32::MAX` on a fresh frame so its first instruction fires a line event
     pub hook_oldpc: u32,
     /// true if this Lua frame was entered across a C boundary (call_value: a
-    /// metamethod, pcall, __close handler, or a coroutine body). Debug level
-    /// traversal (`debug.getinfo`/traceback) inserts a synthetic C frame below it.
+    /// metamethod, pcall, __close handler, or a coroutine body). The debug
+    /// interface does not read it: it places the running natives themselves
+    /// among the frames.
     pub from_c: bool,
-    /// the metamethod event this frame is handling (e.g. "close" for a `__close`
-    /// handler call), so `debug.traceback`/getinfo can name it "metamethod
-    /// 'close'" (PUC `CallInfo.u.l.tm`/`luaG_funcnamefromtm`).
+    /// the metamethod event this frame is handling (e.g. "close" for a
+    /// `__close` handler call); the debug interface reads `"gc"` to recognize
+    /// a finalizer (PUC `CIST_FIN`), and names other handlers from the
+    /// instruction that called them.
     pub tm: Option<&'static str>,
     /// true when this frame is the hook function itself (PUC sets
     /// `CIST_HOOKED`). `debug.getinfo(1).namewhat` returns `"hook"` for it.
@@ -47,6 +49,11 @@ pub struct Frame {
     /// `getinfo(2..lim)` and expects each to be `"tail"`). The 5.2+
     /// `istailcall` boolean is `tailcalls > 0`.
     pub tailcalls: u32,
+    /// How many `__call` metamethods were resolved to reach this function,
+    /// each adding one argument (PUC 5.5 `CIST_CCMT` bits, reported as
+    /// `getinfo("t").extraargs`). A tail call keeps the count of the
+    /// activation it reuses, as PUC's `luaD_pretailcall` does.
+    pub ccmt: u8,
 }
 
 /// An entry on a thread's call stack: either a Lua activation record or a
