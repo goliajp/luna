@@ -9429,6 +9429,12 @@ impl Vm {
         }
     }
 
+    /// Overwrite the i-th argument slot of the running native (the in-place
+    /// conversion `lua_tolstring` performs on a number argument).
+    pub(crate) fn nat_set_arg(&mut self, func_slot: u32, i: u32, v: Value) {
+        self.stack[(func_slot + 1 + i) as usize] = v;
+    }
+
     /// Push the return values of a `NativeFn` and return their count
     /// (analogous to pushing N values then `return N` from a C function).
     /// Public so embedders can author their own natives.
