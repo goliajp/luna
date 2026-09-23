@@ -158,8 +158,13 @@ luna --sandbox script.lua     # safe stdlib subset; reject bytecode loading
 luna --budget=1000000 s.lua   # cap dispatched instructions
 luna --no-jit script.lua      # interpreter only
 luna --profile script.lua     # print trace-JIT counters on exit
+luna -l mod -e "f()" s.lua a  # lua.c's options: -e -l -i -v -E -W -- -
 luna                          # interactive REPL (Ctrl-D exits)
 ```
+
+Options, the `arg` table, error reports and exit status follow the
+selected dialect's `lua.c`; see
+[`docs/compatibility.md`](docs/compatibility.md#cli).
 
 ## Linking from C
 
