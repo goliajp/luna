@@ -611,18 +611,39 @@ fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// or by pcall, or through an unnamed expression — 5.2+ look the function up
 /// by the name its library registered it under, and 5.1 prints '?'.
 pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
-    let name = match vm.running_call_name() {
-        Some(("method", name)) => {
+    // 5.5 counts the objects a `__call` chain put in front of the arguments
+    // separately: an error in one of them is a "bad extra argument", and
+    // the remaining arguments are numbered without them.
+    let extraargs = if vm.version() >= LuaVersion::Lua55 {
+        let ts = vm.thread_stack(None);
+        if ts.levels.is_empty() {
+            0
+        } else {
+            u32::try_from(vm.level_ar(&ts, 0).extraargs).expect("a __call chain length is small")
+        }
+    } else {
+        0
+    };
+    let call_name = vm.running_call_name();
+    let (argword, n) = if n <= extraargs {
+        ("extra argument", n)
+    } else {
+        let n = n - extraargs;
+        if let Some(("method", name)) = &call_name {
             let n = n - 1; // self is not counted
             if n == 0 {
                 return raise_str(vm, &format!("calling '{name}' on bad self ({extra})"));
             }
-            return raise_str(vm, &format!("bad argument #{n} to '{name}' ({extra})"));
+            ("argument", n)
+        } else {
+            ("argument", n)
         }
+    };
+    let name = match call_name {
         Some((_, name)) => name,
         None => unnamed_native_name(vm),
     };
-    raise_str(vm, &format!("bad argument #{n} to '{name}' ({extra})"))
+    raise_str(vm, &format!("bad {argword} #{n} to '{name}' ({extra})"))
 }
 
 /// `luaL_argerror`'s fallback when `ar.name` is NULL: '?' on 5.1, otherwise

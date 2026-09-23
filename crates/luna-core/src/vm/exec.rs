@@ -4390,7 +4390,9 @@ impl Vm {
                             func_slot,
                             nargs,
                             depth: self.frames.len() as u32,
-                            ccmt: chain as u8,
+                            // a tail call resolved its `__call` chain before
+                            // calling here and passed the count in tail_ccmt
+                            ccmt: tail_ccmt + chain as u8,
                         });
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
@@ -8314,6 +8316,10 @@ impl Vm {
                         // results land at `abs..self.top` and the next op (the
                         // fallback `Op::Return`) forwards them. `wanted = -1`
                         // because the caller will multret them through Return.
+                        // PUC's precallC gives the C call this tail call's own
+                        // `__call` count (5.5 extraargs); the chain was already
+                        // resolved above, so hand it over.
+                        self.pending_ccmt = chain as u8;
                         self.begin_call(abs, Some(nargs), -1, false)?;
                     }
                 }
