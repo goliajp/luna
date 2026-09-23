@@ -46,5 +46,8 @@ debug.sethook()
 local lines = {}
 for l, c in pairs(counts) do lines[#lines + 1] = l end
 table.sort(lines)
-for _, l in ipairs(lines) do io.write(l, ":", counts[l], " ") end
+-- relative to run's first line: the diff harness prepends code on luna's
+-- side, which shifts absolute line numbers
+local base = debug.getinfo(run, "S").linedefined
+for _, l in ipairs(lines) do io.write(l - base, ":", counts[l], " ") end
 print()

@@ -255,7 +255,10 @@ messages. What still differs does so on purpose:
   suite expects); a leaked pattern-matcher depth counter in 5.3's
   `gmatch`; results that depend on how the host C compiler or C library
   was built (fused multiply-subtract in 5.1/5.2 `%` on arm64, `%a`
-  rounding in the macOS C library).
+  rounding in the macOS C library, 5.2's `%a` existing only when built
+  with `LUA_USE_AFORMAT`). A NaN prints as `nan` on every platform;
+  PUC leaves its sign to the C library, which prints `-nan` on glibc,
+  `nan` on macOS and `-nan(ind)` on Windows.
 - **Unavailable without a C library:** two-way `io.popen` modes on
   5.1/5.2, `os.clock` as CPU time (it measures time since the `Vm`
   started), locales other than C/POSIX, and loading C modules
