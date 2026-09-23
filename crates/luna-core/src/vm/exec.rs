@@ -8777,17 +8777,6 @@ impl Vm {
         }
     }
 
-    /// PUC luaL_len: the length as an integer, erroring if `__len` returned a
-    /// value with no integer representation.
-    pub(crate) fn checked_len(&mut self, v: Value) -> Result<i64, LuaError> {
-        match self.len_value(v)? {
-            Value::Int(i) => Ok(i),
-            Value::Float(f) => crate::runtime::value::f2i_exact(f)
-                .ok_or_else(|| self.rt_err("object length is not an integer")),
-            _ => Err(self.rt_err("object length is not an integer")),
-        }
-    }
-
     pub(crate) fn index_value(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
         match self.index_step(t, key)? {
             MmOut::Done(v) => Ok(v),
@@ -9148,6 +9137,15 @@ impl Vm {
     }
 
     // ---- comparison ----
+
+    /// `lua_compare(L, a, b, LUA_OPEQ)`: equality including `__eq`.
+    pub(crate) fn equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
+        match self.eq_step(l, r) {
+            MmOut::Done(v) => Ok(v.truthy()),
+            MmOut::Mm { func, .. } => Ok(self.call_mm1(func, &[l, r])?.truthy()),
+            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from eq_step"),
+        }
+    }
 
     pub(crate) fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
         match self.less_step(l, r, or_eq)? {
