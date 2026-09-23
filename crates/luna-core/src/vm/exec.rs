@@ -1944,6 +1944,15 @@ impl Vm {
     /// PUC error message — `None` if it may. Distinguishes "not in a coroutine"
     /// from "inside an unyieldable C call" (sort/gsub callback).
     pub(crate) fn yield_barrier(&self) -> Option<&'static str> {
+        // 5.1's pcall/xpcall are plain C calls (no continuations), so a yield
+        // below one crosses the boundary like any other; 5.1 also has a single
+        // wording for every case, the main thread included.
+        if self.version <= LuaVersion::Lua51 {
+            if self.current.is_none() || self.nny > 0 || self.pcall_depth > 0 {
+                return Some("attempt to yield across metamethod/C-call boundary");
+            }
+            return None;
+        }
         if self.current.is_none() {
             Some("attempt to yield from outside a coroutine")
         } else if self.nny > 0 {
