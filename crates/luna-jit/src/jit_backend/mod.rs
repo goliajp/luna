@@ -703,6 +703,10 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
     );
     builder.symbol("luna_jit_table_len", luna_jit_table_len as *const u8);
     builder.symbol("luna_jit_upval_get", luna_jit_upval_get as *const u8);
+    builder.symbol(
+        "luna_jit_upval_get_float",
+        luna_jit_upval_get_float as *const u8,
+    );
     Some(JITModule::new(builder))
 }
 
@@ -3086,7 +3090,8 @@ pub fn lower_int_chunk_into<M: Module>(
                 let a = ins.a() as usize;
                 if is_upval_value_read[pc] {
                     // P11-S5d.J — ValueRead: fetch the upvalue at
-                    // runtime via `luna_jit_upval_get`. The dispatcher
+                    // runtime via `luna_jit_upval_get_float`, which deopts
+                    // on anything but a float. The dispatcher
                     // has pinned `JIT_CL` to the active closure for
                     // this entry, so the helper can resolve the
                     // upvalue cell. Result is the raw 8-byte payload;
@@ -3097,7 +3102,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     sig.params.push(AbiParam::new(types::I64));
                     sig.returns.push(AbiParam::new(types::I64));
                     let id = module
-                        .declare_function("luna_jit_upval_get", Linkage::Import, &sig)
+                        .declare_function("luna_jit_upval_get_float", Linkage::Import, &sig)
                         .ok()?;
                     let r = module.declare_func_in_func(id, bcx.func);
                     let call_inst = bcx.ins().call(r, &[idx_arg]);

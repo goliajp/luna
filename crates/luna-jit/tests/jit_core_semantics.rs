@@ -45,3 +45,28 @@ fn compiled_numeric_for_checks_limit_and_counts_unsigned() {
         );
     }
 }
+
+/// The method JIT reads a 5.1/5.2 upvalue straight as a float. A nil or a
+/// numeric string there must still raise or coerce as the interpreter
+/// does, on the first call and after the function is hot.
+#[test]
+fn compiled_upvalue_arithmetic_checks_the_value() {
+    let src = "
+        local up = nil
+        local function f() return up + 1 end
+        local ok, e = pcall(f)
+        up = 1
+        for i = 1, 300 do f() end
+        up = '4'
+        local s = f()
+        up = {}
+        local ok2, e2 = pcall(f)
+        return e .. ' | ' .. s .. ' | ' .. e2";
+    for v in [LuaVersion::Lua51, LuaVersion::Lua52] {
+        assert_eq!(
+            run(v, src),
+            "c:3: attempt to perform arithmetic on upvalue 'up' (a nil value) | 5 | \
+             c:3: attempt to perform arithmetic on upvalue 'up' (a table value)"
+        );
+    }
+}
