@@ -1768,6 +1768,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
+            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let inner = heap.adopt_proto(inner);
@@ -1794,6 +1795,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
+            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let outer = heap.adopt_proto(outer);

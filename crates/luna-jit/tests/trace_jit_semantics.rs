@@ -350,3 +350,30 @@ fn recording_does_not_span_a_compiled_trace() {
         assert!(dispatched > 0, "{v:?}: no trace dispatched");
     }
 }
+
+/// A hot function whose trace does not compile was recorded and
+/// compiled again on every later call (299,936 failed compiles for
+/// 300,000 calls, 19x the interpreter's time). A head is dropped after a
+/// few failures.
+#[test]
+fn a_failing_trace_is_not_recompiled_on_every_call() {
+    let src = r#"
+        local function f(x) local y = x + "1" return y end
+        local s = 0
+        for i = 1, 20000 do s = s + f(i) end
+        return tostring(s)"#;
+    for v in INT_DIALECTS {
+        let mut vm = luna_jit::new_with_jit(v);
+        let out = match vm.eval(src).expect("eval").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(out, "200030000", "{v:?}");
+        let failed = vm.jit.counters.compile_failed;
+        assert!(
+            failed > 0,
+            "{v:?}: the trace was expected to fail to compile"
+        );
+        assert!(failed <= 10, "{v:?}: {failed} failed compiles");
+    }
+}
