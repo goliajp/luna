@@ -85,6 +85,8 @@ pub(crate) struct Ar {
 /// A read-only view of one thread's call stack.
 pub(crate) struct ThreadStack<'a> {
     pub(crate) frames: &'a [CallFrame],
+    /// `__call` counts of the Lua frames, by index into `frames`
+    frame_ccmt: &'a [u8],
     pub(crate) stack: &'a [Value],
     top: u32,
     natives: &'a [Gc<NativeClosure>],
@@ -97,6 +99,7 @@ impl<'a> ThreadStack<'a> {
     fn new(
         v51: bool,
         frames: &'a [CallFrame],
+        frame_ccmt: &'a [u8],
         stack: &'a [Value],
         top: u32,
         natives: &'a [Gc<NativeClosure>],
@@ -137,6 +140,7 @@ impl<'a> ThreadStack<'a> {
         }
         ThreadStack {
             frames,
+            frame_ccmt,
             stack,
             top,
             natives,
@@ -372,6 +376,7 @@ impl Vm {
                 ThreadStack::new(
                     v51,
                     &c.frames,
+                    &c.frame_ccmt,
                     &c.stack,
                     c.top,
                     &self.running_natives[natives.clone()],
@@ -382,6 +387,7 @@ impl Vm {
             _ => ThreadStack::new(
                 v51,
                 &self.frames,
+                &self.frame_ccmt,
                 &self.stack,
                 self.top,
                 &self.running_natives[self.natives_base..],
@@ -466,7 +472,7 @@ impl Vm {
                 let mut ar = self.closure_ar(f.closure);
                 ar.currentline = ts.currentline(i);
                 ar.istailcall = ts.is_tail(i);
-                ar.extraargs = f.ccmt as i64;
+                ar.extraargs = ts.frame_ccmt[fi] as i64;
                 ar
             }
             DbgKind::C(c) => {

@@ -108,6 +108,13 @@ nothing is open until the host says so.
 | `debug` | `open_debug` | partial; sandbox-hostile, opt-in |
 | everything above | `open_all_libs` | convenience; not for untrusted code |
 
+Numbers are rendered the way PUC renders them, including the one place
+where PUC's output depends on the platform: a NaN is spelled by the C
+library's `printf`, so luna follows the platform it runs on — `nan` on
+macOS; `-nan` for a negative NaN (which is what 0/0 gives on x86) and
+`+nan` / ` nan` under those `string.format` flags on Linux; `-nan(ind)`
+for that default NaN on Windows.
+
 `io` and `os` share a single opener because they share a threat model:
 either the host is giving the script filesystem and process access or it
 is not.
@@ -118,9 +125,14 @@ bytecode loading off, with instruction and memory budgets.
 
 ## C API surface
 
-`luna-jit` builds a `cdylib` / `staticlib` exposing a `lua.h`-compatible
-subset from `crates/luna-jit/src/capi.rs`, so an existing C host can
-link against it as a drop-in for the covered surface.
+`luna-jit` builds a `cdylib` / `staticlib` exposing a subset of the
+`lua.h` functions from `crates/luna-jit/src/capi.rs`. It is **not** a
+drop-in replacement for PUC's library: a host compiled against PUC's own
+`lua.h` does not link, because several of the names below are macros in
+those headers that expand to functions luna does not export
+(`lua_tostring` → `lua_tolstring`, `lua_pcall` → `lua_pcallk` in 5.2+,
+`lua_pushcfunction` → `lua_pushcclosure`, `lua_tointeger` →
+`lua_tointegerx`). Call the covered functions by these names directly.
 
 Covered — `crates/luna-jit/tests/capi.rs` is the conformance suite
 (13 tests):
@@ -248,6 +260,10 @@ messages. What still differs does so on purpose:
   border; `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's
   return-hook `ftransfer` depends on its own stack use.
+- **"too many registers" has no `near` token.** PUC raises it while
+  parsing, with the lexer's current token at hand; luna allocates
+  registers after the whole chunk is parsed, so the message stops before
+  the `near` part.
 - **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
   compiler merging `0` and `-0` constants; 5.1 `io.lines(nil)` raising
   through a stack-index bug; out-of-range float-to-integer conversions
@@ -256,9 +272,7 @@ messages. What still differs does so on purpose:
   `gmatch`; results that depend on how the host C compiler or C library
   was built (fused multiply-subtract in 5.1/5.2 `%` on arm64, `%a`
   rounding in the macOS C library, 5.2's `%a` existing only when built
-  with `LUA_USE_AFORMAT`). A NaN prints as `nan` on every platform;
-  PUC leaves its sign to the C library, which prints `-nan` on glibc,
-  `nan` on macOS and `-nan(ind)` on Windows.
+  with `LUA_USE_AFORMAT`).
 - **Unavailable without a C library:** two-way `io.popen` modes on
   5.1/5.2, `os.clock` as CPU time (it measures time since the `Vm`
   started), locales other than C/POSIX, and loading C modules
