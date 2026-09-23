@@ -38,7 +38,7 @@ fn lua_5_5_suite() {
 
 #[test]
 fn lua_5_4_suite() {
-    parse_suite("tests/official/lua-5.4.8-tests", LuaVersion::Lua54);
+    parse_suite("tests/official/lua-5.4.9-tests", LuaVersion::Lua54);
 }
 
 #[test]

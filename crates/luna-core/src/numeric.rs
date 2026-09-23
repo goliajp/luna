@@ -388,7 +388,7 @@ fn float_to_string(f: f64, fmt: FloatFmt) -> String {
         return if f < 0.0 { "-inf" } else { "inf" }.to_string();
     }
     let mut s = match fmt {
-        // ≤5.4: plain LUA_NUMBER_FMT="%.14g" (lua 5.1.5-5.4.8).
+        // ≤5.4: plain LUA_NUMBER_FMT="%.14g" (lua 5.1.5-5.4.9).
         FloatFmt::Legacy14 | FloatFmt::G14 => format_g(f, 14),
         // 5.5 `tostringbuffFloat` (lobject.c): %.15g, read back, and
         // only if the round-trip is inexact re-print with %.17g.

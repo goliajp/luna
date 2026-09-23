@@ -214,7 +214,7 @@ const SUITES: &[Suite] = &[
     },
     Suite {
         version: LuaVersion::Lua54,
-        dir: "tests/official/lua-5.4.8-tests",
+        dir: "tests/official/lua-5.4.9-tests",
         expected_pass: &[
             "verybig.lua",
             "main.lua",

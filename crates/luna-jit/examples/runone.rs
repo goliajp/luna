@@ -11,7 +11,7 @@ fn parse_version(arg: &str) -> Option<(LuaVersion, &'static str)> {
         "5.1" => Some((LuaVersion::Lua51, "tests/official/lua5.1-tests")),
         "5.2" => Some((LuaVersion::Lua52, "tests/official/lua-5.2.2-tests")),
         "5.3" => Some((LuaVersion::Lua53, "tests/official/lua-5.3.4-tests")),
-        "5.4" => Some((LuaVersion::Lua54, "tests/official/lua-5.4.8-tests")),
+        "5.4" => Some((LuaVersion::Lua54, "tests/official/lua-5.4.9-tests")),
         "5.5" => Some((LuaVersion::Lua55, "tests/official/lua-5.5.1-tests")),
         _ => None,
     }

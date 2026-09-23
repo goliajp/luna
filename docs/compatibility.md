@@ -10,7 +10,7 @@ and measured baselines see [`performance.md`](performance.md).
 
 Not by inspection. A private corpus of **514 fixtures** runs against
 stock PUC interpreters built from source — **5.1.5, 5.2.4, 5.3.6,
-5.4.8, 5.5.1** — and every one must match byte for byte on stdout,
+5.4.9, 5.5.1** — and every one must match byte for byte on stdout,
 stderr and exit code, with zero skips, before a commit is green. CI
 additionally asserts the 5.5 reference is exactly 5.5.1, so the basis
 cannot drift when a runner image changes.
