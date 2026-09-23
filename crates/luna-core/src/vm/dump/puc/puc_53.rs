@@ -291,6 +291,23 @@ mod tests {
     }
 
     #[test]
+    fn setlist_block_from_extraarg_becomes_an_element_offset() {
+        const SETLIST: u32 = 43;
+        const EXTRAARG: u32 = 46;
+        // block 600 of 50 fields: the values go after element 29950
+        let code = lower(vec![
+            abc(SETLIST, 0, 2, 0),
+            EXTRAARG | (600 << 6),
+            abc(RETURN, 0, 1, 0),
+        ]);
+        assert_eq!(
+            (code[0].op(), code[0].b(), code[0].k()),
+            (Op::SetList, 2, true)
+        );
+        assert_eq!((code[1].op(), code[1].ax()), (Op::ExtraArg, 599 * 50));
+    }
+
+    #[test]
     fn loadbool_true_with_skip_jumps_over_the_next_instruction() {
         let code = lower(vec![
             abc(LOADBOOL, 0, 1, 1),
