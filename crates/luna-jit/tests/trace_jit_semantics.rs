@@ -246,13 +246,14 @@ fn max_and_min_of_mixed_kinds() {
     }
 }
 
-/// 5.4+ `atan(y)` folds as `atan2(y, 1)`, rounded as PUC does.
+/// 5.4+ `atan(y)` folds as `atan2(y, 1)`, rounded as the interpreter
+/// (and PUC on the same libm) does.
 #[test]
 fn atan_folds_as_atan2() {
     let src = "local a, t = 0, 0.00012682450675524315 \
                for i = 1, 3000 do a = math.atan(t) end return string.format('%.17g', a)";
     for v in INT_DIALECTS {
-        assert_eq!(same(v, src), "0.00012682450607527543");
+        same(v, src);
     }
 }
 
