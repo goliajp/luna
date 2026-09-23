@@ -5409,17 +5409,20 @@ impl Vm {
     }
 
     /// Position prefix of the Lua frame `level` steps up from the running C
-    /// function (PUC `luaL_where(L, level)`): `level == 1` is the immediate
-    /// Lua caller (skipping Cont/C-boundary frames the way `dbg_frame` does),
-    /// `level == 2` its caller, and so on. Used by `error(msg, level)` so the
-    /// caller's frame is reported even across pcall/xpcall continuations.
-    /// `luaL_where(level)` for `error()`: unlike `dbg_frame` (whose 5.2+
-    /// level numbering skips Cont activations to match db.lua's getinfo
-    /// shape), PUC counts EVERY CallInfo — a C caller occupies a level of
-    /// its own. `pcall(pcall, error, "msg")` must therefore resolve
-    /// level 1 to the inner pcall (a C activation, no line info → no
-    /// prefix), not tunnel through to the Lua frame below (v2.13
-    /// CORPUS-IV fixture 239).
+    /// function (PUC `luaL_where(L, level)`): `level == 1` is the function
+    /// that called the running native, `level == 2` its caller, and so on.
+    /// Used by `error(msg, level)`.
+    ///
+    /// PUC counts EVERY CallInfo — a C caller occupies a level of its own
+    /// (`pcall(pcall, error, "msg")` resolves level 1 to the inner pcall, a
+    /// C activation with no line info, v2.13 CORPUS-IV fixture 239). luna
+    /// represents such a C activation either by the `from_c` flag of the Lua
+    /// frame it called, or — when that flag is absent (it called a native
+    /// directly, or a tail call replaced the frame it called) — by its
+    /// pcall/xpcall/pairs continuation frame; each is counted once. A
+    /// metamethod handler is called by the VM itself (Lua to Lua, no C level
+    /// in between), so neither its `from_c` nor its Meta/Close continuation
+    /// counts.
     pub(crate) fn position_prefix_at_level(&self, level: i64) -> Option<String> {
         if level < 1 {
             return None;
@@ -5427,6 +5430,9 @@ impl Vm {
         let v51 = self.version <= LuaVersion::Lua51;
         let mut lvl = level;
         let mut found: Option<usize> = None;
+        // whether the frame visited just before (the one above) already
+        // counted the C activation below it
+        let mut above_counted_c = false;
         'walk: for fi in (0..self.frames.len()).rev() {
             match &self.frames[fi] {
                 CallFrame::Lua(f) => {
@@ -5443,21 +5449,26 @@ impl Vm {
                             }
                         }
                     }
-                    if f.from_c {
+                    above_counted_c = f.from_c && f.tm.is_none();
+                    if above_counted_c {
                         lvl -= 1;
                         if lvl == 0 {
                             return None; // C activation: no line info
                         }
                     }
                 }
-                CallFrame::Cont(_) => {
-                    // A continuation-driven native (pcall/xpcall/close)
-                    // is a C activation — it takes a level and has no
-                    // line info.
-                    lvl -= 1;
-                    if lvl == 0 {
-                        return None;
+                CallFrame::Cont(nc) => {
+                    let c_level = matches!(
+                        nc.kind,
+                        ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Pairs
+                    ) && !above_counted_c;
+                    if c_level {
+                        lvl -= 1;
+                        if lvl == 0 {
+                            return None;
+                        }
                     }
+                    above_counted_c = false;
                 }
             }
         }
