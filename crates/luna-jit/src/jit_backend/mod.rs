@@ -1172,8 +1172,15 @@ pub fn lower_int_chunk_into<M: Module>(
                     // P11-S5b — math libcall fold. Emit-side folds the
                     // 4-op window into one cranelift libm call; here
                     // we just clear the per-register trackers.
-                } else if self_upval.get(a).copied().unwrap_or(false) {
-                    // S2c.C — self-recursive call.
+                } else if self_upval.get(a).copied().unwrap_or(false)
+                    && nargs as usize == num_params
+                {
+                    // S2c.C — self-recursive call, lowered as a direct
+                    // call of the compiled body, whose signature takes
+                    // exactly the function's parameters. The upvalue may
+                    // hold another function (the entry check catches that
+                    // at run time), so the call site's count can differ;
+                    // such a call is not lowered.
                     self_call_pcs[pc] = true;
                 } else {
                     return None;
