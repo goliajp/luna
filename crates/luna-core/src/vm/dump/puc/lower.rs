@@ -665,6 +665,32 @@ fn bx_distance(dialect: &str, d: i64) -> Result<u32, String> {
     Ok(d as u32)
 }
 
+/// A bare function around `code`, for translator unit tests.
+#[cfg(test)]
+pub(super) fn test_proto(
+    heap: &mut Heap,
+    code: Vec<u32>,
+    consts: Vec<Value>,
+    frame: u8,
+) -> RawProto {
+    RawProto {
+        source: heap.intern(b"=test"),
+        line_defined: 0,
+        last_line_defined: 0,
+        num_params: 0,
+        is_vararg: false,
+        has_compat_vararg_arg: false,
+        vararg_table: false,
+        max_stack: frame,
+        code,
+        consts,
+        upvals: Vec::new(),
+        protos: Vec::new(),
+        lines: Vec::new(),
+        locvars: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
