@@ -58,6 +58,8 @@ pub struct Coro {
     pub stack: Vec<Value>,
     /// Saved frame stack (Lua frames + native continuations).
     pub frames: Vec<CallFrame>,
+    /// `frames`' `__call` counts, by frame index (see `Vm::frame_ccmt`)
+    pub(crate) frame_ccmt: Vec<u8>,
     /// Open-upvalue list — `(stack slot, upvalue cell)` pairs.
     pub open_upvals: Vec<(u32, Gc<Upvalue>)>,
     /// Stack indices of registered `<close>` slots (5.4+).

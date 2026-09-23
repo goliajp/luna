@@ -509,9 +509,42 @@ fn format_g(f: f64, prec: usize) -> String {
     }
 }
 
+/// How the host C library's `printf` spells a NaN, as (shows a minus
+/// sign, lowercase body). PUC renders numbers through the platform's
+/// `printf`, which differs here, so luna follows the platform it runs on:
+/// Apple's libc never prints a NaN's sign; glibc and musl print it like any
+/// other sign (`-nan`, and `+nan` / ` nan` under those flags); the Windows
+/// CRT also names the kind (`-nan(ind)` for the default NaN that 0/0 and
+/// friends produce, `nan(snan)` for a signalling one). wasm follows musl,
+/// whose `printf` wasi-libc uses.
+pub(crate) fn nan_spelling(f: f64) -> (bool, &'static str) {
+    let negative = f.is_sign_negative();
+    if cfg!(target_vendor = "apple") {
+        (false, "nan")
+    } else if cfg!(target_os = "windows") {
+        let bits = f.to_bits();
+        let quiet = bits & (1 << 51) != 0;
+        let body = if !quiet {
+            "nan(snan)"
+        } else if bits == 0xFFF8_0000_0000_0000 {
+            "nan(ind)"
+        } else {
+            "nan"
+        };
+        (negative, body)
+    } else {
+        (negative, "nan")
+    }
+}
+
 fn float_to_string(f: f64, fmt: FloatFmt) -> String {
     if f.is_nan() {
-        return "nan".to_string();
+        let (negative, body) = nan_spelling(f);
+        return if negative {
+            format!("-{body}")
+        } else {
+            body.to_string()
+        };
     }
     if f.is_infinite() {
         return if f < 0.0 { "-inf" } else { "inf" }.to_string();
