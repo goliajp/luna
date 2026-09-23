@@ -3193,6 +3193,13 @@ fn emit_tagged_exit<M: Module>(
     );
 }
 
+/// The resume pc of a trace's return value, whichever exit encoding it
+/// uses (see `decode_exit_shape`).
+#[cfg(test)]
+pub(crate) fn exit_pc(ret: i64) -> i64 {
+    ret & 0xFFFF_FFFF
+}
+
 /// P12-S4-step4b-C-2 — inline cmp@d>0 side-exit return shape. The
 /// upper 32 bits encode `site_idx + 1` (1-based; 0 means "no
 /// inline site, look up via cont_pc in `per_exit_tags`"); the lower
@@ -9026,7 +9033,9 @@ mod s2b_arith {
     const WIDE_SRC: &[u8] = b"local a,b,c,d = 0,0,0,0; return a+b+c+d";
 
     fn make_record(head_pc: u32, ops: &[Inst], proto: Gc<Proto>) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        // The registers these traces compute on hold integers.
+        let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+        let mut rec = TraceRecord::start(proto, head_pc, tags, false);
         for (i, inst) in ops.iter().copied().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -9057,7 +9066,11 @@ mod s2b_arith {
         state.resize(p.max_stack as usize, 0);
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 7, "clean close returns head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            7,
+            "clean close returns head_pc"
+        );
         // First four slots passed through untouched — load-then-store
         // pattern preserves the i64 payload.
         assert_eq!(state[0], 100);
@@ -9082,7 +9095,7 @@ mod s2b_arith {
         state[2] = 3;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 11);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 11);
         assert_eq!(state[0], 13, "10 + 3");
         assert_eq!(state[1], 10, "input untouched");
         assert_eq!(state[2], 3, "input untouched");
@@ -9111,7 +9124,7 @@ mod s2b_arith {
         state[3] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 0, "head_pc 0");
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0, "head_pc 0");
         // ((5 + 3) * 4) - 7 = 25
         assert_eq!(state[0], 25);
     }
@@ -9135,7 +9148,7 @@ mod s2b_arith {
         state[3] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[0], 42, "7 * 6");
     }
 
@@ -9162,7 +9175,7 @@ mod s2b_arith {
         state[1] = 4;
         state[2] = 5;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[0], 9);
     }
 
@@ -9170,7 +9183,12 @@ mod s2b_arith {
     fn non_closed_trace_does_not_compile() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
@@ -9190,7 +9208,12 @@ mod s2b_arith {
     fn inline_depth_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -9212,7 +9235,12 @@ mod s2b_arith {
         // even though both compile from the same source. The
         // lowerer must reject any cross-Proto op (inlined sub-calls
         // are S4 territory).
-        let mut rec = TraceRecord::start(p1, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p1,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p1.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p2,
             pc: 0,
@@ -9257,7 +9285,7 @@ mod s2b_arith {
             state[1] = k;
             state[2] = 2 * k;
             let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-            assert_eq!(r, 0);
+            assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
             assert_eq!(state[0], 3 * k);
         }
     }
@@ -9284,7 +9312,12 @@ mod s2b_cmp {
     /// controls the clean-close return value and is independent of
     /// the cmp's PC.
     fn cmp_jmp_record(proto: Gc<Proto>, head_pc: u32, cmp_pc: u32, cmp: Inst) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            proto,
+            head_pc,
+            vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto,
             pc: cmp_pc,
@@ -9317,7 +9350,11 @@ mod s2b_cmp {
         state[1] = 3; // 3 < 7 holds → matches K=true → continue
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 5, "clean close returns head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            5,
+            "clean close returns head_pc"
+        );
     }
 
     #[test]
@@ -9333,7 +9370,11 @@ mod s2b_cmp {
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // Lua's `pc++` on cmp mismatch lands at cmp_pc + 2 = 12.
-        assert_eq!(r, 12, "side-exit returns failing PC = cmp_pc + 2");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            12,
+            "side-exit returns failing PC = cmp_pc + 2"
+        );
         // Reg state is still written back so interp resumes
         // with consistent values.
         assert_eq!(state[1], 9);
@@ -9355,13 +9396,17 @@ mod s2b_cmp {
         state[2] = 7;
         // Cmp result `9 < 7` is false; K=0; false == K=0 → continue.
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 3);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 3);
 
         // Flip inputs so cmp result `3 < 7` is true; K=0; true != K → side-exit.
         state[1] = 3;
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 10, "cmp_pc=8 + 2 = 10");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            10,
+            "cmp_pc=8 + 2 = 10"
+        );
     }
 
     #[test]
@@ -9377,12 +9422,18 @@ mod s2b_cmp {
         // Equal: 5 <= 5 holds → continue.
         state[1] = 5;
         state[2] = 5;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 0);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            0
+        );
 
         // 5 <= 4 false → side-exit.
         state[1] = 5;
         state[2] = 4;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 2);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            2
+        );
     }
 
     #[test]
@@ -9397,11 +9448,17 @@ mod s2b_cmp {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 42;
         state[1] = 42;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 7);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            7
+        );
 
         state[0] = 42;
         state[1] = 41;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 6); // cmp_pc(4) + 2
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            6
+        ); // cmp_pc(4) + 2
     }
 
     #[test]
@@ -9416,7 +9473,12 @@ mod s2b_cmp {
             Inst::iabc(Op::Lt, 0, 2, 0, true), // R[0] < R[2]
             Inst::isj(Op::Jmp, -3),
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -9434,7 +9496,10 @@ mod s2b_cmp {
         state[0] = 10;
         state[1] = 7;
         state[2] = 5;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 0);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            0
+        );
         assert_eq!(state[0], 3);
 
         // R[0] = 10 - 1 = 9; 9 < 5 false → side-exit.
@@ -9443,7 +9508,7 @@ mod s2b_cmp {
         state[2] = 5;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // cmp at index 1, pc=1; failing PC = pc+2 = 3.
-        assert_eq!(r, 3);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 3);
         assert_eq!(state[0], 9, "post-arith value must be in reg_state");
         assert_eq!(state[1], 1);
         assert_eq!(state[2], 5);
@@ -9455,7 +9520,12 @@ mod s2b_cmp {
         // "cmp didn't match K, Jmp skipped" direction.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -9475,7 +9545,12 @@ mod s2b_cmp {
             Inst::iabc(Op::Lt, 0, 1, 0, true),
             Inst::iabc(Op::Add, 2, 0, 1, false), // not a Jmp
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -9495,7 +9570,12 @@ mod s2b_cmp {
         // as an orphan and bails.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -9525,7 +9605,12 @@ mod s2b_cmp {
             Inst::isj(Op::Jmp, -1), // orphan, position 0 of a 2-op record
             Inst::iabc(Op::Add, 0, 1, 2, false),
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -9551,7 +9636,12 @@ mod s2b_cmp {
             Inst::iabc(Op::Lt, 0, 2, 0, false), // K=0
             Inst::isj(Op::Jmp, -3),
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -9578,7 +9668,11 @@ mod s2b_cmp {
             let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
             iters += 1;
             if r != 0 {
-                assert_eq!(r, 3, "side-exit PC = cmp_pc(1) + 2");
+                assert_eq!(
+                    crate::jit_backend::trace::exit_pc(r),
+                    3,
+                    "side-exit PC = cmp_pc(1) + 2"
+                );
                 break;
             }
             assert!(iters < 100, "loop should terminate");
@@ -9607,7 +9701,12 @@ mod s2b_table_ops {
     }
 
     fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            proto,
+            head_pc,
+            vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+            false,
+        );
         for (i, inst) in ops.iter().copied().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -9646,7 +9745,7 @@ mod s2b_table_ops {
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = run_trace(&mut vm, &ct, &mut state);
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert!(
             state[0] != 0,
             "NewTable must return a non-null Gc<Table> ptr"
@@ -9675,7 +9774,7 @@ mod s2b_table_ops {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[2] = 42; // value to write
         let r = run_trace(&mut vm, &ct, &mut state);
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert!(vm.jit.pending_err.is_none(), "no metatable → no deopt");
         assert_eq!(state[3], 42, "Get must see the value Set wrote");
     }
@@ -9705,7 +9804,7 @@ mod s2b_table_ops {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 99;
         let r = run_trace(&mut vm, &ct, &mut state);
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[2], 3, "Len must report array length 3");
     }
 
@@ -9731,7 +9830,11 @@ mod s2b_table_ops {
         state[1] = 7;
         let r = run_trace(&mut vm, &ct, &mut state);
 
-        assert_eq!(r, 0, "trace still returns head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            0,
+            "trace still returns head_pc"
+        );
         assert!(
             vm.jit.pending_err.is_some(),
             "metatable-bearing table must park a deopt request"
@@ -9805,7 +9908,7 @@ mod s2b_table_ops {
         state[1] = 11;
         let r = run_trace(&mut vm, &ct, &mut state);
 
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert!(vm.jit.pending_err.is_some());
         // GetI short-circuit returns 0 sentinel; trace tail stores
         // that back into R[2].
@@ -9861,7 +9964,12 @@ mod s2b_call_truncation {
     }
 
     fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            proto,
+            head_pc,
+            vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+            false,
+        );
         for (i, inst) in ops.iter().copied().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -9895,7 +10003,11 @@ mod s2b_call_truncation {
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // Trace's "head_pc" was 5 — but the side-exit at the Call
         // returns the Call's PC (= 0 in this 1-op trace).
-        assert_eq!(r, 0, "side-exit at call's PC, not head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            0,
+            "side-exit at call's PC, not head_pc"
+        );
         // Reg state passes through (we loaded + stored every reg).
         assert_eq!(state[0], 42);
         assert_eq!(state[1], 43);
@@ -9918,7 +10030,7 @@ mod s2b_call_truncation {
         state[1] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // Call is at index 1 → pc 1.
-        assert_eq!(r, 1);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
         // The Add ran before the Call's side-exit, so the
         // post-Add value lives in reg_state[0].
         assert_eq!(state[0], 107, "post-arith state visible to interp");
@@ -9946,7 +10058,11 @@ mod s2b_call_truncation {
         state[1] = 30;
         state[2] = 12;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 1, "side-exit at Call.pc = 1");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            1,
+            "side-exit at Call.pc = 1"
+        );
         // The Mul never ran — R[0] holds the Add's result, not
         // R[0]*200.
         assert_eq!(state[0], 42);
@@ -10000,7 +10116,11 @@ mod s2b_call_truncation {
         state[1] = 10;
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 3, "side-exit at Call.pc = 3");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            3,
+            "side-exit at Call.pc = 3"
+        );
         assert_eq!(state[0], 12);
 
         // Now flip so cmp doesn't match: R[0]=99, R[1]=10 → 99<10
@@ -10009,7 +10129,11 @@ mod s2b_call_truncation {
         state[1] = 10;
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 2, "cmp side-exit takes precedence over Call truncation");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            2,
+            "cmp side-exit takes precedence over Call truncation"
+        );
         assert_eq!(state[0], 99, "Add never ran on this path");
     }
 
@@ -10047,7 +10171,11 @@ mod s2b_call_truncation {
         state[4] = 0;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // ForLoop at index 1, pc=1; exit PC = pc+1 = 2.
-        assert_eq!(r, 2, "ForLoop count-exhaustion side-exits at pc+1");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            2,
+            "ForLoop count-exhaustion side-exits at pc+1"
+        );
         // Body order: Add runs BEFORE ForLoop's count check. With
         // count = 5 initially, body iters: count=5 (Add → 1), 4, 3,
         // 2, 1, 0 (ForLoop's check sees 0, side-exits AFTER the
@@ -10084,7 +10212,11 @@ mod s2b_call_truncation {
         // loop with non-zero bx, body_pc would land on the loop body
         // start; for this synthetic op chain body_pc just exits past
         // the ForLoop.
-        assert_eq!(r, 1, "one-shot continue returns body_pc=(rop.pc+1)-bx=1");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            1,
+            "one-shot continue returns body_pc=(rop.pc+1)-bx=1"
+        );
         // R[0] = 10 + 1 = 11.
         assert_eq!(state[0], 11);
         assert_eq!(state[1], 2); // count -= 1
@@ -10131,7 +10263,7 @@ mod s2b_call_truncation {
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     }
 }
 
@@ -10156,7 +10288,9 @@ mod s4_step3a_op_offsets {
     }
 
     fn make_record(proto: Gc<Proto>, items: Vec<(Inst, u8)>) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, 0, Vec::new(), true);
+        // The registers these traces compute on hold integers.
+        let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+        let mut rec = TraceRecord::start(proto, 0, tags, true);
         for (i, (inst, depth)) in items.into_iter().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -10283,7 +10417,12 @@ mod s4_step3b_inline_emit {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg, "fixture must be non-vararg");
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -10333,7 +10472,12 @@ mod s4_step3b_inline_emit {
     fn first_op_at_depth_gt_zero_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -10353,7 +10497,12 @@ mod s4_step3b_inline_emit {
         let mut vm2 = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p1 = load_proto(&mut vm1, WIDE_SRC);
         let p2 = load_proto(&mut vm2, WIDE_SRC);
-        let mut rec = TraceRecord::start(p1, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p1,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p1.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p2,
             pc: 0,
@@ -10404,7 +10553,12 @@ mod s4_step4b_skeleton {
         let p = load_proto(&mut vm, WIDE_SRC);
         // A plain depth=0 add — no cmp@d>0 site, so per_exit_inline
         // stays empty.
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -10506,7 +10660,12 @@ mod s4_step4b_skeleton {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         // depth 0: an Add, then a self-recursive Call.
         rec.push(RecordedOp {
             proto: p,
@@ -10567,7 +10726,12 @@ mod s4_step4b_skeleton {
     fn self_recursive_call_with_multiple_returns_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
