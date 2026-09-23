@@ -68,7 +68,7 @@ const HEADER_53: &[u8] = &[
     0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
-fn header_for(version: LuaVersion) -> &'static [u8] {
+pub(super) fn header_for(version: LuaVersion) -> &'static [u8] {
     match version {
         LuaVersion::Lua53 => HEADER_53,
         LuaVersion::Lua54 => HEADER_54,
@@ -83,7 +83,7 @@ fn header_for(version: LuaVersion) -> &'static [u8] {
 /// loader would reach this byte expecting the number of upvalues; we use a
 /// non-PUC sentinel so an accidental cross-load (luna chunk into PUC, or
 /// vice-versa) errors cleanly rather than misinterpreting bytes.
-const BODY_TAG: &[u8] = b"\x00LunaV1\x00";
+pub(super) const BODY_TAG: &[u8] = b"\x00LunaV1\x00";
 
 // ---- writer ----
 
