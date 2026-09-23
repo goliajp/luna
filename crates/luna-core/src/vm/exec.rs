@@ -140,6 +140,9 @@ pub struct Vm {
     gc_pause: i64,
     gc_stepmul: i64,
     gc_stepsize: i64,
+    /// `collectgarbage`'s parameters as the dialect stores them; they set
+    /// the three knobs above through `set_gc_pacing`.
+    pub(crate) gc_params: crate::vm::lib_gc::GcParams,
     /// true while `__gc` finalizers are being run, so a finalizer that calls
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
@@ -947,6 +950,7 @@ impl Vm {
             gc_pause: 200,
             gc_stepmul: 100,
             gc_stepsize: 13,
+            gc_params: crate::vm::lib_gc::GcParams::new(version),
             gc_finalizing: false,
             capi_stack: Vec::new(),
             capi_cstr_pin: None,
@@ -2685,22 +2689,13 @@ impl Vm {
         self.gc_stepsize
     }
 
-    /// `collectgarbage("param", name [,value])`: read (or set, returning the
-    /// previous value of) a pacing parameter. Returns `None` for an unknown
-    /// name so the caller can raise PUC's `invalid parameter` error. The
-    /// collector is stop-the-world, so these only round-trip for API fidelity.
-    pub(crate) fn gc_param(&mut self, name: &[u8], set: Option<i64>) -> Option<i64> {
-        let slot = match name {
-            b"pause" => &mut self.gc_pause,
-            b"stepmul" => &mut self.gc_stepmul,
-            b"stepsize" => &mut self.gc_stepsize,
-            _ => return None,
-        };
-        let prev = *slot;
-        if let Some(v) = set {
-            *slot = v;
-        }
-        Some(prev)
+    /// Set luna's collector knobs: heap growth before a new cycle (%), sweep
+    /// work per safe point, and the default step size (0 = a step completes
+    /// the cycle).
+    pub(crate) fn set_gc_pacing(&mut self, pause: i64, stepmul: i64, stepsize: i64) {
+        self.gc_pause = pause;
+        self.gc_stepmul = stepmul;
+        self.gc_stepsize = stepsize;
     }
 
     /// Interpreter safe-point auto-GC: FULL incremental Propagate + adaptive
