@@ -131,8 +131,10 @@ fn sqrt_of_a_numeric_string_converts_it() {
 }
 
 /// 5.3+ `math.atan(y)` is `atan2(y, 1)`, which libm rounds differently
-/// from `atan(y)` for some inputs; this is one (PUC 5.4 prints ...543,
-/// libm `atan` gives ...545).
+/// from `atan(y)` for some inputs; this is one on macOS (PUC 5.4 prints
+/// ...543, libm `atan` gives ...545). The rounding is the platform
+/// libm's, so the JIT is compared with the interpreter, which calls
+/// `atan2(y, 1)` as lmathlib.c does.
 #[test]
 fn atan_rounds_like_atan2() {
     let src = r#"
@@ -143,16 +145,16 @@ fn atan_rounds_like_atan2() {
         local last2
         for i = 1, 20000 do last2 = f(x0) end
         return string.format("%.17g %.17g", last, last2)"#;
-    same(
-        LuaVersion::Lua54,
-        src,
-        "0.00012682450607527543 0.00012682450607527543",
-    );
+    let (interp, _) = run(LuaVersion::Lua54, src, false);
+    let (jit, _) = run(LuaVersion::Lua54, src, true);
+    assert_eq!(jit, interp);
 }
 
 /// 5.3+ method chunks fold `floor` / `ceil` of a float (an integer when
 /// it fits, otherwise the interpreter reruns the call and returns the
-/// float) and `atan` as `atan2(y, 1)`. Each function must compile.
+/// float) and `atan` as `atan2(y, 1)` (its last digits are the platform
+/// libm's, so that result is compared with the interpreter only). Each
+/// function must compile.
 #[test]
 fn method_folds_rounding_and_atan_on_integer_dialects() {
     let src = format!(
@@ -161,19 +163,21 @@ fn method_folds_rounding_and_atan_on_integer_dialects() {
         local function ce(x) local y = math.ceil(x) return y end
         local function at(x) local y = math.atan(x) return y end
         return show(fl(2.5)) .. ' ' .. show(ce(-2.5)) .. ' ' .. show(fl(-0.0))
-          .. ' ' .. show(fl(1e300)) .. ' ' .. show(ce(2^63)) .. ' ' .. show(fl(-2^63))
-          .. ' ' .. show(at(0.00012682450675524315))"
+          .. ' ' .. show(fl(1e300)) .. ' ' .. show(ce(2^63)) .. ' ' .. show(fl(-2^63))"
     );
+    let atan = "local function at(x) local y = math.atan(x) return y end
+        return string.format('%.17g', at(0.00012682450675524315))";
     for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
         same(
             v,
             &src,
             "2:integer -2:integer 0:integer 1.0000000000000001e+300:float \
-             9.2233720368547758e+18:float -9.2233720368547758e+18:integer \
-             0.00012682450607527543:float",
+             9.2233720368547758e+18:float -9.2233720368547758e+18:integer",
         );
+        assert_eq!(run(v, atan, true).0, run(v, atan, false).0, "{v:?} atan");
         let mut vm = luna_jit::new_with_jit(v);
         vm.eval(&src).expect("eval");
+        vm.eval(atan).expect("eval");
         assert!(
             luna_jit::jit_backend::cache_entry_count(&vm) >= 3,
             "{v:?}: fl / ce / at should compile"
