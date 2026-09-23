@@ -7958,7 +7958,7 @@ impl Vm {
                 Op::Shr => self.arith_rr(inst, base, ArithOp::Shr)?,
                 Op::Unm => {
                     let v = self.r(base, inst.b());
-                    match coerce_num(v) {
+                    match coerce_num(v, self.version) {
                         Some(Num::Int(i)) => {
                             self.set_r(base, inst.a(), Value::Int(i.wrapping_neg()))
                         }
@@ -7975,7 +7975,7 @@ impl Vm {
                 }
                 Op::BNot => {
                     let v = self.r(base, inst.b());
-                    match coerce_num(v) {
+                    match coerce_num(v, self.version) {
                         Some(n) => {
                             let i = self.int_from_num(n)?;
                             self.set_r(base, inst.a(), Value::Int(!i));
@@ -9052,7 +9052,7 @@ impl Vm {
         match op {
             BAnd | BOr | BXor | Shl | Shr => {
                 // strings coerce for bitwise too (PUC tointegerns via cvt2num)
-                match (coerce_num(l), coerce_num(r)) {
+                match (coerce_num(l, self.version), coerce_num(r, self.version)) {
                     (Some(a), Some(b)) => {
                         let to_int = |n: Num| match n {
                             Num::Int(i) => Some(i),
@@ -9077,7 +9077,7 @@ impl Vm {
             }
             _ => {}
         }
-        let (ln, rn) = match (coerce_num(l), coerce_num(r)) {
+        let (ln, rn) = match (coerce_num(l, self.version), coerce_num(r, self.version)) {
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(None),
         };
@@ -9190,7 +9190,11 @@ impl Vm {
                 }
                 "perform arithmetic on"
             };
-            let bad = if coerce_num(l).is_none() { l } else { r };
+            let bad = if coerce_num(l, self.version).is_none() {
+                l
+            } else {
+                r
+            };
             return Err(self.type_err(what, bad));
         }
         Ok(mm)
@@ -9329,7 +9333,7 @@ impl Vm {
             return Err(self.rt_err("'for' step is zero"));
         }
         for (what, val) in order {
-            if as_num(val).is_none() {
+            if as_num(val, v).is_none() {
                 return Err(self.rt_err(&if v >= LuaVersion::Lua54 {
                     format!(
                         "bad 'for' {what} (number expected, got {})",
@@ -9340,7 +9344,7 @@ impl Vm {
                 }));
             }
         }
-        let n = |val| as_num(val).expect("checked above");
+        let n = |val| as_num(val, v).expect("checked above");
         let int_loop =
             v <= LuaVersion::Lua52 || matches!((init, step), (Value::Int(_), Value::Int(_)));
         if int_loop {
@@ -9762,12 +9766,12 @@ impl ArithOp {
     }
 }
 
-fn as_num(v: Value) -> Option<Num> {
+fn as_num(v: Value, version: LuaVersion) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),
         Value::Float(f) => Some(Num::Float(f)),
         // PUC forprep coerces numeric strings (`for i = "10", "1", "-2"`).
-        Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true),
+        Value::Str(s) => str_to_num(s.as_bytes(), version),
         _ => None,
     }
 }
@@ -9819,12 +9823,23 @@ fn type_mt_slot(v: Value) -> Option<usize> {
 }
 
 /// Number, or string coerced to number (5.5 default string-arith coercion).
-fn coerce_num(v: Value) -> Option<Num> {
+fn coerce_num(v: Value, version: LuaVersion) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),
         Value::Float(f) => Some(Num::Float(f)),
-        Value::Str(s) => numeric::str2num(s.as_bytes(), true, true),
+        Value::Str(s) => str_to_num(s.as_bytes(), version),
         _ => None,
+    }
+}
+
+/// A string's numeric value as the dialect converts it: 5.1 runs C
+/// `strtod` over it (so `inf`/`nan` count and a NUL ends it), 5.2 has its
+/// own reader but still only floats, 5.3+ `luaO_str2num` with integers.
+pub(crate) fn str_to_num(s: &[u8], version: LuaVersion) -> Option<Num> {
+    match version {
+        LuaVersion::Lua51 => numeric::strtod_str(s).map(Num::Float),
+        LuaVersion::Lua52 => numeric::str2num(s, false, true),
+        _ => numeric::str2num(s, true, true),
     }
 }
 
