@@ -826,7 +826,11 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let result = vm.call_value(Value::Closure(cl), &[]);
+    // lua.c runs every chunk from inside its C function `pmain`, a stack
+    // level scripts can see (one more `debug.getinfo` level, a traceback's
+    // closing `[C]: in ?`); run the chunk the same way.
+    let pmain = vm.native_with(run_chunk, Box::new([Value::Closure(cl)]));
+    let result = vm.call_value(pmain, &[]);
 
     if profile {
         // Pull JIT counters from the JitState sidecar (A2).
@@ -862,6 +866,14 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// The CLI's counterpart of lua.c's `pmain`: call the chunk held in its
+/// upvalue and return what it returns.
+fn run_chunk(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, luna_jit::vm::LuaError> {
+    let chunk = vm.running_native_upvalue(0);
+    let results = vm.call_value(chunk, &[])?;
+    Ok(vm.nat_return(fs, &results))
 }
 
 /// C5 — pretty error rendering with source name / line / context
