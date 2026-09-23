@@ -167,7 +167,7 @@ pub enum Token {
 impl Token {
     /// The near-token shown in `... near <tok>` error messages, rendered the
     /// way the dialect's `txtToken` / `luaX_token2str` does (see
-    /// [`near_text`]). Lossy view of [`Token::near_bytes`].
+    /// `near_text`). Lossy view of `Token::near_bytes`.
     pub fn describe(&self, src: &[u8], span: Span, version: LuaVersion) -> String {
         String::from_utf8_lossy(&self.near_bytes(src, span, version)).into_owned()
     }
