@@ -7,6 +7,7 @@ identified in the v2.0 Phase 0 Track CV audit:
 |---------------------|---------------------|-------------------------------------------------|
 | `fuzz_parser`       | random bytes        | `luna_core::frontend::parser::parse` × 6 dialects |
 | `fuzz_dump_reader`  | random bytes        | `luna_core::vm::dump::undump` (luna + PUC 5.1-5.5) |
+| `fuzz_dump_exec`    | random bytes        | `Vm::load` of a binary chunk (through the verifier), then run under an instruction budget |
 | `fuzz_vm_dispatch`  | random UTF-8 source | full eval pipeline (parser + compiler + dispatcher) |
 | `fuzz_aot_meta`     | random bytes        | `luna_core::jit::aot_meta::decode_meta_blob` + per-byte unpackers |
 
