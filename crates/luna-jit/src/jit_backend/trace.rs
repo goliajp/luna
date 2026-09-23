@@ -641,6 +641,59 @@ fn is_rounding(fn_name: &str) -> bool {
     matches!(fn_name, "floor" | "ceil")
 }
 
+/// `m // n` or `m % n` for integers, `n != 0`, as lvm.c `luaV_idiv` /
+/// `luaV_mod`: the quotient rounds toward minus infinity and the
+/// remainder takes the divisor's sign. `n == -1` is special-cased there
+/// (`m // -1` wraps to `-m`, `m % -1` is 0) because `sdiv` traps on
+/// `minint / -1`; dividing by 1 instead gives the same remainder.
+fn emit_int_floor_div_mod(bcx: &mut FunctionBuilder<'_>, op: Op, m: Value, n: Value) -> Value {
+    let one = bcx.ins().iconst(types::I64, 1);
+    let is_neg1 = bcx.ins().icmp_imm(IntCC::Equal, n, -1);
+    let d = bcx.ins().select(is_neg1, one, n);
+    let q = bcx.ins().sdiv(m, d);
+    let r = bcx.ins().srem(m, d);
+    // The truncated result is off by one step when the remainder is
+    // non-zero and has the other sign from the divisor.
+    let r_nonzero = bcx.ins().icmp_imm(IntCC::NotEqual, r, 0);
+    let sign_differs = {
+        let x = bcx.ins().bxor(r, n);
+        bcx.ins().icmp_imm(IntCC::SignedLessThan, x, 0)
+    };
+    let adjust = bcx.ins().band(r_nonzero, sign_differs);
+    match op {
+        Op::IDiv => {
+            let q_floor = bcx.ins().isub(q, one);
+            let q = bcx.ins().select(adjust, q_floor, q);
+            let neg_m = bcx.ins().ineg(m);
+            bcx.ins().select(is_neg1, neg_m, q)
+        }
+        Op::Mod => {
+            let r_floor = bcx.ins().iadd(r, n);
+            bcx.ins().select(adjust, r_floor, r)
+        }
+        _ => unreachable!("only IDiv / Mod"),
+    }
+}
+
+/// `x << n` as lvm.c `luaV_shiftl`: a negative `n` shifts right
+/// (logically) by `-n`, and a count of 64 or more either way gives 0.
+/// `x >> n` is this with `-n` (wrapping), as `luaV_shiftr` does.
+/// Cranelift masks the count to 6 bits, hence the explicit range tests.
+fn emit_lua_shift_left(bcx: &mut FunctionBuilder<'_>, x: Value, n: Value) -> Value {
+    let zero = bcx.ins().iconst(types::I64, 0);
+    let left = bcx.ins().ishl(x, n);
+    let left_out = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, n, 64);
+    let left = bcx.ins().select(left_out, zero, left);
+    let neg_n = bcx.ins().ineg(n);
+    let right = bcx.ins().ushr(x, neg_n);
+    let right_out = bcx
+        .ins()
+        .icmp_imm(IntCC::UnsignedGreaterThanOrEqual, neg_n, 64);
+    let right = bcx.ins().select(right_out, zero, right);
+    let is_right = bcx.ins().icmp_imm(IntCC::SignedLessThan, n, 0);
+    bcx.ins().select(is_right, right, left)
+}
+
 /// Single-op classifier — the per-op decision logic used by the
 /// look-ahead walker [`infer_getx_exit_lookahead`].
 ///
@@ -5496,6 +5549,140 @@ pub fn lower_trace_into_named<M: Module>(
     // immediate-form instructions at codegen. See layer-6 doc §3 for
     // attack #2 candidates that ARE structural (block3 dead-slot store
     // elimination, side-exit materialize call ABI consolidation).
+    // Side exit from the block the builder is in: resume the interpreter
+    // at `$pc` with the state of recorded op `$i`. Materialises the live
+    // sunk tables and, at inline depth > 0, the inlined frames, so it is
+    // valid anywhere in the body; it records the register kinds of this
+    // point for the dispatcher's restore.
+    macro_rules! side_exit {
+        ($i:expr, $pc:expr) => {{
+            let side_exit_pc: u32 = $pc;
+            if !call_chain.is_empty() {
+                // Capture head's resume pc BEFORE the innermost
+                // override — `call_chain[0].pc` is the outermost
+                // self-rec Call's `pc + 1` (= trace head's
+                // post-Call resume). Each exit site has its own chain
+                // (the v1 single-global-array attempt looped fib
+                // forever because sibling Calls produced wrong chains
+                // under the depth-indexed lookup); the innermost
+                // frame's pc is this exit's, so the materialize helper
+                // stays PC-agnostic.
+                let head_resume_pc = call_chain[0].pc;
+                let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                if let Some(last) = snapshot.last_mut() {
+                    last.pc = side_exit_pc;
+                }
+                let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                let chain_len = chain_rc.len() as i64;
+                let site_idx = per_exit_inline_vec.len() as u32;
+                // P12-S10-B — materialise live Sinkable sites BEFORE
+                // the frame-mat helper pushes the inline frames. The
+                // window-sized snapshot updates in-place so
+                // per_exit_inline's kinds entry reflects materialised
+                // slots.
+                let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                let mat_count = emit_materialize_live_sunk(
+                    &mut bcx,
+                    &mut module,
+                    mat_sunk_id,
+                    &escape,
+                    &virt_vars,
+                    &virt_kinds,
+                    &regs_full,
+                    &op_offsets,
+                    $i,
+                    &mut kinds_snapshot,
+                    head_proto,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                materialize_emit_count += mat_count;
+                let inline_side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let chain_for_helper = chain_rc.clone();
+                per_exit_inline_vec.push((
+                    side_exit_pc,
+                    head_resume_pc,
+                    kinds_snapshot,
+                    chain_rc,
+                    inline_side_box,
+                ));
+                let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                let ptr_arg = emit_chain_ptr_arg(
+                    &mut module,
+                    &mut bcx,
+                    &chain_for_helper,
+                    chain_ptr,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
+                let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                emit_store_back_and_return_site(
+                    &mut bcx,
+                    &regs_full[..window_size_us],
+                    reg_state,
+                    site_idx,
+                    side_exit_pc,
+                    flush_ctx.as_ref(),
+                    0i64,
+                    trace_fn_sig_ref,
+                );
+            } else {
+                // P12-S5-C / S10-A — materialise every live Sinkable
+                // site at this depth=0 exit. The snapshot carries
+                // `RegKind::Table` for each materialised caller-window
+                // slot so the dispatcher unpacks the heap pointer
+                // correctly on deopt.
+                let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                let mat_count = emit_materialize_live_sunk(
+                    &mut bcx,
+                    &mut module,
+                    mat_sunk_id,
+                    &escape,
+                    &virt_vars,
+                    &virt_kinds,
+                    &regs_full,
+                    &op_offsets,
+                    $i,
+                    &mut snapshot,
+                    head_proto,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                materialize_emit_count += mat_count;
+                let tag_side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let tag_side_local = per_exit_kinds.len() as u32;
+                per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box));
+                // store_back only writes caller window — depth>0 scratch
+                // slots stay out of the dispatcher's reg_state restore.
+                emit_store_back_and_return_pc(
+                    &mut bcx,
+                    &regs_full[..max_stack],
+                    reg_state,
+                    side_exit_pc,
+                    flush_ctx.as_ref(),
+                    0i64,
+                    trace_fn_sig_ref,
+                    encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local),
+                );
+            }
+        }};
+    }
+    // Continue in a new block when `$cond` holds, else take a
+    // `side_exit!` to `$pc`.
+    macro_rules! guard {
+        ($cond:expr, $i:expr, $pc:expr) => {{
+            let continue_blk = bcx.create_block();
+            let side_exit_blk = bcx.create_block();
+            bcx.ins().brif($cond, continue_blk, &[], side_exit_blk, &[]);
+            bcx.switch_to_block(side_exit_blk);
+            bcx.seal_block(side_exit_blk);
+            side_exit!($i, $pc);
+            bcx.switch_to_block(continue_blk);
+            bcx.seal_block(continue_blk);
+        }};
+    }
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // P12-S4-step3b — `off` is the start of this op's register
@@ -5827,31 +6014,37 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = RegKind::Int;
                 }
             }
-            // 3-reg Int ops. Cranelift's signed div / mod panic on
-            // divide-by-zero — Lua wraps the same way (raises an
-            // error). The recorder picked a sample run where these
-            // didn't fault, but a runtime zero divisor would crash
-            // the trace. Future hardening could trap-then-deopt.
+            // 3-reg integer ops, with Lua's integer semantics (lvm.c
+            // luaV_idiv / luaV_mod / luaV_shiftl): `//` and `%` round
+            // toward minus infinity, a shift by a negative count shifts
+            // the other way and one by 64 or more gives 0. A zero
+            // divisor raises an error, so it leaves the trace and the
+            // interpreter runs the op.
             Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
-                // Int-only ops. Bail if either operand is Float —
-                // Lua's IDiv would coerce to Float (different
-                // semantics) and bitwise ops on Floats are
-                // type-errors at runtime.
+                // On a float or any non-integer operand these ops
+                // convert, coerce or raise; only two integers are
+                // lowered.
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
                 let kc = k_op(&current_kinds, off as u32 + ins.c());
-                if matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float) {
+                if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
                     return None;
                 }
                 let lhs = bcx.use_var(regs[ins.b() as usize]);
                 let rhs = bcx.use_var(regs[ins.c() as usize]);
                 let r = match op {
-                    Op::IDiv => bcx.ins().sdiv(lhs, rhs),
-                    Op::Mod => bcx.ins().srem(lhs, rhs),
+                    Op::IDiv | Op::Mod => {
+                        let nonzero = bcx.ins().icmp_imm(IntCC::NotEqual, rhs, 0);
+                        guard!(nonzero, i, rop.pc);
+                        emit_int_floor_div_mod(&mut bcx, op, lhs, rhs)
+                    }
                     Op::BAnd => bcx.ins().band(lhs, rhs),
                     Op::BOr => bcx.ins().bor(lhs, rhs),
                     Op::BXor => bcx.ins().bxor(lhs, rhs),
-                    Op::Shl => bcx.ins().ishl(lhs, rhs),
-                    Op::Shr => bcx.ins().ushr(lhs, rhs),
+                    Op::Shl => emit_lua_shift_left(&mut bcx, lhs, rhs),
+                    Op::Shr => {
+                        let neg = bcx.ins().ineg(rhs);
+                        emit_lua_shift_left(&mut bcx, lhs, neg)
+                    }
                     _ => unreachable!("whitelist gated above"),
                 };
                 bcx.def_var(regs[ins.a() as usize], r);
@@ -5916,128 +6109,10 @@ pub fn lower_trace_into_named<M: Module>(
                     _ => unreachable!("pre-emit gates Int / Float const only"),
                 };
 
-                let continue_blk = bcx.create_block();
-                let side_exit_blk = bcx.create_block();
-                bcx.ins().brif(cond, continue_blk, &[], side_exit_blk, &[]);
-
-                bcx.switch_to_block(side_exit_blk);
-                bcx.seal_block(side_exit_blk);
-                let side_exit_pc = rop.pc + 2;
                 // P12-S4-step4b-C-2 — at depth>0, the side-exit must
                 // materialise the inlined frames before the interp can
-                // resume at the cmp's PC. See the matching Lt/Le/Eq
-                // arm below for the chain-build details.
-                if !call_chain.is_empty() {
-                    // Capture head's resume pc BEFORE the innermost
-                    // override — `call_chain[0].pc` is the outermost
-                    // self-rec Call's `pc + 1` (= trace head's
-                    // post-Call resume).
-                    let head_resume_pc = call_chain[0].pc;
-                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
-                    if let Some(last) = snapshot.last_mut() {
-                        last.pc = side_exit_pc;
-                    }
-                    let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
-                    let chain_len = chain_rc.len() as i64;
-                    let site_idx = per_exit_inline_vec.len() as u32;
-                    // P12-S10-B — materialise live Sinkable sites
-                    // BEFORE the frame_materialize_frames helper
-                    // pushes the inline frames. The window-sized
-                    // snapshot updates in-place so per_exit_inline's
-                    // kinds entry reflects materialised slots.
-                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
-                    let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
-                        mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
-                        i,
-                        &mut kinds_snapshot,
-                        head_proto,
-                        opts.aot,
-                        &mut defined_aot_data,
-                    );
-                    materialize_emit_count += mat_count;
-                    let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
-                    let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
-                    let chain_for_helper = chain_rc.clone();
-                    per_exit_inline_vec.push((
-                        side_exit_pc,
-                        head_resume_pc,
-                        kinds_snapshot,
-                        chain_rc,
-                        inline_side_box_0,
-                    ));
-                    let n_arg = bcx.ins().iconst(types::I64, chain_len);
-                    let ptr_arg = emit_chain_ptr_arg(
-                        &mut module,
-                        &mut bcx,
-                        &chain_for_helper,
-                        chain_ptr,
-                        opts.aot,
-                        &mut defined_aot_data,
-                    );
-                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
-                    let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
-                    emit_store_back_and_return_site(
-                        &mut bcx,
-                        &regs_full[..window_size_us],
-                        reg_state,
-                        site_idx,
-                        side_exit_pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                    );
-                } else {
-                    // P12-S5-C / S10-A — materialise every live
-                    // Sinkable site at this depth=0 cmp side-exit.
-                    // The snapshot carries `RegKind::Table` for each
-                    // materialised caller-window slot so the
-                    // dispatcher unpacks the heap pointer correctly
-                    // on deopt.
-                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
-                    let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
-                        mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
-                        i,
-                        &mut snapshot,
-                        head_proto,
-                        opts.aot,
-                        &mut defined_aot_data,
-                    );
-                    materialize_emit_count += mat_count;
-                    let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
-                    let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
-                    let tag_side_local_0 = per_exit_kinds.len() as u32;
-                    per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_0));
-                    // store_back only writes caller window — depth>0 scratch
-                    // slots stay out of the dispatcher's reg_state restore.
-                    emit_store_back_and_return_pc(
-                        &mut bcx,
-                        &regs_full[..max_stack],
-                        reg_state,
-                        side_exit_pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local_0),
-                    );
-                }
-
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                // resume at the cmp's PC (see `side_exit!`).
+                guard!(cond, i, rop.pc + 2);
             }
             Op::Test => {
                 // P12-S12-A v1 / v3 — `if (not R[A] == K) then pc++`.
@@ -6223,10 +6298,6 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.ins().icmp(int_cc, lhs, rhs)
                 };
 
-                let continue_blk = bcx.create_block();
-                let side_exit_blk = bcx.create_block();
-                bcx.ins().brif(cond, continue_blk, &[], side_exit_blk, &[]);
-
                 // Side-exit PC depends on the recorded direction:
                 //   TookJmp    → interp's `pc++` lands at cmp_pc + 2.
                 //   SkippedJmp → interp would have taken the Jmp;
@@ -6240,117 +6311,7 @@ pub fn lower_trace_into_named<M: Module>(
                         (pc_after_jmp + jmp_inst.sj() as i64) as u32
                     }
                 };
-                bcx.switch_to_block(side_exit_blk);
-                bcx.seal_block(side_exit_blk);
-                // P12-S4-step4b-C-2 — at depth>0, snapshot the live
-                // `call_chain` (each cmp@d>0 site has its OWN chain;
-                // the v1 single-global-array attempt looped fib
-                // forever because sibling Calls produced wrong
-                // chains under the depth-indexed lookup). The
-                // innermost frame's pc is overwritten with this
-                // site's side-exit PC so the materialize helper
-                // stays PC-agnostic — it just pushes whatever
-                // metadata says.
-                if !call_chain.is_empty() {
-                    let head_resume_pc = call_chain[0].pc;
-                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
-                    if let Some(last) = snapshot.last_mut() {
-                        last.pc = side_exit_pc;
-                    }
-                    let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-                    let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
-                    let chain_len = chain_rc.len() as i64;
-                    let site_idx = per_exit_inline_vec.len() as u32;
-                    // P12-S10-B — materialise live Sinkable sites
-                    // (depth=0 + depth>0) before frame-mat helper
-                    // pushes the inline frames.
-                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
-                    let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
-                        mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
-                        i,
-                        &mut kinds_snapshot,
-                        head_proto,
-                        opts.aot,
-                        &mut defined_aot_data,
-                    );
-                    materialize_emit_count += mat_count;
-                    let inline_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
-                    let _inline_side_cell_addr_1 = (&*inline_side_box_1) as *const TCellPtr as i64;
-                    let chain_for_helper = chain_rc.clone();
-                    per_exit_inline_vec.push((
-                        side_exit_pc,
-                        head_resume_pc,
-                        kinds_snapshot,
-                        chain_rc,
-                        inline_side_box_1,
-                    ));
-                    let n_arg = bcx.ins().iconst(types::I64, chain_len);
-                    let ptr_arg = emit_chain_ptr_arg(
-                        &mut module,
-                        &mut bcx,
-                        &chain_for_helper,
-                        chain_ptr,
-                        opts.aot,
-                        &mut defined_aot_data,
-                    );
-                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
-                    let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
-                    emit_store_back_and_return_site(
-                        &mut bcx,
-                        &regs_full[..window_size_us],
-                        reg_state,
-                        site_idx,
-                        side_exit_pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                    );
-                } else {
-                    // P12-S5-C / S10-A — materialise-on-deopt for
-                    // depth=0 cmp's live Sinkable sites.
-                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
-                    let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
-                        mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
-                        i,
-                        &mut snapshot,
-                        head_proto,
-                        opts.aot,
-                        &mut defined_aot_data,
-                    );
-                    materialize_emit_count += mat_count;
-                    let tag_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
-                    let _tag_side_cell_addr_1 = (&*tag_side_box_1) as *const TCellPtr as i64;
-                    let tag_side_local_1 = per_exit_kinds.len() as u32;
-                    per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_1));
-                    emit_store_back_and_return_pc(
-                        &mut bcx,
-                        &regs_full[..max_stack],
-                        reg_state,
-                        side_exit_pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local_1),
-                    );
-                }
-
-                // Continue: subsequent ops emit here.
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                guard!(cond, i, side_exit_pc);
             }
             Op::NewTable => {
                 // P12-S5-B — sunk path: skip the heap alloc helper.
