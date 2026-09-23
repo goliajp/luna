@@ -649,7 +649,7 @@ fn mm_event_name(op: crate::vm::isa::Op) -> Option<&'static str> {
     })
 }
 
-/// PUC MAXTAGLOOP: bound on `__index`/`__newindex` chains.
+/// PUC MAXTAGLOOP (5.3+): bound on `__index`/`__newindex` chains.
 const MAX_TAG_LOOP: u32 = 2000;
 /// PUC `MAXCCMT`: bound on a `__call` metamethod chain (lvm.c). 200 chains
 /// is more than any reasonable program needs and matches PUC 5.4/5.5; the
@@ -8793,12 +8793,22 @@ impl Vm {
         }
     }
 
+    /// PUC `MAXTAGLOOP`: 100 links of `__index`/`__newindex` in 5.1/5.2,
+    /// 2000 from 5.3.
+    fn tag_loop_limit(&self) -> u32 {
+        if self.version <= LuaVersion::Lua52 {
+            100
+        } else {
+            MAX_TAG_LOOP
+        }
+    }
+
     /// Resolve `t[key]` through the `__index` chain, stopping at the first raw
     /// hit (`Done`) or function metamethod (`Mm`). Table-valued `__index` links
     /// are followed inline (no yield possible); only a function link can yield.
     fn index_step(&mut self, t: Value, key: Value) -> Result<MmOut, LuaError> {
         let mut cur = t;
-        for _ in 0..MAX_TAG_LOOP {
+        for _ in 0..self.tag_loop_limit() {
             let mm = match cur {
                 Value::Table(tb) => {
                     let v = tb.get(key);
@@ -8829,7 +8839,11 @@ impl Vm {
                 next => cur = next,
             }
         }
-        Err(self.vm_err("'__index' chain too long; possible loop"))
+        Err(self.vm_err(if self.version <= LuaVersion::Lua52 {
+            "loop in gettable"
+        } else {
+            "'__index' chain too long; possible loop"
+        }))
     }
 
     pub(crate) fn newindex_value(
@@ -8884,7 +8898,7 @@ impl Vm {
             panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
         }
         let mut cur = t;
-        for _ in 0..MAX_TAG_LOOP {
+        for _ in 0..self.tag_loop_limit() {
             let mm = match cur {
                 Value::Table(tb) => {
                     // PI-A3 single-walk collapse — Table::try_set_existing
@@ -8928,7 +8942,11 @@ impl Vm {
                 next => cur = next,
             }
         }
-        Err(self.vm_err("'__newindex' chain too long; possible loop"))
+        Err(self.vm_err(if self.version <= LuaVersion::Lua52 {
+            "loop in settable"
+        } else {
+            "'__newindex' chain too long; possible loop"
+        }))
     }
 
     pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
