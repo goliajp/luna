@@ -16,7 +16,7 @@ use crate::runtime::{
     MetaAction, MetaCont, NativeClosure, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
 };
 use crate::version::LuaVersion;
-use crate::vm::builtins::{nat_pairs, nat_pcall, nat_xpcall};
+use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
 use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
@@ -1336,6 +1336,33 @@ impl Vm {
         self.macro_registry.clear();
     }
 
+    /// PUC `luaL_loadfilex`: compile the file `name` (standard input when
+    /// `None`, named `stdin`) into a function. A first line starting with
+    /// `#` is skipped; `mode` (`"t"`, `"b"`, `"bt"`, `None` for both)
+    /// limits the chunk to text and/or binary. The error is the message
+    /// PUC's function leaves: `cannot open <name>: <reason>` when the file
+    /// cannot be read, or the positioned syntax error.
+    pub fn load_file(
+        &mut self,
+        name: Option<&[u8]>,
+        mode: Option<&[u8]>,
+    ) -> Result<Value, LuaError> {
+        crate::vm::lib_os_io::load_path(self, name, mode).map_err(LuaError)
+    }
+
+    /// PUC `luaL_loadbufferx`: compile `src` under `chunkname`, the chunk
+    /// kind limited by `mode` as in [`Vm::load_file`]. A syntax error comes
+    /// back as its positioned message (`<chunk id>:<line>: <message>`), the
+    /// string `load` returns.
+    pub fn load_buffer(
+        &mut self,
+        src: &[u8],
+        chunkname: &[u8],
+        mode: Option<&[u8]>,
+    ) -> Result<Value, LuaError> {
+        crate::vm::lib_os_io::load_chunk(self, src, chunkname, mode).map_err(LuaError)
+    }
+
     /// Parse + compile a chunk and close it over the globals table.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
         // Reject oversize input *before* handing the parser/lexer a
@@ -1483,6 +1510,51 @@ impl Vm {
                 }
                 format!("(error object is a {} value)", v.type_name())
             }
+        }
+    }
+
+    /// Call `f` with `args` in protected mode with the message handler
+    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made from a C
+    /// function of the host's, as lua.c's `docall` does from `pmain`.
+    ///
+    /// `msgh` runs where the error was raised, before the stack unwinds, so
+    /// it can take a traceback of the failing call ([`Vm::traceback`]); an
+    /// error inside it calls it again with the new error, as in PUC. The
+    /// returned error carries what the handler returned.
+    ///
+    /// The call counts as one C level on the stack, the host function
+    /// making it: `debug.getinfo` finds it below `f`, and a traceback taken
+    /// inside ends with `[C]: in ?` (`[C]: ?` in 5.1).
+    pub fn call_value_with_handler(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        let level = self.native(crate::vm::builtins::nat_host_xpcall);
+        let mut call_args = Vec::with_capacity(args.len() + 2);
+        call_args.push(f);
+        call_args.push(msgh);
+        call_args.extend_from_slice(args);
+        let mut results = self.call_value(level, &call_args)?;
+        // the protected call's `true, results...` or `false, handled error`
+        if results.first().is_some_and(|ok| ok.truthy()) {
+            results.remove(0);
+            Ok(results)
+        } else {
+            Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
+        }
+    }
+
+    /// PUC `luaL_getmetafield`: the field `event` of `v`'s metatable, read
+    /// raw; nil when `v` has no metatable or the field is absent.
+    pub fn metafield(&mut self, v: Value, event: &str) -> Value {
+        match self.metatable_of(v) {
+            Some(mt) => {
+                let key = Value::Str(self.heap.intern(event.as_bytes()));
+                mt.get(key)
+            }
+            None => Value::Nil,
         }
     }
 
@@ -2748,11 +2820,32 @@ impl Vm {
         nargs: u32,
         from_c: bool,
     ) -> Result<Vec<Value>, LuaError> {
-        if self.begin_call(func_slot, Some(nargs), -1, from_c)? {
-            self.exec()
-        } else {
+        let depth = self.frames.len();
+        match self.begin_call(func_slot, Some(nargs), -1, from_c) {
+            // run until every frame the call pushed has returned: a pcall /
+            // xpcall / __pairs continuation sits below the frame of the
+            // function it called, and it is the continuation that produces
+            // the call's results (`true, ...`, or `false, msg` on an error)
+            Ok(true) => self.exec_with(depth + 1),
             // native completed inline; results at func_slot..top
-            Ok(self.take_results(func_slot))
+            Ok(false) => Ok(self.take_results(func_slot)),
+            // pcall / xpcall pushed their continuation and then failed to
+            // call their function (`pcall("x")`): the continuation catches
+            // that error, as it does in the dispatch loop
+            Err(e)
+                if self.frames.len() > depth
+                    && self.yielding.is_none()
+                    && self.terminating.is_none()
+                    && !self.host_yield_pending
+                    && self.pending_async_native_fut.is_none() =>
+            {
+                match self.unwind(e.0, depth + 1) {
+                    Unwound::Caught => self.exec_with(depth + 1),
+                    Unwound::CaughtReturn(vals) => Ok(vals),
+                    Unwound::Propagated(err) => Err(err),
+                }
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -4007,6 +4100,24 @@ impl Vm {
         Some(String::from_utf8_lossy(&tb).into_owned())
     }
 
+    /// PUC `luaL_traceback(L, L, msg, level)` on the running thread: `msg`
+    /// (when given) and a newline, then `stack traceback:` and one line per
+    /// stack level from `level` on, level 0 being the running function (the
+    /// native calling this, when a native does).
+    pub fn traceback(&mut self, msg: Option<&[u8]>, level: i64) -> Vec<u8> {
+        let mut out = match msg {
+            Some(m) => {
+                let mut out = m.to_vec();
+                out.push(b'\n');
+                out
+            }
+            None => Vec::new(),
+        };
+        out.extend_from_slice(b"stack traceback:");
+        out.extend(self.traceback_lines(None, level));
+        out
+    }
+
     /// Arm the soft memory cap (P09 embedding). The run loop checks the
     /// heap's tracked byte usage between dispatch turns; on overshoot it
     /// first runs a full collect, and if `bytes` still exceeds the cap it
@@ -4381,7 +4492,12 @@ impl Vm {
                         return self.begin_pcall(func_slot, nargs, nresults);
                     }
                     if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
-                        return self.begin_xpcall(func_slot, nargs, nresults);
+                        // 5.1 `xpcall(f, err)` calls `f` with no arguments
+                        let forward = self.version > LuaVersion::Lua51;
+                        return self.begin_xpcall(func_slot, nargs, nresults, forward);
+                    }
+                    if std::ptr::fn_addr_eq(nc.f, nat_host_xpcall as NativeFn) {
+                        return self.begin_xpcall(func_slot, nargs, nresults, true);
                     }
                     // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
                     // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
@@ -4718,11 +4834,13 @@ impl Vm {
     /// `xpcall(f, msgh, ...)` (PUC luaB_xpcall): like `begin_pcall`, but the
     /// message handler is stashed in the continuation and the arguments are
     /// shifted down over the handler's slot so `f`'s args are contiguous.
+    /// `forward` is false for 5.1's `xpcall`, which passes `f` none of them.
     fn begin_xpcall(
         &mut self,
         func_slot: u32,
         nargs: u32,
         nresults: i32,
+        forward: bool,
     ) -> Result<bool, LuaError> {
         self.with_native_running(func_slot, nargs, |vm| {
             let a = crate::vm::argcheck::Args::new(func_slot, nargs);
@@ -4739,11 +4857,7 @@ impl Vm {
         // 5.1: `xpcall (f, err)` takes exactly two parameters — extra
         // arguments are NOT forwarded to `f` (5.2 added forwarding;
         // 5.1 calls f with zero args). v2.14 dialect fixture 5.1/519.
-        let nfargs = if self.version <= crate::version::LuaVersion::Lua51 {
-            0
-        } else {
-            nargs - 2
-        };
+        let nfargs = if forward { nargs - 2 } else { 0 };
         for i in 0..nfargs {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
         }
@@ -5617,11 +5731,6 @@ impl Vm {
     }
 
     // ---- the interpreter ----
-
-    fn exec(&mut self) -> Result<Vec<Value>, LuaError> {
-        let entry_depth = self.frames.len();
-        self.exec_with(entry_depth)
-    }
 
     /// Run from the current top frame down to (but not past) `entry_depth`
     /// frames. Coroutine driving passes `entry_depth = 1` so the whole thread
