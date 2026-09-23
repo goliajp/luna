@@ -361,13 +361,17 @@ fn emit_chain_ptr_arg<M: Module>(
 /// `math.log(x, base)` / `math.atan(y, x)` / `math.max(...)` use a
 /// different bytecode window (B≠2) so the pattern matcher rejects
 /// them.
+///
+/// `atan` is absent: 5.3+ computes `atan2(y, 1)`, which libm does not
+/// round like `atan(y)`, and `pre53` cannot tell 5.3 from 5.2. `floor`
+/// and `ceil` return an integer on 5.3+, so they fold only on 5.4+ (see
+/// the emit).
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"sin", "sin"),
     (b"cos", "cos"),
     (b"tan", "tan"),
     (b"asin", "asin"),
     (b"acos", "acos"),
-    (b"atan", "atan"),
     (b"exp", "exp"),
     (b"log", "log"),
     (b"sqrt", "sqrt"),
@@ -473,6 +477,7 @@ fn try_match_trace_math_fold(
     record: &TraceRecord,
     i: usize,
     head_proto: Gc<Proto>,
+    pre53: bool,
 ) -> Option<TraceMathFold> {
     // Common prefix (GetTabUp + GetField) needs at least 2 ops.
     if i + 1 >= record.ops.len() {
@@ -528,6 +533,11 @@ fn try_match_trace_math_fold(
         .iter()
         .find_map(|&(needle, name)| (needle == fname_bytes).then_some(name))
     {
+        // floor/ceil results are floats on 5.1/5.2 and integers on 5.3;
+        // `pre53` covers both, so leave the call to the interpreter.
+        if pre53 && is_rounding(fn_name) {
+            return None;
+        }
         if i + 3 >= record.ops.len() {
             return None;
         }
@@ -623,6 +633,12 @@ fn try_match_trace_math_fold(
         arg1_reg: a + 1,
         arg2_reg: a + 2,
     })
+}
+
+/// `math.floor` / `math.ceil`: on 5.3+ they keep integers integral and
+/// turn a float into an integer when it fits.
+fn is_rounding(fn_name: &str) -> bool {
+    matches!(fn_name, "floor" | "ceil")
 }
 
 /// Single-op classifier — the per-op decision logic used by the
@@ -3755,7 +3771,7 @@ pub fn lower_trace_into_named<M: Module>(
         //     fires `fmin / fmax`.
         let mut i = 0;
         while i < n {
-            if let Some(fold) = try_match_trace_math_fold(record, i, head_proto) {
+            if let Some(fold) = try_match_trace_math_fold(record, i, head_proto, opts.pre53) {
                 match fold.kind {
                     FoldKind::Libm1 => {
                         for k in 0..4 {
@@ -5584,12 +5600,28 @@ pub fn lower_trace_into_named<M: Module>(
                         let arg_src = fold.arg_src.expect("Libm1 has arg_src");
                         let FoldArgSrc::Reg { reg: arg_reg } = arg_src;
                         let arg_kind = k_op(&current_kinds, off as u32 + arg_reg);
+                        // The argument must be a number the trace knows as
+                        // one: a numeric string is valid Lua here, and its
+                        // payload is a pointer.
+                        if !matches!(arg_kind, RegKind::Int | RegKind::Float) {
+                            return None;
+                        }
+                        if is_rounding(fold.fn_name) {
+                            // 5.4+: an integer is its own floor/ceil. A
+                            // float's result is an integer only when it
+                            // fits, a kind this trace cannot hold
+                            // statically, so such a trace is not compiled.
+                            if matches!(arg_kind, RegKind::Float) {
+                                return None;
+                            }
+                            let raw = bcx.use_var(regs[arg_reg as usize]);
+                            bcx.def_var(regs[fold.dst_reg as usize], raw);
+                            current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
+                            continue;
+                        }
                         let arg_f64 = if matches!(arg_kind, RegKind::Float) {
                             use_var_f64(&mut bcx, regs, arg_reg)
                         } else {
-                            // Treat Int/Unset/Nil as Int → fcvt. The
-                            // recorded trace saw a numeric arg or
-                            // it wouldn't have closed.
                             let raw = bcx.use_var(regs[arg_reg as usize]);
                             bcx.ins().fcvt_from_sint(types::F64, raw)
                         };
@@ -5603,51 +5635,39 @@ pub fn lower_trace_into_named<M: Module>(
                         // away, no IR.
                     }
                     FoldKind::Min2 | FoldKind::Max2 if fold.call_idx == i => {
-                        // 2-arg min/max. PUC's `math.min(a, b)` preserves
-                        // the operand type — both Int → Int result;
-                        // either Float → Float result. So we pick the
-                        // IR lowering based on the recorded operand
-                        // kinds, mirroring PUC's `vm.less_than` +
-                        // pick-loser semantics.
+                        // 2-arg min/max. PUC's `math.min(a, b)` returns
+                        // one of its operands as it is, so the lowering
+                        // follows the recorded operand kinds:
                         //
-                        //   Int  / Int  → cranelift `imin_s` / `imax_s`
-                        //   Float/ Float → cranelift `fmin` / `fmax`
-                        //   mixed         → promote Int to Float, use fmin/fmax
-                        //
-                        // The IEEE-754 NaN handling of `fmin`/`fmax`
-                        // matches PUC's `less_than(NaN, x) = false`
-                        // fallthrough for the all-numeric paths the
-                        // trace recorder admits.
+                        //   Int  / Int   → cranelift `smin` / `smax`
+                        //   Float/ Float → `fcmp` + `select`
+                        //   otherwise    → not compiled
                         let k1 = k_op(&current_kinds, off as u32 + fold.arg1_reg);
                         let k2 = k_op(&current_kinds, off as u32 + fold.arg2_reg);
+                        // `math.max` returns whichever argument wins,
+                        // unconverted (5.3+), so an Int/Float pair has no
+                        // static result kind: such a trace is not
+                        // compiled.
+                        // Anything but two numbers of one kind (strings
+                        // compare too, from 5.3) is not compiled either.
                         let result_kind = match (k1, k2) {
-                            (RegKind::Float, _) | (_, RegKind::Float) => RegKind::Float,
-                            _ => RegKind::Int,
+                            (RegKind::Float, RegKind::Float) => RegKind::Float,
+                            (RegKind::Int, RegKind::Int) => RegKind::Int,
+                            _ => return None,
                         };
                         if matches!(result_kind, RegKind::Float) {
-                            let coerce_to_f64 = |bcx: &mut FunctionBuilder<'_>,
-                                                 regs: &[Variable],
-                                                 current_kinds: &[RegKind],
-                                                 off: usize,
-                                                 reg: u32|
-                             -> Value {
-                                let kind = k_op(current_kinds, off as u32 + reg);
-                                if matches!(kind, RegKind::Float) {
-                                    use_var_f64(bcx, regs, reg)
-                                } else {
-                                    let raw = bcx.use_var(regs[reg as usize]);
-                                    bcx.ins().fcvt_from_sint(types::F64, raw)
-                                }
-                            };
-                            let a1 =
-                                coerce_to_f64(&mut bcx, regs, &current_kinds, off, fold.arg1_reg);
-                            let a2 =
-                                coerce_to_f64(&mut bcx, regs, &current_kinds, off, fold.arg2_reg);
-                            let r = match fold.kind {
-                                FoldKind::Min2 => bcx.ins().fmin(a1, a2),
-                                FoldKind::Max2 => bcx.ins().fmax(a1, a2),
+                            let a1 = use_var_f64(&mut bcx, regs, fold.arg1_reg);
+                            let a2 = use_var_f64(&mut bcx, regs, fold.arg2_reg);
+                            // PUC keeps the first argument unless the
+                            // second compares strictly better — not
+                            // IEEE fmin/fmax, which differ on NaN and
+                            // on -0.0 vs 0.0.
+                            let second_wins = match fold.kind {
+                                FoldKind::Min2 => bcx.ins().fcmp(FloatCC::LessThan, a2, a1),
+                                FoldKind::Max2 => bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
                                 FoldKind::Libm1 => unreachable!(),
                             };
+                            let r = bcx.ins().select(second_wins, a2, a1);
                             def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
                             current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
                         } else {

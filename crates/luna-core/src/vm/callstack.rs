@@ -1105,6 +1105,13 @@ impl Vm {
     /// overflow", and if the handler fails on that too, "error in error
     /// handling" (errors.lua :637).
     pub(crate) fn call_msgh(&mut self, handler: Value, err: Value) -> Value {
+        // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once when the handler
+        // is not a function
+        if self.version() <= LuaVersion::Lua52
+            && !matches!(handler, Value::Closure(_) | Value::Native(_))
+        {
+            return Value::Str(self.heap.intern(b"error in error handling"));
+        }
         let mut cur = err;
         let mut capped = false;
         for iter in 0.. {

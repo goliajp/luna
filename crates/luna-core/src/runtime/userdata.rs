@@ -29,9 +29,13 @@ pub struct Userdata {
     metatable: Option<Gc<Table>>,
     /// host-side payload
     pub(crate) payload: UserdataPayload,
-    /// one-byte read pushback (ungetc) for `file:read("n")`, which must peek one
-    /// past the numeral and return it to the stream
-    pub(crate) peeked: Option<u8>,
+    /// Bytes read from the OS but not yet consumed (PUC's stdio input
+    /// buffer): `read_buf[read_pos..]` is what the next read returns. It also
+    /// serves as the pushback for `ungetc`, which 5.1/5.2's `fscanf`-based
+    /// number reader needs for more than one byte.
+    pub(crate) read_buf: Vec<u8>,
+    /// Consumed prefix of `read_buf`.
+    pub(crate) read_pos: usize,
     /// 5.2/5.3 `lua_getuservalue`/`lua_setuservalue` slot (nil until set)
     pub(crate) user_value: Value,
     /// User-space write buffer for `FileHandle::File` (PUC's stdio FILE*).
@@ -137,7 +141,8 @@ impl Userdata {
             hdr,
             metatable: None,
             payload,
-            peeked: None,
+            read_buf: Vec::new(),
+            read_pos: 0,
             user_value: Value::Nil,
             write_buf: Vec::new(),
             writable,

@@ -863,6 +863,9 @@ fn main() {
         Err(e) => {
             let msg = vm.error_text(&e);
             print_pretty_error(&mut vm, &msg, &src, color, /*compile=*/ false);
+            // lua.c closes the state after reporting, which finalizes open
+            // files and so writes out what they still buffer
+            drop(vm);
             std::process::exit(1);
         }
     }
@@ -912,7 +915,9 @@ fn print_pretty_error(vm: &mut Vm, msg: &str, src: &[u8], color: bool, compile_t
     }
     if let Some(tb) = vm.take_error_traceback() {
         eprintln!("{dim}traceback:{reset}");
-        for line in tb.lines() {
+        // the level lines each start with a newline; the first would print
+        // as an empty line
+        for line in tb.trim_start_matches('\n').lines() {
             eprintln!("  {line}");
         }
     }

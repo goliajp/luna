@@ -141,6 +141,9 @@ pub struct Vm {
     gc_pause: i64,
     gc_stepmul: i64,
     gc_stepsize: i64,
+    /// `collectgarbage`'s parameters as the dialect stores them; they set
+    /// the three knobs above through `set_gc_pacing`.
+    pub(crate) gc_params: crate::vm::lib_gc::GcParams,
     /// true while `__gc` finalizers are being run, so a finalizer that calls
     /// `collectgarbage` gets a no-op (PUC's non-reentrancy: lua_gc returns -1 →
     /// `collectgarbage` yields fail).
@@ -705,6 +708,21 @@ impl From<LuaError> for Error {
     }
 }
 
+impl Vm {
+    /// `lua_close` from inside a running script (`os.exit(code, true)`):
+    /// close the main thread's pending to-be-closed variables, then run every
+    /// finalizer. Both run protected, so their errors are dropped as PUC's
+    /// `close_state` drops them. Inside a coroutine the main thread's stack is
+    /// parked, and only the finalizers run.
+    pub(crate) fn close_state(&mut self) {
+        if self.current.is_none() {
+            let _ = self.close_slots(0, None);
+        }
+        self.heap.queue_all_finalizers();
+        self.run_finalizers();
+    }
+}
+
 impl Drop for Vm {
     fn drop(&mut self) {
         // state close: run `__gc` for every still-registered finalizable before
@@ -936,6 +954,7 @@ impl Vm {
             gc_pause: 200,
             gc_stepmul: 100,
             gc_stepsize: 13,
+            gc_params: crate::vm::lib_gc::GcParams::new(version),
             gc_finalizing: false,
             capi_stack: Vec::new(),
             capi_cstr_pin: None,
@@ -1099,7 +1118,6 @@ impl Vm {
         self.open_os_io();
         self.open_debug();
         self.open_coroutine();
-        self.open_package();
         // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
         // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
         // library loaded. The diff ground truth is the default build
@@ -1108,6 +1126,8 @@ impl Vm {
         if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.open_bit32();
         }
+        // last, so `package.loaded` lists every library opened before it
+        self.open_package();
     }
 
     /// Install the base library (`print`, `type`, `pairs`, `tostring`,
@@ -1153,7 +1173,7 @@ impl Vm {
     }
     /// `package` plus the 5.1-only `module` and `package.seeall` aliases.
     pub fn open_package(&mut self) {
-        crate::vm::lib_os_io::open_package(self);
+        crate::vm::lib_package::open_package(self);
     }
     /// 5.2-only `bit32` library (5.3+ retired in favour of native bitwise
     /// ops on 64-bit integers).
@@ -1954,6 +1974,33 @@ impl Vm {
     /// PUC error message — `None` if it may. Distinguishes "not in a coroutine"
     /// from "inside an unyieldable C call" (sort/gsub callback).
     pub(crate) fn yield_barrier(&self) -> Option<&'static str> {
+        // 5.1's pcall/xpcall are plain C calls (no continuations), so a yield
+        // below one crosses the boundary like any other; 5.1 also has a single
+        // wording for every case, the main thread included.
+        // 5.1 also calls every metamethod and generic-for iterator through
+        // `luaD_call`, which counts as a C level, so a yield from inside one
+        // is refused as well.
+        if self.version <= LuaVersion::Lua51 {
+            let inside_call = self.frames.iter().enumerate().any(|(i, f)| match f {
+                CallFrame::Cont(nc) => matches!(nc.kind, ContKind::Meta(_)),
+                CallFrame::Lua(fr) => {
+                    fr.tm.is_some()
+                        || (i > 0
+                            && self.frames[i - 1].lua().is_some_and(|c| {
+                                let pc = (c.pc as usize).wrapping_sub(1);
+                                c.closure
+                                    .proto
+                                    .code
+                                    .get(pc)
+                                    .is_some_and(|ins| ins.op() == Op::TForCall)
+                            }))
+                }
+            });
+            if self.current.is_none() || self.nny > 0 || self.pcall_depth > 0 || inside_call {
+                return Some("attempt to yield across metamethod/C-call boundary");
+            }
+            return None;
+        }
         if self.current.is_none() {
             Some("attempt to yield from outside a coroutine")
         } else if self.nny > 0 {
@@ -2705,22 +2752,13 @@ impl Vm {
         self.gc_stepsize
     }
 
-    /// `collectgarbage("param", name [,value])`: read (or set, returning the
-    /// previous value of) a pacing parameter. Returns `None` for an unknown
-    /// name so the caller can raise PUC's `invalid parameter` error. The
-    /// collector is stop-the-world, so these only round-trip for API fidelity.
-    pub(crate) fn gc_param(&mut self, name: &[u8], set: Option<i64>) -> Option<i64> {
-        let slot = match name {
-            b"pause" => &mut self.gc_pause,
-            b"stepmul" => &mut self.gc_stepmul,
-            b"stepsize" => &mut self.gc_stepsize,
-            _ => return None,
-        };
-        let prev = *slot;
-        if let Some(v) = set {
-            *slot = v;
-        }
-        Some(prev)
+    /// Set luna's collector knobs: heap growth before a new cycle (%), sweep
+    /// work per safe point, and the default step size (0 = a step completes
+    /// the cycle).
+    pub(crate) fn set_gc_pacing(&mut self, pause: i64, stepmul: i64, stepsize: i64) {
+        self.gc_pause = pause;
+        self.gc_stepmul = stepmul;
+        self.gc_stepsize = stepsize;
     }
 
     /// Interpreter safe-point auto-GC: FULL incremental Propagate + adaptive
@@ -3986,6 +4024,10 @@ impl Vm {
     /// `__gc` metamethod (PUC luaC_checkfinalizer at setmetatable time — adding
     /// `__gc` to the metatable afterwards does not retroactively register).
     pub(crate) fn check_finalizer(&mut self, t: Gc<Table>) {
+        // Tables gained finalizers in 5.2; PUC 5.1 runs `__gc` for userdata only.
+        if self.version == crate::version::LuaVersion::Lua51 {
+            return;
+        }
         if !self.get_mm(Value::Table(t), Mm::Gc).is_nil() {
             self.heap.register_finalizable(t);
         }
@@ -4315,9 +4357,13 @@ impl Vm {
                     if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
                         return self.begin_xpcall(func_slot, nargs, nresults);
                     }
-                    // pairs(t) with a __pairs metamethod calls it yieldably (PUC
-                    // luaB_pairs); without one, fall through to the plain native.
-                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn) && nargs >= 1 {
+                    // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
+                    // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
+                    // lua_call, and 5.1 has no `__pairs`: the native handles those.
+                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn)
+                        && nargs >= 1
+                        && self.version >= LuaVersion::Lua54
+                    {
                         let arg = self.stack[(func_slot + 1) as usize];
                         if !self.get_mm(arg, Mm::Pairs).is_nil() {
                             return self.begin_pairs(func_slot, nresults);
@@ -4607,10 +4653,11 @@ impl Vm {
     /// resolved by the loop (even when `f` is a native that already ran inline).
     fn begin_pcall(&mut self, func_slot: u32, nargs: u32, nresults: i32) -> Result<bool, LuaError> {
         if nargs == 0 {
-            return Err(crate::vm::builtins::raise_str(
-                self,
-                "bad argument #1 to 'pcall' (value expected)",
-            ));
+            // `luaL_checkany` fails here: there is no function to call.
+            self.with_native_running(func_slot, nargs, |vm| {
+                let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+                crate::vm::argcheck::check_any(vm, a, 0).map(drop)
+            })?;
         }
         if self.pcall_depth >= MAX_C_DEPTH {
             // raised inside pcall, a C function: no position
@@ -4642,12 +4689,10 @@ impl Vm {
         nargs: u32,
         nresults: i32,
     ) -> Result<bool, LuaError> {
-        if nargs < 2 {
-            return Err(crate::vm::builtins::raise_str(
-                self,
-                "bad argument #2 to 'xpcall' (value expected)",
-            ));
-        }
+        self.with_native_running(func_slot, nargs, |vm| {
+            let a = crate::vm::argcheck::Args::new(func_slot, nargs);
+            crate::vm::builtins::xpcall_handler(vm, a).map(drop)
+        })?;
         if self.pcall_depth >= MAX_C_DEPTH {
             // raised inside pcall, a C function: no position
             return Err(self.plain_err("C stack overflow"));
@@ -4686,6 +4731,33 @@ impl Vm {
     /// continuation so a `coroutine.yield` inside it suspends cleanly. The
     /// metamethod is called in `pairs`'s own slot, so its (≤4, nil-padded)
     /// results land exactly where `pairs`'s results belong.
+    /// Run a check of the native at `func_slot` while it counts as the running
+    /// C function, so an argument error names it the way PUC does. pcall and
+    /// xpcall check their arguments in the dispatcher, before the native
+    /// would otherwise be entered.
+    fn with_native_running(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        check: impl FnOnce(&mut Vm) -> Result<(), LuaError>,
+    ) -> Result<(), LuaError> {
+        let Value::Native(nc) = self.stack[func_slot as usize] else {
+            unreachable!("pcall/xpcall dispatch sits on a native")
+        };
+        self.running_natives.push(nc);
+        self.running_native_acts
+            .push(crate::vm::callstack::NativeAct {
+                func_slot,
+                nargs,
+                depth: self.frames.len() as u32,
+                ccmt: 0,
+            });
+        let r = check(self);
+        self.running_natives.pop();
+        self.running_native_acts.pop();
+        r
+    }
+
     fn begin_pairs(&mut self, func_slot: u32, nresults: i32) -> Result<bool, LuaError> {
         let arg = self.stack[(func_slot + 1) as usize];
         let mm = self.get_mm(arg, Mm::Pairs);
@@ -4708,7 +4780,8 @@ impl Vm {
                 nresults,
             }),
         );
-        self.begin_call(func_slot + 1, Some(1), 4, true)?;
+        let want = crate::vm::builtins::pairs_mm_results(self) as i32;
+        self.begin_call(func_slot + 1, Some(1), want, true)?;
         Ok(true)
     }
 
@@ -5378,9 +5451,13 @@ impl Vm {
         if !instr.k() {
             regs.push(instr.c());
         }
+        let no_int = |n: Option<Num>| matches!(n, Some(Num::Float(x)) if crate::runtime::value::f2i_exact(x).is_none());
         for reg in regs {
             let v = self.r(f.base, reg);
-            if matches!(v, Value::Float(x) if crate::runtime::value::f2i_exact(x).is_none()) {
+            // before 5.4 a numeric string is converted first, so "2.5" is
+            // the operand without an integer value
+            let n = self.arith_operand()(v);
+            if no_int(n) {
                 return match crate::vm::objname::getobjname(p, pc - 1, reg) {
                     Some((kind, name)) => format!(" ({kind} '{name}')"),
                     None => String::new(),
@@ -5396,7 +5473,16 @@ impl Vm {
     /// native call), PUC pushes no prefix — match that by looking only at the
     /// topmost frame directly and bailing if it is anything but a Lua frame.
     pub(crate) fn position_prefix(&self) -> Option<String> {
-        let f = self.frames.last().and_then(CallFrame::lua)?;
+        let f = match self.frames.last()? {
+            CallFrame::Lua(f) => f,
+            // a native metamethod runs above the Meta continuation of the
+            // instruction that triggered it: that Lua function is its caller
+            CallFrame::Cont(NativeCont {
+                kind: ContKind::Meta(_),
+                ..
+            }) => self.frames.iter().rev().nth(1)?.lua()?,
+            CallFrame::Cont(_) => return None,
+        };
         let proto = f.closure.proto;
         if proto.source.as_bytes().is_empty() {
             return Some(self.stripped_prefix());
@@ -5517,6 +5603,33 @@ impl Vm {
         // picks `func_slot = stack.len()` which would otherwise re-overflow).
         let saved_len = self.stack.len();
         err = self.raise_to_handler(err);
+        // An error that no protected call inside the running coroutine will
+        // catch kills it without unwinding: PUC's `lua_resume` leaves the
+        // dead thread's stack as it was, so its pending to-be-closed
+        // variables run only when it is closed (`coroutine.close`, or
+        // `coroutine.wrap` closing it before re-raising). Scoped to the
+        // coroutine's own run (`entry_depth == 1`); a run nested under a
+        // native unwinds as before.
+        if entry_depth == 1
+            && self.version >= LuaVersion::Lua54
+            && self
+                .current
+                .is_some_and(|c| c.status == crate::runtime::CoroStatus::Running)
+            && !self.frames.iter().any(|f| {
+                matches!(
+                    f,
+                    CallFrame::Cont(NativeCont {
+                        kind: ContKind::Pcall | ContKind::Xpcall { .. } | ContKind::Close(_),
+                        ..
+                    })
+                )
+            })
+        {
+            while self.frames.len() >= entry_depth {
+                frames_pop_sync(&mut self.frames, &mut self.frames_top);
+            }
+            return Unwound::Propagated(LuaError(err));
+        }
         while self.frames.len() >= entry_depth {
             match *self.frames.last().expect("frame") {
                 // a yieldable-metamethod continuation does not catch: discard the
@@ -5848,12 +5961,13 @@ impl Vm {
                     }
                     continue;
                 }
-                // __pairs returned: normalize its results to exactly four
-                // (iterator, state, control, closing) at pairs's slot, where
-                // the metamethod was called, and hand them to pairs's caller.
+                // __pairs returned: normalize its results to exactly the
+                // dialect's count (iterator, state, control, and on 5.5 the
+                // closing value) at pairs's slot, where the metamethod was
+                // called, and hand them to pairs's caller.
                 if let ContKind::Pairs = nc.kind {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let total = 4u32;
+                    let total = crate::vm::builtins::pairs_mm_results(self) as u32;
                     let need = (nc.func_slot + total) as usize;
                     if self.stack.len() < need {
                         self.stack.resize(need, Value::Nil);
@@ -7807,7 +7921,7 @@ impl Vm {
                 Op::Shr => self.arith_rr(inst, base, ArithOp::Shr)?,
                 Op::Unm => {
                     let v = self.r(base, inst.b());
-                    match coerce_num(v) {
+                    match self.unary_operand(v) {
                         Some(Num::Int(i)) => {
                             self.set_r(base, inst.a(), Value::Int(i.wrapping_neg()))
                         }
@@ -7824,9 +7938,11 @@ impl Vm {
                 }
                 Op::BNot => {
                     let v = self.r(base, inst.b());
-                    match coerce_num(v) {
+                    match self.arith_operand()(v) {
                         Some(n) => {
-                            let i = self.int_from_num(n)?;
+                            let Some(i) = int_of(n) else {
+                                return Err(self.no_int_rep_err());
+                            };
                             self.set_r(base, inst.a(), Value::Int(!i));
                         }
                         None => {
@@ -8626,17 +8742,6 @@ impl Vm {
         }
     }
 
-    /// PUC luaL_len: the length as an integer, erroring if `__len` returned a
-    /// value with no integer representation.
-    pub(crate) fn checked_len(&mut self, v: Value) -> Result<i64, LuaError> {
-        match self.len_value(v)? {
-            Value::Int(i) => Ok(i),
-            Value::Float(f) => crate::runtime::value::f2i_exact(f)
-                .ok_or_else(|| self.rt_err("object length is not an integer")),
-            _ => Err(self.rt_err("object length is not an integer")),
-        }
-    }
-
     pub(crate) fn index_value(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
         match self.index_step(t, key)? {
             MmOut::Done(v) => Ok(v),
@@ -8876,106 +8981,72 @@ impl Vm {
         Ok(())
     }
 
+    /// The number a unary `-` operand stands for: 5.4+ leaves strings to
+    /// the string metatable, 5.3 converts them to floats (PUC `tonumber`).
+    fn unary_operand(&self, v: Value) -> Option<Num> {
+        let n = self.arith_operand()(v);
+        if self.version == LuaVersion::Lua53 && matches!(v, Value::Str(_)) {
+            n.map(|n| Num::Float(n.as_f64()))
+        } else {
+            n
+        }
+    }
+
+    /// How an arithmetic operand becomes a number: 5.4+ takes numbers only
+    /// (strings go to their metatable), 5.3 converts numeric strings, and
+    /// 5.1/5.2, which have only floats, convert them to floats.
+    fn arith_operand(&self) -> fn(Value) -> Option<Num> {
+        if self.version >= LuaVersion::Lua54 {
+            as_number
+        } else if self.version == LuaVersion::Lua53 {
+            coerce_num
+        } else {
+            coerce_num_float
+        }
+    }
+
     /// Fast path for an arithmetic/bitwise op: `Ok(Some(v))` when computed
     /// directly, `Ok(None)` when a metamethod is required (the caller decides
     /// whether to call it synchronously or yieldably).
     fn arith_fast(&mut self, op: ArithOp, l: Value, r: Value) -> Result<Option<Value>, LuaError> {
         use ArithOp::*;
-        match op {
-            BAnd | BOr | BXor | Shl | Shr => {
-                // strings coerce for bitwise too (PUC tointegerns via cvt2num)
-                match (coerce_num(l), coerce_num(r)) {
-                    (Some(a), Some(b)) => {
-                        let to_int = |n: Num| match n {
-                            Num::Int(i) => Some(i),
-                            Num::Float(f) => crate::runtime::value::f2i_exact(f),
-                        };
-                        let (Some(a), Some(b)) = (to_int(a), to_int(b)) else {
-                            // PUC luaG_tointerror: name the offending operand
-                            return Err(self.no_int_rep_err());
-                        };
-                        let v = match op {
-                            BAnd => a & b,
-                            BOr => a | b,
-                            BXor => a ^ b,
-                            Shl => shift_left(a, b),
-                            Shr => shift_left(a, b.wrapping_neg()),
-                            _ => unreachable!(),
-                        };
-                        return Ok(Some(Value::Int(v)));
-                    }
-                    _ => return Ok(None),
-                }
-            }
-            _ => {}
+        // 5.4 moved string->number coercion out of the VM: a string operand
+        // goes to the string metatable's `__add` etc., and bitwise operators
+        // have no string metamethods at all.
+        let num = self.arith_operand();
+        if let BAnd | BOr | BXor | Shl | Shr = op {
+            let (Some(a), Some(b)) = (num(l), num(r)) else {
+                return Ok(None);
+            };
+            let (Some(a), Some(b)) = (int_of(a), int_of(b)) else {
+                // PUC luaG_tointerror: name the offending operand
+                return Err(self.no_int_rep_err());
+            };
+            let v = match op {
+                BAnd => a & b,
+                BOr => a | b,
+                BXor => a ^ b,
+                Shl => shift_left(a, b),
+                Shr => shift_left(a, b.wrapping_neg()),
+                _ => unreachable!(),
+            };
+            return Ok(Some(Value::Int(v)));
         }
-        let (ln, rn) = match (coerce_num(l), coerce_num(r)) {
-            (Some(a), Some(b)) => (a, b),
-            _ => return Ok(None),
+        let (Some(mut ln), Some(mut rn)) = (num(l), num(r)) else {
+            return Ok(None);
         };
-        let v = match (op, ln, rn) {
-            (Add, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_add(b)),
-            (Sub, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_sub(b)),
-            (Mul, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_mul(b)),
-            (IDiv, Num::Int(a), Num::Int(b)) => {
-                if b == 0 {
-                    return Err(self.rt_err("attempt to divide by zero"));
-                }
-                let mut q = a.wrapping_div(b);
-                if (a ^ b) < 0 && q.wrapping_mul(b) != a {
-                    q -= 1;
-                }
-                Value::Int(q)
-            }
-            (Mod, Num::Int(a), Num::Int(b)) => {
-                if b == 0 {
-                    return Err(self.rt_err("attempt to perform 'n%0'"));
-                }
-                let mut m = a.wrapping_rem(b);
-                if m != 0 && (m ^ b) < 0 {
-                    m += b;
-                }
-                Value::Int(m)
-            }
-            (Add, a, b) => Value::Float(a.as_f64() + b.as_f64()),
-            (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
-            (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
-            (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
-            (Pow, a, b) => Value::Float(a.as_f64().powf(b.as_f64())),
-            (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
-            (Mod, a, b) => {
-                let (x, y) = (a.as_f64(), b.as_f64());
-                // PUC luai_nummod: correct fmod's sign without the `m*y`
-                // product, which underflows to 0 for tiny denormals
-                let mut m = x % y;
-                if (m > 0.0 && y < 0.0) || (m < 0.0 && y > 0.0) {
-                    m += y;
-                }
-                Value::Float(m)
-            }
-            _ => unreachable!(),
-        };
-        Ok(Some(v))
-    }
-
-    pub(crate) fn int_from(&mut self, v: Value, what: &str) -> Result<i64, LuaError> {
-        match v {
-            Value::Int(i) => Ok(i),
-            Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
-                Some(i) => Ok(i),
-                None => Err(self.rt_err("number has no integer representation")),
-            },
-            v => Err(self.type_err(what, v)),
+        // PUC 5.3 takes the integer path only when both operands are
+        // integers (`ttisinteger`); a converted string goes through
+        // `tonumber`, which yields a float.
+        if self.version == LuaVersion::Lua53
+            && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
+        {
+            ln = Num::Float(ln.as_f64());
+            rn = Num::Float(rn.as_f64());
         }
-    }
-
-    fn int_from_num(&mut self, n: Num) -> Result<i64, LuaError> {
-        match n {
-            Num::Int(i) => Ok(i),
-            Num::Float(f) => match crate::runtime::value::f2i_exact(f) {
-                Some(i) => Ok(i),
-                None => Err(self.rt_err("number has no integer representation")),
-            },
+        match arith_num(op, ln, rn) {
+            Ok(v) => Ok(Some(v)),
+            Err(msg) => Err(self.rt_err(msg)),
         }
     }
 
@@ -9005,39 +9076,30 @@ impl Vm {
             let what = if matches!(op, BAnd | BOr | BXor | Shl | Shr) {
                 "perform bitwise operation on"
             } else {
-                // 5.4+ report string-involved arithmetic faults through
-                // lstrlib's string-metatable arithmetic handlers, which
-                // emit the per-op wording `attempt to add a 'string'
-                // with a 'number'` (operands in syntactic order, quoted
-                // type names, no varinfo). Non-string faults (nil+1,
-                // {}+{}) keep the classic VM wording on every dialect —
-                // v2.14 HC.4, probed against stock 5.1.5-5.5.0.
-                if self.version >= crate::version::LuaVersion::Lua54
-                    && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
-                {
-                    let verb = match op {
-                        Add => "add",
-                        Sub => "sub",
-                        Mul => "mul",
-                        Div => "div",
-                        Mod => "mod",
-                        Pow => "pow",
-                        IDiv => "idiv",
-                        BAnd | BOr | BXor | Shl | Shr => unreachable!(),
-                    };
-                    let t1 = self.obj_typename(l);
-                    let t2 = self.obj_typename(r);
-                    return Err(self.rt_err(&format!("attempt to {verb} a '{t1}' with a '{t2}'")));
-                }
                 "perform arithmetic on"
             };
-            let bad = if coerce_num(l).is_none() { l } else { r };
+            // luaG_opinterror blames the first operand that is not a number;
+            // before 5.4 a numeric string counts as one.
+            let bad = if self.arith_operand()(l).is_none() {
+                l
+            } else {
+                r
+            };
             return Err(self.type_err(what, bad));
         }
         Ok(mm)
     }
 
     // ---- comparison ----
+
+    /// `lua_compare(L, a, b, LUA_OPEQ)`: equality including `__eq`.
+    pub(crate) fn equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
+        match self.eq_step(l, r) {
+            MmOut::Done(v) => Ok(v.truthy()),
+            MmOut::Mm { func, .. } => Ok(self.call_mm1(func, &[l, r])?.truthy()),
+            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from eq_step"),
+        }
+    }
 
     pub(crate) fn less_than(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
         match self.less_step(l, r, or_eq)? {
@@ -9149,8 +9211,14 @@ impl Vm {
         let init = self.r(base, a);
         let limit = self.r(base, a + 1);
         let step = self.r(base, a + 2);
+        // only a real integer init and step make an integer loop; a numeric
+        // string is converted with `tonumber`, to a float (5.3+ forprep)
+        let float_str = |v: Value| match v {
+            Value::Str(_) => as_num(v).map(|n| Num::Float(n.as_f64())),
+            v => as_num(v),
+        };
         let (Some(init_n), Some(limit_n), Some(step_n)) =
-            (as_num(init), as_num(limit), as_num(step))
+            (float_str(init), as_num(limit), float_str(step))
         else {
             // PUC luaG_forerror: "bad 'for' <what> (number expected, got <type>)".
             // PUC checks limit, then step, then initial value.
@@ -9362,6 +9430,12 @@ impl Vm {
         }
     }
 
+    /// Overwrite the i-th argument slot of the running native (the in-place
+    /// conversion `lua_tolstring` performs on a number argument).
+    pub(crate) fn nat_set_arg(&mut self, func_slot: u32, i: u32, v: Value) {
+        self.stack[(func_slot + 1 + i) as usize] = v;
+    }
+
     /// Push the return values of a `NativeFn` and return their count
     /// (analogous to pushing N values then `return N` from a C function).
     /// Public so embedders can author their own natives.
@@ -9477,20 +9551,34 @@ impl Vm {
         Ok(())
     }
 
-    /// tostring with __tostring / __name support.
+    /// `luaL_tolstring`: `__tostring` (whose result must be a string or a
+    /// number, rendered), else the basic rendering, where 5.3+ names a value
+    /// by a string `__name` metafield.
     pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
-            return match self.call_mm1(mm, &[v])? {
+            // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
+            let r = self.call_noyield(mm, &[v])?;
+            return match r.first().copied().unwrap_or(Value::Nil) {
                 Value::Str(s) => Ok(s.as_bytes().to_vec()),
+                r @ (Value::Int(_) | Value::Float(_)) => Ok(self.tostring_basic(r)),
                 _ => Err(self.rt_err("'__tostring' must return a string")),
             };
         }
-        if let Value::Table(t) = v
+        if self.version >= LuaVersion::Lua53
+            && !matches!(
+                v,
+                Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+            )
             && let Value::Str(name) = self.get_mm(v, Mm::Name)
         {
+            let basic = self.tostring_basic(v);
+            let at = basic
+                .iter()
+                .position(|&c| c == b':')
+                .expect("an object renders as `kind: address`");
             let mut out = name.as_bytes().to_vec();
-            out.extend_from_slice(format!(": {:p}", t.as_ptr()).as_bytes());
+            out.extend_from_slice(&basic[at..]);
             return Ok(out);
         }
         Ok(self.tostring_basic(v))
@@ -9524,7 +9612,7 @@ impl Vm {
             Value::Str(s) => s.as_bytes().to_vec(),
             Value::Table(t) => format!("table: {:p}", t.as_ptr()).into_bytes(),
             Value::Closure(c) => format!("function: {:p}", c.as_ptr()).into_bytes(),
-            Value::Native(n) => format!("function: builtin: {:p}", n.as_ptr()).into_bytes(),
+            Value::Native(n) => format!("function: {:p}", n.as_ptr()).into_bytes(),
             Value::Coro(co) => format!("thread: {:p}", co.as_ptr()).into_bytes(),
             // PUC names file handles `file (0x…)`; a bare userdata is
             // `userdata: 0x…`. The io library overrides this via __tostring.
@@ -9537,7 +9625,7 @@ impl Vm {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ArithOp {
+pub(crate) enum ArithOp {
     Add,
     Sub,
     Mul,
@@ -9612,7 +9700,81 @@ fn type_mt_slot(v: Value) -> Option<usize> {
     }
 }
 
-/// Number, or string coerced to number (5.5 default string-arith coercion).
+/// A number operand as-is; strings stay non-numbers (5.4+ `tonumberns`).
+fn as_number(v: Value) -> Option<Num> {
+    match v {
+        Value::Int(i) => Some(Num::Int(i)),
+        Value::Float(f) => Some(Num::Float(f)),
+        _ => None,
+    }
+}
+
+/// Arithmetic (not bitwise) on two numbers, PUC `luaO_rawarith`: integer
+/// results for integer operands except `/` and `^`. The error is the
+/// message of a zero integer divisor.
+pub(crate) fn arith_num(op: ArithOp, ln: Num, rn: Num) -> Result<Value, &'static str> {
+    use ArithOp::*;
+    Ok(match (op, ln, rn) {
+        (Add, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_add(b)),
+        (Sub, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_sub(b)),
+        (Mul, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_mul(b)),
+        (IDiv, Num::Int(a), Num::Int(b)) => {
+            if b == 0 {
+                return Err("attempt to divide by zero");
+            }
+            let mut q = a.wrapping_div(b);
+            if (a ^ b) < 0 && q.wrapping_mul(b) != a {
+                q -= 1;
+            }
+            Value::Int(q)
+        }
+        (Mod, Num::Int(a), Num::Int(b)) => {
+            if b == 0 {
+                return Err("attempt to perform 'n%0'");
+            }
+            let mut m = a.wrapping_rem(b);
+            if m != 0 && (m ^ b) < 0 {
+                m += b;
+            }
+            Value::Int(m)
+        }
+        (Add, a, b) => Value::Float(a.as_f64() + b.as_f64()),
+        (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
+        (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
+        (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
+        (Pow, a, b) => Value::Float(a.as_f64().powf(b.as_f64())),
+        (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
+        (Mod, a, b) => {
+            let (x, y) = (a.as_f64(), b.as_f64());
+            // PUC luai_nummod: correct fmod's sign without the `m*y`
+            // product, which underflows to 0 for tiny denormals
+            let mut m = x % y;
+            if (m > 0.0 && y < 0.0) || (m < 0.0 && y > 0.0) {
+                m += y;
+            }
+            Value::Float(m)
+        }
+        (BAnd | BOr | BXor | Shl | Shr, ..) => unreachable!("bitwise op in arith_num"),
+    })
+}
+
+/// A number's integer value, if it has one.
+fn int_of(n: Num) -> Option<i64> {
+    match n {
+        Num::Int(i) => Some(i),
+        Num::Float(f) => crate::runtime::value::f2i_exact(f),
+    }
+}
+
+/// A number, or a numeric string read as a float (5.1/5.2).
+fn coerce_num_float(v: Value) -> Option<Num> {
+    match v {
+        Value::Str(s) => numeric::str2num(s.as_bytes(), false, true),
+        v => as_number(v),
+    }
+}
+
+/// Number, or string coerced to number (5.3 string-arith coercion).
 fn coerce_num(v: Value) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),
@@ -9765,21 +9927,6 @@ impl Vm {
         &mut self,
         target: crate::runtime::value::NativeFn,
     ) -> Option<String> {
-        let full = self.loaded_funcname(target)?;
-        Some(match full.strip_prefix("_G.") {
-            Some(rest) => rest.to_string(),
-            None if full == "_G" => String::new(),
-            None => full,
-        })
-    }
-
-    /// The name `package.loaded` knows `target` by, unshortened: `"_G.print"`,
-    /// `"string.rep"`, or a bare module key. PUC 5.2's `pushglobalfuncname`
-    /// reports this as-is; 5.3 started dropping the `"_G."` prefix.
-    pub(crate) fn loaded_funcname(
-        &mut self,
-        target: crate::runtime::value::NativeFn,
-    ) -> Option<String> {
         let pkg_k = Value::Str(self.heap.intern(b"package"));
         let pkg = match self.globals().get(pkg_k) {
             Value::Table(t) => t,
@@ -9799,7 +9946,7 @@ impl Vm {
             let Value::Str(outer) = nk else { continue };
             let outer = String::from_utf8_lossy(outer.as_bytes()).into_owned();
             if matches(nv) {
-                return Some(outer);
+                return Some(if outer == "_G" { String::new() } else { outer });
             }
             if let Value::Table(inner_t) = nv {
                 let mut k2 = Value::Nil;
@@ -9808,8 +9955,12 @@ impl Vm {
                     if matches(nv2)
                         && let Value::Str(inner) = nk2
                     {
-                        let inner = String::from_utf8_lossy(inner.as_bytes());
-                        return Some(format!("{outer}.{inner}"));
+                        let inner = String::from_utf8_lossy(inner.as_bytes()).into_owned();
+                        return Some(if outer == "_G" {
+                            inner
+                        } else {
+                            format!("{outer}.{inner}")
+                        });
                     }
                 }
             }
