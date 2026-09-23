@@ -219,6 +219,48 @@ rationale. They are scope choices, not gaps — for instance `gc.lua`,
 not hold for a different GC, and 5.5's `files.lua` wants a real
 `/dev/full`, which exists on Linux and not on macOS.
 
+## Deliberate differences
+
+Beyond the corpus, luna is compared against stock PUC with probes that
+walk every standard-library function through missing, nil, wrong-typed
+and numeric-string arguments, every library's surface in each dialect,
+`collectgarbage`, call-stack levels, tracebacks, and language-level error
+messages. What still differs does so on purpose:
+
+- **Metamethod recursion depth.** PUC counts a metamethod call against its
+  200-level C-call limit, so a `__index` function recursing about 200
+  deep raises "C stack overflow". luna does not count metamethod calls;
+  such recursion is bounded by the Lua stack (one million slots) and
+  raises "stack overflow" there. It never crashes the process.
+- **`pcall` nesting depth.** Both stop with "C stack overflow", but the
+  depth at which they do depends on how many C levels the host has
+  already used (PUC's standalone interpreter spends about three before
+  the script runs), so the exact count differs.
+- **Local time.** luna-core links no C library timezone code:
+  `os.date` without a leading `!` formats UTC, and `os.time`'s valid
+  range is computed rather than taken from the host's `mktime`.
+- **`collectgarbage("step")`'s result** says whether the step finished a
+  cycle. luna's collector is its own, so this follows luna's progress,
+  not PUC's. Everything else about `collectgarbage` — options per
+  dialect, return shapes, how parameters read back — matches.
+- **Implementation-internal values** that the manual leaves open or that
+  expose the compiler: `#t` on a table with holes may pick a different
+  border; `debug.getlocal` past the declared locals reads temporaries
+  whose contents depend on register allocation; a C function's
+  return-hook `ftransfer` depends on its own stack use.
+- **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
+  compiler merging `0` and `-0` constants; 5.1 `io.lines(nil)` raising
+  through a stack-index bug; out-of-range float-to-integer conversions
+  (5.2 `string.format("%d", 2^63)` raises the range error the 5.2 test
+  suite expects); a leaked pattern-matcher depth counter in 5.3's
+  `gmatch`; results that depend on how the host C compiler or C library
+  was built (fused multiply-subtract in 5.1/5.2 `%` on arm64, `%a`
+  rounding in the macOS C library).
+- **Unavailable without a C library:** two-way `io.popen` modes on
+  5.1/5.2, `os.clock` as CPU time (it measures time since the `Vm`
+  started), locales other than C/POSIX, and loading C modules
+  (`package.loadlib`, the C searchers).
+
 ## CLI
 
 | Flag | Behaviour |
