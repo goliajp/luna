@@ -287,7 +287,8 @@ mod tests {
         assert_eq!(code[1].op(), Op::Jmp, "the skipped instruction is the jump");
         let tramp = (1 + 1 + code[1].sj()) as usize;
         assert_eq!((code[tramp].op(), code[tramp].a()), (Op::Close, 1));
-        assert_eq!(tramp + 2 + code[tramp + 1].sj() as usize, 3);
+        // the jump back is negative: add in signed arithmetic
+        assert_eq!(tramp as i32 + 2 + code[tramp + 1].sj(), 3);
     }
 
     #[test]
