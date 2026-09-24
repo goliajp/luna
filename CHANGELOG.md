@@ -19,6 +19,122 @@ optimization.
 
 ---
 
+## [3.1.0] — 2026-09-24
+
+A parity release. **No breaking change**: code written against 3.0 builds
+unchanged. The public-API audit against 3.0.0 finds no removed item and no
+changed signature; the additions are listed below.
+
+luna was compared against stock PUC 5.1.5, 5.2.4, 5.3.6, 5.4.9 and 5.5.1,
+function by function, with 63 probe programs run on both macOS and Linux
+(every standard-library function against missing, nil, wrongly typed and
+numeric-string arguments; each library's surface; error messages; the
+lexer; compiler limits; number formatting; what a program can see of the
+collector). Every difference found was fixed, or is listed as deliberate in
+`docs/compatibility.md`. The differential corpus grew from 514 to **799
+fixtures**, each run both as source and as PUC bytecode compiled by that
+version's `luac`.
+
+### Added
+
+- `Vm::call_value_with_handler` (PUC `lua_pcall` with a message handler),
+  `Vm::traceback` (`luaL_traceback`), `Vm::metafield`
+  (`luaL_getmetafield`), `Vm::load_file` (`luaL_loadfilex`) and
+  `Vm::load_buffer` (`luaL_loadbufferx`).
+- `vm::objname::getobjname_in`, the dialect-aware form of `getobjname`.
+- A bytecode verifier, on by default: a binary chunk whose registers,
+  constants, upvalues, jumps or nested functions point outside what the
+  function has fails to load instead of crashing the process. PUC does not
+  verify binary chunks.
+- Smaller public items: `SyntaxError::render` / `SyntaxError::unpositioned`,
+  `numeric::strtod_str` (C `strtod`, used by 5.1), `lib_math::inlinable_native`.
+
+### Changed
+
+- **The `luna` CLI reports errors and sets its exit status as each
+  dialect's `lua.c` does**: `lua: <message>` plus the message handler's
+  traceback on stderr, exit status 1; non-string error objects, `-e`,
+  `-l`, `-i`, `-v`, `-E`, `-W`, `--`, `-` and the usage message per
+  version. luna's own flags are unchanged.
+- **A NaN is spelled the way the platform's `printf` spells it**, as PUC
+  does: `nan` on macOS, `-nan` for a negative NaN on Linux (0/0 is one on
+  x86), `-nan(ind)` on Windows.
+- Binary-chunk load errors use each dialect's `lundump.c` wording and
+  chunk-name prefix.
+- The 5.4 ground truth moved from PUC 5.4.8 to 5.4.9.
+
+### Fixed
+
+Standard library (each against that dialect's own `l*lib.c`):
+
+- Argument errors: the function is named as the caller named it (5.1
+  `'?'`, 5.2's global-table walk, 5.5 `bad extra argument`), with each
+  dialect's number conversions and `no value` / `__name` handling.
+- `collectgarbage`: options, results and parameter encodings per dialect.
+  Tables are finalized only from 5.2 on.
+- `string.format` rebuilt on a model of C `printf`; `string`, `string.pack`
+  and `utf8` per dialect (utf8 is absent from 5.1/5.2); string arithmetic
+  and coercions per dialect.
+- `math`, `table` and `bit32` follow `lmathlib`, `ltablib` and `lbitlib`.
+- `io`, `os`, `package` (real searchers) and `coroutine` per dialect.
+  5.1's `file:seek` returns a number that prints as a double.
+- `load`, `loadfile`, `tonumber` with a base, `tostring` via
+  `luaL_tolstring`, `getfenv` / `setfenv` levels and `newproxy` (5.1).
+
+Language and VM:
+
+- Syntax errors name the token PUC names. `goto` and labels are checked
+  while parsing. Numeric `for` loops are checked and counted per dialect;
+  a NaN in a 5.4/5.5 float loop runs the body once, as there.
+- Register limits per dialect (5.1/5.2 fail at 250, 5.3/5.4 at 255, 5.5
+  above 255), 5.1's 60-upvalue limit (a hidden environment slot took one),
+  and the right error for a `return` of 255 or more values.
+- Metamethods: `__le` from `__lt` in 5.4, the same `__eq` on both sides in
+  5.2, one `__call` hop before 5.4, `__index` chains bounded at 100 in
+  5.1/5.2, `__name` ignored before 5.3.
+- Multiple assignment stores from the last target to the first. 5.4+
+  `<const>` locals with constant values are compile-time constants.
+- An `xpcall` message handler that raises runs again where it raised, as
+  PUC's `luaG_errormsg` does; `xpcall(error, error)` gives `error in
+  error handling`; 5.5's `<no error object>` is not handled twice.
+  `pcall` / `xpcall` called from a library function (`string.gsub(s, p,
+  pcall)`) return their results.
+- The debug library walks the stack as PUC's `CallInfo` chain does:
+  levels, names, tracebacks, hooks, `getinfo` options.
+
+PUC bytecode:
+
+- A chunk from the running dialect's own PUC version reaches the
+  translator. Four corpus programs compiled by PUC's `luac` crashed the
+  process with SIGBUS when loaded (the translator mis-encoded jump
+  offsets); they load and run now.
+
+JIT:
+
+- Reading a table with a NaN, infinite or out-of-range float key in
+  method-JIT code killed the process with SIGILL (since 1.0).
+- Method-JIT table reads check the type of what they read: a missing key
+  came back as integer 0.
+- A trace whose table helper declined an operation (a metatable) restarted
+  the iteration and ran its earlier stores twice.
+- About fifteen further trace and method-JIT defects found by running the
+  whole corpus with the JIT forced on, among them a trace loop that never
+  ended and a failing trace recompiled on every call.
+
+### Performance
+
+Same-runner perf-gate against 3.0.0: `sliding_window_500` 0.50×,
+`dict_5k_lookup` 0.87×, `string_ops_2k` 0.88×, `method_dispatch_5k`
+0.99×, `token_bucket_1k` 1.045× (within the 5% gate; the new read checks
+cost compile time in this compile-dominated cell).
+
+### Documentation
+
+- `docs/compatibility.md` lists the deliberate differences from PUC, and
+  no longer calls the C API a drop-in for PUC's `lua.h`: several names it
+  covers are macros there that expand to functions luna does not export.
+- `docs/performance.md` corrected (a claimed benchmark track never shipped).
+
 ## [3.0.0] — 2026-08-14
 
 The v2.x maturity arc's destination. **No breaking change** — the major

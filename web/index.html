@@ -13,7 +13,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="luna">
 <meta property="og:title" content="luna — a Lua runtime in pure Rust">
-<meta property="og:description" content="Five Lua dialects and MacroLua in a single binary. Zero-dependency core, Cranelift trace JIT, AOT native binaries, and 514 fixtures byte-equal against reference Lua.">
+<meta property="og:description" content="Five Lua dialects and MacroLua in a single binary. Zero-dependency core, Cranelift trace JIT, AOT native binaries, and 799 fixtures byte-equal against reference Lua.">
 <meta property="og:url" content="https://luna.golia.jp/">
 
 <link rel="alternate" hreflang="en" href="https://luna.golia.jp/">
@@ -33,13 +33,13 @@
 <div class="shell">
 
   <section class="frontmatter">
-    <div class="eyebrow">v3.0.0 · MIT / Apache-2.0</div>
+    <div class="eyebrow">v3.1.0 · MIT / Apache-2.0</div>
     <h1>A Lua runtime in <em>pure Rust</em>.</h1>
     <p class="abstract">Five Lua dialects and MacroLua in a single binary. A zero-dependency interpreter core, a Cranelift-backed trace JIT, ahead-of-time native compilation, and a sandbox designed for embedding untrusted scripts.</p>
     <div class="figures">
       <div class="figure"><div class="v">5.1 – 5.5</div><div class="k">dialects, plus MacroLua</div></div>
       <div class="figure"><div class="v">0</div><div class="k">dependencies in the core</div></div>
-      <div class="figure"><div class="v">514</div><div class="k">fixtures byte-equal vs PUC</div></div>
+      <div class="figure"><div class="v">799</div><div class="k">fixtures byte-equal vs PUC</div></div>
       <div class="figure"><div class="v">~33 KB</div><div class="k">cold-start heap</div></div>
     </div>
     <div class="actions">
@@ -93,14 +93,14 @@
       <h2>Byte-equal against reference Lua, on every push.</h2>
       <p class="lede">
         Compatibility is a measurement here, not a claim. A private corpus of
-        514 fixtures runs against stock PUC interpreters built from source —
+        799 fixtures runs against stock PUC interpreters built from source —
         5.1.5, 5.2.4, 5.3.6, 5.4.9 and 5.5.1 — and every one must match
         byte for byte, with zero skips, before a commit is green.
       </p>
     </div>
     <div class="cards">
       <div class="card">
-        <h3>514 fixtures, five dialects</h3>
+        <h3>799 fixtures, five dialects</h3>
         <p>Compared on stdout, stderr and exit code against the reference binary for each dialect. CI additionally asserts the 5.5 interpreter is exactly 5.5.1, so the basis cannot drift with a runner image.</p>
       </div>
       <div class="card">
