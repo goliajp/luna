@@ -1,14 +1,14 @@
 # Compatibility
 
 The compatibility surface for embedders deciding whether luna fits their
-host. Current as of **v3.0.0** (2026-08-14). For performance methodology
+host. Current as of **v3.1.0** (2026-09-24). For performance methodology
 and measured baselines see [`performance.md`](performance.md).
 
 ---
 
 ## How compatibility is established
 
-Not by inspection. A private corpus of **514 fixtures** runs against
+Not by inspection. A private corpus of **799 fixtures** runs against
 stock PUC interpreters built from source — **5.1.5, 5.2.4, 5.3.6,
 5.4.9, 5.5.1** — and every one must match byte for byte on stdout,
 stderr and exit code, with zero skips, before a commit is green. CI
@@ -263,7 +263,7 @@ sharing `lower.rs` (5.1) with `classic.rs` (5.2/5.3) and `modern.rs`
 
 ## Known correctness gaps
 
-None open as of v3.0.0,
+None open as of v3.1.0,
 and three classes of use-after-free that the arc started with are fixed
 — including one that a previous release had judged impossible to
 reproduce and which turned out to be two all-platform GC bugs.

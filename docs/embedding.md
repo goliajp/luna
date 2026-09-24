@@ -1,6 +1,6 @@
 # Embedding
 
-Cookbook for hosting luna inside a Rust program. Current as of v3.0.0.
+Cookbook for hosting luna inside a Rust program. Current as of v3.1.0.
 Companion docs: [`architecture.md`](architecture.md) (crate layout +
 JIT pipeline), [`threading.md`](threading.md) (async + multi-thread
 patterns), [`compatibility.md`](compatibility.md) (per-dialect

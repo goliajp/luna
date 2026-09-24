@@ -127,7 +127,7 @@ trackers, no scripts at all.
 
 ## Updating for a new release
 
-The version string `v3.0.0` appears in the `.eyebrow` of all six pages.
+The version string `v3.1.0` appears in the `.eyebrow` of all six pages.
 Bump them on release — `deploy.sh` refuses to ship a tree where the six
 disagree, which is what a half-finished bump looks like. This is also
 step 8 of `.dev/rfcs/monthly-drift-sweep.md`.

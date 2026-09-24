@@ -16,12 +16,12 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
-**v3.0.0** shipped 2026-08-14, closing the v2.x maturity arc. The major
-bump marks a maturity gate rather than an API break: the public surface
-is identical to 2.18.0 — 788 items, zero removals, zero additions — and
-code written against 2.x compiles against 3.0 unchanged. See
-[`CHANGELOG.md`](CHANGELOG.md) for what the arc bought and what each of
-its ten acceptance criteria rests on today.
+**v3.1.0** shipped 2026-09-24: a parity release with no breaking change.
+luna was compared against stock PUC 5.1–5.5 function by function, every
+difference found was fixed or is listed as deliberate in
+[`docs/compatibility.md`](docs/compatibility.md), and the differential
+corpus grew to 799 fixtures. **v3.0.0** (2026-08-14) closed the v2.x
+maturity arc. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install
 
@@ -109,11 +109,12 @@ what is explicitly *not* contained:
 
 Compatibility here is a measurement, not a claim.
 
-- **514 differential fixtures** run against stock PUC interpreters built
+- **799 differential fixtures** run against stock PUC interpreters built
   from source — 5.1.5, 5.2.4, 5.3.6, 5.4.9, 5.5.1 — and must match
   byte for byte on stdout, stderr and exit code, with zero skips, before
-  a commit is green. CI additionally asserts the 5.5 reference is
-  exactly 5.5.1, so the basis cannot drift with a runner image.
+  a commit is green; each also runs as PUC bytecode compiled by that
+  version's `luac`. CI asserts the 5.4 and 5.5 references are exactly
+  5.4.9 and 5.5.1, so the basis cannot drift with a runner image.
 - **PUC's own test suite** runs end-to-end across all five dialects with
   matching assert-count instrumentation.
 - **AddressSanitizer** over that suite nightly; **Miri** for provenance
