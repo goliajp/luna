@@ -2,8 +2,7 @@
 //! `lundump.c` wording and chunk-name prefix (`binary string` for a chunk
 //! loaded from a string under its default name, `@`/`=` stripped
 //! otherwise). The expected strings are what stock PUC 5.1.5 / 5.2.4 /
-//! 5.3.6 / 5.4.9 / 5.5.1 print for the same `load` calls
-//! (antirat probe `dump_roundtrip.lua`).
+//! 5.3.6 / 5.4.9 / 5.5.1 print for the same `load` calls.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
