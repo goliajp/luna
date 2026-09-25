@@ -1,7 +1,7 @@
 # Contributing — re-running the disk + binary-size baseline
 
 This is the reproduction guide for the workspace's disk-size baseline
-measurements (Track DS). Run these commands on macOS aarch64 (or
+measurements. Run these commands on macOS aarch64 (or
 adapt as noted) to produce numbers comparable to the committed
 baseline snapshot. Sister doc: [`binary-size.md`](binary-size.md)
 covers the historical `cargo bloat` snapshot for the `luna` runner
@@ -136,11 +136,8 @@ contains:
 - `runtime-helpers-sizes.md`
 - `summary.md`
 
-To check for drift after a sprint, re-run the steps above and diff
-the resulting numbers against the latest snapshot. The Track DS
-gate (TBD, lands during the v2.0 implementation phase) will fail CI
-when measured sizes exceed budget targets enumerated in the
-`summary.md` of the most recent snapshot.
+To check for drift, re-run the steps above and diff the resulting
+numbers against the latest snapshot.
 
 ### Drift thresholds (informational)
 
@@ -182,4 +179,4 @@ dominates `.text`". It does not measure:
 
 The two tools are complementary: re-run `cargo bloat` to see *which
 crates* contribute to `.text` growth; re-run the commands in this
-doc to track absolute disk + section bytes across a sprint.
+doc to track absolute disk + section bytes over time.
