@@ -19,7 +19,7 @@ optimization.
 
 ---
 
-## [3.1.0] — 2026-09-24
+## [3.1.0] — 2026-09-25
 
 A parity release. **No breaking change**: code written against 3.0 builds
 unchanged. The public-API audit against 3.0.0 (rustdoc JSON of the five
@@ -143,9 +143,10 @@ JIT:
 
 ### Performance
 
-Same-runner perf-gate against 3.0.0: `sliding_window_500` 0.50×,
-`dict_5k_lookup` 0.87×, `string_ops_2k` 0.88×, `method_dispatch_5k`
-0.99×, `token_bucket_1k` PERF_TBD.
+Same-runner perf-gate against 3.0.0 (x86_64): `sliding_window_500`
+0.57×, `token_bucket_1k` 0.95×, `method_dispatch_5k` 0.96×,
+`string_ops_2k` 1.00×, `dict_5k_lookup` 1.01× (earlier runs on other
+runners measured the last two at 0.88× and 0.87×).
 
 A trace no longer carries registers its loop only writes around the loop.
 Keeping the in-memory register state current asked the SSA builder for
