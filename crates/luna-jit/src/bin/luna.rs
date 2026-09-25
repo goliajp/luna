@@ -675,7 +675,7 @@ struct LunaOpts {
     profile: bool,
 }
 
-/// Take luna's own options out of `argv` (argv[0] stays): those among the
+/// Take luna's own options out of `argv` (`argv[0]` stays): those among the
 /// options before the script, the arguments of `-e` / `-l` aside.
 /// `-h` / `--help` prints the help and exits.
 fn take_luna_opts(argv: Vec<String>) -> (LunaOpts, Vec<String>) {
@@ -869,7 +869,7 @@ fn print_version(v: LuaVersion) {
 /// The interpreter: the state `lua.c` keeps around its `lua_State`.
 struct Interp {
     vm: Vm,
-    /// `progname`: argv[0]; none while the REPL runs.
+    /// `progname`: `argv[0]`; none while the REPL runs.
     progname: Option<String>,
 }
 
@@ -992,7 +992,7 @@ impl Interp {
         Value::Str(self.vm.heap.intern(s.as_bytes()))
     }
 
-    /// `createargtable` / `getargs`: `arg[0]` is the script (argv[0] when
+    /// `createargtable` / `getargs`: `arg[0]` is the script (`argv[0]` when
     /// there is none), the script's arguments count up from 1 and what
     /// comes before it down from -1.
     fn set_arg(&mut self, argv: &[String], script: usize) {

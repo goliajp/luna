@@ -304,10 +304,11 @@ messages. What still differs does so on purpose:
   border; `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's
   return-hook `ftransfer` depends on its own stack use.
-- **"too many registers" has no `near` token.** PUC raises it while
-  parsing, with the lexer's current token at hand; luna allocates
-  registers after the whole chunk is parsed, so the message stops before
-  the `near` part.
+- **Compile-time limit errors have no `near` token** ("too many
+  registers", "function or expression too complex", "too many upvalues"
+  from 5.2 on). PUC raises them while parsing, with the lexer's current
+  token at hand; luna allocates registers and resolves upvalues after the
+  whole chunk is parsed, so the message stops before the `near` part.
 - **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
   compiler merging `0` and `-0` constants; `debug.getinfo(level, ">…")`
   before 5.4 treating the option string as the function (5.1 crashes;
