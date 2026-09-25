@@ -2030,12 +2030,18 @@ impl<'a> Compiler<'a> {
         if l >= saved {
             self.set_freereg(l + 1);
         }
-        let re = self.expr(rhs)?;
         // 5.4+ compiles `x - K` for a small integer constant K as `x + -K`
         // (`ADDI`). That is the same number except for K = 0, where
-        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`.
-        let sub_zero =
-            op == BinOp::Sub && self.version >= LuaVersion::Lua54 && matches!(re, Exp::Int(0));
+        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`. K is whatever
+        // PUC's parser folds to a constant: `(0)`, `1 - 1`, `5 % 5`...
+        let sub_zero = op == BinOp::Sub && self.version >= LuaVersion::Lua54 && {
+            let ast = self.ast;
+            matches!(
+                ct_value(ast, rhs, &mut |name| self.ct_const_named(name)),
+                Some(CtConst::Int(0))
+            )
+        };
+        let re = self.expr(rhs)?;
         let r = self.exp_to_anyreg(re)?;
         self.set_freereg(saved);
         // PUC attributes the arith op itself to the operator's line, but

@@ -6433,7 +6433,15 @@ pub fn lower_trace_into_named<M: Module>(
                         .ok()?;
                     let pow_ref = module.declare_func_in_func(pow_id, bcx.func);
                     let call = bcx.ins().call(pow_ref, &[lhs, rhs]);
-                    let r = bcx.inst_results(call)[0];
+                    let mut r = bcx.inst_results(call)[0];
+                    // 5.4+ `luai_numpow` squares by multiplying, which can
+                    // differ from `pow` in the last bit
+                    if !opts.pre53 {
+                        let two = bcx.ins().f64const(2.0);
+                        let is_two = bcx.ins().fcmp(FloatCC::Equal, rhs, two);
+                        let sq = bcx.ins().fmul(lhs, lhs);
+                        r = bcx.ins().select(is_two, sq, r);
+                    }
                     def_var_f64(&mut bcx, regs[ins.a() as usize], r);
                     current_kinds[off + ins.a() as usize] = RegKind::Float;
                     continue;
