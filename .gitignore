@@ -12,7 +12,6 @@
 .dev-audit/
 .dev-*.md
 .tmp/
-.claude/
 
 # Editor / OS
 .DS_Store
