@@ -13,7 +13,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="luna">
 <meta property="og:title" content="luna — 用纯 Rust 打造的 Lua 运行时 · Golia Lab">
-<meta property="og:description" content="单个二进制里容纳五种 Lua 方言与 MacroLua。零依赖核心、Cranelift trace JIT、AOT 原生二进制,以及 799 个与参考 Lua 逐字节相等的 fixture。">
+<meta property="og:description" content="单个二进制里容纳五种 Lua 方言与 MacroLua。零依赖核心、Cranelift trace JIT、AOT 原生二进制,以及 802 个与参考 Lua 逐字节相等的 fixture。">
 <meta property="og:url" content="https://luna.golia.jp/zh/">
 
 <link rel="alternate" hreflang="en" href="https://luna.golia.jp/">
@@ -39,7 +39,7 @@
     <div class="figures">
       <div class="figure"><div class="v">5.1 – 5.5</div><div class="k">种方言，外加 MacroLua</div></div>
       <div class="figure"><div class="v">0</div><div class="k">核心的第三方依赖</div></div>
-      <div class="figure"><div class="v">799</div><div class="k">个 fixture 与 PUC 逐字节相等</div></div>
+      <div class="figure"><div class="v">802</div><div class="k">个 fixture 与 PUC 逐字节相等</div></div>
       <div class="figure"><div class="v">~33 KB</div><div class="k">冷启动堆占用</div></div>
     </div>
     <div class="actions">
@@ -86,11 +86,11 @@
   <section id="parity">
     <div class="sechead">
       <h2>对照参考 Lua 逐字节相等，每次推送都验</h2>
-      <p class="lede">兼容性在这里是量出来的，不是声称的。一份 799 个 fixture 的私有语料库，对照从源码构建的原版 PUC 解释器——5.1.5、5.2.4、5.3.6、5.4.9 与 5.5.1——每一个都必须逐字节一致、零 skip，提交才算绿。</p>
+      <p class="lede">兼容性在这里是量出来的，不是声称的。一份 802 个 fixture 的私有语料库，对照从源码构建的原版 PUC 解释器——5.1.5、5.2.4、5.3.6、5.4.9 与 5.5.1——每一个都必须逐字节一致、零 skip，提交才算绿。</p>
     </div>
     <div class="cards">
       <div class="card">
-        <h3>799 个 fixture，五种方言</h3>
+        <h3>802 个 fixture，五种方言</h3>
         <p>按 stdout、stderr 与退出码对照每种方言的参考二进制。CI 还会断言 5.5 解释器恰好是 5.5.1，使基准不会随 runner 镜像漂移。</p>
       </div>
       <div class="card">

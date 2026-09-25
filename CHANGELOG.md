@@ -33,7 +33,7 @@ function by function, with 63 probe programs run on both macOS and Linux
 numeric-string arguments; each library's surface; error messages; the
 lexer; compiler limits; number formatting; what a program can see of the
 collector). Every difference found was fixed, or is listed as deliberate in
-`docs/compatibility.md`. The differential corpus grew from 514 to **799
+`docs/compatibility.md`. The differential corpus grew from 514 to **802
 fixtures**, each run both as source and as PUC bytecode compiled by that
 version's `luac`.
 
