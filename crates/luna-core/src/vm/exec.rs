@@ -5613,7 +5613,7 @@ impl Vm {
             return String::new();
         }
         let instr = p.code[pc - 1];
-        match instr.op() {
+        match instr.source_op() {
             Op::Call | Op::TailCall => {
                 let reg = instr.a();
                 if self.r(f.base, reg).raw_eq(bad) {
@@ -5630,10 +5630,13 @@ impl Vm {
             Op::TForCall if self.version >= LuaVersion::Lua54 => {
                 " (for iterator 'for iterator')".to_string()
             }
-            op => match mm_event_name(op) {
+            // 5.4 `funcnamefromcall` names the metamethod; up to 5.3 the
+            // call raised through `luaG_typeerror`, whose `varinfo` does not
+            op if self.version >= LuaVersion::Lua54 => match mm_event_name(op) {
                 Some(ev) => format!(" (metamethod '{ev}')"),
                 None => String::new(),
             },
+            _ => String::new(),
         }
     }
 
@@ -9237,6 +9240,14 @@ impl Vm {
                 return Ok(());
             }
         }
+        // An `Add` with k set is a 5.4+ `x - 0` (see `Op::Add`): the right
+        // operand is the integer 0, so it adds only when the left is a number.
+        let op = if inst.k() && op == ArithOp::Add && !matches!(l, Value::Int(_) | Value::Float(_))
+        {
+            ArithOp::Sub
+        } else {
+            op
+        };
         match self.arith_fast(op, l, r)? {
             Some(v) => self.set_r(base, inst.a(), v),
             None => {
