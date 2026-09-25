@@ -253,6 +253,13 @@ fn r_const(
     })
 }
 
+/// A u32 element count, refused as a truncation when the rest of the
+/// chunk cannot hold that many elements of at least `min_size` bytes.
+fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
+    let n = r.u32()?;
+    r.count(u64::from(n), min_size)
+}
+
 fn r_proto(
     r: &mut Reader,
     heap: &mut Heap,
@@ -273,22 +280,24 @@ fn r_proto(
         heap.intern(raw)
     };
 
-    let n = r.u32()? as usize;
+    // each count sizes an allocation; `count` refuses one the remaining
+    // bytes cannot hold (the minimum size of an element) as a truncation
+    let n = read_count(r, 4)?;
     let mut code = Vec::with_capacity(n);
     for _ in 0..n {
         code.push(crate::vm::isa::Inst(r.u32()?));
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 4)?;
     let mut lines = Vec::with_capacity(n);
     for _ in 0..n {
         lines.push(r.u32()?);
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 1)?;
     let mut consts = Vec::with_capacity(n);
     for _ in 0..n {
         consts.push(r_const(r, heap, strings)?);
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 7)?;
     let mut upvals = Vec::with_capacity(n);
     for _ in 0..n {
         let in_stack = r.u8()? != 0;
@@ -302,12 +311,12 @@ fn r_proto(
             read_only,
         });
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 4)?;
     let mut protos = Vec::with_capacity(n);
     for _ in 0..n {
         protos.push(r_proto(r, heap, Some(source), strings)?);
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 16)?;
     let mut locvars = Vec::with_capacity(n);
     for _ in 0..n {
         let name = String::from_utf8_lossy(r.bytes()?).into_owned().into();

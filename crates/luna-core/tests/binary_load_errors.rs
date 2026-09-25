@@ -90,3 +90,35 @@ fn lua55_wording() {
         "bad binary format (version mismatch)",
     );
 }
+
+/// A count in luna's own dump format sizes an allocation. One the rest of
+/// the chunk cannot hold is refused as a truncation; before, a corrupt
+/// count asked for gigabytes and aborted the process (`fuzz_dump_reader`).
+#[test]
+fn a_count_larger_than_the_chunk_is_a_truncation() {
+    for (version, want) in [
+        (LuaVersion::Lua51, "nil bad: unexpected end in precompiled chunk"),
+        (LuaVersion::Lua52, "nil bad: truncated precompiled chunk"),
+        (LuaVersion::Lua54, "nil bad: bad binary format (truncated chunk)"),
+        (LuaVersion::Lua55, "nil bad: bad binary format (truncated chunk)"),
+    ] {
+        let mut vm = Vm::new(version);
+        // the instruction count follows the chunk's source name
+        let r = vm
+            .eval(
+                r#"
+                local ld = loadstring or load
+                local d = string.dump(ld("return 1", "=srcmark"))
+                local at = select(2, d:find("=srcmark", 1, true))
+                local bad = d:sub(1, at) .. "\255\255\255\255" .. d:sub(at + 5)
+                local f, e = ld(bad, "=bad")
+                return tostring(f) .. " " .. tostring(e)
+                "#,
+            )
+            .expect("chunk runs");
+        let Some(Value::Str(s)) = r.first() else {
+            panic!("expected a string")
+        };
+        assert_eq!(String::from_utf8_lossy(s.as_bytes()), want, "{version:?}");
+    }
+}
