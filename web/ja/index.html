@@ -13,7 +13,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="luna">
 <meta property="og:title" content="luna — 純粋な Rust による Lua ランタイム · Golia Lab">
-<meta property="og:description" content="5 つの Lua ダイアレクトと MacroLua を 1 つのバイナリに。依存ゼロのコア、Cranelift トレース JIT、AOT ネイティブバイナリ、そして参照 Lua とバイト単位で一致する 799 個の fixture。">
+<meta property="og:description" content="5 つの Lua ダイアレクトと MacroLua を 1 つのバイナリに。依存ゼロのコア、Cranelift トレース JIT、AOT ネイティブバイナリ、そして参照 Lua とバイト単位で一致する 802 個の fixture。">
 <meta property="og:url" content="https://luna.golia.jp/ja/">
 
 <link rel="alternate" hreflang="en" href="https://luna.golia.jp/">
@@ -39,7 +39,7 @@
     <div class="figures">
       <div class="figure"><div class="v">5.1 – 5.5</div><div class="k">種のダイアレクトと MacroLua</div></div>
       <div class="figure"><div class="v">0</div><div class="k">コアの外部依存</div></div>
-      <div class="figure"><div class="v">799</div><div class="k">個の fixture が PUC とバイト単位で一致</div></div>
+      <div class="figure"><div class="v">802</div><div class="k">個の fixture が PUC とバイト単位で一致</div></div>
       <div class="figure"><div class="v">~33 KB</div><div class="k">コールドスタート時のヒープ</div></div>
     </div>
     <div class="actions">
@@ -86,11 +86,11 @@
   <section id="parity">
     <div class="sechead">
       <h2>参照 Lua とバイト単位で一致、プッシュごとに検証</h2>
-      <p class="lede">互換性はここでは主張ではなく計測です。799 個の fixture からなる非公開コーパスを、ソースからビルドした純正 PUC インタプリタ——5.1.5、5.2.4、5.3.6、5.4.9、5.5.1——と突き合わせ、すべてがバイト単位で一致し skip ゼロであって初めてコミットがグリーンになります。</p>
+      <p class="lede">互換性はここでは主張ではなく計測です。802 個の fixture からなる非公開コーパスを、ソースからビルドした純正 PUC インタプリタ——5.1.5、5.2.4、5.3.6、5.4.9、5.5.1——と突き合わせ、すべてがバイト単位で一致し skip ゼロであって初めてコミットがグリーンになります。</p>
     </div>
     <div class="cards">
       <div class="card">
-        <h3>799 fixture、5 ダイアレクト</h3>
+        <h3>802 fixture、5 ダイアレクト</h3>
         <p>各ダイアレクトの参照バイナリに対して stdout・stderr・終了コードで比較します。CI は 5.5 インタプリタが厳密に 5.5.1 であることも表明するため、基準が runner イメージとともに漂流することはありません。</p>
       </div>
       <div class="card">
