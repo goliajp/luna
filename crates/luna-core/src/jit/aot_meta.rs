@@ -478,13 +478,11 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
         }
         let count = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
         cur += 4;
-        // the count sizes an allocation: each entry takes at least its
-        // 8-byte header, so a count the rest of the blob cannot hold is a
-        // truncation, not a request for gigabytes
-        if count.saturating_mul(8) > bytes.len() - cur {
-            return Err("v2 tail truncated at entry header");
-        }
-        per_exit_tags.reserve(count);
+        // the count comes from the blob: reserve only what the rest of it
+        // can hold (an entry takes at least its 8-byte header), so a
+        // corrupt count fails in the loop below instead of asking for
+        // gigabytes
+        per_exit_tags.reserve(count.min((bytes.len() - cur) / 8));
         for _ in 0..count {
             if bytes.len() < cur + 8 {
                 return Err("v2 tail truncated at entry header");
@@ -523,10 +521,7 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
         cur += 4;
         // as above: an entry is at least 16 bytes (cont_pc, resume pc and
         // the two length fields)
-        if count.saturating_mul(16) > bytes.len() - cur {
-            return Err("v3 tail truncated at entry header");
-        }
-        per_exit_inline.reserve(count);
+        per_exit_inline.reserve(count.min((bytes.len() - cur) / 16));
         for _ in 0..count {
             if bytes.len() < cur + 12 {
                 return Err("v3 tail truncated at entry header");
