@@ -34,7 +34,6 @@
 //! The bench writes per-workload `.dhat` heap profiles + a one-line
 //! summary per workload to stdout. Re-baseline:
 //! `MM_DHAT_OUT=/path/to/dir cargo bench --bench mem_baseline -p luna-core`.
-//! See `docs/contributing-mem.md` for full workflow.
 
 use std::path::PathBuf;
 

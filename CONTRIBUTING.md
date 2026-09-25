@@ -52,10 +52,6 @@ context.
   bench reproduction
 - [`docs/compatibility.md`](docs/compatibility.md) — per-dialect
   feature matrix (Lua 5.1 - 5.5 + MacroLua)
-- [`docs/contributing-mem.md`](docs/contributing-mem.md) — memory
-  baseline reproduction
-- [`docs/contributing-disk.md`](docs/contributing-disk.md) — disk
-  + binary size baseline reproduction
 - [`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md) —
   major-version upgrade checklist
 

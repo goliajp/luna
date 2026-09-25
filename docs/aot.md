@@ -116,9 +116,7 @@ For musl/Alpine deployment specifically, install `musl-cross` via
 
 A `production_like.lua` chunk (~1.5k LOC) compiled with default
 release profile + `strip` produces ~4.5 MiB on macOS aarch64
-(measured 2026-06-25; see
-[`contributing-disk.md`](contributing-disk.md) for the reproduction
-recipe).
+(measured 2026-06-25).
 
 Section breakdown (`size -m`, release-stripped):
 

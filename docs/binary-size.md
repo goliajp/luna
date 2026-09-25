@@ -1,9 +1,6 @@
 # Binary size
 
-Binary size budgeting + reproduction reference. Numbers refresh on
-crate-boundary changes; the canonical baselines live at
-`.dev/baselines/disk-2026-06-25/` (gitignored, reproducible via
-[`contributing-disk.md`](contributing-disk.md)).
+Binary size reference, measured at v1.3 (2026-06-25).
 
 For deploy-side decision criteria, see [`deploy.md`](deploy.md) §2
 (packaging shapes). For the AOT binary's section composition
@@ -107,14 +104,10 @@ strip /tmp/hello && ls -lh /tmp/hello
 size -m /tmp/hello   # macOS Mach-O section breakdown
 ```
 
-Full reproduction recipe: [`contributing-disk.md`](contributing-disk.md).
-
 ## 6. See also
 
 - [`aot.md`](aot.md) §4 — AOT binary section breakdown
 - [`deploy.md`](deploy.md) §2 — packaging shape decisions
-- [`contributing-disk.md`](contributing-disk.md) — local
-  reproduction guide
 - [`architecture.md`](architecture.md) — 5-crate workspace layout
   feasibility tagging
 
