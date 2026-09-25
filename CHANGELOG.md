@@ -94,7 +94,11 @@ Language and VM:
   and the right error for a `return` of 255 or more values.
 - Metamethods: `__le` from `__lt` in 5.4, the same `__eq` on both sides in
   5.2, one `__call` hop before 5.4, `__index` chains bounded at 100 in
-  5.1/5.2, `__name` ignored before 5.3.
+  5.1/5.2, `__name` ignored before 5.3. Calling a metamethod that is not
+  a function names it (`(metamethod 'sub')`) only from 5.4 on.
+- `x - 0` with a literal integer zero runs as `x + 0` in 5.4/5.5, as PUC
+  compiles it (`ADDI`), so `-0.0 - 0` is `0.0` there; a float result of
+  zero or NaN is no longer constant folded from 5.3 on (found by fuzzing).
 - Multiple assignment stores from the last target to the first. 5.4+
   `<const>` locals with constant values are compile-time constants.
 - An `xpcall` message handler that raises runs again where it raised, as

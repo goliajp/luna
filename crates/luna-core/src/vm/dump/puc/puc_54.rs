@@ -340,6 +340,25 @@ mod tests {
     }
 
     #[test]
+    fn subtracting_an_immediate_zero_stays_an_addition() {
+        // `x - 0` compiles to ADDI x 0 and runs as `x + 0`: `-0.0 - 0` is 0.0.
+        let code = lower(
+            vec![
+                abck(ADDI, 0, 1, 127, false),
+                abck(MMBINI, 1, 127, TM_SUB, false),
+                abck(RETURN0, 0, 0, 0, false),
+            ],
+            vec![],
+        );
+        let t = code[0].a();
+        assert_eq!(
+            (code[1].op(), code[1].b(), code[1].c(), code[1].k()),
+            (Op::Add, 1, t, true)
+        );
+        assert_eq!(code[1].source_op(), Op::Sub);
+    }
+
+    #[test]
     fn a_flipped_constant_operand_stays_on_the_left() {
         // `2.5 + x`: ADDK with the constant swapped to the right, MMBINK k=1.
         let code = lower(

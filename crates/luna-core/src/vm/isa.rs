@@ -55,7 +55,9 @@ pub enum Op {
     /// `R[A+1] := R[B]; R[A] := R[B][K[C]:string]` self-method prep for
     /// `obj:m(...)`.
     SelfOp,
-    /// `R[A] := R[B] + R[C]/K[C]`.
+    /// `R[A] := R[B] + R[C]/K[C]`. With `k` set it is a 5.4+ `x - 0`, which
+    /// PUC compiles as `ADDI x 0`: numbers add (so `-0.0 - 0` is `0.0`),
+    /// anything else is subtracted, `__sub` and string coercion included.
     Add,
     /// `R[A] := R[B] - R[C]/K[C]`.
     Sub,
@@ -195,7 +197,8 @@ impl Inst {
 
     /// [`Inst::iasbx`] with the range check of [`Inst::try_iabc`].
     pub(crate) fn try_iasbx(op: Op, a: u32, sbx: i32) -> Option<Inst> {
-        (a <= MAX_A && (-MAX_SBX..=MAX_SBX).contains(&sbx)).then(|| Inst::iasbx(op, a, sbx))
+        (a <= MAX_A && (-MAX_SBX..=MAX_BX as i32 - MAX_SBX).contains(&sbx))
+            .then(|| Inst::iasbx(op, a, sbx))
     }
 
     /// [`Inst::iax`] with the range check of [`Inst::try_iabc`].
@@ -222,7 +225,9 @@ impl Inst {
 
     /// Build an iAsBx-format instruction (`A`, signed `sBx`).
     pub fn iasbx(op: Op, a: u32, sbx: i32) -> Inst {
-        debug_assert!((-MAX_SBX..=MAX_SBX).contains(&sbx));
+        // Bx is biased by MAX_SBX, so the top value, MAX_SBX + 1, fits too
+        // (PUC 5.4+ `LOADI` uses it)
+        debug_assert!((-MAX_SBX..=MAX_BX as i32 - MAX_SBX).contains(&sbx));
         Inst::iabx(op, a, (sbx + MAX_SBX) as u32)
     }
 
@@ -258,6 +263,15 @@ impl Inst {
     #[inline(always)]
     pub fn k(self) -> bool {
         (self.0 >> POS_K) & 1 != 0
+    }
+
+    /// The operator an arithmetic instruction stands for in the source: an
+    /// `Add` with `k` set is a subtraction (see [`Op::Add`]).
+    pub(crate) fn source_op(self) -> Op {
+        match self.op() {
+            Op::Add if self.k() => Op::Sub,
+            op => op,
+        }
     }
 
     /// Decode the `B` field.

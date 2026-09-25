@@ -2018,7 +2018,7 @@ impl<'a> Compiler<'a> {
         // line, matching PUC).
         let saved_force = self.force_line.replace(line);
         let le = self.expr(lhs)?;
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs) {
+        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version) {
             self.force_line = saved_force;
             return Ok(folded);
         }
@@ -2031,6 +2031,11 @@ impl<'a> Compiler<'a> {
             self.set_freereg(l + 1);
         }
         let re = self.expr(rhs)?;
+        // 5.4+ compiles `x - K` for a small integer constant K as `x + -K`
+        // (`ADDI`). That is the same number except for K = 0, where
+        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`.
+        let sub_zero =
+            op == BinOp::Sub && self.version >= LuaVersion::Lua54 && matches!(re, Exp::Int(0));
         let r = self.exp_to_anyreg(re)?;
         self.set_freereg(saved);
         // PUC attributes the arith op itself to the operator's line, but
@@ -2042,6 +2047,7 @@ impl<'a> Compiler<'a> {
         let r_op = (|| -> Result<Exp, SyntaxError> {
             Ok(match op {
                 BinOp::Add => self.arith(Op::Add, l, r),
+                BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))),
                 BinOp::Sub => self.arith(Op::Sub, l, r),
                 BinOp::Mul => self.arith(Op::Mul, l, r),
                 BinOp::Div => self.arith(Op::Div, l, r),
@@ -3650,7 +3656,7 @@ impl<'a> Compiler<'a> {
 
 /// Constant-fold arithmetic over two numeric literals where Lua semantics
 /// are total (no division-by-zero style runtime errors).
-fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
+fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId, version: LuaVersion) -> Option<Exp> {
     let l = match le {
         Exp::Int(i) => Num::Int(*i),
         Exp::Float(f) => Num::Float(*f),
@@ -3672,6 +3678,14 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
         (BinOp::Div, a, b) => Float(a.as_f64() / b.as_f64()),
         _ => return None,
     };
+    // PUC `constfolding` leaves a NaN unfolded, and from 5.3 a float zero
+    // too: its sign can depend on how the operation is compiled (5.4's
+    // `-0.0 - 0` runs as `-0.0 + 0`).
+    if let Float(f) = v
+        && (f.is_nan() || (f == 0.0 && version >= LuaVersion::Lua53))
+    {
+        return None;
+    }
     Some(match v {
         Int(i) => Exp::Int(i),
         Float(f) => Exp::Float(f),

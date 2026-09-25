@@ -357,7 +357,12 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 }
                 // k on the MMBIN: the constant was the left operand.
                 let (l, r) = if mm.k() { (t, b) } else { (b, t) };
-                lw.emit(enc_abc(op, a, l, r, false)?);
+                // `x - 0` ran as `ADDI x 0`: luna's flagged `Add` (see `Op::Add`)
+                if k == Kind::ArithI && op == Op::Sub && mm.sb() == 0 && !mm.k() {
+                    lw.emit(enc_abc(Op::Add, a, l, r, true)?);
+                } else {
+                    lw.emit(enc_abc(op, a, l, r, false)?);
+                }
             }
             Kind::Arith(op) => {
                 let (a, b, c) = (lw.r(i.a())?, lw.r(i.b())?, lw.r(i.c())?);

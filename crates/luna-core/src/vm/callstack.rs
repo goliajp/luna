@@ -454,8 +454,8 @@ impl Vm {
                 crate::vm::objname::getobjname_in(p, pc, instr.a(), v)
             }
             Op::TForCall => Some(("for iterator", "for iterator".to_string())),
-            op if v >= LuaVersion::Lua52 => {
-                instr_event(v, op).map(|e| ("metamethod", tm_name(v, e)))
+            _ if v >= LuaVersion::Lua52 => {
+                instr_event(v, instr.source_op()).map(|e| ("metamethod", tm_name(v, e)))
             }
             _ => None,
         }
