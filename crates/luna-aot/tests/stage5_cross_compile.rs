@@ -207,6 +207,10 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
                 "ld: warning: ignoring file",
                 "unsupported file format",
                 "unknown argument",
+                // gcc as the host cc, handed clang's `-target`
+                "unrecognized command-line option",
+                // the host linker used for an aarch64 link: no cross linker
+                "is only supported on AArch64",
                 "invalid linker",
                 "linker `cc` not found",
                 "error: linker",

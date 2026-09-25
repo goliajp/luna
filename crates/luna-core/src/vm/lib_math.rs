@@ -1,149 +1,176 @@
-//! math library. Integer/float dual semantics follow PUC lmathlib; the RNG
-//! is xoshiro256** (PUC 5.4+'s algorithm), state per VM.
+//! math library, following each dialect's `lmathlib.c`. ≤5.2 has no integer
+//! subtype, so results there are floats and integer arguments go through
+//! `luaL_checkint`; 5.3+ keeps integers integral (`pushnumint`). The RNG is
+//! xoshiro256** (PUC 5.4+'s algorithm), state per VM.
 
 use crate::numeric::Num;
 use crate::runtime::Value;
+use crate::runtime::value::f2i_exact;
+use crate::version::LuaVersion as V;
+use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
+type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
+
 pub(crate) fn open_math(vm: &mut Vm) {
+    let ver = vm.version();
     let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, f| {
-        let fv = vm.native(f);
-        let k = Value::Str(vm.heap.intern(name.as_bytes()));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, fv)
-            .expect("valid key");
-    };
-    set(vm, "abs", m_abs);
-    set(vm, "ceil", m_ceil);
-    set(vm, "floor", m_floor);
-    set(vm, "sqrt", m_sqrt);
-    set(vm, "sin", m_sin);
-    set(vm, "cos", m_cos);
-    set(vm, "tan", m_tan);
-    set(vm, "asin", m_asin);
-    set(vm, "acos", m_acos);
-    set(vm, "atan", m_atan);
-    set(vm, "exp", m_exp);
-    set(vm, "deg", m_deg);
-    set(vm, "rad", m_rad);
-    set(vm, "frexp", m_frexp);
-    set(vm, "ldexp", m_ldexp);
-    set(vm, "log", m_log);
-    set(vm, "fmod", m_fmod);
-    set(vm, "modf", m_modf);
-    // Integer-subtype API arrives with 5.3 — ≤5.2 must NOT expose
-    // these (`math.type == nil` on stock PUC 5.2; v2.14 dialect
-    // fixture 5.2/524).
-    if vm.version() >= crate::version::LuaVersion::Lua53 {
-        set(vm, "tointeger", m_tointeger);
-        set(vm, "type", m_type);
-        set(vm, "ult", m_ult);
-    }
-    set(vm, "max", m_max);
-    set(vm, "min", m_min);
-    set(vm, "random", m_random);
-    set(vm, "randomseed", m_randomseed);
-    // Legacy math entries kept for 5.1/5.2 (PUC 5.3 dropped them in favour of
-    // the new `^` operator, `math.atan(y, x)`, and the integer subtype).
-    // Always registered so cross-version libraries that happen to use them
-    // still load — the version-aware tests don't assert their absence.
-    if vm.version() <= crate::version::LuaVersion::Lua52 {
-        set(vm, "atan2", m_atan2);
-        set(vm, "cosh", m_cosh);
-        set(vm, "sinh", m_sinh);
-        set(vm, "tanh", m_tanh);
-        set(vm, "log10", m_log10);
-        set(vm, "pow", m_pow);
-        set(vm, "mod", m_fmod);
-    }
-    let consts: [(&str, Value); 4] = [
-        ("pi", Value::Float(std::f64::consts::PI)),
-        ("huge", Value::Float(f64::INFINITY)),
-        ("maxinteger", Value::Int(i64::MAX)),
-        ("mininteger", Value::Int(i64::MIN)),
-    ];
-    for (name, v) in consts {
+    let set = |vm: &mut Vm, name: &str, v: Value| {
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, v)
             .expect("valid key");
+    };
+    let mut funcs: Vec<(&str, Native)> = vec![
+        ("abs", m_abs),
+        ("ceil", m_ceil),
+        ("floor", m_floor),
+        ("sqrt", m_sqrt),
+        ("sin", m_sin),
+        ("cos", m_cos),
+        ("tan", m_tan),
+        ("asin", m_asin),
+        ("acos", m_acos),
+        ("atan", m_atan),
+        ("exp", m_exp),
+        ("deg", m_deg),
+        ("rad", m_rad),
+        ("frexp", m_frexp),
+        ("ldexp", m_ldexp),
+        ("log", m_log),
+        ("fmod", m_fmod),
+        ("modf", m_modf),
+        ("max", m_max),
+        ("min", m_min),
+        ("random", m_random),
+        ("randomseed", m_randomseed),
+    ];
+    if ver >= V::Lua53 {
+        funcs.extend([
+            ("tointeger", m_tointeger as Native),
+            ("type", m_type),
+            ("ult", m_ult),
+        ]);
+    }
+    // The pre-5.3 functions: native in 5.1/5.2, kept by the default
+    // LUA_COMPAT_MATHLIB of the 5.3 and 5.4 builds, gone in 5.5.
+    if ver <= V::Lua54 {
+        funcs.extend([
+            ("cosh", m_cosh as Native),
+            ("sinh", m_sinh),
+            ("tanh", m_tanh),
+            ("pow", m_pow),
+            ("log10", m_log10),
+        ]);
+    }
+    if ver <= V::Lua52 {
+        funcs.push(("atan2", m_atan2));
+    }
+    for (name, f) in funcs {
+        let fv = vm.native(f);
+        set(vm, name, fv);
+    }
+    // Aliases are the same function value, so `math.atan2 == math.atan`
+    // holds: 5.3/5.4 register `atan2` as `math_atan`, and 5.1's
+    // LUA_COMPAT_MOD copies the `fmod` field to `mod`.
+    let alias = match ver {
+        V::Lua51 => Some(("mod", "fmod")),
+        V::Lua53 | V::Lua54 => Some(("atan2", "atan")),
+        _ => None,
+    };
+    if let Some((name, of)) = alias {
+        let k = Value::Str(vm.heap.intern(of.as_bytes()));
+        let fv = t.get(k);
+        set(vm, name, fv);
+    }
+    set(vm, "pi", Value::Float(std::f64::consts::PI));
+    set(vm, "huge", Value::Float(f64::INFINITY));
+    if ver >= V::Lua53 {
+        set(vm, "maxinteger", Value::Int(i64::MAX));
+        set(vm, "mininteger", Value::Int(i64::MIN));
     }
     vm.set_global("math", Value::Table(t))
         .expect("stdlib registration");
     vm.barrier_back_table(t);
 }
 
-fn check_num(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<Num, LuaError> {
-    match vm.nat_arg(fs, nargs, i) {
-        Value::Int(x) => Ok(Num::Int(x)),
-        Value::Float(x) => Ok(Num::Float(x)),
-        Value::Str(s) => crate::numeric::str2num(s.as_bytes(), true, true)
-            .ok_or_else(|| arg_error(vm, i + 1, who, "number expected, got string")),
-        v => {
-            let tn = vm.obj_typename(v);
-            Err(arg_error(
-                vm,
-                i + 1,
-                who,
-                &format!("number expected, got {tn}"),
-            ))
-        }
-    }
+/// The native registered as `math.<name>`, for the functions a JIT may
+/// inline: it replaces the call with its own code only while the field
+/// still holds this function, since a program can assign any value to
+/// it. `None` for other names.
+#[doc(hidden)]
+pub fn inlinable_native(name: &[u8]) -> Option<crate::runtime::value::NativeFn> {
+    let f: Native = match name {
+        b"sin" => m_sin,
+        b"cos" => m_cos,
+        b"tan" => m_tan,
+        b"asin" => m_asin,
+        b"acos" => m_acos,
+        b"atan" => m_atan,
+        b"exp" => m_exp,
+        b"log" => m_log,
+        b"sqrt" => m_sqrt,
+        b"floor" => m_floor,
+        b"ceil" => m_ceil,
+        b"max" => m_max,
+        b"min" => m_min,
+        _ => return None,
+    };
+    Some(f)
 }
 
-fn check_f64(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<f64, LuaError> {
-    Ok(check_num(vm, fs, nargs, i, who)?.as_f64())
-}
-
-fn check_int(vm: &mut Vm, fs: u32, nargs: u32, i: u32, who: &str) -> Result<i64, LuaError> {
-    match check_num(vm, fs, nargs, i, who)? {
-        Num::Int(x) => Ok(x),
-        Num::Float(f) => crate::runtime::value::f2i_exact(f)
-            .ok_or_else(|| arg_error(vm, i + 1, who, "number has no integer representation")),
-    }
-}
-
-/// PUC pushnumint: float with an exact integer value becomes an integer.
+/// PUC `pushnumint`: a float that fits an integer becomes one.
 fn push_numint(f: f64) -> Value {
-    match crate::runtime::value::f2i_exact(f) {
+    match f2i_exact(f) {
         Some(i) => Value::Int(i),
         None => Value::Float(f),
     }
 }
 
 fn m_abs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let v = match check_num(vm, fs, nargs, 0, "abs")? {
-        Num::Int(i) => Value::Int(i.wrapping_abs()),
-        Num::Float(f) => Value::Float(f.abs()),
+    let a = Args::new(fs, nargs);
+    // ≤5.2 has no Int subtype to overflow, so the integer fast path is only
+    // an unobservable shortcut there.
+    let v = match a.get(vm, 0) {
+        Value::Int(i) => Value::Int(i.wrapping_abs()),
+        _ => Value::Float(argcheck::check_number(vm, a, 0)?.abs()),
+    };
+    Ok(vm.nat_return(fs, &[v]))
+}
+
+/// `math.floor` / `math.ceil`: 5.3+ returns an integer when the result fits;
+/// ≤5.2 pushes the float, which keeps `-0.0` and huge values intact.
+fn round_with(vm: &mut Vm, fs: u32, nargs: u32, op: fn(f64) -> f64) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let v = match a.get(vm, 0) {
+        Value::Int(i) => Value::Int(i),
+        _ => {
+            let r = op(argcheck::check_number(vm, a, 0)?);
+            if vm.version() <= V::Lua52 {
+                Value::Float(r)
+            } else {
+                push_numint(r)
+            }
+        }
     };
     Ok(vm.nat_return(fs, &[v]))
 }
 
 fn m_floor(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let v = match check_num(vm, fs, nargs, 0, "floor")? {
-        Num::Int(i) => Value::Int(i),
-        Num::Float(f) => push_numint(f.floor()),
-    };
-    Ok(vm.nat_return(fs, &[v]))
+    round_with(vm, fs, nargs, f64::floor)
 }
 
 fn m_ceil(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let v = match check_num(vm, fs, nargs, 0, "ceil")? {
-        Num::Int(i) => Value::Int(i),
-        Num::Float(f) => push_numint(f.ceil()),
-    };
-    Ok(vm.nat_return(fs, &[v]))
+    round_with(vm, fs, nargs, f64::ceil)
 }
 
 macro_rules! float_fn {
-    ($name:ident, $who:literal, $op:expr) => {
+    ($name:ident, $op:expr) => {
         fn $name(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-            let x = check_f64(vm, fs, nargs, 0, $who)?;
+            let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
             #[allow(clippy::redundant_closure_call)]
             let v = Value::Float(($op)(x));
             Ok(vm.nat_return(fs, &[v]))
@@ -151,15 +178,31 @@ macro_rules! float_fn {
     };
 }
 
-float_fn!(m_sqrt, "sqrt", |x: f64| x.sqrt());
-float_fn!(m_sin, "sin", |x: f64| x.sin());
-float_fn!(m_cos, "cos", |x: f64| x.cos());
-float_fn!(m_tan, "tan", |x: f64| x.tan());
-float_fn!(m_asin, "asin", |x: f64| x.asin());
-float_fn!(m_acos, "acos", |x: f64| x.acos());
-float_fn!(m_exp, "exp", |x: f64| x.exp());
-float_fn!(m_deg, "deg", |x: f64| x.to_degrees());
-float_fn!(m_rad, "rad", |x: f64| x.to_radians());
+float_fn!(m_sqrt, f64::sqrt);
+float_fn!(m_sin, f64::sin);
+float_fn!(m_cos, f64::cos);
+float_fn!(m_tan, f64::tan);
+float_fn!(m_asin, f64::asin);
+float_fn!(m_acos, f64::acos);
+float_fn!(m_exp, f64::exp);
+float_fn!(m_cosh, f64::cosh);
+float_fn!(m_sinh, f64::sinh);
+float_fn!(m_tanh, f64::tanh);
+float_fn!(m_log10, f64::log10);
+
+fn m_deg(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
+    // ≤5.2 divides by RADIANS_PER_DEGREE; 5.3 switched to multiplying by
+    // 180/pi, which rounds differently (deg(3.7) differs in the last digit).
+    let r = if vm.version() <= V::Lua52 {
+        x / (std::f64::consts::PI / 180.0)
+    } else {
+        x * (180.0 / std::f64::consts::PI)
+    };
+    Ok(vm.nat_return(fs, &[Value::Float(r)]))
+}
+
+float_fn!(m_rad, |x: f64| x * (std::f64::consts::PI / 180.0));
 
 /// frexp: x = m * 2^e with 0.5 <= |m| < 1 (or m == x for 0/inf/nan).
 fn frexp(x: f64) -> (f64, i64) {
@@ -203,99 +246,130 @@ fn ldexp(mut m: f64, mut e: i64) -> f64 {
 }
 
 fn m_frexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "frexp")?;
+    let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
     let (m, e) = frexp(x);
     Ok(vm.nat_return(fs, &[Value::Float(m), Value::Int(e)]))
 }
 
 fn m_ldexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let m = check_f64(vm, fs, nargs, 0, "ldexp")?;
-    let e = vm.int_from(vm.nat_arg(fs, nargs, 1), "use as an exponent")?;
-    Ok(vm.nat_return(fs, &[Value::Float(ldexp(m, e))]))
+    let a = Args::new(fs, nargs);
+    let m = argcheck::check_number(vm, a, 0)?;
+    // The exponent is a C `int` in every version.
+    let e = argcheck::check_int(vm, a, 1)?;
+    Ok(vm.nat_return(fs, &[Value::Float(ldexp(m, e.into()))]))
 }
 
 fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let y = check_f64(vm, fs, nargs, 0, "atan")?;
-    let x = if nargs >= 2 {
-        check_f64(vm, fs, nargs, 1, "atan")?
+    let a = Args::new(fs, nargs);
+    let y = argcheck::check_number(vm, a, 0)?;
+    // ≤5.2 `atan` is one-argument; the two-argument form is `atan2`.
+    let r = if vm.version() <= V::Lua52 {
+        y.atan()
     } else {
-        1.0
+        y.atan2(argcheck::opt_number(vm, a, 1, 1.0)?)
     };
+    Ok(vm.nat_return(fs, &[Value::Float(r)]))
+}
+
+fn m_atan2(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let y = argcheck::check_number(vm, a, 0)?;
+    let x = argcheck::check_number(vm, a, 1)?;
     Ok(vm.nat_return(fs, &[Value::Float(y.atan2(x))]))
 }
 
+fn m_pow(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let x = argcheck::check_number(vm, a, 0)?;
+    let y = argcheck::check_number(vm, a, 1)?;
+    Ok(vm.nat_return(fs, &[Value::Float(x.powf(y))]))
+}
+
 fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "log")?;
-    let v = if nargs >= 2 {
-        let base = check_f64(vm, fs, nargs, 1, "log")?;
-        if base == 2.0 {
+    let a = Args::new(fs, nargs);
+    let x = argcheck::check_number(vm, a, 0)?;
+    let ver = vm.version();
+    // 5.1 `log` takes no base; 5.2 added it with a log10 special case and
+    // 5.3 a log2 one, each exact where the quotient would not be.
+    let r = if ver == V::Lua51 || a.is_none_or_nil(vm, 1) {
+        x.ln()
+    } else {
+        let base = argcheck::check_number(vm, a, 1)?;
+        if base == 2.0 && ver >= V::Lua53 {
             x.log2()
         } else if base == 10.0 {
             x.log10()
         } else {
             x.ln() / base.ln()
         }
-    } else {
-        x.ln()
     };
-    Ok(vm.nat_return(fs, &[Value::Float(v)]))
+    Ok(vm.nat_return(fs, &[Value::Float(r)]))
 }
 
 fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = check_num(vm, fs, nargs, 0, "fmod")?;
-    let b = check_num(vm, fs, nargs, 1, "fmod")?;
-    let v = match (a, b) {
-        (Num::Int(a), Num::Int(b)) => {
-            if b == 0 {
-                return Err(arg_error(vm, 2, "fmod", "zero"));
-            }
-            // C fmod truncates (unlike the % operator's floor semantics)
-            Value::Int(a.wrapping_rem(b))
-        }
-        (a, b) => Value::Float(a.as_f64() % b.as_f64()),
-    };
-    Ok(vm.nat_return(fs, &[v]))
+    let a = Args::new(fs, nargs);
+    if vm.version() >= V::Lua53
+        && let (Value::Int(x), Value::Int(d)) = (a.get(vm, 0), a.get(vm, 1))
+    {
+        // C `%` truncates, unlike the `%` operator; -1 is special-cased
+        // because mininteger % -1 overflows in C.
+        let v = match d {
+            0 => return Err(arg_error(vm, 2, "zero")),
+            -1 => 0,
+            _ => x % d,
+        };
+        return Ok(vm.nat_return(fs, &[Value::Int(v)]));
+    }
+    let x = argcheck::check_number(vm, a, 0)?;
+    let y = argcheck::check_number(vm, a, 1)?;
+    Ok(vm.nat_return(fs, &[Value::Float(x % y)]))
 }
 
 fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    // PUC fast path: an integer argument is returned unchanged (+ 0.0)
-    if let Value::Int(i) = vm.nat_arg(fs, nargs, 0) {
+    let a = Args::new(fs, nargs);
+    if vm.version() <= V::Lua52 {
+        // C `modf`: both parts keep the sign of x (so -0.0 and -inf give
+        // a -0.0 fraction).
+        let x = argcheck::check_number(vm, a, 0)?;
+        let ip = x.trunc();
+        let fp = if x.is_infinite() {
+            0.0f64.copysign(x)
+        } else {
+            x - ip
+        };
+        let fp = if fp == 0.0 { 0.0f64.copysign(x) } else { fp };
+        return Ok(vm.nat_return(fs, &[Value::Float(ip), Value::Float(fp)]));
+    }
+    if let Value::Int(i) = a.get(vm, 0) {
         return Ok(vm.nat_return(fs, &[Value::Int(i), Value::Float(0.0)]));
     }
-    let x = check_f64(vm, fs, nargs, 0, "modf")?;
-    let ip = if x >= 0.0 { x.floor() } else { x.ceil() };
-    let fp = if x.is_infinite() { 0.0 } else { x - ip };
-    // v2.12 KNOWN-DIV: PUC 5.5's math.modf returns the integer
-    // part as Integer subtype when it fits an i64 (matches PUC
-    // luaB_modf's `pushnumint` fast path). Only fall back to
-    // Float when the value is non-integral (NaN/inf) or overflows
-    // i64 range. Fixture 69_math_ops.lua depends on this.
-    let ip_val = crate::runtime::value::f2i_exact(ip)
-        .map(Value::Int)
-        .unwrap_or(Value::Float(ip));
-    Ok(vm.nat_return(fs, &[ip_val, Value::Float(fp)]))
+    let n = argcheck::check_number(vm, a, 0)?;
+    let ip = if n < 0.0 { n.ceil() } else { n.floor() };
+    let fp = if n == ip { 0.0 } else { n - ip };
+    Ok(vm.nat_return(fs, &[push_numint(ip), Value::Float(fp)]))
 }
 
 fn m_tointeger(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let v = match vm.nat_arg(fs, nargs, 0) {
-        Value::Int(i) => Value::Int(i),
-        Value::Float(f) => crate::runtime::value::f2i_exact(f)
-            .map(Value::Int)
-            .unwrap_or(Value::Nil),
-        Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
-            Some(Num::Int(i)) => Value::Int(i),
-            Some(Num::Float(f)) => crate::runtime::value::f2i_exact(f)
-                .map(Value::Int)
-                .unwrap_or(Value::Nil),
-            None => Value::Nil,
-        },
-        _ => Value::Nil,
+    let a = Args::new(fs, nargs);
+    // `lua_tointegerx`: numeric strings convert too, floats only when exact.
+    let n = match argcheck::to_num(vm, a.get(vm, 0)) {
+        Some(Num::Int(i)) => Some(i),
+        Some(Num::Float(f)) => f2i_exact(f),
+        None => None,
+    };
+    let v = match n {
+        Some(i) if !a.is_none(0) => Value::Int(i),
+        _ => {
+            argcheck::check_any(vm, a, 0)?;
+            Value::Nil
+        }
     };
     Ok(vm.nat_return(fs, &[v]))
 }
 
 fn m_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let v = match vm.nat_arg(fs, nargs, 0) {
+    let a = Args::new(fs, nargs);
+    let v = match argcheck::check_any(vm, a, 0)? {
         Value::Int(_) => Value::Str(vm.heap.intern(b"integer")),
         Value::Float(_) => Value::Str(vm.heap.intern(b"float")),
         _ => Value::Nil,
@@ -304,27 +378,56 @@ fn m_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 }
 
 fn m_ult(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = check_int(vm, fs, nargs, 0, "ult")?;
-    let b = check_int(vm, fs, nargs, 1, "ult")?;
-    Ok(vm.nat_return(fs, &[Value::Bool((a as u64) < (b as u64))]))
+    let a = Args::new(fs, nargs);
+    let x = argcheck::check_integer(vm, a, 0)?;
+    let y = argcheck::check_integer(vm, a, 1)?;
+    Ok(vm.nat_return(fs, &[Value::Bool((x as u64) < (y as u64))]))
 }
 
-fn minmax(vm: &mut Vm, fs: u32, nargs: u32, who: &str, want_max: bool) -> Result<u32, LuaError> {
-    if nargs == 0 {
-        return Err(raise_str(
-            vm,
-            &format!("bad argument #1 to '{who}' (value expected)"),
-        ));
+/// `math.max` / `math.min`. ≤5.2 converts every argument with
+/// `luaL_checknumber` and compares doubles; 5.3+ compares the arguments
+/// themselves with `lua_compare` (metamethods included) and returns the
+/// winner unconverted.
+fn minmax(vm: &mut Vm, fs: u32, nargs: u32, want_max: bool) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    if vm.version() <= V::Lua52 {
+        let mut best = argcheck::check_number(vm, a, 0)?;
+        for i in 1..nargs {
+            let d = argcheck::check_number(vm, a, i)?;
+            if if want_max { d > best } else { d < best } {
+                best = d;
+            }
+        }
+        return Ok(vm.nat_return(fs, &[Value::Float(best)]));
     }
-    let mut best = vm.nat_arg(fs, nargs, 0);
-    check_num(vm, fs, nargs, 0, who)?;
+    if nargs == 0 {
+        return Err(arg_error(vm, 1, "value expected"));
+    }
+    let mut best = a.get(vm, 0);
     for i in 1..nargs {
-        check_num(vm, fs, nargs, i, who)?;
-        let v = vm.nat_arg(fs, nargs, i);
-        let swap = if want_max {
-            vm.less_than(best, v, false)?
-        } else {
-            vm.less_than(v, best, false)?
+        let v = a.get(vm, i);
+        let swap = match (best, v) {
+            (Value::Int(x), Value::Int(y)) => {
+                if want_max {
+                    x < y
+                } else {
+                    y < x
+                }
+            }
+            (Value::Float(x), Value::Float(y)) => {
+                if want_max {
+                    x < y
+                } else {
+                    y < x
+                }
+            }
+            _ => {
+                if want_max {
+                    vm.less_than(best, v, false)?
+                } else {
+                    vm.less_than(v, best, false)?
+                }
+            }
         };
         if swap {
             best = v;
@@ -334,116 +437,159 @@ fn minmax(vm: &mut Vm, fs: u32, nargs: u32, who: &str, want_max: bool) -> Result
 }
 
 fn m_max(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    minmax(vm, fs, nargs, "max", true)
+    minmax(vm, fs, nargs, true)
 }
 
 fn m_min(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    minmax(vm, fs, nargs, "min", false)
+    minmax(vm, fs, nargs, false)
+}
+
+/// A float in [0, 1) from the top 53 bits (PUC 5.4 `I2d`).
+fn rand_float(vm: &mut Vm) -> f64 {
+    (vm.rng_next() >> 11) as f64 * (0.5 / (1u64 << 52) as f64)
 }
 
 fn m_random(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (lo, hi) = match nargs {
+    match vm.version() {
+        V::Lua51 => random_51(vm, fs, nargs),
+        V::Lua52 => random_52(vm, fs, nargs),
+        _ => random_53(vm, fs, nargs),
+    }
+}
+
+/// 5.1: `luaL_checkint` bounds, float result.
+fn random_51(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let r = rand_float(vm);
+    let v = match nargs {
+        0 => r,
+        1 => {
+            let u = argcheck::check_int(vm, a, 0)?;
+            if u < 1 {
+                return Err(arg_error(vm, 1, "interval is empty"));
+            }
+            (r * f64::from(u)).floor() + 1.0
+        }
+        2 => {
+            let l = argcheck::check_int(vm, a, 0)?;
+            let u = argcheck::check_int(vm, a, 1)?;
+            if l > u {
+                return Err(arg_error(vm, 2, "interval is empty"));
+            }
+            (r * f64::from(u.wrapping_sub(l).wrapping_add(1))).floor() + f64::from(l)
+        }
+        _ => return Err(raise_str(vm, "wrong number of arguments")),
+    };
+    Ok(vm.nat_return(fs, &[Value::Float(v)]))
+}
+
+/// 5.2: the bounds are plain numbers, so `random(3.5)` is valid.
+fn random_52(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let r = rand_float(vm);
+    let v = match nargs {
+        0 => r,
+        1 => {
+            let u = argcheck::check_number(vm, a, 0)?;
+            // a NaN bound fails the C comparison too
+            if u < 1.0 || u.is_nan() {
+                return Err(arg_error(vm, 1, "interval is empty"));
+            }
+            (r * u).floor() + 1.0
+        }
+        2 => {
+            let l = argcheck::check_number(vm, a, 0)?;
+            let u = argcheck::check_number(vm, a, 1)?;
+            if l > u || l.is_nan() || u.is_nan() {
+                return Err(arg_error(vm, 2, "interval is empty"));
+            }
+            (r * (u - l + 1.0)).floor() + l
+        }
+        _ => return Err(raise_str(vm, "wrong number of arguments")),
+    };
+    Ok(vm.nat_return(fs, &[Value::Float(v)]))
+}
+
+/// 5.3+: integer bounds; both emptiness checks blame argument 1.
+fn random_53(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let v53 = vm.version() == V::Lua53;
+    let (low, up) = match nargs {
         0 => {
-            // float in [0, 1): top 53 bits
-            let bits = vm.rng_next() >> 11;
-            let v = Value::Float(bits as f64 * (1.0 / (1u64 << 53) as f64));
-            return Ok(vm.nat_return(fs, &[v]));
+            let r = rand_float(vm);
+            return Ok(vm.nat_return(fs, &[Value::Float(r)]));
         }
         1 => {
-            let m = check_int(vm, fs, nargs, 0, "random")?;
-            if m == 0 {
-                // random(0): all 64 bits as an integer
+            let up = argcheck::check_integer(vm, a, 0)?;
+            // 5.4: a single 0 asks for all 64 random bits.
+            if up == 0 && !v53 {
                 let v = Value::Int(vm.rng_next() as i64);
                 return Ok(vm.nat_return(fs, &[v]));
             }
-            (1, m)
+            (1, up)
         }
         2 => (
-            check_int(vm, fs, nargs, 0, "random")?,
-            check_int(vm, fs, nargs, 1, "random")?,
+            argcheck::check_integer(vm, a, 0)?,
+            argcheck::check_integer(vm, a, 1)?,
         ),
         _ => return Err(raise_str(vm, "wrong number of arguments")),
     };
-    if lo > hi {
-        return Err(arg_error(vm, nargs.min(2), "random", "interval is empty"));
+    if low > up {
+        return Err(arg_error(vm, 1, "interval is empty"));
     }
-    // PUC 5.3 `math.random`: bounds the interval by `up <= MAXINTEGER + low`
-    // (lmathlib.c). 5.4 rebuilt random on a 64-bit RNG and dropped the
-    // check. math.lua 5.3 :800-:803 still expect huge non-overflowing
-    // ranges (`0..maxint`, `minint..-1`) to succeed, so encoding the exact
-    // PUC condition keeps both the success and the :819+ failure cases.
-    if vm.version() <= crate::version::LuaVersion::Lua53 && lo < 0 && hi > i64::MAX.wrapping_add(lo)
-    {
-        return Err(arg_error(vm, nargs.min(2), "random", "interval too large"));
-    }
-    // PUC project(): uniform in [0, range] by rejection
-    let range = (hi as u64).wrapping_sub(lo as u64);
-    let v = if range == u64::MAX {
-        vm.rng_next()
-    } else {
-        let lim = range.wrapping_add(1);
-        // rejection threshold: largest multiple of lim that fits
-        let t = u64::MAX - u64::MAX % lim;
-        loop {
-            let r = vm.rng_next();
-            if r < t {
-                break r % lim;
-            }
+    if v53 {
+        // 5.3 scales a float in [0, 1), so the interval must fit an integer.
+        if low < 0 && up > i64::MAX.wrapping_add(low) {
+            return Err(arg_error(vm, 1, "interval too large"));
         }
-    };
-    let out = Value::Int((lo as u64).wrapping_add(v) as i64);
-    Ok(vm.nat_return(fs, &[out]))
+        let r = rand_float(vm) * ((up - low) as f64 + 1.0);
+        return Ok(vm.nat_return(fs, &[Value::Int((r as i64).wrapping_add(low))]));
+    }
+    let n = (up as u64).wrapping_sub(low as u64);
+    let p = project(vm, n);
+    Ok(vm.nat_return(fs, &[Value::Int(p.wrapping_add(low as u64) as i64)]))
+}
+
+/// PUC 5.4 `project`: mask the random value down to the smallest Mersenne
+/// number not below `n` and retry until it lands in [0, n].
+fn project(vm: &mut Vm, n: u64) -> u64 {
+    let mut ran = vm.rng_next();
+    let mut lim = n;
+    let mut sh = 1;
+    while lim & lim.wrapping_add(1) != 0 {
+        lim |= lim >> sh;
+        sh *= 2;
+    }
+    loop {
+        ran &= lim;
+        if ran <= n {
+            return ran;
+        }
+        ran = vm.rng_next();
+    }
 }
 
 fn m_randomseed(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (s0, s1) = if nargs == 0 {
-        vm.rng_auto_seed()
-    } else {
-        let x = match check_num(vm, fs, nargs, 0, "randomseed")? {
-            Num::Int(i) => i,
-            Num::Float(f) => f.to_bits() as i64,
-        };
-        let y = if nargs >= 2 {
-            check_int(vm, fs, nargs, 1, "randomseed")?
-        } else {
-            0
-        };
-        (x, y)
+    let a = Args::new(fs, nargs);
+    // ≤5.3 seeds C `srand` and returns nothing. luna has one generator for
+    // every dialect; only the argument rules and the result count differ.
+    let seed: u64 = match vm.version() {
+        V::Lua51 => argcheck::check_int(vm, a, 0)? as u64,
+        V::Lua52 => argcheck::check_unsigned52(vm, a, 0)?.into(),
+        V::Lua53 => argcheck::check_number(vm, a, 0)? as i64 as u64,
+        _ => {
+            let (n1, n2) = if a.is_none(0) {
+                vm.rng_auto_seed()
+            } else {
+                (
+                    argcheck::check_integer(vm, a, 0)?,
+                    argcheck::opt_integer(vm, a, 1, 0)?,
+                )
+            };
+            vm.rng_seed(n1 as u64, n2 as u64);
+            return Ok(vm.nat_return(fs, &[Value::Int(n1), Value::Int(n2)]));
+        }
     };
-    vm.rng_seed(s0 as u64, s1 as u64);
-    Ok(vm.nat_return(fs, &[Value::Int(s0), Value::Int(s1)]))
-}
-
-// ---- pre-5.3 math entries (kept registered for ≤5.2 — see open_math) ----
-
-fn m_atan2(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let y = check_f64(vm, fs, nargs, 0, "atan2")?;
-    let x = check_f64(vm, fs, nargs, 1, "atan2")?;
-    Ok(vm.nat_return(fs, &[Value::Float(y.atan2(x))]))
-}
-
-fn m_cosh(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "cosh")?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.cosh())]))
-}
-
-fn m_sinh(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "sinh")?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.sinh())]))
-}
-
-fn m_tanh(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "tanh")?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.tanh())]))
-}
-
-fn m_log10(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "log10")?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.log10())]))
-}
-
-fn m_pow(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let x = check_f64(vm, fs, nargs, 0, "pow")?;
-    let y = check_f64(vm, fs, nargs, 1, "pow")?;
-    Ok(vm.nat_return(fs, &[Value::Float(x.powf(y))]))
+    vm.rng_seed(seed, 0);
+    Ok(0)
 }

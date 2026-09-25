@@ -10,6 +10,9 @@
 
 use std::collections::HashMap;
 
+mod ctconst;
+use ctconst::{CtConst, ct_value};
+
 use crate::frontend::ast::{
     self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, Stat, StatId, TableField, UnOp,
     block_uses_vararg,
@@ -30,9 +33,24 @@ pub fn compile_chunk(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
+    compile_parsed(ast, &[], version, source_name, heap)
+}
+
+/// [`compile_chunk`] with the `end` lines the parser recorded for loops
+/// ([`crate::frontend::parser::Parsed::end_lines`]); a [`Chunk`] carries no
+/// such lines, so code PUC emits after a loop's `end` is placed on that
+/// line only when they are given.
+pub(crate) fn compile_parsed(
+    ast: &Chunk,
+    end_lines: &[u32],
+    version: LuaVersion,
+    source_name: &[u8],
+    heap: &mut Heap,
+) -> Result<Gc<Proto>, SyntaxError> {
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
+        end_lines,
         heap,
         version,
         source,
@@ -78,6 +96,7 @@ pub fn compile_chunk_with_last_target(
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
+        end_lines: &[],
         heap,
         version,
         source,
@@ -107,7 +126,16 @@ pub fn compile_chunk_with_last_target(
     ))
 }
 
-const MAX_REGS: u32 = 254;
+/// PUC `luaK_checkstack`'s register cap, as the most registers a function
+/// may use: 5.1/5.2 fail at `newstack >= 250` (`MAXSTACK`/`MAXREGS` 250),
+/// 5.3/5.4 at `newstack >= 255`, 5.5 at `newstack > 255`.
+fn max_regs(version: LuaVersion) -> u32 {
+    match version {
+        LuaVersion::Lua51 | LuaVersion::Lua52 => 249,
+        LuaVersion::Lua53 | LuaVersion::Lua54 => 254,
+        _ => 255,
+    }
+}
 /// PUC `LUAI_MAXUPVAL`: the per-function upvalue cap. 5.1 set this to 60;
 /// 5.2+ raised it to 255 because the bytecode encoding gained the room.
 /// Errors raised at this boundary use the standard "too many upvalues
@@ -158,6 +186,9 @@ struct LocalVar {
     vararg_virtual: bool,
     /// pc at which the variable became visible (for debug LocVar records)
     start_pc: u32,
+    /// a compile-time constant (5.4+): no register (`reg` is meaningless)
+    /// and no debug entry; uses take the value
+    konst: Option<CtConst>,
 }
 
 /// One entry in the function's ordered active-variable sequence used for
@@ -169,6 +200,9 @@ struct LocalVar {
 struct AVar {
     name: Option<Box<str>>,
     reg: Option<u32>,
+    /// a `global` declaration (otherwise a local, which a compile-time
+    /// constant is too, without a register)
+    global: bool,
 }
 
 struct BlockCx {
@@ -178,6 +212,14 @@ struct BlockCx {
     reg_floor: u32,
     is_loop: bool,
     breaks: Vec<usize>,
+    /// 5.4: per entry of `breaks`, the number of active locals at the
+    /// `break`, to tell which blocks with upvalues it leaves
+    break_levels: Vec<usize>,
+    /// 5.4: a `break` left the scope of a local needing a CLOSE (PUC's
+    /// goto `close` flag), so the loop's "break" label closes
+    break_close: bool,
+    /// the pc where the block starts
+    start_pc: usize,
     /// visible labels defined in this block
     labels: Vec<LabelDef>,
     /// forward gotos not yet matched to a label
@@ -193,6 +235,13 @@ struct BlockCx {
     /// tail calls so the function returns to run __close. Tracked separately
     /// from `has_tbc` so it doesn't perturb CLOSE-instruction emission.
     tbc_scope: bool,
+    /// 5.4: the loop body's locals (from this index of `locals`) went out
+    /// of scope at this pc, before the loop's per-iteration CLOSE; PUC keeps
+    /// the body in a block of its own and removes its variables first
+    body_end: Option<(usize, u32)>,
+    /// the line of the loop's closing `end`, when known: the CLOSE after a
+    /// 5.4 `break` label is emitted there
+    end_line: Option<u32>,
 }
 
 struct LabelDef {
@@ -213,6 +262,8 @@ struct GotoRef {
 
 enum VarKind {
     Local(u32),
+    /// a compile-time constant local (5.4+)
+    Const(CtConst),
     Upval(u32),
     /// global access; read_only from 5.5 declarations
     Global {
@@ -343,6 +394,7 @@ impl Level {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
+            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         }
     }
@@ -350,6 +402,8 @@ impl Level {
 
 struct Compiler<'a> {
     ast: &'a Chunk,
+    /// see [`compile_parsed`]
+    end_lines: &'a [u32],
     heap: &'a mut Heap,
     version: LuaVersion,
     source: Gc<LuaStr>,
@@ -371,6 +425,14 @@ struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     // ---- infrastructure ----
+
+    /// The `end` line the parser recorded for statement `sid`.
+    fn stat_end_line(&self, sid: StatId) -> Option<u32> {
+        self.end_lines
+            .get(sid.0 as usize)
+            .copied()
+            .filter(|&l| l != 0)
+    }
 
     fn l(&mut self) -> &mut Level {
         self.levels.last_mut().expect("no level")
@@ -531,19 +593,50 @@ impl<'a> Compiler<'a> {
         } else {
             format!("function at line {line_defined}")
         };
-        self.err(
-            self.last_line,
-            format!("too many {what} (limit is {limit}) in {where_}"),
-        )
+        let msg = if self.version <= LuaVersion::Lua51 {
+            format!("{where_} has more than {limit} {what}")
+        } else {
+            format!("too many {what} (limit is {limit}) in {where_}")
+        };
+        self.err(self.last_line, msg)
+    }
+
+    /// Upvalues a level already holds that count against the limit. A 5.1
+    /// function's slot 0 is the `_ENV` cell luna adds for `setfenv`; PUC 5.1
+    /// keeps a function's environment outside its upvalues, so that slot is
+    /// not one of the 60.
+    fn counted_upvals(&self, li: usize) -> u32 {
+        let n = self.levels[li].upvals.len() as u32;
+        let hidden_env = self.version == LuaVersion::Lua51
+            && self.levels[li]
+                .upvals
+                .first()
+                .is_some_and(|u| &*u.name == "_ENV");
+        n - u32::from(hidden_env)
+    }
+
+    /// PUC `luaK_checkstack` on overflow: 5.1/5.2 say the expression is too
+    /// complex, 5.3/5.4 that it needs too many registers, 5.5 runs it through
+    /// `errorlimit`. PUC appends the token being read; the AST keeps no
+    /// tokens, so luna cannot.
+    fn regs_error(&self, line: u32) -> SyntaxError {
+        match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 => {
+                self.err(line, "function or expression too complex")
+            }
+            LuaVersion::Lua55 => self.limit_err("registers", 255),
+            _ => self.err(line, "function or expression needs too many registers"),
+        }
     }
 
     fn reserve(&mut self, n: u32) -> Result<u32, SyntaxError> {
         let line = self.last_line;
+        let cap = max_regs(self.version);
         let l = self.l();
         let base = l.freereg;
         l.freereg += n;
-        if l.freereg > MAX_REGS {
-            return Err(self.err(line, "function or expression needs too many registers"));
+        if l.freereg > cap {
+            return Err(self.regs_error(line));
         }
         if l.freereg > l.max_stack {
             l.max_stack = l.freereg;
@@ -611,51 +704,95 @@ impl<'a> Compiler<'a> {
         let floor = self.lr().freereg;
         let first = self.lr().locals.len();
         let first_avar = self.lr().avars.len();
+        let start_pc = self.lr().code.len();
         self.l().blocks.push(BlockCx {
             first_local: first,
             first_avar,
             reg_floor: floor,
             is_loop,
             breaks: Vec::new(),
+            break_levels: Vec::new(),
+            break_close: false,
+            start_pc,
             labels: Vec::new(),
             gotos: Vec::new(),
             gdecls: Vec::new(),
             collective: None,
             has_tbc: false,
             tbc_scope: false,
+            body_end: None,
+            end_line: None,
         });
     }
 
     fn leave_block(&mut self) -> Result<(), SyntaxError> {
         let b = self.l().blocks.pop().expect("block underflow");
         let captured = self.lr().locals[b.first_local..].iter().any(|l| l.captured);
-        // The block's CLOSE runs *while* these locals are still in scope: a
-        // `__close` handler can call `debug.getlocal` on the frame and must
-        // see them (5.5.1 locals.lua :1198 pins this for a `repeat` body,
-        // where the exit path's close is the one emitted here). So emit it
-        // before fixing `end_pc` — computing `end_pc` first would leave the
-        // CLOSE at `pc >= end_pc`, and `getlocalname`'s `pc < end_pc` test
-        // would report "(temporary)".
-        if captured || b.has_tbc {
+        // Where the block's CLOSE falls against its locals' `end_pc` is
+        // visible to a `__close` handler reading the frame with
+        // `debug.getlocal` (`getlocalname` tests `pc < end_pc`). 5.4's
+        // `leaveblock` removes the variables first, so the handler finds
+        // "(temporary)"; 5.5 closes while they are still in scope (5.5.1
+        // locals.lua :1198 pins this for a `repeat` body).
+        let v54 = self.version == LuaVersion::Lua54;
+        let before_close = self.lr().code.len() as u32;
+        // 5.4 `break` is a goto to a label placed here, where the loop's
+        // variables are gone; a CLOSE follows the label when some break
+        // left active locals of a block with upvalues or to-be-closed
+        // variables (PUC `movegotosout` sets the goto's `close`)
+        let mut break_close = b.break_close;
+        if v54 && (captured || b.has_tbc) {
+            if b.is_loop {
+                break_close |= b.break_levels.iter().any(|&n| n > b.first_local);
+            } else if let Some(lp) = self.l().blocks.iter_mut().rev().find(|x| x.is_loop) {
+                let crossed = lp
+                    .breaks
+                    .iter()
+                    .zip(&lp.break_levels)
+                    .any(|(&pc, &n)| pc >= b.start_pc && n > b.first_local);
+                lp.break_close |= crossed;
+            }
+        }
+        if break_close && let Some(line) = b.end_line {
+            self.last_line = line;
+        }
+        if v54 {
+            for &pc in &b.breaks {
+                self.patch_to_here(pc)?;
+            }
+        }
+        if captured || b.has_tbc || break_close {
             self.emit(Inst::iabc(Op::Close, b.reg_floor, 0, 0, false));
         }
         // record debug LocVar entries for the locals leaving scope here
-        let end_pc = self.lr().code.len() as u32;
-        let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[b.first_local..]
+        let end_pc = if v54 {
+            before_close
+        } else {
+            self.lr().code.len() as u32
+        };
+        let first_local = b.first_local;
+        let leaving: Vec<crate::runtime::LocVar> = self.lr().locals[first_local..]
             .iter()
-            .map(|l| crate::runtime::LocVar {
+            .enumerate()
+            .filter(|(_, l)| l.konst.is_none())
+            .map(|(i, l)| crate::runtime::LocVar {
                 name: l.name.clone(),
                 reg: l.reg,
                 start_pc: l.start_pc,
-                end_pc,
+                end_pc: match b.body_end {
+                    Some((first, pc)) if first_local + i >= first => pc,
+                    _ => end_pc,
+                },
             })
             .collect();
         self.l().locvars.extend(leaving);
         self.l().locals.truncate(b.first_local);
         self.l().avars.truncate(b.first_avar);
         self.set_freereg(b.reg_floor);
-        for pc in b.breaks {
-            self.patch_to_here(pc)?;
+        if !v54 {
+            for pc in b.breaks {
+                self.patch_to_here(pc)?;
+            }
         }
         // propagate unmatched gotos to the enclosing block (the label may
         // appear after this block); a goto leaving a block with captured or
@@ -970,12 +1107,70 @@ impl<'a> Compiler<'a> {
             captured: false,
             vararg_virtual: false,
             start_pc,
+            konst: None,
         });
         self.l().avars.push(AVar {
             name: Some(name.into()),
             reg: Some(reg),
+            global: false,
         });
         Ok(())
+    }
+
+    /// Declare a compile-time constant local (PUC `RDKCTC`).
+    fn declare_ct_const(&mut self, name: &str, value: CtConst) {
+        let start_pc = self.lr().code.len() as u32;
+        self.l().locals.push(LocalVar {
+            name: name.into(),
+            reg: u32::MAX,
+            read_only: true,
+            captured: false,
+            vararg_virtual: false,
+            start_pc,
+            konst: Some(value),
+        });
+        self.l().avars.push(AVar {
+            name: Some(name.into()),
+            reg: None,
+            global: false,
+        });
+    }
+
+    /// The compile-time constant `name` refers to here, if it does: the
+    /// nearest binding of the name, walking out through the functions, is
+    /// a constant local. No upvalue is created on the way.
+    fn ct_const_named(&self, name: &str) -> Option<CtConst> {
+        for lvl in self.levels.iter().rev() {
+            if lvl
+                .avars
+                .iter()
+                .rev()
+                .find(|a| a.name.as_deref() == Some(name))
+                .is_some_and(|a| a.global)
+            {
+                return None;
+            }
+            if let Some(l) = lvl.locals.iter().rev().find(|l| &*l.name == name) {
+                return l.konst.clone();
+            }
+            if lvl.upvals.iter().any(|u| &*u.name == name) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Materialise a compile-time constant as an expression of the
+    /// function being compiled.
+    fn ct_exp(&mut self, v: CtConst) -> Exp {
+        match v {
+            CtConst::Nil => Exp::Nil,
+            CtConst::Bool(true) => Exp::True,
+            CtConst::Bool(false) => Exp::False,
+            CtConst::Int(i) => Exp::Int(i),
+            CtConst::Float(f) => Exp::Float(f),
+            CtConst::Str(s) => Exp::Const(self.str_const(&s)),
+        }
     }
 
     /// Append a `global` declaration marker to the active-variable sequence so
@@ -985,6 +1180,7 @@ impl<'a> Compiler<'a> {
         self.l().avars.push(AVar {
             name: name.map(|n| n.into()),
             reg: None,
+            global: true,
         });
     }
 
@@ -1010,7 +1206,7 @@ impl<'a> Compiler<'a> {
             .iter()
             .rev()
             .find(|a| a.name.as_deref() == Some(name))
-            && av.reg.is_none()
+            && av.global
         {
             return Ok(VarKind::Global { read_only: false });
         }
@@ -1019,7 +1215,11 @@ impl<'a> Compiler<'a> {
             .iter()
             .rposition(|l| &*l.name == name)
         {
-            return Ok(VarKind::Local(self.levels[li].locals[idx].reg));
+            let local = &self.levels[li].locals[idx];
+            return Ok(match &local.konst {
+                Some(v) => VarKind::Const(v.clone()),
+                None => VarKind::Local(local.reg),
+            });
         }
         if li < self.levels.len() - 1 || li == 0 {
             // upvalue cache applies at every level; main level has _ENV
@@ -1034,6 +1234,8 @@ impl<'a> Compiler<'a> {
         }
         match self.resolve_at(li - 1, name)? {
             VarKind::Global { .. } => Ok(VarKind::Global { read_only: false }),
+            // a constant needs no upvalue
+            VarKind::Const(v) => Ok(VarKind::Const(v)),
             VarKind::Local(reg) => {
                 let mut read_only = false;
                 if let Some(idx) = self.levels[li - 1]
@@ -1045,7 +1247,7 @@ impl<'a> Compiler<'a> {
                     read_only = self.levels[li - 1].locals[idx].read_only;
                 }
                 let ui = self.levels[li].upvals.len() as u32;
-                if ui >= max_upvals(self.version) {
+                if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
                 self.levels[li].upvals.push(UpvalDesc {
@@ -1059,7 +1261,7 @@ impl<'a> Compiler<'a> {
             VarKind::Upval(pidx) => {
                 let read_only = self.levels[li - 1].upvals[pidx as usize].read_only;
                 let ui = self.levels[li].upvals.len() as u32;
-                if ui >= max_upvals(self.version) {
+                if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
                 }
                 self.levels[li].upvals.push(UpvalDesc {
@@ -1135,6 +1337,7 @@ impl<'a> Compiler<'a> {
     fn name_expr(&mut self, name: &str) -> Result<Exp, SyntaxError> {
         match self.resolve_name(name)? {
             VarKind::Local(reg) => Ok(Exp::Reg(reg)),
+            VarKind::Const(v) => Ok(self.ct_exp(v)),
             VarKind::Upval(u) => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetUpval,
                 0,
@@ -1187,7 +1390,7 @@ impl<'a> Compiler<'a> {
             ));
         }
         let c = self.str_const(name.as_bytes());
-        match self.resolve_name("_ENV")? {
+        match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => Ok(Exp::Reloc(self.emit(Inst::iabc(
                 Op::GetTabUp,
                 0,
@@ -1212,7 +1415,9 @@ impl<'a> Compiler<'a> {
                     VarKind::Local(r) => {
                         self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
-                    VarKind::Global { .. } => unreachable!("_ENV always resolves"),
+                    VarKind::Global { .. } | VarKind::Const(_) => {
+                        unreachable!("resolve_env gives a register or an upvalue")
+                    }
                 }
                 self.load_const(er + 1, c);
                 self.set_freereg(er);
@@ -1224,6 +1429,18 @@ impl<'a> Compiler<'a> {
                     false,
                 ))))
             }
+        }
+    }
+
+    /// `_ENV` as the table a global access indexes. A compile-time constant
+    /// `_ENV` is loaded into a register first (PUC `luaK_exp2anyregup`).
+    fn resolve_env(&mut self) -> Result<VarKind, SyntaxError> {
+        match self.resolve_name("_ENV")? {
+            VarKind::Const(v) => {
+                let e = self.ct_exp(v);
+                Ok(VarKind::Local(self.exp_to_anyreg(e)?))
+            }
+            k => Ok(k),
         }
     }
 
@@ -1310,15 +1527,12 @@ impl<'a> Compiler<'a> {
     ) -> Result<(u32, bool), SyntaxError> {
         for (i, &a) in args.iter().enumerate() {
             let dst = argbase + i as u32;
-            if dst >= MAX_REGS {
+            if dst >= max_regs(self.version) {
                 // PUC `checkstack` raises "function or expression needs too
                 // many registers" once the per-function register cap is hit;
                 // a too-wide call site is just one path into it (errors.lua
                 // :740 checkmessage "too many registers").
-                return Err(self.err(
-                    self.last_line,
-                    "function or expression needs too many registers",
-                ));
+                return Err(self.regs_error(self.last_line));
             }
             self.set_freereg(dst);
             let last = i == args.len() - 1;
@@ -1804,7 +2018,7 @@ impl<'a> Compiler<'a> {
         // line, matching PUC).
         let saved_force = self.force_line.replace(line);
         let le = self.expr(lhs)?;
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs) {
+        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version) {
             self.force_line = saved_force;
             return Ok(folded);
         }
@@ -1816,6 +2030,17 @@ impl<'a> Compiler<'a> {
         if l >= saved {
             self.set_freereg(l + 1);
         }
+        // 5.4+ compiles `x - K` for a small integer constant K as `x + -K`
+        // (`ADDI`). That is the same number except for K = 0, where
+        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`. K is whatever
+        // PUC's parser folds to a constant: `(0)`, `1 - 1`, `5 % 5`...
+        let sub_zero = op == BinOp::Sub && self.version >= LuaVersion::Lua54 && {
+            let ast = self.ast;
+            matches!(
+                ct_value(ast, rhs, &mut |name| self.ct_const_named(name)),
+                Some(CtConst::Int(0))
+            )
+        };
         let re = self.expr(rhs)?;
         let r = self.exp_to_anyreg(re)?;
         self.set_freereg(saved);
@@ -1828,6 +2053,7 @@ impl<'a> Compiler<'a> {
         let r_op = (|| -> Result<Exp, SyntaxError> {
             Ok(match op {
                 BinOp::Add => self.arith(Op::Add, l, r),
+                BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))),
                 BinOp::Sub => self.arith(Op::Sub, l, r),
                 BinOp::Mul => self.arith(Op::Mul, l, r),
                 BinOp::Div => self.arith(Op::Div, l, r),
@@ -2040,7 +2266,7 @@ impl<'a> Compiler<'a> {
             .iter()
             .rev()
             .find(|a| a.name.as_deref() == Some(name))
-            && av.reg.is_none()
+            && av.global
         {
             return false;
         }
@@ -2127,8 +2353,8 @@ impl<'a> Compiler<'a> {
                 TableField::Item(v) => {
                     item_idx += 1;
                     let dst = treg + 1 + pending;
-                    if dst >= MAX_REGS {
-                        return Err(self.err(line, "constructor too long"));
+                    if dst >= max_regs(self.version) {
+                        return Err(self.regs_error(line));
                     }
                     self.set_freereg(dst);
                     let e = self.expr(*v)?;
@@ -2278,7 +2504,7 @@ impl<'a> Compiler<'a> {
             }
             Stat::While { cond, body } => {
                 let (cond, body) = (*cond, body.clone());
-                self.while_stat(cond, &body)
+                self.while_stat(cond, &body, self.stat_end_line(sid))
             }
             Stat::Repeat { body, cond } => {
                 let (body, cond) = (body.clone(), *cond);
@@ -2294,7 +2520,8 @@ impl<'a> Compiler<'a> {
                 let var = var.clone();
                 let (start, limit, step) = (*start, *limit, *step);
                 let body = body.clone();
-                self.numeric_for(&var.text, var.line, start, limit, step, &body)
+                let end = self.stat_end_line(sid);
+                self.numeric_for(&var.text, var.line, (start, limit, step), &body, end)
             }
             Stat::GenericFor {
                 vars,
@@ -2306,7 +2533,7 @@ impl<'a> Compiler<'a> {
                 let exprs: Vec<ExprId> = exprs.clone();
                 let body = body.clone();
                 let expr_line = *expr_line;
-                self.generic_for(&vars, &exprs, &body, expr_line)
+                self.generic_for(&vars, &exprs, &body, expr_line, self.stat_end_line(sid))
             }
             Stat::Break { line } => {
                 self.last_line = *line;
@@ -2320,16 +2547,22 @@ impl<'a> Compiler<'a> {
                 else {
                     return Err(self.err(*line, "break outside a loop"));
                 };
-                self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
+                // 5.4 jumps to the loop's end and closes there (PUC's
+                // "break" label); the others close on the spot
+                if self.version != LuaVersion::Lua54 {
+                    self.emit(Inst::iabc(Op::Close, loop_floor, 0, 0, false));
+                }
                 let jmp = self.emit_jump();
-                self.l()
+                let level = self.lr().locals.len();
+                let lp = self
+                    .l()
                     .blocks
                     .iter_mut()
                     .rev()
                     .find(|b| b.is_loop)
-                    .expect("loop block")
-                    .breaks
-                    .push(jmp);
+                    .expect("loop block");
+                lp.breaks.push(jmp);
+                lp.break_levels.push(level);
                 Ok(())
             }
             Stat::Return { exprs, line } => {
@@ -2541,7 +2774,26 @@ impl<'a> Compiler<'a> {
         if let Some(first) = names.first() {
             self.last_line = first.name.line;
         }
-        let base = self.explist_adjust(exprs, n)?;
+        // PUC `localstat`: with as many values as names, a last name that
+        // is <const> and whose value is a compile-time constant is not a
+        // variable (5.4+)
+        let last_const =
+            names.last().and_then(|an| an.attrib.or(collective)) == Some(ast::Attrib::Const);
+        let ct = if self.version >= LuaVersion::Lua54 && last_const && exprs.len() == n as usize {
+            let ast = self.ast;
+            ct_value(ast, exprs[exprs.len() - 1], &mut |name| {
+                self.ct_const_named(name)
+            })
+        } else {
+            None
+        };
+        let all_names = names;
+        let (names, vals) = match ct {
+            Some(_) => (&names[..names.len() - 1], &exprs[..exprs.len() - 1]),
+            None => (names, exprs),
+        };
+        let n = names.len() as u32;
+        let base = self.explist_adjust(vals, n)?;
         let mut tbc: Option<u32> = None;
         for (i, an) in names.iter().enumerate() {
             let reg = base + i as u32;
@@ -2557,6 +2809,9 @@ impl<'a> Compiler<'a> {
                 tbc = Some(reg);
             }
             self.declare_local(&an.name.text, reg, read_only)?;
+        }
+        if let (Some(v), Some(last)) = (ct, all_names.last()) {
+            self.declare_ct_const(&last.name.text, v);
         }
         if let Some(reg) = tbc {
             self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false));
@@ -2577,11 +2832,8 @@ impl<'a> Compiler<'a> {
         // to deliver up to `want` results, bypassing the per-expr `reserve`'s
         // bounds check. errors.lua :721's `local a,a,…(500),a = f()` would
         // otherwise slip past the register cap — guard the target window here.
-        if base.saturating_add(want) > MAX_REGS {
-            return Err(self.err(
-                self.last_line,
-                "function or expression needs too many registers",
-            ));
+        if base.saturating_add(want) > max_regs(self.version) {
+            return Err(self.regs_error(self.last_line));
         }
         if exprs.is_empty() {
             if want > 0 {
@@ -2604,8 +2856,8 @@ impl<'a> Compiler<'a> {
         let n = exprs.len() as u32;
         for (i, &eid) in exprs.iter().enumerate() {
             let dst = base + i as u32;
-            if dst >= MAX_REGS {
-                return Err(self.err(self.last_line, "too many values in expression list"));
+            if dst >= max_regs(self.version) {
+                return Err(self.regs_error(self.last_line));
             }
             self.set_freereg(dst);
             let e = self.expr(eid)?;
@@ -2728,7 +2980,10 @@ impl<'a> Compiler<'a> {
             } else {
                 None
             };
-        for (i, plan) in plans.into_iter().enumerate() {
+        // PUC `restassign` stores on the way back out of its recursion: the
+        // last target first. The order is visible through `__newindex` and
+        // when a target repeats (`a, a = 1, 2` leaves 1).
+        for (i, plan) in plans.into_iter().enumerate().rev() {
             let vreg = alt_vreg.unwrap_or(base + i as u32);
             match plan {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
@@ -2776,6 +3031,10 @@ impl<'a> Compiler<'a> {
         // `line` param verbatim so a read-only-assign diagnostic still
         // points at the name.
         match self.resolve_name(text)? {
+            VarKind::Const(_) => Err(self.err(
+                line,
+                format!("attempt to assign to const variable '{text}'"),
+            )),
             VarKind::Local(reg) => {
                 if let Some(name) = self.local_is_read_only(reg) {
                     let name = name.to_string();
@@ -2832,7 +3091,7 @@ impl<'a> Compiler<'a> {
             ));
         }
         let c = self.str_const(text.as_bytes());
-        match self.resolve_name("_ENV")? {
+        match self.resolve_env()? {
             VarKind::Upval(u) if c <= 0xFF => {
                 self.emit(Inst::iabc(Op::SetTabUp, u, c, vreg, true));
                 Ok(())
@@ -2851,7 +3110,9 @@ impl<'a> Compiler<'a> {
                     VarKind::Local(r) => {
                         self.emit(Inst::iabc(Op::Move, er, r, 0, false));
                     }
-                    VarKind::Global { .. } => unreachable!("_ENV always resolves"),
+                    VarKind::Global { .. } | VarKind::Const(_) => {
+                        unreachable!("resolve_env gives a register or an upvalue")
+                    }
                 }
                 self.load_const(er + 1, c);
                 self.emit(Inst::iabc(Op::SetTable, er, er + 1, vreg, false));
@@ -2942,16 +3203,33 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn while_stat(&mut self, cond: ExprId, body: &Block) -> Result<(), SyntaxError> {
+    /// A loop's per-iteration CLOSE of its body (from local `first` on). 5.4
+    /// ends the body's scope before it (see [`Compiler::leave_block`]).
+    fn close_body(&mut self, first: usize, floor: u32) {
+        if self.version == LuaVersion::Lua54 {
+            let here = self.here() as u32;
+            self.l().blocks.last_mut().expect("loop block").body_end = Some((first, here));
+        }
+        self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+    }
+
+    fn while_stat(
+        &mut self,
+        cond: ExprId,
+        body: &Block,
+        end_line: Option<u32>,
+    ) -> Result<(), SyntaxError> {
         let top = self.here();
         let exit = self.cond_jump_false(cond)?;
         self.enter_block(true);
         self.stat_block(body)?;
         if self.block_captured() {
             let floor = self.block_floor();
-            self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+            let first = self.l().blocks.last().expect("while block").first_local;
+            self.close_body(first, floor);
         }
         self.jump_back(top)?;
+        self.l().blocks.last_mut().expect("while block").end_line = end_line;
         self.leave_block()?;
         self.patch_to_here(exit)?;
         Ok(())
@@ -2986,7 +3264,8 @@ impl<'a> Compiler<'a> {
             let cont = self.emit_jump(); // cond FALSE -> close & loop
             let exit = self.emit_jump(); // cond TRUE  -> normal exit
             self.patch_to_here(cont)?;
-            self.emit(Inst::iabc(Op::Close, floor, 0, 0, false));
+            let first = self.l().blocks.last().expect("repeat block").first_local;
+            self.close_body(first, floor);
             self.jump_back(top)?;
             self.patch_to_here(exit)?;
         } else {
@@ -3000,10 +3279,9 @@ impl<'a> Compiler<'a> {
         &mut self,
         var: &str,
         line: u32,
-        start: ExprId,
-        limit: ExprId,
-        step: Option<ExprId>,
+        (start, limit, step): (ExprId, ExprId, Option<ExprId>),
         body: &Block,
+        end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         self.last_line = line;
         let base = self.lr().freereg;
@@ -3030,15 +3308,17 @@ impl<'a> Compiler<'a> {
             }
         }
         self.set_freereg(base + 3);
+        let control_start = self.here() as u32;
         self.enter_block(true);
         let var_reg = self.reserve(1)?;
         self.declare_local(var, var_reg, self.version >= LuaVersion::Lua55)?;
+        let body_first = self.lr().locals.len();
         self.last_line = line;
         let prep = self.emit(Inst::iabx(Op::ForPrep, base, 0));
         let body_top = self.here();
         self.stat_block(body)?;
         if self.block_captured() {
-            self.emit(Inst::iabc(Op::Close, var_reg, 0, 0, false));
+            self.close_body(body_first, var_reg);
         }
         let loop_pc = self.here();
         let back = loop_pc - body_top + 1;
@@ -3059,9 +3339,40 @@ impl<'a> Compiler<'a> {
         self.mark_target(body_top);
         let post_loop = self.here();
         self.mark_target(post_loop);
+        self.l().blocks.last_mut().expect("for block").end_line = end_line;
         self.leave_block()?;
+        // PUC fornum's internal locals, which debug.getlocal lists ahead
+        // of the loop variable: 5.1-5.3 name them after their roles, 5.4
+        // has three "(for state)", 5.5 two.
+        let hidden: &[(&str, u32)] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                &[("(for index)", 0), ("(for limit)", 1), ("(for step)", 2)]
+            }
+            LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1)],
+            _ => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 2)],
+        };
+        self.push_hidden_locals(base, hidden, control_start, post_loop as u32);
         self.set_freereg(base);
         Ok(())
+    }
+
+    /// Debug entries for a for loop's internal variables, `(name, offset
+    /// from base)`, live over `start_pc..end_pc`.
+    fn push_hidden_locals(
+        &mut self,
+        base: u32,
+        hidden: &[(&str, u32)],
+        start_pc: u32,
+        end_pc: u32,
+    ) {
+        for &(name, off) in hidden {
+            self.l().locvars.push(crate::runtime::LocVar {
+                name: name.into(),
+                reg: base + off,
+                start_pc,
+                end_pc,
+            });
+        }
     }
 
     fn generic_for(
@@ -3070,11 +3381,24 @@ impl<'a> Compiler<'a> {
         exprs: &[ExprId],
         body: &Block,
         expr_line: u32,
+        end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         let line = vars[0].line;
         self.last_line = line;
-        // control slots: iterator, state, control, closing (<close>: slice 5)
-        let base = self.explist_adjust(exprs, 4)?;
+        // control slots: iterator, state, control, closing (<close>: slice 5).
+        // Before 5.4 the list is cut to three values (PUC `forlist`'s
+        // `adjust_assign(ls, 3, ...)`) and the fourth slot stays nil, so a
+        // fourth value is evaluated and dropped rather than closed.
+        let tbc = self.version >= LuaVersion::Lua54;
+        let base = if tbc {
+            self.explist_adjust(exprs, 4)?
+        } else {
+            let base = self.explist_adjust(exprs, 3)?;
+            self.set_freereg(base + 3);
+            self.reserve(1)?;
+            self.emit(Inst::iabc(Op::LoadNil, base + 3, 0, 0, false));
+            base
+        };
         self.set_freereg(base + 4);
         let control_start = self.here() as u32;
         self.enter_block(true);
@@ -3082,7 +3406,7 @@ impl<'a> Compiler<'a> {
         // a `return f()` in the body must not be a tail call, *and* a `goto`
         // leaving this block must close the iterator's closing value via a
         // trampoline (locals.lua:1219 nested-for goto regression).
-        {
+        if tbc {
             let b = self.l().blocks.last_mut().expect("no block");
             b.tbc_scope = true;
             b.has_tbc = true;
@@ -3098,11 +3422,12 @@ impl<'a> Compiler<'a> {
                 i == 0 && self.version >= LuaVersion::Lua55,
             )?;
         }
+        let body_first = self.lr().locals.len();
         let prep = self.emit(Inst::iabx(Op::TForPrep, base, 0));
         let body_top = self.here();
         self.stat_block(body)?;
         if self.block_captured() {
-            self.emit(Inst::iabc(Op::Close, vbase, 0, 0, false));
+            self.close_body(body_first, vbase);
         }
         let tforcall_pc = self.here();
         let skip = tforcall_pc - prep - 1;
@@ -3131,33 +3456,44 @@ impl<'a> Compiler<'a> {
         // value at `base + 3` (which sits BELOW the for-body's user-locals
         // floor `base + 4`). PUC's lparser does the same via `leavelevel` to
         // `f->level + 4` minus the to-be-closed control width.
-        self.l().blocks.last_mut().expect("no block").reg_floor = base;
+        let blk = self.l().blocks.last_mut().expect("no block");
+        blk.reg_floor = base;
+        blk.end_line = end_line;
         self.leave_block()?;
-        // close the iterator's closing value (4th control slot, 5.4+)
-        self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
-        // PUC forlist registers three hidden control variables named
-        // "(for state)" (generator, state, to-be-closed); debug.getlocal must
-        // see them. They live across the loop body.
-        let end_pc = self.here() as u32;
-        // PUC 5.4 names ALL four control slots "(for state)" — generator,
-        // state, control, and to-be-closed; 5.5 dropped the user-control
-        // entry so only three are reported. 5.4 files.lua :443 expects the
-        // to-be-closed at the 4th "(for state)" hit; 5.5 files.lua :433
-        // expects it at the 3rd. Without the user-control entry on 5.4 the
-        // file never gets closed on `break`.
-        let regs: &[u32] = if self.version >= LuaVersion::Lua55 {
-            &[base, base + 1, base + 3]
-        } else {
-            &[base, base + 1, base + 2, base + 3]
-        };
-        for &reg in regs {
-            self.l().locvars.push(crate::runtime::LocVar {
-                name: "(for state)".into(),
-                reg,
-                start_pc: control_start,
-                end_pc,
-            });
+        // close the iterator's closing value (4th control slot, 5.4+). PUC
+        // emits it in `leaveblock` after reading the loop's `end`, so a line
+        // hook sees that line once as the loop exits.
+        if self.version >= LuaVersion::Lua54
+            && let Some(line) = end_line
+        {
+            self.last_line = line;
         }
+        self.emit(Inst::iabc(Op::Close, base, 0, 0, false));
+        // PUC forlist registers hidden control variables that
+        // debug.getlocal lists; they live across the loop body. 5.1-5.3
+        // have three, named after their roles. 5.4 names all four control
+        // slots "(for state)" — generator, state, control, and
+        // to-be-closed; 5.5 dropped the user-control entry so only three
+        // are reported. 5.4 files.lua :443 expects the to-be-closed at the
+        // 4th "(for state)" hit; 5.5 files.lua :433 expects it at the 3rd.
+        // Without the user-control entry on 5.4 the file never gets closed
+        // on `break`.
+        let end_pc = self.here() as u32;
+        let hidden: &[(&str, u32)] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => &[
+                ("(for generator)", 0),
+                ("(for state)", 1),
+                ("(for control)", 2),
+            ],
+            LuaVersion::Lua55 => &[("(for state)", 0), ("(for state)", 1), ("(for state)", 3)],
+            _ => &[
+                ("(for state)", 0),
+                ("(for state)", 1),
+                ("(for state)", 2),
+                ("(for state)", 3),
+            ],
+        };
+        self.push_hidden_locals(base, hidden, control_start, end_pc);
         self.set_freereg(base);
         Ok(())
     }
@@ -3225,11 +3561,16 @@ impl<'a> Compiler<'a> {
                 self.emit(Inst::iabc(Op::Return1, r, 0, 0, false));
             }
             n if n > 254 => {
-                // PUC `OP_RETURN`'s B field is a byte (`b = nret + 1`), so the
-                // statement supports at most 254 fixed return values
-                // (calls.lua :573). Report the limit explicitly rather than
-                // letting it surface as the generic register-pressure error.
-                return Err(self.err(self.last_line, "too many returns"));
+                // `OP_RETURN`'s B field is a byte (`b = nret + 1`): at most
+                // 254 fixed values. PUC places every value in a register
+                // first, so the register limit speaks first unless the
+                // values fit: only 5.5 allows 255 registers and then checks
+                // the count, with `errorlimit` (5.5 calls.lua :591).
+                let base = self.lr().freereg as usize;
+                if self.version >= LuaVersion::Lua55 && base + n <= 255 {
+                    return Err(self.limit_err("returns", 255));
+                }
+                return Err(self.regs_error(self.last_line));
             }
             n => {
                 let base = self.lr().freereg;
@@ -3311,7 +3652,7 @@ impl<'a> Compiler<'a> {
             Some(l) => l,
             None => return false,
         };
-        if local.captured || local.vararg_virtual {
+        if local.captured || local.vararg_virtual || local.konst.is_some() {
             return false;
         }
         // AST-side gate (call walker + obj-is-name check).
@@ -3321,7 +3662,7 @@ impl<'a> Compiler<'a> {
 
 /// Constant-fold arithmetic over two numeric literals where Lua semantics
 /// are total (no division-by-zero style runtime errors).
-fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
+fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId, version: LuaVersion) -> Option<Exp> {
     let l = match le {
         Exp::Int(i) => Num::Int(*i),
         Exp::Float(f) => Num::Float(*f),
@@ -3343,6 +3684,14 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId) -> Option<Exp> {
         (BinOp::Div, a, b) => Float(a.as_f64() / b.as_f64()),
         _ => return None,
     };
+    // PUC `constfolding` leaves a NaN unfolded, and from 5.3 a float zero
+    // too: its sign can depend on how the operation is compiled (5.4's
+    // `-0.0 - 0` runs as `-0.0 + 0`).
+    if let Float(f) = v
+        && (f.is_nan() || (f == 0.0 && version >= LuaVersion::Lua53))
+    {
+        return None;
+    }
     Some(match v {
         Int(i) => Exp::Int(i),
         Float(f) => Exp::Float(f),

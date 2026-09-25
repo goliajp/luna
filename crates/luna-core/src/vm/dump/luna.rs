@@ -11,6 +11,8 @@
 //! records and upvalue names); line info is always kept because the VM
 //! indexes it for error positions.
 
+use super::error::Bad;
+use super::header;
 use super::reader::Reader;
 use crate::runtime::Value;
 use crate::runtime::function::{LocVar, Proto, UpvalDesc};
@@ -68,14 +70,21 @@ const HEADER_53: &[u8] = &[
     0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
-fn header_for(version: LuaVersion) -> &'static [u8] {
+pub(super) fn header_for(version: LuaVersion) -> &'static [u8] {
+    header_and_layout(version).0
+}
+
+/// The header luna writes for `version`, with its PUC field layout.
+fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, Bad)]) {
     match version {
-        LuaVersion::Lua53 => HEADER_53,
-        LuaVersion::Lua54 => HEADER_54,
+        LuaVersion::Lua53 => (HEADER_53, header::LAYOUT_53),
+        LuaVersion::Lua54 => (HEADER_54, header::LAYOUT_54),
         // 5.1 / 5.2 calls.lua does not test binary-chunk header bytes, so
         // route them through the 5.5 layout (luna's own dump round-trips
         // either way, and PUC 5.1/5.2 chunks aren't loadable into luna).
-        _ => HEADER_55,
+        LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua55 | LuaVersion::MacroLua => {
+            (HEADER_55, header::LAYOUT_55)
+        }
     }
 }
 
@@ -83,7 +92,7 @@ fn header_for(version: LuaVersion) -> &'static [u8] {
 /// loader would reach this byte expecting the number of upvalues; we use a
 /// non-PUC sentinel so an accidental cross-load (luna chunk into PUC, or
 /// vice-versa) errors cleanly rather than misinterpreting bytes.
-const BODY_TAG: &[u8] = b"\x00LunaV1\x00";
+pub(super) const BODY_TAG: &[u8] = b"\x00LunaV1\x00";
 
 // ---- writer ----
 
@@ -96,7 +105,12 @@ fn w_bytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(b);
 }
 
-fn w_const(out: &mut Vec<u8>, v: Value) {
+/// Strings already written, for 5.5's `dumpString`, which saves each
+/// distinct string once and refers back to it after that; `None` for the
+/// dialects whose dump repeats them.
+type Saved = Option<std::collections::HashMap<Vec<u8>, u32>>;
+
+fn w_const(out: &mut Vec<u8>, v: Value, saved: &mut Saved) {
     match v {
         Value::Nil => out.push(0),
         Value::Bool(false) => out.push(1),
@@ -110,6 +124,15 @@ fn w_const(out: &mut Vec<u8>, v: Value) {
             out.extend_from_slice(&f.to_bits().to_le_bytes());
         }
         Value::Str(s) => {
+            if let Some(map) = saved {
+                if let Some(&idx) = map.get(s.as_bytes()) {
+                    out.push(6);
+                    w_u32(out, idx);
+                    return;
+                }
+                let idx = map.len() as u32;
+                map.insert(s.as_bytes().to_vec(), idx);
+            }
             out.push(5);
             w_bytes(out, s.as_bytes());
         }
@@ -119,7 +142,13 @@ fn w_const(out: &mut Vec<u8>, v: Value) {
     }
 }
 
-fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8]>) {
+fn w_proto(
+    out: &mut Vec<u8>,
+    p: &Proto,
+    strip: bool,
+    parent_source: Option<&[u8]>,
+    saved: &mut Saved,
+) {
     out.push(p.num_params);
     out.push(p.is_vararg as u8);
     out.push(p.max_stack);
@@ -148,7 +177,7 @@ fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8
 
     w_u32(out, p.consts.len() as u32);
     for &k in p.consts.iter() {
-        w_const(out, k);
+        w_const(out, k, saved);
     }
 
     w_u32(out, p.upvals.len() as u32);
@@ -161,7 +190,7 @@ fn w_proto(out: &mut Vec<u8>, p: &Proto, strip: bool, parent_source: Option<&[u8
 
     w_u32(out, p.protos.len() as u32);
     for sub in p.protos.iter() {
-        w_proto(out, sub, strip, Some(source));
+        w_proto(out, sub, strip, Some(source), saved);
     }
 
     if strip {
@@ -184,14 +213,19 @@ pub(super) fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     let mut out = Vec::with_capacity(header.len() + BODY_TAG.len() + proto.code.len() * 4);
     out.extend_from_slice(header);
     out.extend_from_slice(BODY_TAG);
-    w_proto(&mut out, proto, strip, None);
+    let mut saved: Saved = (version >= LuaVersion::Lua55).then(Default::default);
+    w_proto(&mut out, proto, strip, None, &mut saved);
     out
 }
 
 // `Reader` lives in `super::reader` so the per-dialect PUC translators
 // (`super::puc_5{1,2,3,4,5}` in Wave 2) can share the same primitives.
 
-fn r_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
+fn r_const(
+    r: &mut Reader,
+    heap: &mut Heap,
+    strings: &mut Vec<Gc<crate::runtime::LuaStr>>,
+) -> Result<Value, Bad> {
     Ok(match r.u8()? {
         0 => Value::Nil,
         1 => Value::Bool(false),
@@ -202,17 +236,36 @@ fn r_const(r: &mut Reader, heap: &mut Heap) -> Result<Value, String> {
         ))),
         5 => {
             let b = r.bytes()?;
-            Value::Str(heap.intern(b))
+            let s = heap.intern(b);
+            strings.push(s);
+            Value::Str(s)
         }
-        t => return Err(format!("bad constant tag {t}")),
+        // a string saved earlier in the chunk (5.5)
+        6 => {
+            let idx = r.u32()? as usize;
+            Value::Str(
+                *strings
+                    .get(idx)
+                    .ok_or(Bad::Code(format!("saved string {idx} out of range")))?,
+            )
+        }
+        _ => return Err(Bad::Constant),
     })
+}
+
+/// A u32 element count, refused as a truncation when the rest of the
+/// chunk cannot hold that many elements of at least `min_size` bytes.
+fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
+    let n = r.u32()?;
+    r.count(u64::from(n), min_size)
 }
 
 fn r_proto(
     r: &mut Reader,
     heap: &mut Heap,
     parent_source: Option<Gc<crate::runtime::LuaStr>>,
-) -> Result<Gc<Proto>, String> {
+    strings: &mut Vec<Gc<crate::runtime::LuaStr>>,
+) -> Result<Gc<Proto>, Bad> {
     let num_params = r.u8()?;
     let is_vararg = r.u8()? != 0;
     let max_stack = r.u8()?;
@@ -227,22 +280,24 @@ fn r_proto(
         heap.intern(raw)
     };
 
-    let n = r.u32()? as usize;
+    // each count sizes an allocation; `count` refuses one the remaining
+    // bytes cannot hold (the minimum size of an element) as a truncation
+    let n = read_count(r, 4)?;
     let mut code = Vec::with_capacity(n);
     for _ in 0..n {
         code.push(crate::vm::isa::Inst(r.u32()?));
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 4)?;
     let mut lines = Vec::with_capacity(n);
     for _ in 0..n {
         lines.push(r.u32()?);
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 1)?;
     let mut consts = Vec::with_capacity(n);
     for _ in 0..n {
-        consts.push(r_const(r, heap)?);
+        consts.push(r_const(r, heap, strings)?);
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 7)?;
     let mut upvals = Vec::with_capacity(n);
     for _ in 0..n {
         let in_stack = r.u8()? != 0;
@@ -256,12 +311,12 @@ fn r_proto(
             read_only,
         });
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 4)?;
     let mut protos = Vec::with_capacity(n);
     for _ in 0..n {
-        protos.push(r_proto(r, heap, Some(source))?);
+        protos.push(r_proto(r, heap, Some(source), strings)?);
     }
-    let n = r.u32()? as usize;
+    let n = read_count(r, 16)?;
     let mut locvars = Vec::with_capacity(n);
     for _ in 0..n {
         let name = String::from_utf8_lossy(r.bytes()?).into_owned().into();
@@ -308,6 +363,7 @@ fn r_proto(
         call_hot_count: std::cell::Cell::new(0),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
+        trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
     }))
 }
@@ -316,37 +372,23 @@ fn r_proto(
 /// Validates the running dialect's PUC header byte-for-byte (the calls.lua
 /// corrupted-header test flips a single byte and expects a load failure),
 /// then the luna body tag, then the luna body.
-pub(super) fn undump(
-    bytes: &[u8],
-    heap: &mut Heap,
-    version: LuaVersion,
-) -> Result<Gc<Proto>, String> {
-    let header = header_for(version);
-    if bytes.len() < header.len() {
-        return Err("truncated binary chunk".to_string());
+pub(super) fn undump(bytes: &[u8], heap: &mut Heap, version: LuaVersion) -> Result<Gc<Proto>, Bad> {
+    let (header, layout) = header_and_layout(version);
+    header::check(bytes, header, layout)?;
+    let body = header.len();
+    let tag = bytes
+        .get(body..body + BODY_TAG.len())
+        .ok_or(Bad::Truncated)?;
+    if tag != BODY_TAG {
+        return Err(Bad::Code("not a luna chunk body".to_string()));
     }
-    // Validate everything except the trailing float sanity field (PUC tolerates
-    // long-double padding differences here, and on this build the float
-    // representation matches anyway). The non-float bytes are luna's
-    // contract: a single-byte change must fail the load.
-    let float_off = header.len() - 8;
-    if bytes[..float_off] != header[..float_off] {
-        return Err("bad binary chunk header".to_string());
-    }
-    if bytes[float_off..header.len()] != header[float_off..] {
-        return Err("bad binary chunk float check".to_string());
-    }
-    let pos = header.len();
-    if bytes.len() < pos + BODY_TAG.len() {
-        return Err("truncated binary chunk".to_string());
-    }
-    if &bytes[pos..pos + BODY_TAG.len()] != BODY_TAG {
-        return Err("bad binary chunk body tag".to_string());
-    }
-    let mut r = Reader::at(bytes, pos + BODY_TAG.len());
-    let proto = r_proto(&mut r, heap, None)?;
+    let mut r = Reader::at(bytes, body + BODY_TAG.len());
+    let proto = r_proto(&mut r, heap, None, &mut Vec::new())?;
     if r.pos() != bytes.len() {
-        return Err("trailing bytes in chunk".to_string());
+        return Err(Bad::Code(format!(
+            "{} trailing bytes",
+            bytes.len() - r.pos()
+        )));
     }
     Ok(proto)
 }

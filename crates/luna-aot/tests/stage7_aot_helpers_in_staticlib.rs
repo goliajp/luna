@@ -4,7 +4,7 @@
 //! Builds `libluna_runtime_helpers.a` via the same pipeline the AOT
 //! `compile_and_link` flow uses (`cargo build -p luna-runtime-helpers
 //! --profile=release-aot-helpers`), then shells out to `nm` and
-//! asserts all 27 `luna_jit_*` Cranelift trace-mcode helpers are
+//! asserts all 39 `luna_jit_*` Cranelift trace-mcode helpers are
 //! present as defined-text (`T`) symbols.
 //!
 //! # Why this exists
@@ -60,7 +60,7 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn all_27_luna_jit_helpers_are_defined_in_staticlib() {
+fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
     // Windows MSVC produces `luna_runtime_helpers.lib` (COFF archive,
     // not `libluna_runtime_helpers.a` Mach-O/ELF archive) and inspects
     // symbols via `dumpbin /symbols` not `nm`. The Stage 7 AOT pipeline
@@ -151,10 +151,10 @@ fn all_27_luna_jit_helpers_are_defined_in_staticlib() {
     // List of helpers — must match the
     // `luna-runtime-helpers/src/lib.rs::LUNA_AOT_HELPER_PIN` array and
     // the `pub unsafe extern "C" fn luna_jit_*` definitions in
-    // `crates/luna-jit/src/jit_backend/mod.rs`. If a 28th helper lands
+    // `crates/luna-jit/src/jit_backend/mod.rs`. If a 36th helper lands
     // upstream, grow this list AND the pin array AND the
-    // `force_link_jit_helpers_reports_27` test in luna-runtime-helpers.
-    let expected: [&str; 27] = [
+    // `force_link_jit_helpers_reports_39` test in luna-runtime-helpers.
+    let expected: [&str; 39] = [
         "luna_jit_new_table",
         "luna_jit_new_table_sized",
         "luna_jit_materialize_sunk_table",
@@ -182,6 +182,18 @@ fn all_27_luna_jit_helpers_are_defined_in_staticlib() {
         "luna_jit_op_closure",
         "luna_jit_trace_materialize_frames",
         "luna_jit_table_len",
+        "luna_jit_table_get_int_checked",
+        "luna_jit_table_get_field_checked",
+        "luna_jit_op_get_tab_up_checked",
+        "luna_jit_upval_get_float",
+        "luna_jit_self_upval_check",
+        "luna_jit_math_fn_is_library",
+        "luna_jit_park_deopt",
+        "luna_jit_suppress_trace_admit",
+        "luna_jit_table_set_checked",
+        "luna_jit_table_set_int_checked",
+        "luna_jit_table_set_field_checked",
+        "luna_jit_table_len_checked",
     ];
 
     let mut missing = Vec::new();
@@ -199,7 +211,7 @@ fn all_27_luna_jit_helpers_are_defined_in_staticlib() {
 
     assert!(
         missing.is_empty(),
-        "staticlib `{}` is missing {} of 27 helper text symbols: {:?}\n\
+        "staticlib `{}` is missing {} of 39 helper text symbols: {:?}\n\
          nm output (filtered for luna_jit_*):\n{}",
         staticlib.display(),
         missing.len(),

@@ -1,22 +1,11 @@
-//! Phase LB Wave 2 — PUC Lua 5.1 `.luac` undumper tests.
+//! PUC 5.1 chunk loading on hand-made chunks: header diagnostics, the
+//! gate, and translator shapes a stock `luac 5.1` rarely produces
+//! (`SETLIST` with its block number in the next word, RK constants on
+//! both comparison operands, the `arg` table of `LUA_COMPAT_VARARG`).
 //!
-//! 5.1 has no `luac5.1` binary available on this dev machine (only
-//! `luac` 5.5 ships with Homebrew), so the in-tree tests hand-craft
-//! minimal 5.1 binary chunks covering the three high-risk translator
-//! features the v1.3 audit calls out:
-//!
-//! 1. 6-bit opcode decode shim (`op:6 | A:8 | C:9 | B:9` layout)
-//! 2. `OP_GETGLOBAL` / `OP_SETGLOBAL` → `GetTabUp` / `SetTabUp` rewrite
-//!    with synthesised `_ENV` upvalue
-//! 3. `OP_CLOSURE` pseudo-instruction strip + PC offset adjustment on
-//!    every jump target that crossed the strip
-//!
-//! An additional `#[ignore]`d integration smoke test loads a vendored
-//! `.luac` produced by an external `luac5.1` (path read from the
-//! `LUAC51` env var) when one is installed; CI doesn't gate on it.
-//!
-//! See `crates/luna-core/src/vm/dump/puc/puc_51.rs` and
-//! translator design + punted features.
+//! What a real `luac 5.1` chunk does in luna is pinned by
+//! `diff_puc.rs::diff_puc_bytecode`, which runs the whole diff_puc corpus
+//! through stock `luac` (`PUC_LUAC_51`) and compares with PUC.
 
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -212,7 +201,7 @@ fn rejects_big_endian_header() {
     chunk[6] = 0x00; // flip endian flag to BE
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = err.to_string();
-    assert!(s.contains("little-endian"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (integer format mismatch)");
 }
 
 #[test]
@@ -223,7 +212,7 @@ fn rejects_bad_sizeof_int() {
     chunk[7] = 8; // sizeof(int) = 8 — luna requires 4
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = err.to_string();
-    assert!(s.contains("sizeof(int)"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (int size mismatch)");
 }
 
 #[test]
@@ -655,40 +644,4 @@ fn loads_eq_rk_chunk() {
     let chunk = build_eq_rk_chunk();
     vm.load(&chunk, b"=test")
         .expect("EQ RK chunk loads (PU Wave 2 retired punt-6)");
-}
-
-/// Integration smoke: when an external `luac5.1` is installed, point at
-/// it via `LUAC51=/path/to/luac5.1` and the test compiles a tiny Lua
-/// source then loads the resulting bytecode through the translator. Not
-/// run by default (CI is hermetic).
-#[test]
-#[ignore]
-fn integration_real_luac51() {
-    let luac51 = match std::env::var("LUAC51") {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("set LUAC51 to /path/to/luac5.1 to enable this test");
-            return;
-        }
-    };
-    let src = "return 1\n";
-    let dir = std::env::temp_dir().join("luna_puc51_smoke");
-    std::fs::create_dir_all(&dir).unwrap();
-    let lua_path = dir.join("smoke.lua");
-    let luac_path = dir.join("smoke.luac");
-    std::fs::write(&lua_path, src).unwrap();
-    let out = std::process::Command::new(&luac51)
-        .args([
-            "-o",
-            luac_path.to_str().unwrap(),
-            lua_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("ran luac5.1");
-    assert!(out.status.success(), "luac5.1 failed: {out:?}");
-    let bytes = std::fs::read(&luac_path).unwrap();
-    let mut vm = Vm::new(LuaVersion::Lua54);
-    vm.set_puc_bytecode_loading(true);
-    vm.load(&bytes, b"=smoke")
-        .expect("real luac5.1 bytecode loads");
 }

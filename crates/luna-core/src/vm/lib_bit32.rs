@@ -1,257 +1,233 @@
-//! PUC 5.2 `bit32` library. Every operation treats its operands as unsigned
-//! 32-bit integers — operands wider than 32 bits are truncated mod 2^32, the
-//! result is reported in [0, 2^32). 5.3 retired the library in favour of
-//! native 64-bit bitwise operators, so this surface is only registered when
-//! the VM is running in `Lua52` mode.
+//! `bit32`, following PUC `lbitlib.c`: the 5.2 library, and 5.3's copy kept
+//! by the default LUA_COMPAT_BITLIB. Results are unsigned 32-bit values.
+//!
+//! The two versions read their operands differently. 5.2's `lua_Unsigned`
+//! is 32 bits and `luaL_checkunsigned` rounds a float to nearest and wraps
+//! it (see `argcheck::check_unsigned52`); 5.3 takes `luaL_checkinteger`
+//! (so the float must be integral) and trims to 32 bits afterwards. Shift
+//! and field arguments are C `int`s on 5.2 and `lua_Integer`s on 5.3.
 
 use crate::runtime::Value;
+use crate::version::LuaVersion as V;
+use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
+type Native = fn(&mut Vm, u32, u32) -> Result<u32, LuaError>;
+
 pub(crate) fn open_bit32(vm: &mut Vm) {
     let t = vm.heap.new_table();
-    let set = |vm: &mut Vm, name: &str, f| {
+    let funcs: [(&str, Native); 12] = [
+        ("band", b_and),
+        ("bor", b_or),
+        ("bxor", b_xor),
+        ("bnot", b_not),
+        ("btest", b_test),
+        ("lshift", b_lshift),
+        ("rshift", b_rshift),
+        ("arshift", b_arshift),
+        ("lrotate", b_lrot),
+        ("rrotate", b_rrot),
+        ("extract", b_extract),
+        ("replace", b_replace),
+    ];
+    for (name, f) in funcs {
         let fv = vm.native(f);
         let k = Value::Str(vm.heap.intern(name.as_bytes()));
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { t.as_mut() }
             .set(&mut vm.heap, k, fv)
             .expect("valid key");
-    };
-    set(vm, "band", b_band);
-    set(vm, "bor", b_bor);
-    set(vm, "bxor", b_bxor);
-    set(vm, "bnot", b_bnot);
-    set(vm, "btest", b_btest);
-    set(vm, "lshift", b_lshift);
-    set(vm, "rshift", b_rshift);
-    set(vm, "arshift", b_arshift);
-    set(vm, "lrotate", b_lrotate);
-    set(vm, "rrotate", b_rrotate);
-    set(vm, "extract", b_extract);
-    set(vm, "replace", b_replace);
+    }
     vm.set_global("bit32", Value::Table(t))
         .expect("stdlib registration");
     vm.barrier_back_table(t);
+    // `luaL_requiref` also records the module in `package.loaded`, which is
+    // what `require "bit32"` and error messages naming `bit32.band` look up.
+    // bit32 opens after the package library, so it registers itself.
+    let pk = Value::Str(vm.heap.intern(b"package"));
+    let lk = Value::Str(vm.heap.intern(b"loaded"));
+    if let Value::Table(pkg) = vm.globals().get(pk)
+        && let Value::Table(loaded) = pkg.get(lk)
+    {
+        let k = Value::Str(vm.heap.intern(b"bit32"));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        unsafe { loaded.as_mut() }
+            .set(&mut vm.heap, k, Value::Table(t))
+            .expect("valid key");
+        vm.barrier_back_table(loaded);
+    }
 }
 
-/// `lua_tounsignedx` for `bit32`: an integer-valued double becomes its low 32
-/// bits (PUC `b_arg` mods by 2^32). Strings flow through `tonumber`, then the
-/// same modular reduction.
-fn to_u32(vm: &mut Vm, v: Value, n: u32, who: &str) -> Result<u32, LuaError> {
-    let f = match v {
-        Value::Int(i) => i as f64,
-        Value::Float(f) => f,
-        Value::Str(s) => match crate::numeric::str2num(s.as_bytes(), true, true) {
-            Some(crate::numeric::Num::Int(i)) => i as f64,
-            Some(crate::numeric::Num::Float(f)) => f,
-            None => return Err(arg_error(vm, n, who, "number expected")),
-        },
-        _ => return Err(arg_error(vm, n, who, "number expected")),
-    };
-    if !f.is_finite() || f.fract() != 0.0 {
-        return Err(arg_error(
-            vm,
-            n,
-            who,
-            "number has no integer representation",
-        ));
-    }
-    // PUC `b_arg`: cast to `lua_Unsigned` (= unsigned long long) then truncate
-    // mod 2^32. Floats outside i64 range fold via wrapping before the mask.
-    let bits = if f >= 0.0 && f < (u64::MAX as f64) {
-        f as u64
+const ALLONES: u64 = 0xFFFF_FFFF;
+
+/// `checkunsigned`, as the full-width value 5.3 works with before trimming.
+fn unsigned(vm: &mut Vm, a: Args, i: u32) -> Result<u64, LuaError> {
+    if vm.version() <= V::Lua52 {
+        Ok(argcheck::check_unsigned52(vm, a, i)?.into())
     } else {
-        (f as i64) as u64
-    };
-    Ok((bits & 0xFFFF_FFFF) as u32)
-}
-
-fn fold(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-    who: &str,
-    init: u32,
-    op: fn(u32, u32) -> u32,
-) -> Result<u32, LuaError> {
-    let mut acc = init;
-    for i in 0..nargs {
-        let v = vm.nat_arg(fs, nargs, i);
-        let u = to_u32(vm, v, i + 1, who)?;
-        acc = op(acc, u);
+        Ok(argcheck::check_integer(vm, a, i)? as u64)
     }
-    Ok(vm.nat_return(fs, &[Value::Int(acc as i64)]))
 }
 
-fn b_band(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    fold(vm, fs, nargs, "band", 0xFFFF_FFFF, |a, b| a & b)
-}
-
-fn b_bor(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    fold(vm, fs, nargs, "bor", 0, |a, b| a | b)
-}
-
-fn b_bxor(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    fold(vm, fs, nargs, "bxor", 0, |a, b| a ^ b)
-}
-
-fn b_btest(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let mut acc: u32 = 0xFFFF_FFFF;
-    for i in 0..nargs {
-        let v = vm.nat_arg(fs, nargs, i);
-        let u = to_u32(vm, v, i + 1, "btest")?;
-        acc &= u;
+/// A shift, rotation or field argument: `luaL_checkint` on 5.2,
+/// `luaL_checkinteger` on 5.3.
+fn int_arg(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
+    if vm.version() <= V::Lua52 {
+        Ok(argcheck::check_int(vm, a, i)?.into())
+    } else {
+        argcheck::check_integer(vm, a, i)
     }
-    Ok(vm.nat_return(fs, &[Value::Bool(acc != 0)]))
 }
 
-fn b_bnot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let v = vm.nat_arg(fs, nargs, 0);
-    let u = to_u32(vm, v, 1, "bnot")?;
-    Ok(vm.nat_return(fs, &[Value::Int((!u) as i64)]))
+fn push(vm: &mut Vm, fs: u32, r: u64) -> Result<u32, LuaError> {
+    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
 }
 
-/// PUC `b_shift`: a positive `disp` shifts left; a negative one shifts right
-/// (used by both `lshift` and `rshift` with sign-inverted `disp`). Shifts of
-/// 32 bits or more zero the result.
-fn signed_shift(x: u32, disp: i32) -> u32 {
-    let d = disp.unsigned_abs();
-    if d >= 32 {
+fn andaux(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u64, LuaError> {
+    let a = Args::new(fs, nargs);
+    let mut r = u64::MAX;
+    for i in 0..nargs {
+        r &= unsigned(vm, a, i)?;
+    }
+    Ok(r & ALLONES)
+}
+
+fn b_and(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let r = andaux(vm, fs, nargs)?;
+    push(vm, fs, r)
+}
+
+fn b_test(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let r = andaux(vm, fs, nargs)?;
+    Ok(vm.nat_return(fs, &[Value::Bool(r != 0)]))
+}
+
+fn fold(vm: &mut Vm, fs: u32, nargs: u32, op: fn(u64, u64) -> u64) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let mut r = 0;
+    for i in 0..nargs {
+        r = op(r, unsigned(vm, a, i)?);
+    }
+    push(vm, fs, r & ALLONES)
+}
+
+fn b_or(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    fold(vm, fs, nargs, |x, y| x | y)
+}
+
+fn b_xor(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    fold(vm, fs, nargs, |x, y| x ^ y)
+}
+
+fn b_not(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let r = !unsigned(vm, Args::new(fs, nargs), 0)?;
+    push(vm, fs, r & ALLONES)
+}
+
+/// `b_shift`: a positive displacement shifts left, a negative one right;
+/// 32 or more clears everything.
+fn shift(r: u64, i: i64) -> u64 {
+    if i < 0 {
+        let i = i.wrapping_neg();
+        if i >= 32 { 0 } else { (r & ALLONES) >> i }
+    } else if i >= 32 {
         0
-    } else if disp >= 0 {
-        x.wrapping_shl(d)
     } else {
-        x.wrapping_shr(d)
+        (r << i) & ALLONES
     }
-}
-
-fn shift_arg(vm: &mut Vm, fs: u32, nargs: u32, who: &str) -> Result<(u32, i32), LuaError> {
-    let v0 = vm.nat_arg(fs, nargs, 0);
-    let v1 = vm.nat_arg(fs, nargs, 1);
-    let x = to_u32(vm, v0, 1, who)?;
-    let d = vm.int_from(v1, "use as a number")?;
-    // PUC `b_shift` clamps |disp| to 32 via the shift implementation; pass the
-    // signed value through unchanged.
-    let d32 = if d > i32::MAX as i64 {
-        i32::MAX
-    } else if d < i32::MIN as i64 {
-        i32::MIN
-    } else {
-        d as i32
-    };
-    Ok((x, d32))
 }
 
 fn b_lshift(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (x, d) = shift_arg(vm, fs, nargs, "lshift")?;
-    let r = signed_shift(x, d);
-    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
+    let a = Args::new(fs, nargs);
+    let r = unsigned(vm, a, 0)?;
+    let i = int_arg(vm, a, 1)?;
+    push(vm, fs, shift(r, i))
 }
 
 fn b_rshift(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (x, d) = shift_arg(vm, fs, nargs, "rshift")?;
-    let r = signed_shift(x, -d);
-    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
+    let a = Args::new(fs, nargs);
+    let r = unsigned(vm, a, 0)?;
+    let i = int_arg(vm, a, 1)?;
+    push(vm, fs, shift(r, i.wrapping_neg()))
 }
 
 fn b_arshift(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (x, d) = shift_arg(vm, fs, nargs, "arshift")?;
-    let r = if d >= 0 {
-        // PUC arithmetic right shift: sign-extend the 32-bit value before the
-        // shift; a disp >= 32 saturates to all-sign.
-        let s = x as i32;
-        if d >= 32 {
-            if s < 0 { 0xFFFF_FFFF } else { 0 }
-        } else {
-            (s >> d) as u32
-        }
+    let a = Args::new(fs, nargs);
+    let r = unsigned(vm, a, 0)?;
+    let i = int_arg(vm, a, 1)?;
+    let r = if i < 0 || r & (1 << 31) == 0 {
+        shift(r, i.wrapping_neg())
+    } else if i >= 32 {
+        ALLONES
     } else {
-        signed_shift(x, -d)
+        // shift in copies of the sign bit
+        ((r >> i) | !(ALLONES >> i)) & ALLONES
     };
-    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
+    push(vm, fs, r)
 }
 
-fn rotate(x: u32, disp: i32) -> u32 {
-    // PUC `b_rotate`: `disp` reduced mod 32 (negative wraps positive).
-    let d = (disp.rem_euclid(32)) as u32;
-    x.rotate_left(d)
+/// `b_rot`: the displacement is taken mod 32. It is read before the value
+/// (`b_rot(L, luaL_checkint(L, 2))`), so a bad displacement is reported
+/// first.
+fn rotate(vm: &mut Vm, fs: u32, nargs: u32, negate: bool) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let d = int_arg(vm, a, 1)?;
+    let r = unsigned(vm, a, 0)? & ALLONES;
+    let d = if negate { d.wrapping_neg() } else { d };
+    let r = (r as u32).rotate_left((d & 31) as u32);
+    push(vm, fs, r.into())
 }
 
-fn b_lrotate(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (x, d) = shift_arg(vm, fs, nargs, "lrotate")?;
-    Ok(vm.nat_return(fs, &[Value::Int(rotate(x, d) as i64)]))
+fn b_lrot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    rotate(vm, fs, nargs, false)
 }
 
-fn b_rrotate(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let (x, d) = shift_arg(vm, fs, nargs, "rrotate")?;
-    Ok(vm.nat_return(fs, &[Value::Int(rotate(x, -d) as i64)]))
+fn b_rrot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    rotate(vm, fs, nargs, true)
 }
 
-fn field_args(
-    vm: &mut Vm,
-    fs: u32,
-    nargs: u32,
-    field_idx: u32,
-    who: &str,
-) -> Result<(u32, u32), LuaError> {
-    let field = vm.int_from(vm.nat_arg(fs, nargs, field_idx), "use as a number")?;
-    let width = if nargs > field_idx + 1 {
-        vm.int_from(vm.nat_arg(fs, nargs, field_idx + 1), "use as a number")?
-    } else {
+/// `fieldargs`: field `f` at argument `farg`, width at `farg + 1`
+/// (default 1).
+fn fieldargs(vm: &mut Vm, a: Args, farg: u32) -> Result<(u32, u32), LuaError> {
+    let f = int_arg(vm, a, farg)?;
+    let w = if a.is_none_or_nil(vm, farg + 1) {
         1
+    } else {
+        int_arg(vm, a, farg + 1)?
     };
-    // PUC `fieldargs`: f in [0, 31], w in [1, 32], f + w in [1, 32].
-    if !(0..=31).contains(&field) {
-        return Err(arg_error(vm, field_idx + 1, who, "field out of range"));
+    if f < 0 {
+        return Err(arg_error(vm, farg + 1, "field cannot be negative"));
     }
-    if !(1..=32).contains(&width) {
-        return Err(arg_error(
-            vm,
-            field_idx + 2,
-            who,
-            "trying to access non-existent bits",
-        ));
+    if w <= 0 {
+        return Err(arg_error(vm, farg + 2, "width must be positive"));
     }
-    if field + width > 32 {
-        return Err(arg_error(
-            vm,
-            field_idx + 1,
-            who,
-            "trying to access non-existent bits",
-        ));
+    // PUC adds in `int`/`lua_Integer`, and a sum that overflows slips past
+    // this check into undefined shifts; the true sum is what is meant.
+    if f.saturating_add(w) > 32 {
+        return Err(raise_str(vm, "trying to access non-existent bits"));
     }
-    Ok((field as u32, width as u32))
+    Ok((f as u32, w as u32))
+}
+
+/// `mask(w)`: `w` low bits set, 1 <= w <= 32.
+fn mask(w: u32) -> u64 {
+    ALLONES >> (32 - w)
 }
 
 fn b_extract(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let n = to_u32(vm, vm.nat_arg(fs, nargs, 0), 1, "extract")?;
-    let (f, w) = field_args(vm, fs, nargs, 1, "extract")?;
-    let mask = if w == 32 {
-        0xFFFF_FFFF
-    } else {
-        (1u32 << w) - 1
-    };
-    let r = (n >> f) & mask;
-    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
+    let a = Args::new(fs, nargs);
+    let r = unsigned(vm, a, 0)? & ALLONES;
+    let (f, w) = fieldargs(vm, a, 1)?;
+    push(vm, fs, (r >> f) & mask(w))
 }
 
 fn b_replace(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let n = to_u32(vm, vm.nat_arg(fs, nargs, 0), 1, "replace")?;
-    let v = to_u32(vm, vm.nat_arg(fs, nargs, 1), 2, "replace")?;
-    let (f, w) = field_args(vm, fs, nargs, 2, "replace")?;
-    let mask = if w == 32 {
-        0xFFFF_FFFF
-    } else {
-        (1u32 << w) - 1
-    };
-    let r = (n & !(mask << f)) | ((v & mask) << f);
-    Ok(vm.nat_return(fs, &[Value::Int(r as i64)]))
-}
-
-// keep `raise_str` available for future error paths
-#[allow(dead_code)]
-fn _keep(_vm: &mut Vm) -> LuaError {
-    raise_str(_vm, "unused")
+    let a = Args::new(fs, nargs);
+    let r = unsigned(vm, a, 0)? & ALLONES;
+    let v = unsigned(vm, a, 1)? & ALLONES;
+    let (f, w) = fieldargs(vm, a, 2)?;
+    let m = mask(w);
+    push(vm, fs, ((r & !(m << f)) | ((v & m) << f)) & ALLONES)
 }

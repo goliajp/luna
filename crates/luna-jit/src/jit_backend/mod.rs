@@ -24,9 +24,9 @@ use luna_core::jit::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JitVmGuard,
     MAX_JIT_ARITY, TraceCompiler,
 };
-use luna_core::runtime::Gc;
 use luna_core::runtime::Value as LuaValue;
 use luna_core::runtime::function::Proto;
+use luna_core::runtime::{Gc, LuaStr};
 use luna_core::vm::isa::{Inst, Op};
 
 /// P11-S3 — per-Lua-register type lattice. `Unset` is the bottom;
@@ -510,6 +510,10 @@ fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
 /// numerics only; `math.log(x, base)` / `math.atan(y, x)` /
 /// `math.max(...)` use a different bytecode window (B≠2) so the
 /// pattern matcher rejects them.
+///
+/// On 5.3+ `floor`/`ceil` return integers ([`is_rounding`]) and
+/// `atan(y)` is `atan2(y, 1)`, rounded differently from libm `atan`;
+/// the emit handles both.
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"sin", "sin"),
     (b"cos", "cos"),
@@ -523,6 +527,13 @@ const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"floor", "floor"),
     (b"ceil", "ceil"),
 ];
+
+/// `math.floor` / `math.ceil`: floats on 5.1/5.2; from 5.3 an integer
+/// stays itself and a float becomes an integer when the result fits
+/// (`luaV_flttointns`), a float otherwise.
+fn is_rounding(fn_name: &str) -> bool {
+    matches!(fn_name, "floor" | "ceil")
+}
 
 /// P11-S5c.C — `Table` layout constants used by the inline-aset
 /// fast path. Cranelift IR walks past the helper call ABI by
@@ -636,6 +647,22 @@ struct MathFold {
     /// Lua register receiving the libm result (= the `GetTabUp.A` =
     /// `Call.A`).
     dst_reg: u32,
+    /// The result is an integer: 5.3+ `floor` / `ceil`.
+    int_result: bool,
+    /// The `"math"` and `"<fn>"` constant keys, for the entry check that
+    /// the field still holds the library function.
+    math_key: Gc<LuaStr>,
+    name_key: Gc<LuaStr>,
+}
+
+impl MathFold {
+    fn result_kind(&self) -> RegKind {
+        if self.int_result {
+            RegKind::Int
+        } else {
+            RegKind::Float
+        }
+    }
 }
 
 /// v1.3 Phase AOT Stage 3 — backend-agnostic metadata describing one
@@ -669,6 +696,11 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
     flag_builder.set("use_colocated_libcalls", "false").ok();
     flag_builder.set("is_pic", "false").ok();
     flag_builder.set("opt_level", "speed").ok();
+    // Release builds leave the IR verifier out, as the trace JIT does
+    // (see `build_trace_jit_module`).
+    if !cfg!(debug_assertions) {
+        flag_builder.set("enable_verifier", "false").ok();
+    }
     let isa = cranelift_native::builder()
         .ok()?
         .finish(settings::Flags::new(flag_builder))
@@ -703,6 +735,27 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
     );
     builder.symbol("luna_jit_table_len", luna_jit_table_len as *const u8);
     builder.symbol("luna_jit_upval_get", luna_jit_upval_get as *const u8);
+    builder.symbol(
+        "luna_jit_upval_get_float",
+        luna_jit_upval_get_float as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_self_upval_check",
+        luna_jit_self_upval_check as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_math_fn_is_library",
+        luna_jit_math_fn_is_library as *const u8,
+    );
+    builder.symbol("luna_jit_park_deopt", luna_jit_park_deopt as *const u8);
+    builder.symbol(
+        "luna_jit_table_get_int_checked",
+        luna_jit_table_get_int_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_float_checked",
+        luna_jit_table_get_float_checked as *const u8,
+    );
     Some(JITModule::new(builder))
 }
 
@@ -766,6 +819,110 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
         ret_is_float: meta.ret_is_float,
         ret_is_table: meta.ret_is_table,
     })
+}
+
+/// The tag a method-JIT register of `kind` holds, as `Value::unpack`
+/// reports it.
+fn want_tag(kind: RegKind) -> i64 {
+    match kind {
+        RegKind::Int | RegKind::Unset => RAW_TAG_INT,
+        RegKind::Float => RAW_TAG_FLOAT,
+        RegKind::Table => RAW_TAG_TABLE,
+    }
+}
+
+/// A typed table read, `R[A] = t[key]`, whose register kind was inferred
+/// statically: the value's tag is checked against `want`, and a value of
+/// another type (nil for a missing key, a string, ...) leaves the compiled
+/// call so the interpreter re-runs it, as a metatable does. Reading the
+/// raw payload unchecked turned a nil into integer 0 or float 0.0.
+///
+/// `fast_ok` selects the inline array read (`key - 1` in range, no
+/// metatable); otherwise `slow` names a `*_checked` helper and its key.
+fn emit_checked_get<M: Module>(
+    bcx: &mut FunctionBuilder<'_>,
+    module: &mut M,
+    t: Value,
+    fast_ok: Value,
+    key_minus_1: Value,
+    slow: (&str, Value),
+    want: i64,
+) -> Option<Value> {
+    let fast_blk = bcx.create_block();
+    let slow_blk = bcx.create_block();
+    let deopt_blk = bcx.create_block();
+    let merge_blk = bcx.create_block();
+    bcx.append_block_param(merge_blk, types::I64);
+    bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
+
+    // atags trail the avals: the tag of slot i is at avals_ptr + asize * 8 + i
+    bcx.switch_to_block(fast_blk);
+    bcx.seal_block(fast_blk);
+    let avals_ptr = bcx.ins().load(
+        types::I64,
+        MemFlags::trusted(),
+        t,
+        TABLE_ARRAY_PTR_OFFSET as i32,
+    );
+    let asize = bcx.ins().load(
+        types::I64,
+        MemFlags::trusted(),
+        t,
+        TABLE_ASIZE_OFFSET as i32,
+    );
+    let avals_bytes = bcx.ins().ishl_imm(asize, 3);
+    let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
+    let tag_addr = bcx.ins().iadd(atags_ptr, key_minus_1);
+    let tag = bcx
+        .ins()
+        .uload8(types::I64, MemFlags::trusted(), tag_addr, 0);
+    let tag_ok = bcx.ins().icmp_imm(IntCC::Equal, tag, want);
+    let val_off = bcx.ins().ishl_imm(key_minus_1, 3);
+    let val_addr = bcx.ins().iadd(avals_ptr, val_off);
+    let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
+    bcx.ins().brif(
+        tag_ok,
+        merge_blk,
+        &[BlockArg::Value(fast_bits)],
+        deopt_blk,
+        &[],
+    );
+
+    bcx.switch_to_block(slow_blk);
+    bcx.seal_block(slow_blk);
+    let (helper, key) = slow;
+    let slot = bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+    let out = bcx.ins().stack_addr(types::I64, slot, 0);
+    let mut sig = module.make_signature();
+    for _ in 0..4 {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let id = module
+        .declare_function(helper, Linkage::Import, &sig)
+        .ok()?;
+    let f = module.declare_func_in_func(id, bcx.func);
+    let want_v = bcx.ins().iconst(types::I64, want);
+    let call = bcx.ins().call(f, &[t, key, want_v, out]);
+    let ok = bcx.inst_results(call)[0];
+    let slow_bits = bcx.ins().stack_load(types::I64, slot, 0);
+    bcx.ins()
+        .brif(ok, merge_blk, &[BlockArg::Value(slow_bits)], deopt_blk, &[]);
+
+    bcx.switch_to_block(deopt_blk);
+    bcx.seal_block(deopt_blk);
+    let park_sig = module.make_signature();
+    let park_id = module
+        .declare_function("luna_jit_park_deopt", Linkage::Import, &park_sig)
+        .ok()?;
+    let park = module.declare_func_in_func(park_id, bcx.func);
+    bcx.ins().call(park, &[]);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.switch_to_block(merge_blk);
+    bcx.seal_block(merge_blk);
+    Some(bcx.block_params(merge_blk)[0])
 }
 
 /// v1.3 Phase AOT Stage 3 — backend-agnostic body of the int-chunk
@@ -902,7 +1059,7 @@ pub fn lower_int_chunk_into<M: Module>(
     if env_upval_present {
         let mut try_pc = 0usize;
         while try_pc + 3 < n {
-            if let Some(fold) = try_match_math_fold(&proto, try_pc) {
+            if let Some(fold) = try_match_math_fold(&proto, try_pc, float_only) {
                 folded_math[try_pc] = true;
                 folded_math[try_pc + 1] = true;
                 folded_math[try_pc + 2] = true;
@@ -913,6 +1070,18 @@ pub fn lower_int_chunk_into<M: Module>(
                 try_pc += 1;
             }
         }
+    }
+    // The folds are checked once, at entry; a table store in the body
+    // could reassign a math field after that.
+    if !math_folds.is_empty()
+        && proto.code.iter().any(|i| {
+            matches!(
+                i.op(),
+                Op::SetTable | Op::SetI | Op::SetField | Op::SetTabUp
+            )
+        })
+    {
+        return None;
     }
 
     let mut pc = 0;
@@ -1115,8 +1284,15 @@ pub fn lower_int_chunk_into<M: Module>(
                     // P11-S5b — math libcall fold. Emit-side folds the
                     // 4-op window into one cranelift libm call; here
                     // we just clear the per-register trackers.
-                } else if self_upval.get(a).copied().unwrap_or(false) {
-                    // S2c.C — self-recursive call.
+                } else if self_upval.get(a).copied().unwrap_or(false)
+                    && nargs as usize == num_params
+                {
+                    // S2c.C — self-recursive call, lowered as a direct
+                    // call of the compiled body, whose signature takes
+                    // exactly the function's parameters. The upvalue may
+                    // hold another function (the entry check catches that
+                    // at run time), so the call site's count can differ;
+                    // such a call is not lowered.
                     self_call_pcs[pc] = true;
                 } else {
                     return None;
@@ -2150,12 +2326,16 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 Op::Call => {
                     if folded_math[pc] {
-                        // P11-S5b — math libcall result is f64. Pin R[A]
-                        // (= Call.A = libm return slot) to Float.
-                        if !RegKind::unify(&mut reg_kinds[ins.a() as usize], RegKind::Float) {
+                        // P11-S5b — pin R[A] (= Call.A = the fold's
+                        // result slot) to the fold's result kind.
+                        let k = math_folds
+                            .iter()
+                            .find(|f| f.start_pc + 3 == pc)
+                            .map_or(RegKind::Float, MathFold::result_kind);
+                        if !RegKind::unify(&mut reg_kinds[ins.a() as usize], k) {
                             return None;
                         }
-                        latest_writer_kind[ins.a() as usize] = RegKind::Float;
+                        latest_writer_kind[ins.a() as usize] = k;
                         maybe_table[ins.a() as usize] = false;
                         is_nil_writer[ins.a() as usize] = false;
                     } else {
@@ -2255,9 +2435,14 @@ pub fn lower_int_chunk_into<M: Module>(
                         RegKind::Int | RegKind::Unset => RegKind::Int,
                         RegKind::Table => return None,
                     };
+                    // Likewise a nil-written init / limit / step (`for i =
+                    // 1, nil`, or a declared-uninitialized local): the
+                    // interpreter raises the 'for' error, the JIT would
+                    // loop over the Variable's zero payload.
                     for off in [0usize, 1, 2, 3] {
                         if matches!(latest_writer_kind[a + off], RegKind::Table)
                             || maybe_table[a + off]
+                            || (off < 3 && is_nil_writer[a + off])
                         {
                             return None;
                         }
@@ -2560,7 +2745,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 if let Some(fold) = math_folds.iter().find(|f| f.start_pc == p)
                     && let Some(slot) = state.get_mut(fold.dst_reg as usize)
                 {
-                    *slot = RegKind::Float;
+                    *slot = fold.result_kind();
                 }
                 continue;
             }
@@ -2989,6 +3174,20 @@ pub fn lower_int_chunk_into<M: Module>(
                 // `reg_kinds` — `current_kinds[a]` reflects pre-write
                 // state and may still be Unset before this op runs.
                 let k = a_kind(&reg_kinds, ins.a());
+                // A float result converts an integer operand first
+                // (`a / b` of two integers, or `i + 0.5`).
+                let (lhs, rhs) = if k == RegKind::Float {
+                    let to_float = |bcx: &mut FunctionBuilder<'_>, v: Value| {
+                        if bcx.func.dfg.value_type(v) == types::I64 {
+                            bcx.ins().fcvt_from_sint(types::F64, v)
+                        } else {
+                            v
+                        }
+                    };
+                    (to_float(&mut bcx, lhs), to_float(&mut bcx, rhs))
+                } else {
+                    (lhs, rhs)
+                };
                 let r = match (ins.op(), k) {
                     (Op::Add, RegKind::Float) => bcx.ins().fadd(lhs, rhs),
                     (Op::Sub, RegKind::Float) => bcx.ins().fsub(lhs, rhs),
@@ -3040,36 +3239,89 @@ pub fn lower_int_chunk_into<M: Module>(
                     .copied()
                     .expect("math fold for this PC");
 
-                let mut libm_sig = module.make_signature();
-                libm_sig.params.push(AbiParam::new(types::F64));
-                libm_sig.returns.push(AbiParam::new(types::F64));
-                let libm_id = module
-                    .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
-                    .ok()?;
-                let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
-
                 let arg_kind = a_kind(&reg_kinds, fold.arg_reg);
                 let arg_var = bcx.use_var(regs[fold.arg_reg as usize]);
-                let arg_f64 = match arg_kind {
-                    RegKind::Float => arg_var,
-                    RegKind::Int | RegKind::Unset => bcx.ins().fcvt_from_sint(types::F64, arg_var),
-                    // The fold's `Move` source can only be a Lua
-                    // numeric — the whitelist's `Op::Call B=2` gate
-                    // implies a numeric arg. A Table-typed source
-                    // would have been bailed earlier by the kind
-                    // sweep mismatching the fold's Float result.
-                    RegKind::Table => unreachable!("math fold arg can't be Table"),
+                let result = if fold.int_result {
+                    match arg_kind {
+                        RegKind::Float => {
+                            let r = if fold.fn_name == "floor" {
+                                bcx.ins().floor(arg_var)
+                            } else {
+                                bcx.ins().ceil(arg_var)
+                            };
+                            // An integer when it fits (NaN and the
+                            // infinities do not); otherwise the result
+                            // is a float, a kind this register cannot
+                            // hold, and the interpreter reruns the call.
+                            // Folds only compile in chunks without
+                            // table stores, so nothing has happened yet
+                            // that a rerun would repeat.
+                            let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
+                            let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
+                            let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
+                            let lt_hi = bcx.ins().fcmp(FloatCC::LessThan, r, hi);
+                            let fits = bcx.ins().band(ge_lo, lt_hi);
+                            let ok_blk = bcx.create_block();
+                            let bail_blk = bcx.create_block();
+                            bcx.ins().brif(fits, ok_blk, &[], bail_blk, &[]);
+                            bcx.switch_to_block(bail_blk);
+                            bcx.seal_block(bail_blk);
+                            let park_id = module
+                                .declare_function(
+                                    "luna_jit_park_deopt",
+                                    Linkage::Import,
+                                    &module.make_signature(),
+                                )
+                                .ok()?;
+                            let park_ref = module.declare_func_in_func(park_id, bcx.func);
+                            bcx.ins().call(park_ref, &[]);
+                            let zero = bcx.ins().iconst(types::I64, 0);
+                            bcx.ins().return_(&[zero]);
+                            bcx.switch_to_block(ok_blk);
+                            bcx.seal_block(ok_blk);
+                            bcx.ins().fcvt_to_sint(types::I64, r)
+                        }
+                        // An integer is its own floor and ceiling.
+                        RegKind::Int | RegKind::Unset => arg_var,
+                        RegKind::Table => unreachable!("math fold arg can't be Table"),
+                    }
+                } else {
+                    let arg_f64 = match arg_kind {
+                        RegKind::Float => arg_var,
+                        RegKind::Int | RegKind::Unset => {
+                            bcx.ins().fcvt_from_sint(types::F64, arg_var)
+                        }
+                        // The fold's `Move` source can only be a Lua
+                        // numeric — the whitelist's `Op::Call B=2` gate
+                        // implies a numeric arg. A Table-typed source
+                        // would have been bailed earlier by the kind
+                        // sweep mismatching the fold's Float result.
+                        RegKind::Table => unreachable!("math fold arg can't be Table"),
+                    };
+                    // 5.3+ `atan(y)` is `atan2(y, 1)` (lmathlib.c), which
+                    // libm rounds differently from `atan(y)`.
+                    let atan2 = fold.fn_name == "atan" && !float_only;
+                    let mut libm_sig = module.make_signature();
+                    libm_sig.params.push(AbiParam::new(types::F64));
+                    if atan2 {
+                        libm_sig.params.push(AbiParam::new(types::F64));
+                    }
+                    libm_sig.returns.push(AbiParam::new(types::F64));
+                    let name = if atan2 { "atan2" } else { fold.fn_name };
+                    let libm_id = module
+                        .declare_function(name, Linkage::Import, &libm_sig)
+                        .ok()?;
+                    let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
+                    let call_inst = if atan2 {
+                        let one = bcx.ins().f64const(1.0);
+                        bcx.ins().call(libm_ref, &[arg_f64, one])
+                    } else {
+                        bcx.ins().call(libm_ref, &[arg_f64])
+                    };
+                    bcx.inst_results(call_inst)[0]
                 };
-                let call_inst = bcx.ins().call(libm_ref, &[arg_f64]);
-                let result_f64 = bcx.inst_results(call_inst)[0];
-                aligned_def(
-                    &mut bcx,
-                    &regs,
-                    &reg_kinds,
-                    fold.dst_reg as usize,
-                    result_f64,
-                );
-                current_kinds[fold.dst_reg as usize] = RegKind::Float;
+                aligned_def(&mut bcx, &regs, &reg_kinds, fold.dst_reg as usize, result);
+                current_kinds[fold.dst_reg as usize] = fold.result_kind();
                 current_is_nil[fold.dst_reg as usize] = false;
 
                 pc += 3; // skip GetField + Move + Call; outer `pc += 1` lands past the Call.
@@ -3081,7 +3333,8 @@ pub fn lower_int_chunk_into<M: Module>(
                 let a = ins.a() as usize;
                 if is_upval_value_read[pc] {
                     // P11-S5d.J — ValueRead: fetch the upvalue at
-                    // runtime via `luna_jit_upval_get`. The dispatcher
+                    // runtime via `luna_jit_upval_get_float`, which deopts
+                    // on anything but a float. The dispatcher
                     // has pinned `JIT_CL` to the active closure for
                     // this entry, so the helper can resolve the
                     // upvalue cell. Result is the raw 8-byte payload;
@@ -3092,7 +3345,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     sig.params.push(AbiParam::new(types::I64));
                     sig.returns.push(AbiParam::new(types::I64));
                     let id = module
-                        .declare_function("luna_jit_upval_get", Linkage::Import, &sig)
+                        .declare_function("luna_jit_upval_get_float", Linkage::Import, &sig)
                         .ok()?;
                     let r = module.declare_func_in_func(id, bcx.func);
                     let call_inst = bcx.ins().call(r, &[idx_arg]);
@@ -3193,14 +3446,16 @@ pub fn lower_int_chunk_into<M: Module>(
 
                         // count = (limit - init) / step (positive-step)
                         //       = (init - limit) / -step (negative-step)
-                        // Both branches yield a non-negative count.
+                        // Both are unsigned (PUC `lua_Unsigned`): the span
+                        // of a loop over most of the integer range does not
+                        // fit an i64.
                         let span = if step_imm > 0 {
                             bcx.ins().isub(limit, init)
                         } else {
                             bcx.ins().isub(init, limit)
                         };
                         let abs_step = bcx.ins().iconst(types::I64, step_imm.abs());
-                        let count = bcx.ins().sdiv(span, abs_step);
+                        let count = bcx.ins().udiv(span, abs_step);
 
                         aligned_def(&mut bcx, &regs, &reg_kinds, a, init);
                         aligned_def(&mut bcx, &regs, &reg_kinds, a + 1, count);
@@ -3348,7 +3603,8 @@ pub fn lower_int_chunk_into<M: Module>(
                     // S5a — 5.4+ Int count form.
                     let count = bcx.use_var(regs[a + 1]);
                     let zero_i = bcx.ins().iconst(types::I64, 0);
-                    let cont = bcx.ins().icmp(IntCC::SignedGreaterThan, count, zero_i);
+                    // unsigned count (see ForPrep)
+                    let cont = bcx.ins().icmp(IntCC::NotEqual, count, zero_i);
 
                     let continue_blk = bcx.create_block();
                     let body_blk = pc_to_block[prep_pc + 1].expect("body BB");
@@ -3728,44 +3984,17 @@ pub fn lower_int_chunk_into<M: Module>(
                 let no_meta = bcx.ins().icmp(IntCC::Equal, metatable, zero_i64);
                 let fast_ok = bcx.ins().band(in_range, no_meta);
 
-                let fast_blk = bcx.create_block();
-                let slow_blk = bcx.create_block();
-                let merge_blk = bcx.create_block();
-                bcx.append_block_param(merge_blk, types::I64);
-                bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
-
-                bcx.switch_to_block(fast_blk);
-                bcx.seal_block(fast_blk);
-                let avals_ptr = bcx.ins().load(
-                    types::I64,
-                    MemFlags::trusted(),
-                    t,
-                    TABLE_ARRAY_PTR_OFFSET as i32,
-                );
-                let three = bcx.ins().iconst(types::I64, 3);
-                let val_off = bcx.ins().ishl(key_minus_1, three);
-                let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-                let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(fast_bits)]);
-
-                bcx.switch_to_block(slow_blk);
-                bcx.seal_block(slow_blk);
                 let key = bcx.ins().iconst(types::I64, key_imm);
-                let mut sig = module.make_signature();
-                sig.params.push(AbiParam::new(types::I64));
-                sig.params.push(AbiParam::new(types::I64));
-                sig.returns.push(AbiParam::new(types::I64));
-                let id = module
-                    .declare_function("luna_jit_table_get_int", Linkage::Import, &sig)
-                    .ok()?;
-                let r = module.declare_func_in_func(id, bcx.func);
-                let call_inst = bcx.ins().call(r, &[t, key]);
-                let slow_bits = bcx.inst_results(call_inst)[0];
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(slow_bits)]);
-
-                bcx.switch_to_block(merge_blk);
-                bcx.seal_block(merge_blk);
-                let v = bcx.block_params(merge_blk)[0];
+                let want = want_tag(reg_kinds.get(a).copied().unwrap_or(RegKind::Int));
+                let v = emit_checked_get(
+                    &mut bcx,
+                    module,
+                    t,
+                    fast_ok,
+                    key_minus_1,
+                    ("luna_jit_table_get_int_checked", key),
+                    want,
+                )?;
                 aligned_def(&mut bcx, &regs, &reg_kinds, a, v);
                 current_kinds[a] = reg_kinds[a];
                 current_is_nil[a] = false;
@@ -3775,10 +4004,11 @@ pub fn lower_int_chunk_into<M: Module>(
                 // path shape as the GetI inline aget (S5d.K), but the
                 // key sits in a register rather than as an immediate.
                 // Float keys (5.1/5.2 `t[1.0]`) get an exactness check
-                // (fcvt_to_sint + fcvt_from_sint == original) before
-                // the bounds + metatable guards; non-exact / fractional
-                // keys fall through to the helper which walks the
-                // hash part. Int keys (5.3+) skip the fcvt round-trip.
+                // (in the i64 range, and fcvt + fcvt back == original)
+                // before the bounds + metatable guards; NaN, infinite,
+                // out-of-range and fractional keys fall through to the
+                // helper which walks the hash part. Int keys (5.3+) skip
+                // the fcvt round-trip.
                 let a = ins.a() as usize;
                 let b = ins.b() as usize;
                 let c = ins.c() as usize;
@@ -3799,9 +4029,15 @@ pub fn lower_int_chunk_into<M: Module>(
                 // is the fast-path eligibility flag for the key's
                 // numeric form.
                 let (key_i64, key_ok) = if is_float_key {
-                    let key_int = bcx.ins().fcvt_to_sint(types::I64, key_raw);
+                    // the saturating form: the trapping one kills the
+                    // process on a NaN or out-of-range key
+                    let key_int = bcx.ins().fcvt_to_sint_sat(types::I64, key_raw);
                     let key_back = bcx.ins().fcvt_from_sint(types::F64, key_int);
-                    let exact = bcx.ins().fcmp(FloatCC::Equal, key_raw, key_back);
+                    let round_trips = bcx.ins().fcmp(FloatCC::Equal, key_raw, key_back);
+                    // 2^63 saturates to i64::MAX, which converts back to
+                    // 2^63: only the range check tells it apart
+                    let fits = trace::emit_f64_fits_i64(&mut bcx, key_raw);
+                    let exact = bcx.ins().band(round_trips, fits);
                     (key_int, exact)
                 } else {
                     // Int key — always "exact" by construction.
@@ -3829,49 +4065,14 @@ pub fn lower_int_chunk_into<M: Module>(
                 let bounds_ok = bcx.ins().band(in_range, no_meta);
                 let fast_ok = bcx.ins().band(bounds_ok, key_ok);
 
-                let fast_blk = bcx.create_block();
-                let slow_blk = bcx.create_block();
-                let merge_blk = bcx.create_block();
-                bcx.append_block_param(merge_blk, types::I64);
-                bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
-
-                bcx.switch_to_block(fast_blk);
-                bcx.seal_block(fast_blk);
-                let avals_ptr = bcx.ins().load(
-                    types::I64,
-                    MemFlags::trusted(),
-                    t,
-                    TABLE_ARRAY_PTR_OFFSET as i32,
-                );
-                let three = bcx.ins().iconst(types::I64, 3);
-                let val_off = bcx.ins().ishl(key_minus_1, three);
-                let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-                let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(fast_bits)]);
-
-                bcx.switch_to_block(slow_blk);
-                bcx.seal_block(slow_blk);
-                let (helper_name, key_arg) = if is_float_key {
+                let slow = if is_float_key {
                     let key_bits = bcx.ins().bitcast(types::I64, MemFlags::new(), key_raw);
-                    ("luna_jit_table_get_float", key_bits)
+                    ("luna_jit_table_get_float_checked", key_bits)
                 } else {
-                    ("luna_jit_table_get_int", key_raw)
+                    ("luna_jit_table_get_int_checked", key_raw)
                 };
-                let mut sig = module.make_signature();
-                sig.params.push(AbiParam::new(types::I64));
-                sig.params.push(AbiParam::new(types::I64));
-                sig.returns.push(AbiParam::new(types::I64));
-                let id = module
-                    .declare_function(helper_name, Linkage::Import, &sig)
-                    .ok()?;
-                let r = module.declare_func_in_func(id, bcx.func);
-                let call_inst = bcx.ins().call(r, &[t, key_arg]);
-                let slow_bits = bcx.inst_results(call_inst)[0];
-                bcx.ins().jump(merge_blk, &[BlockArg::Value(slow_bits)]);
-
-                bcx.switch_to_block(merge_blk);
-                bcx.seal_block(merge_blk);
-                let v = bcx.block_params(merge_blk)[0];
+                let want = want_tag(reg_kinds.get(a).copied().unwrap_or(RegKind::Int));
+                let v = emit_checked_get(&mut bcx, module, t, fast_ok, key_minus_1, slow, want)?;
                 aligned_def(&mut bcx, &regs, &reg_kinds, a, v);
                 current_kinds[a] = reg_kinds[a];
                 current_is_nil[a] = false;
@@ -3917,6 +4118,31 @@ pub fn lower_int_chunk_into<M: Module>(
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
 
+    // The body's self-recursive calls go straight to its own code, which
+    // is the Lua call only while the upvalue they load holds the running
+    // closure, and its math folds replace `math.<fn>(...)` by inline code,
+    // which is the Lua call only while the field holds the library
+    // function. The compiled code is shared by every closure of the proto
+    // (and by protos with the same code), so both are checked on each
+    // entry from the interpreter. Recursive calls enter the body directly:
+    // nothing the body runs can reassign the upvalue or, with no table
+    // stores (checked above), a field.
+    let mut math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)> = Vec::new();
+    for fold in &math_folds {
+        if !math_fns.iter().any(|&(_, n)| n.ptr_eq(fold.name_key)) {
+            math_fns.push((fold.math_key, fold.name_key));
+        }
+    }
+    let checks = EntryChecks {
+        self_upval: self_upval_idx.filter(|_| any_self_call),
+        math_fns,
+    };
+    let entry_id = if checks.self_upval.is_some() || !checks.math_fns.is_empty() {
+        define_checked_entry(module, &mut ctx, fn_id, &checks, num_params)?
+    } else {
+        fn_id
+    };
+
     // v1.3 Phase AOT Stage 3 — diag of the lowered chunk's shape
     // (used to live with the JIT finalize step; moved alongside in
     // the runtime wrapper [`try_compile_int_chunk`]). The generic
@@ -3924,7 +4150,7 @@ pub fn lower_int_chunk_into<M: Module>(
     let _ = ret_kind; // tracked for diag in the JIT wrapper; backend-agnostic here.
 
     Some((
-        fn_id,
+        entry_id,
         ChunkMeta {
             num_args: num_params as u8,
             returns_one: sees_return1,
@@ -3934,6 +4160,104 @@ pub fn lower_int_chunk_into<M: Module>(
             ret_is_table,
         },
     ))
+}
+
+/// What a chunk's entry verifies before running the body.
+struct EntryChecks {
+    /// Upvalue the self-recursive calls go through.
+    self_upval: Option<u32>,
+    /// `("math", name)` key pairs of the folded `math.<name>` calls.
+    math_fns: Vec<(Gc<LuaStr>, Gc<LuaStr>)>,
+}
+
+/// Defines the entry that runs `checks` before calling the chunk body
+/// `body_id`: when one fails it returns at once with a deopt parked, and
+/// the dispatcher runs the call in the interpreter.
+fn define_checked_entry<M: Module>(
+    module: &mut M,
+    ctx: &mut cranelift_codegen::Context,
+    body_id: FuncId,
+    checks: &EntryChecks,
+    num_params: usize,
+) -> Option<FuncId> {
+    let mut sig = module.make_signature();
+    for _ in 0..num_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let entry_id = module
+        .declare_function("luna_jit_chunk_entry", Linkage::Local, &sig)
+        .ok()?;
+    let mut self_sig = module.make_signature();
+    self_sig.params.push(AbiParam::new(types::I64));
+    self_sig.returns.push(AbiParam::new(types::I64));
+    let self_check_id = module
+        .declare_function("luna_jit_self_upval_check", Linkage::Import, &self_sig)
+        .ok()?;
+    let mut math_sig = module.make_signature();
+    math_sig.params.push(AbiParam::new(types::I64));
+    math_sig.params.push(AbiParam::new(types::I64));
+    math_sig.returns.push(AbiParam::new(types::I64));
+    let math_check_id = module
+        .declare_function("luna_jit_math_fn_is_library", Linkage::Import, &math_sig)
+        .ok()?;
+    let park_id = module
+        .declare_function(
+            "luna_jit_park_deopt",
+            Linkage::Import,
+            &module.make_signature(),
+        )
+        .ok()?;
+
+    ctx.func.signature = sig;
+    ctx.func.name = UserFuncName::user(0, entry_id.as_u32());
+    let mut fbc = FunctionBuilderContext::new();
+    let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
+    let entry = bcx.create_block();
+    let bail = bcx.create_block();
+    bcx.append_block_params_for_function_params(entry);
+    bcx.switch_to_block(entry);
+    let args: Vec<Value> = bcx.block_params(entry).to_vec();
+    // luna_jit_self_upval_check parks its own deopt; the math check
+    // leaves that to the bail block.
+    let park_on_bail = !checks.math_fns.is_empty();
+    if let Some(idx) = checks.self_upval {
+        let check_ref = module.declare_func_in_func(self_check_id, bcx.func);
+        let idx = bcx.ins().iconst(types::I64, i64::from(idx));
+        let call = bcx.ins().call(check_ref, &[idx]);
+        let ok = bcx.inst_results(call)[0];
+        let next = bcx.create_block();
+        bcx.ins().brif(ok, next, &[], bail, &[]);
+        bcx.switch_to_block(next);
+    }
+    for &(math_key, name_key) in &checks.math_fns {
+        let check_ref = module.declare_func_in_func(math_check_id, bcx.func);
+        let m = bcx.ins().iconst(types::I64, math_key.as_ptr() as i64);
+        let k = bcx.ins().iconst(types::I64, name_key.as_ptr() as i64);
+        let call = bcx.ins().call(check_ref, &[m, k]);
+        let ok = bcx.inst_results(call)[0];
+        let next = bcx.create_block();
+        bcx.ins().brif(ok, next, &[], bail, &[]);
+        bcx.switch_to_block(next);
+    }
+    let body_ref = module.declare_func_in_func(body_id, bcx.func);
+    let call = bcx.ins().call(body_ref, &args);
+    let r = bcx.inst_results(call)[0];
+    bcx.ins().return_(&[r]);
+
+    bcx.switch_to_block(bail);
+    if park_on_bail {
+        let park_ref = module.declare_func_in_func(park_id, bcx.func);
+        bcx.ins().call(park_ref, &[]);
+    }
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.seal_all_blocks();
+    bcx.finalize();
+    module.define_function(entry_id, ctx).ok()?;
+    module.clear_context(ctx);
+    Some(entry_id)
 }
 
 /// S3 — align a value with the Variable's declared Cranelift type
@@ -3970,7 +4294,7 @@ fn aligned_def(
 /// promotion. Caller (`try_compile_int_chunk`'s pre-scan) marks the
 /// participating PCs in `folded_math[]` and pushes the fold to
 /// `math_folds`.
-fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
+fn try_match_math_fold(proto: &Proto, start_pc: usize, float_only: bool) -> Option<MathFold> {
     let code = &proto.code;
     let i0 = *code.get(start_pc)?;
     let i1 = *code.get(start_pc + 1)?;
@@ -4036,6 +4360,9 @@ fn try_match_math_fold(proto: &Proto, start_pc: usize) -> Option<MathFold> {
         fn_name,
         arg_reg,
         dst_reg: a,
+        int_result: !float_only && is_rounding(fn_name),
+        math_key: s,
+        name_key: fname,
     })
 }
 

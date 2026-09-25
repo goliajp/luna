@@ -5,6 +5,8 @@
 //! Stays stdlib-only — the luna-core 0-dep contract forbids pulling in
 //! `byteorder`, `nom`, or a ULEB128 crate.
 
+use super::error::Bad;
+
 /// Cursor over a slice of bytes with truncation-safe primitive readers.
 pub(super) struct Reader<'a> {
     b: &'a [u8],
@@ -29,22 +31,34 @@ impl<'a> Reader<'a> {
         self.p
     }
 
-    pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self.p.checked_add(n).ok_or("truncated chunk")?;
-        let slice = self.b.get(self.p..end).ok_or("truncated chunk")?;
+    pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8], Bad> {
+        let end = self.p.checked_add(n).ok_or(Bad::Truncated)?;
+        let slice = self.b.get(self.p..end).ok_or(Bad::Truncated)?;
         self.p = end;
         Ok(slice)
     }
 
-    pub(super) fn u8(&mut self) -> Result<u8, String> {
+    pub(super) fn u8(&mut self) -> Result<u8, Bad> {
         Ok(self.take(1)?[0])
     }
 
-    pub(super) fn u32(&mut self) -> Result<u32, String> {
+    pub(super) fn u32(&mut self) -> Result<u32, Bad> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    pub(super) fn bytes(&mut self) -> Result<&'a [u8], String> {
+    /// A dumped element count, refused when the chunk has fewer than
+    /// `min_size` bytes left per element — the count sizes an allocation,
+    /// and a corrupt one must not request gigabytes before the reads that
+    /// would have caught the truncation.
+    pub(super) fn count(&self, n: u64, min_size: usize) -> Result<usize, Bad> {
+        let left = (self.b.len() - self.p) as u64;
+        match n.checked_mul(min_size as u64) {
+            Some(need) if need <= left => Ok(n as usize),
+            _ => Err(Bad::Truncated),
+        }
+    }
+
+    pub(super) fn bytes(&mut self) -> Result<&'a [u8], Bad> {
         let n = self.u32()? as usize;
         self.take(n)
     }
@@ -61,13 +75,13 @@ impl<'a> Reader<'a> {
     /// Advance the reader to byte position `to`. Mirrors the rewind /
     /// re-seek pattern needed by `puc_51`'s look-ahead.
     #[allow(dead_code)]
-    pub(super) fn skip_to(&mut self, to: usize) -> Result<(), String> {
+    pub(super) fn skip_to(&mut self, to: usize) -> Result<(), Bad> {
         if to < self.p || to > self.b.len() {
-            return Err(format!(
+            return Err(Bad::Code(format!(
                 "skip_to {to} out of range (cur {}, len {})",
                 self.p,
                 self.b.len()
-            ));
+            )));
         }
         self.p = to;
         Ok(())
@@ -91,7 +105,7 @@ impl<'a> Reader<'a> {
 /// Hand-rolled to keep the luna-core 0-dep contract (no `leb128` crate).
 /// Caps at 10 payload bytes (u64 saturation); rejects overflow.
 #[allow(dead_code)] // Phase LB Wave 2 (5.4 / 5.5 translators) call this
-pub(super) fn read_puc_varint(r: &mut Reader) -> Result<u64, String> {
+pub(super) fn read_puc_varint(r: &mut Reader) -> Result<u64, Bad> {
     let mut acc: u64 = 0;
     for _ in 0..10 {
         let byte = r.u8()?;
@@ -99,7 +113,7 @@ pub(super) fn read_puc_varint(r: &mut Reader) -> Result<u64, String> {
         // If any of the top 7 bits of `acc` are set, the new bits would
         // be lost — that's a u64 overflow.
         if acc >> 57 != 0 {
-            return Err("puc varint value overflows u64".to_string());
+            return Err(Bad::IntOverflow);
         }
         acc = (acc << 7) | (byte & 0x7f) as u64;
         if byte & 0x80 == 0 {
@@ -107,5 +121,5 @@ pub(super) fn read_puc_varint(r: &mut Reader) -> Result<u64, String> {
             return Ok(acc);
         }
     }
-    Err("puc varint value too long (max 10 bytes)".to_string())
+    Err(Bad::IntOverflow)
 }

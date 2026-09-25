@@ -29,12 +29,14 @@ pub struct Frame {
     /// `u32::MAX` on a fresh frame so its first instruction fires a line event
     pub hook_oldpc: u32,
     /// true if this Lua frame was entered across a C boundary (call_value: a
-    /// metamethod, pcall, __close handler, or a coroutine body). Debug level
-    /// traversal (`debug.getinfo`/traceback) inserts a synthetic C frame below it.
+    /// metamethod, pcall, __close handler, or a coroutine body). The debug
+    /// interface does not read it: it places the running natives themselves
+    /// among the frames.
     pub from_c: bool,
-    /// the metamethod event this frame is handling (e.g. "close" for a `__close`
-    /// handler call), so `debug.traceback`/getinfo can name it "metamethod
-    /// 'close'" (PUC `CallInfo.u.l.tm`/`luaG_funcnamefromtm`).
+    /// the metamethod event this frame is handling (e.g. "close" for a
+    /// `__close` handler call); the debug interface reads `"gc"` to recognize
+    /// a finalizer (PUC `CIST_FIN`), and names other handlers from the
+    /// instruction that called them.
     pub tm: Option<&'static str>,
     /// true when this frame is the hook function itself (PUC sets
     /// `CIST_HOOKED`). `debug.getinfo(1).namewhat` returns `"hook"` for it.
@@ -360,6 +362,11 @@ pub struct Proto {
     /// on the Proto, mirroring the `JitProtoState::Failed`
     /// invariant.
     pub trace_gave_up: std::cell::Cell<bool>,
+    /// Trace heads (pc) whose recordings failed to compile, with the
+    /// number of failures. The hot counters are not reset after a
+    /// recording, so without this every later call or back-edge would
+    /// record and compile the same failing trace again.
+    pub(crate) trace_compile_failures: crate::jit::send_compat::TRefLock<Vec<(u32, u8)>>,
     /// P12-S2 — compiled trace cache for this Proto. A successful
     /// `compile_trace(record)` (S2.B) parks its `CompiledTrace` here;
     /// `Vm::run`'s S3 dispatcher (next phase) iterates this on each

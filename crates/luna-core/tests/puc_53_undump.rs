@@ -1,27 +1,10 @@
-//! Phase LB Wave 2 — PUC Lua 5.3 `.luac` undumper tests.
+//! PUC 5.3 chunk loading on hand-made chunks: header diagnostics
+//! (`LUAC_INT`, `LUAC_NUM`, the `sizeof` bytes), the gate, constant tags
+//! and `LOADBOOL` with a skip.
 //!
-//! No `luac5.3` ships on the dev machine (only `luac` 5.5 via Homebrew),
-//! so the in-tree tests hand-craft minimal 5.3 chunks covering the
-//! translator's high-risk features per
-//!
-//! 1. 6-bit opcode decode shim (`op:6 | A:8 | C:9 | B:9` layout)
-//! 2. `LUAC_INT` (0x5678) + `LUAC_NUM` (370.5) sanity-byte validation
-//! 3. `sizeof(size_t)=8` byte (5.1-5.3 only) validation
-//! 4. const-pool subtype-tagged decode (`LUA_TNUMFLT=3`, `LUA_TNUMINT=19`,
-//!    `LUA_TSHRSTR=4`, `LUA_TLNGSTR=20`)
-//! 5. PUC 5.3 string format (single-byte length, no trailing nul)
-//! 6. `LOADBOOL` lowering to luna `LoadFalse` / `LoadTrue` / `LFalseSkip`
-//! 7. Per-instruction `op:7|A:8|k:1|B:8|C:8` re-encode
-//! 8. End-to-end: `Vm::load` + execution of a hand-crafted "return 42"
-//!    chunk
-//!
-//! Once a `luac5.3` binary appears on PATH, the `LUAC53` env var gates a
-//! `#[ignore]`d integration smoke test (similar to puc_51 / puc_54 / puc_55).
-//!
-//! See `crates/luna-core/src/vm/dump/puc/puc_53.rs` for the translator
-//! design + audit-tracked polish list (generic-for + RK-on-B +
-//! `LOADBOOL true+skip` + `CONCAT B!=A` all closed in Phase 4 PU
-//! Waves 2-3; `OP_JMP close-upvalues` still tracked).
+//! What a real `luac 5.3` chunk does in luna is pinned by
+//! `diff_puc.rs::diff_puc_bytecode`, which runs the whole diff_puc corpus
+//! through stock `luac` (`PUC_LUAC_53`) and compares with PUC.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -228,10 +211,7 @@ fn rejects_bad_luac_int() {
     chunk[18] = 0xFF;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(
-        s.contains("LUAC_INT") || s.contains("endianness"),
-        "got: {s}"
-    );
+    assert_eq!(s, "test: bad binary format (integer format mismatch)");
 }
 
 #[test]
@@ -244,7 +224,7 @@ fn rejects_bad_sizeof_size_t() {
     chunk[13] = 4;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(s.contains("size_t"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (size_t size mismatch)");
 }
 
 #[test]
@@ -257,7 +237,7 @@ fn rejects_bad_sizeof_int() {
     chunk[12] = 8;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(s.contains("sizeof(int)"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (int size mismatch)");
 }
 
 #[test]
@@ -270,10 +250,7 @@ fn rejects_bad_luac_num() {
     chunk[32] = 0xFF;
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(
-        s.contains("LUAC_NUM") || s.contains("float format"),
-        "got: {s}"
-    );
+    assert_eq!(s, "test: bad binary format (float format mismatch)");
 }
 
 #[test]
@@ -302,9 +279,10 @@ fn rejects_wrong_version_byte() {
     let mut chunk = build_return_42_chunk();
     chunk[4] = 0x52; // pretend to be 5.2 — should route elsewhere
     let err = vm.load(&chunk, b"=test").unwrap_err();
-    // routes to 5.2 stub which says "not yet implemented"
+    // the 5.2 reader meets 5.3's LUAC_DATA where 5.2 keeps its endianness
+    // flag (header byte 6)
     let s = String::from_utf8_lossy(&err.msg).into_owned();
-    assert!(s.contains("5.2") || s.contains("LB5"), "got: {s}");
+    assert_eq!(s, "test: bad binary format (integer format mismatch)");
 }
 
 /// End-to-end: invoke the loaded chunk and check the returned value is
@@ -428,15 +406,4 @@ fn end_to_end_loadbool_true_skip_returns_true() {
         Value::Bool(true) => {}
         other => panic!("expected Bool(true) (skipped LoadFalse), got {other:?}"),
     }
-}
-
-/// Optional integration smoke test: when the user has `luac5.3`
-/// installed (`brew install lua@5.3`), `LUAC53=/path/to/luac5.3 cargo
-/// test --ignored end_to_end_luac53_corpus` exercises an actual
-/// .luac file from a stock compiler. Default CI doesn't run this.
-#[test]
-#[ignore = "requires luac5.3 on PATH (set LUAC53 env var)"]
-fn end_to_end_luac53_corpus() {
-    // Placeholder — wire up to a tests/official/luac-binaries/5.3/
-    // vendor tree once luac5.3 is available on the dev box.
 }

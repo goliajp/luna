@@ -478,7 +478,11 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
         }
         let count = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
         cur += 4;
-        per_exit_tags.reserve(count);
+        // the count comes from the blob: reserve only what the rest of it
+        // can hold (an entry takes at least its 8-byte header), so a
+        // corrupt count fails in the loop below instead of asking for
+        // gigabytes
+        per_exit_tags.reserve(count.min((bytes.len() - cur) / 8));
         for _ in 0..count {
             if bytes.len() < cur + 8 {
                 return Err("v2 tail truncated at entry header");
@@ -515,7 +519,9 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
         }
         let count = u32::from_le_bytes(bytes[cur..cur + 4].try_into().unwrap()) as usize;
         cur += 4;
-        per_exit_inline.reserve(count);
+        // as above: an entry is at least 16 bytes (cont_pc, resume pc and
+        // the two length fields)
+        per_exit_inline.reserve(count.min((bytes.len() - cur) / 16));
         for _ in 0..count {
             if bytes.len() < cur + 12 {
                 return Err("v3 tail truncated at entry header");
@@ -621,6 +627,38 @@ pub const AOT_TRACE_INDEX_ENTRY_SIZE_CHECK: () = assert!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tail count the rest of the blob cannot hold is a truncation. It
+    /// sized a `reserve` before, so a corrupt count asked for tens of
+    /// gigabytes and aborted the process (found by `fuzz_aot_meta`).
+    #[test]
+    fn a_tail_count_larger_than_the_blob_is_refused_before_allocating() {
+        let header = AotTraceMetaHeader {
+            magic: AOT_META_MAGIC,
+            version: AOT_META_VERSION,
+            head_pc: 0,
+            n_ops: 0,
+            window_size: 0,
+            dispatchable: 1,
+            tag_res_kind: pack_tag_res_kind(TagResKind::AllInt),
+            entry_tags_len: 0,
+            exit_tags_len: 0,
+        };
+        let blob = encode_meta_blob(&header, &[], &[], &[], &[]);
+        let v2 = AotTraceMetaHeader::SIZE;
+        let mut bad = blob.clone();
+        bad[v2..v2 + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            decode_meta_blob(&bad).err(),
+            Some("v2 tail truncated at entry header")
+        );
+        let mut bad = blob;
+        bad[v2 + 4..v2 + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            decode_meta_blob(&bad).err(),
+            Some("v3 tail truncated at entry header")
+        );
+    }
 
     #[test]
     fn header_round_trip() {
