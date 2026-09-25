@@ -95,7 +95,8 @@ fn deep_nesting_is_limited() {
     let deep = format!("x = {}0{}", "(".repeat(300), ")".repeat(300));
     let e = err(&deep, Lua55);
     let m = e.msg_str();
-    assert!(m.contains("too many C levels"), "msg: {}", m);
+    // 5.4+ count parser levels on the C stack (PUC `luaE_checkcstack`)
+    assert_eq!(m, "C stack overflow");
     // ...but reasonable depth is fine
     let fine = format!("x = {}0{}", "(".repeat(100), ")".repeat(100));
     ok(&fine, Lua55);

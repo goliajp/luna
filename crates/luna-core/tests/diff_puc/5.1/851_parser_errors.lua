@@ -1,0 +1,25 @@
+-- Parser errors: how each dialect words and quotes them, which token it
+-- is looking at when it gives up, and where `...`/`break` are checked.
+local ld = loadstring or load
+local function e(src)
+  local f, msg = ld(src, "=c")
+  print(f and "ok" or msg)
+end
+e("local end = 1")
+e("return 1 x = 2")
+e("f() = 1")
+e("(a) = 1")
+e("a, f() = 1, 2")
+e("x")
+e("local function () end")
+e("function f(1) end")
+e("function f() return ... end")
+e("return function() return ... end")
+e("break")
+e("x = 1\nbreak\nx = 2\n\n")
+e("local function f()\n  break\nend\n\nx = 1")
+e("while true do local function f() break end end")
+e("local a" .. string.rep(",a", 210))
+e("x = 1\ny = [[\n\n]] +")
+print(select(2, ld("x = = 1", "a very long chunk name that goes on and on and on and on and on and on and on and ends here")))
+print(select(2, ld("x = = 1", "line one\rline two")))

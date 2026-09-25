@@ -4,9 +4,10 @@
 
 use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
-use crate::frontend::lexer::Lexer;
+use crate::frontend::goto_check::GotoCheck;
+use crate::frontend::lexer::{Lexed, Lexer};
 use crate::frontend::span::Span;
-use crate::frontend::token::{Token, TokenInfo};
+use crate::frontend::token::{Near, Token, TokenInfo, near_text};
 use crate::version::LuaVersion;
 
 /// PUC `LUAI_MAXCCALLS` — the parser's nesting cap. PUC sets it to 200 and
@@ -15,6 +16,9 @@ use crate::version::LuaVersion;
 /// sub_expr + suffixedexp + block), so the same 200 budget keeps
 /// errors.lua's `testrep` baseline — 190 levels compile, 201 hits the wall.
 const MAX_DEPTH: u32 = 200;
+
+/// PUC `MAXVARS`: active locals per function.
+const MAXVARS: u32 = 200;
 
 /// `(collective attrib, declared names, initializer exprs)` of a declaration.
 type DeclList = (Option<Attrib>, Vec<AttribName>, Vec<ExprId>);
@@ -94,10 +98,28 @@ pub(crate) enum TokenSource<'s> {
     },
 }
 
+/// A token as the parser holds it. `char` is set when the lexer handed back
+/// a byte no token starts with; `info.tok` is then a placeholder that no
+/// grammar rule accepts ([`Token::At`], which only MacroLua lexes, and
+/// MacroLua never parses from a live lexer).
+struct Cur {
+    info: TokenInfo,
+    char: Option<u8>,
+}
+
 impl<'s> TokenSource<'s> {
-    fn next_token(&mut self) -> Result<TokenInfo, SyntaxError> {
+    fn next_token(&mut self) -> Result<Cur, SyntaxError> {
         match self {
-            TokenSource::Lexer(l) => l.next_token(),
+            TokenSource::Lexer(l) => Ok(match l.next_lexed()? {
+                Lexed::Tok(info) => Cur { info, char: None },
+                Lexed::Char(c, mut info) => {
+                    info.tok = Token::At;
+                    Cur {
+                        info,
+                        char: Some(c),
+                    }
+                }
+            }),
             TokenSource::PreExpanded {
                 tokens,
                 cursor,
@@ -106,15 +128,21 @@ impl<'s> TokenSource<'s> {
                 if *cursor >= tokens.len() {
                     let line = tokens.last().map(|t| t.line).unwrap_or(1);
                     let _ = src;
-                    Ok(TokenInfo {
-                        tok: Token::Eof,
-                        span: Span::new(0, 0),
-                        line,
+                    Ok(Cur {
+                        info: TokenInfo {
+                            tok: Token::Eof,
+                            span: Span::new(0, 0),
+                            line,
+                        },
+                        char: None,
                     })
                 } else {
                     let t = tokens[*cursor].clone();
                     *cursor += 1;
-                    Ok(t)
+                    Ok(Cur {
+                        info: t,
+                        char: None,
+                    })
                 }
             }
         }
@@ -124,6 +152,18 @@ impl<'s> TokenSource<'s> {
         match self {
             TokenSource::Lexer(l) => l.src(),
             TokenSource::PreExpanded { src, .. } => src,
+        }
+    }
+
+    /// PUC `ls->linenumber`: where the scanner stands, which is where every
+    /// syntax error is reported.
+    fn line(&self) -> u32 {
+        match self {
+            TokenSource::Lexer(l) => l.line(),
+            TokenSource::PreExpanded { tokens, cursor, .. } => tokens
+                .get(cursor.saturating_sub(1))
+                .or(tokens.last())
+                .map_or(1, |t| t.line),
         }
     }
 }
@@ -137,8 +177,29 @@ impl<'s> TokenSource<'s> {
 /// transparently for MacroLua; direct callers feed expanded tokens via
 /// [`parse_tokens`].
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
+    parse_at_depth(src, version, 0).map(|p| p.chunk)
+}
+
+/// A parsed chunk with what the public [`Chunk`] has no place for.
+pub(crate) struct Parsed {
+    pub(crate) chunk: Chunk,
+    /// the line of the closing `end` of each `while` / `for` statement, by
+    /// `StatId` (0 for other statements): PUC attributes the code it emits
+    /// after reading that `end` to its line
+    pub(crate) end_lines: Vec<u32>,
+}
+
+/// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
+/// counts its nesting on the running thread's `nCcalls`, so a chunk loaded
+/// near the C-call limit fails to *parse* (and `require` reports it as an
+/// error loading the module) before the call that would run it overflows.
+pub(crate) fn parse_at_depth(
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+) -> Result<Parsed, SyntaxError> {
     let lex = Lexer::new(src, version);
-    parse_from_source(TokenSource::Lexer(lex), version)
+    parse_from_source(TokenSource::Lexer(lex), version, c_depth)
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua
@@ -150,6 +211,16 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
+    parse_tokens_at_depth(tokens, src, version, 0).map(|p| p.chunk)
+}
+
+/// [`parse_tokens`] at a C depth (see [`parse_at_depth`]).
+pub(crate) fn parse_tokens_at_depth(
+    tokens: Vec<TokenInfo>,
+    src: &[u8],
+    version: LuaVersion,
+    c_depth: u32,
+) -> Result<Parsed, SyntaxError> {
     parse_from_source(
         TokenSource::PreExpanded {
             tokens,
@@ -157,26 +228,36 @@ pub fn parse_tokens(
             src,
         },
         version,
+        c_depth,
     )
 }
 
 fn parse_from_source<'s>(
     mut lex: TokenSource<'s>,
     version: LuaVersion,
-) -> Result<Chunk, SyntaxError> {
-    let tok = lex.next_token()?;
+    c_depth: u32,
+) -> Result<Parsed, SyntaxError> {
+    let cur = lex.next_token()?;
     let mut p = Parser {
         lex,
-        tok,
+        tok: cur.info,
+        tok_char: cur.char,
         peeked: None,
         prev_line: 1,
         exprs: Vec::new(),
         stats: Vec::new(),
         stat_lines: Vec::new(),
-        depth: 0,
+        end_lines: Vec::new(),
+        depth: c_depth,
         version,
         // the main chunk is the bottom-most function context (line 0 → main)
-        func_local_count: vec![(0, 0)],
+        func_local_count: vec![(0, 0, 0)],
+        funcs: vec![FnFlow {
+            vararg: true,
+            loops: 0,
+        }],
+        gotos: GotoCheck::new(version),
+        last_line: 1,
         upval_chain_51: if version <= LuaVersion::Lua51 {
             vec![FnUvSlot {
                 line_defined: 0,
@@ -186,24 +267,42 @@ fn parse_from_source<'s>(
             Vec::new()
         },
     };
+    if let Some(g) = p.gotos.as_mut() {
+        g.enter_function();
+    }
     let block = p.block()?;
     if p.tok.tok != Token::Eof {
-        return Err(p.error("'<eof>' expected"));
+        return Err(p.error_expected("<eof>"));
     }
+    p.close_function()?;
     let end_line = p.prev_line;
-    Ok(Chunk {
-        exprs: p.exprs,
-        stats: p.stats,
-        stat_lines: p.stat_lines,
-        block,
-        end_line,
+    Ok(Parsed {
+        chunk: Chunk {
+            exprs: p.exprs,
+            stats: p.stats,
+            stat_lines: p.stat_lines,
+            block,
+            end_line,
+        },
+        end_lines: p.end_lines,
     })
 }
 
 struct Parser<'s> {
     lex: TokenSource<'s>,
     tok: TokenInfo,
-    peeked: Option<TokenInfo>,
+    /// The byte behind a placeholder `tok` (see [`Cur`]).
+    tok_char: Option<u8>,
+    peeked: Option<Cur>,
+    /// Per open function (main chunk first): what `...` and `break` are
+    /// checked against while parsing, as PUC does.
+    funcs: Vec<FnFlow>,
+    /// Gotos (and 5.2-5.4 `break`) are resolved while parsing; see
+    /// [`GotoCheck`].
+    gotos: Option<GotoCheck>,
+    /// PUC `ls->lastline`: where the scanner stood before reading the
+    /// current token, i.e. the line the last consumed token ended on.
+    last_line: u32,
     /// line of the previously consumed token (for the 5.1 ambiguity check)
     prev_line: u32,
     exprs: Vec<Expr>,
@@ -211,14 +310,18 @@ struct Parser<'s> {
     /// starting source line of each statement (by StatId), for precise per-
     /// instruction line info in the compiler
     stat_lines: Vec<u32>,
+    /// see [`Parsed::end_lines`]
+    end_lines: Vec<u32>,
     depth: u32,
     version: LuaVersion,
     /// One entry per function context (main chunk + nested functions): the
-    /// running active-local count (PUC `nactvar`) and the function's defining
-    /// line so the limit error can render "in function at line N". Pushed by
+    /// running active-local count (PUC `nactvar`), the function's defining
+    /// line so the limit error can render "in function at line N", and the
+    /// locals declared but not yet in scope (`local a, b` before its `=`
+    /// list is parsed). Pushed by
     /// `func_body`, popped on exit. Without parse-time tracking, errors.lua
     /// :775 would race a later structural error (a missing `end`) and lose.
-    func_local_count: Vec<(u32, u32)>,
+    func_local_count: Vec<(u32, u32, u32)>,
     /// Parse-time upvalue accounting for PUC 5.1 (errors.lua :238). PUC 5.1's
     /// `singlevaraux` resolves each identifier as it parses and stops at
     /// `MAXUPVAL=60`; luna defers name resolution to the compiler so a stack
@@ -232,6 +335,12 @@ struct Parser<'s> {
     upval_chain_51: Vec<FnUvSlot>,
 }
 
+struct FnFlow {
+    vararg: bool,
+    /// Loops enclosing the current position inside this function.
+    loops: u32,
+}
+
 #[derive(Default)]
 struct FnUvSlot {
     locals: Vec<Box<str>>,
@@ -243,34 +352,64 @@ impl<'s> Parser<'s> {
     // ---- token plumbing ----
 
     fn advance(&mut self) -> Result<TokenInfo, SyntaxError> {
+        self.last_line = self.lex.line();
         let next = match self.peeked.take() {
             Some(t) => t,
             None => self.lex.next_token()?,
         };
         self.prev_line = self.tok.line;
-        Ok(std::mem::replace(&mut self.tok, next))
+        self.tok_char = next.char;
+        Ok(std::mem::replace(&mut self.tok, next.info))
     }
 
     fn peek(&mut self) -> Result<&Token, SyntaxError> {
         if self.peeked.is_none() {
             self.peeked = Some(self.lex.next_token()?);
         }
-        Ok(&self.peeked.as_ref().unwrap().tok)
+        Ok(&self.peeked.as_ref().unwrap().info.tok)
     }
 
-    fn near(&self) -> String {
-        self.tok
-            .tok
-            .describe(self.lex.src(), self.tok.span, self.version)
+    fn near(&self) -> Vec<u8> {
+        match self.tok_char {
+            Some(c) => near_text(self.version, Near::Char(c)),
+            None => self
+                .tok
+                .tok
+                .near_bytes(self.lex.src(), self.tok.span, self.version),
+        }
     }
 
+    /// PUC `luaX_syntaxerror`: `msg near <current token>`.
     fn error(&self, msg: impl AsRef<str>) -> SyntaxError {
+        // a NUL byte comes back from PUC's scanner as token 0, which
+        // `lexerror` reads as "no near-token"
+        if self.tok_char == Some(0) {
+            return self.plain_error(msg.as_ref());
+        }
         let mut bytes = msg.as_ref().as_bytes().to_vec();
         bytes.extend_from_slice(b" near ");
-        bytes.extend_from_slice(self.near().as_bytes());
+        bytes.extend_from_slice(&self.near());
         SyntaxError {
-            line: self.tok.line,
+            line: self.lex.line(),
             msg: bytes,
+        }
+    }
+
+    /// PUC `luaK_semerror` / `luaX_lexerror(.., 0)`: no near-token.
+    fn plain_error(&self, msg: impl Into<Vec<u8>>) -> SyntaxError {
+        SyntaxError {
+            line: self.lex.line(),
+            msg: msg.into(),
+        }
+    }
+
+    /// PUC `error_expected`. `what` is a token as `luaX_token2str` spells
+    /// it; the `<name>`-style pseudo-tokens are quoted only by 5.1.
+    fn error_expected(&self, what: &str) -> SyntaxError {
+        if what.starts_with('<') && self.version >= LuaVersion::Lua52 {
+            self.error(format!("{what} expected"))
+        } else {
+            self.error(format!("'{what}' expected"))
         }
     }
 
@@ -285,7 +424,7 @@ impl<'s> Parser<'s> {
 
     fn expect(&mut self, tok: Token, what: &str) -> Result<(), SyntaxError> {
         if !self.accept(tok)? {
-            return Err(self.error(format!("'{what}' expected")));
+            return Err(self.error_expected(what));
         }
         Ok(())
     }
@@ -299,8 +438,8 @@ impl<'s> Parser<'s> {
         who_line: u32,
     ) -> Result<(), SyntaxError> {
         if !self.accept(tok)? {
-            if who_line == self.tok.line {
-                return Err(self.error(format!("'{what}' expected")));
+            if who_line == self.lex.line() {
+                return Err(self.error_expected(what));
             }
             return Err(self.error(format!(
                 "'{what}' expected (to close '{who}' at line {who_line})"
@@ -311,7 +450,7 @@ impl<'s> Parser<'s> {
 
     fn expect_name(&mut self) -> Result<Name, SyntaxError> {
         if !matches!(self.tok.tok, Token::Name(_)) {
-            return Err(self.error("<name> expected"));
+            return Err(self.error_expected("<name>"));
         }
         let info = self.advance()?;
         let Token::Name(text) = info.tok else {
@@ -325,22 +464,43 @@ impl<'s> Parser<'s> {
 
     fn enter(&mut self) -> Result<(), SyntaxError> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH {
-            // PUC 5.1 `enterlevel`: "chunk has too many syntax levels".
-            // 5.2+ `LUAI_MAXCCALLS` overflow: "too many C levels (limit is
-            // N) in main function near <token>". errors.lua 5.1 :214 vs
-            // 5.4 :650 baseline on each spelling.
-            let msg: &[u8] = if self.version <= LuaVersion::Lua51 {
-                b"chunk has too many syntax levels"
-            } else {
-                b"too many C levels (limit is 200) in main function"
-            };
-            return Err(SyntaxError {
-                line: self.tok.line,
-                msg: msg.to_vec(),
-            });
+        // 5.1-5.3 `enterlevel` fails past the limit; 5.4+ `luaE_incCstack`
+        // at it
+        let limit = if self.version >= LuaVersion::Lua54 {
+            MAX_DEPTH - 1
+        } else {
+            MAX_DEPTH
+        };
+        if self.depth > limit {
+            return Err(self.levels_error());
         }
         Ok(())
+    }
+
+    /// PUC's nesting-limit error: 5.1 `enterlevel` has its own wording and
+    /// no near-token; 5.2/5.3 run it through `errorlimit` ("C levels", in
+    /// the function being parsed); 5.4+ count parser levels on the C stack,
+    /// and `luaE_checkcstack` raises a runtime error that carries no
+    /// position because the running function is `load`, not Lua code.
+    fn levels_error(&self) -> SyntaxError {
+        match self.version {
+            LuaVersion::Lua51 => self.plain_error("chunk has too many syntax levels"),
+            LuaVersion::Lua52 | LuaVersion::Lua53 => self.error(format!(
+                "too many C levels (limit is 200) in {}",
+                self.where_()
+            )),
+            _ => SyntaxError::unpositioned("C stack overflow"),
+        }
+    }
+
+    /// PUC `errorlimit`'s `where`: the function being parsed.
+    fn where_(&self) -> String {
+        let &(_, line_defined, _) = self.func_local_count.last().expect("func ctx");
+        if self.func_local_count.len() == 1 {
+            "main function".to_string()
+        } else {
+            format!("function at line {line_defined}")
+        }
     }
 
     fn leave(&mut self) {
@@ -355,6 +515,15 @@ impl<'s> Parser<'s> {
     fn push_stat(&mut self, s: Stat) -> StatId {
         self.stats.push(s);
         StatId((self.stats.len() - 1) as u32)
+    }
+
+    /// Push a statement that ended with the `end` just read.
+    fn push_ended_stat(&mut self, s: Stat) -> StatId {
+        let id = self.push_stat(s);
+        let idx = id.0 as usize;
+        self.end_lines.resize(idx + 1, 0);
+        self.end_lines[idx] = self.prev_line;
+        id
     }
 
     // ---- blocks & statements ----
@@ -374,8 +543,22 @@ impl<'s> Parser<'s> {
         // short blocks; without this the cap fires spuriously).
         let local_snapshot = self.func_local_count.last().expect("func ctx").0;
         let locals_51_snap = self.snap_locals_51();
+        self.goto_step(|g| {
+            g.enter_block(false);
+            Ok(())
+        })?;
         let mut stats = Vec::new();
         loop {
+            // labels wait for the no-op statements that follow them
+            if self.gotos.as_ref().is_some_and(GotoCheck::has_open_labels)
+                && !matches!(self.tok.tok, Token::Semi | Token::DColon)
+            {
+                let last = matches!(
+                    self.tok.tok,
+                    Token::Else | Token::Elseif | Token::End | Token::Eof
+                );
+                self.goto_step(|g| g.finish_labels(last))?;
+            }
             if self.block_follow() {
                 break;
             }
@@ -385,7 +568,7 @@ impl<'s> Parser<'s> {
             }
             if self.tok.tok == Token::Break && self.version.break_is_last_statement() {
                 let line = self.tok.line;
-                self.advance()?;
+                self.break_stat()?;
                 stats.push(self.push_stat(Stat::Break { line }));
                 self.accept(Token::Semi)?;
                 break;
@@ -398,6 +581,7 @@ impl<'s> Parser<'s> {
                 self.accept(Token::Semi)?;
             }
         }
+        self.goto_step(GotoCheck::leave_block)?;
         self.leave();
         self.func_local_count.last_mut().expect("func ctx").0 = local_snapshot;
         self.restore_locals_51(locals_51_snap);
@@ -436,6 +620,7 @@ impl<'s> Parser<'s> {
             )
         {
             let stat = self.global_stat()?;
+            self.set_stat_line(stat, start_line);
             return Ok(Some(stat));
         }
         let stat = match self.tok.tok {
@@ -462,29 +647,113 @@ impl<'s> Parser<'s> {
             Token::DColon => {
                 self.advance()?;
                 let name = self.expect_name()?;
+                let text = name.text.clone();
+                self.goto_step(|g| g.label_before_close(&text, start_line))?;
                 self.expect(Token::DColon, "::")?;
                 Some(self.push_stat(Stat::Label(name)))
             }
             Token::Break => {
                 let line = self.tok.line;
-                self.advance()?;
+                self.break_stat()?;
                 Some(self.push_stat(Stat::Break { line }))
             }
             Token::Goto => {
+                // 5.4 reads the goto's line after skipping the keyword, 5.5
+                // takes the statement's
+                let mut line = self.lex.line();
                 self.advance()?;
+                if self.version >= LuaVersion::Lua55 {
+                    line = start_line;
+                } else if self.version >= LuaVersion::Lua54 {
+                    line = self.lex.line();
+                }
                 let name = self.expect_name()?;
+                let text = name.text.clone();
+                self.goto_step(|g| g.goto_stat(&text, line))?;
                 Some(self.push_stat(Stat::Goto(name)))
             }
             _ => Some(self.expr_stat()?),
         };
         if let Some(sid) = stat {
-            let idx = sid.0 as usize;
-            if self.stat_lines.len() <= idx {
-                self.stat_lines.resize(idx + 1, 0);
-            }
-            self.stat_lines[idx] = start_line;
+            self.set_stat_line(sid, start_line);
         }
         Ok(stat)
+    }
+
+    fn set_stat_line(&mut self, sid: StatId, line: u32) {
+        let idx = sid.0 as usize;
+        if self.stat_lines.len() <= idx {
+            self.stat_lines.resize(idx + 1, 0);
+        }
+        self.stat_lines[idx] = line;
+    }
+
+    /// Consume `break`, checking it the way the dialect does: 5.1 and 5.5
+    /// on the spot (5.1 after skipping the keyword, 5.5 before); 5.2–5.4
+    /// treat it as a goto to the loop's end, so a break outside a loop is
+    /// an unresolved goto when the function closes.
+    fn break_stat(&mut self) -> Result<(), SyntaxError> {
+        let line = self.lex.line();
+        let in_loop = self.funcs.last().expect("func ctx").loops > 0;
+        if !in_loop && self.version >= LuaVersion::Lua55 {
+            return Err(self.error("break outside loop"));
+        }
+        self.advance()?;
+        if !in_loop && self.version <= LuaVersion::Lua51 {
+            return Err(self.error("no loop to break"));
+        }
+        if self.version >= LuaVersion::Lua55 {
+            return Ok(());
+        }
+        self.goto_step(|g| g.goto_stat("break", line))
+    }
+
+    /// A loop body with the loop's own variables (`vars`) in scope: PUC's
+    /// loop block, which places the "break" label, around a block for the
+    /// declared variables.
+    fn loop_block(&mut self, vars: &[Name]) -> Result<Block, SyntaxError> {
+        self.funcs.last_mut().expect("func ctx").loops += 1;
+        self.goto_step(|g| {
+            g.enter_block(true);
+            g.enter_block(false);
+            for v in vars {
+                g.declare(&v.text);
+            }
+            Ok(())
+        })?;
+        let body = self.block()?;
+        self.goto_step(|g| {
+            g.leave_block()?;
+            g.leave_block()
+        })?;
+        self.funcs.last_mut().expect("func ctx").loops -= 1;
+        Ok(body)
+    }
+
+    /// PUC `close_func` → `leaveblock` of the function's outer block, which
+    /// runs after the closing token has been consumed: a goto (or 5.2-5.4
+    /// `break`) that found no label is reported there, at the scanner's
+    /// line.
+    fn close_function(&mut self) -> Result<(), SyntaxError> {
+        let _ = self.funcs.pop().expect("func ctx");
+        self.goto_step(GotoCheck::leave_block)
+    }
+
+    /// Run a step of the goto check (dialects that have one), turning its
+    /// error into a syntax error without a near-token (PUC `semerror`),
+    /// which 5.5 reports at the line of the last token consumed.
+    fn goto_step(
+        &mut self,
+        step: impl FnOnce(&mut GotoCheck) -> Result<(), String>,
+    ) -> Result<(), SyntaxError> {
+        match self.gotos.as_mut().map(step) {
+            Some(Err(msg)) if self.version >= LuaVersion::Lua55 => Err(SyntaxError {
+                line: self.last_line,
+                msg: msg.into_bytes(),
+            }),
+            Some(Err(msg)) => Err(self.plain_error(msg)),
+            _ => Ok(()),
+        }
     }
 
     fn if_stat(&mut self) -> Result<StatId, SyntaxError> {
@@ -516,15 +785,15 @@ impl<'s> Parser<'s> {
         self.advance()?;
         let cond = self.expr()?;
         self.expect(Token::Do, "do")?;
-        let body = self.block()?;
+        let body = self.loop_block(&[])?;
         self.expect_match(Token::End, "end", "while", line)?;
-        Ok(self.push_stat(Stat::While { cond, body }))
+        Ok(self.push_ended_stat(Stat::While { cond, body }))
     }
 
     fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
         let line = self.tok.line;
         self.advance()?;
-        let body = self.block()?;
+        let body = self.loop_block(&[])?;
         self.expect_match(Token::Until, "until", "repeat", line)?;
         let cond = self.expr()?;
         Ok(self.push_stat(Stat::Repeat { body, cond }))
@@ -547,9 +816,9 @@ impl<'s> Parser<'s> {
                 };
                 self.expect(Token::Do, "do")?;
                 self.add_local_51(&first.text);
-                let body = self.block()?;
+                let body = self.loop_block(std::slice::from_ref(&first))?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_stat(Stat::NumericFor {
+                Ok(self.push_ended_stat(Stat::NumericFor {
                     var: first,
                     start,
                     limit,
@@ -569,9 +838,9 @@ impl<'s> Parser<'s> {
                 for v in &vars {
                     self.add_local_51(&v.text);
                 }
-                let body = self.block()?;
+                let body = self.loop_block(&vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
-                Ok(self.push_stat(Stat::GenericFor {
+                Ok(self.push_ended_stat(Stat::GenericFor {
                     vars,
                     exprs,
                     body,
@@ -633,6 +902,7 @@ impl<'s> Parser<'s> {
         let mut names = Vec::new();
         loop {
             let name = self.expect_name()?;
+            self.new_local()?;
             let attrib = self.attrib()?;
             names.push(AttribName { name, attrib });
             if !self.accept(Token::Comma)? {
@@ -654,13 +924,25 @@ impl<'s> Parser<'s> {
             let name = self.expect_name()?;
             // `local function f` declares `f` in the enclosing function before
             // the body is parsed (PUC `localfunc`'s pre-declare); count it.
-            self.bump_locals(1)?;
+            self.new_local()?;
+            self.activate_locals()?;
             self.add_local_51(&name.text);
+            let text = name.text.clone();
+            self.goto_step(|g| {
+                g.declare(&text);
+                Ok(())
+            })?;
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::LocalFunction { name, body }));
         }
         let (collective, names, exprs) = self.attnamelist()?;
-        self.bump_locals(names.len() as u32)?;
+        self.activate_locals()?;
+        self.goto_step(|g| {
+            for an in &names {
+                g.declare(&an.name.text);
+            }
+            Ok(())
+        })?;
         for an in &names {
             self.add_local_51(&an.name.text);
         }
@@ -676,12 +958,21 @@ impl<'s> Parser<'s> {
         if self.accept(Token::Function)? {
             let line = self.prev_line;
             let name = self.expect_name()?;
+            let text = name.text.clone();
+            self.goto_step(|g| {
+                g.declare(&text);
+                Ok(())
+            })?;
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
         }
         // `global [attrib] '*'`
         let leading = self.attrib()?;
         if self.accept(Token::Star)? {
+            self.goto_step(|g| {
+                g.declare("*");
+                Ok(())
+            })?;
             return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
         }
         let mut names = Vec::new();
@@ -698,6 +989,13 @@ impl<'s> Parser<'s> {
         } else {
             Vec::new()
         };
+        // the declared names come into scope after their initializers
+        self.goto_step(|g| {
+            for an in &names {
+                g.declare(&an.name.text);
+            }
+            Ok(())
+        })?;
         Ok(self.push_stat(Stat::Global {
             collective: leading,
             names,
@@ -707,42 +1005,71 @@ impl<'s> Parser<'s> {
 
     fn expr_stat(&mut self) -> Result<StatId, SyntaxError> {
         let first = self.suffixed_expr()?;
-        if matches!(self.tok.tok, Token::Assign | Token::Comma) {
-            let mut targets = vec![first];
-            while self.accept(Token::Comma)? {
-                // PUC's `restassign` enforces `nvars + nCcalls < LUAI_MAXCCALLS`
-                // (200) at each comma; otherwise a runaway multi-assign would
-                // exhaust the C stack. errors.lua :650 builds a 500-target list
-                // and expects the limit error.
-                if targets.len() >= 200 {
-                    let msg: &[u8] = if self.version <= LuaVersion::Lua51 {
-                        b"chunk has too many syntax levels"
-                    } else {
-                        b"too many C levels (limit is 200) in main function"
-                    };
-                    return Err(SyntaxError {
-                        line: self.tok.line,
-                        msg: msg.to_vec(),
-                    });
-                }
-                targets.push(self.suffixed_expr()?);
-            }
-            self.expect(Token::Assign, "=")?;
-            for &t in &targets {
-                if !matches!(self.exprs[t.0 as usize], Expr::Name(_) | Expr::Index { .. }) {
-                    return Err(self.error("syntax error"));
-                }
-            }
-            let exprs = self.exprlist()?;
-            return Ok(self.push_stat(Stat::Assign { targets, exprs }));
-        }
-        if !matches!(
+        let is_call = matches!(
             self.exprs[first.0 as usize],
             Expr::Call { .. } | Expr::MethodCall { .. }
-        ) {
-            return Err(self.error("syntax error"));
+        );
+        // 5.1 `exprstat` takes anything that is not a call as the start of
+        // an assignment (so a lone `x` wants an '='); 5.2+ look for '=' or
+        // ',' first and otherwise demand a call.
+        let assign = if self.version <= LuaVersion::Lua51 {
+            !is_call
+        } else {
+            matches!(self.tok.tok, Token::Assign | Token::Comma)
+        };
+        if !assign {
+            if !is_call {
+                return Err(self.error("syntax error"));
+            }
+            return Ok(self.push_stat(Stat::Call(first)));
         }
-        Ok(self.push_stat(Stat::Call(first)))
+        // PUC `assignment`/`restassign` check each target as soon as it is
+        // parsed, so the near-token is the one following that target.
+        let mut targets = vec![first];
+        let mut entered = 0;
+        loop {
+            let last = *targets.last().expect("one target");
+            if !matches!(
+                self.exprs[last.0 as usize],
+                Expr::Name(_) | Expr::Index { .. }
+            ) {
+                return Err(self.error("syntax error"));
+            }
+            if !self.accept(Token::Comma)? {
+                break;
+            }
+            // PUC recurses once per extra target and bounds that against
+            // the C-call budget (errors.lua :650 expects the error for 500
+            // targets), after reading the target: 5.1 as a count of
+            // "variables in assignment", 5.2/5.3 as C levels, 5.4+ by
+            // entering a level that stays entered until the statement ends.
+            let nvars = targets.len() as u32;
+            targets.push(self.suffixed_expr()?);
+            match self.version {
+                LuaVersion::Lua51 => {
+                    let limit = MAX_DEPTH.saturating_sub(self.depth);
+                    if nvars > limit {
+                        return Err(self.plain_error(format!(
+                            "{} has more than {limit} variables in assignment",
+                            self.where_()
+                        )));
+                    }
+                }
+                LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                    if nvars + self.depth > MAX_DEPTH {
+                        return Err(self.levels_error());
+                    }
+                }
+                _ => {
+                    self.enter()?;
+                    entered += 1;
+                }
+            }
+        }
+        self.expect(Token::Assign, "=")?;
+        let exprs = self.exprlist()?;
+        self.depth -= entered;
+        Ok(self.push_stat(Stat::Assign { targets, exprs }))
     }
 
     // ---- expressions ----
@@ -803,6 +1130,9 @@ impl<'s> Parser<'s> {
                 Expr::False
             }
             Token::Ellipsis => {
+                if !self.funcs.last().expect("func ctx").vararg {
+                    return Err(self.error("cannot use '...' outside a vararg function"));
+                }
                 self.advance()?;
                 Expr::Vararg
             }
@@ -982,7 +1312,7 @@ impl<'s> Parser<'s> {
 
     fn func_body(&mut self, line: u32) -> Result<FuncBody, SyntaxError> {
         self.expect(Token::LParen, "(")?;
-        self.func_local_count.push((0, line));
+        self.func_local_count.push((0, line, 0));
         self.enter_fn_51(line);
         let mut params = Vec::new();
         let mut vararg = Vararg::None;
@@ -999,31 +1329,41 @@ impl<'s> Parser<'s> {
                             Vararg::Anonymous
                         };
                         if let Vararg::Named(ref n) = vararg {
+                            self.new_local()?;
                             self.add_local_51(&n.text);
                         }
                         break;
                     }
                     Token::Name(_) => {
                         let p = self.expect_name()?;
+                        self.new_local()?;
                         self.add_local_51(&p.text);
                         params.push(p);
                     }
-                    _ => return Err(self.error("<name> expected")),
+                    _ => return Err(self.error("<name> or '...' expected")),
                 }
                 if !self.accept(Token::Comma)? {
                     break;
                 }
             }
         }
+        self.activate_locals()?;
+        self.goto_step(|g| {
+            g.enter_function();
+            for p in &params {
+                g.declare(&p.text);
+            }
+            Ok(())
+        })?;
         self.expect(Token::RParen, ")")?;
-        // params count against the function's local cap (PUC `new_localvar`
-        // for parameters); errors raised at this point still attribute to
-        // the function's defining line.
-        let nparams = params.len() as u32 + matches!(vararg, Vararg::Named(_)) as u32;
-        self.bump_locals(nparams)?;
+        self.funcs.push(FnFlow {
+            vararg: !matches!(vararg, Vararg::None),
+            loops: 0,
+        });
         let block = self.block()?;
         let end_line = self.tok.line; // the `end` token's line, before consuming
         self.expect_match(Token::End, "end", "function", line)?;
+        self.close_function()?;
         self.func_local_count.pop();
         self.leave_fn_51();
         Ok(FuncBody {
@@ -1085,8 +1425,8 @@ impl<'s> Parser<'s> {
     /// PUC 5.1 `singlevaraux`-equivalent: resolve `name` against the current
     /// nested-function stack of declared locals, accumulating an upvalue entry
     /// in every intermediate function between the referencing site and the
-    /// owning scope. Returns the PUC "too many upvalues" error the moment a
-    /// link's upvalue set crosses 60. No-op for non-5.1 dialects.
+    /// owning scope. Returns PUC 5.1's "has more than 60 upvalues" error the
+    /// moment a link's upvalue set crosses 60. No-op for non-5.1 dialects.
     fn ident_lookup_51(&mut self, name: &str) -> Result<(), SyntaxError> {
         if !self.track_uv_51() {
             return Ok(());
@@ -1119,38 +1459,55 @@ impl<'s> Parser<'s> {
                 } else {
                     format!("function at line {line_defined}")
                 };
+                // 5.1 `errorlimit`: "<where> has more than <limit> <what>"
                 return Err(SyntaxError {
                     line: self.tok.line,
-                    msg: format!("too many upvalues (limit is {MAXUPVAL}) in {where_}")
-                        .into_bytes(),
+                    msg: format!("{where_} has more than {MAXUPVAL} upvalues").into_bytes(),
                 });
             }
         }
         Ok(())
     }
 
-    /// Increment the active-local count of the function we are currently
-    /// parsing and raise PUC's "too many local variables" error if the cap
-    /// is exceeded. The "in function at line N" suffix uses the function's
-    /// defining line that `func_body` stashed alongside the counter.
-    fn bump_locals(&mut self, n: u32) -> Result<(), SyntaxError> {
-        const MAXVARS: u32 = 200;
-        let depth = self.func_local_count.len();
-        let &(cur, line_defined) = self.func_local_count.last().expect("func ctx pushed");
-        let new = cur.saturating_add(n);
-        if new > MAXVARS {
-            let where_ = if depth == 1 {
-                "main function".to_string()
+    /// PUC `new_localvar`, right after a local's name is read: up to 5.4
+    /// the local cap counts declared-but-pending names too, and the error
+    /// points at the token after the name (5.1 words it differently and
+    /// shows no token).
+    fn new_local(&mut self) -> Result<(), SyntaxError> {
+        let &(active, line_defined, pending) = self.func_local_count.last().expect("func ctx");
+        if self.version <= LuaVersion::Lua54 && active + pending + 1 > MAXVARS {
+            return Err(if self.version <= LuaVersion::Lua51 {
+                let what = if self.func_local_count.len() == 1 {
+                    "main function".to_string()
+                } else {
+                    format!("function at line {line_defined}")
+                };
+                self.plain_error(format!("{what} has more than {MAXVARS} local variables"))
             } else {
-                format!("function at line {line_defined}")
-            };
-            return Err(SyntaxError {
-                line: self.tok.line,
-                msg: format!("too many local variables (limit is {MAXVARS}) in {where_}")
-                    .into_bytes(),
+                self.local_limit_error()
             });
         }
-        self.func_local_count.last_mut().unwrap().0 = new;
+        self.func_local_count.last_mut().expect("func ctx").2 += 1;
         Ok(())
+    }
+
+    /// PUC `adjustlocalvars`: the pending locals come into scope. 5.5 checks
+    /// the cap here instead of at declaration.
+    fn activate_locals(&mut self) -> Result<(), SyntaxError> {
+        let (active, _, pending) = *self.func_local_count.last().expect("func ctx");
+        if self.version >= LuaVersion::Lua55 && active + pending > MAXVARS {
+            return Err(self.local_limit_error());
+        }
+        let slot = self.func_local_count.last_mut().expect("func ctx");
+        slot.0 += pending;
+        slot.2 = 0;
+        Ok(())
+    }
+
+    fn local_limit_error(&self) -> SyntaxError {
+        self.error(format!(
+            "too many local variables (limit is {MAXVARS}) in {}",
+            self.where_()
+        ))
     }
 }

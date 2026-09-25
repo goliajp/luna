@@ -1,6 +1,6 @@
 # Embedding
 
-Cookbook for hosting luna inside a Rust program. Current as of v3.0.0.
+Cookbook for hosting luna inside a Rust program. Current as of v3.1.0.
 Companion docs: [`architecture.md`](architecture.md) (crate layout +
 JIT pipeline), [`threading.md`](threading.md) (async + multi-thread
 patterns), [`compatibility.md`](compatibility.md) (per-dialect
@@ -635,6 +635,15 @@ match vm.eval("error('something failed')") {
     }
 }
 ```
+
+To handle an error where it is raised, before the stack unwinds — as
+`lua.c` does to print a traceback — call through a message handler:
+`vm.call_value_with_handler(f, &args, msgh)` is PUC's `lua_pcall` with a
+handler, and inside the handler `vm.traceback(Some(msg), 1)` is
+`luaL_traceback`. `vm.load_file(name, mode)` and
+`vm.load_buffer(src, chunkname, mode)` are `luaL_loadfilex` /
+`luaL_loadbufferx`, returning the error message those leave. The `luna`
+CLI (`crates/luna-jit/src/bin/luna.rs`) is built on these.
 
 `LuaErrorKind` classifies common cases:
 

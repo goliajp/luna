@@ -547,8 +547,11 @@ impl Heap {
             resume_at: None,
             error_value: None,
             error_traceback: None,
+            error_levels: None,
+            natives: 0..0,
             stack: Vec::new(),
             frames: Vec::new(),
+            frame_ccmt: Vec::new(),
             open_upvals: Vec::new(),
             tbc: Vec::new(),
             top: 0,
@@ -1289,6 +1292,19 @@ impl Heap {
         }
     }
 
+    /// Every userdata still awaiting finalization, registered or already
+    /// queued. The io library uses it to reach all open files the way C's
+    /// `fflush(NULL)` and `exit` reach every `FILE*`.
+    pub(crate) fn finalizable_userdata(&self) -> Vec<Gc<crate::runtime::Userdata>> {
+        self.finalize
+            .iter()
+            .chain(self.tobefnz.iter())
+            // SAFETY: both lists hold GcHeader pointers of live objects registered for finalization (heap.rs:5-7); a finalizable object is not freed before its finalizer runs.
+            .filter(|&&h| unsafe { (*h).tag } == ObjTag::Userdata)
+            .map(|&h| Gc::from_ptr(h as *mut crate::runtime::Userdata))
+            .collect()
+    }
+
     /// Take the objects awaiting their `__gc` call (the VM runs the
     /// finalizers). Each entry is dispatched on its `ObjTag` so the caller
     /// can look up `__gc` for either a table or a proxy userdata.
@@ -1753,6 +1769,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
+            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let inner = heap.adopt_proto(inner);
@@ -1779,6 +1796,7 @@ mod tests {
             call_hot_count: std::cell::Cell::new(0),
             trace_discard_count: std::cell::Cell::new(0),
             trace_gave_up: std::cell::Cell::new(false),
+            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         };
         let outer = heap.adopt_proto(outer);

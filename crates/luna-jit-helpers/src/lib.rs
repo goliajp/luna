@@ -276,6 +276,9 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) {
 /// Op::Closure trace JIT) silently wraps the closure pointer as
 /// `Value::Int(ptr_bits)` — a number that later calls fail with
 /// "attempt to call a number value".
+///
+/// No compiler emits this call any more: the trace JIT stores through
+/// the `luna_jit_table_set_*_checked` helpers. It stays for the 3.x API.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -313,6 +316,9 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
 ///
 /// Same metatable / pending_err short-circuit as the other table
 /// helpers — `__newindex` cases deopt to interp.
+///
+/// No compiler emits this call any more: the trace JIT stores through
+/// the `luna_jit_table_set_*_checked` helpers. It stays for the 3.x API.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
@@ -348,6 +354,113 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
         )
     };
     let _ = table.set(&mut vm.heap, key, v);
+}
+
+/// The trace JIT's table stores, `t[key] = val`, with the value given as
+/// a `raw` tag and payload. They return `1` when stored. They store
+/// nothing and return `0` when the table has a metatable, whose
+/// `__newindex` the helper would bypass, or when the key cannot index a
+/// table (nil, NaN); the caller then side-exits at the storing op and
+/// the interpreter performs it. The trace goes no further than that op,
+/// so nothing it did before is repeated.
+///
+/// # Safety
+/// `t` is a live table, and `val_tag` is the tag of a register holding
+/// `val_raw` (see `runtime::value::raw`).
+#[inline]
+unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, val_tag: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        vm.jit.counters.deopt += 1;
+        return 0;
+    }
+    // SAFETY: the caller passes a register's tag with its payload.
+    let val = unsafe {
+        luna_core::runtime::Value::pack(
+            val_tag as u8,
+            luna_core::runtime::value::RawVal {
+                zero: val_raw as u64,
+            },
+        )
+    };
+    // SAFETY: `t` is a live table the trace holds in a register.
+    let table = unsafe { g.as_mut() };
+    if table.set(&mut vm.heap, key, val).is_err() {
+        vm.jit.counters.deopt += 1;
+        return 0;
+    }
+    1
+}
+
+/// `t[key] = val` with an integer key; see `checked_store`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_set_int_checked(
+    t: i64,
+    key: i64,
+    val_raw: i64,
+    val_tag: i64,
+) -> i64 {
+    // SAFETY: see `checked_store`.
+    unsafe { checked_store(t, luna_core::runtime::Value::Int(key), val_raw, val_tag) }
+}
+
+/// `t[key] = val` with an interned string key; see `checked_store`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_set_field_checked(
+    t: i64,
+    key_ptr: i64,
+    val_raw: i64,
+    val_tag: i64,
+) -> i64 {
+    let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
+        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: see `checked_store`.
+    unsafe { checked_store(t, luna_core::runtime::Value::Str(key), val_raw, val_tag) }
+}
+
+/// `t[key] = val` with a key of any type, given like the value; see
+/// `checked_store`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_set_checked(
+    t: i64,
+    key_raw: i64,
+    key_tag: i64,
+    val_raw: i64,
+    val_tag: i64,
+) -> i64 {
+    // SAFETY: the trace passes a register's tag with its payload.
+    let key = unsafe {
+        luna_core::runtime::Value::pack(
+            key_tag as u8,
+            luna_core::runtime::value::RawVal {
+                zero: key_raw as u64,
+            },
+        )
+    };
+    // SAFETY: see `checked_store`.
+    unsafe { checked_store(t, key, val_raw, val_tag) }
+}
+
+/// The trace JIT's `#t`: the length, or `-1` when the table has a
+/// metatable (whose `__len` the helper would bypass), in which case the
+/// caller side-exits at the op and the interpreter performs it.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_len_checked(t: i64) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+        unsafe { current_jit_vm() }.jit.counters.deopt += 1;
+        return -1;
+    }
+    g.len()
 }
 
 /// P12-S11-A — read `t[key_ptr_as_str]` and return raw payload bits.
@@ -423,6 +536,108 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
     unsafe { raw.zero as i64 }
 }
 
+/// Trace-JIT table reads that check what they read. The trace types a
+/// read's result from how the next ops use it (arithmetic → Int, indexing
+/// → Table, ...) and compiles the rest of the trace for that type. These
+/// variants return `1` and write the payload through `out` only when the
+/// value has tag `want_tag` and the table has no metatable (whose
+/// `__index` the helper would bypass); otherwise they return `0` and the
+/// caller side-exits at the reading op, so the interpreter performs it.
+unsafe fn checked_read(v: luna_core::runtime::Value, want_tag: i64, out: *mut i64) -> i64 {
+    let (tag, raw) = v.unpack();
+    if tag as i64 != want_tag {
+        return 0;
+    }
+    // SAFETY: `out` is a stack slot of the calling trace, valid for one
+    // i64 write; `raw` was just unpacked from a live Value.
+    unsafe { *out = raw.zero as i64 };
+    1
+}
+
+/// `t[key]` with an integer key; see `checked_read`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_int_checked(
+    t: i64,
+    key: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        return 0;
+    }
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get_int(key), want_tag, out) }
+}
+
+/// `t[key]` with a float key (its bits); see `checked_read`. The table
+/// normalises an integral key and finds nothing for a NaN.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_float_checked(
+    t: i64,
+    key_bits: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        return 0;
+    }
+    let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get(k), want_tag, out) }
+}
+
+/// `t[key]` with an interned string key; see `checked_read`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_table_get_field_checked(
+    t: i64,
+    key_ptr: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    let g: luna_core::runtime::Gc<luna_core::runtime::Table> =
+        luna_core::runtime::Gc::from_ptr(t as *mut luna_core::runtime::Table);
+    if g.metatable().is_some() {
+        return 0;
+    }
+    let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
+        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get(luna_core::runtime::Value::Str(key)), want_tag, out) }
+}
+
+/// `upvals[upval_idx][key]` (a global read through `_ENV`); see
+/// `checked_read`. An upvalue that is not a plain table also fails.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_op_get_tab_up_checked(
+    upval_idx: i64,
+    key_ptr: i64,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: called only from Cranelift-emitted JIT code; `enter_jit(vm, Some(cl))` pinned JIT_CL for the dispatch window.
+    let cl = unsafe { current_jit_closure() };
+    let luna_core::runtime::Value::Table(g) = vm.upval_get(cl, upval_idx as u32) else {
+        return 0;
+    };
+    if g.metatable().is_some() {
+        return 0;
+    }
+    let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
+        luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
+    // SAFETY: see `checked_read`.
+    unsafe { checked_read(g.get(luna_core::runtime::Value::Str(key)), want_tag, out) }
+}
+
 /// P12-S6-A2 — write `Value::Nil` to `t[key]` (Int key). Used by
 /// trace JIT when a SetList/SetI/SetTable's source register is a
 /// `RegKind::Nil` (e.g. Lua's `local t = {nil, nil}` table
@@ -433,6 +648,9 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
 /// Same metatable / `jit_pending_err` short-circuit as the other
 /// `_table_set_*` helpers — caller deopts on `pending_err` and
 /// the interpreter re-runs the op to honour `__newindex`.
+///
+/// No compiler emits this call any more: the trace JIT stores through
+/// the `luna_jit_table_set_*_checked` helpers. It stays for the 3.x API.
 // SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
@@ -570,6 +788,108 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     let (_tag, raw) = v.unpack();
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
+}
+
+/// The method JIT's read of a 5.1/5.2 upvalue that feeds arithmetic: the
+/// compiled code takes the payload as a float, the only number type of
+/// those dialects. Anything else — nil, a numeric string, a table with
+/// `__add` — needs the interpreter, which raises or coerces as the dialect
+/// does, so this parks a deopt and the call is re-run there.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_some() {
+        return 0;
+    }
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let cl = unsafe { current_jit_closure() };
+    match vm.upval_get(cl, idx as u32) {
+        luna_core::runtime::Value::Float(f) => f.to_bits() as i64,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: upvalue is not a float"));
+            0
+        }
+    }
+}
+
+/// Method-JIT entry check for a chunk compiled with self-recursive
+/// calls: they are direct calls to the chunk's own code, which is right
+/// only while `upvals[idx]` holds the running closure. A forward-declared
+/// local (`local a, b; a = function() ... b() end`) or a reassigned one
+/// holds another function, so the call is parked as a deopt and the
+/// interpreter runs it. Returns 1 when the upvalue is the running
+/// closure, 0 after parking the deopt.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: the method-JIT dispatcher enters with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    match vm.upval_get(cl, idx as u32) {
+        luna_core::runtime::Value::Closure(c) if c.ptr_eq(cl) => 1,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: callee is not the running closure"));
+            0
+        }
+    }
+}
+
+/// A trace side exit that resumes at the trace's own head: the op there
+/// has not run, so the dispatcher must let the interpreter run it before
+/// admitting the trace again, or the two would hand the same pc back and
+/// forth forever.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    vm.jit.suppress_downrec_admit_once = true;
+}
+
+/// Parks a deopt for the running method-JIT call, which then returns at
+/// once: the dispatcher discards its result and runs the call in the
+/// interpreter. Used where compiled code finds, before doing anything
+/// observable, that it cannot compute the result.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_park_deopt() {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    if vm.jit.pending_err.is_none() {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: compiled code cannot run this call"));
+    }
+}
+
+/// Whether `_ENV.math.<name>` of the running closure is still the
+/// library function the JIT inlined for `math.<name>(...)`: 1 if it is,
+/// 0 otherwise. Raw reads suffice: a field that is present is found
+/// before any `__index`, and an absent one is not the library function.
+/// The keys are interned strings the compiled code baked in; `_ENV` is
+/// upvalue 0, as the fold matchers require.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i64) -> i64 {
+    use luna_core::runtime::{Gc, LuaStr, Value};
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: both dispatchers enter with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    let Value::Table(env) = vm.upval_get(cl, 0) else {
+        return 0;
+    };
+    let math_key = Gc::from_ptr(math_key as *mut LuaStr);
+    let Value::Table(math) = env.get(Value::Str(math_key)) else {
+        return 0;
+    };
+    let name_key = Gc::from_ptr(name_key as *mut LuaStr);
+    let Value::Native(f) = math.get(Value::Str(name_key)) else {
+        return 0;
+    };
+    let lib = luna_core::vm::lib_math::inlinable_native(name_key.as_bytes());
+    i64::from(lib.is_some_and(|lib| std::ptr::fn_addr_eq(f.f, lib)))
 }
 
 /// P12-S7-C — trace JIT helper for `Op::Close A`. Wraps

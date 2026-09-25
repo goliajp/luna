@@ -22,9 +22,12 @@
 //!   both luna and PUC bodies; loader uses this to decide
 //!   "undump vs parse")
 
+mod error;
+mod header;
 mod luna;
 mod puc;
 mod reader;
+mod verify;
 
 use crate::runtime::function::Proto;
 use crate::runtime::heap::{Gc, Heap};
@@ -49,58 +52,105 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 
 /// Reconstruct a prototype tree from a binary chunk.
 ///
-/// Routes by the leading 5 bytes:
-/// - `\x1bLua` + the running dialect's version byte → `luna::undump`
-///   (private sibling module; this is what luna's own `dump` emits, and
-///   the only path that accepts the `BODY_TAG` sentinel)
-/// - `\x1bLua` + a `0x51..0x55` version byte that does NOT match the
-///   running dialect → `puc::undump_puc` (private sibling module; gated
-///   by `allow_puc`; rejected with a clear error when disabled)
-/// - anything else → `Err("not a binary chunk")`
-///
-/// **Routing is decided by the version byte alone** — we do not try luna
-/// first and fall back to PUC on error, because luna's "truncated chunk"
-/// / "bad header" errors must surface verbatim for the
-/// `calls.lua` corrupted-header + truncated-chunk round-trip tests.
+/// luna's own chunks carry the running dialect's PUC header followed by the
+/// `BODY_TAG` sentinel; a PUC chunk has its body there instead. Routing:
+/// - `BODY_TAG` right after a header-sized prefix → `luna::undump`. The
+///   header bytes are not checked here, so a luna chunk with a corrupted
+///   header reaches luna's own header errors (calls.lua pins them).
+/// - shorter than header + tag and not foreign → `luna::undump`, which
+///   reports the truncation.
+/// - otherwise a `\x1bLua` chunk with a `0x51..0x55` version byte is PUC's
+///   → `puc::undump_puc`, gated by `allow_puc`. This includes a chunk from
+///   the running dialect's own PUC version, which routing by version byte
+///   alone used to send to luna's loader.
+/// - anything else → `luna::undump` for its error.
 ///
 /// `allow_puc` mirrors `Vm::puc_bytecode_loading()`. Default off — PUC
 /// bytecode is a strictly larger trust surface than luna's own (the v1.3
 /// audit calls this out as the embedder gate per §"Cross-dialect risks").
+///
+/// Whichever reader produced it, the prototype tree is verified before it is
+/// returned (see the `verify` module). A refused chunk's message is worded
+/// as the running dialect's `lundump.c` words it, without the chunk-name
+/// prefix `load` adds (see `undump_named`).
 pub fn undump(
     bytes: &[u8],
     heap: &mut Heap,
     version: LuaVersion,
     allow_puc: bool,
 ) -> Result<Gc<Proto>, String> {
-    if bytes.first() != Some(&0x1b) {
-        return Err("not a binary chunk".to_string());
-    }
-    // Version-byte dispatch. luna's own dumper writes the running
-    // dialect's byte (e.g. Lua54 → 0x54); any other 0x51..0x55 byte
-    // signals a foreign PUC chunk. Short / mangled chunks (where
-    // `bytes[4]` is absent or junk) fall to `luna::undump`, which produces
-    // the truncated / bad-header errors the test suite asserts on.
-    // Per `luna::header_for`, luna dumps 5.1 / 5.2 chunks with the
-    // `0x55` version byte (calls.lua doesn't pin those two dialects'
-    // header layouts, so luna piggy-backs on HEADER_55). The version
-    // byte luna would WRITE for the running dialect:
-    let written_version_byte = match version {
-        LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua55 => 0x55,
-        LuaVersion::Lua53 => 0x53,
-        // MacroLua dumps using the 5.4 base header (audit-locked).
-        LuaVersion::Lua54 | LuaVersion::MacroLua => 0x54,
-    };
-    let foreign_puc = bytes.len() >= 5
-        && &bytes[0..4] == b"\x1bLua"
-        && matches!(bytes[4], 0x51..=0x55)
-        && bytes[4] != written_version_byte;
-    if foreign_puc {
-        if !allow_puc {
-            return Err("PUC bytecode loading is disabled \
-                 (call vm.set_puc_bytecode_loading(true) to enable)"
-                .to_string());
+    undump_checked(bytes, heap, version, allow_puc).map_err(|r| match r {
+        Refusal::Gate(msg) => msg,
+        Refusal::Bad(bad) => bad.render(version),
+    })
+}
+
+/// [`undump`] as `load` reports it: a malformed chunk's message starts with
+/// `lundump.c`'s chunk name (`chunkname` without a leading `@` or `=`, or
+/// `binary string` for a name starting with the escape byte).
+pub(crate) fn undump_named(
+    bytes: &[u8],
+    heap: &mut Heap,
+    version: LuaVersion,
+    allow_puc: bool,
+    chunkname: &[u8],
+) -> Result<Gc<Proto>, Vec<u8>> {
+    undump_checked(bytes, heap, version, allow_puc).map_err(|r| match r {
+        Refusal::Gate(msg) => msg.into_bytes(),
+        Refusal::Bad(bad) => {
+            let mut out = error::lundump_name(chunkname).to_vec();
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(bad.render(version).as_bytes());
+            out
         }
-        return puc::undump_puc(bytes, heap);
+    })
+}
+
+/// A chunk refused by an embedder gate, or found malformed.
+enum Refusal {
+    Gate(String),
+    Bad(error::Bad),
+}
+
+impl From<error::Bad> for Refusal {
+    fn from(bad: error::Bad) -> Refusal {
+        Refusal::Bad(bad)
     }
-    luna::undump(bytes, heap, version)
+}
+
+fn undump_checked(
+    bytes: &[u8],
+    heap: &mut Heap,
+    version: LuaVersion,
+    allow_puc: bool,
+) -> Result<Gc<Proto>, Refusal> {
+    if bytes.first() != Some(&0x1b) {
+        return Err(Refusal::Gate("not a binary chunk".to_string()));
+    }
+    let header = luna::header_for(version);
+    let tag_at = header.len();
+    let luna_body = bytes.len() >= tag_at + luna::BODY_TAG.len()
+        && &bytes[tag_at..tag_at + luna::BODY_TAG.len()] == luna::BODY_TAG;
+    // luna writes 0x55 for 5.1/5.2 as well (calls.lua does not pin those
+    // dialects' header layouts), so any other version byte cannot be luna's.
+    let written_version_byte = header[4];
+    let puc_signature =
+        bytes.len() >= 5 && &bytes[0..4] == b"\x1bLua" && matches!(bytes[4], 0x51..=0x55);
+    let foreign_puc = puc_signature
+        && !luna_body
+        && (bytes[4] != written_version_byte || bytes.len() >= tag_at + luna::BODY_TAG.len());
+    if foreign_puc && !allow_puc {
+        return Err(Refusal::Gate(
+            "PUC bytecode loading is disabled \
+             (call vm.set_puc_bytecode_loading(true) to enable)"
+                .to_string(),
+        ));
+    }
+    let proto = if foreign_puc {
+        puc::undump_puc(bytes, heap)?
+    } else {
+        luna::undump(bytes, heap, version)?
+    };
+    verify::verify(&proto).map_err(error::Bad::Code)?;
+    Ok(proto)
 }

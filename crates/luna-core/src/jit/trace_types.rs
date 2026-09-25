@@ -1280,6 +1280,18 @@ pub fn exit_tags_match_entry_tags(
     true
 }
 
+/// Set in a trace's return value when bits 32.. hold an index into
+/// `per_exit_tags` (see [`decode_exit_shape`]).
+pub const EXIT_TAGS_INDEX_BIT: u64 = 1 << 54;
+/// Set in a trace's return value to resume at a generic-for's TForLoop
+/// with its loop variables as they are on the stack: the TForCall
+/// helper wrote them there with their real tags, which need not be the
+/// ones the trace's registers were compiled for.
+pub const EXIT_KEEP_TFOR_VARS: u64 = 1 << 55;
+/// Bits 32..54 of a trace's return value: inline site id + 1, or a
+/// `per_exit_tags` index under [`EXIT_TAGS_INDEX_BIT`].
+const EXIT_SITE_MASK: u64 = (1 << 22) - 1;
+
 /// P15-A v2-C-A0 — decoded exit shape. Returned by
 /// [`decode_exit_shape`]. Carries the per-exit metadata the
 /// dispatcher's restore loop needs: the resume PC, the
@@ -1319,6 +1331,13 @@ pub struct DecodedExit<'a> {
 /// `Vm::run` for that future reuse — no behavior change vs the
 /// inlined form.
 ///
+/// A depth-0 side exit returns `EXIT_TAGS_INDEX_BIT | (i << 32) | cont_pc`
+/// and restores through `per_exit_tags[i]`: several exits can resume at
+/// the same pc with different register kinds (and one at `head_pc`, where
+/// the clean tail returns too), so the pc alone does not identify the
+/// snapshot. A bare `cont_pc` is looked up by pc, then falls back to the
+/// global tags.
+///
 /// Layout reminder (from `CompiledTrace::exit_hit_counts`):
 /// - `[0..inline.len())` — inline cmp@d>0 sites, indexed by
 ///   `site_id - 1` (1-based encoding lets `site_id == 0` mean
@@ -1332,9 +1351,21 @@ pub fn decode_exit_shape<'a>(
     per_exit_tags: &'a [(u32, TArc<[ExitTag]>)],
     exit_tags: &'a [ExitTag],
 ) -> DecodedExit<'a> {
-    let site_id = (raw_ret >> 32) as u32;
+    let site_field = ((raw_ret >> 32) & EXIT_SITE_MASK) as u32;
     let cont_pc = (raw_ret & 0xFFFF_FFFF) as u32;
     let inline_n = per_exit_inline.len();
+    if raw_ret & EXIT_TAGS_INDEX_BIT != 0 {
+        let i = site_field as usize;
+        debug_assert_eq!(per_exit_tags[i].0, cont_pc, "per_exit_tags entry's pc");
+        return DecodedExit {
+            cont_pc,
+            site_id: 0,
+            exit_hit_idx: inline_n + i,
+            exit_tags_for_pc: &per_exit_tags[i].1,
+            using_global_exit_tags: false,
+        };
+    }
+    let site_id = site_field;
     if site_id > 0 {
         let idx = (site_id - 1) as usize;
         debug_assert!(

@@ -47,11 +47,19 @@ pub struct Coro {
     /// dead-with-error coroutine still shows the error site (PUC's
     /// `luaG_errormsg` flow plus a per-thread `errfunc` snapshot).
     pub error_traceback: Option<Vec<u8>>,
+    /// the same snapshot one line per stack level, so `debug.traceback(co,
+    /// msg, level)` can start at any level
+    pub(crate) error_levels: Option<Vec<Vec<u8>>>,
+    /// while it waits on a coroutine it resumed (status normal): its own
+    /// running natives, as indices into the Vm's `running_natives`
+    pub(crate) natives: std::ops::Range<usize>,
     // ---- saved execution context (valid while suspended/normal) ----
     /// Saved value stack.
     pub stack: Vec<Value>,
     /// Saved frame stack (Lua frames + native continuations).
     pub frames: Vec<CallFrame>,
+    /// `frames`' `__call` counts, by frame index (see `Vm::frame_ccmt`)
+    pub(crate) frame_ccmt: Vec<u8>,
     /// Open-upvalue list — `(stack slot, upvalue cell)` pairs.
     pub open_upvals: Vec<(u32, Gc<Upvalue>)>,
     /// Stack indices of registered `<close>` slots (5.4+).

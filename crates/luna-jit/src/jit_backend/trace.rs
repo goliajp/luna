@@ -361,6 +361,11 @@ fn emit_chain_ptr_arg<M: Module>(
 /// `math.log(x, base)` / `math.atan(y, x)` / `math.max(...)` use a
 /// different bytecode window (B≠2) so the pattern matcher rejects
 /// them.
+///
+/// `pre53` cannot tell 5.3 from 5.2, and two of these differ between
+/// them: 5.3+ `atan(y)` is `atan2(y, 1)`, which libm does not round like
+/// `atan(y)`, and 5.3+ `floor` / `ceil` return integers. Those two fold
+/// only on 5.4+ (see the emit).
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"sin", "sin"),
     (b"cos", "cos"),
@@ -473,6 +478,7 @@ fn try_match_trace_math_fold(
     record: &TraceRecord,
     i: usize,
     head_proto: Gc<Proto>,
+    pre53: bool,
 ) -> Option<TraceMathFold> {
     // Common prefix (GetTabUp + GetField) needs at least 2 ops.
     if i + 1 >= record.ops.len() {
@@ -528,6 +534,12 @@ fn try_match_trace_math_fold(
         .iter()
         .find_map(|&(needle, name)| (needle == fname_bytes).then_some(name))
     {
+        // floor/ceil results are floats on 5.1/5.2 and integers on 5.3,
+        // atan is atan(y) on 5.1/5.2 and atan2(y, 1) on 5.3; `pre53`
+        // covers both, so leave the call to the interpreter.
+        if pre53 && (is_rounding(fn_name) || fn_name == "atan") {
+            return None;
+        }
         if i + 3 >= record.ops.len() {
             return None;
         }
@@ -623,6 +635,49 @@ fn try_match_trace_math_fold(
         arg1_reg: a + 1,
         arg2_reg: a + 2,
     })
+}
+
+/// Whether the float `r` (an integral value or NaN / ±inf) converts to
+/// an i64: `-2^63 <= r < 2^63`. NaN fails both comparisons.
+pub(super) fn emit_f64_fits_i64(bcx: &mut FunctionBuilder<'_>, r: Value) -> Value {
+    let lo = bcx.ins().f64const(-9_223_372_036_854_775_808.0);
+    let hi = bcx.ins().f64const(9_223_372_036_854_775_808.0);
+    let ge_lo = bcx.ins().fcmp(FloatCC::GreaterThanOrEqual, r, lo);
+    let lt_hi = bcx.ins().fcmp(FloatCC::LessThan, r, hi);
+    bcx.ins().band(ge_lo, lt_hi)
+}
+
+/// `i < f` for an integer and a float, exactly (lvm.c `LTintfloat`):
+/// `i < f` iff `i < ceil(f)`, with a NaN `f` false and an `f` beyond the
+/// integer range deciding by its sign.
+fn emit_lt_int_float(bcx: &mut FunctionBuilder<'_>, i: Value, f: Value) -> Value {
+    let c = bcx.ins().ceil(f);
+    let ci = bcx.ins().fcvt_to_sint_sat(types::I64, c);
+    let in_range = emit_f64_fits_i64(bcx, c);
+    let lt = bcx.ins().icmp(IntCC::SignedLessThan, i, ci);
+    let zero = bcx.ins().f64const(0.0);
+    // Out of range (or NaN): true iff f is above every integer.
+    let above = bcx.ins().fcmp(FloatCC::GreaterThan, f, zero);
+    bcx.ins().select(in_range, lt, above)
+}
+
+/// `f < i` for a float and an integer, exactly (lvm.c `LTfloatint`):
+/// `f < i` iff `floor(f) < i`, with a NaN `f` false and an `f` beyond the
+/// integer range deciding by its sign.
+fn emit_lt_float_int(bcx: &mut FunctionBuilder<'_>, f: Value, i: Value) -> Value {
+    let fl = bcx.ins().floor(f);
+    let fi = bcx.ins().fcvt_to_sint_sat(types::I64, fl);
+    let in_range = emit_f64_fits_i64(bcx, fl);
+    let lt = bcx.ins().icmp(IntCC::SignedLessThan, fi, i);
+    let zero = bcx.ins().f64const(0.0);
+    let below = bcx.ins().fcmp(FloatCC::LessThan, f, zero);
+    bcx.ins().select(in_range, lt, below)
+}
+
+/// `math.floor` / `math.ceil`: on 5.3+ they keep integers integral and
+/// turn a float into an integer when it fits.
+fn is_rounding(fn_name: &str) -> bool {
+    matches!(fn_name, "floor" | "ceil")
 }
 
 /// Single-op classifier — the per-op decision logic used by the
@@ -753,6 +808,85 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
         return None;
     }
     None
+}
+
+/// [`emit_floor_divmod`] for a divisor `k` known to be neither 0 nor -1:
+/// the truncated remainder needs adjusting exactly when it is nonzero and
+/// of the other sign than `k`, which for a known sign is one sign test,
+/// done without a compare as an all-ones mask (`|r| < |k|`, so negating
+/// `r` cannot overflow).
+///
+/// For `k > 0` there is a shorter exact form: with `s = x >> 63` (0 or
+/// all ones), `t = x ^ s` is `x` or `-x - 1`, never negative and never
+/// overflowing, and `floor(x / k) = (t / k) ^ s` with an unsigned
+/// division, which Cranelift strength-reduces to a multiply; the
+/// remainder is then `x - k * q` with no sign adjustment.
+fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
+    let kv = bcx.ins().iconst(types::I64, k);
+    if k > 0 {
+        let s = bcx.ins().sshr_imm(a, 63);
+        let t = bcx.ins().bxor(a, s);
+        let ut = bcx.ins().udiv(t, kv);
+        let q = bcx.ins().bxor(ut, s);
+        return if op == Op::IDiv {
+            q
+        } else {
+            let qk = bcx.ins().imul(q, kv);
+            bcx.ins().isub(a, qk)
+        };
+    }
+    let q = bcx.ins().sdiv(a, kv);
+    let qk = bcx.ins().imul(q, kv);
+    let r = bcx.ins().isub(a, qk);
+    let wrong_sign = if k > 0 { r } else { bcx.ins().ineg(r) };
+    let mask = bcx.ins().sshr_imm(wrong_sign, 63);
+    if op == Op::IDiv {
+        bcx.ins().iadd(q, mask)
+    } else {
+        let adj = bcx.ins().band_imm(mask, k);
+        bcx.ins().iadd(r, adj)
+    }
+}
+
+/// Lua's integer `//` or `%` for a nonzero divisor: rounded toward minus
+/// infinity (the remainder takes the divisor's sign), and `x // -1` wraps
+/// where a machine division by -1 would trap on minint.
+fn emit_floor_divmod(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, b: Value) -> Value {
+    let minus_one = bcx.ins().iconst(types::I64, -1);
+    let one = bcx.ins().iconst(types::I64, 1);
+    let zero = bcx.ins().iconst(types::I64, 0);
+    let is_m1 = bcx.ins().icmp(IntCC::Equal, b, minus_one);
+    let safe_b = bcx.ins().select(is_m1, one, b);
+    let q = bcx.ins().sdiv(a, safe_b);
+    let qb = bcx.ins().imul(q, safe_b);
+    let r = bcx.ins().isub(a, qb);
+    // a nonzero remainder whose sign differs from the divisor's
+    let r_nz = bcx.ins().icmp(IntCC::NotEqual, r, zero);
+    let signs = bcx.ins().bxor(r, b);
+    let differ = bcx.ins().icmp(IntCC::SignedLessThan, signs, zero);
+    let adjust = bcx.ins().band(r_nz, differ);
+    if op == Op::IDiv {
+        let q1 = bcx.ins().isub(q, one);
+        let floored = bcx.ins().select(adjust, q1, q);
+        let neg = bcx.ins().ineg(a);
+        bcx.ins().select(is_m1, neg, floored)
+    } else {
+        let rb = bcx.ins().iadd(r, b);
+        let floored = bcx.ins().select(adjust, rb, r);
+        bcx.ins().select(is_m1, zero, floored)
+    }
+}
+
+/// The kind a GetX result is typed as, from its inferred use, and the
+/// value tag its checked read demands (`None`: the use is not typed).
+fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
+    use luna_core::runtime::value::raw;
+    match tag {
+        Some(ExitTag::Int) => Some((RegKind::Int, raw::INT)),
+        Some(ExitTag::Table) => Some((RegKind::Table, raw::TABLE)),
+        Some(ExitTag::Float) => Some((RegKind::Float, raw::FLOAT)),
+        _ => None,
+    }
 }
 
 /// P12-S4-step2c — forward-look exit-tag inference for `Op::GetUpval`.
@@ -2799,54 +2933,60 @@ fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
     bcx.def_var(var, bits);
 }
 
-/// Emit a store-back of every `regs[i]` Variable to
-/// `reg_state[i * 8]`, followed by `return iconst(pc)`. Used by both
-/// the clean-close tail (pc = head_pc) and every cmp's side-exit
-/// block (pc = failing_pc).
-/// P12-S7-C — central dispatch for `t[key] = v` helper-path emit.
-/// Picks the right specialized helper by the source register's
-/// `RegKind`. Without the kind-aware dispatch a Closure / Table /
-/// Float src would be silently wrapped as `Value::Int(raw_bits)`
-/// by the legacy `set_int` helper.
+/// The checked table-store helpers, by the key's kind.
+struct StoreHelpers {
+    int_key: cranelift_module::FuncId,
+    str_key: cranelift_module::FuncId,
+    any_key: cranelift_module::FuncId,
+}
+
+/// Calls the checked table store `t[key] = v` for a key and a value of
+/// known kinds, returning the helper's status (`1` stored, `0` the
+/// interpreter must do it); the caller side-exits on `0`. Integer and
+/// string keys have their own helpers, which need not rebuild the key
+/// from a tag.
+#[allow(clippy::too_many_arguments)]
 fn emit_table_set<M: Module>(
     bcx: &mut FunctionBuilder<'_>,
     module: &mut M,
-    set_int_id: cranelift_module::FuncId,
-    set_nil_id: cranelift_module::FuncId,
-    set_raw_id: cranelift_module::FuncId,
+    helpers: &StoreHelpers,
     t: Value,
     key: Value,
+    key_kind: RegKind,
+    val: Value,
     val_kind: RegKind,
-    val_var: Variable,
-) {
-    use luna_core::runtime::value::raw;
-    match val_kind {
-        RegKind::Nil => {
-            let f = module.declare_func_in_func(set_nil_id, bcx.func);
-            bcx.ins().call(f, &[t, key]);
-        }
-        // Int / Unset → set_int (legacy fast path; synth tests +
-        // un-snapshotted slots default to Int payload, which matches
-        // the pre-S7-C behaviour). Production traces with proper
-        // kind tracking pin Int explicitly here.
-        RegKind::Int | RegKind::Unset => {
-            let v = bcx.use_var(val_var);
-            let f = module.declare_func_in_func(set_int_id, bcx.func);
-            bcx.ins().call(f, &[t, key, v]);
-        }
-        other => {
-            let tag = match other {
-                RegKind::Float => raw::FLOAT,
-                RegKind::Table => raw::TABLE,
-                RegKind::Closure => raw::CLOSURE,
-                RegKind::Str => raw::STR,
-                RegKind::Nil | RegKind::Int | RegKind::Unset => unreachable!(),
+) -> Value {
+    let val_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(val_kind)));
+    let call = match key_kind {
+        RegKind::Int | RegKind::Str => {
+            let id = if key_kind == RegKind::Int {
+                helpers.int_key
+            } else {
+                helpers.str_key
             };
-            let v = bcx.use_var(val_var);
-            let tag_v = bcx.ins().iconst(types::I64, tag as i64);
-            let f = module.declare_func_in_func(set_raw_id, bcx.func);
-            bcx.ins().call(f, &[t, key, v, tag_v]);
+            let f = module.declare_func_in_func(id, bcx.func);
+            bcx.ins().call(f, &[t, key, val, val_tag])
         }
+        _ => {
+            let key_tag = bcx.ins().iconst(types::I64, i64::from(kind_tag(key_kind)));
+            let f = module.declare_func_in_func(helpers.any_key, bcx.func);
+            bcx.ins().call(f, &[t, key, key_tag, val, val_tag])
+        }
+    };
+    bcx.inst_results(call)[0]
+}
+
+/// The value tag (`runtime::value::raw`) of a register of kind `k`.
+fn kind_tag(k: RegKind) -> u8 {
+    use luna_core::runtime::value::raw;
+    match k {
+        RegKind::Int => raw::INT,
+        RegKind::Float => raw::FLOAT,
+        RegKind::Table => raw::TABLE,
+        RegKind::Closure => raw::CLOSURE,
+        RegKind::Str => raw::STR,
+        RegKind::Nil => raw::NIL,
+        RegKind::Unset => unreachable!("callers do not lower a store of an unknown kind"),
     }
 }
 
@@ -2989,8 +3129,35 @@ fn emit_side_trace_or_return(
 fn emit_store_back_and_return_pc(
     bcx: &mut FunctionBuilder<'_>,
     regs: &[Variable],
+    stored: &[Option<Value>],
     reg_state: Value,
     pc: u32,
+    flush_ctx: Option<&FlushCtx>,
+    side_trace_cell_addr: i64,
+    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
+    sentinel_code: u32,
+) {
+    emit_store_back_and_return(
+        bcx,
+        regs,
+        stored,
+        reg_state,
+        i64::from(pc),
+        flush_ctx,
+        side_trace_cell_addr,
+        trace_fn_sig_ref,
+        sentinel_code,
+    );
+}
+
+/// [`emit_store_back_and_return_pc`] returning `ret`, an encoded exit
+/// (see `decode_exit_shape`), instead of a bare pc.
+fn emit_store_back_and_return(
+    bcx: &mut FunctionBuilder<'_>,
+    regs: &[Variable],
+    stored: &[Option<Value>],
+    reg_state: Value,
+    ret: i64,
     flush_ctx: Option<&FlushCtx>,
     side_trace_cell_addr: i64,
     trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
@@ -2999,8 +3166,13 @@ fn emit_store_back_and_return_pc(
     if let Some(ctx) = flush_ctx {
         emit_flush_buf(bcx, ctx, regs);
     }
+    // reg_state already holds `stored[idx]` (see `sync_reg_state`); only
+    // a register whose value changed since is written.
     for (idx, v) in regs.iter().copied().enumerate() {
         let val = bcx.use_var(v);
+        if stored.get(idx).copied().flatten() == Some(val) {
+            continue;
+        }
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlags::new(), val, reg_state, offset);
     }
@@ -3011,10 +3183,229 @@ fn emit_store_back_and_return_pc(
         trace_fn_sig_ref,
         sentinel_code,
         |bcx| {
-            let pc_val = bcx.ins().iconst(types::I64, pc as i64);
-            bcx.ins().return_(&[pc_val]);
+            let ret_val = bcx.ins().iconst(types::I64, ret);
+            bcx.ins().return_(&[ret_val]);
         },
     );
+}
+
+/// Removes block parameters nothing reads, with the arguments branches
+/// pass to them.
+///
+/// `sync_reg_state` and the exits compare every register's current value
+/// with what reg_state holds, and asking the SSA builder for a register's
+/// value at a loop head gives it a parameter there. A register the loop
+/// only writes then travels around the loop as a parameter that no
+/// instruction reads, live across every helper call: token_bucket's trace
+/// carried six of those, which register allocation had to keep and spill.
+/// Cranelift does not remove them, so this does: a parameter is used when
+/// an instruction other than a branch reads it, or when it is passed on to
+/// a parameter that is used.
+fn drop_unused_block_params(func: &mut cranelift_codegen::ir::Function) {
+    use cranelift_codegen::ir::{BlockArg, ValueDef};
+    use std::collections::HashSet;
+
+    let dfg = &func.dfg;
+    let mut used: HashSet<Value> = HashSet::new();
+    // (target parameter, argument) for every branch edge
+    let mut edges: Vec<(Value, Value)> = Vec::new();
+    for block in func.layout.blocks() {
+        for inst in func.layout.block_insts(block) {
+            for &v in dfg.inst_args(inst) {
+                used.insert(dfg.resolve_aliases(v));
+            }
+            for dest in dfg.insts[inst].branch_destination(&dfg.jump_tables, &dfg.exception_tables)
+            {
+                let params = dfg.block_params(dest.block(&dfg.value_lists));
+                for (i, arg) in dest.args(&dfg.value_lists).enumerate() {
+                    match arg {
+                        BlockArg::Value(a) => edges.push((params[i], dfg.resolve_aliases(a))),
+                        // a call result or exception payload: keep the parameter
+                        _ => {
+                            used.insert(params[i]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    loop {
+        let before = used.len();
+        for &(param, arg) in &edges {
+            if used.contains(&param) {
+                used.insert(arg);
+            }
+        }
+        if used.len() == before {
+            break;
+        }
+    }
+    let entry = func.layout.entry_block();
+    let blocks: Vec<_> = func.layout.blocks().collect();
+    for &block in &blocks {
+        if Some(block) == entry {
+            continue;
+        }
+        let dead: Vec<usize> = func
+            .dfg
+            .block_params(block)
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !used.contains(p))
+            .map(|(i, _)| i)
+            .collect();
+        if dead.is_empty() {
+            continue;
+        }
+        for &src in &blocks {
+            let insts: Vec<_> = func.layout.block_insts(src).collect();
+            for inst in insts {
+                let dfg = &mut func.dfg;
+                for dest in dfg.insts[inst]
+                    .branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables)
+                {
+                    if dest.block(&dfg.value_lists) == block {
+                        for &i in dead.iter().rev() {
+                            dest.remove(i, &mut dfg.value_lists);
+                        }
+                    }
+                }
+            }
+        }
+        for &i in dead.iter().rev() {
+            let p = func.dfg.block_params(block)[i];
+            debug_assert!(matches!(func.dfg.value_def(p), ValueDef::Param(..)));
+            func.dfg.remove_block_param(p);
+        }
+    }
+}
+
+#[cfg(test)]
+mod drop_unused_block_params_tests {
+    use super::*;
+    use cranelift_codegen::ir::{Function, Signature, UserFuncName};
+    use cranelift_codegen::isa::CallConv;
+
+    /// `loop(dead, live)`: `dead` is only passed back unchanged, as the
+    /// registers a trace loop only writes were; `live` is read. The first
+    /// parameter and its arguments go; the second stays.
+    #[test]
+    fn a_parameter_only_passed_back_to_itself_is_removed() {
+        let mut sig = Signature::new(CallConv::SystemV);
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let mut func = Function::with_name_signature(UserFuncName::default(), sig);
+        let mut fctx = FunctionBuilderContext::new();
+        let mut b = FunctionBuilder::new(&mut func, &mut fctx);
+        let entry = b.create_block();
+        let head = b.create_block();
+        let out = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        let dead = b.append_block_param(head, types::I64);
+        let live = b.append_block_param(head, types::I64);
+        b.switch_to_block(entry);
+        let x = b.block_params(entry)[0];
+        b.ins().jump(head, &[x.into(), x.into()]);
+        b.switch_to_block(head);
+        let one = b.ins().iconst(types::I64, 1);
+        let again = b.ins().icmp_imm(IntCC::SignedLessThan, live, 10);
+        let next_live = b.ins().iadd(live, one);
+        b.ins()
+            .brif(again, head, &[dead.into(), next_live.into()], out, &[]);
+        b.switch_to_block(out);
+        b.ins().return_(&[live]);
+        b.seal_all_blocks();
+        b.finalize();
+
+        drop_unused_block_params(&mut func);
+
+        assert_eq!(func.dfg.block_params(head), &[live]);
+        let branches: Vec<usize> = func
+            .layout
+            .blocks()
+            .flat_map(|blk| func.layout.block_insts(blk).collect::<Vec<_>>())
+            .flat_map(|inst| {
+                func.dfg.insts[inst]
+                    .branch_destination(&func.dfg.jump_tables, &func.dfg.exception_tables)
+                    .iter()
+                    .filter(|d| d.block(&func.dfg.value_lists) == head)
+                    .map(|d| d.len(&func.dfg.value_lists))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(branches, vec![1, 1]);
+        cranelift_codegen::verify_function(&func, &settings::Flags::new(settings::builder()))
+            .expect("the function still verifies");
+    }
+}
+
+/// Writes every register whose SSA value differs from what reg_state
+/// holds (`stored`) and records the new values. Called at the start of
+/// each recorded op and before every back-edge, it keeps reg_state equal
+/// to the registers as of the last completed op, so an exit stores only
+/// what the op it leaves from changed (usually nothing) instead of the
+/// whole window. That made every exit a block of stores, which is what
+/// the trace's compile time scaled with.
+fn sync_reg_state(
+    bcx: &mut FunctionBuilder<'_>,
+    regs: &[Variable],
+    stored: &mut [Option<Value>],
+    reg_state: Value,
+) {
+    for (idx, v) in regs.iter().copied().enumerate() {
+        let val = bcx.use_var(v);
+        if stored[idx] == Some(val) {
+            continue;
+        }
+        bcx.ins()
+            .store(MemFlags::new(), val, reg_state, (idx as i32) * 8);
+        stored[idx] = Some(val);
+    }
+}
+
+/// A depth-0 side exit restoring through `per_exit_tags[tags_idx]`: the
+/// return value names the snapshot, since exits resuming at the same pc
+/// can carry different register kinds (see `decode_exit_shape`). An exit
+/// to the trace's own head has not run the head op, so it also stops the
+/// dispatcher from re-entering the trace before the interpreter has.
+fn emit_tagged_exit<M: Module>(
+    bcx: &mut FunctionBuilder<'_>,
+    module: &mut M,
+    suppress_admit_id: cranelift_module::FuncId,
+    regs: &[Variable],
+    stored: &[Option<Value>],
+    reg_state: Value,
+    pc: u32,
+    head_pc: u32,
+    tags_idx: u32,
+    flush_ctx: Option<&FlushCtx>,
+    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
+) {
+    if pc == head_pc {
+        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+        bcx.ins().call(r, &[]);
+    }
+    let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
+        | (u64::from(tags_idx) << 32)
+        | u64::from(pc);
+    emit_store_back_and_return(
+        bcx,
+        regs,
+        stored,
+        reg_state,
+        ret as i64,
+        flush_ctx,
+        0i64,
+        trace_fn_sig_ref,
+        encode_side_sentinel(SIDE_SENT_KIND_TAG, tags_idx),
+    );
+}
+
+/// The resume pc of a trace's return value, whichever exit encoding it
+/// uses (see `decode_exit_shape`).
+#[cfg(test)]
+pub(crate) fn exit_pc(ret: i64) -> i64 {
+    ret & 0xFFFF_FFFF
 }
 
 /// P12-S4-step4b-C-2 — inline cmp@d>0 side-exit return shape. The
@@ -3027,6 +3418,7 @@ fn emit_store_back_and_return_pc(
 fn emit_store_back_and_return_site(
     bcx: &mut FunctionBuilder<'_>,
     regs: &[Variable],
+    stored: &[Option<Value>],
     reg_state: Value,
     site_idx: u32,
     cont_pc: u32,
@@ -3037,8 +3429,13 @@ fn emit_store_back_and_return_site(
     if let Some(ctx) = flush_ctx {
         emit_flush_buf(bcx, ctx, regs);
     }
+    // reg_state already holds `stored[idx]` (see `sync_reg_state`); only
+    // a register whose value changed since is written.
     for (idx, v) in regs.iter().copied().enumerate() {
         let val = bcx.use_var(v);
+        if stored.get(idx).copied().flatten() == Some(val) {
+            continue;
+        }
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlags::new(), val, reg_state, offset);
     }
@@ -3221,6 +3618,12 @@ fn build_trace_jit_module() -> Option<JITModule> {
     flag_builder.set("use_colocated_libcalls", "false").ok()?;
     flag_builder.set("is_pic", "false").ok()?;
     flag_builder.set("opt_level", "speed").ok()?;
+    // The IR verifier is a quarter of a trace's compile time (token_bucket:
+    // 175 of 720 us of Cranelift passes). Release builds leave it out, as
+    // wasmtime does; debug builds, which the lib tests run, keep it.
+    if !cfg!(debug_assertions) {
+        flag_builder.set("enable_verifier", "false").ok()?;
+    }
     let isa = cranelift_native::builder()
         .ok()?
         .finish(settings::Flags::new(flag_builder))
@@ -3233,31 +3636,21 @@ fn build_trace_jit_module() -> Option<JITModule> {
     // like `cargo test`, so the default `dlsym(RTLD_DEFAULT)` resolver
     // misses them without an explicit `builder.symbol(...)`.)
     builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
+    // SetI / SetTable / SetList / SetField
     builder.symbol(
-        "luna_jit_table_set_int",
-        super::luna_jit_table_set_int as *const u8,
+        "luna_jit_table_set_int_checked",
+        super::luna_jit_table_set_int_checked as *const u8,
     );
-    // P12-S6-A2 — Nil-valued SetList/SetI/SetTable helper. Trace JIT
-    // emits a call here when an Op::LoadNil-written source register
-    // is fed into a (non-sunk) table write.
     builder.symbol(
-        "luna_jit_table_set_nil",
-        super::luna_jit_table_set_nil as *const u8,
+        "luna_jit_table_set_field_checked",
+        super::luna_jit_table_set_field_checked as *const u8,
     );
-    // P12-S7-C — generalised SetTable/SetI/SetList helper for any
-    // (tag, raw_bits) pair. Used for Closure / Table / non-Int/Nil
-    // sources where the legacy set_int helper would mis-wrap as
-    // Value::Int(ptr_bits).
     builder.symbol(
-        "luna_jit_table_set_raw",
-        super::luna_jit_table_set_raw as *const u8,
+        "luna_jit_table_set_checked",
+        super::luna_jit_table_set_checked as *const u8,
     );
-    // P12-S11-A — SetField + GetField helpers (string key from
-    // Proto.consts; raw pointer baked into IR at emit time).
-    builder.symbol(
-        "luna_jit_table_set_field",
-        super::luna_jit_table_set_field as *const u8,
-    );
+    // GetField helper (string key from Proto.consts; raw pointer baked
+    // into IR at emit time).
     builder.symbol(
         "luna_jit_table_get_field",
         super::luna_jit_table_get_field as *const u8,
@@ -3271,7 +3664,31 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_table_get_int",
         super::luna_jit_table_get_int as *const u8,
     );
-    builder.symbol("luna_jit_table_len", super::luna_jit_table_len as *const u8);
+    // Checked reads: the typed GetI / GetTable / GetField / GetTabUp.
+    builder.symbol(
+        "luna_jit_table_get_int_checked",
+        super::luna_jit_table_get_int_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_get_field_checked",
+        super::luna_jit_table_get_field_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_op_get_tab_up_checked",
+        super::luna_jit_op_get_tab_up_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_table_len_checked",
+        super::luna_jit_table_len_checked as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_math_fn_is_library",
+        super::luna_jit_math_fn_is_library as *const u8,
+    );
+    builder.symbol(
+        "luna_jit_suppress_trace_admit",
+        super::luna_jit_suppress_trace_admit as *const u8,
+    );
     // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
     // helper. Reuses the method JIT helper; the trace dispatcher's
     // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
@@ -3755,7 +4172,7 @@ pub fn lower_trace_into_named<M: Module>(
         //     fires `fmin / fmax`.
         let mut i = 0;
         while i < n {
-            if let Some(fold) = try_match_trace_math_fold(record, i, head_proto) {
+            if let Some(fold) = try_match_trace_math_fold(record, i, head_proto, opts.pre53) {
                 match fold.kind {
                     FoldKind::Libm1 => {
                         for k in 0..4 {
@@ -4790,44 +5207,31 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_new_table", Linkage::Import, &new_table_sig)
         .ok()?;
 
-    let mut set_int_sig = module.make_signature();
-    set_int_sig.params.push(AbiParam::new(types::I64));
-    set_int_sig.params.push(AbiParam::new(types::I64));
-    set_int_sig.params.push(AbiParam::new(types::I64));
-    let set_int_id = module
-        .declare_function("luna_jit_table_set_int", Linkage::Import, &set_int_sig)
-        .ok()?;
-
-    // P12-S6-A2 — `fn luna_jit_table_set_nil(t: i64, key: i64)`.
-    // Returns nothing; writes `Value::Nil` to t[key].
-    let mut set_nil_sig = module.make_signature();
-    set_nil_sig.params.push(AbiParam::new(types::I64));
-    set_nil_sig.params.push(AbiParam::new(types::I64));
-    let set_nil_id = module
-        .declare_function("luna_jit_table_set_nil", Linkage::Import, &set_nil_sig)
-        .ok()?;
-
-    // P12-S7-C — `fn luna_jit_table_set_raw(t, key, raw_bits, tag)`.
-    // Writes Value::pack(tag, raw_bits) to t[key]. Used for any
-    // src kind other than Int / Nil (Closure / Table / Float / etc.).
-    let mut set_raw_sig = module.make_signature();
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    set_raw_sig.params.push(AbiParam::new(types::I64));
-    let set_raw_id = module
-        .declare_function("luna_jit_table_set_raw", Linkage::Import, &set_raw_sig)
-        .ok()?;
-
-    // P12-S11-A — `fn luna_jit_table_set_field(t, key_ptr, raw, tag)`.
-    let mut set_field_sig = module.make_signature();
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    set_field_sig.params.push(AbiParam::new(types::I64));
-    let set_field_id = module
-        .declare_function("luna_jit_table_set_field", Linkage::Import, &set_field_sig)
-        .ok()?;
+    // `fn luna_jit_table_set_{int,field}_checked(t, key, val_raw, val_tag)
+    // -> stored` and `fn luna_jit_table_set_checked(t, key_raw, key_tag,
+    // val_raw, val_tag) -> stored`
+    let mut set_sig = module.make_signature();
+    for _ in 0..4 {
+        set_sig.params.push(AbiParam::new(types::I64));
+    }
+    set_sig.returns.push(AbiParam::new(types::I64));
+    let mut set_any_sig = set_sig.clone();
+    set_any_sig.params.push(AbiParam::new(types::I64));
+    let set_ids = StoreHelpers {
+        int_key: module
+            .declare_function("luna_jit_table_set_int_checked", Linkage::Import, &set_sig)
+            .ok()?,
+        str_key: module
+            .declare_function(
+                "luna_jit_table_set_field_checked",
+                Linkage::Import,
+                &set_sig,
+            )
+            .ok()?,
+        any_key: module
+            .declare_function("luna_jit_table_set_checked", Linkage::Import, &set_any_sig)
+            .ok()?,
+    };
 
     // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
     let mut get_field_sig = module.make_signature();
@@ -4845,6 +5249,35 @@ pub fn lower_trace_into_named<M: Module>(
     get_tab_up_sig.returns.push(AbiParam::new(types::I64));
     let get_tab_up_id = module
         .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
+        .ok()?;
+
+    // Checked table reads (`luna_jit_table_get_int_checked` et al.):
+    // `fn(table_or_upval, key, want_tag, out: *mut i64) -> ok`.
+    let mut get_checked_sig = module.make_signature();
+    for _ in 0..4 {
+        get_checked_sig.params.push(AbiParam::new(types::I64));
+    }
+    get_checked_sig.returns.push(AbiParam::new(types::I64));
+    let get_int_checked_id = module
+        .declare_function(
+            "luna_jit_table_get_int_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+    let get_field_checked_id = module
+        .declare_function(
+            "luna_jit_table_get_field_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
+        .ok()?;
+    let get_tab_up_checked_id = module
+        .declare_function(
+            "luna_jit_op_get_tab_up_checked",
+            Linkage::Import,
+            &get_checked_sig,
+        )
         .ok()?;
 
     // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
@@ -5005,11 +5438,30 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_table_get_int", Linkage::Import, &get_int_sig)
         .ok()?;
 
+    let suppress_admit_id = module
+        .declare_function(
+            "luna_jit_suppress_trace_admit",
+            Linkage::Import,
+            &module.make_signature(),
+        )
+        .ok()?;
+    let mut math_fn_check_sig = module.make_signature();
+    math_fn_check_sig.params.push(AbiParam::new(types::I64));
+    math_fn_check_sig.params.push(AbiParam::new(types::I64));
+    math_fn_check_sig.returns.push(AbiParam::new(types::I64));
+    let math_fn_check_id = module
+        .declare_function(
+            "luna_jit_math_fn_is_library",
+            Linkage::Import,
+            &math_fn_check_sig,
+        )
+        .ok()?;
+
     let mut len_sig = module.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
-    let len_id = module
-        .declare_function("luna_jit_table_len", Linkage::Import, &len_sig)
+    let len_checked_id = module
+        .declare_function("luna_jit_table_len_checked", Linkage::Import, &len_sig)
         .ok()?;
 
     // P12-S4-step2b — `fn luna_jit_upval_get(idx: i64) -> i64`. The
@@ -5164,6 +5616,11 @@ pub fn lower_trace_into_named<M: Module>(
         } else {
             let z = bcx.ins().iconst(types::I64, 0);
             bcx.def_var(v, z);
+            // Exits store only what changed since (see `sync_reg_state`),
+            // so reg_state must hold the zero too: a side trace entered
+            // from its parent's exit finds the parent's values here.
+            bcx.ins()
+                .store(MemFlags::new(), z, reg_state, (i as i32) * 8);
         }
         regs_full.push(v);
     }
@@ -5175,9 +5632,13 @@ pub fn lower_trace_into_named<M: Module>(
     // unconditionally — only def_var'd if the trace actually has a
     // TForCall (otherwise unused, cranelift tree-shakes).
     let tforcall_tag_var = bcx.declare_var(types::I64);
+    // The tag of the value TForCall produced (R[A+5]), for the TForLoop
+    // back-edge check.
+    let tforcall_val_tag_var = bcx.declare_var(types::I64);
     {
         let z = bcx.ins().iconst(types::I64, 0);
         bcx.def_var(tforcall_tag_var, z);
+        bcx.def_var(tforcall_val_tag_var, z);
     }
 
     // v2.0 Track-R R3.3+ sub-1 — depth-relative `base_var` scaffold.
@@ -5366,11 +5827,43 @@ pub fn lower_trace_into_named<M: Module>(
         });
     }
 
+    // Nothing in the trace can reassign `math.<fn>` unless it stores a
+    // field of that name or `math` itself, or stores under a key it does
+    // not know (SetTable); calls end the trace and the table helpers
+    // deopt on `__newindex`. Without such a store the math folds are
+    // checked once, in `precheck` before the loop head, rather than on
+    // every iteration.
+    let fold_check_once = !record.ops[..effective_end].iter().any(|rop| {
+        let key = |k: u32| match head_proto.consts.get(k as usize) {
+            Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
+            _ => None,
+        };
+        match rop.inst.op() {
+            Op::SetTable => true,
+            // the key is K[B] for both
+            Op::SetField | Op::SetTabUp => match key(rop.inst.b()) {
+                Some(name) => {
+                    name == b"math" || math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
+                }
+                None => true,
+            },
+            _ => false,
+        }
+    });
+    // Filled in below, once the exit bookkeeping exists.
+    let precheck = (fold_check_once && !math_folds.is_empty()).then(|| bcx.create_block());
+
     let body_loop = bcx.create_block();
-    bcx.ins().jump(body_loop, &[]);
+    bcx.ins().jump(precheck.unwrap_or(body_loop), &[]);
     bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
+
+    // What reg_state holds for each register at the loop head: on entry
+    // the values the prelude loaded (caller window) or the zeroes the
+    // dispatcher filled it with (inline frames); on the back-edge what
+    // `sync_reg_state` wrote before the jump.
+    let mut stored: Vec<Option<Value>> = regs_full.iter().map(|&v| Some(bcx.use_var(v))).collect();
 
     // Per-reg current kind. Initialise from the recorder's
     // entry-tag snapshot; writers below refine. Unset slots fall
@@ -5480,8 +5973,227 @@ pub fn lower_trace_into_named<M: Module>(
     // immediate-form instructions at codegen. See layer-6 doc §3 for
     // attack #2 candidates that ARE structural (block3 dead-slot store
     // elimination, side-exit materialize call ABI consolidation).
+    // A guard that fails leaves the trace at `$pc` (the op being
+    // guarded, re-executed by the interpreter) exactly as a cmp side
+    // exit does: live sunk tables are materialised and, when the op sits
+    // in an inlined frame, the frames are rebuilt first.
+    macro_rules! guard_exit {
+        ($pc:expr, $i:expr) => {{
+            let side_exit_pc: u32 = $pc;
+            if !call_chain.is_empty() {
+                let head_resume_pc = call_chain[0].pc;
+                let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                if let Some(last) = snapshot.last_mut() {
+                    last.pc = side_exit_pc;
+                }
+                let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+                let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+                let chain_len = chain_rc.len() as i64;
+                let site_idx = per_exit_inline_vec.len() as u32;
+                let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                let mat_count = emit_materialize_live_sunk(
+                    &mut bcx,
+                    &mut module,
+                    mat_sunk_id,
+                    &escape,
+                    &virt_vars,
+                    &virt_kinds,
+                    &regs_full,
+                    &op_offsets,
+                    $i,
+                    &mut kinds_snapshot,
+                    head_proto,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                materialize_emit_count += mat_count;
+                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let chain_for_helper = chain_rc.clone();
+                per_exit_inline_vec.push((
+                    side_exit_pc,
+                    head_resume_pc,
+                    kinds_snapshot,
+                    chain_rc,
+                    side_box,
+                ));
+                let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                let ptr_arg = emit_chain_ptr_arg(
+                    &mut module,
+                    &mut bcx,
+                    &chain_for_helper,
+                    chain_ptr,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
+                let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                emit_store_back_and_return_site(
+                    &mut bcx,
+                    &regs_full[..window_size_us],
+                    &stored,
+                    reg_state,
+                    site_idx,
+                    side_exit_pc,
+                    flush_ctx.as_ref(),
+                    0i64,
+                    trace_fn_sig_ref,
+                );
+            } else {
+                let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                let mat_count = emit_materialize_live_sunk(
+                    &mut bcx,
+                    &mut module,
+                    mat_sunk_id,
+                    &escape,
+                    &virt_vars,
+                    &virt_kinds,
+                    &regs_full,
+                    &op_offsets,
+                    $i,
+                    &mut snapshot,
+                    head_proto,
+                    opts.aot,
+                    &mut defined_aot_data,
+                );
+                materialize_emit_count += mat_count;
+                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+                let tag_side_local = per_exit_kinds.len() as u32;
+                per_exit_kinds.push((side_exit_pc, snapshot, side_box));
+                emit_tagged_exit(
+                    &mut bcx,
+                    &mut module,
+                    suppress_admit_id,
+                    &regs_full[..max_stack],
+                    &stored,
+                    reg_state,
+                    side_exit_pc,
+                    record.head_pc,
+                    tag_side_local,
+                    flush_ctx.as_ref(),
+                    trace_fn_sig_ref,
+                );
+            }
+        }};
+    }
+    // Call a checked read helper; on failure leave the trace at `$pc`,
+    // otherwise evaluate to the payload it wrote.
+    macro_rules! checked_read {
+        ($id:expr, $a0:expr, $a1:expr, $want:expr, $pc:expr, $i:expr) => {{
+            let out_ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+            let out_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+            let want = bcx.ins().iconst(types::I64, $want as i64);
+            let fref = module.declare_func_in_func($id, bcx.func);
+            let call = bcx.ins().call(fref, &[$a0, $a1, want, out_addr]);
+            let ok = bcx.inst_results(call)[0];
+            let cont_blk = bcx.create_block();
+            let exit_blk = bcx.create_block();
+            bcx.ins().brif(ok, cont_blk, &[], exit_blk, &[]);
+            bcx.switch_to_block(exit_blk);
+            bcx.seal_block(exit_blk);
+            guard_exit!($pc, $i);
+            bcx.switch_to_block(cont_blk);
+            bcx.seal_block(cont_blk);
+            bcx.ins().stack_load(types::I64, out_ss, 0)
+        }};
+    }
+    // Continue in a new block when `$cond` holds, else take a
+    // `guard_exit!` to `$pc`.
+    macro_rules! guard {
+        ($cond:expr, $i:expr, $pc:expr) => {{
+            let continue_blk = bcx.create_block();
+            let exit_blk = bcx.create_block();
+            bcx.ins().brif($cond, continue_blk, &[], exit_blk, &[]);
+            bcx.switch_to_block(exit_blk);
+            bcx.seal_block(exit_blk);
+            guard_exit!($pc, $i);
+            bcx.switch_to_block(continue_blk);
+            bcx.seal_block(continue_blk);
+        }};
+    }
+    // Integer constants the registers hold at this point of the trace
+    // (from LoadI / LoadK earlier in the same pass), so a `//`, `%` or shift
+    // by a constant needs no runtime guard.
+    let mut known_int: Vec<Option<i64>> = vec![None; window_size_us];
+    if let Some(precheck) = precheck {
+        // Nothing has run yet: a failed check leaves at the head with the
+        // entry kinds, and the interpreter makes the calls.
+        bcx.switch_to_block(precheck);
+        bcx.seal_block(precheck);
+        // Before the loop head reg_state holds what the prelude loaded.
+        let entry_stored: Vec<Option<Value>> =
+            regs_full.iter().map(|&v| Some(bcx.use_var(v))).collect();
+        // interned, so one pointer per name
+        let mut checked: Vec<*const u8> = Vec::new();
+        for fold in &math_folds {
+            let math_key = head_proto.consts[record.ops[fold.start_idx].inst.c() as usize];
+            let name_key = head_proto.consts[record.ops[fold.start_idx + 1].inst.c() as usize];
+            let (
+                luna_core::runtime::Value::Str(math_key),
+                luna_core::runtime::Value::Str(name_key),
+            ) = (math_key, name_key)
+            else {
+                unreachable!("the fold matcher took both keys as strings");
+            };
+            let name_ptr = name_key.as_ptr() as *const u8;
+            if checked.contains(&name_ptr) {
+                continue;
+            }
+            checked.push(name_ptr);
+            let m = emit_str_key_arg(module, &mut bcx, math_key, opts.aot, &mut defined_aot_data);
+            let k = emit_str_key_arg(module, &mut bcx, name_key, opts.aot, &mut defined_aot_data);
+            let check_ref = module.declare_func_in_func(math_fn_check_id, bcx.func);
+            let call = bcx.ins().call(check_ref, &[m, k]);
+            let is_library = bcx.inst_results(call)[0];
+            let ok_blk = bcx.create_block();
+            let exit_blk = bcx.create_block();
+            bcx.ins().brif(is_library, ok_blk, &[], exit_blk, &[]);
+            bcx.switch_to_block(exit_blk);
+            bcx.seal_block(exit_blk);
+            let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
+            let tags_idx = per_exit_kinds.len() as u32;
+            per_exit_kinds.push((
+                record.head_pc,
+                current_kinds[..max_stack].to_vec(),
+                side_box,
+            ));
+            emit_tagged_exit(
+                &mut bcx,
+                &mut module,
+                suppress_admit_id,
+                &regs_full[..max_stack],
+                &entry_stored,
+                reg_state,
+                record.head_pc,
+                record.head_pc,
+                tags_idx,
+                flush_ctx.as_ref(),
+                trace_fn_sig_ref,
+            );
+            bcx.switch_to_block(ok_blk);
+            bcx.seal_block(ok_blk);
+        }
+        bcx.ins().jump(body_loop, &[]);
+        bcx.switch_to_block(body_loop);
+    }
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
+        // Commit the previous op's register writes to reg_state.
+        sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
+        // R[C] of a register-operand op, read before this op's own write
+        // forgets it (`x = x % 7` divides by the old value)
+        let rc_const = known_int
+            .get(op_offsets[i] as usize + rop.inst.c() as usize)
+            .copied()
+            .flatten();
+        for w in op_writes_at_offset(rop, op_offsets[i]) {
+            if let Some(slot) = known_int.get_mut(w as usize) {
+                *slot = None;
+            }
+        }
         // P12-S4-step3b — `off` is the start of this op's register
         // window inside reg_state_buf. `regs` is shadowed to the
         // matching slice of `regs_full`, so existing `regs[ins.X()]`
@@ -5522,6 +6234,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     &regs_full[..max_stack],
+                    &stored,
                     reg_state,
                     rop.pc,
                     flush_ctx.as_ref(),
@@ -5567,6 +6280,40 @@ pub fn lower_trace_into_named<M: Module>(
                         && (f.start_idx + 1 == i || f.call_idx == i))
             });
             if let Some(fold) = fold {
+                // The fold stands for the library function; leave the
+                // trace at the GetTabUp, before anything of the call
+                // has run, when `math.<fn>` holds something else (checked
+                // in `precheck` instead when nothing in the trace can
+                // change the field).
+                if fold.start_idx == i && precheck.is_none() {
+                    let math_key = head_proto.consts[record.ops[i].inst.c() as usize];
+                    let name_key = head_proto.consts[record.ops[i + 1].inst.c() as usize];
+                    let (
+                        luna_core::runtime::Value::Str(math_key),
+                        luna_core::runtime::Value::Str(name_key),
+                    ) = (math_key, name_key)
+                    else {
+                        unreachable!("the fold matcher took both keys as strings");
+                    };
+                    let m = emit_str_key_arg(
+                        module,
+                        &mut bcx,
+                        math_key,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    let k = emit_str_key_arg(
+                        module,
+                        &mut bcx,
+                        name_key,
+                        opts.aot,
+                        &mut defined_aot_data,
+                    );
+                    let check_ref = module.declare_func_in_func(math_fn_check_id, bcx.func);
+                    let call = bcx.ins().call(check_ref, &[m, k]);
+                    let is_library = bcx.inst_results(call)[0];
+                    guard!(is_library, i, rop.pc);
+                }
                 match fold.kind {
                     FoldKind::Libm1 if fold.start_idx == i => {
                         // Declare libm fn fresh per fold (cranelift
@@ -5584,16 +6331,58 @@ pub fn lower_trace_into_named<M: Module>(
                         let arg_src = fold.arg_src.expect("Libm1 has arg_src");
                         let FoldArgSrc::Reg { reg: arg_reg } = arg_src;
                         let arg_kind = k_op(&current_kinds, off as u32 + arg_reg);
+                        // The argument must be a number the trace knows as
+                        // one: a numeric string is valid Lua here, and its
+                        // payload is a pointer.
+                        if !matches!(arg_kind, RegKind::Int | RegKind::Float) {
+                            return None;
+                        }
+                        if is_rounding(fold.fn_name) {
+                            // 5.4+: an integer is its own floor/ceil; a
+                            // float's becomes an integer when it fits.
+                            // When it does not (NaN, the infinities,
+                            // beyond ±2^63) the result is a float, and
+                            // the trace leaves at the GetTabUp — nothing
+                            // of the call has run — for the interpreter.
+                            let raw = bcx.use_var(regs[arg_reg as usize]);
+                            let r = if matches!(arg_kind, RegKind::Float) {
+                                let x = use_var_f64(&mut bcx, regs, arg_reg);
+                                let r = if fold.fn_name == "floor" {
+                                    bcx.ins().floor(x)
+                                } else {
+                                    bcx.ins().ceil(x)
+                                };
+                                let fits = emit_f64_fits_i64(&mut bcx, r);
+                                guard!(fits, i, rop.pc);
+                                bcx.ins().fcvt_to_sint(types::I64, r)
+                            } else {
+                                raw
+                            };
+                            bcx.def_var(regs[fold.dst_reg as usize], r);
+                            current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
+                            continue;
+                        }
                         let arg_f64 = if matches!(arg_kind, RegKind::Float) {
                             use_var_f64(&mut bcx, regs, arg_reg)
                         } else {
-                            // Treat Int/Unset/Nil as Int → fcvt. The
-                            // recorded trace saw a numeric arg or
-                            // it wouldn't have closed.
                             let raw = bcx.use_var(regs[arg_reg as usize]);
                             bcx.ins().fcvt_from_sint(types::F64, raw)
                         };
-                        let call = bcx.ins().call(libm_ref, &[arg_f64]);
+                        let call = if fold.fn_name == "atan" {
+                            // Only on 5.4+ (see the matcher): atan2(y, 1).
+                            let mut atan2_sig = module.make_signature();
+                            atan2_sig.params.push(AbiParam::new(types::F64));
+                            atan2_sig.params.push(AbiParam::new(types::F64));
+                            atan2_sig.returns.push(AbiParam::new(types::F64));
+                            let atan2_id = module
+                                .declare_function("atan2", Linkage::Import, &atan2_sig)
+                                .ok()?;
+                            let atan2_ref = module.declare_func_in_func(atan2_id, bcx.func);
+                            let one = bcx.ins().f64const(1.0);
+                            bcx.ins().call(atan2_ref, &[arg_f64, one])
+                        } else {
+                            bcx.ins().call(libm_ref, &[arg_f64])
+                        };
                         let r = bcx.inst_results(call)[0];
                         def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
                         current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
@@ -5603,51 +6392,73 @@ pub fn lower_trace_into_named<M: Module>(
                         // away, no IR.
                     }
                     FoldKind::Min2 | FoldKind::Max2 if fold.call_idx == i => {
-                        // 2-arg min/max. PUC's `math.min(a, b)` preserves
-                        // the operand type — both Int → Int result;
-                        // either Float → Float result. So we pick the
-                        // IR lowering based on the recorded operand
-                        // kinds, mirroring PUC's `vm.less_than` +
-                        // pick-loser semantics.
+                        // 2-arg min/max. PUC's `math.min(a, b)` returns
+                        // one of its operands as it is, so the lowering
+                        // follows the recorded operand kinds:
                         //
-                        //   Int  / Int  → cranelift `imin_s` / `imax_s`
-                        //   Float/ Float → cranelift `fmin` / `fmax`
-                        //   mixed         → promote Int to Float, use fmin/fmax
-                        //
-                        // The IEEE-754 NaN handling of `fmin`/`fmax`
-                        // matches PUC's `less_than(NaN, x) = false`
-                        // fallthrough for the all-numeric paths the
-                        // trace recorder admits.
+                        //   Int  / Int   → cranelift `smin` / `smax`
+                        //   Float/ Float → `fcmp` + `select`
+                        //   otherwise    → not compiled
                         let k1 = k_op(&current_kinds, off as u32 + fold.arg1_reg);
                         let k2 = k_op(&current_kinds, off as u32 + fold.arg2_reg);
+                        // `math.max` returns whichever argument wins,
+                        // unconverted (5.3+), so an Int/Float pair has no
+                        // static result kind: such a trace is not
+                        // compiled.
+                        // Anything but two numbers of one kind (strings
+                        // compare too, from 5.3) is not compiled either.
                         let result_kind = match (k1, k2) {
-                            (RegKind::Float, _) | (_, RegKind::Float) => RegKind::Float,
-                            _ => RegKind::Int,
+                            (RegKind::Float, RegKind::Float) => RegKind::Float,
+                            (RegKind::Int, RegKind::Int) => RegKind::Int,
+                            (RegKind::Int, RegKind::Float) | (RegKind::Float, RegKind::Int) => {
+                                // The winner keeps its kind, which is
+                                // known only at run time. The trace
+                                // continues when the first argument wins
+                                // (PUC keeps it unless the second is
+                                // strictly better, compared exactly) and
+                                // otherwise leaves for the interpreter
+                                // at the fold's GetTabUp: the folded
+                                // GetTabUp / GetField never filled R[A],
+                                // and the argument set-up in between
+                                // only writes the call's argument slots,
+                                // so running it again is harmless.
+                                let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
+                                let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
+                                let f1 = bcx.ins().bitcast(types::F64, MemFlags::new(), a1);
+                                let f2 = bcx.ins().bitcast(types::F64, MemFlags::new(), a2);
+                                // max: second wins iff a1 < a2; min: iff a2 < a1.
+                                let second_wins = match (fold.kind, k1) {
+                                    (FoldKind::Max2, RegKind::Int) => {
+                                        emit_lt_int_float(&mut bcx, a1, f2)
+                                    }
+                                    (FoldKind::Max2, _) => emit_lt_float_int(&mut bcx, f1, a2),
+                                    (FoldKind::Min2, RegKind::Int) => {
+                                        emit_lt_float_int(&mut bcx, f2, a1)
+                                    }
+                                    (FoldKind::Min2, _) => emit_lt_int_float(&mut bcx, a2, f1),
+                                    (FoldKind::Libm1, _) => unreachable!(),
+                                };
+                                let first_wins = bcx.ins().bxor_imm(second_wins, 1);
+                                guard!(first_wins, i, record.ops[fold.start_idx].pc);
+                                bcx.def_var(regs[fold.dst_reg as usize], a1);
+                                current_kinds[off + fold.dst_reg as usize] = k1;
+                                continue;
+                            }
+                            _ => return None,
                         };
                         if matches!(result_kind, RegKind::Float) {
-                            let coerce_to_f64 = |bcx: &mut FunctionBuilder<'_>,
-                                                 regs: &[Variable],
-                                                 current_kinds: &[RegKind],
-                                                 off: usize,
-                                                 reg: u32|
-                             -> Value {
-                                let kind = k_op(current_kinds, off as u32 + reg);
-                                if matches!(kind, RegKind::Float) {
-                                    use_var_f64(bcx, regs, reg)
-                                } else {
-                                    let raw = bcx.use_var(regs[reg as usize]);
-                                    bcx.ins().fcvt_from_sint(types::F64, raw)
-                                }
-                            };
-                            let a1 =
-                                coerce_to_f64(&mut bcx, regs, &current_kinds, off, fold.arg1_reg);
-                            let a2 =
-                                coerce_to_f64(&mut bcx, regs, &current_kinds, off, fold.arg2_reg);
-                            let r = match fold.kind {
-                                FoldKind::Min2 => bcx.ins().fmin(a1, a2),
-                                FoldKind::Max2 => bcx.ins().fmax(a1, a2),
+                            let a1 = use_var_f64(&mut bcx, regs, fold.arg1_reg);
+                            let a2 = use_var_f64(&mut bcx, regs, fold.arg2_reg);
+                            // PUC keeps the first argument unless the
+                            // second compares strictly better — not
+                            // IEEE fmin/fmax, which differ on NaN and
+                            // on -0.0 vs 0.0.
+                            let second_wins = match fold.kind {
+                                FoldKind::Min2 => bcx.ins().fcmp(FloatCC::LessThan, a2, a1),
+                                FoldKind::Max2 => bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
                                 FoldKind::Libm1 => unreachable!(),
                             };
+                            let r = bcx.ins().select(second_wins, a2, a1);
                             def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
                             current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
                         } else {
@@ -5694,6 +6505,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let v = bcx.ins().iconst(types::I64, imm);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
+                known_int[off + ins.a() as usize] = Some(imm);
             }
             Op::LoadF => {
                 // R[A] := sBx as f64. Bitcast result to i64
@@ -5721,6 +6533,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let bx = ins.bx() as usize;
                 let (v, k) = match head_proto.consts[bx] {
                     luna_core::runtime::Value::Int(n) => {
+                        known_int[off + ins.a() as usize] = Some(n);
                         (bcx.ins().iconst(types::I64, n), RegKind::Int)
                     }
                     luna_core::runtime::Value::Float(f) => {
@@ -5736,6 +6549,13 @@ pub fn lower_trace_into_named<M: Module>(
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
                 let kc = k_op(&current_kinds, off as u32 + ins.c());
+                // A string operand is coerced (or has `__add` & co. in its
+                // metatable); only numbers are lowered, since the payload of
+                // anything else is a pointer.
+                let number = |k| matches!(k, RegKind::Int | RegKind::Float);
+                if !number(kb) || !number(kc) {
+                    return None;
+                }
                 // Op::Pow always returns Float in Lua 5.4+ (matches
                 // `pow(f64, f64) -> f64`); coerce Int operands to
                 // Float via fcvt_from_sint.
@@ -5763,7 +6583,15 @@ pub fn lower_trace_into_named<M: Module>(
                         .ok()?;
                     let pow_ref = module.declare_func_in_func(pow_id, bcx.func);
                     let call = bcx.ins().call(pow_ref, &[lhs, rhs]);
-                    let r = bcx.inst_results(call)[0];
+                    let mut r = bcx.inst_results(call)[0];
+                    // 5.4+ `luai_numpow` squares by multiplying, which can
+                    // differ from `pow` in the last bit
+                    if !opts.pre53 {
+                        let two = bcx.ins().f64const(2.0);
+                        let is_two = bcx.ins().fcmp(FloatCC::Equal, rhs, two);
+                        let sq = bcx.ins().fmul(lhs, lhs);
+                        r = bcx.ins().select(is_two, sq, r);
+                    }
                     def_var_f64(&mut bcx, regs[ins.a() as usize], r);
                     current_kinds[off + ins.a() as usize] = RegKind::Float;
                     continue;
@@ -5807,39 +6635,85 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = RegKind::Int;
                 }
             }
-            // 3-reg Int ops. Cranelift's signed div / mod panic on
-            // divide-by-zero — Lua wraps the same way (raises an
-            // error). The recorder picked a sample run where these
-            // didn't fault, but a runtime zero divisor would crash
-            // the trace. Future hardening could trap-then-deopt.
+            // 3-reg Int ops. The cases the machine instruction gets
+            // wrong for Lua — a zero divisor (Lua raises), a shift count
+            // outside 0..=63 (Lua shifts the other way or gives 0) — leave
+            // the trace at the op so the interpreter does them; a -1
+            // divisor (the machine traps on minint) is done inline.
             Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
-                // Int-only ops. Bail if either operand is Float —
-                // Lua's IDiv would coerce to Float (different
-                // semantics) and bitwise ops on Floats are
-                // type-errors at runtime.
+                // Lowered for two integers only: a float operand makes
+                // `//` and `%` float ops and the bitwise ops convert or
+                // raise; a string is coerced.
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
                 let kc = k_op(&current_kinds, off as u32 + ins.c());
-                if matches!(kb, RegKind::Float) || matches!(kc, RegKind::Float) {
+                if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
                     return None;
                 }
                 let lhs = bcx.use_var(regs[ins.b() as usize]);
                 let rhs = bcx.use_var(regs[ins.c() as usize]);
-                let r = match op {
-                    Op::IDiv => bcx.ins().sdiv(lhs, rhs),
-                    Op::Mod => bcx.ins().srem(lhs, rhs),
-                    Op::BAnd => bcx.ins().band(lhs, rhs),
-                    Op::BOr => bcx.ins().bor(lhs, rhs),
-                    Op::BXor => bcx.ins().bxor(lhs, rhs),
-                    Op::Shl => bcx.ins().ishl(lhs, rhs),
-                    Op::Shr => bcx.ins().ushr(lhs, rhs),
-                    _ => unreachable!("whitelist gated above"),
+                let r = match (op, rc_const) {
+                    // a constant divisor needs neither guard (and the
+                    // machine division by a constant is strength-reduced)
+                    (Op::IDiv | Op::Mod, Some(k)) if k != 0 && k != -1 => {
+                        emit_floor_divmod_by(&mut bcx, op, lhs, k)
+                    }
+                    // a constant shift count is a single machine shift
+                    (Op::Shl | Op::Shr, Some(k)) => {
+                        let n = if op == Op::Shr { k.wrapping_neg() } else { k };
+                        if n <= -64 || n >= 64 {
+                            bcx.ins().iconst(types::I64, 0)
+                        } else if n >= 0 {
+                            bcx.ins().ishl_imm(lhs, n)
+                        } else {
+                            bcx.ins().ushr_imm(lhs, -n)
+                        }
+                    }
+                    _ => match op {
+                        Op::IDiv | Op::Mod => {
+                            // A zero divisor is the interpreter's error to
+                            // raise: leave the trace at this op.
+                            let zero = bcx.ins().iconst(types::I64, 0);
+                            let is_zero = bcx.ins().icmp(IntCC::Equal, rhs, zero);
+                            let cont_blk = bcx.create_block();
+                            let exit_blk = bcx.create_block();
+                            bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
+                            bcx.switch_to_block(exit_blk);
+                            bcx.seal_block(exit_blk);
+                            guard_exit!(rop.pc, i);
+                            bcx.switch_to_block(cont_blk);
+                            bcx.seal_block(cont_blk);
+                            emit_floor_divmod(&mut bcx, op, lhs, rhs)
+                        }
+                        Op::BAnd => bcx.ins().band(lhs, rhs),
+                        Op::BOr => bcx.ins().bor(lhs, rhs),
+                        Op::BXor => bcx.ins().bxor(lhs, rhs),
+                        Op::Shl | Op::Shr => {
+                            let wide = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThan, rhs, 63);
+                            let cont_blk = bcx.create_block();
+                            let exit_blk = bcx.create_block();
+                            bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
+                            bcx.switch_to_block(exit_blk);
+                            bcx.seal_block(exit_blk);
+                            guard_exit!(rop.pc, i);
+                            bcx.switch_to_block(cont_blk);
+                            bcx.seal_block(cont_blk);
+                            if op == Op::Shl {
+                                bcx.ins().ishl(lhs, rhs)
+                            } else {
+                                bcx.ins().ushr(lhs, rhs)
+                            }
+                        }
+                        _ => unreachable!("whitelist gated above"),
+                    },
                 };
                 bcx.def_var(regs[ins.a() as usize], r);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
             }
             Op::Unm | Op::BNot => {
                 let kb = k_op(&current_kinds, off as u32 + ins.b());
-                if matches!(op, Op::BNot) && matches!(kb, RegKind::Float) {
+                if !matches!(kb, RegKind::Int)
+                    && !(matches!(op, Op::Unm) && matches!(kb, RegKind::Float))
+                {
                     return None;
                 }
                 if matches!(op, Op::Unm) && matches!(kb, RegKind::Float) {
@@ -5967,6 +6841,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_site(
                         &mut bcx,
                         &regs_full[..window_size_us],
+                        &stored,
                         reg_state,
                         site_idx,
                         side_exit_pc,
@@ -6004,15 +6879,18 @@ pub fn lower_trace_into_named<M: Module>(
                     per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_0));
                     // store_back only writes caller window — depth>0 scratch
                     // slots stay out of the dispatcher's reg_state restore.
-                    emit_store_back_and_return_pc(
+                    emit_tagged_exit(
                         &mut bcx,
+                        &mut module,
+                        suppress_admit_id,
                         &regs_full[..max_stack],
+                        &stored,
                         reg_state,
                         side_exit_pc,
+                        record.head_pc,
+                        tag_side_local_0,
                         flush_ctx.as_ref(),
-                        0i64,
                         trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local_0),
                     );
                 }
 
@@ -6074,6 +6952,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
+                        &stored,
                         reg_state,
                         rop.pc,
                         flush_ctx.as_ref(),
@@ -6139,6 +7018,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
+                        &stored,
                         reg_state,
                         rop.pc,
                         flush_ctx.as_ref(),
@@ -6151,7 +7031,8 @@ pub fn lower_trace_into_named<M: Module>(
                     if recorded_passed {
                         let v = bcx.use_var(regs[ins.b() as usize]);
                         bcx.def_var(regs[ins.a() as usize], v);
-                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] =
+                            k_op(&current_kinds, off as u32 + ins.b());
                     }
                 }
             }
@@ -6285,6 +7166,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_site(
                         &mut bcx,
                         &regs_full[..window_size_us],
+                        &stored,
                         reg_state,
                         site_idx,
                         side_exit_pc,
@@ -6316,15 +7198,18 @@ pub fn lower_trace_into_named<M: Module>(
                     let _tag_side_cell_addr_1 = (&*tag_side_box_1) as *const TCellPtr as i64;
                     let tag_side_local_1 = per_exit_kinds.len() as u32;
                     per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_1));
-                    emit_store_back_and_return_pc(
+                    emit_tagged_exit(
                         &mut bcx,
+                        &mut module,
+                        suppress_admit_id,
                         &regs_full[..max_stack],
+                        &stored,
                         reg_state,
                         side_exit_pc,
+                        record.head_pc,
+                        tag_side_local_1,
                         flush_ctx.as_ref(),
-                        0i64,
                         trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local_1),
                     );
                 }
 
@@ -6371,43 +7256,48 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.c() as i64);
-                let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, k_imm]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
-                // GetX inference: look at the immediate next op.
+                // GetX inference: look at the immediate next op. The read
+                // is checked against it, so a value of another type (or
+                // a table with a metatable) leaves the trace here.
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
-                    _ => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
-                    }
+                if let Some((kind, want)) = getx_want(inferred) {
+                    let v = checked_read!(get_int_checked_id, t, k_imm, want, rop.pc, i);
+                    bcx.def_var(regs[ins.a() as usize], v);
+                    current_kinds[off + ins.a() as usize] = kind;
+                } else {
+                    let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[t, k_imm]);
+                    let v = bcx.inst_results(call)[0];
+                    bcx.def_var(regs[ins.a() as usize], v);
+                    dispatchable = false;
+                    dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
                 }
             }
             Op::GetTable => {
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key = bcx.use_var(regs[ins.c() as usize]);
-                let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t, key]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
-                match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                // the helper reads the key as an integer
+                let key_is_int = matches!(k_op(&current_kinds, off as u32 + ins.c()), RegKind::Int);
+                match getx_want(inferred) {
+                    Some((kind, want)) if key_is_int => {
+                        let v = checked_read!(get_int_checked_id, t, key, want, rop.pc, i);
+                        bcx.def_var(regs[ins.a() as usize], v);
+                        current_kinds[off + ins.a() as usize] = kind;
+                    }
                     _ => {
+                        let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key]);
+                        let v = bcx.inst_results(call)[0];
+                        bcx.def_var(regs[ins.a() as usize], v);
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetTable:inference-fail"));
@@ -6449,19 +7339,22 @@ pub fn lower_trace_into_named<M: Module>(
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
-                let val_tag = match val_kind {
-                    RegKind::Int => luna_core::runtime::value::raw::INT,
-                    RegKind::Float => luna_core::runtime::value::raw::FLOAT,
-                    RegKind::Table => luna_core::runtime::value::raw::TABLE,
-                    RegKind::Closure => luna_core::runtime::value::raw::CLOSURE,
-                    RegKind::Str => luna_core::runtime::value::raw::STR,
-                    RegKind::Nil => luna_core::runtime::value::raw::NIL,
-                    RegKind::Unset => luna_core::runtime::value::raw::INT,
-                };
-                let val_raw = bcx.use_var(regs[ins.c() as usize]);
-                let tag_arg = bcx.ins().iconst(types::I64, val_tag as i64);
-                let func_ref = module.declare_func_in_func(set_field_id, bcx.func);
-                bcx.ins().call(func_ref, &[t, key_arg, val_raw, tag_arg]);
+                // a value of unknown kind cannot be tagged for the table
+                if matches!(val_kind, RegKind::Unset) {
+                    return None;
+                }
+                let val = bcx.use_var(regs[ins.c() as usize]);
+                let done = emit_table_set(
+                    &mut bcx,
+                    &mut module,
+                    &set_ids,
+                    t,
+                    key_arg,
+                    RegKind::Str,
+                    val,
+                    val_kind,
+                );
+                guard!(done, i, rop.pc);
             }
             Op::GetField => {
                 // P12-S11-B-v1 — sunk path: use_var the virt slot
@@ -6491,6 +7384,12 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
+                let inferred = if i + 1 < effective_end {
+                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
+                } else {
+                    None
+                };
+                let want = getx_want(inferred);
 
                 // v2.1 Phase 1I.B — table-field IC scaffold.
                 //
@@ -6507,11 +7406,21 @@ pub fn lower_trace_into_named<M: Module>(
                 // atomic load inside `field_ic_enabled()`; the IC
                 // emission produces zero additional IR when the
                 // gate is off.
+                // The IC's tag guard only stands in for the checked read
+                // when the cached tag is the one the trace types it as.
                 let ic_active = luna_core::jit::trace_types::field_ic_enabled()
-                    && record
-                        .field_ic_snapshot
-                        .as_ref()
-                        .is_some_and(|s| s.op_idx as usize == i);
+                    && record.field_ic_snapshot.as_ref().is_some_and(|s| {
+                        s.op_idx as usize == i
+                            && want.is_none_or(|(k, _)| {
+                                use luna_core::runtime::value::tag;
+                                let enum_tag = match k {
+                                    RegKind::Int => tag::INT,
+                                    RegKind::Float => tag::FLOAT,
+                                    _ => tag::TABLE,
+                                };
+                                enum_tag == s.cached_val_tag
+                            })
+                    });
 
                 let v = if ic_active {
                     let snap = record
@@ -6595,18 +7504,24 @@ pub fn lower_trace_into_named<M: Module>(
                     );
                     bcx.ins().jump(merge_blk, &[val_raw.into()]);
 
-                    // --- slow: fall back to existing helper ---
+                    // --- slow: fall back to the helper ---
                     bcx.switch_to_block(slow_blk);
                     bcx.seal_block(slow_blk);
-                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                    let v_slow = bcx.inst_results(call)[0];
+                    let v_slow = if let Some((_, w)) = want {
+                        checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
+                    } else {
+                        let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[t, key_arg]);
+                        bcx.inst_results(call)[0]
+                    };
                     bcx.ins().jump(merge_blk, &[v_slow.into()]);
 
                     // --- merge ---
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
                     bcx.block_params(merge_blk)[0]
+                } else if let Some((_, w)) = want {
+                    checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
                 } else {
                     let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
                     let call = bcx.ins().call(func_ref, &[t, key_arg]);
@@ -6614,11 +7529,6 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 bcx.def_var(regs[ins.a() as usize], v);
 
-                let inferred = if i + 1 < effective_end {
-                    infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-                } else {
-                    None
-                };
                 match inferred {
                     Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
                     Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
@@ -6644,15 +7554,19 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let key_arg =
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
+                let v = if let Some((_, w)) = getx_want(inferred) {
+                    checked_read!(get_tab_up_checked_id, upval_idx_arg, key_arg, w, rop.pc, i)
+                } else {
+                    let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
+                    let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
+                    bcx.inst_results(call)[0]
+                };
+                bcx.def_var(regs[ins.a() as usize], v);
                 match inferred {
                     Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
                     Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
@@ -6692,17 +7606,22 @@ pub fn lower_trace_into_named<M: Module>(
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.b() as i64);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
-                emit_table_set(
+                // a value of unknown kind cannot be tagged for the table
+                if matches!(val_kind, RegKind::Unset) {
+                    return None;
+                }
+                let val = bcx.use_var(regs[ins.c() as usize]);
+                let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_int_id,
-                    set_nil_id,
-                    set_raw_id,
+                    &set_ids,
                     t,
                     k_imm,
+                    RegKind::Int,
+                    val,
                     val_kind,
-                    regs[ins.c() as usize],
                 );
+                guard!(done, i, rop.pc);
             }
             Op::SetTable => {
                 // P12-S8-C — sunk path: escape sweep tagged
@@ -6730,18 +7649,24 @@ pub fn lower_trace_into_named<M: Module>(
                 // as Op::SetI.
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let key = bcx.use_var(regs[ins.b() as usize]);
+                let key_kind = k_op(&current_kinds, off as u32 + ins.b());
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
-                emit_table_set(
+                // a key or value of unknown kind cannot be tagged for the table
+                if matches!(key_kind, RegKind::Unset) || matches!(val_kind, RegKind::Unset) {
+                    return None;
+                }
+                let val = bcx.use_var(regs[ins.c() as usize]);
+                let done = emit_table_set(
                     &mut bcx,
                     &mut module,
-                    set_int_id,
-                    set_nil_id,
-                    set_raw_id,
+                    &set_ids,
                     t,
                     key,
+                    key_kind,
+                    val,
                     val_kind,
-                    regs[ins.c() as usize],
                 );
+                guard!(done, i, rop.pc);
             }
             Op::SetList => {
                 // P12-S5-B / P12-S9-C — `R[A][C+i] := R[A+i]` for i in
@@ -6790,25 +7715,34 @@ pub fn lower_trace_into_named<M: Module>(
                 for ii in 1..=effective_b {
                     let key = bcx.ins().iconst(types::I64, c_off + ii as i64);
                     let src_kind = k_op(&current_kinds, (off + a + ii) as u32);
-                    emit_table_set(
+                    // a value of unknown kind cannot be tagged for the table
+                    if matches!(src_kind, RegKind::Unset) {
+                        return None;
+                    }
+                    let val = bcx.use_var(regs[a + ii]);
+                    // Always stored: SetList fills the fresh table of a
+                    // constructor, which has no metatable, at integer keys.
+                    let _ = emit_table_set(
                         &mut bcx,
                         &mut module,
-                        set_int_id,
-                        set_nil_id,
-                        set_raw_id,
+                        &set_ids,
                         t,
                         key,
+                        RegKind::Int,
+                        val,
                         src_kind,
-                        regs[a + ii],
                     );
                 }
             }
             Op::Len => {
                 // R[A] := #R[B] — call luna_jit_table_len(t) -> i64.
                 let t = bcx.use_var(regs[ins.b() as usize]);
-                let func_ref = module.declare_func_in_func(len_id, bcx.func);
+                let func_ref = module.declare_func_in_func(len_checked_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[t]);
                 let v = bcx.inst_results(call)[0];
+                // -1: the table has a metatable
+                let ok = bcx.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, v, 0);
+                guard!(ok, i, rop.pc);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
             }
@@ -6899,28 +7833,10 @@ pub fn lower_trace_into_named<M: Module>(
                 let func_ref = module.declare_func_in_func(op_close_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[a_arg]);
                 let status = bcx.inst_results(call)[0];
-                let continue_blk = bcx.create_block();
-                let deopt_blk = bcx.create_block();
-                bcx.ins().brif(status, deopt_blk, &[], continue_blk, &[]);
-                bcx.switch_to_block(deopt_blk);
-                bcx.seal_block(deopt_blk);
-                // Deopt: store back full caller window so interp
-                // resumes Op::Close with the trace's mid-stream values
-                // in vm.stack. dispatcher's pending_err check will
-                // unwind without restoring reg_state; interp re-runs
-                // Op::Close → idempotent close_from + handler dispatch.
-                emit_store_back_and_return_pc(
-                    &mut bcx,
-                    &regs_full[..max_stack],
-                    reg_state,
-                    rop.pc,
-                    flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                );
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                // 1: a `__close` handler would run; the interpreter
+                // redoes the op and runs it
+                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                guard!(ok, i, rop.pc);
             }
             Op::GetUpval => {
                 // R[A] := UpVal[B]. The helper reads JIT_CL's
@@ -7112,52 +8028,45 @@ pub fn lower_trace_into_named<M: Module>(
                 // Allocates the 3-slot buffer, calls the helper,
                 // brif-checks the result, def_vars regs + tag from
                 // the buffer.
-                let emit_helper_call = |bcx: &mut FunctionBuilder<'_>, module: &mut M| -> () {
-                    let out_ss =
-                        bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            24,
-                            3,
-                        ));
-                    let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
-                    let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
-                    let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
-                    let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
-                    let nvars_arg = bcx.ins().iconst(types::I64, nvars);
-                    let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
-                    let call_inst = bcx
-                        .ins()
-                        .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
-                    let status_or_tag = bcx.inst_results(call_inst)[0];
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status_or_tag, zero);
-                    let cont_blk = bcx.create_block();
-                    let deopt_blk = bcx.create_block();
-                    bcx.ins().brif(is_err, deopt_blk, &[], cont_blk, &[]);
-                    bcx.switch_to_block(deopt_blk);
-                    bcx.seal_block(deopt_blk);
-                    emit_store_back_and_return_pc(
-                        bcx,
-                        &regs_full[..max_stack],
-                        reg_state,
-                        rop.pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                    );
-                    bcx.switch_to_block(cont_blk);
-                    bcx.seal_block(cont_blk);
-                    bcx.def_var(tforcall_tag_var, status_or_tag);
-                    let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
-                    let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
-                    let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
-                    bcx.def_var(regs[a_us + 2], ctrl_raw);
-                    bcx.def_var(regs[a_us + 4], key_raw);
-                    if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                        bcx.def_var(regs[a_us + 5], val_raw);
-                    }
-                };
+                macro_rules! emit_helper_call {
+                    () => {{
+                        let out_ss =
+                            bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                24,
+                                3,
+                            ));
+                        let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
+                        let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
+                        let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
+                        let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
+                        let nvars_arg = bcx.ins().iconst(types::I64, nvars);
+                        let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
+                        let call_inst = bcx
+                            .ins()
+                            .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
+                        let status_or_tag = bcx.inst_results(call_inst)[0];
+                        // -1: not a native iterator, or it raised; the
+                        // interpreter redoes the op
+                        let ok =
+                            bcx.ins()
+                                .icmp_imm(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
+                        guard!(ok, i, rop.pc);
+                        // key tag | value tag << 8 (Vm::jit_op_tforcall)
+                        let key_tag = bcx.ins().band_imm(status_or_tag, 0xff);
+                        let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
+                        bcx.def_var(tforcall_tag_var, key_tag);
+                        bcx.def_var(tforcall_val_tag_var, val_tag);
+                        let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
+                        let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
+                        let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
+                        bcx.def_var(regs[a_us + 2], ctrl_raw);
+                        bcx.def_var(regs[a_us + 4], key_raw);
+                        if (nvars as usize) >= 2 && a_us + 5 < max_stack {
+                            bcx.def_var(regs[a_us + 5], val_raw);
+                        }
+                    }};
+                }
 
                 if is_ipairs_trace {
                     // Inline aget fast path. The recorder confirmed
@@ -7257,6 +8166,7 @@ pub fn lower_trace_into_named<M: Module>(
                         emit_store_back_and_return_pc(
                             &mut bcx,
                             &regs_full[..max_stack],
+                            &stored,
                             reg_state,
                             rop.pc,
                             flush_ctx.as_ref(),
@@ -7289,6 +8199,7 @@ pub fn lower_trace_into_named<M: Module>(
                         bcx.def_var(regs[a_us + 5], chosen_v5);
                     }
                     bcx.def_var(tforcall_tag_var, r4_tag);
+                    bcx.def_var(tforcall_val_tag_var, val_tag);
                     bcx.ins().jump(merge_blk, &[]);
 
                     // ----- slow_blk: helper fallback -----
@@ -7300,14 +8211,14 @@ pub fn lower_trace_into_named<M: Module>(
                     // value. R[A]/R[A+1] still hold their entry
                     // values in vm.stack.
                     spill_slot(&mut bcx, a_us + 2);
-                    emit_helper_call(&mut bcx, module);
+                    emit_helper_call!();
                     bcx.ins().jump(merge_blk, &[]);
 
                     // ----- merge_blk -----
                     bcx.switch_to_block(merge_blk);
                     bcx.seal_block(merge_blk);
                 } else {
-                    emit_helper_call(&mut bcx, module);
+                    emit_helper_call!();
                 }
 
                 current_kinds[off + a_us + 2] = RegKind::Unset;
@@ -7353,35 +8264,18 @@ pub fn lower_trace_into_named<M: Module>(
                 let func_ref = module.declare_func_in_func(op_concat_id, bcx.func);
                 let call_inst = bcx.ins().call(func_ref, &[a_arg, n_arg]);
                 let status = bcx.inst_results(call_inst)[0];
-                let zero = bcx.ins().iconst(types::I64, 0);
-                let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status, zero);
-                let continue_blk = bcx.create_block();
-                let deopt_blk = bcx.create_block();
-                bcx.ins().brif(is_err, deopt_blk, &[], continue_blk, &[]);
-                bcx.switch_to_block(deopt_blk);
-                bcx.seal_block(deopt_blk);
-                emit_store_back_and_return_pc(
-                    &mut bcx,
-                    &regs_full[..max_stack],
-                    reg_state,
-                    rop.pc,
-                    flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                );
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                // -1: an error or `__concat`; the interpreter redoes the op
+                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                guard!(ok, i, rop.pc);
                 // Reload regs[A] (= result Str) from vm.stack via
-                // luna_jit_stack_load helper. current_kinds = Unset
-                // since RegKind doesn't carry Str (string raw bits
-                // round-trip via the dispatcher's per-slot tag path).
+                // luna_jit_stack_load helper. The helper deopts on the
+                // `__concat` path, so a result here is always a string.
                 let stack_load_ref = module.declare_func_in_func(stack_load_id, bcx.func);
                 let a_arg_reload = bcx.ins().iconst(types::I64, a_us as i64);
                 let reload_inst = bcx.ins().call(stack_load_ref, &[a_arg_reload]);
                 let result_raw = bcx.inst_results(reload_inst)[0];
                 bcx.def_var(regs[a_us], result_raw);
-                current_kinds[off + a_us] = RegKind::Unset;
+                current_kinds[off + a_us] = RegKind::Str;
             }
             // P12-S12-B-v2 — generic-for prep is the leading pc-bump
             // before body_top. Recorder enters at body_top, so this
@@ -7588,6 +8482,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &stored,
             reg_state,
             record.head_pc,
             flush_ctx.as_ref(),
@@ -7683,6 +8578,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &stored,
             reg_state,
             record.head_pc,
             flush_ctx.as_ref(),
@@ -7696,6 +8592,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &stored,
             reg_state,
             record.ops[call_idx].pc,
             flush_ctx.as_ref(),
@@ -7711,6 +8608,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &stored,
             reg_state,
             record.ops[inline_abort_idx].pc,
             flush_ctx.as_ref(),
@@ -7727,6 +8625,7 @@ pub fn lower_trace_into_named<M: Module>(
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &stored,
             reg_state,
             record.ops[return_idx].pc,
             flush_ctx.as_ref(),
@@ -7754,7 +8653,8 @@ pub fn lower_trace_into_named<M: Module>(
             Op::ForLoop => {
                 let count = bcx.use_var(regs_full[a + 1]);
                 let zero = bcx.ins().iconst(types::I64, 0);
-                let cond = bcx.ins().icmp(IntCC::SignedGreaterThan, count, zero);
+                // the loop count is unsigned (PUC `lua_Unsigned`)
+                let cond = bcx.ins().icmp(IntCC::NotEqual, count, zero);
 
                 let continue_blk = bcx.create_block();
                 let exit_blk = bcx.create_block();
@@ -7766,6 +8666,7 @@ pub fn lower_trace_into_named<M: Module>(
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     caller_regs,
+                    &stored,
                     reg_state,
                     rop.pc + 1,
                     flush_ctx.as_ref(),
@@ -7786,6 +8687,7 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.def_var(regs_full[a + 1], count_new);
                 bcx.def_var(regs_full[a + 3], next);
                 if do_internal_loop {
+                    sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
                     // ForLoop's continue branch jumps to the loop's
@@ -7806,6 +8708,7 @@ pub fn lower_trace_into_named<M: Module>(
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         caller_regs,
+                        &stored,
                         reg_state,
                         body_pc,
                         flush_ctx.as_ref(),
@@ -7822,8 +8725,10 @@ pub fn lower_trace_into_named<M: Module>(
                 //                           //     batched helper
                 //                           //     return value
                 //   if tag == NIL:  side-exit at tforloop.pc + 1
-                //   elif tag == INT: R[A+2]=R[A+4] + back-edge
-                //   else: deopt (unsupported iter return kind)
+                //   elif the key's (and value's) tag is the one the
+                //        body was compiled for: R[A+2]=R[A+4] +
+                //        back-edge
+                //   else: deopt (the interpreter runs the TForLoop)
                 //
                 // The Nil branch reuses the existing dispatcher
                 // restore path; push a per_exit_kinds snapshot with
@@ -7832,13 +8737,25 @@ pub fn lower_trace_into_named<M: Module>(
                 // dispatcher without override would restore as Int
                 // — wrong for Nil).
                 let tag = bcx.use_var(tforcall_tag_var);
+                // The body was lowered for the head's entry tags; the
+                // back-edge runs it again only with a key (and, when the
+                // loop has one, a value) of those tags. A pairs loop
+                // over string keys meeting an integer key (or the
+                // reverse) stored the new key under the old tag.
+                let nvars = match record.ops[for_loop_idx - 1].inst.op() {
+                    Op::TForCall => record.ops[for_loop_idx - 1].inst.c() as usize,
+                    _ => return None,
+                };
+                let key_tag = *record.entry_tags.get(a + 4)?;
+                let val_tag = if nvars >= 2 {
+                    Some(*record.entry_tags.get(a + 5)?)
+                } else {
+                    None
+                };
 
                 let nil_const = bcx
                     .ins()
                     .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
-                let int_const = bcx
-                    .ins()
-                    .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
                 let is_nil = bcx.ins().icmp(IntCC::Equal, tag, nil_const);
                 let nil_exit_blk = bcx.create_block();
                 let not_nil_blk = bcx.create_block();
@@ -7848,44 +8765,58 @@ pub fn lower_trace_into_named<M: Module>(
                 // = Nil, then store back + return tforloop.pc + 1.
                 bcx.switch_to_block(nil_exit_blk);
                 bcx.seal_block(nil_exit_blk);
+                // Every loop variable restores as nil: the key is nil, and
+                // the value slots hold what the iterator's last call left
+                // (nil in the helper path), which the loop no longer reads.
                 let mut nil_snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
-                if a + 4 < nil_snapshot.len() {
-                    nil_snapshot[a + 4] = RegKind::Nil;
+                for k in (a + 4)..(a + 4 + nvars).min(nil_snapshot.len()) {
+                    nil_snapshot[k] = RegKind::Nil;
                 }
                 let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
                 let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
                 let tag_side_local_2 = per_exit_kinds.len() as u32;
                 per_exit_kinds.push((rop.pc + 1, nil_snapshot, tag_side_box_2));
-                emit_store_back_and_return_pc(
+                emit_tagged_exit(
                     &mut bcx,
+                    &mut module,
+                    suppress_admit_id,
                     caller_regs,
+                    &stored,
                     reg_state,
                     rop.pc + 1,
+                    record.head_pc,
+                    tag_side_local_2,
                     flush_ctx.as_ref(),
-                    0i64,
                     trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_TAG, tag_side_local_2),
                 );
 
-                // Non-Nil branch: check it's Int (v2 only handles
-                // Int-key iters like ipairs / numeric pairs).
                 bcx.switch_to_block(not_nil_blk);
                 bcx.seal_block(not_nil_blk);
-                let is_int = bcx.ins().icmp(IntCC::Equal, tag, int_const);
+                let mut same_kinds = bcx.ins().icmp_imm(IntCC::Equal, tag, i64::from(key_tag));
+                if let Some(val_tag) = val_tag {
+                    let v = bcx.use_var(tforcall_val_tag_var);
+                    let same_val = bcx.ins().icmp_imm(IntCC::Equal, v, i64::from(val_tag));
+                    same_kinds = bcx.ins().band(same_kinds, same_val);
+                }
                 let continue_blk = bcx.create_block();
                 let deopt_blk = bcx.create_block();
-                bcx.ins().brif(is_int, continue_blk, &[], deopt_blk, &[]);
+                bcx.ins()
+                    .brif(same_kinds, continue_blk, &[], deopt_blk, &[]);
 
-                // Deopt: unsupported iter return kind. Store back +
-                // return TForLoop.pc so the interp re-executes the
-                // back-edge in the slow path.
+                // Deopt: the next key or value has another kind than the
+                // body was compiled for. Store back + return TForLoop.pc
+                // so the interp re-executes the back-edge.
                 bcx.switch_to_block(deopt_blk);
                 bcx.seal_block(deopt_blk);
-                emit_store_back_and_return_pc(
+                // The helper already wrote the loop variables to the stack
+                // with their tags, which are not the ones the registers
+                // were compiled for; the dispatcher must leave them there.
+                emit_store_back_and_return(
                     &mut bcx,
                     caller_regs,
+                    &stored,
                     reg_state,
-                    rop.pc,
+                    (luna_core::jit::trace_types::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
                     flush_ctx.as_ref(),
                     0i64,
                     trace_fn_sig_ref,
@@ -7899,11 +8830,13 @@ pub fn lower_trace_into_named<M: Module>(
                 let ctrl = bcx.use_var(regs_full[a + 4]);
                 bcx.def_var(regs_full[a + 2], ctrl);
                 if do_internal_loop {
+                    sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         caller_regs,
+                        &stored,
                         reg_state,
                         record.head_pc,
                         flush_ctx.as_ref(),
@@ -7916,11 +8849,13 @@ pub fn lower_trace_into_named<M: Module>(
             _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
         }
     } else if do_internal_loop {
+        sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
         bcx.ins().jump(body_loop, &[]);
     } else {
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
+            &stored,
             reg_state,
             record.head_pc,
             flush_ctx.as_ref(),
@@ -7936,6 +8871,7 @@ pub fn lower_trace_into_named<M: Module>(
     bcx.seal_block(body_loop);
 
     bcx.finalize();
+    drop_unused_block_params(&mut ctx.func);
     // Path C — `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction
     // tool for layer-6 attribution (per-call IR op count is the gap).
@@ -8068,6 +9004,17 @@ pub fn lower_trace_into_named<M: Module>(
     // (probe: `closure_no_upval_for_500k` mac measured 0.53× when
     // the gate was skipped). Closure traces only earn dispatch when
     // body length passes the gate organically.
+    // P12-S4-step3b — InlineAbort traces close before any frame
+    // materialization machinery exists (step 4's job). The interp
+    // can't resume at the inline-abort PC without the matching
+    // CallFrames; gate dispatch off until step 4 adds the helper.
+    // Recorded before the length gate: the first reason is the one
+    // kept, and side-trace wiring tells a trace that is unsafe to run
+    // from one that is only too short to dispatch by it.
+    if inline_abort_idx_opt.is_some() {
+        dispatchable = false;
+        dispatch_off_reason = dispatch_off_reason.or(Some("InlineAbort-gate"));
+    }
     if (call_idx_opt.is_some() || return_idx_opt.is_some())
         && effective_end < min_dispatchable_trunc_body
         && per_exit_inline_vec.is_empty()
@@ -8075,14 +9022,6 @@ pub fn lower_trace_into_named<M: Module>(
     {
         dispatchable = false;
         dispatch_off_reason = dispatch_off_reason.or(Some("length-gate"));
-    }
-    // P12-S4-step3b — InlineAbort traces close before any frame
-    // materialization machinery exists (step 4's job). The interp
-    // can't resume at the inline-abort PC without the matching
-    // CallFrames; gate dispatch off until step 4 adds the helper.
-    if inline_abort_idx_opt.is_some() {
-        dispatchable = false;
-        dispatch_off_reason = dispatch_off_reason.or(Some("InlineAbort-gate"));
     }
 
     // P12-S4-step3b — clean-tail `exit_tags` cover the caller window
@@ -8413,7 +9352,9 @@ mod s2b_arith {
     const WIDE_SRC: &[u8] = b"local a,b,c,d = 0,0,0,0; return a+b+c+d";
 
     fn make_record(head_pc: u32, ops: &[Inst], proto: Gc<Proto>) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        // The registers these traces compute on hold integers.
+        let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+        let mut rec = TraceRecord::start(proto, head_pc, tags, false);
         for (i, inst) in ops.iter().copied().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -8444,7 +9385,11 @@ mod s2b_arith {
         state.resize(p.max_stack as usize, 0);
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 7, "clean close returns head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            7,
+            "clean close returns head_pc"
+        );
         // First four slots passed through untouched — load-then-store
         // pattern preserves the i64 payload.
         assert_eq!(state[0], 100);
@@ -8469,7 +9414,7 @@ mod s2b_arith {
         state[2] = 3;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 11);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 11);
         assert_eq!(state[0], 13, "10 + 3");
         assert_eq!(state[1], 10, "input untouched");
         assert_eq!(state[2], 3, "input untouched");
@@ -8498,7 +9443,7 @@ mod s2b_arith {
         state[3] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 0, "head_pc 0");
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0, "head_pc 0");
         // ((5 + 3) * 4) - 7 = 25
         assert_eq!(state[0], 25);
     }
@@ -8522,7 +9467,7 @@ mod s2b_arith {
         state[3] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
 
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[0], 42, "7 * 6");
     }
 
@@ -8549,7 +9494,7 @@ mod s2b_arith {
         state[1] = 4;
         state[2] = 5;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[0], 9);
     }
 
@@ -8557,7 +9502,12 @@ mod s2b_arith {
     fn non_closed_trace_does_not_compile() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
     }
 
@@ -8577,7 +9527,12 @@ mod s2b_arith {
     fn inline_depth_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -8599,7 +9554,12 @@ mod s2b_arith {
         // even though both compile from the same source. The
         // lowerer must reject any cross-Proto op (inlined sub-calls
         // are S4 territory).
-        let mut rec = TraceRecord::start(p1, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p1,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p1.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p2,
             pc: 0,
@@ -8644,7 +9604,7 @@ mod s2b_arith {
             state[1] = k;
             state[2] = 2 * k;
             let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-            assert_eq!(r, 0);
+            assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
             assert_eq!(state[0], 3 * k);
         }
     }
@@ -8671,7 +9631,12 @@ mod s2b_cmp {
     /// controls the clean-close return value and is independent of
     /// the cmp's PC.
     fn cmp_jmp_record(proto: Gc<Proto>, head_pc: u32, cmp_pc: u32, cmp: Inst) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            proto,
+            head_pc,
+            vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto,
             pc: cmp_pc,
@@ -8704,7 +9669,11 @@ mod s2b_cmp {
         state[1] = 3; // 3 < 7 holds → matches K=true → continue
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 5, "clean close returns head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            5,
+            "clean close returns head_pc"
+        );
     }
 
     #[test]
@@ -8720,7 +9689,11 @@ mod s2b_cmp {
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // Lua's `pc++` on cmp mismatch lands at cmp_pc + 2 = 12.
-        assert_eq!(r, 12, "side-exit returns failing PC = cmp_pc + 2");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            12,
+            "side-exit returns failing PC = cmp_pc + 2"
+        );
         // Reg state is still written back so interp resumes
         // with consistent values.
         assert_eq!(state[1], 9);
@@ -8742,13 +9715,17 @@ mod s2b_cmp {
         state[2] = 7;
         // Cmp result `9 < 7` is false; K=0; false == K=0 → continue.
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 3);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 3);
 
         // Flip inputs so cmp result `3 < 7` is true; K=0; true != K → side-exit.
         state[1] = 3;
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 10, "cmp_pc=8 + 2 = 10");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            10,
+            "cmp_pc=8 + 2 = 10"
+        );
     }
 
     #[test]
@@ -8764,12 +9741,18 @@ mod s2b_cmp {
         // Equal: 5 <= 5 holds → continue.
         state[1] = 5;
         state[2] = 5;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 0);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            0
+        );
 
         // 5 <= 4 false → side-exit.
         state[1] = 5;
         state[2] = 4;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 2);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            2
+        );
     }
 
     #[test]
@@ -8784,11 +9767,17 @@ mod s2b_cmp {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[0] = 42;
         state[1] = 42;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 7);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            7
+        );
 
         state[0] = 42;
         state[1] = 41;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 6); // cmp_pc(4) + 2
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            6
+        ); // cmp_pc(4) + 2
     }
 
     #[test]
@@ -8803,7 +9792,12 @@ mod s2b_cmp {
             Inst::iabc(Op::Lt, 0, 2, 0, true), // R[0] < R[2]
             Inst::isj(Op::Jmp, -3),
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -8821,7 +9815,10 @@ mod s2b_cmp {
         state[0] = 10;
         state[1] = 7;
         state[2] = 5;
-        assert_eq!(unsafe { (ct.entry)(state.as_mut_ptr()) }, 0);
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(unsafe { (ct.entry)(state.as_mut_ptr()) }),
+            0
+        );
         assert_eq!(state[0], 3);
 
         // R[0] = 10 - 1 = 9; 9 < 5 false → side-exit.
@@ -8830,7 +9827,7 @@ mod s2b_cmp {
         state[2] = 5;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // cmp at index 1, pc=1; failing PC = pc+2 = 3.
-        assert_eq!(r, 3);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 3);
         assert_eq!(state[0], 9, "post-arith value must be in reg_state");
         assert_eq!(state[1], 1);
         assert_eq!(state[2], 5);
@@ -8842,7 +9839,12 @@ mod s2b_cmp {
         // "cmp didn't match K, Jmp skipped" direction.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -8862,7 +9864,12 @@ mod s2b_cmp {
             Inst::iabc(Op::Lt, 0, 1, 0, true),
             Inst::iabc(Op::Add, 2, 0, 1, false), // not a Jmp
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -8882,7 +9889,12 @@ mod s2b_cmp {
         // as an orphan and bails.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -8912,7 +9924,12 @@ mod s2b_cmp {
             Inst::isj(Op::Jmp, -1), // orphan, position 0 of a 2-op record
             Inst::iabc(Op::Add, 0, 1, 2, false),
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -8938,7 +9955,12 @@ mod s2b_cmp {
             Inst::iabc(Op::Lt, 0, 2, 0, false), // K=0
             Inst::isj(Op::Jmp, -3),
         ];
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         for (i, inst) in prog.iter().copied().enumerate() {
             rec.push(RecordedOp {
                 proto: p,
@@ -8965,7 +9987,11 @@ mod s2b_cmp {
             let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
             iters += 1;
             if r != 0 {
-                assert_eq!(r, 3, "side-exit PC = cmp_pc(1) + 2");
+                assert_eq!(
+                    crate::jit_backend::trace::exit_pc(r),
+                    3,
+                    "side-exit PC = cmp_pc(1) + 2"
+                );
                 break;
             }
             assert!(iters < 100, "loop should terminate");
@@ -8994,7 +10020,12 @@ mod s2b_table_ops {
     }
 
     fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            proto,
+            head_pc,
+            vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+            false,
+        );
         for (i, inst) in ops.iter().copied().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -9033,7 +10064,7 @@ mod s2b_table_ops {
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = run_trace(&mut vm, &ct, &mut state);
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert!(
             state[0] != 0,
             "NewTable must return a non-null Gc<Table> ptr"
@@ -9062,7 +10093,7 @@ mod s2b_table_ops {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[2] = 42; // value to write
         let r = run_trace(&mut vm, &ct, &mut state);
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert!(vm.jit.pending_err.is_none(), "no metatable → no deopt");
         assert_eq!(state[3], 42, "Get must see the value Set wrote");
     }
@@ -9092,7 +10123,7 @@ mod s2b_table_ops {
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         state[1] = 99;
         let r = run_trace(&mut vm, &ct, &mut state);
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
         assert_eq!(state[2], 3, "Len must report array length 3");
     }
 
@@ -9100,29 +10131,43 @@ mod s2b_table_ops {
     /// `jit_pending_err` short-circuit (PUC routes the write through
     /// `__newindex`; the helper bypasses it, so the lowerer must
     /// deopt instead).
+    /// A store into a table with a metatable is left to the interpreter:
+    /// the trace exits at that store, after doing the ones before it
+    /// once, with nothing parked for the dispatcher.
     #[test]
-    fn metatable_on_set_i_parks_pending_err() {
+    fn metatable_on_set_i_exits_at_the_store() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        // Pre-allocate the target table with a metatable.
+        let plain = vm.heap.new_table();
         let t = vm.heap.new_table();
         let mt = vm.heap.new_table();
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
-        // Trace: R[0][1] = R[1]. R[0] holds the pre-built table.
-        let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 1, false)]);
+        // R[0][1] = R[1]; R[2][1] = R[1]
+        let rec = closed_record(
+            p,
+            0,
+            &[
+                Inst::iabc(Op::SetI, 0, 1, 1, false),
+                Inst::iabc(Op::SetI, 2, 1, 1, false),
+            ],
+        );
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-        state[0] = t.as_ptr() as i64;
+        state[0] = plain.as_ptr() as i64;
         state[1] = 7;
+        state[2] = t.as_ptr() as i64;
         let r = run_trace(&mut vm, &ct, &mut state);
 
-        assert_eq!(r, 0, "trace still returns head_pc");
-        assert!(
-            vm.jit.pending_err.is_some(),
-            "metatable-bearing table must park a deopt request"
-        );
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
+        assert!(vm.jit.pending_err.is_none());
+        assert!(matches!(
+            plain.get_int(1),
+            luna_core::runtime::Value::Int(7)
+        ));
+        assert!(t.get_int(1).is_nil());
+        assert_eq!(vm.jit.counters.deopt, 1);
     }
 
     #[test]
@@ -9145,58 +10190,39 @@ mod s2b_table_ops {
     }
 
     #[test]
-    fn metatable_on_len_parks_pending_err() {
+    fn metatable_on_len_exits_at_the_len() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
+        let plain = vm.heap.new_table();
         let t = vm.heap.new_table();
         let mt = vm.heap.new_table();
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
-        let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 1, 0, 0, false)]);
-        let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
-
-        let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-        state[0] = t.as_ptr() as i64;
-        run_trace(&mut vm, &ct, &mut state);
-
-        assert!(vm.jit.pending_err.is_some(), "Len deopt on metatable");
-    }
-
-    /// Once a helper has parked `jit_pending_err`, subsequent
-    /// helpers in the same trace early-return without touching
-    /// the heap — so the trace can complete safely even though
-    /// every subsequent table-op is bogus.
-    #[test]
-    fn pending_err_short_circuits_downstream_helpers() {
-        let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
-        let p = load_proto(&mut vm, WIDE_SRC);
-        let t = vm.heap.new_table();
-        let mt = vm.heap.new_table();
-        unsafe { t.as_mut() }.set_metatable(Some(mt));
-
-        // SetI (parks err) → SetI (short-circuit) → GetI
-        // (short-circuit, returns 0 sentinel).
+        // R[0][1] = R[1]; R[3] = #R[2]
         let rec = closed_record(
             p,
             0,
             &[
                 Inst::iabc(Op::SetI, 0, 1, 1, false),
-                Inst::iabc(Op::SetI, 0, 2, 1, false),
-                Inst::iabc(Op::GetI, 2, 0, 1, false),
+                Inst::iabc(Op::Len, 3, 2, 0, false),
             ],
         );
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
-        state[0] = t.as_ptr() as i64;
-        state[1] = 11;
+        state[0] = plain.as_ptr() as i64;
+        state[1] = 7;
+        state[2] = t.as_ptr() as i64;
+        state[3] = 42;
         let r = run_trace(&mut vm, &ct, &mut state);
 
-        assert_eq!(r, 0);
-        assert!(vm.jit.pending_err.is_some());
-        // GetI short-circuit returns 0 sentinel; trace tail stores
-        // that back into R[2].
-        assert_eq!(state[2], 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
+        assert!(vm.jit.pending_err.is_none());
+        assert!(matches!(
+            plain.get_int(1),
+            luna_core::runtime::Value::Int(7)
+        ));
+        assert_eq!(state[3], 42, "the length was not written");
     }
 
     #[test]
@@ -9248,7 +10274,12 @@ mod s2b_call_truncation {
     }
 
     fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, head_pc, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            proto,
+            head_pc,
+            vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+            false,
+        );
         for (i, inst) in ops.iter().copied().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -9282,7 +10313,11 @@ mod s2b_call_truncation {
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // Trace's "head_pc" was 5 — but the side-exit at the Call
         // returns the Call's PC (= 0 in this 1-op trace).
-        assert_eq!(r, 0, "side-exit at call's PC, not head_pc");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            0,
+            "side-exit at call's PC, not head_pc"
+        );
         // Reg state passes through (we loaded + stored every reg).
         assert_eq!(state[0], 42);
         assert_eq!(state[1], 43);
@@ -9305,7 +10340,7 @@ mod s2b_call_truncation {
         state[1] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // Call is at index 1 → pc 1.
-        assert_eq!(r, 1);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
         // The Add ran before the Call's side-exit, so the
         // post-Add value lives in reg_state[0].
         assert_eq!(state[0], 107, "post-arith state visible to interp");
@@ -9333,7 +10368,11 @@ mod s2b_call_truncation {
         state[1] = 30;
         state[2] = 12;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 1, "side-exit at Call.pc = 1");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            1,
+            "side-exit at Call.pc = 1"
+        );
         // The Mul never ran — R[0] holds the Add's result, not
         // R[0]*200.
         assert_eq!(state[0], 42);
@@ -9387,7 +10426,11 @@ mod s2b_call_truncation {
         state[1] = 10;
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 3, "side-exit at Call.pc = 3");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            3,
+            "side-exit at Call.pc = 3"
+        );
         assert_eq!(state[0], 12);
 
         // Now flip so cmp doesn't match: R[0]=99, R[1]=10 → 99<10
@@ -9396,7 +10439,11 @@ mod s2b_call_truncation {
         state[1] = 10;
         state[2] = 7;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 2, "cmp side-exit takes precedence over Call truncation");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            2,
+            "cmp side-exit takes precedence over Call truncation"
+        );
         assert_eq!(state[0], 99, "Add never ran on this path");
     }
 
@@ -9434,7 +10481,11 @@ mod s2b_call_truncation {
         state[4] = 0;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
         // ForLoop at index 1, pc=1; exit PC = pc+1 = 2.
-        assert_eq!(r, 2, "ForLoop count-exhaustion side-exits at pc+1");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            2,
+            "ForLoop count-exhaustion side-exits at pc+1"
+        );
         // Body order: Add runs BEFORE ForLoop's count check. With
         // count = 5 initially, body iters: count=5 (Add → 1), 4, 3,
         // 2, 1, 0 (ForLoop's check sees 0, side-exits AFTER the
@@ -9471,7 +10522,11 @@ mod s2b_call_truncation {
         // loop with non-zero bx, body_pc would land on the loop body
         // start; for this synthetic op chain body_pc just exits past
         // the ForLoop.
-        assert_eq!(r, 1, "one-shot continue returns body_pc=(rop.pc+1)-bx=1");
+        assert_eq!(
+            crate::jit_backend::trace::exit_pc(r),
+            1,
+            "one-shot continue returns body_pc=(rop.pc+1)-bx=1"
+        );
         // R[0] = 10 + 1 = 11.
         assert_eq!(state[0], 11);
         assert_eq!(state[1], 2); // count -= 1
@@ -9518,7 +10573,7 @@ mod s2b_call_truncation {
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        assert_eq!(r, 0);
+        assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
     }
 }
 
@@ -9543,7 +10598,9 @@ mod s4_step3a_op_offsets {
     }
 
     fn make_record(proto: Gc<Proto>, items: Vec<(Inst, u8)>) -> TraceRecord {
-        let mut rec = TraceRecord::start(proto, 0, Vec::new(), true);
+        // The registers these traces compute on hold integers.
+        let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+        let mut rec = TraceRecord::start(proto, 0, tags, true);
         for (i, (inst, depth)) in items.into_iter().enumerate() {
             let pushed = rec.push(RecordedOp {
                 proto,
@@ -9670,7 +10727,12 @@ mod s4_step3b_inline_emit {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg, "fixture must be non-vararg");
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -9720,7 +10782,12 @@ mod s4_step3b_inline_emit {
     fn first_op_at_depth_gt_zero_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -9740,7 +10807,12 @@ mod s4_step3b_inline_emit {
         let mut vm2 = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p1 = load_proto(&mut vm1, WIDE_SRC);
         let p2 = load_proto(&mut vm2, WIDE_SRC);
-        let mut rec = TraceRecord::start(p1, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p1,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p1.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p2,
             pc: 0,
@@ -9791,7 +10863,12 @@ mod s4_step4b_skeleton {
         let p = load_proto(&mut vm, WIDE_SRC);
         // A plain depth=0 add — no cmp@d>0 site, so per_exit_inline
         // stays empty.
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
@@ -9893,7 +10970,12 @@ mod s4_step4b_skeleton {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         // depth 0: an Add, then a self-recursive Call.
         rec.push(RecordedOp {
             proto: p,
@@ -9954,7 +11036,12 @@ mod s4_step4b_skeleton {
     fn self_recursive_call_with_multiple_returns_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        let mut rec = TraceRecord::start(p, 0, Vec::new(), false);
+        let mut rec = TraceRecord::start(
+            p,
+            0,
+            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+            false,
+        );
         rec.push(RecordedOp {
             proto: p,
             pc: 0,

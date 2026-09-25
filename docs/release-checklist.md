@@ -11,7 +11,7 @@ releases.
 > is not part of any published package, so those steps only apply if you
 > are cutting the release.
 
-Walked for every release through `v3.0.0` (2026-08-14).
+Walked for every release through `v3.1.0` (2026-09-24).
 
 Two things this checklist exists to prevent, both of which have actually
 happened: a release that ships to crates.io while the website still

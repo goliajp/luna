@@ -149,9 +149,9 @@ fn division_by_zero() {
 fn concat_result_as_binop_operand() {
     // A CONCAT result is a temporary at the top of the stack; the enclosing
     // binary op must not let the right operand reuse and clobber its register.
-    check_int("return (1 .. 2) << 1", 24); // "12" -> 12, 12<<1
+    check_int("return (1 .. 2) * 2", 24); // "12" -> 12 via the string __mul
     check_int("return (1 .. 2) + 1", 13);
-    check_int("return (\"7\" .. 3) << 1", 146);
+    check_int("return (\"7\" .. 3) * 2", 146);
     check_bool("return \"a\" .. \"b\" > \"a\"", true);
     check_bool("return not(2+1 > 3*1) and \"a\"..\"b\" > \"a\"", true);
 }
@@ -701,7 +701,11 @@ fn mm_arithmetic_and_string_coercion() {
     check_float("return '2.5' * 2", 5.0);
     check_int("return '0x10' + 0", 16);
     check_int("return '8' // '3'", 2);
-    check_int("return '12' & 4", 4);
+    // bitwise operators do not convert strings from 5.4 on
+    check_error(
+        "return '12' & 4",
+        "attempt to perform bitwise operation on a string value",
+    );
     // 5.4+ (the default Vm dialect is 5.5) reports string-involved
     // arithmetic faults with lstrlib's per-op wording; dialect fixtures
     // 5.3/541 + 5.4/551 + 5.5/252 pin the full matrix (v2.14 HC.4).
@@ -1366,7 +1370,7 @@ fn string_format() {
         true,
     );
     check_str("return string.format('%q', 0/0)", b"(0/0)");
-    check_str("return string.format('%q', 2.0)", b"2.0");
+    check_str("return string.format('%q', 2.0)", b"0x1p+1");
     // tostring path honors __tostring in %s
     check_str(
         "local t = setmetatable({}, {__tostring = function() return 'T' end}) \
@@ -1472,13 +1476,13 @@ fn debug_getinfo_c_frame_boundary() {
 #[test]
 fn debug_getinfo_source_lines_options() {
     // linedefined / lastlinedefined span the function from `function` to `end`;
-    // the function-value form has an empty namewhat and no name.
+    // the function-value form has an empty namewhat and no name ('n' only).
     check_str(
         "local function test (a) \n\
            local x = a \n\
            return x \n\
          end \n\
-         local i = debug.getinfo(test, 'S') \n\
+         local i = debug.getinfo(test, 'Sn') \n\
          return i.what .. ',' .. i.linedefined .. ',' .. i.lastlinedefined \n\
             .. ',' .. i.namewhat .. ',' .. tostring(i.name)",
         b"Lua,1,4,,nil",
@@ -1871,12 +1875,16 @@ fn goto_scope_over_declarations() {
 
 #[test]
 fn lexer_string_escape_near_tokens() {
-    // PUC near-token = raw source of the string read so far; decimal-too-large
-    // includes the char after the digits, utf8-too-large stops at the digit.
-    check_compile_error(r#"return "\999""#, r#"near '\999"'"#);
-    check_compile_error(r#"return "abc\u{100000000}""#, r#"near 'abc\u{100000000'"#);
-    check_compile_error(r#"return "abc\u{11r""#, r#"near 'abc\u{11r'"#);
-    check_compile_error(r#"return "abc\u""#, r#"near 'abc\u"'"#);
+    // PUC near-token = the lex buffer: the string read so far, opening
+    // delimiter included; decimal-too-large includes the char after the
+    // digits, utf8-too-large stops at the digit.
+    check_compile_error(r#"return "\999""#, r#"near '"\999"'"#);
+    check_compile_error(
+        r#"return "abc\u{100000000}""#,
+        r#"UTF-8 value too large near '"abc\u{100000000'"#,
+    );
+    check_compile_error(r#"return "abc\u{11r""#, r#"missing '}' near '"abc\u{11r'"#);
+    check_compile_error(r#"return "abc\u""#, r#"missing '{' near '"abc\u"'"#);
     // unfinished string reports the <eof> token
     check_compile_error("return 'alo", "unfinished string near <eof>");
 }
@@ -1960,7 +1968,7 @@ fn string_dump_round_trips() {
         10,
     );
     // only Lua functions can be dumped
-    check_error("string.dump(print)", "unable to dump given function");
+    check_error("string.dump(print)", "Lua function expected");
 }
 
 #[test]
@@ -2956,9 +2964,10 @@ fn os_execute_shell_probe_and_command() {
         Value::Int(1) => {}
         v => panic!("5.1 os.execute() expected Int(1), got {v:?}"),
     }
-    // 5.5: a real shell command. `(success, "exit", 0)` on success;
-    // `(false, "exit", N)` on a non-zero exit. Build the assertion from
-    // the triple so we exercise the full return shape.
+    // 5.5: a real shell command. `(true, "exit", 0)` on success;
+    // `(nil, "exit", N)` on a non-zero exit (luaL_execresult pushes fail,
+    // which is nil). Build the assertion from the triple so we exercise the
+    // full return shape.
     check_str(
         "local ok, kind, code = os.execute('true') \
          return tostring(ok)..':'..kind..':'..tostring(code)",
@@ -2967,7 +2976,7 @@ fn os_execute_shell_probe_and_command() {
     check_str(
         "local ok, kind, code = os.execute('exit 7') \
          return tostring(ok)..':'..kind..':'..tostring(code)",
-        b"false:exit:7",
+        b"nil:exit:7",
     );
 }
 
@@ -2993,13 +3002,13 @@ fn io_popen_read_write_and_close_status() {
          return tostring(ok)..':'..kind..':'..tostring(code)",
         b"true:exit:0",
     );
-    // Non-zero exit propagates into close's triple.
+    // Non-zero exit propagates into close's triple, with nil for failure.
     check_str(
         "local f = io.popen('exit 4') \
          f:read('a') \
          local ok, kind, code = f:close() \
          return tostring(ok)..':'..kind..':'..tostring(code)",
-        b"false:exit:4",
+        b"nil:exit:4",
     );
 }
 
@@ -3357,9 +3366,11 @@ fn io_buffered_writes_and_round_trip_time() {
     // the part luna controls: the buffered write returns the file (not a
     // `(nil, msg)` triple) before any flush has happened.
     check_bool(
-        "local f = assert(io.open(os.tmpname(), 'w')) \
+        "local p = os.tmpname() \
+         local f = assert(io.open(p, 'w')) \
          local r = f:write('abcd') \
          f:close() \
+         os.remove(p) \
          return r == f",
         true,
     );
@@ -3630,8 +3641,9 @@ fn pushglobalfuncname_qualifies_nested_native_arg_error() {
     // setmetatable is invoked from gsub's native replacement loop; PUC
     // finds `_G.setmetatable` and strips the `_G.` prefix.
     check_error("string.gsub('s', 's', setmetatable)", "'setmetatable'");
-    // A direct (non-nested) native arg error keeps the bare name.
-    check_error("table.sort({}, 7)", "'sort'");
+    // A direct (non-nested) native arg error keeps the bare name. (The
+    // array must hold two elements: 5.3+ checks the comparator only then.)
+    check_error("table.sort({2, 1}, 7)", "'sort'");
 }
 
 #[test]

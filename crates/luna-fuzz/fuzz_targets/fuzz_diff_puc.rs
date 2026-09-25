@@ -14,6 +14,9 @@
 //! target generates infinite distinct programs + catches
 //! semantic-divergence bugs the fixed corpus misses.
 //!
+//! `$LUNA_FUZZ_DIALECT` (`5.1` … `5.5`, default `5.5`) picks the dialect
+//! luna runs; point `$PUC_LUA` at the matching interpreter.
+//!
 //! Run:
 //!     PUC_LUA=$(which lua5.5) cd crates/luna-fuzz
 //!     cargo +nightly fuzz run fuzz_diff_puc -- -runs=1000
@@ -215,7 +218,14 @@ end
     full.push_str(PREAMBLE);
     full.push_str(source);
     full.push_str("\nreturn _G.__diff_puc_buf\n");
-    let mut vm = Vm::new(LuaVersion::Lua55);
+    let version = match std::env::var("LUNA_FUZZ_DIALECT").as_deref() {
+        Ok("5.1") => LuaVersion::Lua51,
+        Ok("5.2") => LuaVersion::Lua52,
+        Ok("5.3") => LuaVersion::Lua53,
+        Ok("5.4") => LuaVersion::Lua54,
+        _ => LuaVersion::Lua55,
+    };
+    let mut vm = Vm::new(version);
     vm.set_memory_cap(Some(16 * 1024 * 1024));
     let r = vm.eval(&full).ok()?;
     match r.first() {
