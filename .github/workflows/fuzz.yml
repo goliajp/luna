@@ -73,7 +73,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-crash-${{ matrix.target }}
-          path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/
+          # cargo fuzz --fuzz-dir . writes artifacts under the fuzz dir itself
+          path: crates/luna-fuzz/artifacts/${{ matrix.target }}/
           retention-days: 90
 
   # ─────────────────────────────────────────────────────────────────
@@ -138,7 +139,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-crash-weekly-${{ matrix.target }}
-          path: crates/luna-fuzz/fuzz/artifacts/${{ matrix.target }}/
+          # cargo fuzz --fuzz-dir . writes artifacts under the fuzz dir itself
+          path: crates/luna-fuzz/artifacts/${{ matrix.target }}/
           retention-days: 365
 
   # ─────────────────────────────────────────────────────────────────
@@ -176,6 +178,20 @@ jobs:
             gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
               --jq '.artifacts[] | select(.name | startswith("fuzz-crash")) | "  \(.name)"'
             echo "::error::A fuzz target crashed. Triage the artifact and convert it to a regression test before this goes green again (v3.0 acceptance #10)."
+            exit 1
+          fi
+          # A second signal that does not share the upload's failure
+          # modes: the weekly fuzz jobs' own conclusions. Until 2026-09 the
+          # upload path was wrong, nothing was ever uploaded, and this gate
+          # stayed green for weeks while three targets failed each run.
+          F=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.name | startswith("fuzz 60-min")) | select(.conclusion == "failure")] | length')
+          echo "failed fuzz jobs in this run: $F"
+          echo "fuzz-failed-jobs=$F" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$F" -ne 0 ]; then
+            gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name | startswith("fuzz 60-min")) | select(.conclusion == "failure") | "  \(.name)"'
+            echo "::error::A fuzz job failed without leaving an artifact. Find out why before this goes green again (v3.0 acceptance #10)."
             exit 1
           fi
           echo "no crashes — #10's 'no unhandled crash class' holds for this run"
