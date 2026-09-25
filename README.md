@@ -20,7 +20,7 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 luna was compared against stock PUC 5.1–5.5 function by function, every
 difference found was fixed or is listed as deliberate in
 [`docs/compatibility.md`](docs/compatibility.md), and the differential
-corpus grew to 802 fixtures. **v3.0.0** (2026-08-14) closed the v2.x
+corpus grew to 805 fixtures. **v3.0.0** (2026-08-14) closed the v2.x
 maturity arc. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install
@@ -109,7 +109,7 @@ what is explicitly *not* contained:
 
 Compatibility here is a measurement, not a claim.
 
-- **802 differential fixtures** run against stock PUC interpreters built
+- **805 differential fixtures** run against stock PUC interpreters built
   from source — 5.1.5, 5.2.4, 5.3.6, 5.4.9, 5.5.1 — and must match
   byte for byte on stdout, stderr and exit code, with zero skips, before
   a commit is green; each also runs as PUC bytecode compiled by that

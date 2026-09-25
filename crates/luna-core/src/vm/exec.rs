@@ -10077,7 +10077,16 @@ pub(crate) fn arith_num(
         (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
         (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
         (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
-        (Pow, a, b) => Value::Float(a.as_f64().powf(b.as_f64())),
+        // 5.4+ `luai_numpow` squares by multiplying, which can differ from
+        // the C library's `pow` in the last bit
+        (Pow, a, b) => {
+            let (a, b) = (a.as_f64(), b.as_f64());
+            Value::Float(if b == 2.0 && version >= LuaVersion::Lua54 {
+                a * a
+            } else {
+                a.powf(b)
+            })
+        }
         (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
         (Mod, a, b) => Value::Float(float_mod(version, a.as_f64(), b.as_f64())),
         (BAnd | BOr | BXor | Shl | Shr, ..) => unreachable!("bitwise op in arith_num"),

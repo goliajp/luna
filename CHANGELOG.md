@@ -33,7 +33,7 @@ function by function, with 63 probe programs run on both macOS and Linux
 numeric-string arguments; each library's surface; error messages; the
 lexer; compiler limits; number formatting; what a program can see of the
 collector). Every difference found was fixed, or is listed as deliberate in
-`docs/compatibility.md`. The differential corpus grew from 514 to **802
+`docs/compatibility.md`. The differential corpus grew from 514 to **805
 fixtures**, each run both as source and as PUC bytecode compiled by that
 version's `luac`.
 
@@ -99,6 +99,9 @@ Language and VM:
 - `x - 0` with a literal integer zero runs as `x + 0` in 5.4/5.5, as PUC
   compiles it (`ADDI`), so `-0.0 - 0` is `0.0` there; a float result of
   zero or NaN is no longer constant folded from 5.3 on (found by fuzzing).
+- `x ^ 2` squares by multiplying in 5.4/5.5, as their `luai_numpow` does,
+  in the interpreter and the JIT; the C library's `pow` can differ in the
+  last bit (found by fuzzing).
 - Multiple assignment stores from the last target to the first. 5.4+
   `<const>` locals with constant values are compile-time constants.
 - An `xpcall` message handler that raises runs again where it raised, as

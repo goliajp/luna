@@ -14,6 +14,9 @@ print("float literal", s(x - 0.0))
 print("parens", s((x) - (0)))
 print("constants", s(-0.0 - 0))
 print("left zero", s(0 - x))
+-- whatever the parser folds to an integer zero counts, but not a length
+print("folds", x - ((0) - (0)), x - (0 - (0)), x - (0 // 1), x - (5 % 5),
+  x - (1 & 0), x - -(0), x - ~-1, x - (nil or 0), x - #"")
 print("string", s("-0.0" - 0))
 print("integer", x // 1 - 0, math.type(y - 0))
 local mt = setmetatable({}, {
