@@ -145,8 +145,15 @@ JIT:
 
 Same-runner perf-gate against 3.0.0: `sliding_window_500` 0.50×,
 `dict_5k_lookup` 0.87×, `string_ops_2k` 0.88×, `method_dispatch_5k`
-0.99×, `token_bucket_1k` 1.045× (within the 5% gate; the new read checks
-cost compile time in this compile-dominated cell).
+0.99×, `token_bucket_1k` PERF_TBD.
+
+A trace no longer carries registers its loop only writes around the loop.
+Keeping the in-memory register state current asked the SSA builder for
+every register at each step, which gave the loop head a parameter for each
+one; six of token_bucket's ten were never read but stayed live across
+every helper call. Removing unused block parameters after lowering took
+that trace's compile from 663 to 597 µs and the cell from 947 to 876 µs
+(3.0.0: 879; aarch64, median of 400).
 
 ### Correction to 3.0.0
 
