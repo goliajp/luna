@@ -105,6 +105,16 @@ Language and VM:
 - The debug library walks the stack as PUC's `CallInfo` chain does:
   levels, names, tracebacks, hooks, `getinfo` options.
 
+Binary chunks (found by fuzzing):
+
+- A count read from a luna dump or from AOT trace metadata sized an
+  allocation before anything checked it, so a corrupt count aborted the
+  process out of memory. Counts the rest of the input cannot hold are now
+  refused as a truncation.
+- A PUC 5.1/5.2 operand wider than luna's 8-bit field (their B and C have
+  9 bits) was encoded into the neighbouring field in release builds,
+  yielding a different instruction. The translators now refuse it.
+
 PUC bytecode:
 
 - A chunk from the running dialect's own PUC version reaches the
@@ -130,6 +140,16 @@ Same-runner perf-gate against 3.0.0: `sliding_window_500` 0.50×,
 `dict_5k_lookup` 0.87×, `string_ops_2k` 0.88×, `method_dispatch_5k`
 0.99×, `token_bucket_1k` 1.045× (within the 5% gate; the new read checks
 cost compile time in this compile-dominated cell).
+
+### Correction to 3.0.0
+
+3.0.0 closed its fuzzing criterion on a weekly schedule plus a
+`crash-check` job that fails the run when a target uploads a crash. That
+job could never fail: the upload looked in the wrong directory, so nothing
+was ever uploaded, while three targets (`fuzz_aot_meta`,
+`fuzz_dump_reader`, `fuzz_diff_puc`) failed every week from at least
+2026-07-20. The upload path is fixed, `crash-check` now also fails on the
+fuzz jobs' own results, and the findings are fixed above.
 
 ### Documentation
 
