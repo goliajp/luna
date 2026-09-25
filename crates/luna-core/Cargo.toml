@@ -49,8 +49,8 @@ gc-verify = []
 # v2.0 Phase 5 Track MM (memory budget) — `dhat` is a dev-only heap
 # profiler used by the `mem_baseline` bench. It is gated to
 # `[dev-dependencies]` so prod `cargo tree -p luna-core` still reports
-# exactly 1 crate (luna-core itself), preserving the F1 0-dep contract.
-# `docs/contributing-mem.md` for the workflow.
+# exactly 1 crate (luna-core itself), preserving the zero-dependency
+# contract.
 dhat = "0.3"
 
 [[bench]]

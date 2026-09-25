@@ -143,10 +143,7 @@ useful for diagnosing why a workload isn't getting JIT speedup.
 
 ### 4.3 Memory baseline
 
-The dhat-based mem baseline lives at
-`.dev/baselines/mem-2026-06-25/` (gitignored). Reproduce with the
-recipe in [`contributing-mem.md`](contributing-mem.md); expected
-peaks at v1.3 ship for the 5 measured workloads:
+Peaks measured with dhat at v1.3 for five workloads:
 
 | Workload | Peak | Steady |
 |---|---:|---:|
@@ -242,7 +239,5 @@ When upgrading across major versions (`1.x` → `2.0`):
 - [`security.md`](security.md) — threat model + sandbox boundaries
 - [`binary-size.md`](binary-size.md) — per-crate + AOT-output budgets
 - [`compatibility.md`](compatibility.md) — per-dialect feature matrix
-- [`contributing-mem.md`](contributing-mem.md) — memory baseline
-  reproduction
 - [`migration-v1-to-v2.md`](migration-v1-to-v2.md) — major-version
   upgrade checklist

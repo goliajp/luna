@@ -51,9 +51,7 @@ sprint onward:
 
 ### 2.1 Memory baselines
 
-a local baseline directory (reproducible via
-[`contributing-mem.md`](contributing-mem.md)). Five workloads measured
-under dhat on macOS aarch64:
+Five workloads measured under dhat on macOS aarch64:
 
 | Workload | Peak | Steady | Allocs |
 |---|---:|---:|---:|
@@ -68,9 +66,7 @@ increase on any workload signals an unintended layout change.
 
 ### 2.2 Disk + binary size baselines
 
-a local baseline directory (reproducible via
-[`contributing-disk.md`](contributing-disk.md)). Per-crate publish
-sizes:
+Per-crate publish sizes:
 
 | Crate | Files | Raw | Compressed |
 |---|---:|---:|---:|
@@ -156,10 +152,6 @@ scaffold for `token_bucket_1k`.
 
 ## 5. See also
 
-- [`contributing-mem.md`](contributing-mem.md) — memory baseline
-  reproduction
-- [`contributing-disk.md`](contributing-disk.md) — disk + binary
-  size baseline reproduction
 - [`architecture.md`](architecture.md) — steel/cement/stone
   classification + crate layout
 - [`deploy.md`](deploy.md) — runtime tuning knobs
