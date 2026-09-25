@@ -16,8 +16,8 @@
 //! - `SETLIST` counts 50-field blocks from 1; `C = 0` takes the block number
 //!   from the `EXTRAARG` that follows.
 
-use super::lower::{Jump, Lowered, Lowering, RawProto, Window};
-use crate::vm::isa::{Inst, Op};
+use super::lower::{Jump, Lowered, Lowering, RawProto, Window, enc_abc, enc_abx, enc_sj};
+use crate::vm::isa::Op;
 
 /// An opcode's meaning, independent of the dialect's numbering.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -146,7 +146,7 @@ pub(super) fn translate(
         match k {
             Kind::Move => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
-                lw.emit(Inst::iabc(Op::Move, a, b, 0, false));
+                lw.emit(enc_abc(Op::Move, a, b, 0, false)?);
             }
             Kind::LoadK => {
                 let a = lw.r(i.a)?;
@@ -163,27 +163,27 @@ pub(super) fn translate(
             Kind::LoadBool => {
                 let a = lw.r(i.a)?;
                 match (i.b != 0, i.c != 0) {
-                    (false, false) => lw.emit(Inst::iabc(Op::LoadFalse, a, 0, 0, false)),
-                    (false, true) => lw.emit(Inst::iabc(Op::LFalseSkip, a, 0, 0, false)),
-                    (true, false) => lw.emit(Inst::iabc(Op::LoadTrue, a, 0, 0, false)),
+                    (false, false) => lw.emit(enc_abc(Op::LoadFalse, a, 0, 0, false)?),
+                    (false, true) => lw.emit(enc_abc(Op::LFalseSkip, a, 0, 0, false)?),
+                    (true, false) => lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?),
                     (true, true) => {
-                        lw.emit(Inst::iabc(Op::LoadTrue, a, 0, 0, false));
-                        lw.jump(Inst::isj(Op::Jmp, 0), Jump::Jmp, next + 1)?;
+                        lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?);
+                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + 1)?;
                     }
                 }
             }
             Kind::LoadNil => {
                 let b = lw.byte(i.b, "LOADNIL B")?;
                 let a = lw.run(i.a, b + 1)?;
-                lw.emit(Inst::iabc(Op::LoadNil, a, b, 0, false));
+                lw.emit(enc_abc(Op::LoadNil, a, b, 0, false)?);
             }
             Kind::GetUpval => {
                 let (a, b) = (lw.r(i.a)?, lw.byte(i.b, "GETUPVAL B")?);
-                lw.emit(Inst::iabc(Op::GetUpval, a, b, 0, false));
+                lw.emit(enc_abc(Op::GetUpval, a, b, 0, false)?);
             }
             Kind::SetUpval => {
                 let (a, b) = (lw.r(i.a)?, lw.byte(i.b, "SETUPVAL B")?);
-                lw.emit(Inst::iabc(Op::SetUpval, a, b, 0, false));
+                lw.emit(enc_abc(Op::SetUpval, a, b, 0, false)?);
             }
             // R(A) := UpValue[B][RK(C)]
             Kind::GetTabUp => {
@@ -192,8 +192,8 @@ pub(super) fn translate(
                     lw.get_tabup(a, up, i.c & 0xFF, is_env(raw, up))?;
                 } else {
                     let (t, key) = (lw.temp()?, lw.r(i.c)?);
-                    lw.emit(Inst::iabc(Op::GetUpval, t, up, 0, false));
-                    lw.emit(Inst::iabc(Op::GetTable, a, t, key, false));
+                    lw.emit(enc_abc(Op::GetUpval, t, up, 0, false)?);
+                    lw.emit(enc_abc(Op::GetTable, a, t, key, false)?);
                 }
             }
             // UpValue[A][RK(B)] := RK(C)
@@ -203,8 +203,8 @@ pub(super) fn translate(
                     lw.set_tabup(i.a, i.b & 0xFF, v, is_env(raw, i.a))?;
                 } else {
                     let (t, key) = (lw.temp()?, lw.r(i.b)?);
-                    lw.emit(Inst::iabc(Op::GetUpval, t, i.a, 0, false));
-                    lw.emit(Inst::iabc(Op::SetTable, t, key, v, false));
+                    lw.emit(enc_abc(Op::GetUpval, t, i.a, 0, false)?);
+                    lw.emit(enc_abc(Op::SetTable, t, key, v, false)?);
                 }
             }
             Kind::GetTable => {
@@ -218,25 +218,25 @@ pub(super) fn translate(
             // luna's NewTable ignores its size hints.
             Kind::NewTable => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::NewTable, a, 0, 0, false));
+                lw.emit(enc_abc(Op::NewTable, a, 0, 0, false)?);
             }
             Kind::SelfOp => lw.self_rk(i.a, i.b, i.c)?,
             Kind::Arith(op) => {
                 let a = lw.r(i.a)?;
                 let b = lw.rk(i.b)?;
                 let c = lw.rk(i.c)?;
-                lw.emit(Inst::iabc(op, a, b, c, false));
+                lw.emit(enc_abc(op, a, b, c, false)?);
             }
             Kind::Unary(op) => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
-                lw.emit(Inst::iabc(op, a, b, 0, false));
+                lw.emit(enc_abc(op, a, b, 0, false)?);
             }
             Kind::Concat => lw.concat_range(i.a, i.b, i.c)?,
             // pc += sBx; if (A) close all upvalues >= R(A - 1)
             Kind::Jmp => {
                 let target = next + i.sbx();
                 if i.a == 0 {
-                    lw.jump(Inst::isj(Op::Jmp, 0), Jump::Jmp, target)?;
+                    lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)?;
                 } else {
                     let close = lw.r(i.a - 1)?;
                     let guarded = pc > 0
@@ -247,8 +247,8 @@ pub(super) fn translate(
                     if guarded {
                         lw.jump_closing(close, target)?;
                     } else {
-                        lw.emit(Inst::iabc(Op::Close, close, 0, 0, false));
-                        lw.jump(Inst::isj(Op::Jmp, 0), Jump::Jmp, target)?;
+                        lw.emit(enc_abc(Op::Close, close, 0, 0, false)?);
+                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)?;
                     }
                 }
             }
@@ -258,38 +258,38 @@ pub(super) fn translate(
             // TEST A C: if not (R(A) <=> C) then pc++
             Kind::Test => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::Test, a, 0, 0, i.c != 0));
+                lw.emit(enc_abc(Op::Test, a, 0, 0, i.c != 0)?);
             }
             // TESTSET A B C: if (R(B) <=> C) then R(A) := R(B) else pc++
             Kind::TestSet => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
-                lw.emit(Inst::iabc(Op::TestSet, a, b, 0, i.c != 0));
+                lw.emit(enc_abc(Op::TestSet, a, b, 0, i.c != 0)?);
             }
             Kind::Call => {
                 let (b, c) = (lw.byte(i.b, "CALL B")?, lw.byte(i.c, "CALL C")?);
                 let a = lw.run(i.a, b.max(c.saturating_sub(1)).max(1))?;
-                lw.emit(Inst::iabc(Op::Call, a, b, c, false));
+                lw.emit(enc_abc(Op::Call, a, b, c, false)?);
             }
             Kind::TailCall => {
                 let b = lw.byte(i.b, "TAILCALL B")?;
                 let a = lw.run(i.a, b.max(1))?;
-                lw.emit(Inst::iabc(Op::TailCall, a, b, 0, false));
+                lw.emit(enc_abc(Op::TailCall, a, b, 0, false)?);
             }
             Kind::Return => lw.ret(i.a, i.b)?,
             // FORPREP jumps to its FORLOOP; FORLOOP jumps back to the body.
             Kind::ForPrep => {
                 let a = lw.run(i.a, 4)?;
-                lw.jump(Inst::iabx(Op::ForPrep, a, 0), Jump::ForPrep, next + i.sbx())?;
+                lw.jump(enc_abx(Op::ForPrep, a, 0)?, Jump::ForPrep, next + i.sbx())?;
             }
             Kind::ForLoop => {
                 let a = lw.run(i.a, 4)?;
-                lw.jump(Inst::iabx(Op::ForLoop, a, 0), Jump::Back, next + i.sbx())?;
+                lw.jump(enc_abx(Op::ForLoop, a, 0)?, Jump::Back, next + i.sbx())?;
             }
             Kind::TForCall => {
                 let c = lw.byte(i.c, "TFORCALL C")?;
                 let a = lw.run(i.a, 3)?;
                 lw.run(i.a + 3, c.max(1))?;
-                lw.emit(Inst::iabc(Op::TForCall, a, 0, c, false));
+                lw.emit(enc_abc(Op::TForCall, a, 0, c, false)?);
             }
             // if R(A+1) ~= nil then { R(A) := R(A+1); pc += sBx }, where A is
             // the TFORCALL's A + 2.
@@ -298,7 +298,7 @@ pub(super) fn translate(
                     return Err(lw.err(format_args!("TFORLOOP A={} below 2", i.a)));
                 };
                 let a = lw.run(base, 3)?;
-                lw.jump(Inst::iabx(Op::TForLoop, a, 0), Jump::Back, next + i.sbx())?;
+                lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, next + i.sbx())?;
             }
             Kind::SetList => {
                 let block = if i.c == 0 {
@@ -330,12 +330,12 @@ pub(super) fn translate(
                     u.index = r as u8;
                 }
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabx(Op::Closure, a, idx as u32));
+                lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
             }
             Kind::Vararg => {
                 let b = lw.byte(i.b, "VARARG B")?;
                 let a = lw.run(i.a, b.saturating_sub(1).max(1))?;
-                lw.emit(Inst::iabc(Op::Vararg, a, 0, b, false));
+                lw.emit(enc_abc(Op::Vararg, a, 0, b, false)?);
             }
             Kind::ExtraArg => return Err(lw.err("EXTRAARG without an instruction to extend")),
         }

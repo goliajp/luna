@@ -181,6 +181,33 @@ pub const MAX_AX: u32 = (1 << 25) - 1;
 pub const MAX_SJ: i32 = ((1u32 << 24) - 1) as i32; // sJ stored with this offset
 
 impl Inst {
+    /// [`Inst::iabc`] for operands that come from outside (a translated
+    /// PUC chunk): `None` when a field does not fit, instead of an encoding
+    /// that spills into the neighbouring field.
+    pub(crate) fn try_iabc(op: Op, a: u32, b: u32, c: u32, k: bool) -> Option<Inst> {
+        (a <= MAX_A && b <= MAX_B && c <= MAX_C).then(|| Inst::iabc(op, a, b, c, k))
+    }
+
+    /// [`Inst::iabx`] with the range check of [`Inst::try_iabc`].
+    pub(crate) fn try_iabx(op: Op, a: u32, bx: u32) -> Option<Inst> {
+        (a <= MAX_A && bx <= MAX_BX).then(|| Inst::iabx(op, a, bx))
+    }
+
+    /// [`Inst::iasbx`] with the range check of [`Inst::try_iabc`].
+    pub(crate) fn try_iasbx(op: Op, a: u32, sbx: i32) -> Option<Inst> {
+        (a <= MAX_A && (-MAX_SBX..=MAX_SBX).contains(&sbx)).then(|| Inst::iasbx(op, a, sbx))
+    }
+
+    /// [`Inst::iax`] with the range check of [`Inst::try_iabc`].
+    pub(crate) fn try_iax(op: Op, ax: u32) -> Option<Inst> {
+        (ax <= MAX_AX).then(|| Inst::iax(op, ax))
+    }
+
+    /// [`Inst::isj`] with the range check of [`Inst::try_iabc`].
+    pub(crate) fn try_isj(op: Op, sj: i32) -> Option<Inst> {
+        (-MAX_SJ..=MAX_SJ).contains(&sj).then(|| Inst::isj(op, sj))
+    }
+
     /// Build an iABC-format instruction (`A`, `B`, `C`, `k` flag).
     pub fn iabc(op: Op, a: u32, b: u32, c: u32, k: bool) -> Inst {
         debug_assert!(a <= MAX_A && b <= MAX_B && c <= MAX_C);

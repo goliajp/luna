@@ -29,8 +29,8 @@
 //! four; those loops become luna's ops inside a loop window.
 
 use super::classic::is_env;
-use super::lower::{Jump, Lowered, Lowering, RawProto, Window};
-use crate::vm::isa::{self, Inst, Op};
+use super::lower::{Jump, Lowered, Lowering, RawProto, Window, enc_abc, enc_abx, enc_asbx, enc_sj};
+use crate::vm::isa::{self, Op};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -234,7 +234,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
         match k {
             Kind::Move => {
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                lw.emit(Inst::iabc(Op::Move, a, b, 0, false));
+                lw.emit(enc_abc(Op::Move, a, b, 0, false)?);
             }
             Kind::LoadI | Kind::LoadF => {
                 let op = if k == Kind::LoadI {
@@ -243,7 +243,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     Op::LoadF
                 };
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iasbx(op, a, i.sbx()));
+                lw.emit(enc_asbx(op, a, i.sbx())?);
             }
             Kind::LoadK => {
                 let a = lw.r(i.a())?;
@@ -264,11 +264,11 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     _ => Op::LoadTrue,
                 };
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(op, a, 0, 0, false));
+                lw.emit(enc_abc(op, a, 0, 0, false)?);
             }
             Kind::LoadNil => {
                 let a = lw.run(i.a(), i.b() + 1)?;
-                lw.emit(Inst::iabc(Op::LoadNil, a, i.b(), 0, false));
+                lw.emit(enc_abc(Op::LoadNil, a, i.b(), 0, false)?);
             }
             Kind::GetUpval | Kind::SetUpval => {
                 let op = if k == Kind::GetUpval {
@@ -277,7 +277,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     Op::SetUpval
                 };
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(op, a, i.b(), 0, false));
+                lw.emit(enc_abc(op, a, i.b(), 0, false)?);
             }
             Kind::GetTabUp => {
                 let a = lw.r(i.a())?;
@@ -285,11 +285,11 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             }
             Kind::GetTable => {
                 let (a, b, c) = (lw.r(i.a())?, lw.r(i.b())?, lw.r(i.c())?);
-                lw.emit(Inst::iabc(Op::GetTable, a, b, c, false));
+                lw.emit(enc_abc(Op::GetTable, a, b, c, false)?);
             }
             Kind::GetI => {
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                lw.emit(Inst::iabc(Op::GetI, a, b, i.c(), false));
+                lw.emit(enc_abc(Op::GetI, a, b, i.c(), false)?);
             }
             Kind::GetField => {
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
@@ -310,11 +310,11 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     }
                     Kind::SetTable => {
                         let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                        lw.emit(Inst::iabc(Op::SetTable, a, b, v, false));
+                        lw.emit(enc_abc(Op::SetTable, a, b, v, false)?);
                     }
                     _ => {
                         let a = lw.r(i.a())?;
-                        lw.emit(Inst::iabc(Op::SetI, a, i.b(), v, false));
+                        lw.emit(enc_abc(Op::SetI, a, i.b(), v, false)?);
                     }
                 }
             }
@@ -323,17 +323,17 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     return Err(lw.err("NEWTABLE without its EXTRAARG"));
                 }
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(Op::NewTable, a, 0, 0, false));
+                lw.emit(enc_abc(Op::NewTable, a, 0, 0, false)?);
                 pc += 1;
             }
             // R[A+1] := R[B]; R[A] := R[B][RK(C)] (5.5: always K[C])
             Kind::SelfOp => {
                 let (a, b) = (lw.run(i.a(), 2)?, lw.r(i.b())?);
                 if d.v55 || i.k() {
-                    lw.emit(Inst::iabc(Op::SelfOp, a, b, i.c(), true));
+                    lw.emit(enc_abc(Op::SelfOp, a, b, i.c(), true)?);
                 } else {
                     let c = lw.r(i.c())?;
-                    lw.emit(Inst::iabc(Op::SelfOp, a, b, c, false));
+                    lw.emit(enc_abc(Op::SelfOp, a, b, c, false)?);
                 }
             }
             Kind::ArithI | Kind::ArithK => {
@@ -351,34 +351,34 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
                 let t = lw.temp()?;
                 if k == Kind::ArithI {
-                    lw.emit(Inst::iasbx(Op::LoadI, t, mm.sb()));
+                    lw.emit(enc_asbx(Op::LoadI, t, mm.sb())?);
                 } else {
                     lw.load_k(t, mm.b())?;
                 }
                 // k on the MMBIN: the constant was the left operand.
                 let (l, r) = if mm.k() { (t, b) } else { (b, t) };
-                lw.emit(Inst::iabc(op, a, l, r, false));
+                lw.emit(enc_abc(op, a, l, r, false)?);
             }
             Kind::Arith(op) => {
                 let (a, b, c) = (lw.r(i.a())?, lw.r(i.b())?, lw.r(i.c())?);
-                lw.emit(Inst::iabc(op, a, b, c, false));
+                lw.emit(enc_abc(op, a, b, c, false)?);
             }
             // Consumed by the arithmetic op before it.
             Kind::MmBin | Kind::MmBinI | Kind::MmBinK => {}
             Kind::Unary(op) => {
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                lw.emit(Inst::iabc(op, a, b, 0, false));
+                lw.emit(enc_abc(op, a, b, 0, false)?);
             }
             Kind::Concat => {
                 let a = lw.run(i.a(), i.b().max(1))?;
-                lw.emit(Inst::iabc(Op::Concat, a, i.b(), 0, false));
+                lw.emit(enc_abc(Op::Concat, a, i.b(), 0, false)?);
             }
             Kind::Close | Kind::Tbc => {
                 let op = if k == Kind::Close { Op::Close } else { Op::Tbc };
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(op, a, 0, 0, false));
+                lw.emit(enc_abc(op, a, 0, 0, false)?);
             }
-            Kind::Jmp => lw.jump(Inst::isj(Op::Jmp, 0), Jump::Jmp, next + i.sj())?,
+            Kind::Jmp => lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + i.sj())?,
             Kind::Eq | Kind::Lt | Kind::Le => {
                 let op = match k {
                     Kind::Eq => Op::Eq,
@@ -386,18 +386,18 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     _ => Op::Le,
                 };
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                lw.emit(Inst::iabc(op, a, b, 0, i.k()));
+                lw.emit(enc_abc(op, a, b, 0, i.k())?);
             }
             Kind::EqK => {
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(Op::EqK, a, i.b(), 0, i.k()));
+                lw.emit(enc_abc(Op::EqK, a, i.b(), 0, i.k())?);
             }
             // if ((R[A] <op> sB) ~= k) then pc++; C: the literal was a float
             Kind::EqI | Kind::LtI | Kind::LeI | Kind::GtI | Kind::GeI => {
                 let a = lw.r(i.a())?;
                 let t = lw.temp()?;
                 let load = if i.c() != 0 { Op::LoadF } else { Op::LoadI };
-                lw.emit(Inst::iasbx(load, t, i.sb()));
+                lw.emit(enc_asbx(load, t, i.sb())?);
                 let (op, l, r) = match k {
                     Kind::EqI => (Op::Eq, a, t),
                     Kind::LtI => (Op::Lt, a, t),
@@ -405,31 +405,31 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     Kind::GtI => (Op::Lt, t, a),
                     _ => (Op::Le, t, a),
                 };
-                lw.emit(Inst::iabc(op, l, r, 0, i.k()));
+                lw.emit(enc_abc(op, l, r, 0, i.k())?);
             }
             Kind::Test => {
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(Op::Test, a, 0, 0, i.k()));
+                lw.emit(enc_abc(Op::Test, a, 0, 0, i.k())?);
             }
             Kind::TestSet => {
                 let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                lw.emit(Inst::iabc(Op::TestSet, a, b, 0, i.k()));
+                lw.emit(enc_abc(Op::TestSet, a, b, 0, i.k())?);
             }
             Kind::Call => {
                 let (b, c) = (i.b(), i.c());
                 let a = lw.run(i.a(), b.max(c.saturating_sub(1)).max(1))?;
-                lw.emit(Inst::iabc(Op::Call, a, b, c, false));
+                lw.emit(enc_abc(Op::Call, a, b, c, false)?);
             }
             // C and k only matter to PUC's own frame layout for varargs.
             Kind::TailCall => {
                 let a = lw.run(i.a(), i.b().max(1))?;
-                lw.emit(Inst::iabc(Op::TailCall, a, i.b(), 0, false));
+                lw.emit(enc_abc(Op::TailCall, a, i.b(), 0, false)?);
             }
             Kind::Return => lw.ret(i.a(), i.b())?,
-            Kind::Return0 => lw.emit(Inst::iabc(Op::Return0, 0, 0, 0, false)),
+            Kind::Return0 => lw.emit(enc_abc(Op::Return0, 0, 0, 0, false)?),
             Kind::Return1 => {
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabc(Op::Return1, a, 0, 0, false));
+                lw.emit(enc_abc(Op::Return1, a, 0, 0, false)?);
             }
             // FORPREP skips past its FORLOOP (at pc + 1 + Bx) when the loop
             // does not run; FORLOOP jumps back Bx.
@@ -437,16 +437,16 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 let a = for_base(&lw, d, i.a())?;
                 if k == Kind::ForPrep {
                     let target = next + i.bx() as i64;
-                    lw.jump(Inst::iabx(Op::ForPrep, a, 0), Jump::ForPrep, target)?;
+                    lw.jump(enc_abx(Op::ForPrep, a, 0)?, Jump::ForPrep, target)?;
                 } else {
                     let target = next - i.bx() as i64;
-                    lw.jump(Inst::iabx(Op::ForLoop, a, 0), Jump::Back, target)?;
+                    lw.jump(enc_abx(Op::ForLoop, a, 0)?, Jump::Back, target)?;
                 }
             }
             Kind::TForPrep => {
                 let a = for_base(&lw, d, i.a())?;
                 let target = next + i.bx() as i64;
-                lw.jump(Inst::iabx(Op::TForPrep, a, 0), Jump::TForPrep, target)?;
+                lw.jump(enc_abx(Op::TForPrep, a, 0)?, Jump::TForPrep, target)?;
             }
             Kind::TForCall => {
                 let a = for_base(&lw, d, i.a())?;
@@ -455,12 +455,12 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 if lw.run(first, i.c().max(1))? != a + 4 {
                     return Err(lw.err("generic-for results outside the loop's frame"));
                 }
-                lw.emit(Inst::iabc(Op::TForCall, a, 0, i.c(), false));
+                lw.emit(enc_abc(Op::TForCall, a, 0, i.c(), false)?);
             }
             Kind::TForLoop => {
                 let a = for_base(&lw, d, i.a())?;
                 let target = next - i.bx() as i64;
-                lw.jump(Inst::iabx(Op::TForLoop, a, 0), Jump::Back, target)?;
+                lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, target)?;
             }
             // R[A][C+j] := R[A+j], 1 <= j <= B; k: EXTRAARG extends C
             Kind::SetList => {
@@ -494,24 +494,24 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                     u.index = r as u8;
                 }
                 let a = lw.r(i.a())?;
-                lw.emit(Inst::iabx(Op::Closure, a, idx as u32));
+                lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
             }
             // 5.5's B/k name the vararg table, which luna keeps in the frame.
             Kind::Vararg => {
                 let a = lw.run(i.a(), i.c().saturating_sub(1).max(1))?;
-                lw.emit(Inst::iabc(Op::Vararg, a, 0, i.c(), false));
+                lw.emit(enc_abc(Op::Vararg, a, 0, i.c(), false)?);
             }
             // R[A] := R[B][R[C]] with R[B] the (virtual) vararg table
             Kind::GetVarg => {
                 let (a, c) = (lw.r(i.a())?, lw.r(i.c())?);
-                lw.emit(Inst::iabc(Op::VargIdx, a, 0, c, false));
+                lw.emit(enc_abc(Op::VargIdx, a, 0, c, false)?);
             }
             Kind::ErrNNil => {
                 let a = lw.r(i.a())?;
                 if i.bx() > isa::MAX_BX {
                     return Err(lw.err("ERRNNIL name index past luna's limit"));
                 }
-                lw.emit(Inst::iabx(Op::ErrNNil, a, i.bx()));
+                lw.emit(enc_abx(Op::ErrNNil, a, i.bx())?);
             }
             // luna adjusts varargs at call time. 5.5 keeps the vararg
             // parameter in register `num_params`: a table built here
@@ -521,9 +521,9 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             Kind::VarargPrep if d.v55 => {
                 let a = lw.r(raw.num_params as u32)?;
                 if raw.vararg_table {
-                    lw.emit(Inst::iabc(Op::GetVarg, a, 0, 0, false));
+                    lw.emit(enc_abc(Op::GetVarg, a, 0, 0, false)?);
                 } else {
-                    lw.emit(Inst::iabc(Op::LoadNil, a, 0, 0, false));
+                    lw.emit(enc_abc(Op::LoadNil, a, 0, 0, false)?);
                 }
             }
             Kind::VarargPrep => {}
