@@ -43,10 +43,10 @@ pub use userdata_trait::{
 };
 pub mod lib_debug;
 pub(crate) mod lib_gc;
-pub mod lib_io;
+pub(crate) mod lib_io;
 pub mod lib_math;
 pub mod lib_os_io;
-pub mod lib_package;
+pub(crate) mod lib_package;
 pub(crate) mod lib_strformat;
 pub mod lib_string;
 pub mod lib_strpack;
