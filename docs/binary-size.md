@@ -24,9 +24,8 @@ specifically, see [`aot.md`](aot.md) §4.
 | `luna-jit-derive` | 6 | 28 KiB | 10 KiB |
 
 `luna-core`'s 4.4 MiB raw is dominated by the PUC test corpora bundled
-under `crates/luna-core/tests/official/` — the v2.0 Track DS reduction
-candidate "PUC corpora exclude from luna-core publish" (audit-listed)
-would shrink the published artifact ~60% (-2.6 MiB raw / -1.0 MiB
+under `crates/luna-core/tests/official/`; leaving them out of the
+published crate would shrink it ~60% (-2.6 MiB raw / -1.0 MiB
 compressed) without touching runtime behavior.
 
 ## 2. AOT output binary sizes
@@ -73,22 +72,20 @@ The release staticlib is large but the **link step's linker
 deadstrip pass** discards everything the AOT binary doesn't call,
 which is why the produced binary is ~4.5 MiB instead of ~40 MiB.
 
-## 4. Reduction candidates (v2.0 Track DS)
+## 4. Reduction candidates
 
-Proposed budgets + lever feasibility, from
-The Track DS audit:
+Levers that were assessed, with their estimated effect:
 
 | Lever | Estimated effect | Feasibility | Status |
 |---|---|---|---|
-| PUC corpora exclude from `luna-core` publish | -60% raw / -1 MiB compressed | M (test path audit) | v2.0 Track DS implementation |
+| PUC corpora exclude from `luna-core` publish | -60% raw / -1 MiB compressed | M (test path audit) | Not applied: the 3.1.0 crate still ships them |
 | `panic = "abort"` in AOT release profile | -17% deploy binary | M | Requires `catch_unwind` boundary audit (R2 risk) |
 | Cranelift `all-arch` opt-out (luna-aot) | -1 MiB CLI binary, -70 MiB build tree | M | Breaking change for users relying on cross-compile default |
 | LZ4 bytecode compress (`.luna.bytecode`) | -40% on > 64 KiB payloads | M | Opt-in only; runtime decompression cost |
 | Per-target precompiled staticlib ship | -30s cold AOT compile | L | Multi-target staticlib distribution |
 
-All lever changes are out of scope for the v1.3 ship; they land in
-the v2.0 Track DS implementation phase, with budget gating in the
-`disk-baseline-2026-06-25` comparison pipeline.
+The table records the options as assessed at v1.3; it is not a
+schedule.
 
 ## 5. Reproducing
 
@@ -123,9 +120,8 @@ Full reproduction recipe: [`contributing-disk.md`](contributing-disk.md).
 
 ---
 
-*Last refreshed 2026-06-25 for the v1.3.0 ship + v2.0 Track DS
-measurement baseline. The v1.1-era `cargo bloat` snapshot tables
-have been retired — their `45.1% cranelift / 25.5% luna_core /
+*Last refreshed 2026-06-25 for the v1.3.0 release. The v1.1-era
+`cargo bloat` snapshot tables have been retired — their `45.1% cranelift / 25.5% luna_core /
 13.3% std` proportions are still directionally correct but the
 absolute numbers reflected a different crate layout (pre-Stage-7
 AOT, pre-derive crate). Use the per-target measurement scripts in

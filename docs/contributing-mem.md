@@ -1,4 +1,4 @@
-# Contributing — memory baseline workflow (Track MM)
+# Contributing — memory baseline workflow
 
 luna ships a `mem_baseline` bench on `luna-core` that profiles five
 representative workloads under [dhat][dhat] and writes a
@@ -37,9 +37,8 @@ The bench prints something like:
 | 4 | `alloc_collect`       | ~1M `local x = {}` + 10 explicit `collectgarbage("collect")` |
 | 5 | `userdata_lifecycle`  | 200 finalizable tables (`__gc` metamethod) + 2 GC passes  |
 
-Workloads pick patterns the v2.0 Track MM audit named as the
-heap-budget attack surface. The fifth workload uses Lua-side
-finalizable tables (not embedder Userdata) because luna-core's
+The fifth workload uses Lua-side finalizable tables (not embedder
+Userdata) because luna-core's
 public-facing Userdata API is too thin for a pure-Lua bench — the
 `__gc` path it lowers to is what real Userdata allocations end up
 hitting, so it is the closest in-tree proxy.
@@ -120,22 +119,8 @@ name = "mem_baseline"
 harness = false
 ```
 
-Dev-deps never link into a downstream embedder's build, so the F1
-contract is preserved. The CI `zero-dep` gate (in
+Dev-deps never link into a downstream embedder's build, so
+`luna-core`'s zero-dependency contract is preserved. The CI `zero-dep` gate (in
 `.github/workflows/ci.yml` and `.github/workflows/cargo-deny.yml`)
 uses `cargo tree --edges normal` explicitly to enforce this — dev-deps
 cannot regress the contract by accident.
-
-## What's not yet wired (intentional, for the implementation phase)
-
-- `Vm::heap_stats()` API surfacing per-arena bytes
-- `Heap::exact_bytes()` (Vec/Box capacity tally on top of the
-  intrusive heap byte count)
-- `luna-heap-dump` CLI for runtime introspection
-- `cargo bench mem` regression gate in CI
-
-These all depend on layout decisions that follow the Track R IR
-overhaul. The bench + checked-in baseline exist now so any future
-work has ground truth to A/B against — see the audit summary in
-the Track MM notes for the full
-roadmap.

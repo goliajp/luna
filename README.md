@@ -220,7 +220,6 @@ on a backend and removing one does not touch the core API.
 | [`docs/binary-size.md`](docs/binary-size.md) | what the binary costs |
 | [`docs/unsafe-accounting.md`](docs/unsafe-accounting.md) | every `unsafe` site, justified |
 | [`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md) | v1.x → v2.x migration |
-| [`docs/release-checklist.md`](docs/release-checklist.md) | how a release is cut |
 | [`CHANGELOG.md`](CHANGELOG.md) | release notes |
 
 Rendered API reference: [docs.rs/luna-jit](https://docs.rs/luna-jit) and
