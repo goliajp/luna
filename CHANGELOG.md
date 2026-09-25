@@ -22,8 +22,10 @@ optimization.
 ## [3.1.0] — 2026-09-24
 
 A parity release. **No breaking change**: code written against 3.0 builds
-unchanged. The public-API audit against 3.0.0 finds no removed item and no
-changed signature; the additions are listed below.
+unchanged. The public-API audit against 3.0.0 (rustdoc JSON of the five
+library crates) finds no removed item, no changed signature, no field added
+to an all-public struct and no variant added to an exhaustive enum; the
+additions are listed below.
 
 luna was compared against stock PUC 5.1.5, 5.2.4, 5.3.6, 5.4.9 and 5.5.1,
 function by function, with 63 probe programs run on both macOS and Linux
@@ -47,7 +49,8 @@ version's `luac`.
   function has fails to load instead of crashing the process. PUC does not
   verify binary chunks.
 - Smaller public items: `SyntaxError::render` / `SyntaxError::unpositioned`,
-  `numeric::strtod_str` (C `strtod`, used by 5.1), `lib_math::inlinable_native`.
+  `Lexer::line`, `numeric::strtod_str` (C `strtod`, used by 5.1), and the
+  trace exit bits `EXIT_TAGS_INDEX_BIT` / `EXIT_KEEP_TFOR_VARS`.
 
 ### Changed
 
