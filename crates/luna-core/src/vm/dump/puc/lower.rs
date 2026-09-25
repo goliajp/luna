@@ -55,6 +55,40 @@ use crate::runtime::heap::{Gc, GcHeader, Heap, ObjTag};
 use crate::runtime::string::LuaStr;
 use crate::vm::isa::{self, Inst, Op};
 
+// A translated chunk's operands come from the input: an instruction is
+// built only when every field fits luna's encoding. `Inst::iabc` and
+// friends only debug-assert that, and in a release build an oversized
+// operand spills into the neighbouring field.
+
+/// [`Inst::iabc`], refusing operands that do not fit.
+pub(super) fn enc_abc(op: Op, a: u32, b: u32, c: u32, k: bool) -> Result<Inst, String> {
+    Inst::try_iabc(op, a, b, c, k)
+        .ok_or_else(|| format!("{op:?} operands A={a} B={b} C={c} do not fit an instruction"))
+}
+
+/// [`Inst::iabx`], refusing operands that do not fit.
+pub(super) fn enc_abx(op: Op, a: u32, bx: u32) -> Result<Inst, String> {
+    Inst::try_iabx(op, a, bx)
+        .ok_or_else(|| format!("{op:?} operands A={a} Bx={bx} do not fit an instruction"))
+}
+
+/// [`Inst::iasbx`], refusing operands that do not fit.
+pub(super) fn enc_asbx(op: Op, a: u32, sbx: i32) -> Result<Inst, String> {
+    Inst::try_iasbx(op, a, sbx)
+        .ok_or_else(|| format!("{op:?} operands A={a} sBx={sbx} do not fit an instruction"))
+}
+
+/// [`Inst::iax`], refusing an operand that does not fit.
+pub(super) fn enc_ax(op: Op, ax: u32) -> Result<Inst, String> {
+    Inst::try_iax(op, ax)
+        .ok_or_else(|| format!("{op:?} operand Ax={ax} does not fit an instruction"))
+}
+
+/// [`Inst::isj`], refusing a jump that does not fit.
+pub(super) fn enc_sj(op: Op, sj: i32) -> Result<Inst, String> {
+    Inst::try_isj(op, sj).ok_or_else(|| format!("{op:?} jump sJ={sj} does not fit an instruction"))
+}
+
 /// The "is a constant" bit of a PUC 5.1–5.3 RK operand.
 pub(super) const RK_BIT: u32 = 1 << 8;
 
@@ -348,7 +382,7 @@ impl Lowering {
             target: Target::Trampoline(self.trampolines.len() - 1),
             kind: Jump::Jmp,
         });
-        self.emit(Inst::isj(Op::Jmp, 0));
+        self.emit(enc_sj(Op::Jmp, 0)?);
         Ok(())
     }
 
@@ -362,10 +396,10 @@ impl Lowering {
     /// `R[dst] := K[k]`, through `LoadKx` when `k` does not fit `Bx`.
     pub(super) fn load_k(&mut self, dst: u32, k: u32) -> Result<(), String> {
         if k <= isa::MAX_BX {
-            self.emit(Inst::iabx(Op::LoadK, dst, k));
+            self.emit(enc_abx(Op::LoadK, dst, k)?);
         } else if k <= isa::MAX_AX {
-            self.emit(Inst::iabc(Op::LoadKx, dst, 0, 0, false));
-            self.emit(Inst::iax(Op::ExtraArg, k));
+            self.emit(enc_abc(Op::LoadKx, dst, 0, 0, false)?);
+            self.emit(enc_ax(Op::ExtraArg, k)?);
         } else {
             return Err(self.err(format_args!("constant index {k} past luna's limit")));
         }
@@ -382,10 +416,10 @@ impl Lowering {
     /// `R[dst] := R[t][K[k]]`.
     pub(super) fn get_field(&mut self, dst: u32, t: u32, k: u32) -> Result<(), String> {
         if k <= isa::MAX_C {
-            self.emit(Inst::iabc(Op::GetField, dst, t, k, false));
+            self.emit(enc_abc(Op::GetField, dst, t, k, false)?);
         } else {
             let key = self.k_in_temp(k)?;
-            self.emit(Inst::iabc(Op::GetTable, dst, t, key, false));
+            self.emit(enc_abc(Op::GetTable, dst, t, key, false)?);
         }
         Ok(())
     }
@@ -393,10 +427,10 @@ impl Lowering {
     /// `R[t][K[k]] := R[v]`.
     pub(super) fn set_field(&mut self, t: u32, k: u32, v: u32) -> Result<(), String> {
         if k <= isa::MAX_B {
-            self.emit(Inst::iabc(Op::SetField, t, k, v, false));
+            self.emit(enc_abc(Op::SetField, t, k, v, false)?);
         } else {
             let key = self.k_in_temp(k)?;
-            self.emit(Inst::iabc(Op::SetTable, t, key, v, false));
+            self.emit(enc_abc(Op::SetTable, t, key, v, false)?);
         }
         Ok(())
     }
@@ -407,10 +441,10 @@ impl Lowering {
     /// does for any other upvalue.
     pub(super) fn get_tabup(&mut self, dst: u32, up: u32, k: u32, env: bool) -> Result<(), String> {
         if env && k <= isa::MAX_C {
-            self.emit(Inst::iabc(Op::GetTabUp, dst, up, k, false));
+            self.emit(enc_abc(Op::GetTabUp, dst, up, k, false)?);
         } else {
             let t = self.temp()?;
-            self.emit(Inst::iabc(Op::GetUpval, t, up, 0, false));
+            self.emit(enc_abc(Op::GetUpval, t, up, 0, false)?);
             self.get_field(dst, t, k)?;
         }
         Ok(())
@@ -419,10 +453,10 @@ impl Lowering {
     /// `Upvalue[up][K[k]] := R[v]`; `env` as for [`Self::get_tabup`].
     pub(super) fn set_tabup(&mut self, up: u32, k: u32, v: u32, env: bool) -> Result<(), String> {
         if env && k <= isa::MAX_B {
-            self.emit(Inst::iabc(Op::SetTabUp, up, k, v, false));
+            self.emit(enc_abc(Op::SetTabUp, up, k, v, false)?);
         } else {
             let t = self.temp()?;
-            self.emit(Inst::iabc(Op::GetUpval, t, up, 0, false));
+            self.emit(enc_abc(Op::GetUpval, t, up, 0, false)?);
             self.set_field(t, k, v)?;
         }
         Ok(())
@@ -436,9 +470,9 @@ impl Lowering {
         let b = self.byte(b, "RETURN B")?;
         let a = self.run(a, b.saturating_sub(1).max(1))?;
         self.emit(match b {
-            1 => Inst::iabc(Op::Return0, 0, 0, 0, false),
-            2 => Inst::iabc(Op::Return1, a, 0, 0, false),
-            _ => Inst::iabc(Op::Return, a, b, 0, false),
+            1 => enc_abc(Op::Return0, 0, 0, 0, false)?,
+            2 => enc_abc(Op::Return1, a, 0, 0, false)?,
+            _ => enc_abc(Op::Return, a, b, 0, false)?,
         });
         Ok(())
     }
@@ -450,10 +484,10 @@ impl Lowering {
             return Err(self.err(format_args!("SETLIST count {n} past luna's 8-bit field")));
         }
         if offset <= isa::MAX_C as u64 {
-            self.emit(Inst::iabc(Op::SetList, a, n, offset as u32, false));
+            self.emit(enc_abc(Op::SetList, a, n, offset as u32, false)?);
         } else if offset <= isa::MAX_AX as u64 {
-            self.emit(Inst::iabc(Op::SetList, a, n, 0, true));
-            self.emit(Inst::iax(Op::ExtraArg, offset as u32));
+            self.emit(enc_abc(Op::SetList, a, n, 0, true)?);
+            self.emit(enc_ax(Op::ExtraArg, offset as u32)?);
         } else {
             return Err(self.err(format_args!("SETLIST offset {offset} past luna's limit")));
         }
@@ -482,12 +516,12 @@ impl Lowering {
         if op == Op::Eq && (b_k || c_k) {
             let (reg, konst) = if c_k { (b, c) } else { (c, b) };
             let reg = self.rk(reg)?;
-            self.emit(Inst::iabc(Op::EqK, reg, konst & 0xFF, 0, k));
+            self.emit(enc_abc(Op::EqK, reg, konst & 0xFF, 0, k)?);
             return Ok(());
         }
         let l = self.rk(b)?;
         let r = self.rk(c)?;
-        self.emit(Inst::iabc(op, l, r, 0, k));
+        self.emit(enc_abc(op, l, r, 0, k)?);
         Ok(())
     }
 
@@ -497,7 +531,7 @@ impl Lowering {
             self.get_field(dst, t, key & 0xFF)
         } else {
             let key = self.r(key)?;
-            self.emit(Inst::iabc(Op::GetTable, dst, t, key, false));
+            self.emit(enc_abc(Op::GetTable, dst, t, key, false)?);
             Ok(())
         }
     }
@@ -509,7 +543,7 @@ impl Lowering {
             self.set_field(t, key & 0xFF, v)
         } else {
             let key = self.r(key)?;
-            self.emit(Inst::iabc(Op::SetTable, t, key, v, false));
+            self.emit(enc_abc(Op::SetTable, t, key, v, false)?);
             Ok(())
         }
     }
@@ -519,10 +553,10 @@ impl Lowering {
         let a = self.run(a, 2)?;
         let b = self.r(b)?;
         if key & RK_BIT != 0 {
-            self.emit(Inst::iabc(Op::SelfOp, a, b, key & 0xFF, true));
+            self.emit(enc_abc(Op::SelfOp, a, b, key & 0xFF, true)?);
         } else {
             let key = self.r(key)?;
-            self.emit(Inst::iabc(Op::SelfOp, a, b, key, false));
+            self.emit(enc_abc(Op::SelfOp, a, b, key, false)?);
         }
         Ok(())
     }
@@ -535,10 +569,10 @@ impl Lowering {
         }
         let n = c - b + 1;
         let first = self.run(b, n)?;
-        self.emit(Inst::iabc(Op::Concat, first, n, 0, false));
+        self.emit(enc_abc(Op::Concat, first, n, 0, false)?);
         if a != b {
             let a = self.r(a)?;
-            self.emit(Inst::iabc(Op::Move, a, first, 0, false));
+            self.emit(enc_abc(Op::Move, a, first, 0, false)?);
         }
         Ok(())
     }
@@ -549,14 +583,14 @@ impl Lowering {
         let mut tramp_at = Vec::with_capacity(self.trampolines.len());
         for t in std::mem::take(&mut self.trampolines) {
             tramp_at.push(self.code.len() as u32);
-            self.code.push(Inst::iabc(Op::Close, t.close, 0, 0, false));
+            self.code.push(enc_abc(Op::Close, t.close, 0, 0, false)?);
             self.lines.push(t.line);
             self.fixups.push(Fixup {
                 at: self.code.len(),
                 target: Target::Puc(t.target),
                 kind: Jump::Jmp,
             });
-            self.code.push(Inst::isj(Op::Jmp, 0));
+            self.code.push(enc_sj(Op::Jmp, 0)?);
             self.lines.push(t.line);
         }
         for f in std::mem::take(&mut self.fixups) {
@@ -583,11 +617,11 @@ impl Lowering {
                             self.dialect
                         ));
                     }
-                    Inst::isj(op, sj as i32)
+                    enc_sj(op, sj as i32)?
                 }
-                Jump::ForPrep => Inst::iabx(op, a, bx_distance(self.dialect, t - at)?),
-                Jump::Back => Inst::iabx(op, a, bx_distance(self.dialect, at + 1 - t)?),
-                Jump::TForPrep => Inst::iabx(op, a, bx_distance(self.dialect, t - (at + 1))?),
+                Jump::ForPrep => enc_abx(op, a, bx_distance(self.dialect, t - at)?)?,
+                Jump::Back => enc_abx(op, a, bx_distance(self.dialect, at + 1 - t)?)?,
+                Jump::TForPrep => enc_abx(op, a, bx_distance(self.dialect, t - (at + 1))?)?,
             };
         }
         let locvars = self.locvars(raw_locvars)?;

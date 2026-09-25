@@ -26,14 +26,16 @@
 //! 5. **`SETLIST`** — `C` is a 1-based block number of 50 fields; `C = 0`
 //!    takes the block number from the next code word, a raw integer.
 
-use super::lower::{self, Jump, Lowered, Lowering, RawLocVar, RawProto, Window};
+use super::lower::{
+    self, Jump, Lowered, Lowering, RawLocVar, RawProto, Window, enc_abc, enc_abx, enc_sj,
+};
 use crate::runtime::Value;
 use crate::runtime::function::{Proto, UpvalDesc};
 use crate::runtime::heap::{Gc, Heap};
 use crate::vm::dump::error::Bad;
 use crate::vm::dump::header;
 use crate::vm::dump::reader::Reader;
-use crate::vm::isa::{Inst, Op};
+use crate::vm::isa::Op;
 
 const DIALECT: &str = "PUC 5.1";
 
@@ -298,7 +300,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
         match i.op {
             OP_MOVE => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
-                lw.emit(Inst::iabc(Op::Move, a, b, 0, false));
+                lw.emit(enc_abc(Op::Move, a, b, 0, false)?);
             }
             OP_LOADK => {
                 let a = lw.r(i.a)?;
@@ -307,12 +309,12 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
             OP_LOADBOOL => {
                 let a = lw.r(i.a)?;
                 match (i.b != 0, i.c != 0) {
-                    (false, false) => lw.emit(Inst::iabc(Op::LoadFalse, a, 0, 0, false)),
-                    (false, true) => lw.emit(Inst::iabc(Op::LFalseSkip, a, 0, 0, false)),
-                    (true, false) => lw.emit(Inst::iabc(Op::LoadTrue, a, 0, 0, false)),
+                    (false, false) => lw.emit(enc_abc(Op::LoadFalse, a, 0, 0, false)?),
+                    (false, true) => lw.emit(enc_abc(Op::LFalseSkip, a, 0, 0, false)?),
+                    (true, false) => lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?),
                     (true, true) => {
-                        lw.emit(Inst::iabc(Op::LoadTrue, a, 0, 0, false));
-                        lw.jump(Inst::isj(Op::Jmp, 0), Jump::Jmp, next + 1)?;
+                        lw.emit(enc_abc(Op::LoadTrue, a, 0, 0, false)?);
+                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + 1)?;
                     }
                 }
             }
@@ -322,15 +324,15 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                     return Err(lw.err(format_args!("LOADNIL {}..{}", i.a, i.b)));
                 }
                 let a = lw.run(i.a, i.b - i.a + 1)?;
-                lw.emit(Inst::iabc(Op::LoadNil, a, i.b - i.a, 0, false));
+                lw.emit(enc_abc(Op::LoadNil, a, i.b - i.a, 0, false)?);
             }
             OP_GETUPVAL => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::GetUpval, a, i.b + 1, 0, false));
+                lw.emit(enc_abc(Op::GetUpval, a, i.b + 1, 0, false)?);
             }
             OP_SETUPVAL => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::SetUpval, a, i.b + 1, 0, false));
+                lw.emit(enc_abc(Op::SetUpval, a, i.b + 1, 0, false)?);
             }
             OP_GETGLOBAL => {
                 let a = lw.r(i.a)?;
@@ -351,7 +353,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
             // luna's NewTable ignores its size hints.
             OP_NEWTABLE => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::NewTable, a, 0, 0, false));
+                lw.emit(enc_abc(Op::NewTable, a, 0, 0, false)?);
             }
             OP_SELF => lw.self_rk(i.a, i.b, i.c)?,
             OP_ADD | OP_SUB | OP_MUL | OP_DIV | OP_MOD | OP_POW => {
@@ -366,7 +368,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                 let a = lw.r(i.a)?;
                 let b = lw.rk(i.b)?;
                 let c = lw.rk(i.c)?;
-                lw.emit(Inst::iabc(op, a, b, c, false));
+                lw.emit(enc_abc(op, a, b, c, false)?);
             }
             OP_UNM | OP_NOT | OP_LEN => {
                 let op = match i.op {
@@ -375,54 +377,54 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                     _ => Op::Len,
                 };
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
-                lw.emit(Inst::iabc(op, a, b, 0, false));
+                lw.emit(enc_abc(op, a, b, 0, false)?);
             }
             OP_CONCAT => lw.concat_range(i.a, i.b, i.c)?,
-            OP_JMP => lw.jump(Inst::isj(Op::Jmp, 0), Jump::Jmp, next + i.sbx())?,
+            OP_JMP => lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + i.sbx())?,
             OP_EQ => lw.compare_rk(Op::Eq, i.a != 0, i.b, i.c)?,
             OP_LT => lw.compare_rk(Op::Lt, i.a != 0, i.b, i.c)?,
             OP_LE => lw.compare_rk(Op::Le, i.a != 0, i.b, i.c)?,
             // TEST A C: if not (R(A) <=> C) then pc++
             OP_TEST => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::Test, a, 0, 0, i.c != 0));
+                lw.emit(enc_abc(Op::Test, a, 0, 0, i.c != 0)?);
             }
             // TESTSET A B C: if (R(B) <=> C) then R(A) := R(B) else pc++
             OP_TESTSET => {
                 let (a, b) = (lw.r(i.a)?, lw.r(i.b)?);
-                lw.emit(Inst::iabc(Op::TestSet, a, b, 0, i.c != 0));
+                lw.emit(enc_abc(Op::TestSet, a, b, 0, i.c != 0)?);
             }
             OP_CALL => {
                 let (b, c) = (lw.byte(i.b, "CALL B")?, lw.byte(i.c, "CALL C")?);
                 let a = lw.run(i.a, b.max(c.saturating_sub(1)).max(1))?;
-                lw.emit(Inst::iabc(Op::Call, a, b, c, false));
+                lw.emit(enc_abc(Op::Call, a, b, c, false)?);
             }
             OP_TAILCALL => {
                 let b = lw.byte(i.b, "TAILCALL B")?;
                 let a = lw.run(i.a, b.max(1))?;
-                lw.emit(Inst::iabc(Op::TailCall, a, b, 0, false));
+                lw.emit(enc_abc(Op::TailCall, a, b, 0, false)?);
             }
             OP_RETURN => lw.ret(i.a, i.b)?,
             // FORPREP jumps to its FORLOOP; FORLOOP jumps back to the body.
             OP_FORPREP => {
                 let a = lw.run(i.a, 4)?;
-                lw.jump(Inst::iabx(Op::ForPrep, a, 0), Jump::ForPrep, next + i.sbx())?;
+                lw.jump(enc_abx(Op::ForPrep, a, 0)?, Jump::ForPrep, next + i.sbx())?;
             }
             OP_FORLOOP => {
                 let a = lw.run(i.a, 4)?;
-                lw.jump(Inst::iabx(Op::ForLoop, a, 0), Jump::Back, next + i.sbx())?;
+                lw.jump(enc_abx(Op::ForLoop, a, 0)?, Jump::Back, next + i.sbx())?;
             }
             OP_TFORLOOP => {
                 // `loop_windows` checked that a JMP follows.
                 let c = lw.byte(i.c, "TFORLOOP C")?;
                 let a = lw.run(i.a, 3)?;
                 lw.run(i.a + 3, c.max(1))?;
-                lw.emit(Inst::iabc(Op::TForCall, a, 0, c, false));
+                lw.emit(enc_abc(Op::TForCall, a, 0, c, false)?);
                 pc += 1;
                 let jmp = I51::decode(code[pc]);
                 lw.begin(pc, raw.lines.get(pc).copied().unwrap_or(0));
                 let body = pc as i64 + 1 + jmp.sbx();
-                lw.jump(Inst::iabx(Op::TForLoop, a, 0), Jump::Back, body)?;
+                lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, body)?;
             }
             OP_SETLIST => {
                 let block = if i.c == 0 {
@@ -441,7 +443,7 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
             }
             OP_CLOSE => {
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabc(Op::Close, a, 0, 0, false));
+                lw.emit(enc_abc(Op::Close, a, 0, 0, false)?);
             }
             OP_CLOSURE => {
                 let idx = i.bx() as usize;
@@ -472,13 +474,13 @@ fn translate(raw: &mut RawProto) -> Result<Lowered, String> {
                 }
                 let n_pseudo = child.upvals.len() - 1;
                 let a = lw.r(i.a)?;
-                lw.emit(Inst::iabx(Op::Closure, a, idx as u32));
+                lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
                 pc += n_pseudo;
             }
             OP_VARARG => {
                 let b = lw.byte(i.b, "VARARG B")?;
                 let a = lw.run(i.a, b.saturating_sub(1).max(1))?;
-                lw.emit(Inst::iabc(Op::Vararg, a, 0, b, false));
+                lw.emit(enc_abc(Op::Vararg, a, 0, b, false)?);
             }
             op => return Err(lw.err(format_args!("unknown opcode {op}"))),
         }

@@ -97,10 +97,19 @@ fn lua55_wording() {
 #[test]
 fn a_count_larger_than_the_chunk_is_a_truncation() {
     for (version, want) in [
-        (LuaVersion::Lua51, "nil bad: unexpected end in precompiled chunk"),
+        (
+            LuaVersion::Lua51,
+            "nil bad: unexpected end in precompiled chunk",
+        ),
         (LuaVersion::Lua52, "nil bad: truncated precompiled chunk"),
-        (LuaVersion::Lua54, "nil bad: bad binary format (truncated chunk)"),
-        (LuaVersion::Lua55, "nil bad: bad binary format (truncated chunk)"),
+        (
+            LuaVersion::Lua54,
+            "nil bad: bad binary format (truncated chunk)",
+        ),
+        (
+            LuaVersion::Lua55,
+            "nil bad: bad binary format (truncated chunk)",
+        ),
     ] {
         let mut vm = Vm::new(version);
         // the instruction count follows the chunk's source name
@@ -121,4 +130,26 @@ fn a_count_larger_than_the_chunk_is_a_truncation() {
         };
         assert_eq!(String::from_utf8_lossy(s.as_bytes()), want, "{version:?}");
     }
+}
+
+/// A PUC 5.1 chunk whose one instruction is `SETUPVAL` with B = 320: 5.1's
+/// B field has 9 bits, luna's has 8. The translator built the instruction
+/// with an operand that did not fit, which debug builds caught as an
+/// assertion failure and release builds encoded into the neighbouring
+/// field. It is refused now, as a chunk luna cannot represent
+/// (`fuzz_dump_reader`).
+#[test]
+fn a_translated_operand_that_does_not_fit_is_refused() {
+    const CHUNK: [u8; 64] = [
+        0x1b, 0x4c, 0x75, 0x61, 0x51, 0x00, 0x01, 0x04, 0x08, 0x04, 0x08, 0x00, 0x04, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00,
+        0x00, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    let mut vm = Vm::new(LuaVersion::Lua51);
+    vm.set_puc_bytecode_loading(true);
+    let e = vm.load(&CHUNK, b"=fuzz").expect_err("the chunk must be refused");
+    let msg = String::from_utf8_lossy(&e.msg).into_owned();
+    assert!(msg.contains("bad code in precompiled chunk"), "{msg}");
 }
