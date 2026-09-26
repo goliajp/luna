@@ -1,4 +1,4 @@
-//! Stage 5 smoke — cross-compile path via `--target <triple>`.
+//! Smoke test — cross-compile path via `--target <triple>`.
 //!
 //! These tests **never run the produced binary** (we don't assume QEMU
 //! or Rosetta). They verify, for each installed rust target:
@@ -14,9 +14,8 @@
 //!
 //! # Skip conditions
 //!
-//! - Windows host: Stage 5 ships Unix-only — Windows builds need a
-//!   different driver path (link.exe / MSVC), out-of-scope for this
-//!   session.
+//! - Windows host: this path is Unix-only — Windows builds need a
+//!   different driver path (link.exe / MSVC), out of scope here.
 //! - Missing `cargo` on PATH (vanishingly rare under `cargo test`).
 //! - Missing rust-std for the requested triple: skipped per-target,
 //!   the test as a whole still reports `ok`. The skip message tells
@@ -37,7 +36,7 @@ use luna_aot::embed::{TargetSpec, compile_and_link};
 use luna_core::version::LuaVersion;
 
 /// Probe whether a binary is on PATH. Standalone (test doesn't import
-/// the helper from `stage4_link_and_run.rs` — duplication is preferable
+/// the helper from `aot_link_and_run.rs` — duplication is preferable
 /// to a `mod common` dance under `tests/`).
 fn have_on_path(bin: &str) -> bool {
     Command::new(bin)
@@ -126,7 +125,7 @@ fn assert_binary_magic(binary: &Path, target: &TargetSpec) {
 fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
     if !rustup_has_target(triple) {
         eprintln!(
-            "stage5: skipping target {triple} — not installed \
+            "aot_cross_compile: skipping target {triple} — not installed \
              (run `rustup target add {triple}` to enable)"
         );
         return None;
@@ -135,7 +134,7 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
     let target = match TargetSpec::from_triple(triple) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("stage5: skipping target {triple} — TargetSpec rejected: {e}");
+            eprintln!("aot_cross_compile: skipping target {triple} — TargetSpec rejected: {e}");
             return None;
         }
     };
@@ -152,9 +151,8 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
         Ok(()) => {
             // MinGW gcc auto-appends `.exe` to the output filename when
             // targeting `*-windows-gnu`, regardless of what `-o` says.
-            // The pre-Stage 7 polish 3 test self-skipped on machines
-            // without MinGW, masking this; with MinGW installed the
-            // produced file lands at `<out_path>.exe`. Look for both.
+            // With MinGW installed the produced file lands at
+            // `<out_path>.exe`. Look for both.
             let out_path = if target.os == luna_aot::embed::TargetOs::Windows
                 && !out_path.exists()
                 && out_path.with_extension("exe").exists()
@@ -171,7 +169,7 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
                 meta.len(),
             );
             eprintln!(
-                "stage5: target {triple} produced {} ({} bytes, magic verified)",
+                "aot_cross_compile: target {triple} produced {} ({} bytes, magic verified)",
                 out_path.display(),
                 meta.len()
             );
@@ -225,11 +223,13 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
                 "fatal error",
             ];
             if skip_markers.iter().any(|m| msg.contains(m)) {
-                eprintln!("stage5: target {triple} skipped (cross-toolchain missing): {msg}");
+                eprintln!(
+                    "aot_cross_compile: target {triple} skipped (cross-toolchain missing): {msg}"
+                );
                 None
             } else {
                 panic!(
-                    "stage5: target {triple} failed unexpectedly: {msg}\n\
+                    "aot_cross_compile: target {triple} failed unexpectedly: {msg}\n\
                      (this is a hard failure — none of the known skip markers \
                      matched; the cross-compile path itself may be broken)"
                 );
@@ -240,7 +240,7 @@ fn try_one_target(triple: &str) -> Option<std::path::PathBuf> {
 
 // ────────────────────────────────────────────────────────────────────
 // Tests — one per tier 1/2 target. Each is its own #[test] so
-// `cargo test stage5_` shows per-target green/skip status.
+// `cargo test cross_compile_` shows per-target green/skip status.
 // ────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -277,11 +277,11 @@ fn target_spec_rejects_unsupported_arch() {
 #[test]
 fn cross_compile_x86_64_apple_darwin() {
     if cfg!(target_os = "windows") {
-        eprintln!("stage5: skipping Windows host");
+        eprintln!("aot_cross_compile: skipping Windows host");
         return;
     }
     if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("stage5: skipping — cc/cargo missing");
+        eprintln!("aot_cross_compile: skipping — cc/cargo missing");
         return;
     }
     // Apple's clang supports `-target x86_64-apple-darwin` natively
@@ -289,7 +289,7 @@ fn cross_compile_x86_64_apple_darwin() {
     // test the rest of the cross-compile machinery hangs on.
     if cfg!(not(target_os = "macos")) {
         eprintln!(
-            "stage5: skipping x86_64-apple-darwin — cross to darwin from \
+            "aot_cross_compile: skipping x86_64-apple-darwin — cross to darwin from \
              non-darwin requires the macOS SDK, which we don't bundle"
         );
         return;

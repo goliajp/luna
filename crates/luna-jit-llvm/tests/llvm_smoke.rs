@@ -1,5 +1,5 @@
-//! v2.1 Phase 1K.D.6 — end-to-end smoke for the LLVM backend's
-//! single recognised chunk shape (`[Op::LoadNil(_, _), Op::Return0]`).
+//! End-to-end smoke for the LLVM backend's
+//! simplest recognised chunk shape (`[Op::LoadNil(_, _), Op::Return0]`).
 //!
 //! The test:
 //! 1. Spins up a `luna_jit` Vm with the default Cranelift backend (we
@@ -18,10 +18,9 @@
 //!
 //! This proves the inkwell → LLVM 18 toolchain emits + JIT-compiles +
 //! resolves a Rust-callable function pointer through luna's trait
-//! surface, with the leaked Context / ExecutionEngine keeping the
-//! mmap alive for the duration of the test. Phase 1K.D.7 extends to
-//! `Op::LoadK + Op::Move + Op::LoadNil`; Phase 1K.D.8 swaps the leak
-//! for a per-`Vm` storage cache.
+//! surface, with the per-`Vm` storage cache keeping the Context /
+//! ExecutionEngine (and so the mmap) alive for the duration of the
+//! test.
 
 use luna_core::jit::{CompileResult, IntChunkCompiler};
 use luna_core::vm::isa::Op;
@@ -105,15 +104,14 @@ fn load_nil_then_return0_compiles_and_runs() {
     );
 }
 
-/// v2.1 Phase 1K.D.7 — 3-op chunk smoke.
+/// 3-op chunk smoke.
 ///
 /// `local x; local y = 'h'; local z = y` compiles to
 /// `[LoadNil(R0,0), LoadK(R1, "h"), Move(R2,R1), Return0]`. The
 /// chunk's locals are dead at the `Return0` boundary, so the
 /// recognised shape `[(LoadNil | LoadK | Move)*, Return0]` lowers
-/// to the same `extern "C" fn() -> i64 { ret 0 }` entry as 1K.D.6's
-/// LoadNil-only chunk. Phase 1K.E grows out to ops with observable
-/// side effects.
+/// to the same `extern "C" fn() -> i64 { ret 0 }` entry as the
+/// LoadNil-only chunk.
 #[test]
 fn three_op_dead_locals_chunk_compiles_and_runs() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -144,14 +142,14 @@ fn three_op_dead_locals_chunk_compiles_and_runs() {
     };
     assert!(!entry.is_null());
 
-    // SAFETY: matches the 1K.D.6 smoke's calling convention.
+    // SAFETY: matches the LoadNil smoke's calling convention.
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     let returned = unsafe { entry_fn() };
     assert_eq!(returned, 0);
 }
 
-/// v2.1 Phase 1K.D.8 — verify the per-`Vm` `LlvmJitStorage` cache
+/// Verify the per-`Vm` `LlvmJitStorage` cache
 /// serves a second compile of the same Proto from cache rather than
 /// re-emitting LLVM IR.
 ///
@@ -189,14 +187,12 @@ fn storage_cache_reuses_compiled_entry() {
     );
 }
 
-/// Phase 1K.D.7 / Phase 1K.E.2 — sanity check that out-of-shape
-/// chunks bail back to the interpreter rather than being mis-compiled.
+/// Sanity check that out-of-shape chunks bail back to the
+/// interpreter rather than being mis-compiled.
 ///
-/// At Phase 1K.D the recognised shape was the dead-locals path only,
-/// so `return 1` (LoadI + Return1) bailed. Phase 1K.E.2 added the
-/// compute path which now handles `LoadI` + `Return1` — so we need a
-/// chunk whose op set falls outside *both* paths to retain
-/// `Skipped` coverage. `local t = {}` emits `NewTable` + `Return0`;
+/// The compute path handles `LoadI` + `Return1`, so a chunk whose op
+/// set falls outside *both* paths is needed for `Skipped` coverage.
+/// `local t = {}` emits `NewTable` + `Return0`;
 /// `NewTable` is in neither whitelist, so the backend bails.
 #[test]
 fn out_of_shape_chunk_returns_skipped() {
@@ -222,7 +218,7 @@ fn out_of_shape_chunk_returns_skipped() {
     );
 }
 
-/// v2.1 Phase 1K.E.2 — first observable-value chunk JIT.
+/// First observable-value chunk JIT.
 ///
 /// `return 42` compiles to `[LoadI(R0, 42), Return1(R0), Return0]`.
 /// The compute path's recognised prefix is `(LoadI|LoadNil|Move)*`
@@ -253,7 +249,7 @@ fn return_i_compiles_and_returns_immediate() {
         ..
     } = result
     else {
-        panic!("Phase 1K.E.2 must compile `return 42`; got {result:?}");
+        panic!("must compile `return 42`; got {result:?}");
     };
     assert!(
         returns_one,
@@ -262,7 +258,7 @@ fn return_i_compiles_and_returns_immediate() {
     assert!(!ret_is_float, "int-immediate chunk returns i64, not f64");
     assert!(!entry.is_null(), "compute path must yield a non-null entry");
 
-    // SAFETY: matches the 1K.D smoke's calling convention; the
+    // SAFETY: matches the dead-locals smoke's calling convention; the
     // compute path emits the same `fn() -> i64` shape.
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -273,7 +269,7 @@ fn return_i_compiles_and_returns_immediate() {
     );
 }
 
-/// v2.1 Phase 1K.E.2 — negative immediate path. `return -7` lowers
+/// Negative immediate path. `return -7` lowers
 /// to `[LoadI(R0, -7), Return1(R0)]`; verify the sign-extension is
 /// preserved through the IR `const_int(i64, signed=true)` cast.
 #[test]
@@ -282,8 +278,8 @@ fn return_i_handles_negative_immediate() {
     let closure = vm.load(b"return -7", b"=return_neg7").expect("compile");
     let proto = closure.proto;
     // The parser may fold `-7` to a LoadI of -7, or to a LoadI of 7
-    // + a unary `Unm` (Phase 1K.E later sub-phase). Skip if it's the
-    // latter — Phase 1K.E.2 doesn't cover Unm.
+    // + a unary `Unm`. Skip if it's the latter — the compute path
+    // doesn't cover Unm.
     if !matches!(proto.code.first().map(|i| i.op()), Some(Op::LoadI))
         || proto.code.first().map(|i| i.sbx()) != Some(-7)
     {
@@ -298,7 +294,7 @@ fn return_i_handles_negative_immediate() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("`return -7` must compile via Phase 1K.E.2");
+        panic!("`return -7` must compile");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -306,7 +302,7 @@ fn return_i_handles_negative_immediate() {
     assert_eq!(returned, -7);
 }
 
-/// v2.1 Phase 1K.E.3 — int Add smoke.
+/// Int Add smoke.
 ///
 /// `local x = 2; local y = 3; return x + y` compiles to
 /// `[LoadI(R0,2), LoadI(R1,3), Add(R2,R0,R1), Return1(R2), Return0]`.
@@ -326,7 +322,7 @@ fn add_two_loaded_ints() {
     let code: &[_] = &proto.code;
     assert!(
         code.iter().any(|i| i.op() == Op::Add),
-        "test source must emit an Add to exercise Phase 1K.E.3 \
+        "test source must emit an Add to exercise \
          (got {code:?})",
     );
 
@@ -335,7 +331,7 @@ fn add_two_loaded_ints() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.3 must compile `local x=2; local y=3; return x+y`");
+        panic!("must compile `local x=2; local y=3; return x+y`");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -343,7 +339,7 @@ fn add_two_loaded_ints() {
     assert_eq!(returned, 5, "2 + 3 must equal 5 through the JIT entry");
 }
 
-/// v2.1 Phase 1K.E.3 — Add with negative + positive operands. Pins
+/// Add with negative + positive operands. Pins
 /// signed-i64 semantics (no wrap surprise for small inputs).
 #[test]
 fn add_negative_and_positive() {
@@ -353,7 +349,7 @@ fn add_negative_and_positive() {
         .expect("compile");
     let proto = closure.proto;
     // Parser may fold -10 or use Unm; require LoadI(-10) prefix to
-    // stay in Phase 1K.E.3 scope.
+    // stay inside the compute whitelist.
     let has_neg_loadi = proto
         .code
         .iter()
@@ -362,7 +358,7 @@ fn add_negative_and_positive() {
     if !has_neg_loadi || !has_add {
         eprintln!(
             "[add_negative_and_positive] parser shape differs from \
-             Phase 1K.E.3 target; chunk = {:?}",
+             target; chunk = {:?}",
             proto.code
         );
         return;
@@ -373,7 +369,7 @@ fn add_negative_and_positive() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.3 must compile the neg+pos add chunk");
+        panic!("must compile the neg+pos add chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -381,7 +377,7 @@ fn add_negative_and_positive() {
     assert_eq!(returned, -6);
 }
 
-/// v2.1 Phase 1K.E.4 — int Sub / Mul smoke.
+/// Int Sub / Mul smoke.
 #[test]
 fn sub_two_loaded_ints() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -396,7 +392,7 @@ fn sub_two_loaded_ints() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.4 must compile the Sub chunk");
+        panic!("must compile the Sub chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -417,14 +413,14 @@ fn mul_two_loaded_ints() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.4 must compile the Mul chunk");
+        panic!("must compile the Mul chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 42);
 }
 
-/// v2.1 Phase 1K.E.4 — Lua-semantic Mod, positive operands.
+/// Lua-semantic Mod, positive operands.
 /// Lua: `17 % 5 == 2`. Matches C srem too.
 #[test]
 fn mod_positive_operands() {
@@ -440,21 +436,21 @@ fn mod_positive_operands() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.4 must compile the Mod chunk");
+        panic!("must compile the Mod chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 2);
 }
 
-/// v2.1 Phase 1K.E.4 — Lua Mod with cross-sign operands. This is the
+/// Lua Mod with cross-sign operands. This is the
 /// case where Lua's floor-mod differs from C's srem. Lua: `(-7) % 3
 /// == 2`, C srem(-7, 3) == -1. The JIT emit's sign-fixup must apply.
 ///
 /// Parser-fold-tolerant: if `-7` is parsed as `LoadI(7) + Unm`
-/// (Unm not in the 1K.E.4 whitelist) the chunk falls outside the
-/// recognised shape and the test skips. The bytecode probe at
-/// Phase 1K.E.1 confirmed luna 5.5 emits a direct LoadI(-7).
+/// (Unm not in the whitelist) the chunk falls outside the
+/// recognised shape and the test skips. luna 5.5 emits a direct
+/// LoadI(-7).
 #[test]
 fn mod_negative_dividend_lua_semantics() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -470,7 +466,7 @@ fn mod_negative_dividend_lua_semantics() {
     if !has_neg_loadi || !has_mod {
         eprintln!(
             "[mod_negative_dividend] parser shape differs from \
-             Phase 1K.E.4 target; chunk = {:?}",
+             target; chunk = {:?}",
             proto.code
         );
         return;
@@ -481,7 +477,7 @@ fn mod_negative_dividend_lua_semantics() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.4 must compile the neg-dividend Mod chunk");
+        panic!("must compile the neg-dividend Mod chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -493,7 +489,7 @@ fn mod_negative_dividend_lua_semantics() {
     );
 }
 
-/// v2.1 Phase 1K.E.4 — Div is deliberately NOT in the compute
+/// Div is deliberately NOT in the compute
 /// whitelist (Lua semantics returns float). Confirm the chunk bails
 /// to interpreter rather than being mis-compiled as int sdiv.
 #[test]
@@ -518,7 +514,7 @@ fn div_chunk_bails_until_float_support() {
     );
 }
 
-/// v2.1 Phase 1K.E.5+6 — comparison + control flow.
+/// Comparison + control flow.
 ///
 /// `local x = 5; if x < 10 then return 1 else return 0 end` compiles
 /// to a Lt+Jmp pair plus two Return1 paths. The compute path lowers
@@ -543,7 +539,7 @@ fn if_lt_then_else_takes_correct_branch() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile the if/else chunk");
+        panic!("must compile the if/else chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -554,7 +550,7 @@ fn if_lt_then_else_takes_correct_branch() {
     );
 }
 
-/// v2.1 Phase 1K.E.5+6 — same chunk shape, false condition. `x = 20`
+/// Same chunk shape, false condition. `x = 20`
 /// → `20 < 10` is false → else-branch → return 0.
 #[test]
 fn if_lt_then_else_false_takes_else() {
@@ -571,14 +567,14 @@ fn if_lt_then_else_false_takes_else() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile the if/else chunk (false branch)");
+        panic!("must compile the if/else chunk (false branch)");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 0);
 }
 
-/// v2.1 Phase 1K.E.5+6 — Lt with return-the-operand branches.
+/// Lt with return-the-operand branches.
 ///
 /// `local x = 3; local y = 2; if x < y then return x else return y end`
 /// returns 2 (else branch, because 3<2 is false).
@@ -597,7 +593,7 @@ fn lt_xy_returns_smaller() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile lt_xy");
+        panic!("must compile lt_xy");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
@@ -608,7 +604,7 @@ fn lt_xy_returns_smaller() {
     );
 }
 
-/// v2.1 Phase 1K.E.5+6 — Le boundary.
+/// Le boundary.
 /// `if 5 <= 5 then return 1 else return 0 end` → 1.
 #[test]
 fn le_boundary_returns_then() {
@@ -632,14 +628,14 @@ fn le_boundary_returns_then() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile the Le chunk");
+        panic!("must compile the Le chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 1);
 }
 
-/// v2.1 Phase 1K.E.5+6 — Eq.
+/// Eq.
 /// `if 7 == 7 then return 1 else return 0 end` → 1.
 #[test]
 fn eq_returns_then() {
@@ -663,14 +659,14 @@ fn eq_returns_then() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile the Eq chunk");
+        panic!("must compile the Eq chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 1);
 }
 
-/// v2.1 Phase 1K.E.5+6 — branchy chunk with multi-op then/else.
+/// Branchy chunk with multi-op then/else.
 ///
 /// `local n = 5; local r = 0; if n < 10 then r = n*2 else r = n-1
 /// end; return r` exercises:
@@ -696,14 +692,14 @@ fn branchy_chunk_then_path() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile the branchy chunk");
+        panic!("must compile the branchy chunk");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 10);
 }
 
-/// v2.1 Phase 1K.E.5+6 — branchy chunk, else path. n=20 → r = 20-1
+/// Branchy chunk, else path. n=20 → r = 20-1
 /// = 19.
 #[test]
 fn branchy_chunk_else_path() {
@@ -720,14 +716,14 @@ fn branchy_chunk_else_path() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.5+6 must compile the branchy chunk (else)");
+        panic!("must compile the branchy chunk (else)");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 19);
 }
 
-/// v2.1 Phase 1K.E.7 — dead-locals `local b = true` compiles
+/// Dead-locals `local b = true` compiles
 /// (`LoadTrue + Return0`).
 #[test]
 fn dead_locals_load_true_then_return0() {
@@ -746,7 +742,7 @@ fn dead_locals_load_true_then_return0() {
         entry, returns_one, ..
     } = result
     else {
-        panic!("Phase 1K.E.7 dead-locals LoadTrue chunk must compile; got {result:?}");
+        panic!("dead-locals LoadTrue chunk must compile; got {result:?}");
     };
     assert!(!returns_one, "Return0 chunks report returns_one=false");
     let entry_fn: unsafe extern "C" fn() -> i64 =
@@ -755,7 +751,7 @@ fn dead_locals_load_true_then_return0() {
     assert_eq!(unsafe { entry_fn() }, 0);
 }
 
-/// v2.1 Phase 1K.E.7 — dead-locals `local b = false`.
+/// Dead-locals `local b = false`.
 #[test]
 fn dead_locals_load_false_then_return0() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -770,14 +766,14 @@ fn dead_locals_load_false_then_return0() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.7 dead-locals LoadFalse chunk must compile");
+        panic!("dead-locals LoadFalse chunk must compile");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 0);
 }
 
-/// v2.1 Phase 1K.E.7 — `return true` is **out of scope** until the
+/// `return true` is **out of scope** until the
 /// dispatcher contract grows a `ret_is_bool` bit. The chunk must
 /// bail rather than mis-encoding `true` as `i64(1)` (the dispatcher
 /// would interpret that as `Value::Int(1)`).
@@ -799,13 +795,11 @@ fn return_true_bails_until_bool_ret_widening() {
     );
 }
 
-/// v2.1 Phase 1K.E.8 — substantial int chunk that exercises every
-/// non-call op the compute path supports as of Phase 1K.E:
-/// `LoadI` / `Move` / `Add` / `Sub` / `Mul` / `Mod` / `Lt` / `Le` /
-/// `Eq` / `Jmp` / `Return1`. Closest in-scope analog to the "fib(N)
-/// shape" the Phase 1K.E plan referenced — proper recursive `fib`
-/// needs `Op::Call` (1K.F helper-call emit) and iterative `fib` needs
-/// `Op::ForPrep` / `Op::ForLoop`, both out of 1K.E scope.
+/// Substantial int chunk that exercises every non-call op the
+/// compute path supports: `LoadI` / `Move` / `Add` / `Sub` / `Mul` /
+/// `Mod` / `Lt` / `Le` / `Eq` / `Jmp` / `Return1`. A branchy stand-in
+/// for a "fib(N) shape" — iterative `fib` needs `Op::ForPrep` /
+/// `Op::ForLoop`, which the compute path does not lower.
 ///
 /// Chunk:
 /// ```lua
@@ -870,7 +864,7 @@ fn fib_shape_nested_branchy_chunk() {
         entry, returns_one, ..
     } = backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.8 fib-shape chunk must compile via compute path");
+        panic!("fib-shape chunk must compile via compute path");
     };
     assert!(returns_one);
     let entry_fn: unsafe extern "C" fn() -> i64 =
@@ -882,7 +876,7 @@ fn fib_shape_nested_branchy_chunk() {
     );
 }
 
-/// v2.1 Phase 1K.E.8 — same chunk, then-branch path (n=3):
+/// Same chunk, then-branch path (n=3):
 /// `3 < 5` true → return `3 * 3` = 9.
 #[test]
 fn fib_shape_nested_branchy_chunk_then_path() {
@@ -909,14 +903,14 @@ fn fib_shape_nested_branchy_chunk_then_path() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.8 then-branch chunk must compile");
+        panic!("then-branch chunk must compile");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 9);
 }
 
-/// v2.1 Phase 1K.E.8 — deepest else-branch (n=11 → else → d=8 →
+/// Deepest else-branch (n=11 → else → d=8 →
 /// d==4 false → return `d % 3 == 2`).
 #[test]
 fn fib_shape_nested_branchy_chunk_deep_else() {
@@ -943,14 +937,14 @@ fn fib_shape_nested_branchy_chunk_deep_else() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("Phase 1K.E.8 deep-else chunk must compile");
+        panic!("deep-else chunk must compile");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };
     assert_eq!(unsafe { entry_fn() }, 2);
 }
 
-/// v2.1 Phase 1K.E.2 — `Move`-through-the-return-slot smoke.
+/// `Move`-through-the-return-slot smoke.
 ///
 /// `local x = 9; return x` compiles to `[LoadI(R0,9), Return1(R0)]`
 /// in luna's 5.4/5.5 parser (the return reads the local in place,
@@ -980,7 +974,7 @@ fn move_then_return_propagates_through_reg() {
     let CompileResult::Compiled { entry, .. } =
         backend.try_compile(&mut storage, proto, false, false)
     else {
-        panic!("`local x = 9; local y = x; return y` must compile via Phase 1K.E.2");
+        panic!("`local x = 9; local y = x; return y` must compile");
     };
     let entry_fn: unsafe extern "C" fn() -> i64 =
         unsafe { std::mem::transmute::<*const u8, _>(entry) };

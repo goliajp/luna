@@ -3,10 +3,10 @@
 //! - `luna-aot compile <input.lua> --out <output>` — the scaffold's
 //!   only working command.
 //!
-//! Future v1.3-window commands:
+//! Possible future commands:
 //!
 //! - `luna-aot run <input.lua>` — compile + execute in one shot
-//!   (convenience; audit § Open question 7).
+//!   (convenience).
 //! - `luna-aot dump <input.lua>` — print the dump bytes for
 //!   inspection without touching the linker.
 
@@ -35,8 +35,8 @@ pub struct Cli {
 pub enum Command {
     /// Compile a Lua source file into a native binary embedding the
     /// luna bytecode dump (scaffold: runs a tiny C entry that prints
-    /// the embedded section size; follow-up wires the real Vm-driven
-    /// runtime stub).
+    /// the embedded section size; the default path links the real
+    /// Vm-driven runtime).
     Compile(CompileArgs),
 }
 
@@ -61,8 +61,8 @@ pub struct CompileArgs {
     #[arg(long = "dialect", default_value = "lua55")]
     pub dialect: DialectArg,
 
-    /// **v1.3 Stage 4 escape hatch**: when set, fall back to the
-    /// pre-Stage-4 scaffold path that emits a C entry which only
+    /// **Escape hatch**: when set, fall back to the scaffold path
+    /// that emits a C entry which only
     /// prints the embedded section length to stderr (no `Vm`, no
     /// luna-runtime-helpers link). Useful for benchmarking the
     /// link step in isolation or when the runtime staticlib is
@@ -92,7 +92,7 @@ pub enum DialectArg {
     /// Lua 5.5 (default)
     #[clap(name = "5.5", alias = "lua55")]
     Lua55,
-    /// MacroLua (5.4 base + compile-time macros, Phase ML).
+    /// MacroLua (5.4 base + compile-time macros).
     #[clap(name = "macrolua", alias = "macro")]
     MacroLua,
 }

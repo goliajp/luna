@@ -1,15 +1,16 @@
-//! Stage 4-6 of the AOT pipeline:
+//! The AOT pipeline:
 //! parse + compile Lua source → dump luna bytecode → embed into an
 //! object file's `.luna.bytecode` data section → link.
 //!
-//! This module is the **scaffold cut** of the AOT pipeline. The
-//! Cranelift trace-codegen path (Stages 3-4 in the audit) is **not**
-//! wired here; it lands in follow-up sessions. Today's flow ends after
-//! the bytecode is in a `.luna.bytecode` section bracketed by the two
+//! [`embed_bytecode`] is the **scaffold** path: it ends after the
+//! bytecode is in a `.luna.bytecode` section bracketed by the two
 //! public symbols [`crate::BYTECODE_START_SYMBOL`] and
-//! [`crate::BYTECODE_END_SYMBOL`].
+//! [`crate::BYTECODE_END_SYMBOL`], linked against a C entry that only
+//! prints the section size. [`compile_and_link`] is the full path: it
+//! also links the `luna-runtime-helpers` staticlib and any AOT trace
+//! mcode harvested from a warmup run.
 //!
-//! # Pipeline today
+//! # Scaffold pipeline
 //!
 //! ```text
 //!   foo.lua
@@ -27,20 +28,8 @@
 //!   foo.luna_bytecode.o   (ELF / Mach-O / PE — host triple)
 //!     │  cc foo.luna_bytecode.o entry_stub.o -o foo
 //!     ▼
-//!   foo   (native binary; today: scaffold entry prints the section size)
+//!   foo   (native binary; scaffold entry prints the section size)
 //! ```
-//!
-//! # Follow-up
-//!
-//! - Wire the [`crate::runtime_stub::aot_main`] into the link step so
-//!   the produced binary runs the embedded bytecode through a real
-//!   `Vm`. Needs a `luna-core` staticlib per target triple OR a
-//!   tempdir-cargo bootstrap (audit § Open question 3 Option A).
-//! - Stage 3 refactor: lift the JIT lowerer over `cranelift_module::Module`
-//!   so the same code drives `JITModule` (luna-jit) and `ObjectModule`
-//!   (luna-aot). Then this module emits a second object containing
-//!   Cranelift-lowered trace mcode + symbol exports keyed on
-//!   `(Proto*, entry-pc)`.
 
 use std::fs;
 use std::io;
@@ -81,10 +70,9 @@ pub enum AotError {
     /// linker's stderr verbatim so users can diagnose toolchain
     /// issues without re-running.
     Link(String),
-    /// The target triple isn't supported by the scaffold yet. Today
-    /// this fires for anything other than the host triple — Stage 6
-    /// of the audit wires cross-compile via cranelift-codegen +
-    /// per-triple `cc` flags.
+    /// The target triple isn't supported. The scaffold path rejects
+    /// anything other than the host triple; [`compile_and_link`]
+    /// rejects triples [`TargetSpec::from_triple`] can't describe.
     UnsupportedTarget(String),
 }
 
@@ -121,21 +109,18 @@ impl From<io::Error> for AotError {
 /// the dumped luna bytecode in a `.luna.bytecode` section).
 ///
 /// `target_triple` is parsed only for the host-vs-cross check; the
-/// scaffold session only supports the host triple. Pass `None` to
-/// default to the host.
+/// scaffold only supports the host triple. Pass `None` to default to
+/// the host.
 ///
 /// `version` selects the Lua dialect for parsing + bytecode emit
 /// (defaults to [`LuaVersion::Lua55`] when called via the CLI).
 ///
-/// # End-to-end behaviour today
+/// # End-to-end behaviour
 ///
 /// The produced binary is **runnable**: it prints the embedded
-/// bytecode length to `stderr` and exits 0. Wiring it to construct a
-/// `Vm` and execute the bytecode (the real "interp-only AOT" goal of
-/// the audit) is the next follow-up; the runtime-side code already
-/// lives in [`crate::runtime_stub`] and compiles cleanly, it just
-/// needs to be linked in (audit § Stage 6 Option A — cargo bootstrap
-/// of a tiny `luna-core`-depending crate).
+/// bytecode length to `stderr` and exits 0. It does not execute the
+/// bytecode; use [`compile_and_link`] for a binary that runs the
+/// script through a `Vm`.
 pub fn embed_bytecode(
     source_path: &Path,
     out_path: &Path,
@@ -148,7 +133,7 @@ pub fn embed_bytecode(
         return Err(AotError::UnsupportedTarget(t.to_string()));
     }
 
-    // Stage 1 + 2: source → AST → Proto. Uses the same path the runtime
+    // source → AST → Proto. Uses the same path the runtime
     // `Vm::load` walks (`luna-core/src/vm/exec.rs:1298`).
     let src = fs::read(source_path)?;
     let ast = parse(&src, version).map_err(|e| {
@@ -186,7 +171,7 @@ pub fn embed_bytecode(
     // construction — single-threaded heap, no concurrent mutator.
     let dump_bytes = dump::dump(&proto, false, version);
 
-    // Stage 5: write the bytecode object file.
+    // Write the bytecode object file.
     let workdir = out_path
         .parent()
         .map(Path::to_path_buf)
@@ -201,10 +186,9 @@ pub fn embed_bytecode(
     write_bytecode_object(&dump_bytes, &bytecode_obj_path)?;
     write_scaffold_entry_object(&stub_obj_path)?;
 
-    // Stage 6: link via system `cc`. The scaffold uses a minimal C
-    // entry that references the bracket symbols (proves the section
-    // is reachable end-to-end). Follow-up sessions replace this
-    // with the Rust `runtime_stub` linked as a staticlib.
+    // Link via system `cc`. The scaffold uses a minimal C entry that
+    // references the bracket symbols (proves the section is reachable
+    // end-to-end).
     link_with_cc(&[&bytecode_obj_path, &stub_obj_path], out_path)?;
 
     Ok(())
@@ -277,11 +261,9 @@ fn write_bytecode_object(bytecode: &[u8], out: &Path) -> Result<(), AotError> {
 /// Emit a tiny C-style entry-point object that references the bytecode
 /// bracket symbols and prints the embedded length to stderr.
 ///
-/// This is the **scaffold runtime**. The real runtime —
-/// [`crate::runtime_stub::aot_main`] — constructs a `Vm`, calls
-/// `Vm::load(&bytecode_slice, b"=embedded")`, and runs it. Wiring
-/// that path requires the Rust runtime to be linked into the binary,
-/// which is the next follow-up (audit § Stage 6).
+/// This is the **scaffold runtime**. [`compile_and_link`] links the
+/// real runtime instead, which constructs a `Vm`, loads the embedded
+/// bytecode, and runs it.
 fn write_scaffold_entry_object(out: &Path) -> Result<(), AotError> {
     // Generate a C source file in a tempfile, then invoke `cc -c` to
     // produce the `.o`. This is simpler than hand-rolling the entry
@@ -327,8 +309,7 @@ int main(int argc, char **argv) {{
             String::from_utf8_lossy(&status.stderr)
         )));
     }
-    // best-effort: leave the .c around for diagnosis; future --keep-obj
-    // flag controls deletion (audit § CLI surface).
+    // best-effort: leave the .c around for diagnosis
     Ok(())
 }
 
@@ -354,7 +335,7 @@ fn link_with_cc(objects: &[&Path], out_path: &Path) -> Result<(), AotError> {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Stage 4 — interp-runtime link path
+// Interp-runtime link path
 //
 // This is the "real" deploy shape: the produced binary embeds the
 // bytecode, links against the `luna-runtime-helpers` staticlib (which
@@ -374,15 +355,15 @@ fn link_with_cc(objects: &[&Path], out_path: &Path) -> Result<(), AotError> {
 //      platform libs (`-lpthread -ldl -lm -framework CoreFoundation`
 //      on Mac) into the final binary.
 //
-// Stage 3 Cranelift trace mcode emission is a separate concern — it
-// adds a third object file (containing the lowered traces) to the
+// Cranelift trace mcode emission is a separate concern — it adds a
+// third object file (containing the lowered traces) to the
 // link line. The interp-runtime fallback path lives in the staticlib
 // either way, so adding the trace.o is purely additive.
 // ────────────────────────────────────────────────────────────────────
 
 /// End-to-end AOT compile: produces a self-contained binary that, when
 /// run, loads the embedded bytecode through a luna `Vm` and executes
-/// it (interp-driven; Cranelift trace mcode is a follow-up).
+/// it. Traces harvested from a warmup run are linked in as AOT mcode.
 ///
 /// Differs from [`embed_bytecode`]:
 /// - Builds and links `luna-runtime-helpers` (staticlib carrying
@@ -390,10 +371,10 @@ fn link_with_cc(objects: &[&Path], out_path: &Path) -> Result<(), AotError> {
 /// - Produced binary actually **runs** the script — `print(...)` lands
 ///   on stdout, runtime errors print to stderr + exit 1, etc.
 ///
-/// `target_triple` parsing is host-only in this session; cross-compile
-/// requires per-triple staticlib builds (`cargo build --target=<triple>
-/// -p luna-runtime-helpers`) + the matching `cc --target=...` flag,
-/// folded in by Stage 4 cross-compile follow-up.
+/// `target_triple` selects a cross target via [`TargetSpec::from_triple`];
+/// cross-compile builds a per-triple staticlib (`cargo build
+/// --target=<triple> -p luna-runtime-helpers`) and uses the matching
+/// cc driver.
 ///
 /// `cargo_dir` overrides the working directory `cargo build` runs in
 /// (defaults to the workspace this crate lives in, looked up via
@@ -414,7 +395,7 @@ pub fn compile_and_link(
         None => TargetSpec::host(),
     };
 
-    // Stage 1 + 2 + 5a: shared with `embed_bytecode`.
+    // Parse + compile + dump: shared with `embed_bytecode`.
     let dump_bytes = compile_to_dump(source_path, version)?;
 
     let workdir = out_path
@@ -428,18 +409,16 @@ pub fn compile_and_link(
     let bytecode_obj_path = workdir.join(format!("{stem}.luna_bytecode.o"));
     let cmain_obj_path = workdir.join(format!("{stem}.luna_cmain.o"));
 
-    // Stage 5b: bytecode object — target-aware format/arch.
+    // Bytecode object — target-aware format/arch.
     write_bytecode_object_for(&dump_bytes, &bytecode_obj_path, &target)?;
 
-    // Stage 6a: tiny C main that calls into the staticlib. The C source
+    // Tiny C main that calls into the staticlib. The C source
     // is target-independent (extern decls only); the `cc -c` invocation
     // routes through the target-aware cc driver so the .o has the right
     // ABI / object-format magic.
     write_aot_cmain_object_for(&cmain_obj_path, &target)?;
 
-    // v1.3 Phase AOT Stage 7 sub-piece 4 (closed) + polish 4
-    // (cross-compile traces): offline trace recorder + AOT trace
-    // mcode emission. The warmup `Vm` always runs on the **host**
+    // Offline trace recorder + AOT trace mcode emission. The warmup `Vm` always runs on the **host**
     // (we can't dispatch target mcode at warmup time), but the
     // trace-mcode `.o` we emit is keyed off `TargetSpec`:
     //
@@ -464,7 +443,7 @@ pub fn compile_and_link(
         }
     };
 
-    // Stage 6b: ensure the runtime staticlib exists for `target`.
+    // Ensure the runtime staticlib exists for `target`.
     // For the host triple this is a workspace cargo build; for a cross
     // triple it's `cargo build --target=<triple>` and the resulting
     // staticlib lives under `target/<triple>/release-aot-helpers/`.
@@ -473,7 +452,7 @@ pub fn compile_and_link(
     // helpers survive the rlib → staticlib bundling step.
     let staticlib = build_runtime_helpers_staticlib(target.triple_for_cargo())?;
 
-    // Stage 6c: final link via the target's cc driver. Order matters on
+    // Final link via the target's cc driver. Order matters on
     // some toolchains: bytecode + main first (they reference symbols
     // from the staticlib), then the staticlib, then system libs.
     link_aot_binary_for(
@@ -488,8 +467,7 @@ pub fn compile_and_link(
     Ok(())
 }
 
-/// v1.3 Phase AOT Stage 7 sub-piece 4 — return shape for
-/// [`harvest_and_emit_aot_traces`]. `None` = warmup recorded zero
+/// Return shape for [`harvest_and_emit_aot_traces`]. `None` = warmup recorded zero
 /// dispatchable traces (small / non-loopy source); `Some` = at least
 /// one trace .o was written.
 enum HarvestedTraces {
@@ -512,7 +490,7 @@ pub fn compile_and_link_host(
     compile_and_link(source_path, out_path, None, version)
 }
 
-/// Run Stages 1-2 (parse + compile) and produce the dump bytes the
+/// Parse + compile and produce the dump bytes the
 /// bytecode object holds. Factored out so [`embed_bytecode`] and
 /// [`compile_and_link`] share the front-end exactly.
 fn compile_to_dump(source_path: &Path, version: LuaVersion) -> Result<Vec<u8>, AotError> {
@@ -553,7 +531,7 @@ fn compile_to_dump(source_path: &Path, version: LuaVersion) -> Result<Vec<u8>, A
 /// 1. If `LUNA_AOT_RUNTIME_HELPERS_STATICLIB` is set, take it as the
 ///    absolute path of a pre-built `.a` and skip the cargo build.
 ///    Useful for distribution scenarios where the staticlib is shipped
-///    out-of-band (audit § Stage 6 Option B). Only honoured for the
+///    out-of-band. Only honoured for the
 ///    host triple — cross triples must build their own staticlib so
 ///    the override doesn't accidentally mix ABIs.
 /// 2. Otherwise, look up `CARGO_MANIFEST_DIR`, ascend to the workspace
@@ -605,9 +583,7 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
         // override for a cross target is actively misleading: the check at
         // the top of this function honours it only when `target_triple`
         // is None, so a user following that hint would set it, see the
-        // identical error, and have nothing left to try. (This cost the
-        // v2.20 CI repair two rounds — the Wine job was "fixed" that way
-        // twice before the gate was read.)
+        // identical error, and have nothing left to try.
         AotError::Link(match target_triple {
             None => "CARGO_MANIFEST_DIR not set — cannot locate workspace to \
                      build luna-runtime-helpers. Set \
@@ -642,8 +618,8 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
         .arg("build")
         .arg("-p")
         .arg("luna-runtime-helpers")
-        // v1.3 Stage 7 follow-on — dedicated `release-aot-helpers`
-        // profile (defined in workspace `Cargo.toml`) turns LTO off
+        // Dedicated `release-aot-helpers` profile (defined in
+        // workspace `Cargo.toml`) turns LTO off
         // for this staticlib build. Workspace `[profile.release]`
         // has `lto = true`, which strips the 39 `luna_jit_*`
         // Cranelift trace-mcode helper symbols from the staticlib
@@ -729,8 +705,8 @@ fn build_runtime_helpers_staticlib(target_triple: Option<&str>) -> Result<PathBu
 }
 
 /// Map the host triple to `object::{BinaryFormat, Architecture, Endianness}`.
-/// Scaffold only — cross-compile triples flow in via a richer map in
-/// the follow-up Stage 6 work.
+/// Used by the scaffold path; cross-compile triples go through
+/// [`TargetSpec`].
 fn host_object_target() -> (BinaryFormat, Architecture, Endianness) {
     let format = BinaryFormat::native_object();
     let arch = if cfg!(target_arch = "x86_64") {
@@ -774,7 +750,7 @@ fn host_triple() -> &'static str {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Stage 5 — target-aware emission + cross-compile + Windows linker
+// Target-aware emission + cross-compile + Windows linker
 //
 // `TargetSpec` is the per-triple bundle of facts the AOT pipeline
 // needs:
@@ -790,8 +766,8 @@ fn host_triple() -> &'static str {
 //     `--print native-static-libs` output
 //
 // Adding a new tier just means a new `from_triple` arm. The host arm
-// keeps its `cfg!`-derived defaults so we don't regress the
-// already-shipped Stage 4 path.
+// keeps its `cfg!`-derived defaults so the host path stays
+// unchanged.
 // ────────────────────────────────────────────────────────────────────
 
 /// Per-target bundle of facts the AOT pipeline needs to emit a
@@ -853,8 +829,7 @@ pub enum TargetLibc {
 }
 
 impl TargetSpec {
-    /// Host-triple spec. Mirrors the Stage 4 host-only path: object
-    /// format from `cfg!` derivation, libc from `cfg!(target_env)`.
+    /// Host-triple spec: object format from `cfg!` derivation, libc from `cfg!(target_env)`.
     pub fn host() -> Self {
         let (format, arch, endian) = host_object_target();
         let triple = host_triple().to_string();
@@ -903,7 +878,7 @@ impl TargetSpec {
     /// missing.
     pub fn from_triple(triple: &str) -> Result<Self, AotError> {
         // Short-circuit: if the requested triple matches the host
-        // triple, route through `host()` so we get the Stage-4 lib
+        // triple, route through `host()` so we get the host lib
         // detection (which uses the actual cfg! the binary was built
         // under, not the parsed triple string).
         if triple == host_triple() {
@@ -992,8 +967,7 @@ impl TargetSpec {
         self.os == TargetOs::Windows && self.libc == TargetLibc::Default
     }
 
-    /// v1.3 Phase AOT Stage 7 polish 5 — pick the MSVC-style C compiler
-    /// driver. Returns `None` when none is on PATH (caller skips with a
+    /// Pick the MSVC-style C compiler driver. Returns `None` when none is on PATH (caller skips with a
     /// clear error message). Resolution:
     ///
     /// 1. `$CC` env var wins (consistent with `cc_command`).
@@ -1014,8 +988,7 @@ impl TargetSpec {
         None
     }
 
-    /// v1.3 Phase AOT Stage 7 polish 5 — pick the MSVC-style PE/COFF
-    /// linker driver. Returns `None` when none is on PATH. Resolution:
+    /// Pick the MSVC-style PE/COFF linker driver. Returns `None` when none is on PATH. Resolution:
     ///
     /// 1. `$LD` env var wins (advanced override for embedders shipping a
     ///    pinned linker).
@@ -1044,7 +1017,7 @@ impl TargetSpec {
     /// Resolution order:
     ///
     /// 1. `$CC` environment variable wins, full stop (matches the
-    ///    Stage 4 host path).
+    ///    host path).
     /// 2. For non-host targets we try the toolchain-named cross
     ///    compiler first (e.g. `aarch64-linux-gnu-gcc`,
     ///    `x86_64-w64-mingw32-gcc`, `x86_64-linux-musl-gcc`).
@@ -1105,8 +1078,7 @@ impl TargetSpec {
         cmd
     }
 
-    /// v1.3 Phase AOT Stage 7 polish 4 — resolve the Cranelift
-    /// `TargetIsa` builder for this target. Used by
+    /// Resolve the Cranelift `TargetIsa` builder for this target. Used by
     /// `harvest_and_emit_aot_traces` so the offline trace lowerer
     /// codegens for the deploy ABI rather than the build host's.
     ///
@@ -1128,8 +1100,7 @@ impl TargetSpec {
     /// On the host triple we still go through `cranelift_native::
     /// builder()` (rather than the per-triple path) so we inherit the
     /// CPU-feature autodetection (`SSE4.1`, `AVX2`, …). Host warmup +
-    /// host deploy ⇒ identical mcode, matching the pre-polish-4
-    /// behaviour byte-for-byte.
+    /// host deploy ⇒ identical mcode.
     pub fn cranelift_isa_builder(&self) -> Result<cranelift_codegen::isa::Builder, AotError> {
         use std::str::FromStr;
         if self.is_host {
@@ -1222,13 +1193,12 @@ fn write_bytecode_object_for(
 }
 
 /// Target-aware variant of [`write_aot_cmain_object`]. Generates the
-/// same C source as Stage 4 but invokes the target-specific cc driver
-/// so the produced `.o` has the right ABI.
+/// same C source but invokes the target-specific cc driver so the
+/// produced `.o` has the right ABI.
 fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), AotError> {
-    // v1.3 Phase AOT Stage 7 sub-piece 3 — guarantee the
-    // `luna_strkey_idx` section exists in the link image even when
-    // the binary linked zero AOT trace `.o`s. Without a defining
-    // input the bracket symbols `__start_luna_strkey_idx` /
+    // Guarantee the `luna_strkey_idx` section exists in the link
+    // image even when the binary linked zero AOT trace `.o`s. Without
+    // a defining input the bracket symbols `__start_luna_strkey_idx` /
     // `__stop_luna_strkey_idx` (or the Mach-O `section$start$...`
     // equivalents) are undefined and the link fails. Defining an
     // empty placeholder lets the deploy resolver see `start == end`
@@ -1241,11 +1211,10 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // mirroring the lowerer's `set_segment_section("", ...)` call
     // (cranelift's empty segment routes to `__DATA` on Mach-O). On
     // ELF the `section` attribute takes just the section name.
-    // v1.3 Phase AOT Stage 7 sub-piece 4 — also guarantee the
-    // `luna_trace_meta` section exists in the link image when zero
-    // trace `.o`s linked in (small / non-loopy sources where the
-    // warmup recorder didn't close any traces). Same placeholder
-    // pattern as `luna_strkey_idx` from sub-piece 3.
+    // Also guarantee the `luna_trace_meta` section exists in the
+    // link image when zero trace `.o`s linked in (small / non-loopy
+    // sources where the warmup recorder didn't close any traces).
+    // Same placeholder pattern as `luna_strkey_idx`.
     //
     // **Sized at 48 bytes** (matching `AotTraceIndexEntry::SIZE`) and
     // 8-byte aligned so when a real AOT-emitted trace .o lands in the
@@ -1261,17 +1230,16 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // 8-byte aligned) so the deploy resolver's
     // `start + N * sizeof::<IndexEntry>` iteration lines up with
     // any real trace-emitted entries that follow. A `[1]`-sized
-    // placeholder used to land 7 bytes of zero pad between itself
-    // and the first trace entry (the trace lower sets `align(8)`),
-    // which mis-aligned the divide-by-16 entry count: the walker
-    // saw the placeholder as half an entry and missed the real one
-    // by 8 bytes. Sizing the placeholder to 16 means the section
+    // placeholder would land 7 bytes of zero pad between itself and
+    // the first trace entry (the trace lower sets `align(8)`), which
+    // mis-aligns the divide-by-16 entry count: the walker sees the
+    // placeholder as half an entry and misses the real one by 8
+    // bytes. Sizing the placeholder to 16 means the section
     // is exactly N+1 entries for N real traces; the placeholder's
     // zero-valued `bytes_ptr` short-circuits via the resolver's
     // `entry.bytes_ptr.is_null()` guard.
-    // v1.3 Phase AOT Stage 7 polish 6 — also guarantee the
-    // `luna_inline_chnx` section exists when the binary linked zero
-    // depth>0-inlined-cmp trace `.o`s. Same shape as the strkey idx
+    // Also guarantee the `luna_inline_chnx` section exists when the
+    // binary linked zero depth>0-inlined-cmp trace `.o`s. Same shape as the strkey idx
     // placeholder (16 bytes = one IndexEntry-sized slot) so the deploy
     // resolver's `start + N * sizeof::<IndexEntry>` walk lines up with
     // any real trace-emitted entries. Zero `bytes_ptr` field short-
@@ -1300,7 +1268,7 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
              __attribute__((used, section(\"luna_inline_chnx\"), aligned(8)))\n\
              static const char luna_inline_chnx_placeholder[16] = {0};\n"
         }
-        // v1.3 Phase AOT Stage 7 polish 3 — Windows COFF.
+        // Windows COFF.
         //
         // PE/COFF section name headers are fixed 8 bytes
         // (`IMAGE_SECTION_HEADER::Name`), so we use deliberately
@@ -1381,9 +1349,9 @@ int main(int argc, char **argv) {{
     c_path.set_extension("c");
     fs::write(&c_path, c_src)?;
 
-    // v1.3 Phase AOT Stage 7 polish 5 — MSVC needs `clang-cl` / `cl.exe`
-    // (different flag shape: `/c` + `/Fo:` vs gcc-style `-c` + `-o`).
-    // All other targets keep the existing gcc-style cc driver path.
+    // MSVC needs `clang-cl` / `cl.exe` (different flag shape: `/c` +
+    // `/Fo:` vs gcc-style `-c` + `-o`). All other targets keep the
+    // existing gcc-style cc driver path.
     let mut cmd = if target.is_msvc() {
         let Some(mut cl) = target.msvc_cc_command() else {
             return Err(AotError::Link(format!(
@@ -1441,7 +1409,7 @@ int main(int argc, char **argv) {{
 /// Target-aware variant of [`link_aot_binary`]. Picks the cc driver,
 /// per-OS lib set, and (for Windows) the MinGW vs MSVC path.
 ///
-/// `traces_obj` (Stage 7 sub-piece 4): optional AOT-trace mcode `.o`
+/// `traces_obj`: optional AOT-trace mcode `.o`
 /// emitted by [`harvest_and_emit_aot_traces`]. When `Some`, the linker
 /// pulls in the trace mcode + the `luna_trace_meta` / `luna_trace_blob`
 /// data sections that the deploy walker reads at startup. When `None`,
@@ -1454,11 +1422,10 @@ fn link_aot_binary_for(
     out_path: &Path,
     target: &TargetSpec,
 ) -> Result<(), AotError> {
-    // v1.3 Phase AOT Stage 7 polish 5 — MSVC has a completely different
-    // linker surface (`link.exe` / `lld-link.exe`: `/OUT:foo.exe`,
-    // `/SUBSYSTEM:CONSOLE`, `.lib` system libs, no `-l` flag). Route
-    // through a dedicated path; everything else (Mach-O, ELF, MinGW
-    // PE-COFF) shares the gcc-style cc-driver path below.
+    // MSVC has a completely different linker surface (`link.exe` /
+    // `lld-link.exe`: `/OUT:foo.exe`, `/SUBSYSTEM:CONSOLE`, `.lib`
+    // system libs, no `-l` flag). Route through a dedicated path;
+    // everything else (Mach-O, ELF, MinGW PE-COFF) shares the gcc-style cc-driver path below.
     if target.is_msvc() {
         return link_aot_binary_msvc(
             bytecode_obj,
@@ -1478,7 +1445,7 @@ fn link_aot_binary_for(
     // but we keep the canonical order for portability).
     cmd.arg(cmain_obj).arg(bytecode_obj);
     if let Some(traces) = traces_obj {
-        // Trace mcode `.o` from Stage 7 sub-piece 4. Placed after the
+        // Trace mcode `.o`. Placed after the
         // bytecode object (which references the AOT trace `luna_aot_
         // trace_*` symbols via its bracketed meta section's
         // relocations) so resolution flows correctly under traditional
@@ -1489,9 +1456,8 @@ fn link_aot_binary_for(
 
     // Per-OS lib set — what `rustc --print native-static-libs` reports
     // for a `crate-type = ["staticlib"]` on each platform that pulls
-    // std. Match Stage 4's host-only set verbatim for the macOS+linux
-    // host paths so the cross arm doesn't regress an already-shipped
-    // path.
+    // std. The macOS + linux sets match the host path verbatim so the
+    // cross arm links exactly what the host build does.
     match target.os {
         TargetOs::MacOs => {
             cmd.args(["-framework", "CoreFoundation"]);
@@ -1543,7 +1509,7 @@ fn link_aot_binary_for(
     Ok(())
 }
 
-/// v1.3 Phase AOT Stage 7 polish 5 — MSVC link path. Drives
+/// MSVC link path. Drives
 /// `lld-link` (cross-platform) or `link.exe` (Windows Build Tools)
 /// directly rather than going through a gcc-style cc driver.
 ///
@@ -1676,8 +1642,7 @@ fn link_aot_binary_msvc(
 }
 
 // ────────────────────────────────────────────────────────────────────
-// v1.3 Phase AOT Stage 7 sub-piece 4 — offline trace harvester +
-// AOT trace mcode emission.
+// Offline trace harvester + AOT trace mcode emission.
 //
 // The pipeline:
 //   1. Build a JIT-equipped warmup `Vm` (luna_jit::new_with_jit) and
@@ -1719,8 +1684,7 @@ thread_local! {
 }
 
 impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
-    // v2.0 Track J sub-step J-B — `storage` passthrough; the inner
-    // CraneliftBackend ignores it today (Phase F will consume).
+    // `storage` is passed through to the inner backend.
     fn try_compile_trace(
         &self,
         storage: &mut dyn luna_core::jit::JitStorage,
@@ -1785,7 +1749,7 @@ fn harvest_and_emit_aot_traces(
     vm.set_trace_jit_enabled(true);
     // Chunk JIT short-circuits recursive `Op::Call` at exec.rs:1567 before
     // push_frame, hiding the helper body from the trace recorder and
-    // suppressing the Stage 7 polish 6 inline side-exit chain. Trace JIT
+    // suppressing the inline side-exit chain. Trace JIT
     // subsumes chunk JIT's coverage and adds the inline-side-exit support
     // chunk JIT lacks entirely, so harvest skips chunk JIT.
     vm.set_jit_enabled(false);
@@ -1829,19 +1793,8 @@ fn harvest_and_emit_aot_traces(
     //
     // Filter to AOT-installable shapes. Wire format v2 carries
     // `per_exit_tags` (typed-register side-exit guards — GetUpval-
-    // heavy traces). Wire format v3 *scaffolds* `per_exit_inline`
-    // (depth>0 inlined cmp side-exits) but the harvester still
-    // bails on non-empty inline today: the trace mcode side bakes
-    // the `Rc<[FrameMaterializeInfo]>` chain pointer as a raw
-    // `iconst` immediate at lower time (see `luna-jit/src/jit_
-    // backend/trace.rs` near `chain_ptr =
-    // std::rc::Rc::as_ptr(&chain_rc)`). Under AOT that immediate
-    // would be the warmup VM's heap address, invalid in the deploy
-    // binary; the trace would crash on the inline side-exit path.
-    // Unlocking requires a per-site relocatable chain-slot scheme
-    // analogous to the strkey slot pattern — module docs on
-    // `luna-core::jit::aot_meta` v3 lay out the three pieces.
-    // Until that lands the filter stays in place.
+    // heavy traces). Wire format v3 carries `per_exit_inline`
+    // (depth>0 inlined cmp side-exits).
     //
     // The wire format also doesn't ship sunk-alloc materialize
     // sites yet; `materialize_emit_count > 0` traces need that
@@ -1867,22 +1820,23 @@ fn harvest_and_emit_aot_traces(
             continue;
         }
         if !ct.per_exit_inline.is_empty() {
-            // v1.3 Phase AOT Stage 7 polish 6 — depth>0 inlined cmp
-            // side-exits are NOW supported. The lowerer's
+            // depth>0 inlined cmp side-exits are supported. The lowerer's
             // `emit_chain_ptr_arg` routes the `FrameMaterializeInfo`
             // chain pointer through a relocatable data slot the
             // deploy-side `aot_inline_chain_resolver` populates at
             // startup; the v3 wire format's `per_exit_inline` tail
             // (cont_pc / head_resume_pc / packed exit_tags / packed
             // chain bytes) round-trips into a fresh
-            // `Rc<[InlineSideExit]>` on the install side. Stat counter
-            // retained for diagnostics: how many of the captured
-            // traces went through the v3 inline path.
+            // `Rc<[InlineSideExit]>` on the install side. The JIT path
+            // bakes that chain pointer as a raw `iconst`, which under
+            // AOT would be the warmup VM's heap address, invalid in the
+            // deploy binary. Stat counter for diagnostics: how many of
+            // the captured traces went through the v3 inline path.
             filter_stats.2 += 1;
         }
-        // per_exit_tags is NOW supported by wire format v2 — accept.
-        // (Counter retained for diagnostics: how many of the captured
-        // traces went through the v2 path.)
+        // per_exit_tags is supported by wire format v2 — accept.
+        // (Counter for diagnostics: how many of the captured traces
+        // went through the v2 path.)
         if !ct.per_exit_tags.is_empty() {
             filter_stats.3 += 1;
         }
@@ -1906,13 +1860,11 @@ fn harvest_and_emit_aot_traces(
     // Build the ObjectModule for the trace .o. PIC required for ELF/
     // Mach-O linker relocations.
     //
-    // v1.3 Phase AOT Stage 7 polish 4: `cranelift_isa_builder()` resolves
-    // the per-target ISA (host = `cranelift_native` for CPU-feature
-    // detection; cross = `isa::lookup` over the parsed triple). When
-    // target == host the ISA, flags, and resulting mcode are
-    // byte-for-byte identical to the pre-polish path; for cross targets
-    // we get a `TargetIsa` whose codegen matches the deploy ABI rather
-    // than the build host's.
+    // `cranelift_isa_builder()` resolves the per-target ISA (host =
+    // `cranelift_native` for CPU-feature detection; cross =
+    // `isa::lookup` over the parsed triple). For cross targets we get
+    // a `TargetIsa` whose codegen matches the deploy ABI rather than
+    // the build host's.
     let isa = {
         let mut flag_builder = settings::builder();
         flag_builder
@@ -1998,12 +1950,11 @@ fn harvest_and_emit_aot_traces(
             entry_tags_len: entry_tags_vec.len() as u16,
             exit_tags_len: exit_tags_vec.len() as u32,
         };
-        // v1.3 Phase AOT Stage 7 polish 6 — populate the v3 inline
-        // tail from the live trace's `per_exit_inline`. Each
-        // `InlineSideExit` round-trips into a `PerExitInlineEntry`
-        // via the byte-stable converter: tags pack through
-        // `pack_exit_tag` and the chain serialises as raw `repr(C)`
-        // bytes (12 per record). The deploy install path decodes
+        // Populate the v3 inline tail from the live trace's
+        // `per_exit_inline`. Each `InlineSideExit` round-trips into a
+        // `PerExitInlineEntry` via the byte-stable converter: tags pack
+        // through `pack_exit_tag` and the chain serialises as raw
+        // `repr(C)` bytes (12 per record). The deploy install path decodes
         // the entries back into fresh `Rc<[FrameMaterializeInfo]>` /
         // `Rc<[ExitTag]>` allocations whose contents match what the
         // JIT-time recorder produced; the IR's chain pointer is fed
@@ -2051,7 +2002,7 @@ fn harvest_and_emit_aot_traces(
         // meta` in `__DATA` is the path of least surprise for ld /
         // strip.
         //
-        // Windows COFF host (Stage 7 polish 3): PE section names are
+        // Windows COFF host: PE section names are
         // capped at 8 bytes in the final image; use `.lt_blob` (7 chars
         // + leading `.`) so the post-link PE preserves the name
         // byte-for-byte. The deploy walker doesn't bracket-look this
@@ -2105,7 +2056,7 @@ fn harvest_and_emit_aot_traces(
         // (segment concept is Mach-O specific) so passing `__DATA`
         // is a no-op there.
         //
-        // Windows COFF host (Stage 7 polish 3): short name `.lt_meta`
+        // Windows COFF host: short name `.lt_meta`
         // matches the cmain shim's placeholder section, and the
         // deploy walker's [`windows_section::find_section`] needle.
         // PE section names are capped at 8 bytes in the final linked

@@ -1,5 +1,4 @@
-//! v1.3 Phase AOT Stage 7 polish 3 — Windows COFF section emission +
-//! deploy-side walker smoke.
+//! Windows COFF section emission + deploy-side walker smoke.
 //!
 //! # What this test asserts
 //!
@@ -96,29 +95,29 @@ fn read_pe_section_names(path: &Path) -> Vec<String> {
 fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
     if cfg!(target_os = "windows") {
         eprintln!(
-            "stage7_windows_aot: skip — this test exercises the cross-compile path \
+            "aot_windows_mingw_link: skip — this test exercises the cross-compile path \
              from a Unix host. Native Windows pipeline uses link.exe (not yet wired)."
         );
         return;
     }
     if !have_on_path("cargo") {
-        eprintln!("stage7_windows_aot: skip — cargo missing");
+        eprintln!("aot_windows_mingw_link: skip — cargo missing");
         return;
     }
     let triple = "x86_64-pc-windows-gnu";
     if !rustup_has_target(triple) {
         eprintln!(
-            "stage7_windows_aot: skip — target {triple} not installed \
+            "aot_windows_mingw_link: skip — target {triple} not installed \
              (run `rustup target add {triple}` to enable)"
         );
         return;
     }
     if !have_on_path("x86_64-w64-mingw32-gcc") {
         eprintln!(
-            "stage7_windows_aot: skip — x86_64-w64-mingw32-gcc not on PATH \
+            "aot_windows_mingw_link: skip — x86_64-w64-mingw32-gcc not on PATH \
              (install MinGW cross-toolchain: `brew install mingw-w64` on macOS / \
              `apt install gcc-mingw-w64-x86-64` on Debian/Ubuntu). The staticlib \
-             cross-build is verified separately by stage5_cross_compile."
+             cross-build is verified separately by aot_cross_compile."
         );
         return;
     }
@@ -149,7 +148,7 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
         Err(e) => Some(format!("{e}")),
     };
     if let Some(msg) = link_err {
-        // Mirror stage5_cross_compile's skip-marker pattern: a missing
+        // Mirror aot_cross_compile's skip-marker pattern: a missing
         // rust-std / linker is a skip not a hard fail.
         let skip_markers = [
             "rustup target add",
@@ -163,11 +162,11 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
             "fatal error",
         ];
         if skip_markers.iter().any(|m| msg.contains(m)) {
-            eprintln!("stage7_windows_aot: skip — cross-toolchain incomplete: {msg}");
+            eprintln!("aot_windows_mingw_link: skip — cross-toolchain incomplete: {msg}");
             return;
         }
         panic!(
-            "stage7_windows_aot: unexpected link failure (none of the known skip \
+            "aot_windows_mingw_link: unexpected link failure (none of the known skip \
              markers matched):\n{msg}"
         );
     }
@@ -190,7 +189,7 @@ fn cross_compile_windows_emits_lt_meta_and_lt_skix_sections() {
     );
 
     eprintln!(
-        "stage7_windows_aot: PE section table verified — found {} sections, \
+        "aot_windows_mingw_link: PE section table verified — found {} sections, \
          including `.lt_meta` and `.lt_skix`",
         names.len()
     );

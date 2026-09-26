@@ -1,9 +1,9 @@
-//! v2.0 Stage 7 polish 6 — inline-side-exit runtime fire regression test.
+//! Inline-side-exit runtime fire regression test.
 //!
-//! The polish 6 chain-reloc + deploy-resolver path only exercises when
+//! The inline-chain reloc + deploy-resolver path only exercises when
 //! a compiled trace has BOTH `dispatchable == true` AND
 //! `per_exit_inline.len() > 0`. The sister smoke
-//! `stage7_aot_inlined_recursive` documents that the
+//! `aot_inlined_recursive` documents that the
 //! "for-loop calling a different-proto helper" pattern (the natural
 //! candidate) gets pinned `dispatchable = false` by the InlineAbort
 //! gate at `crates/luna-jit/src/jit_backend/trace.rs:7964` — the
@@ -11,9 +11,7 @@
 //! mismatch arm at `trace.rs:3867`. That smoke self-skips the resolver
 //! assertion as a documented coverage gap.
 //!
-//! This test pins the OTHER pattern that v2.0 Stage 7 polish 6's
-//! `diag_polish6_inline_fire` (under `luna-jit/examples/`) found
-//! actually fires both conditions: a self-recursive helper called
+//! This test pins the other pattern, which does fire both conditions: a self-recursive helper called
 //! from a hot for-loop. With chunk-compiler JIT on (AOT harvest's
 //! default), `try_jit_call_op` does NOT short-circuit a self-recursive
 //! helper because its body contains a non-int-arith `Op::Call`; the
@@ -24,7 +22,7 @@
 //! outermost return — which is dispatchable when length-gate doesn't
 //! bite.
 //!
-//! Skip conditions: same shape as `stage7_aot_inlined_recursive`. The
+//! Skip conditions: same shape as `aot_inlined_recursive`. The
 //! recorder + harvest are both heuristic-driven; if the resolver
 //! report comes back zero on a given build the test self-skips with a
 //! pointer to the diag example so the gap is debuggable without
@@ -84,10 +82,9 @@ fn aot_binary_fires_self_recursive_inline_cmp_trace() {
     // Recursion depth = 1 stays below `RECUNROLL_THRESHOLD + 1 = 3`,
     // so the self-link cycle catch (`exec.rs:5685`) does NOT trip —
     // the trace doesn't get pinned `dispatchable = false` by either
-    // `self-link-retf-r1` (R1 floor) or `downrec-stitch-pending`
-    // (R3.3+ sub-0 lift). Result: a dispatchable trace with
-    // `per_exit_inline.len() > 0`, which is the AOT polish 6 fire
-    // condition.
+    // `self-link-retf-r1` or `downrec-stitch-pending`. Result: a
+    // dispatchable trace with `per_exit_inline.len() > 0`, which is
+    // the AOT inline-chain fire condition.
     //
     // `f(1)` returns `1 + f(0) = 1 + 0 = 1`, so the outer loop
     // accumulates `s = 100000`.
@@ -143,18 +140,14 @@ fn aot_binary_fires_self_recursive_inline_cmp_trace() {
         .unwrap_or_else(|| panic!("could not parse install count from {install_line:?}"));
 
     // Heuristic-driven path. Same self-skip rule as
-    // `stage7_aot_inlined_recursive`: correctness already validated by
+    // `aot_inlined_recursive`: correctness already validated by
     // the stdout assert above; if the recorder/harvest didn't produce
     // a dispatchable + non-empty per_exit_inline trace on THIS build
-    // the run still passes (with a hint to the diag example for
-    // post-mortem).
+    // the run still passes.
     if chains_resolved == 0 {
         eprintln!(
             "limitation: warmup recorder produced {install_count} AOT trace(s) but zero with \
-             depth>0 inlined cmp side-exits on this build. Re-run \
-             `cargo run --release -p luna-jit --example diag_polish6_inline_fire` to \
-             inspect the dispatch_off / close-cause taxonomy that gated the trace; \
-             stderr:\n{stderr}"
+             depth>0 inlined cmp side-exits on this build; stderr:\n{stderr}"
         );
         return;
     }

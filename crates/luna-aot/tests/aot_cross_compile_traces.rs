@@ -1,15 +1,16 @@
-//! v1.3 Phase AOT Stage 7 polish 4 — cross-compile AOT traces.
+//! Cross-compile AOT traces.
 //!
-//! Before this polish the offline trace recorder (`harvest_and_emit_
-//! aot_traces`) built its `ObjectModule` against the **host** Cranelift
-//! ISA. Cross-built binaries (`--target x86_64-unknown-linux-musl` from
-//! an aarch64-apple-darwin host) therefore landed without any AOT mcode
-//! in `luna_trace_meta` — they ran the embedded bytecode through
-//! interp + runtime JIT only, dropping the AOT fast-path entirely.
+//! The offline trace recorder (`harvest_and_emit_aot_traces`) must
+//! build its `ObjectModule` against the **target** Cranelift ISA, not
+//! the host's. Otherwise cross-built binaries (`--target
+//! x86_64-unknown-linux-musl` from an aarch64-apple-darwin host) land
+//! without any AOT mcode in `luna_trace_meta` — they run the embedded
+//! bytecode through interp + runtime JIT only, dropping the AOT
+//! fast-path entirely.
 //!
-//! This test asserts the polish: cross-compile a hot-loop chunk for
-//! `x86_64-unknown-linux-musl`, then walk the produced binary's
-//! `luna_trace_meta` section with the `object` crate and check the
+//! This test cross-compiles a hot-loop chunk for
+//! `x86_64-unknown-linux-musl`, then walks the produced binary's
+//! `luna_trace_meta` section with the `object` crate and checks the
 //! number of 48-byte entries is **non-zero**. The deploy walker reads
 //! the same section at startup to install the AOT traces, so a
 //! non-empty `luna_trace_meta` is the loadable AOT-fast-path signal.
@@ -17,10 +18,9 @@
 //! # What we do **not** verify
 //!
 //! - **Execution**: running the produced x86_64 ELF on an aarch64 mac
-//!   needs qemu / docker / Rosetta; out of scope. Stage 6 has the
-//!   docker-based Alpine smoke that does that for the bytecode-interp
-//!   path; the AOT-trace dispatch fires via the same runtime hook so
-//!   adding it to that test is the natural follow-up.
+//!   needs qemu / docker / Rosetta; out of scope. `aot_alpine_smoke`
+//!   does that for the bytecode-interp path; the AOT-trace dispatch
+//!   fires via the same runtime hook.
 //! - **mcode bytes**: we don't disassemble the trace function body.
 //!   Cross-codegen correctness at the mcode level is Cranelift's
 //!   responsibility — `cranelift-codegen = { features = ["all-arch"] }`
@@ -29,7 +29,7 @@
 //!
 //! # Skip conditions
 //!
-//! Mirror `stage5_cross_compile.rs`'s skip taxonomy:
+//! Mirror `aot_cross_compile.rs`'s skip taxonomy:
 //! - Missing `cc` / `cargo` on PATH (won't compile the staticlib).
 //! - `rustup target add x86_64-unknown-linux-musl` not run.
 //! - Cross-cc missing (`musl-gcc` / `x86_64-linux-musl-gcc`) → the
@@ -142,7 +142,7 @@ fn target_spec_resolves_cross_cranelift_isa() {
 /// Drive `triple` through `compile_and_link` and assert the produced
 /// binary's `luna_trace_meta` carries at least one real (non-placeholder)
 /// AOT trace entry. Returns `Ok(entry_count)` on success, `Err(msg)` for
-/// the cross-toolchain skip taxonomy mirroring `stage5_cross_compile.rs`.
+/// the cross-toolchain skip taxonomy mirroring `aot_cross_compile.rs`.
 fn try_emit_traces_for(triple: &str) -> Result<usize, String> {
     let td = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let src_path = td.path().join("hot.lua");
@@ -194,7 +194,7 @@ fn try_emit_traces_for(triple: &str) -> Result<usize, String> {
 
 #[test]
 fn cross_compile_emits_trace_mcode_for_x86_64_apple_darwin() {
-    // This is the strongest end-to-end signal for polish 4 on a
+    // This is the strongest end-to-end signal for this path on a
     // macOS aarch64 host: Apple's clang handles `-target x86_64-apple-
     // darwin` natively (no extra toolchain install), so the link step
     // actually completes and the test asserts non-empty trace mcode
@@ -228,11 +228,11 @@ fn cross_compile_emits_trace_mcode_for_x86_64_apple_darwin() {
             assert!(
                 entries > 1,
                 "cross-compiled {TRIPLE} binary should have placeholder + ≥1 real \
-                 AOT trace entry; got {entries}. polish 4 may have regressed: \
+                 AOT trace entry; got {entries}. target-ISA trace emission may have regressed: \
                  the cross-codegen path is short-circuiting to interp-only."
             );
             eprintln!(
-                "stage7-polish-4: {TRIPLE} produced binary with {entries} \
+                "aot_cross_compile_traces: {TRIPLE} produced binary with {entries} \
                  luna_trace_meta entries (placeholder + {} real trace(s))",
                 entries - 1,
             );
@@ -276,10 +276,10 @@ fn cross_compile_emits_trace_mcode_for_linux_musl_x86_64() {
             assert!(
                 entries > 1,
                 "cross-compiled {TRIPLE} binary should have placeholder + ≥1 real \
-                 AOT trace entry; got {entries}. polish 4 may have regressed."
+                 AOT trace entry; got {entries}. target-ISA trace emission may have regressed."
             );
             eprintln!(
-                "stage7-polish-4: {TRIPLE} produced binary with {entries} \
+                "aot_cross_compile_traces: {TRIPLE} produced binary with {entries} \
                  luna_trace_meta entries (placeholder + {} real trace(s))",
                 entries - 1,
             );

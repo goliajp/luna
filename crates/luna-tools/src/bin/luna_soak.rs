@@ -1,7 +1,7 @@
 //! `luna-soak` — long-running workload runner with RSS + GC
 //! pause + memory.used() sampling.
 //!
-//! v2.4 Phase Soak ship. Reads a Lua workload file + duration,
+//! Reads a Lua workload file + duration,
 //! evaluates it on a `Vm`, and samples runtime metrics at a
 //! configurable interval. The output JSON is consumed by the
 //! `.github/workflows/soak-nightly.yml` (1h smoke) +
@@ -140,7 +140,7 @@ fn rss_kb() -> u64 {
         0
     }
     // macOS: `ps -p $$ -o rss=` returns RSS in KB. Subprocess is
-    // fine for v2.4 — the sampling interval is ≥ 1 s so a ~10 ms
+    // fine — the sampling interval is ≥ 1 s so a ~10 ms
     // fork+exec is in the noise. Tightening to a libc mach_task
     // call lives behind a luna-tools feature once we accept the
     // libc dep.
@@ -253,10 +253,10 @@ fn main() -> ExitCode {
     // can sample at the requested interval. The Vm is `!Send` by
     // default so we keep both threads using their own access; the
     // sampler reads metrics via channel snapshots rather than
-    // sharing the Vm. v2.5+ may switch to `--features send` for
-    // direct cross-thread sampling.
+    // sharing the Vm. `--features send` would allow direct
+    // cross-thread sampling.
     //
-    // For v2.4: simplest path is to run the workload on the main
+    // Current approach: simplest path is to run the workload on the main
     // thread + sample BEFORE / AFTER eval. The "sampling interval"
     // becomes a sample-at-end behavior unless we wire ticking.
     // Compromise: run the wrapped chunk; afterwards record one

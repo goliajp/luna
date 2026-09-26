@@ -1,4 +1,4 @@
-//! v2.4 Phase Fuzz-D — differential vs PUC fuzz target.
+//! Differential vs PUC fuzz target.
 //!
 //! Arbitrary-derived side-effect-free Expr → list of `print(expr)`
 //! stmts → byte-diff luna vs PUC reference binary (`$PUC_LUA`,
@@ -45,8 +45,7 @@ enum Expr {
     Mul(Box<Expr>, Box<Expr>),
     Mod(Box<Expr>, Box<Expr>),
     Lt(Box<Expr>, Box<Expr>),
-    // v2.6 Track D — Boltzmann grammar extension.
-    // All variants tostring-wrap inputs or guard cross-engine
+    // The variants below tostring-wrap inputs or guard cross-engine
     // semantic drift (negative-exponent power → complex; bad
     // format spec → runtime err; nil values via TableSet → key
     // deletion etc).
@@ -59,7 +58,7 @@ enum Expr {
 
 /// Floats restricted to a narrow non-pathological range — PUC's
 /// `tostring` formatting of NaN / Inf / very-small / very-large
-/// floats has corner-case spelling drift vs luna; v2.5+ tightens.
+/// floats has corner-case spelling drift vs luna.
 #[derive(Debug)]
 struct NormalFloat(f64);
 
@@ -175,7 +174,7 @@ fn bin(buf: &mut String, op: &str, l: &Expr, r: &Expr, depth: u32) {
 }
 
 fn render(p: &Program) -> String {
-    // `t` injected for v2.6 Track D TableGet / TableSet variants.
+    // `t` injected for the TableGet / TableSet variants.
     let mut buf = String::from("local a, b, c = 1, 2, 3\nlocal t = {}\n");
     for e in p.prints.iter().take(16) {
         buf.push_str("print(");

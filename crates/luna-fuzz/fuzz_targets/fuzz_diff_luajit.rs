@@ -1,4 +1,4 @@
-//! v2.6 Track C — differential vs LuaJIT fuzz target.
+//! Differential vs LuaJIT fuzz target.
 //!
 //! Arbitrary-derived side-effect-free Expr → list of `print(expr)`
 //! stmts → byte-diff luna vs LuaJIT reference binary (`$LUAJIT`,

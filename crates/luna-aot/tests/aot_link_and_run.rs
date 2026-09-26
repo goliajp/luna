@@ -1,12 +1,12 @@
-//! Stage 4 smoke — full AOT pipeline drives a Lua source through
+//! Smoke test — full AOT pipeline drives a Lua source through
 //! parse + compile + dump + bytecode-`.o` + C-main-`.o` +
 //! `libluna_runtime_helpers.a` link → runs the produced native
 //! binary in a clean subprocess and asserts stdout matches what the
 //! script would print under the regular `Vm`.
 //!
 //! This is the end-to-end "does the AOT binary actually run?"
-//! correctness signal for v1.3 Phase AOT Stage 4. Previous stages
-//! only proved the section was reachable; this test proves
+//! correctness signal. The scaffold path only proves the section is
+//! reachable; this test proves
 //! `print(...)` from inside the embedded chunk lands on the
 //! subprocess's stdout via the staticlib-linked Vm.
 //!
@@ -21,7 +21,7 @@
 //! - `cargo` is not on `PATH` (we shell out to build the staticlib;
 //!   in-tree test runs always satisfy this since `cargo test`
 //!   guarantees `cargo` is reachable)
-//! - Running on Windows (Stage 4 ships Unix-only — the embed.rs
+//! - Running on Windows (this path is Unix-only — the embed.rs
 //!   linker shim refuses Windows explicitly)
 //!
 //! The skip path keeps the test green on CI runners that strip
@@ -59,7 +59,7 @@ fn run_binary(path: &Path) -> (String, String, Option<i32>) {
 #[test]
 fn aot_binary_runs_hello_print() {
     if cfg!(target_os = "windows") {
-        eprintln!("skipped: Stage 4 Windows support is a follow-up");
+        eprintln!("skipped: not supported on Windows");
         return;
     }
     if !have_on_path("cc") {
@@ -109,7 +109,7 @@ fn aot_binary_runs_hello_print() {
 #[test]
 fn aot_binary_runs_arithmetic_and_multi_print() {
     if cfg!(target_os = "windows") {
-        eprintln!("skipped: Stage 4 Windows support is a follow-up");
+        eprintln!("skipped: not supported on Windows");
         return;
     }
     if !have_on_path("cc") || !have_on_path("cargo") {
@@ -139,7 +139,7 @@ fn aot_binary_runs_arithmetic_and_multi_print() {
 #[test]
 fn aot_binary_propagates_runtime_error() {
     if cfg!(target_os = "windows") {
-        eprintln!("skipped: Stage 4 Windows support is a follow-up");
+        eprintln!("skipped: not supported on Windows");
         return;
     }
     if !have_on_path("cc") || !have_on_path("cargo") {

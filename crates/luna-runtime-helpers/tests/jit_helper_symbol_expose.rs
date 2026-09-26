@@ -1,4 +1,4 @@
-//! v1.3 Stage 7 follow-on — smoke test for the helper-symbol expose.
+//! Smoke test for the helper-symbol expose.
 //!
 //! `luna-runtime-helpers` is the staticlib that AOT-produced binaries
 //! statically link against. When the embedded `.o` (Cranelift-lowered
@@ -23,7 +23,7 @@
 //!
 //! - The link-time symbol presence in the produced staticlib. That
 //!   contract is enforced in `crates/luna-aot/tests/
-//!   stage7_aot_helpers_in_staticlib.rs`, which is the layer that
+//!   aot_helpers_in_staticlib.rs`, which is the layer that
 //!   actually shells out to `nm` against the built `.a`. Putting that
 //!   here would create a circular dep (this crate doesn't know about
 //!   `luna-aot`'s build pipeline).

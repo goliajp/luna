@@ -1,6 +1,6 @@
-//! v2.1 Phase 1K.G — LLVM trace JIT lowerer (MVP).
+//! LLVM trace JIT lowerer (MVP).
 //!
-//! ## Design: alloca-based register file (Risk 2 resolution)
+//! ## Design: alloca-based register file
 //!
 //! The Cranelift trace lowerer uses `FunctionBuilder::Variable` (phi-based
 //! SSA with automatic phi insertion at back-edges). LLVM has no equivalent.
@@ -47,7 +47,7 @@
 //! `LlvmJitStorage::engines` via [`LlvmJitStorage::park_engine`] so the
 //! trace function pointer stays valid for the Vm's lifetime.
 //!
-//! ## Known limitations (1K.H scope)
+//! ## Known limitations
 //!
 //! - No `GetUpval` / `Call` / `GetTabUp` / `GetField` in trace
 //! - No `ForLoop` / `ForPrep` / `TForCall`
@@ -82,7 +82,7 @@ fn is_mvp_trace_op(op: Op) -> bool {
     )
 }
 
-/// v2.1 Phase 1K.G — compile a `TraceRecord` to native code using LLVM.
+/// Compile a `TraceRecord` to native code using LLVM.
 ///
 /// Returns `None` when the record is outside the MVP whitelist (any op at
 /// `inline_depth > 0`, any op not in the MVP set, or `!record.closed`).
@@ -219,7 +219,7 @@ fn compile_trace_fn(
     // Declare helpers (bound via `finalize_module`'s `bind_helper_symbols`
     // call). The MVP op set makes no helper calls, but declaring them upfront
     // mirrors the chunk JIT and keeps the symbol table consistent for future
-    // 1K.H ops.
+    // ops.
     let helpers = declare_jit_helpers(ctx, &module);
 
     // ── entry_bb: alloca register file + load from reg_state ──────────────

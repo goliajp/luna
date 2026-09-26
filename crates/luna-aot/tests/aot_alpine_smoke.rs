@@ -1,4 +1,4 @@
-//! Stage 6 — Alpine no-Lua-installed deploy smoke (charter AOT6 at
+//! Alpine no-Lua-installed deploy smoke.
 //!
 //! Builds `hello.lua` for `x86_64-unknown-linux-musl`, then runs the
 //! produced binary inside an Alpine container with **no Lua installed**.
@@ -9,13 +9,13 @@
 //! - the produced binary's ldd inside the container resolves to musl
 //!   libc only (no `liblua*`, no `libluna*`, no Cranelift)
 //!
-//! This is the "single-binary deploy" charter claim: a real Alpine
+//! This is the "single-binary deploy" claim: a real Alpine
 //! Linux container, no `apk add lua*` step, no `cargo` present at
 //! runtime — just the AOT binary and Alpine's stock musl libc.
 //!
 //! # Skip conditions (each silent + per-step, never a hard error)
 //!
-//! - Windows host: stage 6 is Unix-only end-to-end.
+//! - Windows host: this path is Unix-only end-to-end.
 //! - Missing `cargo` / `cc` on PATH.
 //! - Missing `docker` (or `podman`, tried as fallback) on PATH.
 //! - Missing rust-std for `x86_64-unknown-linux-musl`: skip with
@@ -82,18 +82,18 @@ fn rustup_has_target(triple: &str) -> bool {
 #[test]
 fn alpine_aot_binary_runs_without_lua_installed() {
     if cfg!(target_os = "windows") {
-        eprintln!("stage6 alpine: skipping Windows host");
+        eprintln!("aot_alpine_smoke: skipping Windows host");
         return;
     }
     if !have_on_path("cc") || !have_on_path("cargo") {
-        eprintln!("stage6 alpine: skipping — cc/cargo missing");
+        eprintln!("aot_alpine_smoke: skipping — cc/cargo missing");
         return;
     }
 
     let triple = "x86_64-unknown-linux-musl";
     if !rustup_has_target(triple) {
         eprintln!(
-            "stage6 alpine: skipping — rust-std for {triple} not installed \
+            "aot_alpine_smoke: skipping — rust-std for {triple} not installed \
              (run `rustup target add {triple}` to enable)"
         );
         return;
@@ -101,7 +101,7 @@ fn alpine_aot_binary_runs_without_lua_installed() {
 
     let Some(runtime) = docker_runtime() else {
         eprintln!(
-            "stage6 alpine: skipping — neither docker nor podman is available \
+            "aot_alpine_smoke: skipping — neither docker nor podman is available \
              or the daemon isn't reachable"
         );
         return;
@@ -116,7 +116,7 @@ fn alpine_aot_binary_runs_without_lua_installed() {
     // The compile_and_link call self-skips (returns AotError::Link
     // with a cross-cc-missing message) when `x86_64-linux-musl-gcc`
     // isn't on PATH; we translate that to a soft skip rather than a
-    // hard failure, matching the stage5 convention.
+    // hard failure, matching the `aot_cross_compile` convention.
     if let Err(e) = compile_and_link(&src_path, &out_path, Some(triple), LuaVersion::Lua55) {
         let msg = format!("{e}");
         let skip_markers = [
@@ -130,13 +130,13 @@ fn alpine_aot_binary_runs_without_lua_installed() {
         ];
         if skip_markers.iter().any(|m| msg.contains(m)) {
             eprintln!(
-                "stage6 alpine: skipping — cross-toolchain missing for {triple}: {msg}\n\
+                "aot_alpine_smoke: skipping — cross-toolchain missing for {triple}: {msg}\n\
                  install via your distro's `musl-cross` package or \
                  https://github.com/messense/homebrew-macos-cross-toolchains"
             );
             return;
         }
-        panic!("stage6 alpine: compile_and_link failed unexpectedly: {msg}");
+        panic!("aot_alpine_smoke: compile_and_link failed unexpectedly: {msg}");
     }
 
     // Verify the binary is ELF + x86_64 before handing to docker — if
@@ -172,7 +172,7 @@ fn alpine_aot_binary_runs_without_lua_installed() {
     let output = match docker_status {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("stage6 alpine: skipping — docker run failed to spawn: {e}");
+            eprintln!("aot_alpine_smoke: skipping — docker run failed to spawn: {e}");
             return;
         }
     };
@@ -195,13 +195,13 @@ fn alpine_aot_binary_runs_without_lua_installed() {
         ];
         if pull_failure_markers.iter().any(|m| stderr.contains(m)) {
             eprintln!(
-                "stage6 alpine: skipping — alpine:3.20 unavailable or network \
+                "aot_alpine_smoke: skipping — alpine:3.20 unavailable or network \
                  unreachable:\n{stderr}"
             );
             return;
         }
         panic!(
-            "stage6 alpine: docker run failed (exit {:?})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            "aot_alpine_smoke: docker run failed (exit {:?})\nstdout:\n{stdout}\nstderr:\n{stderr}",
             output.status.code()
         );
     }
@@ -214,7 +214,7 @@ fn alpine_aot_binary_runs_without_lua_installed() {
     );
 
     eprintln!(
-        "stage6 alpine: passed — binary {} runs cleanly in alpine:3.20",
+        "aot_alpine_smoke: passed — binary {} runs cleanly in alpine:3.20",
         out_path.display()
     );
     // Sanity ldd check (best-effort; alpine has no ldd, but `file`
@@ -226,8 +226,8 @@ fn alpine_aot_binary_runs_without_lua_installed() {
 /// Best-effort: confirm the binary inside the container does not pull
 /// any `liblua*` / `libluna*` dynamic libs. Alpine doesn't ship
 /// `ldd`, but `apk add file` gives us `file -L` which reports
-/// statically-linked status. We don't add packages here (charter
-/// requires `apk add` is **not** needed for the deploy to work) so we
+/// statically-linked status. We don't add packages here (the deploy
+/// claim is that `apk add` is **not** needed for the deploy to work) so we
 /// settle for an `ls`/`readelf`-via-`file` check if `file` is in the
 /// base image (it isn't, by default). This step is purely
 /// informational; failure does not fail the test.
@@ -257,6 +257,6 @@ fn verify_only_musl_libc(runtime: &str, mount_dir: &Path) -> Option<()> {
         .output()
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    eprintln!("stage6 alpine ldd-equivalent: {}", stdout.trim());
+    eprintln!("aot_alpine_smoke ldd-equivalent: {}", stdout.trim());
     Some(())
 }

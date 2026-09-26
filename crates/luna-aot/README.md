@@ -5,14 +5,13 @@ binary, built on `luna-core`'s VM. Sibling of `luna-core` (pure-interp
 runtime, zero third-party deps) and `luna-jit` (the runtime
 Cranelift JIT).
 
-End-to-end today: Lua source → luna bytecode dump → ELF/Mach-O/PE
-data section → linked native binary that **constructs a `Vm` at
-process start, undumps the bytecode, and runs it through the
-interpreter**. Stage 1-2 (parse/compile), Stage 3 (backend-agnostic
-lowerer), Stage 4 (linker + runtime staticlib), Stage 5 (cross-compile
-via `--target`), and Stage 6 (Alpine no-Lua deploy smoke) are all
-landed. Trace JIT mcode emission via `cranelift-object` is the only
-remaining sub-stage and lands as a follow-up.
+Lua source → luna bytecode dump → ELF/Mach-O/PE data section →
+linked native binary that **constructs a `Vm` at process start,
+undumps the bytecode, and runs it**. A warmup run under the JIT
+recorder captures the hot traces, which are compiled to machine code
+and linked into the same binary. Cross-compiling with `--target` and
+Alpine (no Lua installed) deploys are supported; see
+[`docs/aot.md`](../../docs/aot.md).
 
 ## Quick start (host triple, single-binary deploy)
 
@@ -85,8 +84,8 @@ package; nothing is silently degraded.
 
 ## Why a separate crate
 
-`luna-aot` pulls third-party deps (`object`, `clap`, and — in the
-follow-up codegen sessions — all of `cranelift`). Keeping it sibling
+`luna-aot` pulls third-party deps (`object`, `clap` and
+`cranelift`). Keeping it sibling
 to `luna-jit` lets embedders pick exactly one of:
 
 - **`luna-core`** — pure interp, zero third-party deps.
@@ -98,25 +97,25 @@ to `luna-jit` lets embedders pick exactly one of:
 The `luna-core` zero-third-party-dep contract is **unaffected** by
 this crate.
 
-## Pipeline (Stages 1-6)
+## Pipeline
 
 ```text
 foo.lua
-  │ luna_core::frontend::parser::parse                       (Stage 1)
+  │ luna_core::frontend::parser::parse
   ▼
 Chunk (AST)
-  │ luna_core::compiler::compile_chunk                       (Stage 2)
+  │ luna_core::compiler::compile_chunk
   ▼
 Gc<Proto>
-  │ [trace JIT mcode emission — follow-up]                   (Stage 3)
+  │ warmup run → hot traces → Cranelift mcode (extra .o sections)
   │ luna_core::vm::dump::dump  (luna's own body format)
   ▼
 Vec<u8>
   │ object::write::Object  (.luna.bytecode + bracket symbols, target-aware)
-  ▼                                                          (Stages 4-5)
+  ▼
 foo.luna_bytecode.o   ELF / Mach-O / PE
   │ cc bytecode.o cmain.o libluna_runtime_helpers.a -o foo
-  ▼                                                          (Stage 6)
+  ▼
 foo   single-binary, runs through luna_aot_run → Vm → call_value
 ```
 
@@ -126,27 +125,11 @@ luna-core; the rlib is what `luna-aot`'s integration tests link
 against so they can drive the same code path in-process without
 shelling out to `cc`.
 
-## Stage matrix
-
-| Stage | Status |
-|---|---|
-| 1. parse → AST                   | shipped — reused from luna-core |
-| 2. AST → Proto                   | shipped — reused from luna-core |
-| 3. Proto → Cranelift IR (shared lowerer over `M: Module`) | shipped — `luna-jit::jit_backend` lowerers are generic over `cranelift_module::Module`; trace mcode emission via `cranelift-object` is the only follow-up |
-| 4. emit `.o` via `object::write::Object` | shipped — bytecode `.o` + C main `.o` |
-| 5. embed bytecode + cross-compile via `--target` | shipped — bytecode embed + target-aware ELF/Mach-O/PE magic + per-triple cc + per-OS lib set |
-| 6. link + Alpine no-Lua smoke    | shipped — `cargo build -p luna-runtime-helpers --release [--target T]` bootstrap + final `cc` link; Alpine smoke test skips cleanly when musl cross-cc / docker missing |
-
-
 ## Limitations
 
-- **Trace JIT mcode is not yet AOT-compiled.** The produced binary
-  runs the interpreter only; hot loops won't get the same native-speed
-  treatment they would under `luna --jit foo.lua` with the runtime
-  Cranelift JIT. The lowerer refactor that lets `cranelift-object`
-  emit the same mcode at AOT time landed in Stage 3, but walking
-  every reachable `Proto`'s hot loops + emitting them into the AOT
-  binary's `.text` is the remaining work. **Post-v1.3.**
+- **Trace coverage comes from one warmup run.** Only traces that fire
+  during it are compiled to machine code; paths that turn hot later
+  run in the embedded interpreter.
 - **`loadstring(...)` at runtime works** — but it runs through the
   interpreter, no AOT codegen at runtime. Embedders that need
   runtime-`loadstring`-of-untrusted-source to be JIT-fast should use

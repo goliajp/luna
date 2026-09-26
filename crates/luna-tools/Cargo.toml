@@ -1,6 +1,6 @@
 [package]
 name = "luna-tools"
-description = "Developer-facing inspection + introspection CLIs for luna's AOT binaries, heap snapshots, JIT state, profiling flamegraphs, and REPL polish. v2.0 Track TL Phase 1+2 ship: `luna-bin-inspect` (AOT section walker), `luna-heap-dump` (heap snapshot via pure-read accessors), `luna-trace-inspect` (JIT state dump), and `luna-profile` (Count-hook sampling profiler). `luna-repl-polish` remains a stub until rustyline `=14.x` pin."
+description = "Developer CLIs for the luna Lua runtime: an AOT binary section walker (`luna-bin-inspect`), heap snapshots (`luna-heap-dump`), a JIT state dump (`luna-trace-inspect`) and a sampling profiler (`luna-profile`)."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-readme = "README.md"
 
 [lib]
 # rlib only: luna-tools is a build of CLIs + shared format types
@@ -36,7 +35,7 @@ path = "src/bin/luna_trace_inspect.rs"
 name = "luna-repl-polish"
 path = "src/bin/luna_repl_polish.rs"
 
-# v2.4 Phase Soak — long-running workload runner with RSS + Vm
+# Long-running workload runner with RSS + Vm
 # memory sampling. Consumed by `.github/workflows/soak-nightly.yml`
 # (1h smoke) and `.github/workflows/soak-weekly.yml` (24h soak)
 # to assert RSS drift < 1% + GC pause p99 < 10ms.
@@ -83,7 +82,7 @@ inferno = { version = "0.11", optional = true }
 # comment claimed cargo-deny walks the whole lockfile regardless of
 # feature gating — that was true of an older cargo-deny. Current
 # releases resolve the default feature set only, which is why the
-# `--all-features` flag is load-bearing; see v2.17 H7.)
+# `--all-features` flag is load-bearing.)
 pprof = { version = "0.15", optional = true }
 
 # Optional: disassembly for `luna-trace-inspect --show mcode`.
@@ -92,13 +91,13 @@ pprof = { version = "0.15", optional = true }
 capstone = { version = "0.12", optional = true }
 
 [features]
-# Default ships the two Phase 1 binaries fully wired. Phase 2
-# tools (luna-profile / luna-trace-inspect / luna-repl-polish)
-# compile as stubs without the extra deps; embedders that want
-# the real impl opt in.
+# Default ships luna-bin-inspect / luna-heap-dump fully wired.
+# The optional parts of luna-profile / luna-trace-inspect /
+# luna-repl-polish compile as stubs without the extra deps;
+# embedders that want the real impl opt in.
 default = []
-# v15.x rustyline is the pinned target for REPL polish in Phase 2.
-# Listed as a placeholder feature today so future commits can land
+# rustyline v15.x is the pinned target for REPL polish. Listed as
+# a placeholder feature today so future commits can land
 # the dep + impl without re-opening the binary list.
 repl-polish = []
 flame-graph = ["dep:inferno", "dep:pprof"]

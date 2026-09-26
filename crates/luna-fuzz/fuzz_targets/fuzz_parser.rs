@@ -1,16 +1,16 @@
-//! v2.0 Track CV fuzz harness — Lua source parser.
+//! Fuzz harness — Lua source parser.
 //!
 //! Feeds arbitrary bytes into `luna_core::frontend::parser::parse` for
 //! every dialect we support and asserts the parser must either return
 //! `Ok(Chunk)` or `Err(SyntaxError)` — **panicking is a real bug**
-//! (per `code/no-blind-bugfix-pattern`, we don't try-catch around
-//! the call). libfuzzer-sys traps panics natively.
+//! (we don't try-catch around the call). libfuzzer-sys traps panics
+//! natively.
 //!
 //! Run:
 //!     cargo +nightly fuzz run fuzz_parser
 //!
-//! Per-track content fill: seed corpus from `tests/official/*.lua` +
-//! crash inputs from any panics this harness uncovers.
+//! Seed corpus: `tests/official/*.lua` + crash inputs from any panics
+//! this harness uncovers.
 
 #![no_main]
 
