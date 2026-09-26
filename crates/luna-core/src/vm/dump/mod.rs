@@ -6,10 +6,13 @@
 //! - `reader` — shared byte-stream reader + PUC `loadSize` ULEB128 port
 //!   (0-dep — luna-core contract forbids `leb128` / `byteorder` crates).
 //! - `puc` — magic-byte → per-dialect PUC undumper dispatch.
+//! - `puc_writer` — `Proto` → PUC chunk of the running dialect
+//!   (`string.dump`).
 //!
 //! Public surface (used by `builtins.rs`, `exec.rs`, `lib_os_io.rs`,
 //! `lib_string.rs`):
 //! - [`dump`] — `Proto → Vec<u8>` (luna body format)
+//! - [`dump_puc`] — `Proto → Vec<u8>` (the running dialect's PUC format)
 //! - [`undump`] — bytes → `Gc<Proto>`, routes by leading magic byte
 //! - [`is_binary_chunk`] — true for any `\x1b`-prefixed input (matches
 //!   both luna and PUC bodies; loader uses this to decide
@@ -19,6 +22,7 @@ mod error;
 mod header;
 mod luna;
 mod puc;
+mod puc_writer;
 mod reader;
 mod verify;
 
@@ -33,6 +37,14 @@ use crate::version::LuaVersion;
 /// luna body). Not PUC-loadable.
 pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     luna::dump(proto, strip, version)
+}
+
+/// Serialise a function prototype as the running dialect's PUC bytecode,
+/// loadable by the stock interpreter of that version (`string.dump`).
+/// `Err` when the function has no faithful encoding in that dialect's
+/// instruction set, or the dialect (MacroLua) has no PUC format.
+pub(crate) fn dump_puc(proto: &Proto, strip: bool, version: LuaVersion) -> Result<Vec<u8>, String> {
+    puc_writer::dump(proto, strip, version)
 }
 
 /// True when `bytes` is a binary chunk (luna or PUC) — only the escape
@@ -51,14 +63,16 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 ///   header reaches luna's own header errors (calls.lua pins them).
 /// - shorter than header + tag and not foreign → `luna::undump`, which
 ///   reports the truncation.
-/// - otherwise a `\x1bLua` chunk with a `0x51..0x55` version byte is PUC's
-///   → `puc::undump_puc`, gated by `allow_puc`. This includes a chunk from
-///   the running dialect's own PUC version, which the version byte alone
-///   cannot tell apart from a luna chunk.
+/// - otherwise a `\x1bLua` chunk of the running dialect's own PUC version
+///   is what `string.dump` writes → `puc::undump_puc`, under the same gate
+///   as luna's own chunks (the caller's bytecode-loading switch).
+/// - a `\x1bLua` chunk of another PUC version → `puc::undump_puc`, gated
+///   by `allow_puc`.
 /// - anything else → `luna::undump` for its error.
 ///
-/// `allow_puc` mirrors `Vm::puc_bytecode_loading()`. Default off — PUC
-/// bytecode is a strictly larger trust surface than luna's own.
+/// `allow_puc` mirrors `Vm::puc_bytecode_loading()`. Default off — a chunk
+/// from another dialect's toolchain is a larger trust surface than one the
+/// running dialect's `string.dump` could have written.
 ///
 /// Whichever reader produced it, the prototype tree is verified before it is
 /// returned (see the `verify` module). A refused chunk's message is worded
@@ -127,8 +141,10 @@ fn undump_checked(
     let written_version_byte = header[4];
     let puc_signature =
         bytes.len() >= 5 && &bytes[0..4] == b"\x1bLua" && matches!(bytes[4], 0x51..=0x55);
+    let own_puc = puc_signature && !luna_body && Some(bytes[4]) == own_puc_version(version);
     let foreign_puc = puc_signature
         && !luna_body
+        && !own_puc
         && (bytes[4] != written_version_byte || bytes.len() >= tag_at + luna::BODY_TAG.len());
     if foreign_puc && !allow_puc {
         return Err(Refusal::Gate(
@@ -137,11 +153,23 @@ fn undump_checked(
                 .to_string(),
         ));
     }
-    let proto = if foreign_puc {
+    let proto = if own_puc || foreign_puc {
         puc::undump_puc(bytes, heap)?
     } else {
         luna::undump(bytes, heap, version)?
     };
     verify::verify(&proto).map_err(error::Bad::Code)?;
     Ok(proto)
+}
+
+/// The version byte of the PUC format `string.dump` writes for `version`.
+fn own_puc_version(version: LuaVersion) -> Option<u8> {
+    match version {
+        LuaVersion::Lua51 => Some(0x51),
+        LuaVersion::Lua52 => Some(0x52),
+        LuaVersion::Lua53 => Some(0x53),
+        LuaVersion::Lua54 => Some(0x54),
+        LuaVersion::Lua55 => Some(0x55),
+        LuaVersion::MacroLua => None,
+    }
 }
