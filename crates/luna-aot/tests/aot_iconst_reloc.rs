@@ -1,17 +1,17 @@
-//! v1.3 Phase AOT Stage 7 sub-piece 2 — load-bearing smoke for
-//! iconst-baked-address relocation in the trace lowerer.
+//! Load-bearing smoke for iconst-baked-address relocation in the
+//! trace lowerer.
 //!
-//! # What sub-piece 2 changes
+//! # Why relocation is needed
 //!
-//! Pre-sub-piece-2 the trace lowerer (`crates/luna-jit/src/jit_backend/
-//! trace.rs`, four iconst sites) baked the recorder-side `Gc<LuaStr>::as_ptr()`
+//! Without AOT mode the trace lowerer (`crates/luna-jit/src/jit_backend/
+//! trace.rs`, four iconst sites) bakes the recorder-side `Gc<LuaStr>::as_ptr()`
 //! as `iconst(I64, <addr>)` directly into the IR. That's correct for
 //! the JIT path (`M = JITModule`, lowered mcode runs in-process with
 //! the recorder `Vm`) but garbage for the AOT path — the deploy
 //! binary's `StringTable` lives at a different address and contains
 //! a different `LuaStr` for the same UTF-8 bytes.
 //!
-//! Sub-piece 2 adds `CompileOptions { aot: true }`. When set, the
+//! `CompileOptions { aot: true }` changes that. When set, the
 //! lowerer's `emit_str_key_arg` helper routes each interned-string
 //! key through two stably-named data objects (deduped via cranelift's
 //! `Module::declare_data` name interning):
@@ -35,24 +35,24 @@
 //! 2. The emitted `.o` symbol table contains BOTH the writable slot
 //!    and the read-only bytes object for the test trace's key string.
 //! 3. The runtime JIT path with `opts.aot = false` is byte-for-byte
-//!    unchanged (covered by the existing `trace_jit_s11_step_a` suite;
+//!    unchanged (covered by the existing `trace_field_access_helpers` suite;
 //!    we don't re-run it here, just record the invariant).
 //!
 //! # What this test does NOT prove
 //!
-//! - The deploy-side runtime resolver (sub-piece 3 of the RFC; lives
-//!   in `luna-runtime-helpers`). Without that, an AOT binary that
-//!   links a sub-piece-2 `.o` would load through an all-zero slot
-//!   and segfault on first dispatch. That's the next session's work.
+//! - The deploy-side runtime resolver (lives in
+//!   `luna-runtime-helpers`, covered by `aot_strkey_resolver`).
+//!   Without it, an AOT binary that links such a `.o` would load
+//!   through an all-zero slot and segfault on first dispatch.
 //! - End-to-end "AOT binary fires AOT mcode on a hot loop". Requires
-//!   sub-pieces 3 (slot resolver) + 4 (trace registry / dispatch
-//!   install) and is the charter AOT acceptance gate.
+//!   the slot resolver + trace registry / dispatch install; covered by
+//!   `aot_trace_fires`.
 //! - The four `state[0] = t.as_ptr() as i64` sites at trace.rs:
 //!   8240/8264/8282/8314 — those are TEST CODE that constructs trace
 //!   input state, not lowerer IR. They are not relocation targets;
-//!   per RFC § "Gc<Table> deopt-payload sites" we recommend the AOT
-//!   pipeline emits traces with `MAX_GUARD_FAILS = 0` so deopt
-//!   payloads aren't an AOT concern at all (v1.4 follow-up).
+//!   the AOT pipeline is meant to emit traces with
+//!   `MAX_GUARD_FAILS = 0` so deopt payloads aren't an AOT concern at
+//!   all.
 //! - The interned string `key_str.as_ptr()` cast from `LuaStr` to
 //!   `*const u8` produces a pointer with the *same* numeric value as
 //!   the AOT-time process address — i.e., we *could* hash that
@@ -185,7 +185,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
     let record = make_setfield_record(proto);
 
     let isa = host_pic_isa();
-    let object_builder = ObjectBuilder::new(isa, "luna_aot_sp2_smoke", default_libcall_names())
+    let object_builder = ObjectBuilder::new(isa, "luna_aot_iconst_smoke", default_libcall_names())
         .expect("ObjectBuilder");
     let mut object_module = ObjectModule::new(object_builder);
 
@@ -217,12 +217,12 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
 
     // Persist the bytes to a tempfile so `nm` can read them.
     let dir = tempfile::tempdir().expect("tempdir");
-    let obj_path = dir.path().join("sp2_smoke.o");
+    let obj_path = dir.path().join("iconst_smoke.o");
     std::fs::write(&obj_path, &bytes).expect("write .o");
 
     if !have_on_path("nm") {
         eprintln!(
-            "stage7_iconst_reloc: `nm` not on PATH — symbol check \
+            "aot_iconst_reloc: `nm` not on PATH — symbol check \
              skipped, but the .o was produced ({} bytes). Install \
              binutils / Xcode CLT to enable the full assertion.",
             bytes.len()
@@ -259,7 +259,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
          nm output:\n{nm_str}"
     );
 
-    // Sub-piece 3 — index entry per unique key. Local linkage, so
+    // Index entry per unique key. Local linkage, so
     // `nm` reports it lowercase-`t`/`s` (small letter = local). The
     // deploy-side resolver doesn't need it by name (it walks the
     // dedicated section instead) but its presence is the load-bearing
@@ -267,7 +267,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
     assert!(
         nm_str.contains(&idx_core),
         "emitted .o must contain `__{idx_core}` (index entry; \
-         sub-piece 3 contract). nm output:\n{nm_str}"
+         resolver contract). nm output:\n{nm_str}"
     );
 
     // Section walk: verify the dedicated index section is present.
@@ -298,7 +298,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
             assert!(
                 has_long || has_short_pe,
                 "`{probe_cmd}` did not surface section `luna_strkey_idx` or `.lt_skix` on \
-                 sp2 .o (sub-piece 3 expects one as the resolver walk target). \
+                 emitted .o (the resolver walks it). \
                  {probe_cmd} output:\n{text}"
             );
         }

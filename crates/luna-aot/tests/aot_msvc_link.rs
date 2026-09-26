@@ -1,4 +1,4 @@
-//! v1.3 Phase AOT Stage 7 polish 5 — Windows MSVC link path.
+//! Windows MSVC link path.
 //!
 //! # What this test asserts
 //!
@@ -16,14 +16,14 @@
 //!
 //! - Host = Windows: redundant with the host-MSVC build path; this
 //!   test specifically covers the **cross-compile from Unix host**
-//!   leg that previously errored out with "use windows-gnu instead".
+//!   leg.
 //! - `rustup` target `x86_64-pc-windows-msvc` not installed.
 //! - Neither `lld-link` nor `link.exe` on PATH (no MSVC linker
 //!   available).
 //! - Neither `clang-cl` nor `cl.exe` on PATH (no MSVC C compiler
 //!   available).
 //! - Staticlib build fails with a known cross-toolchain-incomplete
-//!   marker (matches the marker set in `stage5_cross_compile`).
+//!   marker (matches the marker set in `aot_cross_compile`).
 //!
 //! # E2E run-on-target?
 //!
@@ -84,21 +84,21 @@ fn read_pe_section_names(path: &Path) -> Vec<String> {
 fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
     if cfg!(target_os = "windows") {
         eprintln!(
-            "stage7_msvc_link: skip — Windows host runs the native MSVC \
+            "aot_msvc_link: skip — Windows host runs the native MSVC \
              path which is exercised by the host-target test matrix; \
              this test is for the Unix-host cross-compile leg."
         );
         return;
     }
     if !have_on_path("cargo") {
-        eprintln!("stage7_msvc_link: skip — cargo missing");
+        eprintln!("aot_msvc_link: skip — cargo missing");
         return;
     }
 
     let triple = "x86_64-pc-windows-msvc";
     if !rustup_has_target(triple) {
         eprintln!(
-            "stage7_msvc_link: skip — target {triple} not installed \
+            "aot_msvc_link: skip — target {triple} not installed \
              (run `rustup target add {triple}` to enable)"
         );
         return;
@@ -107,7 +107,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
     let has_cc = have_on_path("clang-cl") || have_on_path("cl.exe") || have_on_path("cl");
     if !has_cc {
         eprintln!(
-            "stage7_msvc_link: skip — no MSVC C compiler on PATH. \
+            "aot_msvc_link: skip — no MSVC C compiler on PATH. \
              Install one of: (a) LLVM (`brew install llvm` on macOS; \
              `apt install clang` on Linux) for `clang-cl`, or \
              (b) Visual Studio Build Tools 2022 (`cl.exe`) on Windows."
@@ -117,7 +117,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
     let has_link = have_on_path("lld-link") || have_on_path("link.exe") || have_on_path("link");
     if !has_link {
         eprintln!(
-            "stage7_msvc_link: skip — no MSVC linker on PATH. \
+            "aot_msvc_link: skip — no MSVC linker on PATH. \
              Install one of: (a) LLVM (`brew install llvm` on macOS; \
              `apt install lld` on Linux) for `lld-link`, or \
              (b) Visual Studio Build Tools 2022 (`link.exe`) on Windows."
@@ -151,8 +151,8 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
         Err(e) => Some(format!("{e}")),
     };
     if let Some(msg) = link_err {
-        // Mirror the skip-marker pattern used by `stage5_cross_compile`
-        // / `stage7_windows_aot`: missing rust-std, missing cross-cc,
+        // Mirror the skip-marker pattern used by `aot_cross_compile`
+        // / `aot_windows_mingw_link`: missing rust-std, missing cross-cc,
         // or missing system libs (LIB env var unset → lld-link can't
         // find ucrt/vcruntime when invoked from a Unix host without
         // a vcvarsall-equivalent) are skips, not hard failures.
@@ -175,11 +175,11 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
             "fatal error",
         ];
         if skip_markers.iter().any(|m| msg.contains(m)) {
-            eprintln!("stage7_msvc_link: skip — MSVC cross-toolchain incomplete:\n{msg}");
+            eprintln!("aot_msvc_link: skip — MSVC cross-toolchain incomplete:\n{msg}");
             return;
         }
         panic!(
-            "stage7_msvc_link: unexpected link failure (none of the known skip \
+            "aot_msvc_link: unexpected link failure (none of the known skip \
              markers matched):\n{msg}"
         );
     }
@@ -201,7 +201,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
     );
 
     eprintln!(
-        "stage7_msvc_link: MSVC PE section table verified — found {} sections, \
+        "aot_msvc_link: MSVC PE section table verified — found {} sections, \
          including `.lt_meta` and `.lt_skix`",
         names.len()
     );
@@ -214,7 +214,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
 //      $ brew install llvm
 //      $ rustup target add x86_64-pc-windows-msvc
 //      $ export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-//      $ cargo test -p luna-aot --test stage7_msvc_link
+//      $ cargo test -p luna-aot --test aot_msvc_link
 //    Expected: test runs (no skip), passes.
 //    Note: lld-link on Unix needs `/LIBPATH:` flags pointing at the
 //    Windows SDK + UCRT lib directories. Without those it'll fail
@@ -224,7 +224,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
 //
 // 2. On a Windows host (Developer Command Prompt for VS 2022):
 //      > rustup target add x86_64-pc-windows-msvc
-//      > cargo test -p luna-aot --test stage7_msvc_link
+//      > cargo test -p luna-aot --test aot_msvc_link
 //    Expected: test runs, passes, exe present in tempdir during
 //    test lifetime.
 //

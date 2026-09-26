@@ -9,35 +9,34 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "../../README.md"
-# v2.1 Phase 1K.D.2 — published as crates.io companion to luna-jit so
-# embedders can flip the `llvm-jit` feature on. Default `cargo install
-# luna-jit` does NOT pull this crate (the feature is OFF by default).
-# Removing `publish = false` here is what unblocks `cargo publish -p
-# luna-jit`'s verify step, which refuses path-only deps (even when
-# `optional = true`).
+# Published as a crates.io companion to luna-jit so embedders can flip
+# the `llvm-jit` feature on. Default `cargo install luna-jit` does NOT
+# pull this crate (the feature is OFF by default). It must stay
+# publishable: `cargo publish -p luna-jit`'s verify step refuses
+# path-only deps (even when `optional = true`).
 
 [lints]
 workspace = true
 
 [dependencies]
-# v2.1 Phase 1K.D.2 — backend implements the luna-core `IntChunkCompiler`
+# The backend implements the luna-core `IntChunkCompiler`
 # / `TraceCompiler` / `JitStorage` traits over LLVM-emitted mcode.
 luna-core = { path = "../luna-core", version = "= 3.1.0" }
 
-# v2.1 Phase 1K.D.2 — extracted `luna_jit_*` runtime helpers + `JIT_VM`
+# Shared `luna_jit_*` runtime helpers + `JIT_VM`
 # TLS shared with luna-jit (Cranelift). Both backends register the
 # same symbol table with their respective JIT execution engines.
 luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 3.1.0" }
 
-# v2.1 Phase 1K.B / 1K.D.2 — LLVM 18.1.x via inkwell 0.9.0. Same
-# feature flag as `llvm-jit-probe` (`llvm18-1`); requires
-# `LLVM_SYS_181_PREFIX` env var pointing at an LLVM 18.1.x install
-# (e.g. `brew install llvm@18` → `/opt/homebrew/opt/llvm@18`). See
+# LLVM 18.1.x via inkwell 0.9.0. Same feature flag as `llvm-jit-probe`
+# (`llvm18-1`); requires `LLVM_SYS_181_PREFIX` env var pointing at an
+# LLVM 18.1.x install (e.g. `brew install llvm@18` →
+# `/opt/homebrew/opt/llvm@18`).
 inkwell = { version = "0.9", features = ["llvm18-1"] }
 
 [dev-dependencies]
 # Integration tests need luna-jit's parser (to materialise real
-# Proto bytecode) for the Phase 1K.D.6 smoke. luna-jit pulls Cranelift
+# Proto bytecode) for the smoke tests. luna-jit pulls Cranelift
 # but only at test build-time; the lib's runtime dep graph stays
 # Cranelift-free. Path-only dev-dep is allowed by `cargo publish` —
 # dev-dependencies without a version are stripped from the published

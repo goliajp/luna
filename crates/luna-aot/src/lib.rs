@@ -2,9 +2,8 @@
 //! luna-aot — ahead-of-time compiler from Lua source to a
 //! self-contained native binary.
 //!
-//! # v1.3 ship scope (THIS SESSION — scaffold + bytecode-embed only)
+//! # Scaffold pipeline (bytecode embed)
 //!
-//! What runs end-to-end **today**:
 //!
 //! 1. CLI [`cli::run`] / library [`embed::embed_bytecode`] take a `.lua`
 //!    source file.
@@ -23,32 +22,11 @@
 //!    scaffold entry just prints the embedded bytecode length to
 //!    `stderr` and exits — proving the section is reachable end-to-end.
 //!
-//! What is **deferred to follow-up sessions** within the v1.3 mega
-//! sprint:
-//!
-//! - **Wiring the [`runtime_stub`] Rust module into the linked binary**
-//!   so the embedded bytecode is `undump`-ed into a [`luna_core::vm::Vm`]
-//!   and executed at process start (interp-only). This needs either
-//!   (a) `luna-core` exposed as a `staticlib` for the target triple,
-//!   or (b) a tempdir-cargo shell-out that builds a tiny crate that
-//!   `include_bytes!`s the dump and depends on `luna-core`. The
-//!   runtime-stub source compiles cleanly today; it just isn't wired
-//!   to the link step yet.
-//! - **Cranelift trace codegen via `cranelift-object::ObjectModule`**
-//!   (the bulk of the ~70-day audit estimate — the lowerer refactor
-//!   that genericises the JIT backend over `cranelift_module::Module`).
-//! - **Cross-compile** via `--target <triple>`. The flag is present in
-//!   the CLI today but only the host triple is wired end-to-end.
-//! - **Smoke tests** that run the produced binary and compare stdout
-//!   with `luna`.
-//!
 //! # Why a separate crate
 //!
-//! See the audit's "Why a separate crate vs `--features aot`" section.
-//! Summary: this crate pulls `object` + `clap` and (in a follow-up
-//! session) all of cranelift; embedders who only want the runtime
-//! JIT keep using `luna-jit`, and embedders who only want pure interp
-//! keep using `luna-core` — both stay free of `luna-aot`'s build-time
+//! This crate pulls `object` + `clap` and all of cranelift;
+//! embedders who only want the runtime JIT keep using `luna-jit`, and
+//! embedders who only want pure interp keep using `luna-core` — both stay free of `luna-aot`'s build-time
 //! dep tree.
 //!
 //! **`luna-core` 0-third-party-dep contract is unaffected.** This

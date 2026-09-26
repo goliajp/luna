@@ -1,5 +1,4 @@
-//! v1.3 Phase AOT Stage 7 trace-coverage follow-up — end-to-end smoke
-//! for the wire-format v2 cut that extends AOT trace installs to
+//! End-to-end smoke for the wire-format v2 cut that extends AOT trace installs to
 //! traces carrying typed-register side-exits (per_exit_tags).
 //!
 //! # What this test asserts
@@ -16,9 +15,8 @@
 //! the enclosing scope (the local `t`). The trace recorder emits
 //! type-check guards on `t.x`'s register, which the lowerer turns
 //! into a per-cont_pc side-exit — landing the closed trace's
-//! `per_exit_tags` non-empty. Under wire format v1 this trace was
-//! filtered out at the AOT harvester ("`has_per_exit_tags`"); under
-//! v2 the harvester emits the trace and the deploy walker
+//! `per_exit_tags` non-empty. Under wire format v2 the harvester
+//! emits the trace and the deploy walker
 //! reconstructs `per_exit_tags` for the install, so the dispatcher
 //! restores the right slot shapes on the side-exit path.
 //!
@@ -27,7 +25,7 @@
 //! 2. At least one AOT trace was installed.
 //! 3. AOT mcode actually dispatched (probe line present).
 //!
-//! # Skip conditions — mirror stage7_aot_trace_fires.rs.
+//! # Skip conditions — mirror aot_trace_fires.rs.
 
 use std::fs;
 use std::path::Path;

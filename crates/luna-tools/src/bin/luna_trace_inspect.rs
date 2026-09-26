@@ -1,6 +1,6 @@
 //! `luna-trace-inspect` — live JIT trace introspection.
 //!
-//! v2.0 Track TL Phase 2 ship. Runs a `.lua` script in a JIT-equipped
+//! Runs a `.lua` script in a JIT-equipped
 //! [`luna_jit::Vm`], then dumps the resulting [`luna_jit::inspect::
 //! JitStateSnapshot`] so embedders can see how the trace JIT engaged.
 //!
@@ -12,12 +12,12 @@
 //!   trace is still in flight at script-exit (rare; most workloads
 //!   close their traces before the chunk returns).
 //!
-//! IR + mcode dumps are **intentionally deferred** per
-//! Track R, so emitting it today would force a flag deprecation
-//! within the same release line. The `--show` CLI surface still
-//! pins `ir` / `mcode` as values so future fills don't break user
-//! muscle memory — they currently exit non-zero with a clear pointer
-//! to the tracking doc instead of pretending to render.
+//! IR + mcode dumps are **intentionally deferred**: the trace IR
+//! shape is not stable yet, so emitting it today would force a flag
+//! deprecation within the same release line. The `--show` CLI surface
+//! still pins `ir` / `mcode` as values so future fills don't break
+//! user muscle memory — they currently exit non-zero with a clear
+//! message instead of pretending to render.
 //!
 //! Output formats: text (default, human-readable) or `--format json`
 //! for downstream tooling. The JSON schema is intentionally narrow
@@ -58,13 +58,12 @@ struct Cli {
 enum ShowMode {
     /// Just counters + active-trace head_pc / length + enable bits.
     Summary,
-    /// Add the trace IR ops — **currently deferred** to Track R IR
-    /// overhaul stabilising; using this flag exits non-zero with a
-    /// pointer to the tracking doc.
+    /// Add the trace IR ops — **currently deferred** until the trace
+    /// IR shape stabilises; using this flag exits non-zero.
     Ir,
     /// Add capstone-disassembled mcode — **currently deferred** to
     /// the `--features mcode-disasm` capstone wrapper; using this
-    /// flag exits non-zero with a pointer to the tracking doc.
+    /// flag exits non-zero.
     Mcode,
 }
 
@@ -107,8 +106,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<(), String> {
-    // R1 gate: IR / mcode shapes will refactor in Track R; refuse
-    // them up-front rather than print misleading output.
+    // IR / mcode shapes are not stable yet; refuse them up-front rather than print misleading output.
     match cli.show {
         ShowMode::Summary => {}
         ShowMode::Ir => {

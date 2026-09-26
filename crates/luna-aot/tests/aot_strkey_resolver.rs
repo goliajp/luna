@@ -1,16 +1,15 @@
-//! v1.3 Phase AOT Stage 7 sub-piece 3 — deploy-side string-key
-//! resolver smoke test.
+//! Deploy-side string-key resolver smoke test.
 //!
-//! # What sub-piece 3 changes
+//! # Background
 //!
-//! Sub-piece 2 (commit `1523f03`) made the trace lowerer emit
+//! The trace lowerer emits
 //! `__luna_aot_strkey_{slot,bytes,idx}_<hex>` data symbols when
 //! `CompileOptions { aot: true }` is set. The slots are
 //! zero-initialised; the trace mcode loads through them and would
 //! dereference NULL on the first dispatch without a deploy-side
 //! resolver.
 //!
-//! Sub-piece 3 lands two pieces:
+//! The resolver has two pieces:
 //!
 //! 1. A dedicated `luna_strkey_idx` section the lowerer fills with
 //!    `[bytes_addr, slot_addr]` 16-byte entries (one per unique
@@ -26,9 +25,7 @@
 //! The C-main shim in `luna-aot::embed` also emits an empty
 //! placeholder of the `luna_strkey_idx` section so the bracket
 //! symbols resolve even when zero trace `.o`s linked in (the
-//! sub-piece-4 path that emits trace mcode is the next session's
-//! work; until then, every AOT binary has zero trace .o's and the
-//! resolver returns 0).
+//! resolver then returns 0).
 //!
 //! # What this test asserts
 //!
@@ -37,24 +34,24 @@
 //!    walk, no link failure on the bracket symbols).
 //! 2. The probe line `luna-runtime-helpers: aot_strkey_resolved = N`
 //!    appears in stderr, confirming the resolver entry point was
-//!    reached. `N == 0` is acceptable today (no trace `.o`s linked
-//!    yet) — `N > 0` would prove the section-walk + intern + slot-
-//!    write loop body works against real entries, but that requires
-//!    sub-piece 4 (trace .o emission).
+//!    reached. `N == 0` is acceptable (this script closes no traces,
+//!    so no trace `.o`s are linked) — `N > 0` would prove the
+//!    section-walk + intern + slot-write loop body works against
+//!    real entries.
 //!
 //! # What this test does NOT prove
 //!
 //! - End-to-end "AOT trace mcode fires through resolver-populated
-//!   slot". Requires sub-piece 4 (the (Proto, pc) → mcode dispatch
-//!   registry). The resolver code path runs in either case, but
-//!   the non-empty walk only matters once sub-piece 4 emits trace
-//!   `.o`s. See `crates/luna-runtime-helpers/src/lib.rs::
-//!   aot_trace_registry` for the sub-piece 4 plan.
+//!   slot". That needs the (Proto, pc) → mcode dispatch registry
+//!   (`crates/luna-runtime-helpers/src/lib.rs::aot_trace_registry`)
+//!   and a script that closes traces. The resolver code path runs in
+//!   either case, but the non-empty walk only matters once trace
+//!   `.o`s are linked.
 //! - Cross-platform bracket-symbol correctness. The Mach-O
 //!   `section$start$...$<sect>` and ELF `__start_<sect>` forms are
 //!   declared per-`cfg!`; this test exercises whichever the host
-//!   is. CI matrix (already covered by `stage5_cross_compile` /
-//!   `stage6_alpine_smoke`) will catch the cross variants.
+//!   is. CI matrix (already covered by `aot_cross_compile` /
+//!   `aot_alpine_smoke`) will catch the cross variants.
 
 use std::fs;
 use std::path::Path;
@@ -87,7 +84,7 @@ fn run_with_env(path: &Path, env_key: &str, env_val: &str) -> (String, String, O
 fn aot_binary_resolver_runs_clean() {
     if cfg!(target_os = "windows") {
         eprintln!(
-            "skipped: Stage 7 sub-piece 3 placeholder is Unix-only \
+            "skipped: strkey index placeholder is Unix-only \
              (Windows COFF has no bracket convention; resolver no-ops)"
         );
         return;
@@ -98,11 +95,9 @@ fn aot_binary_resolver_runs_clean() {
     }
 
     let td = tempfile::tempdir().expect("tempdir");
-    // A script with table getfield/setfield so a future sub-piece-4
-    // session that wires trace emission will exercise the resolver
-    // against real entries. Today the script runs through interp,
-    // so no traces emit; the test asserts the resolver entry path
-    // is reachable, not that any slot got populated.
+    // A script with table getfield/setfield. It runs through interp,
+    // so no traces emit; the test asserts the resolver entry path is
+    // reachable, not that any slot got populated.
     let src_path = td.path().join("table_ops.lua");
     fs::write(
         &src_path,
@@ -130,9 +125,8 @@ fn aot_binary_resolver_runs_clean() {
         "binary stdout mismatch — table ops broke or resolver corrupted \
          the heap (stderr: {stderr:?})"
     );
-    // The resolver probe line. `N` can be 0 (no trace .o's linked
-    // today, sub-piece 4 pending) or positive (future-proof for the
-    // session that wires trace .o emission).
+    // The resolver probe line. `N` can be 0 (no trace .o's linked)
+    // or positive (trace .o's with string keys linked).
     assert!(
         stderr.contains("aot_strkey_resolved = "),
         "expected resolver probe line in stderr, got: {stderr:?}"

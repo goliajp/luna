@@ -1,10 +1,7 @@
-//! v2.0 Track CV fuzz harness — VM dispatcher (eval pipeline end-to-end).
+//! Fuzz harness — VM dispatcher (eval pipeline end-to-end).
 //!
 //! Feeds arbitrary bytes as Lua source into `Vm::eval` with an instr
 //! budget cap. Exercises parser + compiler + dispatcher in one path.
-//! Per-track content fill will add a `puc-bytecode + Vm::load` variant
-//! that hits the dispatcher with adversarial bytecode (different attack
-//! surface from source — compiler-validated invariants are bypassed).
 //!
 //! The instr budget cap exists so the fuzzer can't be wedged by
 //! infinite loops produced from valid-looking inputs (a real bug class

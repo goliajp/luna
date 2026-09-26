@@ -1,4 +1,4 @@
-//! v2.0 Track TL Phase 1 — CLI smoke harness.
+//! CLI smoke harness.
 //!
 //! For every binary defined in `Cargo.toml`'s `[[bin]]` entries,
 //! assert `<binary> --help` exits 0 and contains the binary name.

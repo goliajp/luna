@@ -1,4 +1,4 @@
-//! v2.4 Phase Fuzz-C — GC stress fuzz target.
+//! GC stress fuzz target.
 //!
 //! Random bytes → DSL of `{alloc, weak, finalizer, table set/clear,
 //! drop, gc step/full/count}` ops → execute against a `Vm` via Lua
@@ -7,8 +7,8 @@
 //! - no UB / OOB (ASAN runtime via `cargo +nightly fuzz run`)
 //! - `vm.memory_used()` round-trips consistently across operations
 //!
-//! Deliberately exercises the GC-stress paths the v2.1 → v2.3 UAFs
-//! lived in: weak tables, finalizers, ephemeron cycles,
+//! Deliberately exercises the GC-stress paths where use-after-free bugs
+//! have lived: weak tables, finalizers, ephemeron cycles,
 //! collectgarbage("step") + collectgarbage("collect") interleaving.
 //!
 //! Run:

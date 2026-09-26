@@ -1,28 +1,21 @@
-//! v1.3 Phase AOT Stage 7 — load-bearing smoke test for the trace
-//! lowerer driven against an `ObjectModule`.
+//! Load-bearing smoke test for the trace lowerer driven against an
+//! `ObjectModule`.
 //!
-//! Sibling of `stage3_lower_into_object` (which exercises the
+//! Sibling of `aot_int_chunk_lower_into_object` (which exercises the
 //! *int-chunk* lowerer's `M: Module` generic): this test pins the
 //! *trace* lowerer's generic by feeding it a hand-constructed
 //! pure-arith [`TraceRecord`] and an [`ObjectModule`]. The trace's
 //! IR is then finished into a `Vec<u8>` and the bytes verified to be
 //! a well-formed object file (ELF / Mach-O / PE).
 //!
-//! # Why this is the "load-bearing demo" for Stage 7
+//! # Why this matters
 //!
-//! The audit estimates the
-//! end-to-end trace AOT story at ~40 dev-days. The bulk of that work
-//! is **runtime-side**: in-deploy trace registry walk, dispatch-table
-//! install on the embedded `Vm`, and — most painfully — relocating
-//! the `iconst`-baked runtime addresses (`luna_jit_table_set_field`'s
-//! `key_ptr` is the *AOT-time process address* of an interned
-//! `LuaStr`, which has no meaning at deploy time).
-//!
-//! Before any of that is worth touching, the **codegen-side**
-//! invariant must be proven: that the same `lower_trace_into<M>`
-//! body the runtime JIT calls can also be driven against an
-//! `ObjectModule` without panic / `Module`-trait-method gaps / IR
-//! shape mismatches. That's what this test demonstrates.
+//! The codegen-side invariant: the same `lower_trace_into<M>` body
+//! the runtime JIT calls can also be driven against an `ObjectModule`
+//! without panic / `Module`-trait-method gaps / IR shape mismatches.
+//! Every runtime-side piece of trace AOT (deploy-side registry walk,
+//! dispatch-table install, relocating `iconst`-baked addresses) sits
+//! on top of it.
 //!
 //! # Test fixture shape
 //!
@@ -37,14 +30,10 @@
 //! Pure arith was picked deliberately: **no `luna_jit_*` helper is
 //! called**, so the produced `.o` has no `Linkage::Import` references
 //! to the broader helper set. This sidesteps the "helpers must be in
-//! the deploy-side staticlib" question (audit § Stage 3 step 3 +
-//! § Open question 1) entirely — that's a separate workstream and is
-//! not gated by this proof.
+//! the deploy-side staticlib" question entirely — that is covered
+//! elsewhere and is not gated by this proof.
 //!
 //! # What this does NOT prove
-//!
-//! All of these are explicit follow-ups, called out below so the next
-//! session has a clear continuation surface:
 //!
 //! - Helper symbols (`luna_jit_table_set_field`, `…_op_concat`, …)
 //!   exposed to the deploy-side staticlib via `luna-runtime-helpers`.
@@ -57,12 +46,6 @@
 //!   `TRACE_JIT_HANDLES` thread-local).
 //! - End-to-end "AOT binary actually fires AOT mcode on a hot loop"
 //!   smoke (requires all four bullets above).
-//!
-//! The audit estimates each of the above at 5-10 dev-days. Bundling
-//! them into a single session would either skip validation (no smoke
-//! test) or ship a broken commit (link failures on missing helper
-//! symbols). The honest scope here is: prove the codegen invariant,
-//! document the rest as next-session work.
 
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::default_libcall_names;
@@ -171,13 +154,12 @@ fn trace_lowerer_emits_into_object_module() {
 
     let record = make_pure_arith_record(proto);
 
-    // Build the ObjectModule. The name "luna_aot_stage7_trace_smoke"
+    // Build the ObjectModule. The name "luna_aot_trace_smoke"
     // shows up as the .o's "soname" equivalent — useful for objdump
     // diagnosis if a future regression flips an object-format flag.
     let isa = host_pic_isa();
-    let object_builder =
-        ObjectBuilder::new(isa, "luna_aot_stage7_trace_smoke", default_libcall_names())
-            .expect("ObjectBuilder");
+    let object_builder = ObjectBuilder::new(isa, "luna_aot_trace_smoke", default_libcall_names())
+        .expect("ObjectBuilder");
     let mut object_module = ObjectModule::new(object_builder);
 
     // **Load-bearing assertion**: the same `lower_trace_into<M>` the
@@ -216,11 +198,11 @@ fn trace_lowerer_emits_into_object_module() {
         "emitted object file should contain bytes (got 0)"
     );
 
-    // Magic-byte check across the formats Stage 5 supports. Cranelift's
+    // Magic-byte check across the cross-compile formats. Cranelift's
     // ObjectModule emits .obj artifacts (not PE executables) so Windows
     // magic is the COFF Machine-field at offset 0 (0x8664 = AMD64,
     // 0xAA64 = ARM64, 0x014c = I386), not the `MZ` DOS stub of a
-    // linked .exe. Same shape as stage3_lower_into_object.rs's check.
+    // linked .exe. Same shape as aot_int_chunk_lower_into_object.rs's check.
     let is_elf = bytes.starts_with(&[0x7f, b'E', b'L', b'F']);
     let is_macho = bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
         || bytes.starts_with(&[0xce, 0xfa, 0xed, 0xfe])

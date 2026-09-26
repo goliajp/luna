@@ -1,6 +1,5 @@
-//! v1.3 Phase AOT Stage 7 sub-piece 4 — end-to-end smoke for the
-//! "AOT-compiled binary actually fires AOT trace mcode on a hot loop"
-//! claim.
+//! End-to-end smoke for the "AOT-compiled binary actually fires AOT
+//! trace mcode on a hot loop" claim.
 //!
 //! # What this test asserts
 //!

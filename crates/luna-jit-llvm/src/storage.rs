@@ -1,4 +1,4 @@
-//! v2.1 Phase 1K.D.8 — per-`Vm` LLVM JIT storage cache.
+//! Per-`Vm` LLVM JIT storage cache.
 //!
 //! Mirrors the role of `luna_jit::jit_backend::storage::CraneliftJitStorage`:
 //! the cache maps a proto's stable bytecode key to its previously
@@ -6,27 +6,26 @@
 //! the `inkwell::ExecutionEngine` instances alive (one per compile)
 //! so the JIT mcode mmap stays callable for the Vm's lifetime.
 //!
-//! ## Lifetime path (Risk #1 in 1K.C audit § 6 — provisional)
+//! ## Lifetime path
 //!
 //! `inkwell::Context` borrows from itself (`<'ctx>`), so
 //! `ExecutionEngine<'ctx>`, `Module<'ctx>`, and `Builder<'ctx>` all
 //! pick up that lifetime. luna's storage needs to own the
 //! `Context` AND a growing collection of `ExecutionEngine`s — three
-//! options per the audit:
+//! options:
 //!   (a) `ouroboros` self-referential macro (new dep, unsafe internally);
 //!   (b) hand-rolled `transmute<EE<'_>, EE<'static>>` with strict drop
 //!       order discipline;
 //!   (c) per-compile throwaway `Context` (slower but trivially correct).
 //!
-//! Phase 1K.D.8 picks **option (b) light**: each compile gets its
+//! This uses **option (b) light**: each compile gets its
 //! own freshly-`Box::leak`-ed `Context` (so `Context` is `'static`),
 //! then its `ExecutionEngine` naturally lives `'static` too and
 //! lands in the cache `Vec` as a `Box<ExecutionEngine<'static>>`.
 //! Memory grows linearly with first-compile count (no growth on
-//! cache hit). Phase 1K.E will revisit when the Vm-context unit
-//! economics need tuning — likely moving to option (b) proper with
-//! one shared Context per Vm if the per-compile init cost becomes
-//! measurable in benches.
+//! cache hit). If the per-compile init cost becomes measurable in
+//! benches, option (b) proper with one shared Context per Vm is the
+//! next step.
 //!
 //! ## Cache invalidation
 //!
@@ -142,7 +141,7 @@ impl LlvmJitStorage {
         self.cache.insert(key, entry);
     }
 
-    /// v2.1 Phase 1K.G — park a trace `EnginePair` so the JIT mmap
+    /// Park a trace `EnginePair` so the JIT mmap
     /// stays alive for the Vm's lifetime. Unlike [`Self::insert`] there
     /// is no cache-key association — the `TraceFn` pointer embedded in
     /// `CompiledTrace::entry` is the caller's handle; storage just owns

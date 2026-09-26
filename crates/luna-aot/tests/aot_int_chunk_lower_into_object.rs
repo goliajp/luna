@@ -1,18 +1,16 @@
-//! v1.3 Phase AOT Stage 3 — smoke test for the shared int-chunk
-//! lowerer. Proves that
+//! Smoke test for the shared int-chunk lowerer. Proves that
 //! [`luna_jit::jit_backend::lower_int_chunk_into`] is genuinely
 //! backend-agnostic by driving it with an `ObjectModule`
 //! (deploy-side `.o` emission) instead of the runtime-JIT
 //! `JITModule` (live RWX mmap).
 //!
 //! Without this test, "generic over `M: Module`" is a claim with no
-//! second consumer. With it, the AOT pipeline's contract (Stage 4+)
-//! has a working compile-time witness: feed an `ObjectModule` to
+//! second consumer. With it, the AOT pipeline's contract has a
+//! working compile-time witness: feed an `ObjectModule` to
 //! `lower_int_chunk_into`, drive it through `finish() -> emit()`,
 //! get a `Vec<u8>` containing a valid object file. The linker step
-//! is out of scope for this smoke test (that's Stage 6); we assert
-//! only the lowerer + object-module pipeline cleanly produces
-//! bytes.
+//! is out of scope for this smoke test; we assert only the lowerer +
+//! object-module pipeline cleanly produces bytes.
 //!
 //! Test fixture is the simplest possible Lua chunk that JIT-compiles
 //! cleanly under the int-chunk whitelist:
@@ -86,8 +84,9 @@ fn int_chunk_lowerer_emits_into_object_module() {
     // shape — `finish() -> emit() -> Vec<u8>` produces an ELF / Mach-O
     // / PE `.o`.
     let isa = host_isa();
-    let object_builder = ObjectBuilder::new(isa, "luna_aot_stage3_smoke", default_libcall_names())
-        .expect("ObjectBuilder");
+    let object_builder =
+        ObjectBuilder::new(isa, "luna_aot_int_chunk_smoke", default_libcall_names())
+            .expect("ObjectBuilder");
     let mut object_module = ObjectModule::new(object_builder);
 
     // Drive the SAME lowerer the runtime JIT uses, but against the
@@ -100,7 +99,7 @@ fn int_chunk_lowerer_emits_into_object_module() {
     // exist as `Linkage::Import` declarations resolvable at link
     // time. The `add` chunk above is pure int arith with no helper
     // calls, so the produced .o is self-contained — exactly the
-    // shape Stage 4's pipeline expects for its smallest fixtures.
+    // shape the link pipeline expects for its smallest fixtures.
     let result = lower_int_chunk_into(&mut object_module, proto, false, false);
 
     let (fn_id, meta) = result.expect(

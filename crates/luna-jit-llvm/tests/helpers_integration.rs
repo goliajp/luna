@@ -1,15 +1,15 @@
-//! v2.1 Phase 1K.F integration tests — exercise the helper-call
+//! Integration tests that exercise the helper-call
 //! emit (Op::GetUpval ValueRead via `luna_jit_upval_get`), the
 //! self-recursive Op::Call edge, and parametric chunks
 //! (`num_params > 0`).
 //!
 //! Each test loads a Lua source whose **inner** proto (the
 //! `closure.proto.protos[0]` slot) reduces to a body the
-//! Phase 1K.F compute path can lower. The outer chunk contains
+//! compute path can lower. The outer chunk contains
 //! `Op::Closure` / `Op::TailCall` and falls outside our whitelist
-//! — try_compile bails on it (`Skipped`). Phase 1K.G will widen the
-//! whitelist; for now we drive the backend directly on the inner
-//! proto via the trait surface, mirroring `tests/llvm_smoke.rs`.
+//! — try_compile bails on it (`Skipped`), so we drive the backend
+//! directly on the inner proto via the trait surface, mirroring
+//! `tests/llvm_smoke.rs`.
 
 use luna_core::jit::{CompileResult, IntChunkCompiler};
 use luna_core::runtime::Value;
@@ -17,7 +17,7 @@ use luna_core::vm::isa::Op;
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
-/// 1K.F.6 — parametric chunk with `num_params = 1`. The inner proto
+/// Parametric chunk with `num_params = 1`. The inner proto
 /// for `id(n) return n end` is literally `[Return1 R0, Return0]`; the
 /// JIT entry signature widens to `extern "C" fn(i64) -> i64` and the
 /// entry BB stores arg 0 into regs[0] so `Return1 R0` reads it back.
@@ -70,7 +70,7 @@ fn parametric_chunk_id_one_param_returns_arg() {
     assert_eq!(r, -7, "id(-7) == -7 (signed i64)");
 }
 
-/// 1K.F.6 — `num_params = 3`. Returns the third positional arg.
+/// `num_params = 3`. Returns the third positional arg.
 #[test]
 fn parametric_chunk_pass_three_params_returns_third() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -102,7 +102,7 @@ fn parametric_chunk_pass_three_params_returns_third() {
     assert_eq!(r, -3);
 }
 
-/// 1K.F.3 — self-recursive `Op::Call`. The chunk
+/// Self-recursive `Op::Call`. The chunk
 /// `local function rec(n) if n < 1 then return n end local r = rec(n) return r end`
 /// produces inner-proto bytecode of shape:
 ///   LoadI R1=1; Lt R0<R1; Jmp; Return1 R0;
@@ -171,7 +171,7 @@ fn self_recursive_call_base_case() {
     assert_eq!(r, -5, "rec(-5) base-case returns -5");
 }
 
-/// 1K.F.4 — `Op::GetUpval` ValueRead via `luna_jit_upval_get` helper.
+/// `Op::GetUpval` ValueRead via `luna_jit_upval_get` helper.
 ///
 /// This test requires a real `Vm` + closure rooted so the helper's
 /// `JIT_CL` TLS can resolve `upvals[0]` to a live cell. We construct

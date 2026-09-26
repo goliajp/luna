@@ -1,16 +1,14 @@
-//! v2.0 Phase 5 Track AO sub-track AO-PF — runtime fire measurement
-//! for the Stage 7 polish 6 inline-chain reloc path.
+//! Runtime fire measurement for the AOT inline-chain reloc path.
 //!
 //! NOT a pass/fail test — pure measurement. Prints every relevant
 //! probe (`aot_trace_install_count`, `aot_inline_chains_resolved`,
 //! `aot_trace_fired pc=`, `trace_materialize_frames_fires`) for a
-//! battery of workloads so the verdict doc can cite real numbers,
-//! not hypotheses.
+//! battery of workloads so the numbers are measured, not guessed.
 //!
 //! Workloads:
-//! 1. **Inlined helper** (mirrors `stage7_aot_inlined_recursive`):
+//! 1. **Inlined helper** (mirrors `aot_inlined_recursive`):
 //!    `for i, inner(i)` — recorder MIGHT inline `inner` into the loop
-//!    and emit a cmp@d>0 side-exit. Per stage7 smoke this self-skips
+//!    and emit a cmp@d>0 side-exit. Per that smoke this self-skips
 //!    on this build (recorder produces 0 AOT traces for this shape).
 //! 2. **Self-recursive fib(28)** — classic self-recursion. The
 //!    `is_self_recursive` predicate in `trace.rs:3644` keeps inlined
@@ -22,7 +20,7 @@
 //!
 //! Each workload prints all 4 probe lines on stderr. The test PASSES
 //! unconditionally (modulo the binary running cleanly + producing the
-//! expected stdout); the numbers are for the verdict doc, not gating.
+//! expected stdout); the numbers are informational, not gating.
 
 use std::fs;
 use std::path::Path;
@@ -66,8 +64,8 @@ fn measure(label: &str, src: &[u8], expected_stdout: &str) {
     fs::write(&src_path, src).expect("write source");
 
     let out_path = td.path().join(format!("{label}_aot"));
-    // Surface harvest diagnostics so the verdict doc can cite the
-    // filter accept/reject reason per workload, not just the final
+    // Surface harvest diagnostics so the output shows the filter
+    // accept/reject reason per workload, not just the final
     // installed-trace count.
     // SAFETY: single-threaded test, set_var on a string env key is
     // sound here (cargo test runs each test fn serially within the
@@ -97,8 +95,8 @@ fn measure(label: &str, src: &[u8], expected_stdout: &str) {
 }
 
 #[test]
-fn ao_pf_measurement_battery() {
-    // Workload 1: inlined helper. Mirrors stage7_aot_inlined_recursive.
+fn aot_inline_chain_fire_measurement_battery() {
+    // Workload 1: inlined helper. Mirrors aot_inlined_recursive.
     // Expected sum (n = 100000):
     //   1..99 -> 2*i, 100..100000 -> i => 9900 + 5_000_045_050 = 5_000_054_950
     measure(
@@ -138,7 +136,7 @@ fn ao_pf_measurement_battery() {
     );
 
     // Workload 4 (control): hot counted loop. Known to install +
-    // dispatch AOT traces (mirrors stage7_aot_trace_fires). Used as
+    // dispatch AOT traces (mirrors aot_trace_fires). Used as
     // positive control to confirm the counter wiring is sound — if
     // this one also reports 0 fires, the counter is broken.
     measure(
@@ -150,7 +148,7 @@ fn ao_pf_measurement_battery() {
     );
 
     // Workload 5 (control): table-field getfield/setfield loop.
-    // Known to install + dispatch (mirrors stage7_aot_recursive_trace).
+    // Known to install + dispatch (mirrors aot_recursive_trace).
     measure(
         "getfield_loop_control",
         b"local t = {x = 0}\n\

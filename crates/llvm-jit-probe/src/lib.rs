@@ -1,11 +1,9 @@
-//! v2.1 Phase 1K.B — LLVM JIT toolchain validation harness.
+//! LLVM JIT toolchain validation harness.
 //!
 //! Standalone, `publish = false` validation crate for the LLVM 18 +
-//! `inkwell` 0.9 toolchain selected by Phase 1K.A
-//!. The crate
-//! JIT-compiles a trivial `add(i64, i64) -> i64` IR and invokes it,
-//! proving the toolchain links + runs on the dev host before Phase
-//! 1K.C+ touches any production luna code.
+//! `inkwell` 0.9 toolchain. The crate JIT-compiles a trivial
+//! `add(i64, i64) -> i64` IR and invokes it, proving the toolchain
+//! links + runs on the dev host.
 //!
 //! The crate intentionally has no dependency on `luna-core`,
 //! `luna-jit`, or `luna-aot`. The 0-third-party-dep contract on
@@ -29,7 +27,7 @@ use inkwell::execution_engine::JitFunction;
 /// convention matches this declaration.
 type AddFunc = unsafe extern "C" fn(i64, i64) -> i64;
 
-/// Phase 1K.B.4 — JIT-compile `fn add(a, b) = a + b` in LLVM IR, invoke
+/// JIT-compile `fn add(a, b) = a + b` in LLVM IR, invoke
 /// it with the supplied arguments, and return the result.
 ///
 /// Returns `Err(String)` if the JIT engine cannot be constructed (e.g.

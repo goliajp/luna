@@ -1,5 +1,4 @@
-//! v1.3 Stage 7 follow-on — link-level smoke test for the
-//! `luna_jit_*` helper symbol expose.
+//! Link-level smoke test for the `luna_jit_*` helper symbol expose.
 //!
 //! Builds `libluna_runtime_helpers.a` via the same pipeline the AOT
 //! `compile_and_link` flow uses (`cargo build -p luna-runtime-helpers
@@ -27,7 +26,7 @@
 //! # Skip conditions
 //!
 //! - `nm` not on PATH (Windows runners without llvm-nm in their
-//!   toolchain — Stage 7 is Unix-floor anyway)
+//!   toolchain — the AOT trace pipeline is Unix-floor anyway)
 //! - `cargo` not on PATH (always present under `cargo test`)
 //! - Building the helpers staticlib failed for unrelated reasons
 //!   (rust-std missing for the host triple, etc.) — those surface
@@ -63,25 +62,25 @@ fn workspace_root() -> PathBuf {
 fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
     // Windows MSVC produces `luna_runtime_helpers.lib` (COFF archive,
     // not `libluna_runtime_helpers.a` Mach-O/ELF archive) and inspects
-    // symbols via `dumpbin /symbols` not `nm`. The Stage 7 AOT pipeline
-    // is Unix-floor; v1.3 ships Windows AOT via the MSVC linker path
-    // but the helper-presence smoke test is verified there at the
+    // symbols via `dumpbin /symbols` not `nm`. The AOT trace pipeline
+    // is Unix-floor; Windows AOT goes through the MSVC linker path
+    // and the helper-presence smoke test is verified there at the
     // `luna-aot compile` step's own LNK2019-rejection layer rather
     // than at the staticlib `nm` layer. Skip cleanly on Windows MSVC
     // — equivalent coverage exists at compile-and-link time.
     if cfg!(target_env = "msvc") {
         eprintln!(
-            "stage7_aot_helpers_in_staticlib: MSVC produces .lib not .a; \
+            "aot_helpers_in_staticlib: MSVC produces .lib not .a; \
              helper-presence is verified at the linker layer, skipping"
         );
         return;
     }
     if !have_on_path("nm") {
-        eprintln!("stage7_aot_helpers_in_staticlib: `nm` not on PATH, skipping");
+        eprintln!("aot_helpers_in_staticlib: `nm` not on PATH, skipping");
         return;
     }
     if !have_on_path("cargo") {
-        eprintln!("stage7_aot_helpers_in_staticlib: `cargo` not on PATH, skipping");
+        eprintln!("aot_helpers_in_staticlib: `cargo` not on PATH, skipping");
         return;
     }
 

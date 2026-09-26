@@ -28,24 +28,22 @@ workspace = true
 # when the `jit-helpers` feature is OFF.
 luna-core = { path = "../luna-core", version = "= 3.1.0" }
 
-# v1.3 Stage 7 follow-on — opt-in dep on luna-jit so the 27
+# Opt-in dep on luna-jit so the 27
 # `luna_jit_*` Cranelift helper symbols (table set/get, op_concat,
 # upval_get, …) live inside the deploy-side staticlib. AOT binaries
 # whose embedded `.o` calls trace mcode need these as resolved
 # externals at link time; otherwise the link fails with
 # "undefined reference to `_luna_jit_table_get_field`" et al.
 #
-# Trade-off documented in
+# Trade-offs:
 #   - Pulls all of `luna-jit` (and transitively cranelift) into the
 #     deploy-side staticlib at build time. `cc -Wl,--gc-sections`
 #     (Linux) and Mach-O dead-strip remove unused cranelift code at
 #     link time so the produced binary stays small in the common case
 #     where the embedded `.o` only uses a handful of helpers.
-#   - Audit option (a) — extract helpers to a third tiny crate
-#     `luna-jit-helpers` — is cleaner but invasive (~2-3 dev-days of
-#     thread-local + TLS refactor); option (b), used here, is the
-#     pragmatic v1.3 floor and the architecturally honest unblocker
-#     for "AOT binaries that actually fire AOT mcode".
+#   - Extracting the helpers to a third tiny crate would be cleaner
+#     but needs a thread-local + TLS refactor; depending on luna-jit
+#     directly is what lets AOT binaries fire AOT mcode today.
 #
 # Gated behind a feature so non-AOT consumers of the runtime helpers
 # (e.g. embedders who only want the `luna_aot_run` C-ABI entry for an

@@ -1,5 +1,4 @@
-//! v1.3 Phase AOT Stage 7 polish 3 — deploy-side PE/COFF section
-//! walker for Windows AOT binaries.
+//! Deploy-side PE/COFF section walker for Windows AOT binaries.
 //!
 //! # Why this module exists
 //!
@@ -50,9 +49,8 @@
 //!
 //! # Why hand-rolled winapi externs
 //!
-//! `luna-runtime-helpers` already depends on `luna-jit` (Stage 7
-//! sub-piece 1) which transitively pulls cranelift + a Windows winapi
-//! crate. We could use those types, but the surface this module needs
+//! `luna-runtime-helpers` already depends on `luna-jit`, which
+//! transitively pulls cranelift + a Windows winapi crate. We could use those types, but the surface this module needs
 //! is tiny (one fn import + one struct definition), and hand-rolling
 //! keeps the dependency story for non-Windows targets unchanged. The
 //! `winapi` / `windows-sys` ecosystem also routinely shifts shape
