@@ -12,7 +12,7 @@
 //! Public surface (used by `builtins.rs`, `exec.rs`, `lib_os_io.rs`,
 //! `lib_string.rs`):
 //! - [`dump`] — `Proto → Vec<u8>` (luna body format)
-//! - [`dump_puc`] — `Proto → Vec<u8>` (the running dialect's PUC format)
+//! - `dump_puc` — `Proto → Vec<u8>` (the running dialect's PUC format)
 //! - [`undump`] — bytes → `Gc<Proto>`, routes by leading magic byte
 //! - [`is_binary_chunk`] — true for any `\x1b`-prefixed input (matches
 //!   both luna and PUC bodies; loader uses this to decide
