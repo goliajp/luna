@@ -1,4 +1,4 @@
-//! Bytecode VM (P03): instruction set, errors, interpreter, builtins.
+//! Bytecode VM: instruction set, errors, interpreter, builtins.
 
 pub(crate) mod argcheck;
 pub mod builtins;
@@ -22,7 +22,7 @@ pub mod table_builder;
 pub mod typed_native;
 pub mod userdata_trait;
 
-/// v1.3 Phase SS-B — cross-thread `SendVm` wrapper. Gated behind
+/// Cross-thread `SendVm` wrapper. Gated behind
 /// the `send` cargo feature; embedders not opting in pay no cost.
 /// See [`send_vm::SendVm`] for the design.
 #[cfg(feature = "send")]

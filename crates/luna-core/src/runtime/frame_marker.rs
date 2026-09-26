@@ -1,5 +1,4 @@
-//! P17-D v2 Phase 1 — type foundation for LJ-style unified stack-frame
-//! memory.
+//! Type foundation for LJ-style unified stack-frame memory.
 //!
 //! In LuaJIT 2.1's LJ_FR2 model, each Lua activation record stores TWO
 //! pieces of metadata INLINE in the value stack, at fixed offsets
@@ -15,14 +14,11 @@
 //!     vararg / continuation frames).
 //!
 //! See `lj_frame.h:33-110` for the upstream macros; this module mirrors
-//! their semantics in luna terms. See
-//! `docs/rfcs/20260622-p17-d-v2-lj-unified-stack/design.md` §1 for the
-//! migration plan that consumes these primitives.
+//! their semantics in luna terms.
 //!
-//! **Phase 1 (this module)** — pure type definitions + bit-packing
-//! helpers + roundtrip tests. NOT yet consumed by `Vm`. Adding this
-//! module has no behavior or perf impact; Phase 2-4 wires it into
-//! the frame setup/teardown paths.
+//! This module holds pure type definitions + bit-packing helpers +
+//! roundtrip tests. The frame setup/teardown paths do not consume it
+//! yet, so it has no behavior or perf impact.
 
 /// The kind of an activation record, encoded into the lower 3 bits of
 /// a [`FrameMarker`] u64. Mirrors LuaJIT's `FRAME_*` enum from

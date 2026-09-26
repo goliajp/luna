@@ -1,4 +1,4 @@
-//! v1.3 Phase SS-B — `SendVm` smoke tests.
+//! `SendVm` smoke tests.
 //!
 //! Gated behind `feature = "send"`. Run via
 //! `cargo test -p luna-core --features send --test send_vm`.
@@ -11,7 +11,7 @@
 //! - Concurrent multi-thread access via cloned handles (lock
 //!   serializes them; no race, no UB, no panic).
 //! - Userdata payload set + read through the lock.
-//! - HostRootTicket round-trip (Phase SR types compose with SS-B).
+//! - HostRootTicket round-trip (slot-recycling tickets compose with `SendVm`).
 
 #![cfg(feature = "send")]
 

@@ -80,9 +80,9 @@ pub(crate) fn compile_parsed(
 
 /// Diagnostic version of [`compile_chunk`] that also returns the main
 /// proto's final `last_target` value (the highest pc recorded as a jump
-/// destination — PUC `fs->lasttarget` equivalent). Used by the A4'''
-/// jump-target tracker prereq unit tests at
-/// `crates/luna-core/tests/a4_triple_prime_jump_target.rs`.
+/// destination — PUC `fs->lasttarget` equivalent). Used by the
+/// jump-target tracker unit tests at
+/// `crates/luna-core/tests/compiler_jump_target_tracker.rs`.
 ///
 /// This entry point is intentionally separate from `compile_chunk` so
 /// production callers do not pay the destructure cost; it exists purely
@@ -330,9 +330,8 @@ struct Level {
     /// want to know whether the just-emitted instruction at pc `here() - 1`
     /// can be modified in place: it is safe only when that pc is NOT itself a
     /// jump destination, i.e. `last_target < here() - 1` or `last_target ==
-    /// None`. The A4''' Reloc-landing peephole (deferred follow-up) is the
-    /// first planned consumer; this field is currently exposed but never read
-    /// for code generation, so its addition is behaviour-neutral.
+    /// None`. Consumed by the Reloc-landing peephole at `assign_name` and
+    /// the trailing-Move elision at `assign_stat`.
     ///
     /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
     /// called from every code path that turns some `pc` into a jump landing
@@ -529,7 +528,7 @@ impl<'a> Compiler<'a> {
     /// been emitted yet (vacuous), or when the just-emitted pc is itself a
     /// recorded jump destination.
     ///
-    /// Consumed by the A4''' Reloc-landing peephole at `assign_name` (see
+    /// Consumed by the Reloc-landing peephole at `assign_name` and the
     /// RHS materialization elision at `assign_stat`.
     fn prev_emit_is_safe_peephole_site(&self) -> bool {
         let here = self.here();
@@ -542,7 +541,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// A4''' Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
+    /// Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
     /// instruction at `here() - 1` is a retargetable producer whose A field
     /// equals `vreg` AND that pc is NOT a jump destination. The caller can
     /// then `patch_dest(prev_pc, local_reg)` to retarget the A field
@@ -2908,8 +2907,7 @@ impl<'a> Compiler<'a> {
                 Expr::Index { obj, key } => {
                     let (obj, key) = (*obj, *key);
                     let oe = self.expr(obj)?;
-                    // A4':
-                    // the prereq gate certifies the obj is a non-captured
+                    // When the gate certifies the obj is a non-captured
                     // bare-Name local AND the single RHS contains no
                     // UserOrUnknown call, the unconditional snapshot Move
                     // is provably redundant — reuse the local's register
@@ -2957,13 +2955,12 @@ impl<'a> Compiler<'a> {
             }
         }
         let base = self.explist_adjust(exprs, want)?;
-        // A4'' bundle (rides on A4''' once Reloc-landing peephole shipped):
-        // when explist_adjust ended with a trivial `Move base, src`
+        // When explist_adjust ended with a trivial `Move base, src`
         // materialization of a local-register read AND we have a single
         // store, the store can take `src` directly and the Move is dead.
         // Only catches `Exp::Reg(r)` RHS — Reloc RHS is already handled by
-        // A4''' inside assign_name, literal/Open RHS never emit a tail
-        // Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
+        // the Reloc-landing peephole inside assign_name, literal/Open RHS
+        // never emit a tail Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
         // so a jump landing at the Move's pc is preserved.
         let alt_vreg =
             if targets.len() == 1 && exprs.len() == 1 && self.prev_emit_is_safe_peephole_site() {
@@ -3044,7 +3041,7 @@ impl<'a> Compiler<'a> {
                     ));
                 }
                 if reg != vreg {
-                    // A4''' Reloc-landing peephole: when the just-emitted
+                    // Reloc-landing peephole: when the just-emitted
                     // instruction is a retargetable producer (Add / GetField
                     // / Unm / Len / etc.) that wrote into `vreg` and is not
                     // itself a jump destination, retarget its A field to
@@ -3599,19 +3596,15 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    // -----------------------------------------------------------------
-    // v2.1 Phase 11 — A4' prerequisite: compiler-side snapshot gate.
-    // -----------------------------------------------------------------
-
-    /// Compiler-side metamethod-safety gate for the future A4' Index-LHS
-    /// object snapshot elision attack (see
+    /// Compiler-side metamethod-safety gate for the Index-LHS object
+    /// snapshot elision.
     ///
     /// Returns `true` when, for a single-target Index-LHS assignment
-    /// `obj.key = rhs` (or `obj[key] = rhs`), the unconditional
-    /// `exp_to_nextreg(oe)` snapshot at `assign_stat` line 2490 is
-    /// provably redundant.
+    /// `obj.key = rhs` (or `obj[key] = rhs`), the otherwise unconditional
+    /// `exp_to_nextreg(oe)` snapshot in `assign_stat` is provably
+    /// redundant.
     ///
-    /// The four conditions enforced (mirroring RFC §2.3):
+    /// The four conditions enforced:
     ///
     /// 1. `targets.len() == 1` and `exprs.len() == 1` — no inter-target
     ///    or multi-RHS conflict possible.
@@ -3626,8 +3619,7 @@ impl<'a> Compiler<'a> {
     ///    over `(obj, exprs[0])` returns true (no UserOrUnknown RHS
     ///    calls; obj is a bare Name).
     ///
-    /// Wired by the A4' attack at `assign_stat` line 2487-2522
-    /// Index-LHS branch (v2.1 PI Phase 11 ship).
+    /// Called from the Index-LHS branch of `assign_stat`.
     pub(crate) fn assign_stat_can_skip_obj_snapshot(
         &self,
         targets: &[ExprId],
@@ -3645,8 +3637,8 @@ impl<'a> Compiler<'a> {
             _ => return false,
         };
         // Resolve the name against the *current* level only — we
-        // intentionally do not chase upvalues here because A4' only
-        // elides snapshots for owner-level locals.
+        // intentionally do not chase upvalues here because the elision only
+        // covers snapshots for owner-level locals.
         let level = self.lr();
         let local = match level.locals.iter().find(|l| &*l.name == name_text) {
             Some(l) => l,
@@ -3700,7 +3692,7 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId, version: LuaVersion
 
 /// Closed set of opcodes whose A field is a pure destination produced by an
 /// `Exp::Reloc(pc)` discharge AND whose runtime body does NOT trigger a GC
-/// step keyed off `base + A + 1` as the live-stack-top. The A4''' Reloc-
+/// step keyed off `base + A + 1` as the live-stack-top. The Reloc-
 /// landing peephole at `assign_name` retargets one of these in place to a
 /// local register, skipping the otherwise-required Move.
 ///

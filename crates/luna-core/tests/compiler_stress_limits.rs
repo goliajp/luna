@@ -1,15 +1,11 @@
-//! v2.0 Phase 1 CB-edge — compiler stress edges.
+//! Compiler stress edges: long functions, deep nesting, many upvalues,
+//! spread call sites.
 //!
-//! Audit:
-//! "compiler edge: long fn / deep nesting / many upvals / spread
-//! call site — write 2-3 spot tests".
-//!
-//! These pin **compile + run** invariants at sizes the v1.x test
-//! suite never hit. The luna compiler / dispatcher has known fields
+//! These pin **compile + run** invariants at sizes the rest of the
+//! test suite never hits. The luna compiler / dispatcher has known fields
 //! sized for typical (≪100 LOC, ≪50-depth, ≪64-upval) shapes; the
 //! tests below exercise the larger end so any silent overflow into
-//! limit-field truncation surfaces here rather than from a dogfood
-//! report.
+//! limit-field truncation surfaces here.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

@@ -1,4 +1,4 @@
-//! v2.0 PI Phase 2 attack A3 — `Table::try_set_existing` single-walk
+//! `Table::try_set_existing` single-walk
 //! collapse regression tests.
 //!
 //! The collapse fuses the prior `tb.get(key).is_nil()` gate and the
@@ -298,7 +298,7 @@ fn array_present_with_value_skips_newindex() {
 
 // ---------------------------------------------------------------------
 // Hot-path shape: token_bucket-style repeated SetField ops on the same
-// keys. End-to-end correctness check (the PI Phase 1 cell workload).
+// keys. End-to-end correctness check.
 // ---------------------------------------------------------------------
 
 #[test]

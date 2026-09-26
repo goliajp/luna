@@ -1,5 +1,4 @@
-//! Minimal base library — what the P03 gate corpus needs. The full base
-//! library (P04) replaces/extends this.
+//! Minimal base library. The full base library replaces/extends this.
 
 use std::io::Write;
 

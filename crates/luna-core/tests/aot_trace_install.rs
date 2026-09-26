@@ -1,11 +1,8 @@
-//! v1.3 Phase AOT Stage 7 sub-piece 4 — `Vm::install_aot_trace` +
-//! `Vm::collect_proto_hashes` smoke tests.
+//! `Vm::install_aot_trace` + `Vm::collect_proto_hashes` smoke tests.
 //!
 //! These cover the install API surface only — the deploy-side
 //! resolver that *calls* this API lives in `luna-runtime-helpers` and
-//! is exercised by `crates/luna-aot/tests/stage7_aot_trace_fires.rs`
-//! (which is the end-to-end smoke + currently deferred per the
-//! sub-piece-4 docstring).
+//! is exercised by `crates/luna-aot/tests/aot_trace_fires.rs`.
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;

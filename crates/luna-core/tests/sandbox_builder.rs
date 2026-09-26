@@ -1,4 +1,4 @@
-//! P2-A B1+B2+B7 smoke tests: SandboxBuilder + eval/eval_chunk + intern_str / try_as_str / as_bytes.
+//! Smoke tests: SandboxBuilder + eval/eval_chunk + intern_str / try_as_str / as_bytes.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

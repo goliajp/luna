@@ -1,4 +1,4 @@
-//! B11 smoke tests: Rust-side debug hook.
+//! Smoke tests: Rust-side debug hook.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

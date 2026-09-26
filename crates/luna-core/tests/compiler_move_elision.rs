@@ -1,6 +1,6 @@
-//! v2.1 PI Phase 11 — A4''' + A4'' bundle regression tests.
+//! Reloc-landing and RHS-materialization peephole regression tests.
 //!
-//! A4''' Reloc-landing peephole: when `assign_name` is about to emit a
+//! Reloc-landing peephole: when `assign_name` is about to emit a
 //! `Move local_reg, vreg` for a local target, the just-emitted op at
 //! `here() - 1` is inspected. If it is one of the closed set of
 //! retargetable producers (arith / Get* / Unm / Len / Not / BNot /
@@ -8,7 +8,7 @@
 //! destination, the A field is patched to `local_reg` directly via
 //! `patch_dest` and the Move is skipped. Mirrors PUC `discharge2reg`.
 //!
-//! A4'' bundle: when `assign_stat`'s `explist_adjust` call ends with a
+//! RHS-materialization elision: when `assign_stat`'s `explist_adjust` call ends with a
 //! trivial `Move base, src` materialization (an `Exp::Reg(src)` RHS
 //! discharged into a fresh temp) AND the single-store gate holds
 //! (targets.len() == exprs.len() == 1), the Move is popped and `src`
@@ -36,7 +36,8 @@ use luna_core::vm::isa::{Inst, Op};
 fn compile_main(src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
     let mut heap = Heap::new();
-    let proto = compile_chunk(&ast, LuaVersion::Lua55, b"=a4bundle", &mut heap).expect("compile");
+    let proto =
+        compile_chunk(&ast, LuaVersion::Lua55, b"=move_elision", &mut heap).expect("compile");
     proto.code.to_vec()
 }
 
@@ -77,14 +78,14 @@ fn eval_table_get_int(src: &str) -> i64 {
 }
 
 // =====================================================================
-// A4''' Reloc-landing — retargetable producers
+// Reloc-landing — retargetable producers
 // =====================================================================
 
 #[test]
-fn a4ppp_arith_add_local_local_one_emits_no_move() {
+fn retarget_arith_add_local_local_one_emits_no_move() {
     // The token_bucket pc 33 shape — `refilled = refilled + 1`. Without
-    // A4''' the chunk would emit `Add temp, refilled, 1` + `Move
-    // refilled, temp`. With A4''', the Add's A field is patched to
+    // the peephole the chunk would emit `Add temp, refilled, 1` + `Move
+    // refilled, temp`. With it, the Add's A field is patched to
     // refilled directly and the Move drops.
     let src = r#"
         local refilled = 0
@@ -95,7 +96,7 @@ fn a4ppp_arith_add_local_local_one_emits_no_move() {
     assert_eq!(
         count_moves(&code),
         0,
-        "A4''' must elide the trailing Move for `local = local + 1`"
+        "the Reloc-landing peephole must elide the trailing Move for `local = local + 1`"
     );
     // Add still emits exactly once, landing directly into the local.
     assert_eq!(
@@ -107,7 +108,7 @@ fn a4ppp_arith_add_local_local_one_emits_no_move() {
 }
 
 #[test]
-fn a4ppp_unary_neg_local_emits_no_move() {
+fn retarget_unary_neg_local_emits_no_move() {
     // Unary Unm produces Exp::Reloc whose A is patched at discharge.
     // The Move from Unm-temp to the local should be elided.
     let src = r#"
@@ -119,14 +120,14 @@ fn a4ppp_unary_neg_local_emits_no_move() {
     assert_eq!(
         count_moves(&code),
         0,
-        "A4''' must elide the Unm landing Move"
+        "the Reloc-landing peephole must elide the Unm landing Move"
     );
     assert_eq!(count_ops(&code, Op::Unm), 1);
     assert_eq!(eval_int(src), -5);
 }
 
 #[test]
-fn a4ppp_len_local_emits_no_move() {
+fn retarget_len_local_emits_no_move() {
     // `#x` produces an Exp::Reloc(Op::Len). Same pattern.
     let src = r#"
         local t = "hello"
@@ -135,21 +136,21 @@ fn a4ppp_len_local_emits_no_move() {
         return n
     "#;
     let code = compile_main(src);
-    // The only Move that could appear is the discharge into `n`. A4'''
-    // elides it by retargeting Len's A to `n`'s register.
+    // The only Move that could appear is the discharge into `n`. The
+    // peephole elides it by retargeting Len's A to `n`'s register.
     assert_eq!(
         count_moves(&code),
         0,
-        "A4''' must elide the Len landing Move"
+        "the Reloc-landing peephole must elide the Len landing Move"
     );
     assert_eq!(count_ops(&code, Op::Len), 1);
     assert_eq!(eval_int(src), 5);
 }
 
 #[test]
-fn a4ppp_getfield_local_emits_no_move() {
+fn retarget_getfield_local_emits_no_move() {
     // `x = t.k` — GetField with A=temp, then Move local, temp.
-    // A4''' retargets GetField's A to local.
+    // The peephole retargets GetField's A to local.
     let src = r#"
         local t = { k = 42 }
         local x = 0
@@ -160,13 +161,13 @@ fn a4ppp_getfield_local_emits_no_move() {
     assert_eq!(
         count_moves(&code),
         0,
-        "A4''' must elide the GetField landing Move"
+        "the Reloc-landing peephole must elide the GetField landing Move"
     );
     assert_eq!(eval_int(src), 42);
 }
 
 #[test]
-fn a4ppp_newtable_is_not_retargeted_to_preserve_gc_live_top() {
+fn retarget_newtable_is_not_retargeted_to_preserve_gc_live_top() {
     // NewTable allocates and calls `maybe_collect_garbage(base + A + 1)`,
     // using A as the live-stack-top boundary. Retargeting A to a local
     // below another live local would let GC sweep the higher local —
@@ -176,7 +177,7 @@ fn a4ppp_newtable_is_not_retargeted_to_preserve_gc_live_top() {
     //
     // Construct: u is at r0, b is at r1. After `b = {34}` the locals
     // are settled. The `u = {}` is an `assign_stat` (not local_stat) so
-    // the NewTable goes through a temp. With A4''' off NewTable+Closure
+    // the NewTable goes through a temp. With the peephole off NewTable+Closure
     // the temp must be a fresh reg (>= 3 here = above all locals), then
     // Move(0, temp) writes it to u.
     let src = r#"
@@ -197,7 +198,7 @@ fn a4ppp_newtable_is_not_retargeted_to_preserve_gc_live_top() {
         2,
         "expected two NewTable ops (one for `b = {{34}}`, one for `u = {{}}`)"
     );
-    // For the `u = {}` case (the second NewTable), A4''' is disabled
+    // For the `u = {}` case (the second NewTable), the peephole is disabled
     // for NewTable so it must write to a temp at freereg (>= 2), NOT to
     // u's r0 directly.
     let (_, second_newtable) = new_tables[1];
@@ -220,7 +221,7 @@ fn a4ppp_newtable_is_not_retargeted_to_preserve_gc_live_top() {
 }
 
 #[test]
-fn a4ppp_closure_is_not_retargeted_to_preserve_gc_live_top() {
+fn retarget_closure_is_not_retargeted_to_preserve_gc_live_top() {
     // Closure shares NewTable's GC-step-with-A-derived-live-top contract.
     // Same exclusion. Force the assignment shape (not local_stat) so
     // discharge would normally land on a temp.
@@ -248,11 +249,11 @@ fn a4ppp_closure_is_not_retargeted_to_preserve_gc_live_top() {
 }
 
 #[test]
-fn a4ppp_jump_target_blocks_retarget() {
+fn retarget_jump_target_blocks_retarget() {
     // When the just-emitted instruction at here()-1 is itself a jump
-    // destination, A4''' must NOT retarget — a jump landing there could
-    // be patched by something that depends on the original A field, or
-    // a future basic-block-edge audit could break. Construct a shape
+    // destination, the peephole must NOT retarget — a jump landing there
+    // could be patched by something that depends on the original A
+    // field. Construct a shape
     // where the previous emit IS a jump target.
     //
     // The cleanest minimal pattern: a comparison materialization (Cmp +
@@ -273,14 +274,14 @@ fn a4ppp_jump_target_blocks_retarget() {
 }
 
 // =====================================================================
-// A4'' explist_adjust RHS materialization elision
+// explist_adjust RHS materialization elision
 // =====================================================================
 
 #[test]
-fn a4pp_single_target_simple_reg_rhs_elides_materialization() {
+fn rhs_elision_single_target_simple_reg_rhs_elides_materialization() {
     // The token_bucket pc 29 shape — `bucket.last = now` where `now` is
-    // a local. Without A4'' the chunk emits `Move temp, now` + `SetField
-    // bucket, c_last, temp`. With A4'', the Move drops and SetField
+    // a local. Without the elision the chunk emits `Move temp, now` +
+    // `SetField bucket, c_last, temp`. With it, the Move drops and SetField
     // reads `now` directly.
     //
     // The proto carries two SetFields — one inside the table ctor for
@@ -297,7 +298,7 @@ fn a4pp_single_target_simple_reg_rhs_elides_materialization() {
     assert_eq!(
         count_moves(&code),
         0,
-        "A4'' must elide the RHS materialization Move"
+        "the RHS-materialization elision must elide the RHS materialization Move"
     );
     let setfields: Vec<&Inst> = code.iter().filter(|i| i.op() == Op::SetField).collect();
     assert_eq!(
@@ -316,10 +317,10 @@ fn a4pp_single_target_simple_reg_rhs_elides_materialization() {
 }
 
 #[test]
-fn a4pp_name_target_simple_reg_rhs_collapses_to_one_move() {
-    // `x = y` where both are locals. Without A4'' explist_adjust would
-    // emit Move(temp, y) and assign_name would emit Move(x, temp). With
-    // A4'' the materialization Move is popped, and only assign_name's
+fn rhs_elision_name_target_simple_reg_rhs_collapses_to_one_move() {
+    // `x = y` where both are locals. Without the elision explist_adjust
+    // would emit Move(temp, y) and assign_name would emit Move(x, temp).
+    // With it the materialization Move is popped, and only assign_name's
     // Move(x, y) remains.
     let src = r#"
         local x, y = 0, 41
@@ -336,7 +337,7 @@ fn a4pp_name_target_simple_reg_rhs_collapses_to_one_move() {
 }
 
 #[test]
-fn a4pp_multi_target_preserves_materialization() {
+fn rhs_elision_multi_target_preserves_materialization() {
     // Multi-target assignments cannot use the single-store short-circuit
     // (PUC §3.3.3 ordering). The materialization Moves stay.
     let src = r#"
@@ -356,7 +357,7 @@ fn a4pp_multi_target_preserves_materialization() {
 }
 
 #[test]
-fn a4pp_indexed_target_with_int_key_elides_materialization() {
+fn rhs_elision_indexed_target_with_int_key_elides_materialization() {
     // `t[1] = x` short-circuit: same shape with SetI instead of SetField.
     let src = r#"
         local t = { 0 }
@@ -368,7 +369,7 @@ fn a4pp_indexed_target_with_int_key_elides_materialization() {
     assert_eq!(
         count_moves(&code),
         0,
-        "A4'' must elide materialization Move for SetI store"
+        "the RHS-materialization elision must elide materialization Move for SetI store"
     );
     // SetI with C == x's local register.
     let seti: Vec<&Inst> = code.iter().filter(|i| i.op() == Op::SetI).collect();
@@ -385,7 +386,8 @@ fn a4pp_indexed_target_with_int_key_elides_materialization() {
 fn bundle_token_bucket_repeated_pattern() {
     // Compresses the token_bucket inner-loop shape: refill +1, last =
     // now, tokens -1. Each statement targets a different peephole; the
-    // bundle clears 3 Moves per iter (A4''' twice + A4'' once).
+    // bundle clears 3 Moves per iter (Reloc-landing twice + RHS
+    // materialization once).
     let src = r#"
         local bucket = { tokens = 1000, last = 0 }
         local now = 1
@@ -405,7 +407,7 @@ fn bundle_token_bucket_repeated_pattern() {
 #[test]
 fn bundle_correctness_cross_check_against_baseline_observation() {
     // Differential check: a hand-coded golden value against the bundled
-    // compiler. If A4''' or A4'' had introduced a semantic drift, this
+    // compiler. If either peephole had introduced a semantic drift, this
     // tight numeric expression would diverge.
     let src = r#"
         local a, b, c = 3, 5, 7

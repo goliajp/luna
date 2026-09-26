@@ -1,8 +1,4 @@
-//! v2.0 Phase 1 CB-edge — coroutine + debug.sethook interaction.
-//!
-//! Audit:
-//! coroutine.resume + debug.sethook interaction + 5.5 closeable
-//! iterator + coro spot-audit.
+//! coroutine.resume + debug.sethook interaction.
 //!
 //! Pinned shapes:
 //! 1. Per-thread hook isolation: setting a hook on one coroutine does
@@ -10,7 +6,7 @@
 //! 2. Hook clearance from inside coroutine survives the resume boundary.
 //! 3. Coroutine yielding while a count hook is installed does not
 //!    drop the count counter (regression for hook firing in async
-//!    dispatch — see Phase AS commit `7f054b4`).
+//!    dispatch).
 
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -70,9 +66,9 @@ fn coroutine_hook_isolation_does_not_leak_to_main() {
 /// Regression for `Vm::set_hook(target=None, ...)` being silently
 /// dropped when called from inside a coroutine body. Pre-fix path went
 /// through `is_current_thread(None)`, which returns false whenever
-/// `self.current = Some(co)`, so neither install arm fired. v2.0 CB
-/// sub-track fix routes `target.is_none()` directly to `install_hook`
-/// on the live VM fields (= the running thread, main or current coro).
+/// `self.current = Some(co)`, so neither install arm fired. The fix
+/// routes `target.is_none()` directly to `install_hook` on the live
+/// VM fields (= the running thread, main or current coro).
 #[test]
 fn coroutine_yield_under_count_hook_preserves_counter() {
     let mut vm = Vm::new(LuaVersion::Lua55);

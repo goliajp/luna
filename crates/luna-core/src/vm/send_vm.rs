@@ -1,4 +1,4 @@
-//! v1.3 Phase SS-B — `SendVm` newtype wrapper for cross-thread embedding.
+//! `SendVm` newtype wrapper for cross-thread embedding.
 //!
 //! Gated behind `#[cfg(feature = "send")]`. Embedders opt in via
 //! `cargo add luna-core --features send` and use [`SendVm`] in place
@@ -21,7 +21,7 @@
 //!   reaches a `&mut Vm` once the lock is held.
 //! - `Arc<RwLock<()>>` — access serializer. All operations take
 //!   `lock.write()` (effectively a `Mutex` — see the SAFETY notes
-//!   below for why the read/write split in the audit is purely a
+//!   below for why a read/write split would be purely a
 //!   conceptual classification, not a mechanically distinct path).
 //!
 //! `unsafe impl Send for SendVm {}` — safe because:
@@ -49,22 +49,16 @@
 //!
 //! # Interp-only constraint
 //!
-//! of `SendVm` does **not** install a JIT backend. `SendVm::new`
+//! [`SendVm::new`] does **not** install a JIT backend. It
 //! calls [`Vm::new_minimal`] which leaves `JitState` at
 //! `NullJitBackend`; the dispatcher always falls back to the
-//! interpreter. JIT-aware `SendVm` is a post-v1.3 polish item (the
-//! `Proto::traces: RefCell<Vec<Rc<CompiledTrace>>>` cross-cutting
-//! concern intersects with `Send` and is scoped out of v1.3).
-//!
-//! This is a documented contract, not a defer — embedders who need
-//! both Send semantics and JIT today should run one bare `Vm` per OS
-//! thread and exchange data via channels.
+//! interpreter. A caller-built Vm with a JIT backend can be wrapped
+//! with [`SendVm::from_vm`], under the extra obligations listed there.
 //!
 //! # When to use `SendVm` vs `Vm`
 //!
 //! - **`Vm`** — single-thread scripting (game engine main thread,
-//!   CLI tool, REPL). The fast path; zero overhead vs the v1.2
-//!   baseline.
+//!   CLI tool, REPL). The fast path; zero overhead.
 //! - **`SendVm`** — multi-threaded host (tokio `multi_thread`,
 //!   request-per-script web server, worker-pool embedding). Pays
 //!   the lock acquire cost (~30-50 ns per method call) and gives
@@ -85,7 +79,7 @@ use crate::vm::userdata_trait::LuaUserdata;
 /// Cross-thread-capable Lua VM handle.
 ///
 /// See the [module docs](self) for the design, safety contract, and
-/// the v1.3 interp-only restriction.
+/// the interp-only restriction.
 ///
 /// Clone the handle and move clones into threads / tasks to share one
 /// underlying `Vm` across workers; concurrent method calls block on
@@ -123,7 +117,7 @@ impl SendVm {
         // `Vm::new_minimal` in luna-core constructs a JIT-free Vm
         // (the `luna-jit` crate's `new_minimal_with_jit` is the
         // JIT-installing entry point; we deliberately do not call
-        // it here per the §3.3 interp-only constraint).
+        // it here per the interp-only constraint).
         let vm = Vm::new_minimal(version);
         // clippy::arc_with_non_send_sync fires because
         // `UnsafeCell<Vm>` is `!Send + !Sync`. The `unsafe impl Send
@@ -137,7 +131,7 @@ impl SendVm {
         }
     }
 
-    /// v2.0 Track J sub-step J-E — wrap a caller-constructed `Vm`
+    /// Wrap a caller-constructed `Vm`
     /// (with any backend / libraries / globals already installed) in
     /// a `SendVm`. The complement to [`SendVm::new`], which constructs
     /// an interp-only Vm internally.
@@ -279,32 +273,22 @@ impl SendVm {
         self.with_vm_mut(|vm| vm.unpin(t))
     }
 
-    /// v2.0 Track J sub-step J-E — snapshot of [`Vm::trace_dispatched_count`]
-    /// through the lock. Used by the J-E cross-thread JIT smoke test
-    /// (`luna-jit/tests/cv_send_vm_jit_smoke.rs`) to confirm the trace
-    /// JIT actually engaged on the worker thread; useful to embedders
+    /// Snapshot of [`Vm::trace_dispatched_count`]
+    /// through the lock. Useful to embedders
     /// who want to observe whether a script went JIT-hot through the
     /// SendVm boundary.
     pub fn trace_dispatched_count(&self) -> u64 {
         self.with_vm_mut(|vm| vm.trace_dispatched_count())
     }
 
-    /// v2.0 Track J sub-step J-E — companion accessor for the cache
-    /// entry count when the wrapped Vm has the Cranelift JIT backend
-    /// installed (`luna_jit::new_minimal_with_jit` etc.). Returns 0 for
-    /// JIT-free Vms (the default constructed by [`SendVm::new`]).
-    ///
-    /// The actual count comes from a luna-jit-side helper
-    /// (`luna_jit::jit_backend::cache_entry_count`); luna-core can't
-    /// look at concrete Cranelift types directly without breaking the
-    /// 0-third-party-dep gate, so we expose a closure-shaped accessor
-    /// instead. Use [`Self::with_vm`] for that pattern.
+    /// Number of `SendVm` handles sharing the wrapped Vm (the inner
+    /// `Arc`'s strong count).
     #[doc(hidden)]
     pub fn __j_e_handle_arc_count(&self) -> usize {
         Arc::strong_count(&self.inner)
     }
 
-    /// v2.0 Track J sub-step J-E — read-only closure-shaped accessor
+    /// Read-only closure-shaped accessor
     /// that runs `f` against `&Vm` under the lock. Mirror of the
     /// internal `with_vm_mut` but immutable. Lets embedders read
     /// arbitrary `Vm` state (counters, globals, dialect, etc.)

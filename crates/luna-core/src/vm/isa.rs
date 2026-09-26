@@ -1,9 +1,8 @@
 //! Instruction set: u32 instructions with the PUC 5.5 field layout
 //! (op 7 | A 8 | k 1 | B 8 | C 8, plus Bx/sBx/Ax/sJ variants). The opcode
-//! set follows lopcodes.h (v5.5.0) with deliberate v1 trims recorded in the
-//! P03 plan: no K-/immediate-arith variants and no MMBIN* (metamethod
-//! fallback is handled inline by the Rust dispatch loop); they return in the
-//! P10 ceiling pass if profiles ask for them.
+//! set follows lopcodes.h (v5.5.0) with deliberate trims: no K-/immediate-arith
+//! variants and no MMBIN* (metamethod fallback is handled inline by the Rust
+//! dispatch loop).
 
 /// Opcode kinds for the luna bytecode. Layout follows PUC `lopcodes.h`
 /// (5.5.0); semantics may differ where noted in the dispatcher.

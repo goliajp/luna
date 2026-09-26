@@ -415,7 +415,7 @@ fn scale_f64(mut f: f64, mut e: i64) -> f64 {
 /// C `%g`-style presentation: scientific form when the decimal exponent
 /// falls outside [-4, 14), two-digit signed exponent, and `.0` appended to
 /// integral-looking decimals (PUC lua_number2str). Exact boundary alignment
-/// against PUC 5.5 output is rechecked by the P04 gate (strings/math suites).
+/// against PUC 5.5 output is checked by the official strings/math suites.
 pub fn num_to_string(n: Num) -> String {
     num_to_string_for(n, FloatFmt::TwoStage55)
 }

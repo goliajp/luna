@@ -309,22 +309,22 @@ pub struct Proto {
     /// upval". Computed once at Proto construction so `Op::Closure`'s
     /// 5.1 path doesn't string-compare across `upvals` per closure.
     pub env_upval_idx: u8,
-    /// P11-S2 — JIT cache slot. `Untried` on Proto creation; the first
-    /// `Vm::call_value` on a closure whose body fits the S1 whitelist
+    /// JIT cache slot. `Untried` on Proto creation; the first
+    /// `Vm::call_value` on a closure whose body fits the JIT whitelist
     /// flips it to `Compiled(fn ptr)` and the `JitHandle` that backs
     /// the mmap is parked on the `Vm.jit_handles` Vec for the Vm's
     /// lifetime. `Failed` records the whitelist miss so subsequent
     /// calls skip the compile attempt.
     pub jit: std::cell::Cell<JitProtoState>,
-    /// P12-S1 — trace JIT hot-loop detector. Incremented by `Vm::run`
+    /// Trace JIT hot-loop detector. Incremented by `Vm::run`
     /// on each backward-jump dispatched within this Proto. Once the
     /// counter passes `TRACE_HOT_THRESHOLD`, the next visit to the
     /// backward-jump target promotes that PC to a trace head and
-    /// begins recording (S2+). `Cell<u32>` matches the interp's
+    /// begins recording. `Cell<u32>` matches the interp's
     /// single-threaded dispatch and pays no atomic cost. Cap at
     /// `u32::MAX / 2` to leave headroom above the threshold.
     pub trace_hot_count: std::cell::Cell<u32>,
-    /// P12-S4 — trace-on-call counter. Incremented by `begin_call` on
+    /// Trace-on-call counter. Incremented by `begin_call` on
     /// every Lua-callee push into this Proto. Once it passes
     /// `CALL_HOT_THRESHOLD`, the next call into this Proto promotes
     /// `pc=0` to a trace head and begins recording. Lets the trace
@@ -332,23 +332,23 @@ pub struct Proto {
     /// negative `Op::Jmp` (`fib`, recursive `make`/`check` in
     /// `binary_trees`), where the back-edge counter never triggers.
     pub call_hot_count: std::cell::Cell<u32>,
-    /// P13-S13-I — count of S13-H "partial-coverage" discards on
+    /// Count of "partial-coverage" discards on
     /// this Proto's call-triggered recordings. Each discard is a
     /// new opportunity for the recorder to record a different
     /// (hopefully longer) trace at a deeper recursion point; the
     /// trigger condition re-uses `c >= THRESHOLD &&
-    /// !already_cached` (S13-H) so the next call retries. Without
+    /// !already_cached` so the next call retries. Without
     /// a cap, pathologically-branchy workloads like binary_trees
     /// (`make` body contains 2 nested self-recursive calls)
     /// produce a 1500+ discard storm — the recorder never
     /// captures a covered trace because every base / shallow-
-    /// depth entry caught yields a partial path. The S13-I cap
+    /// depth entry caught yields a partial path. The cap
     /// bounds the storm: after `MAX_DISCARDS = 5` discards, the
     /// next close skips the coverage check and compiles + caches
     /// whatever shape it has (length gate will likely refuse
     /// dispatch but at least the trigger stops firing).
     pub trace_discard_count: std::cell::Cell<u32>,
-    /// P13-S13-K — once the S13-I discard cap forces a compile on
+    /// Once the discard cap forces a compile on
     /// this Proto (the recorder gave up trying to capture a
     /// covered trace and just compiled whatever shape it had), set
     /// this flag to `true`. Both trigger gates (back-edge in
@@ -367,18 +367,18 @@ pub struct Proto {
     /// recording, so without this every later call or back-edge would
     /// record and compile the same failing trace again.
     pub(crate) trace_compile_failures: crate::jit::send_compat::TRefLock<Vec<(u32, u8)>>,
-    /// P12-S2 — compiled trace cache for this Proto. A successful
-    /// `compile_trace(record)` (S2.B) parks its `CompiledTrace` here;
-    /// `Vm::run`'s S3 dispatcher (next phase) iterates this on each
+    /// Compiled trace cache for this Proto. A successful
+    /// `compile_trace(record)` parks its `CompiledTrace` here;
+    /// `Vm::run`'s trace dispatcher iterates this on each
     /// back-edge target visit. `RefCell` because compile is invoked
     /// from inside `Vm::run` and may need to push while another op
-    /// is mid-dispatch in the same Proto. Empty `Vec` until S2 lands.
+    /// is mid-dispatch in the same Proto.
     pub traces: crate::jit::send_compat::TRefLock<
         Vec<crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>>,
     >,
 }
 
-/// P11-S2 / S2c — per-Proto JIT cache state. Copy so it fits a plain
+/// Per-Proto JIT cache state. Copy so it fits a plain
 /// `Cell` on the dispatch hot path (no `RefCell` borrow check); the
 /// fn pointer's mmap is kept alive by `Vm.jit_handles`.
 #[derive(Clone, Copy, Debug)]
@@ -402,12 +402,12 @@ pub enum JitProtoState {
         /// from `Vm::call_value`, an interpreter `Op::Call` gets
         /// zero results pushed (PUC nresults handling).
         returns_one: bool,
-        /// P11-S3 — per-arg Float bit. Bit `i = 1` ↔ arg slot `i`
+        /// Per-arg Float bit. Bit `i = 1` ↔ arg slot `i`
         /// is f64 (passed as i64 bit-pattern across the ABI, bitcast
         /// inside the JIT). Bit `i = 0` ↔ Int. Bits ≥ MAX_JIT_ARITY
         /// are zero.
         arg_float_mask: u8,
-        /// P11-S5d — per-arg Table bit. Bit `i = 1` ↔ arg slot `i`
+        /// Per-arg Table bit. Bit `i = 1` ↔ arg slot `i`
         /// is `Gc<Table>` raw ptr (passed as the i64 pointer value
         /// directly, since `Gc<Table>` is `NonNull<Table>` =
         /// pointer-shaped). Mutually exclusive with `arg_float_mask`
@@ -417,12 +417,12 @@ pub enum JitProtoState {
         /// into the dispatcher's default-deny match arm and the
         /// callee couldn't be reached via JIT.
         arg_table_mask: u8,
-        /// P11-S3 — true iff the chunk's `Return1` value is f64.
+        /// True iff the chunk's `Return1` value is f64.
         /// Dispatcher wraps `r` as `Value::Float(f64::from_bits(r))`
         /// vs `Value::Int(r)` accordingly. Meaningful only when
         /// `returns_one == true`.
         ret_is_float: bool,
-        /// P11-S5d — true iff the chunk's `Return1` value is a
+        /// True iff the chunk's `Return1` value is a
         /// `Gc<Table>` ptr. Mutually exclusive with `ret_is_float`.
         /// Dispatcher wraps `r` as
         /// `Value::Table(Gc::from_ptr(r as *mut Table))`.
@@ -436,7 +436,7 @@ pub enum JitProtoState {
 // need any auto-trait gymnastics — this comment exists so a future
 // audit doesn't try to flip the trait without thinking.
 
-/// v1.3 Phase AOT Stage 7 sub-piece 4 — hand-rolled FNV-1a-128 state.
+/// Hand-rolled FNV-1a-128 state.
 /// Used by [`Proto::stable_hash`] to fingerprint a Proto without
 /// pulling a third-party hash crate (`luna-core` 0-dep contract).
 ///
@@ -481,7 +481,7 @@ impl FnvHash128 {
 }
 
 impl Proto {
-    /// v1.3 Phase AOT Stage 7 sub-piece 4 — stable 128-bit hash over a
+    /// Stable 128-bit hash over a
     /// Proto's identity-defining bytes. Two `Proto`s whose Lua source +
     /// dialect compile to the same bytecode hash to the same digest;
     /// distinct sources hash distinct. The digest is stable across
@@ -626,7 +626,7 @@ impl Proto {
     }
 }
 
-/// P11-S5d.M — closures with `≤ INLINE_UPVALS_N` upvalues skip the
+/// Closures with `≤ INLINE_UPVALS_N` upvalues skip the
 /// per-closure upvals Box. The `Op::Closure` handler builds upvals
 /// into a stack array and calls `Heap::new_closure_inline(&[Gc<…>])`,
 /// which writes them straight into `inline_storage` — no caller-side
@@ -656,7 +656,7 @@ pub struct LuaClosure {
     /// `UnsafeCell` for the same reason as `Table::inline_storage`:
     /// `upvals_ptr` is a self-referential cached pointer into this
     /// field, and a `&mut self` function-entry retag would otherwise
-    /// invalidate it under Stacked Borrows (v2.13 Miri finding). All
+    /// invalidate it under Stacked Borrows (Miri reports it). All
     /// access goes through `upvals_ptr` / `.get()`.
     pub(crate) inline_storage:
         std::cell::UnsafeCell<[std::mem::MaybeUninit<Gc<Upvalue>>; INLINE_UPVALS_N]>,
@@ -675,9 +675,9 @@ impl LuaClosure {
     /// View of all upvalues as a `&[Gc<Upvalue>]`. Backed by inline
     /// storage when `upvals_len <= INLINE_UPVALS_N`, else by overflow.
     /// Freshly-derived base pointer for the upvalue storage — same
-    /// Stacked Borrows discipline as `Table::array_base` (v2.13 Miri
-    /// finding): a cached pointer into `*self` dies on every
-    /// `&mut self` entry retag, so the inline case re-derives through
+    /// Stacked Borrows discipline as `Table::array_base`: a cached
+    /// pointer into `*self` dies on every `&mut self` entry retag, so
+    /// the inline case re-derives through
     /// `UnsafeCell::get()` at each use; the overflow (heap Box) case
     /// keeps the cached pointer whose tag lives outside `*self`.
     /// `upvals_ptr` stays maintained for raw-field consumers.
@@ -736,13 +736,13 @@ pub struct NativeClosure {
     pub f: crate::runtime::value::NativeFn,
     /// Captured upvalues, visible inside `f` via the Vm's call API.
     pub upvals: Box<[Value]>,
-    /// v1.1 B10 Stage 2 — marker bit for async natives. When `true`,
+    /// Marker bit for async natives. When `true`,
     /// `f` is actually an `crate::vm::async_drive::AsyncNativeFn`
     /// (same pointer width, transmuted at the call site) returning a
     /// `Pin<Box<dyn Future>>`. The dispatcher's native-call path checks
     /// this bit and routes through the cooperative-yield mechanism
     /// instead of invoking `f` synchronously. Default `false` (sync
-    /// native) for all v1.0 / v1.1-Stage-1 construction sites.
+    /// native) for every other construction site.
     pub is_async: bool,
 }
 
@@ -769,7 +769,7 @@ pub struct Upvalue {
 pub enum UpvalState {
     /// references slot `slot` of `thread`'s value stack (`None` = the main
     /// thread). The owning thread is tracked so the cell still resolves to the
-    /// right stack after a coroutine swap (P05).
+    /// right stack after a coroutine swap.
     Open {
         /// Stack slot of the captured local on the owning thread.
         slot: u32,

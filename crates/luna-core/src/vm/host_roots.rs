@@ -1,4 +1,4 @@
-//! v1.3 Phase SR — host root pool types and slot-recycling API.
+//! Host root pool types and slot-recycling API.
 //!
 //! This module owns the type definitions (`HostRootSlot` (private),
 //! [`HostRootTicket`], [`HostRootStale`]) plus the `pin_host` /
@@ -11,8 +11,8 @@
 //! pub(crate) host_roots_free: Vec<u32>,
 //! ```
 //!
-//! The pool replaces the v1.1 append-only `Vec<Value>`. Long-running
-//! embedders (request-per-script loops, edge workers) now release
+//! Long-running
+//! embedders (request-per-script loops, edge workers) release
 //! single pins via [`Vm::unpin`] without forcing `unpin_all` between
 //! requests; slots are recycled via a free list, and `HostRootTicket`
 //! carries an ABA-safe generation counter so a stale ticket (held
@@ -27,7 +27,7 @@
 use crate::runtime::value::Value;
 use crate::vm::exec::Vm;
 
-/// v1.3 Phase SR — one slot in the host root pool.
+/// One slot in the host root pool.
 ///
 /// `value == Value::Nil` when the slot is on the free list; the GC
 /// tracer treats `Nil` as a no-op so free slots cost nothing to
@@ -39,7 +39,7 @@ pub(crate) struct HostRootSlot {
     pub(crate) generation: u32,
 }
 
-/// v1.3 Phase SR — opaque handle to a pinned host root.
+/// Opaque handle to a pinned host root.
 ///
 /// `Copy` so embedder handle types (`LuaFunction` / `LuaTable` /
 /// `LuaRoot`) stay `Copy`. Two `u32` fields → 8 bytes total, fits in
@@ -75,7 +75,7 @@ impl HostRootTicket {
     }
 }
 
-/// v1.3 Phase SR — error returned by [`Vm::write_host`] /
+/// Error returned by [`Vm::write_host`] /
 /// [`Vm::unpin`] when the supplied ticket's `generation` no longer
 /// matches the live slot. Indicates the slot has been unpinned (and
 /// possibly re-pinned to an unrelated value) since the ticket was

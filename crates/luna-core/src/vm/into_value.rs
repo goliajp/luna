@@ -1,4 +1,4 @@
-//! `IntoValue` trait (B4, Phase 2 P2-B) — convert Rust primitive
+//! `IntoValue` trait — convert Rust primitive
 //! types into Lua `Value`s through a `&mut Vm` (so string-shaped
 //! conversions can intern through the heap).
 //!
