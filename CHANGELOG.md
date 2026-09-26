@@ -44,7 +44,6 @@ optimization.
   `error: <message>`. Without the `repl-line-editor` feature it no longer
   writes `~/.luna_history`, as `lua.c` without readline keeps no history;
   the line editor still does.
-
 - `string.dump` writes PUC bytecode of the running dialect (5.1, 5.2, 5.3,
   5.4 or 5.5), which that version's stock `lua` loads and runs;
   `string.dump(f, true)` strips debug information as PUC does. A function
@@ -55,7 +54,6 @@ optimization.
   `string.dump` now produces, loads under the same switch as luna's own
   chunks (`Vm::set_bytecode_loading`, on by default); chunks of the other
   PUC versions still need `Vm::set_puc_bytecode_loading(true)`.
-
 - `Vm::set_p16_self_link_enabled` / `Vm::p16_self_link_enabled` are now
   `Vm::set_self_link_enabled` / `Vm::self_link_enabled`. The old names
   still work and are deprecated.
