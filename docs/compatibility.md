@@ -250,12 +250,16 @@ It checks, for every function and nested function:
 - that instructions reading a variable number of values from the stack
   top directly follow the instruction that set it;
 - line info (empty, or one entry per instruction) and each nested
-  function's upvalue descriptors against its parent.
+  function's upvalue descriptors against its parent;
+- the register of every named local against the stack size;
+- function nesting, at most 250 levels deep (the compilers stop at 200).
 
-The verifier does not check register *values* at run time. The debug
-library can change those from plain source too, for example
-`debug.setlocal` on a `for` loop's hidden state. Keep the bytecode gates
-shut for input you do not trust.
+The verifier does not check register *values*. The debug library can
+change those from plain source too, for example `debug.setlocal` on a
+`for` loop's hidden state. The instructions that rely on a value's type
+check it when they run and raise a Lua error (see "Deliberate
+differences"); keep the bytecode gates shut for input you do not trust
+all the same.
 
 Per-dialect translators: `crates/luna-core/src/vm/dump/puc/puc_5{1..5}.rs`,
 sharing `lower.rs` (5.1) with `classic.rs` (5.2/5.3) and `modern.rs`
@@ -320,6 +324,23 @@ messages. What still differs does so on purpose:
   was built (fused multiply-subtract in 5.1/5.2 `%` on arm64, `%a`
   rounding in the macOS C library, 5.2's `%a` existing only when built
   with `LUA_USE_AFORMAT`).
+- **State the compiler never produces raises an error.** PUC reads the
+  hidden state of a numeric `for` loop, the target of a table
+  constructor and its list of to-be-closed variables without checking
+  them, so `debug.setlocal` or a crafted binary chunk that changes them
+  makes it print garbage, loop or crash. luna raises instead:
+  `'for' state corrupted` for a loop whose hidden slots no longer hold
+  numbers of the loop's kind (on 5.1/5.2, which have one number type, an
+  integer or a float is still a number and the loop goes on, as in PUC),
+  `attempt to index a <type> value` for a constructor whose table was
+  replaced, and `'<close>' state corrupted` for a to-be-closed slot
+  registered out of order (reachable only from crafted bytecode).
+- **`debug.setupvalue` does not change a C function's upvalues** (5.2+
+  let it). The standard library and embedder functions keep state there
+  that they rely on (a `gmatch` iterator's position, a wrapped
+  coroutine, a function pointer); `debug.setupvalue` on a C function
+  returns nothing, as it does for an index out of range.
+  `debug.getupvalue` still reads them.
 - **Unavailable without a C library:** two-way `io.popen` modes on
   5.1/5.2, `os.clock` as CPU time (it measures time since the `Vm`
   started), locales other than C/POSIX, and loading C modules
