@@ -10,15 +10,22 @@
 //! exit status set follow the standalone interpreter `lua.c` of the
 //! selected dialect (default Lua 5.5): an uncaught error prints
 //! `<argv[0]>: <message>` and a traceback on stderr and exits with status
-//! 1, and a bad option prints `lua.c`'s usage message. luna's own options
-//! (`--lua=`, `--sandbox`, ...) may appear anywhere before the script.
-//! Values a chunk returns are printed after it finishes.
+//! 1, and a bad option prints `lua.c`'s usage message. `LUA_INIT`, `-E`
+//! and the REPL are `lua.c`'s too. luna's own options (`--lua=`,
+//! `--sandbox`, ...) may appear anywhere before the script. Values a
+//! script or `-e` chunk returns are printed after it finishes.
 
 use luna_jit::VmExt; // brings install_default_jit / install_null_jit dotted-method form
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::{LuaError, Vm};
 use std::io::Write;
+
+#[cfg(feature = "repl-line-editor")]
+#[path = "luna/line_editor.rs"]
+mod line_editor;
+#[path = "luna/repl.rs"]
+mod repl;
 
 const HELP: &str = "\
 luna — a pure-Rust Lua runner
@@ -48,14 +55,17 @@ Options, as the selected dialect's lua.c takes them:
   --             stop handling options
   -              stop handling options and execute stdin
 
-With no script and no -e / -v, luna reads a program from stdin, or starts
-the interactive REPL when stdin is a terminal. Arguments go into the `arg`
-global as lua.c places them. An uncaught error is reported as lua.c
+With no script and no -e / -v, luna reads a program from stdin, or prints
+its version and starts the REPL when stdin is a terminal. Arguments go
+into the `arg` global as lua.c places them. Before the options' chunks
+run, LUA_INIT (from 5.2 on LUA_INIT_5_x first) is run, unless -E is
+given: a chunk, or `@file`. An uncaught error is reported as lua.c
 reports it (message and traceback on stderr) and the exit status is 1.
 
-In REPL mode each line is first evaluated as an expression (prefixed
-with `return`); on syntax error the line is re-evaluated as a
-statement so assignments / function definitions work too.";
+The REPL is lua.c's: it prompts with _PROMPT / _PROMPT2 on stdout, reads
+more lines while a statement is incomplete, tries a line as an
+expression first (5.3 on; `=expr` through 5.4), prints the results with
+`print` and an error with its traceback. Ctrl-D ends it.";
 
 fn parse_version(arg: &str) -> Option<LuaVersion> {
     match arg {
@@ -92,576 +102,6 @@ fn render(v: Value) -> String {
         Value::Userdata(_) => "<userdata>".into(),
         Value::LightUserdata(_) => "<lightuserdata>".into(),
     }
-}
-
-/// Maximum entries persisted in `~/.luna_history`. Older entries get
-/// truncated on save. PUC `lua`'s readline-driven history typically
-/// keeps 500-1000; pick the higher end since each line is short.
-const HISTORY_MAX_ENTRIES: usize = 1000;
-
-fn history_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(std::path::PathBuf::from(home).join(".luna_history"))
-}
-
-fn load_history() -> Vec<String> {
-    let Some(p) = history_path() else {
-        return Vec::new();
-    };
-    match std::fs::read_to_string(&p) {
-        Ok(s) => s.lines().map(|l| l.to_string()).collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(_) => Vec::new(),
-    }
-}
-
-fn save_history(entries: &[String]) {
-    let Some(p) = history_path() else {
-        return;
-    };
-    let body = entries
-        .iter()
-        .rev()
-        .take(HISTORY_MAX_ENTRIES)
-        .rev()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let _ = std::fs::write(&p, body);
-}
-
-/// True if `msg` indicates the parser ran out of input mid-block
-/// (incomplete `if … then`, `do … end`, `function … end`, long string,
-/// etc.). luna's `SyntaxError::msg` carries `near
-/// <eof>` / `unfinished … near <eof>` markers exactly when more input
-/// would let the parser continue. The single counter-example is the
-/// explicit `'<eof>' expected` form, which means the parser saw EXTRA
-/// trailing input and is not asking for more.
-fn is_incomplete_syntax(msg: &str) -> bool {
-    if msg.contains("'<eof>' expected") {
-        return false;
-    }
-    msg.contains(" near <eof>")
-}
-
-/// Interactive REPL entry point. Dispatches to the
-/// rustyline-backed editor when built with `--features
-/// repl-line-editor` (tab completion against `Vm` globals + Lua
-/// syntax highlighting); otherwise falls through to the plain
-/// path. The default `cargo install luna-jit` keeps a tiny dep
-/// surface (no rustyline) by leaving the feature off.
-fn repl(vm: &mut Vm) {
-    #[cfg(feature = "repl-line-editor")]
-    repl_rustyline(vm);
-    #[cfg(not(feature = "repl-line-editor"))]
-    repl_plain(vm);
-}
-
-/// Plain-stdin REPL — single-line + multi-line continuation +
-/// `~/.luna_history`. Always available; the rustyline build falls
-/// back here when terminal init fails.
-///
-/// Each entered chunk is first tried as an expression (`return <chunk>`)
-/// to surface a value; on syntax error it's retried as a statement so
-/// `x = 1` and `function f() ... end` work too. Mid-block incomplete
-/// input (detected via `SyntaxError::msg.contains(" near <eof>")`)
-/// reprompts with `>>` instead of erroring. Ctrl-D / EOF exits cleanly
-/// and persists the history.
-fn repl_plain(vm: &mut Vm) {
-    eprintln!(
-        "luna {} ({}) — interactive REPL. Ctrl-D to exit.",
-        env!("CARGO_PKG_VERSION"),
-        dialect_name(vm.version())
-    );
-    let stdin = std::io::stdin();
-    let mut history: Vec<String> = load_history();
-    let mut chunk = String::new();
-    let mut in_continuation = false;
-    loop {
-        eprint!("{}", if in_continuation { ">> " } else { "> " });
-        let _ = std::io::stderr().flush();
-        let mut line = String::new();
-        match stdin.read_line(&mut line) {
-            Ok(0) => {
-                if in_continuation {
-                    // Mid-block Ctrl-D — drop the partial chunk and exit.
-                    eprintln!();
-                }
-                eprintln!();
-                save_history(&history);
-                return;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("io error: {e}");
-                save_history(&history);
-                return;
-            }
-        }
-        if !in_continuation && line.trim().is_empty() {
-            continue;
-        }
-        if !chunk.is_empty() {
-            chunk.push('\n');
-        }
-        chunk.push_str(&line);
-        // Expression-first: `return <chunk>` to surface a returned
-        // value. If the expression parses but the statement form
-        // doesn't (e.g. assignments), the statement-form error is
-        // what we report to the user.
-        let as_expr = format!("return {chunk}");
-        let result = match vm.eval(&as_expr) {
-            Ok(vs) => Ok(vs),
-            Err(_) => vm.eval(chunk.as_str()),
-        };
-        match result {
-            Ok(vs) => {
-                for v in vs {
-                    println!("{}", render(v));
-                }
-                history.push(chunk.trim_end().to_string());
-                chunk.clear();
-                in_continuation = false;
-            }
-            Err(e) => {
-                let msg = vm.error_text(&e);
-                if is_incomplete_syntax(&msg) {
-                    // More input needed — keep `chunk` and reprompt
-                    // with `>>`.
-                    in_continuation = true;
-                } else {
-                    eprintln!("error: {}", msg);
-                    history.push(chunk.trim_end().to_string());
-                    chunk.clear();
-                    in_continuation = false;
-                }
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────
-// rustyline-backed REPL (opt-in via `--features
-// repl-line-editor`).
-//
-// The non-feature build keeps the `repl_plain` path above so the default `cargo install luna-jit` doesn't pick up
-// rustyline. luna-core remains 0-dep regardless.
-//
-// Layered on top of the same eval / multi-line continuation logic:
-//   * Tab completion — walks Vm globals (`vm.globals().next(...)`)
-//     and offers names whose prefix matches the word at the cursor.
-//   * Syntax highlight — small Lua tokenizer (keywords / strings /
-//     numbers / line comments / long comments / long strings)
-//     emitting ANSI colour escapes via rustyline's `Highlighter`
-//     trait. No dep on syntect / tree-sitter.
-//   * History — rustyline manages `~/.luna_history` natively;
-//     same file the plain path writes, so flipping the feature bit
-//     doesn't lose history.
-// ─────────────────────────────────────────────────────────────────
-
-#[cfg(feature = "repl-line-editor")]
-#[derive(Default)]
-struct GlobalsSnapshot {
-    names: Vec<String>,
-}
-
-#[cfg(feature = "repl-line-editor")]
-struct LuaHelper {
-    globals: std::rc::Rc<std::cell::RefCell<GlobalsSnapshot>>,
-}
-
-#[cfg(feature = "repl-line-editor")]
-impl rustyline::completion::Completer for LuaHelper {
-    type Candidate = rustyline::completion::Pair;
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        _ctx: &rustyline::Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<rustyline::completion::Pair>)> {
-        // Lua identifiers: [A-Za-z_][A-Za-z0-9_]*. Dotted-name
-        // completion (`string.up<TAB>`) is a follow-up; first-segment
-        // matching covers the common case.
-        let bytes = line.as_bytes();
-        let mut start = pos;
-        while start > 0 {
-            let c = bytes[start - 1];
-            if !(c.is_ascii_alphanumeric() || c == b'_') {
-                break;
-            }
-            start -= 1;
-        }
-        let prefix = &line[start..pos];
-        if prefix.is_empty() {
-            return Ok((pos, Vec::new()));
-        }
-        let snap = self.globals.borrow();
-        let mut matches: Vec<rustyline::completion::Pair> = snap
-            .names
-            .iter()
-            .filter(|n| n.starts_with(prefix))
-            .map(|n| rustyline::completion::Pair {
-                display: n.clone(),
-                replacement: n.clone(),
-            })
-            .collect();
-        matches.sort_by(|a, b| a.display.cmp(&b.display));
-        matches.dedup_by(|a, b| a.display == b.display);
-        Ok((start, matches))
-    }
-}
-
-#[cfg(feature = "repl-line-editor")]
-impl rustyline::hint::Hinter for LuaHelper {
-    type Hint = String;
-}
-
-#[cfg(feature = "repl-line-editor")]
-impl rustyline::validate::Validator for LuaHelper {}
-
-#[cfg(feature = "repl-line-editor")]
-impl rustyline::Helper for LuaHelper {}
-
-#[cfg(feature = "repl-line-editor")]
-impl rustyline::highlight::Highlighter for LuaHelper {
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
-        std::borrow::Cow::Owned(highlight_lua(line))
-    }
-    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
-        &'s self,
-        prompt: &'p str,
-        _default: bool,
-    ) -> std::borrow::Cow<'b, str> {
-        std::borrow::Cow::Owned(format!("\x1b[2m{prompt}\x1b[0m"))
-    }
-    fn highlight_char(&self, _line: &str, _pos: usize, _forced: bool) -> bool {
-        // Re-render every keystroke — tokenizer is cheap and partial
-        // highlights look broken mid-string / mid-comment.
-        true
-    }
-}
-
-#[cfg(feature = "repl-line-editor")]
-fn repl_rustyline(vm: &mut Vm) {
-    use rustyline::Editor;
-    use rustyline::error::ReadlineError;
-    use rustyline::history::DefaultHistory;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    eprintln!(
-        "luna {} ({}) — interactive REPL (rustyline). Ctrl-D to exit.",
-        env!("CARGO_PKG_VERSION"),
-        dialect_name(vm.version())
-    );
-
-    let globals = Rc::new(RefCell::new(GlobalsSnapshot::default()));
-    let helper = LuaHelper {
-        globals: globals.clone(),
-    };
-
-    let mut rl: Editor<LuaHelper, DefaultHistory> = match Editor::new() {
-        Ok(rl) => rl,
-        Err(e) => {
-            eprintln!("rustyline init failed ({e}); falling back to plain REPL");
-            repl_plain(vm);
-            return;
-        }
-    };
-    rl.set_helper(Some(helper));
-    let hist_path = history_path();
-    if let Some(ref p) = hist_path {
-        let _ = rl.load_history(p);
-    }
-
-    let mut chunk = String::new();
-    let mut in_continuation = false;
-    loop {
-        refresh_globals_snapshot(vm, &globals);
-        let prompt = if in_continuation { ">> " } else { "> " };
-        let line = match rl.readline(prompt) {
-            Ok(l) => l,
-            Err(ReadlineError::Eof) => {
-                if let Some(ref p) = hist_path {
-                    let _ = rl.save_history(p);
-                }
-                return;
-            }
-            Err(ReadlineError::Interrupted) => {
-                // Ctrl-C drops the in-flight chunk, mirrors PUC.
-                chunk.clear();
-                in_continuation = false;
-                continue;
-            }
-            Err(e) => {
-                eprintln!("io error: {e}");
-                if let Some(ref p) = hist_path {
-                    let _ = rl.save_history(p);
-                }
-                return;
-            }
-        };
-        if !in_continuation && line.trim().is_empty() {
-            continue;
-        }
-        if !chunk.is_empty() {
-            chunk.push('\n');
-        }
-        chunk.push_str(&line);
-
-        let as_expr = format!("return {chunk}");
-        let result = match vm.eval(&as_expr) {
-            Ok(vs) => Ok(vs),
-            Err(_) => vm.eval(chunk.as_str()),
-        };
-        match result {
-            Ok(vs) => {
-                for v in vs {
-                    println!("{}", render(v));
-                }
-                let _ = rl.add_history_entry(chunk.trim_end());
-                chunk.clear();
-                in_continuation = false;
-            }
-            Err(e) => {
-                let msg = vm.error_text(&e);
-                if is_incomplete_syntax(&msg) {
-                    in_continuation = true;
-                } else {
-                    eprintln!("error: {msg}");
-                    let _ = rl.add_history_entry(chunk.trim_end());
-                    chunk.clear();
-                    in_continuation = false;
-                }
-            }
-        }
-    }
-}
-
-#[cfg(feature = "repl-line-editor")]
-fn refresh_globals_snapshot(vm: &mut Vm, snap: &std::rc::Rc<std::cell::RefCell<GlobalsSnapshot>>) {
-    // Iterate `_G` via Table::next (the same primitive that backs
-    // `pairs`). Non-string keys (rare for globals) are skipped — we
-    // only suggest identifier-shaped names. Gc<T>: Deref<Target=T>
-    // (heap.rs:154); read-only iteration needs no unsafe block.
-    let g = vm.globals();
-    let mut key: Value = Value::Nil;
-    let mut out: Vec<String> = Vec::new();
-    loop {
-        match g.next(key) {
-            Ok(Some((k, _v))) => {
-                if let Value::Str(s) = k {
-                    let bytes = s.as_bytes();
-                    if !bytes.is_empty()
-                        && bytes
-                            .iter()
-                            .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
-                        && !bytes[0].is_ascii_digit()
-                    {
-                        out.push(String::from_utf8_lossy(bytes).into_owned());
-                    }
-                }
-                key = k;
-            }
-            Ok(None) => break,
-            Err(_) => break,
-        }
-    }
-    snap.borrow_mut().names = out;
-}
-
-/// Tiny Lua tokenizer → ANSI-coloured string. Used by `LuaHelper`'s
-/// `Highlighter` impl. Recognises keywords, short / long strings,
-/// short / long comments, decimal + hex number literals; everything
-/// else passes through unstyled. Idempotent over the input bytes.
-#[cfg(feature = "repl-line-editor")]
-fn highlight_lua(src: &str) -> String {
-    const KEYWORDS: &[&str] = &[
-        "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
-        "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
-    ];
-    const KW: &str = "\x1b[34m"; // blue
-    const STR: &str = "\x1b[33m"; // yellow
-    const NUM: &str = "\x1b[35m"; // magenta
-    const CMT: &str = "\x1b[2;37m"; // dim white
-    const RST: &str = "\x1b[0m";
-
-    let bytes = src.as_bytes();
-    let mut out = String::with_capacity(src.len() + 16);
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        // Comment: `-- …` or `--[==[ … ]==]`.
-        if c == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
-            let start = i;
-            i += 2;
-            if i < bytes.len() && bytes[i] == b'[' {
-                let mut k = i + 1;
-                let mut level = 0;
-                while k < bytes.len() && bytes[k] == b'=' {
-                    level += 1;
-                    k += 1;
-                }
-                if k < bytes.len() && bytes[k] == b'[' {
-                    let mut end = k + 1;
-                    while end < bytes.len() {
-                        if bytes[end] == b']' {
-                            let mut m = end + 1;
-                            let mut eq = 0;
-                            while m < bytes.len() && bytes[m] == b'=' {
-                                eq += 1;
-                                m += 1;
-                            }
-                            if eq == level && m < bytes.len() && bytes[m] == b']' {
-                                end = m + 1;
-                                break;
-                            }
-                        }
-                        end += 1;
-                    }
-                    let end = end.min(bytes.len());
-                    out.push_str(CMT);
-                    out.push_str(&src[start..end]);
-                    out.push_str(RST);
-                    i = end;
-                    continue;
-                }
-            }
-            let mut end = i;
-            while end < bytes.len() && bytes[end] != b'\n' {
-                end += 1;
-            }
-            out.push_str(CMT);
-            out.push_str(&src[start..end]);
-            out.push_str(RST);
-            i = end;
-            continue;
-        }
-        // Short string literal.
-        if c == b'"' || c == b'\'' {
-            let quote = c;
-            let start = i;
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == quote {
-                    i += 1;
-                    break;
-                }
-                if bytes[i] == b'\n' {
-                    break;
-                }
-                i += 1;
-            }
-            let end = i.min(bytes.len());
-            out.push_str(STR);
-            out.push_str(&src[start..end]);
-            out.push_str(RST);
-            continue;
-        }
-        // Long string `[==[ … ]==]`.
-        if c == b'[' {
-            let mut k = i + 1;
-            let mut level = 0;
-            while k < bytes.len() && bytes[k] == b'=' {
-                level += 1;
-                k += 1;
-            }
-            if k < bytes.len() && bytes[k] == b'[' {
-                let start = i;
-                let mut end = k + 1;
-                while end < bytes.len() {
-                    if bytes[end] == b']' {
-                        let mut m = end + 1;
-                        let mut eq = 0;
-                        while m < bytes.len() && bytes[m] == b'=' {
-                            eq += 1;
-                            m += 1;
-                        }
-                        if eq == level && m < bytes.len() && bytes[m] == b']' {
-                            end = m + 1;
-                            break;
-                        }
-                    }
-                    end += 1;
-                }
-                let end = end.min(bytes.len());
-                out.push_str(STR);
-                out.push_str(&src[start..end]);
-                out.push_str(RST);
-                i = end;
-                continue;
-            }
-        }
-        // Number literal (decimal / hex / float / exponent).
-        if c.is_ascii_digit() || (c == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit())
-        {
-            let start = i;
-            let hex =
-                c == b'0' && i + 1 < bytes.len() && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X');
-            if hex {
-                i += 2;
-                let mut prev_exp = false;
-                while i < bytes.len() {
-                    let b = bytes[i];
-                    let is_sign_after_p = (b == b'+' || b == b'-') && prev_exp;
-                    if b.is_ascii_hexdigit()
-                        || b == b'.'
-                        || matches!(b, b'p' | b'P')
-                        || is_sign_after_p
-                    {
-                        prev_exp = matches!(b, b'p' | b'P');
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-            } else {
-                let mut prev_exp = false;
-                while i < bytes.len() {
-                    let b = bytes[i];
-                    let is_sign_after_e = (b == b'+' || b == b'-') && prev_exp;
-                    if b.is_ascii_digit()
-                        || b == b'.'
-                        || matches!(b, b'e' | b'E')
-                        || is_sign_after_e
-                    {
-                        prev_exp = matches!(b, b'e' | b'E');
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            out.push_str(NUM);
-            out.push_str(&src[start..i]);
-            out.push_str(RST);
-            continue;
-        }
-        // Identifier or keyword.
-        if c.is_ascii_alphabetic() || c == b'_' {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let word = &src[start..i];
-            if KEYWORDS.contains(&word) {
-                out.push_str(KW);
-                out.push_str(word);
-                out.push_str(RST);
-            } else {
-                out.push_str(word);
-            }
-            continue;
-        }
-        // Punctuation / whitespace.
-        out.push(c as char);
-        i += 1;
-    }
-    out
 }
 
 /// luna's own options, taken out of the command line before `lua.c`'s
@@ -738,6 +178,8 @@ struct LuaArgs {
     has_i: bool,
     has_v: bool,
     has_e: bool,
+    /// `-E`
+    ignore_env: bool,
     /// Index of the script name in `argv`, if there is one.
     script: Option<usize>,
 }
@@ -767,8 +209,9 @@ fn collectargs(v: LuaVersion, argv: &[String]) -> Result<LuaArgs, usize> {
                 return Ok(args);
             }
             // 5.2 checks no characters after -E
-            Some(b'E') if v == LuaVersion::Lua52 => {}
-            Some(b'E') if v >= LuaVersion::Lua53 && !tail => {}
+            Some(b'E') if v == LuaVersion::Lua52 || (v >= LuaVersion::Lua53 && !tail) => {
+                args.ignore_env = true;
+            }
             Some(b'W') if v >= LuaVersion::Lua54 && !tail => {}
             Some(b'i' | b'v') if !tail => {
                 args.has_i |= a[1] == b'i';
@@ -922,40 +365,52 @@ impl Interp {
     }
 
     /// `dochunk`: run a loaded chunk, reporting a failure to load or run it.
-    /// True when it ran to the end.
-    fn dochunk(&mut self, loaded: Result<Value, LuaError>, args: &[Value]) -> bool {
+    /// The values it returned when it ran to the end.
+    fn dochunk(&mut self, loaded: Result<Value, LuaError>, args: &[Value]) -> Option<Vec<Value>> {
         let result = match loaded {
             Ok(f) => self.docall(f, args),
             Err(e) => Err(e.0),
         };
-        match result {
-            Ok(vals) => {
-                for v in vals {
-                    println!("=> {}", render(v));
-                }
-                true
-            }
-            Err(e) => {
-                self.report(e);
-                false
-            }
-        }
+        result.map_err(|e| self.report(e)).ok()
     }
 
-    /// `dostring`: `-e`'s chunk, named `(command line)`. 5.5 takes text
-    /// only.
-    fn dostring(&mut self, src: &str) -> bool {
+    /// `dostring`: a chunk from the command line or the environment. 5.5
+    /// takes text only.
+    fn dostring(&mut self, src: &[u8], chunkname: &[u8]) -> Option<Vec<Value>> {
         let mode = (self.version() >= LuaVersion::Lua55).then_some(&b"t"[..]);
-        let loaded = self
-            .vm
-            .load_buffer(src.as_bytes(), b"=(command line)", mode);
+        let loaded = self.vm.load_buffer(src, chunkname, mode);
         self.dochunk(loaded, &[])
     }
 
     /// `dofile`: a file, or stdin when `name` is `None`.
-    fn dofile(&mut self, name: Option<&str>) -> bool {
-        let loaded = self.vm.load_file(name.map(str::as_bytes), None);
+    fn dofile(&mut self, name: Option<&[u8]>) -> Option<Vec<Value>> {
+        let loaded = self.vm.load_file(name, None);
         self.dochunk(loaded, &[])
+    }
+
+    /// `handle_luainit`: run `LUA_INIT` (from 5.2 on `LUA_INIT_5_x` first),
+    /// a chunk or, after an `@`, a file to run. False when it failed.
+    fn handle_luainit(&mut self) -> bool {
+        let versioned = match self.version() {
+            LuaVersion::Lua51 => None,
+            LuaVersion::Lua52 => Some("LUA_INIT_5_2"),
+            LuaVersion::Lua53 => Some("LUA_INIT_5_3"),
+            LuaVersion::Lua54 | LuaVersion::MacroLua => Some("LUA_INIT_5_4"),
+            LuaVersion::Lua55 => Some("LUA_INIT_5_5"),
+        };
+        let found = versioned
+            .into_iter()
+            .chain(["LUA_INIT"])
+            .find_map(|name| std::env::var_os(name).map(|init| (name, init)));
+        let Some((name, init)) = found else {
+            return true;
+        };
+        let init = os_bytes(init);
+        let done = match init.strip_prefix(b"@") {
+            Some(file) => self.dofile(Some(file)),
+            None => self.dostring(&init, format!("={name}").as_bytes()),
+        };
+        done.is_some()
     }
 
     /// `dolibrary`: `-l name`, `require(module)`, whose result 5.2 on store
@@ -1041,7 +496,7 @@ impl Interp {
                 }
             }
         };
-        self.dochunk(Ok(f), &args)
+        self.dochunk(Ok(f), &args).map(show).is_some()
     }
 
     /// 5.3's `pushargs`: the script's arguments are `arg[1..#arg]`, as they
@@ -1069,7 +524,9 @@ impl Interp {
                         argv[i].clone()
                     };
                     let ok = if o == b'e' {
-                        self.dostring(&extra)
+                        self.dostring(extra.as_bytes(), b"=(command line)")
+                            .map(show)
+                            .is_some()
                     } else {
                         self.dolibrary(&extra)
                     };
@@ -1089,6 +546,25 @@ impl Interp {
             i += 1;
         }
         true
+    }
+}
+
+/// luna's addition to `lua.c`: the values a chunk returned, printed.
+fn show(vals: Vec<Value>) {
+    for v in vals {
+        println!("=> {}", render(v));
+    }
+}
+
+/// An environment variable's value as the C library hands it over.
+fn os_bytes(s: std::ffi::OsString) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        std::os::unix::ffi::OsStringExt::into_vec(s)
+    }
+    #[cfg(not(unix))]
+    {
+        s.to_string_lossy().into_owned().into_bytes()
     }
 }
 
@@ -1173,7 +649,7 @@ fn traceback_51(vm: &mut Vm, err: Value) -> Result<Value, LuaError> {
         .unwrap_or(Value::Nil))
 }
 
-fn new_vm(opts: &LunaOpts) -> Vm {
+fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
     // luna-core's `Vm::new` defaults to the no-op
     // JIT backend; the `luna` bin always wants Cranelift, so go
     // through the wrapper. --no-jit then opts back out.
@@ -1194,13 +670,18 @@ fn new_vm(opts: &LunaOpts) -> Vm {
             vm.install_default_jit();
         }
         vm
-    } else if opts.no_jit {
-        // Full stdlib but no JIT.
-        let mut vm = luna_jit::vm::Vm::new(opts.version);
-        vm.install_null_jit();
-        vm
     } else {
-        luna_jit::new_with_jit(opts.version)
+        let mut vm = if opts.no_jit {
+            let mut vm = luna_jit::vm::Vm::new_minimal(opts.version);
+            vm.install_null_jit();
+            vm
+        } else {
+            luna_jit::new_minimal_with_jit(opts.version)
+        };
+        // lua.c sets it before it opens the libraries
+        vm.set_ignore_env(ignore_env);
+        vm.open_all_libs();
+        vm
     };
     if let Some(n) = opts.budget {
         vm.set_instr_budget(Some(n));
@@ -1251,6 +732,10 @@ fn pmain(interp: &mut Interp, argv: &[String], args: &LuaArgs) -> bool {
     if v >= LuaVersion::Lua53 {
         interp.set_arg(argv, args.script.unwrap_or(0));
     }
+    // 5.1 ran it before looking at the options
+    if v >= LuaVersion::Lua52 && !args.ignore_env && !interp.handle_luainit() {
+        return false;
+    }
     let optlim = args.script.unwrap_or(argv.len());
     if !interp.runargs(argv, optlim) {
         return false;
@@ -1261,24 +746,18 @@ fn pmain(interp: &mut Interp, argv: &[String], args: &LuaArgs) -> bool {
         return false;
     }
     if args.has_i {
-        repl_as_lua_c(interp);
-    } else if args.script.is_none() && !args.has_e && !args.has_v {
+        return repl::repl(interp);
+    }
+    if args.script.is_none() && !args.has_e && !args.has_v {
         if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            repl_as_lua_c(interp);
-        } else {
-            // lua.c ignores how this ends: an error in it is reported, and
-            // the exit status stays 0
-            interp.dofile(None);
+            print_version(v);
+            return repl::repl(interp);
         }
+        // lua.c ignores how this ends: an error in it is reported, and
+        // the exit status stays 0
+        interp.dofile(None).map(show);
     }
     true
-}
-
-/// The REPL runs without a program name on its messages, as `lua.c`'s.
-fn repl_as_lua_c(interp: &mut Interp) {
-    let progname = interp.progname.take();
-    repl(&mut interp.vm);
-    interp.progname = progname;
 }
 
 fn main() {
@@ -1288,18 +767,21 @@ fn main() {
         Some(p) if !p.is_empty() => p.clone(),
         _ => "lua".to_string(),
     };
-    let args = match collectargs(opts.version, &argv) {
-        Ok(args) => args,
-        Err(bad) => {
-            print_usage(opts.version, &progname, &argv[bad]);
-            std::process::exit(1);
-        }
-    };
+    let args = collectargs(opts.version, &argv);
+    let ignore_env = args.as_ref().is_ok_and(|a| a.ignore_env);
     let mut interp = Interp {
-        vm: new_vm(&opts),
-        progname: Some(progname),
+        vm: new_vm(&opts, ignore_env),
+        progname: Some(progname.clone()),
     };
-    let ok = pmain(&mut interp, &argv, &args);
+    // 5.1 runs LUA_INIT before it looks at the options
+    let ok = (opts.version != LuaVersion::Lua51 || interp.handle_luainit())
+        && match args {
+            Ok(args) => pmain(&mut interp, &argv, &args),
+            Err(bad) => {
+                print_usage(opts.version, &progname, &argv[bad]);
+                false
+            }
+        };
     if opts.profile {
         print_profile(&interp.vm);
     }

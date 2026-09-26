@@ -100,6 +100,9 @@ fn init_registry(vm: &mut Vm) {
     unsafe { hook_t.as_mut() }.set_metatable(Some(mt));
     vm.barrier_back_table(hook_t);
     set_field(vm, reg, "_HOOKKEY", Value::Table(hook_t));
+    if vm.ignore_env && vm.version() >= LuaVersion::Lua52 {
+        set_field(vm, reg, "LUA_NOENV", Value::Bool(true));
+    }
     vm.barrier_back_table(reg);
     vm.registry = Some(reg);
 }

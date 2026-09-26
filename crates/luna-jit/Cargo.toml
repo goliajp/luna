@@ -70,9 +70,8 @@ cranelift-native = "0.124"
 # against Vm globals + Lua syntax highlighting + native
 # `~/.luna_history`). Opt-in via `--features repl-line-editor`.
 #
-# Default `cargo install luna-jit` does NOT pull rustyline — the plain
-# REPL (multi-line continuation + plain-text history) stays the
-# baseline so the shipped binary stays small and the supply-chain
+# Default `cargo install luna-jit` does NOT pull rustyline — lua.c's
+# REPL reading plain lines from stdin stays the baseline so the shipped binary stays small and the supply-chain
 # surface unchanged. luna-core remains 0-third-party-dep regardless;
 # this dep lives in luna-jit only.
 rustyline = { version = "14", optional = true }

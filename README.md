@@ -155,11 +155,12 @@ luna --budget=1000000 s.lua   # cap dispatched instructions
 luna --no-jit script.lua      # interpreter only
 luna --profile script.lua     # print trace-JIT counters on exit
 luna -l mod -e "f()" s.lua a  # lua.c's options: -e -l -i -v -E -W -- -
+luna -i script.lua            # run the script, then the REPL
 luna                          # interactive REPL (Ctrl-D exits)
 ```
 
-Options, the `arg` table, error reports and exit status follow the
-selected dialect's `lua.c`; see
+Options, `LUA_INIT`, the `arg` table, the REPL, error reports and exit
+status follow the selected dialect's `lua.c`; see
 [`docs/compatibility.md`](docs/compatibility.md#cli).
 
 ## Linking from C
