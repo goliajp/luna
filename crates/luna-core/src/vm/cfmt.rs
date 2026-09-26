@@ -37,15 +37,20 @@ impl Spec {
             }
             i += 1;
         }
+        // a width that overflows is rejected by the caller's format check;
+        // it only has to not panic here
         while let Some(&c @ b'0'..=b'9') = body.get(i) {
-            sp.width = sp.width * 10 + (c - b'0') as usize;
+            sp.width = sp
+                .width
+                .saturating_mul(10)
+                .saturating_add((c - b'0') as usize);
             i += 1;
         }
         if body.get(i) == Some(&b'.') {
             i += 1;
-            let mut p = 0;
+            let mut p: usize = 0;
             while let Some(&c @ b'0'..=b'9') = body.get(i) {
-                p = p * 10 + (c - b'0') as usize;
+                p = p.saturating_mul(10).saturating_add((c - b'0') as usize);
                 i += 1;
             }
             sp.prec = Some(p);

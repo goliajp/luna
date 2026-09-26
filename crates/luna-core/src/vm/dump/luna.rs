@@ -314,7 +314,7 @@ fn r_proto(
     let n = read_count(r, 4)?;
     let mut protos = Vec::with_capacity(n);
     for _ in 0..n {
-        protos.push(r_proto(r, heap, Some(source), strings)?);
+        protos.push(r.nested(|r| r_proto(r, heap, Some(source), strings))?);
     }
     let n = read_count(r, 16)?;
     let mut locvars = Vec::with_capacity(n);

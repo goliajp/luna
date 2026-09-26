@@ -285,7 +285,7 @@ fn read_proto(
     }
     let n = read_count(r, 1)?;
     let protos = (0..n)
-        .map(|_| read_proto(r, heap, strings))
+        .map(|_| r.nested(|r| read_proto(r, heap, strings)))
         .collect::<Result<Vec<_>, _>>()?;
     // A stripped chunk has no source; errors then report "?".
     let source = match read_string(r, heap, strings)? {

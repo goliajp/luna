@@ -162,9 +162,12 @@ fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            let r = unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i), v);
-            debug_assert!(r.is_ok(), "integer key is never nil/NaN");
-            let _ = r;
+            if unsafe { t.as_mut() }
+                .set(&mut vm.heap, Value::Int(i), v)
+                .is_err()
+            {
+                return Err(vm.rt_err("table overflow"));
+            }
             vm.barrier_back_table(t);
         }
         return Ok(());
@@ -412,7 +415,7 @@ fn t_concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if k == last {
         concat_field(vm, tv, last, &mut out)?;
     }
-    let s = Value::Str(vm.heap.intern(&out));
+    let s = vm.built_str(&out)?;
     Ok(vm.nat_return(fs, &[s]))
 }
 
@@ -615,7 +618,7 @@ fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.sort_scratch.push(frame.unwrap_or_default());
     let s = Sorter { tv, comp, snapshot };
     let r = if ver <= V::Lua52 {
-        s.auxsort_int(vm, 1, n as i32)
+        s.auxsort_int(vm, 1, i64::from(n as i32))
     } else {
         s.auxsort(vm, 1, n as u32, 0)
     };
@@ -639,7 +642,8 @@ fn pure_snapshot(tv: Value, n: i64) -> Option<Vec<Value>> {
     let Value::Table(t) = tv else {
         return None;
     };
-    let mut out = Vec::with_capacity(usize::try_from(n).ok()?);
+    // `n` may come from `__len`; only a real sequence fills the vector
+    let mut out = Vec::with_capacity(usize::try_from(n.min(t.len())).ok()?);
     let mut strings = None;
     for i in 1..=n {
         let v = t.get(Value::Int(i));
@@ -736,16 +740,17 @@ impl Sorter {
         }
     }
 
-    /// ≤5.2 `auxsort` on C `int` indices. 5.1 detects a bad comparator only
+    /// ≤5.2 `auxsort` on C `int` indices, computed in `i64` so that the
+    /// middle of a range ending at `INT_MAX` does not overflow. 5.1 detects a bad comparator only
     /// once the scan has run past the range (`i > u`, `j < l`); 5.2 one
     /// step earlier.
-    fn auxsort_int(&self, vm: &mut Vm, mut l: i32, mut u: i32) -> Result<(), LuaError> {
+    fn auxsort_int(&self, vm: &mut Vm, mut l: i64, mut u: i64) -> Result<(), LuaError> {
         let strict = vm.version() == V::Lua52;
         while l < u {
-            self.geti(vm, l.into())?;
-            self.geti(vm, u.into())?;
+            self.geti(vm, l)?;
+            self.geti(vm, u)?;
             if self.lt(vm, 1, 2)? {
-                self.set2(vm, l.into(), u.into())?;
+                self.set2(vm, l, u)?;
             } else {
                 Self::pop(vm, 2);
             }
@@ -753,15 +758,15 @@ impl Sorter {
                 break;
             }
             let mut i = (l + u) / 2;
-            self.geti(vm, i.into())?;
-            self.geti(vm, l.into())?;
+            self.geti(vm, i)?;
+            self.geti(vm, l)?;
             if self.lt(vm, 2, 1)? {
-                self.set2(vm, i.into(), l.into())?;
+                self.set2(vm, i, l)?;
             } else {
                 Self::pop(vm, 1);
-                self.geti(vm, u.into())?;
+                self.geti(vm, u)?;
                 if self.lt(vm, 1, 2)? {
-                    self.set2(vm, i.into(), u.into())?;
+                    self.set2(vm, i, u)?;
                 } else {
                     Self::pop(vm, 2);
                 }
@@ -769,43 +774,43 @@ impl Sorter {
             if u - l == 2 {
                 break;
             }
-            self.geti(vm, i.into())?;
+            self.geti(vm, i)?;
             let pivot = Self::at(vm, 1);
             Self::push(vm, pivot);
-            self.geti(vm, (u - 1).into())?;
-            self.set2(vm, i.into(), (u - 1).into())?;
+            self.geti(vm, u - 1)?;
+            self.set2(vm, i, u - 1)?;
             i = l;
             let mut j = u - 1;
             loop {
                 i += 1;
-                self.geti(vm, i.into())?;
+                self.geti(vm, i)?;
                 while self.lt(vm, 1, 2)? {
                     if if strict { i >= u } else { i > u } {
                         return Err(invalid_order(vm));
                     }
                     Self::pop(vm, 1);
                     i += 1;
-                    self.geti(vm, i.into())?;
+                    self.geti(vm, i)?;
                 }
                 j -= 1;
-                self.geti(vm, j.into())?;
+                self.geti(vm, j)?;
                 while self.lt(vm, 3, 1)? {
                     if if strict { j <= l } else { j < l } {
                         return Err(invalid_order(vm));
                     }
                     Self::pop(vm, 1);
                     j -= 1;
-                    self.geti(vm, j.into())?;
+                    self.geti(vm, j)?;
                 }
                 if j < i {
                     Self::pop(vm, 3);
                     break;
                 }
-                self.set2(vm, i.into(), j.into())?;
+                self.set2(vm, i, j)?;
             }
-            self.geti(vm, (u - 1).into())?;
-            self.geti(vm, i.into())?;
-            self.set2(vm, (u - 1).into(), i.into())?;
+            self.geti(vm, u - 1)?;
+            self.geti(vm, i)?;
+            self.set2(vm, u - 1, i)?;
             // recurse into the smaller half [j..i], loop on the larger [l..u]
             if i - l < u - i {
                 j = l;

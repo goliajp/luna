@@ -461,6 +461,69 @@ fn nested_function_is_checked() {
     );
 }
 
+#[test]
+fn functions_nested_too_deep() {
+    refused(
+        "return function() local function g() end end",
+        |p| {
+            let mut chain = p.protos[0].clone();
+            for _ in 0..300 {
+                let mut outer = p.clone();
+                outer.protos = vec![chain];
+                chain = outer;
+            }
+            *p = chain;
+        },
+        "functions nested too deep",
+    );
+}
+
+/// Point local `idx` of `p` at register `reg`.
+fn set_local_reg(p: &mut P, idx: usize, reg: u32) {
+    let mut rd = Rd(&p.locvars, 4);
+    for _ in 0..idx {
+        rd.bytes();
+        rd.take(12);
+    }
+    rd.bytes();
+    let at = rd.1;
+    p.locvars[at..at + 4].copy_from_slice(&reg.to_le_bytes());
+}
+
+#[test]
+fn local_register_out_of_range() {
+    refused(
+        "return function(x) local y = x return y end",
+        |p| set_local_reg(p, 1, 200),
+        "local 'y' in register 200 out of range",
+    );
+}
+
+/// A local renamed onto the register of the call in progress: the debug
+/// library must not reach `pcall`'s own slot through it (a later
+/// traceback would find a number where the function was).
+#[test]
+fn local_aliasing_a_running_call() {
+    let (header, mut p) = dumped(
+        "return function()
+           local a = 1
+           local ok, r = pcall(function()
+             local n = debug.setlocal(3, 1, 42)
+             return tostring(n) .. ' ' .. type(debug.traceback())
+           end)
+           return r
+         end",
+    );
+    set_local_reg(&mut p, 0, 1);
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    let f = vm.load(&chunk(&header, &p), b"=crafted").expect("loads");
+    let r = vm.call_value(Value::Closure(f), &[]).expect("runs");
+    let Value::Str(s) = r[0] else {
+        panic!("expected a string, got {:?}", r[0]);
+    };
+    assert_eq!(s.as_bytes(), b"nil string");
+}
+
 /// Load-time cost over the corpus: every diff_puc 5.5 fixture and 5.5
 /// official test file, dumped by luna and (when `PUC_LUAC_55` is set)
 /// compiled by PUC's `luac`, loaded `ROUNDS` times per sample. Run the same
