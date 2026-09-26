@@ -23,7 +23,7 @@ pub(crate) enum Line {
 enum Input {
     Stdin,
     #[cfg(feature = "repl-line-editor")]
-    Editor(crate::line_editor::LineEditor),
+    Editor(Box<crate::line_editor::LineEditor>),
 }
 
 impl Input {
@@ -31,7 +31,7 @@ impl Input {
         #[cfg(feature = "repl-line-editor")]
         if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             match crate::line_editor::LineEditor::new() {
-                Ok(ed) => return Input::Editor(ed),
+                Ok(ed) => return Input::Editor(Box::new(ed)),
                 Err(e) => eprintln!("line editor unavailable ({e}); reading plain lines"),
             }
         }
@@ -73,7 +73,7 @@ impl Input {
         match self {
             Input::Stdin => {}
             #[cfg(feature = "repl-line-editor")]
-            Input::Editor(ed) => ed.finish(),
+            Input::Editor(ed) => (*ed).finish(),
         }
     }
 }
