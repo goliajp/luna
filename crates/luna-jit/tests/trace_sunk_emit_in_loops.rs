@@ -1,18 +1,16 @@
-//! P12-S5-D — sunk emit extends to looping (ForLoop-terminated)
-//! traces. The escape sweep no longer auto-escapes live bindings
-//! at a `TraceEnd::ForLoop` terminator: interp resumes OUTSIDE
-//! the loop on exit, where any `local t = {...}` declared inside
-//! the body is out of scope (parser frees the register slot).
-//! The exit-tag override (Sinkable slot → Untouched) keeps the
-//! restored slot reading as its entry tag.
+//! Sunk emit in looping (ForLoop-terminated) traces. The escape sweep
+//! does not auto-escape live bindings at a `TraceEnd::ForLoop`
+//! terminator: interp resumes OUTSIDE the loop on exit, where any
+//! `local t = {...}` declared inside the body is out of scope (parser
+//! frees the register slot). The exit-tag override (Sinkable slot →
+//! Untouched) keeps the restored slot reading as its entry tag.
 //!
 //! These tests verify:
 //! 1. Positive — a `for ... do local t = {a,b,c}; ... end` loop
 //!    body's NewTable sinks; the trace dispatches ONCE (native
 //!    back-edge until ForLoop exits) and skips every heap alloc.
-//! 2. Negative — a body cmp (`if x > 0 then ... end` inside the
-//!    loop) blocks sunk emit via the `body_has_cmp` pre-emit
-//!    gate; result stays correct via the heap helper path.
+//! 2. A body cmp (`if x > 0 then ... end` inside the loop) still
+//!    sinks via materialise-on-deopt; result stays correct.
 
 use luna_jit::version::LuaVersion;
 
@@ -73,8 +71,8 @@ fn for_body_sunk_dispatches_once() {
 }
 
 /// `for i=1,1000 do local t={1,2,3}; if i > 500 then s = s + t[1] end end`.
-/// The body has an `Op::Lt` (the `i > 500` test). Post-S5-C, the
-/// site STILL sinks: the cmp side-exit's emit path materialises
+/// The body has an `Op::Lt` (the `i > 500` test). The site STILL
+/// sinks: the cmp side-exit's emit path materialises
 /// the live virt slots into a heap `Gc<Table>` so the interp
 /// resume sees the correct table at `t`. Result asserts
 /// correctness via the materialise-on-deopt path.
@@ -102,7 +100,7 @@ fn for_body_with_cmp_now_sinks_and_materialises() {
     );
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "post-S5-C, body cmp does not block sunk emit; \
+        "with materialise-on-deopt, body cmp does not block sunk emit; \
          got sunk_alloc_count={}",
         vm.trace_sunk_alloc_count()
     );

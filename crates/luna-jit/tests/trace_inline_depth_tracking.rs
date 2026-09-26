@@ -1,18 +1,15 @@
-//! P12-S4-step1 — recorder fills `RecordedOp.inline_depth` with the
-//! live nesting depth relative to the trace head's frame, and bails
-//! the trace when the depth crosses `MAX_INLINE_DEPTH`.
+//! The recorder fills `RecordedOp.inline_depth` with the live nesting
+//! depth relative to the trace head's frame, and closes the trace when
+//! the depth reaches `MAX_INLINE_DEPTH`.
 //!
-//! Step 1 only changes the recorder. The lowerer still bails on
-//! `inline_depth > 0`, so no compile / dispatch from depth>0 ops yet
-//! — but `trace_max_depth_seen` lets tests verify the tracker really
-//! walks past 0 on recursive / nested-call bodies.
+//! `trace_max_depth_seen` lets tests verify the tracker really walks
+//! past 0 on recursive / nested-call bodies.
 //!
-//! Step 2 changed call-triggered traces to close on first re-entry,
-//! so the depth tracker for fib-style recursion is rarely exercised
-//! through that path now. These tests therefore use **back-edge
-//! triggered** traces (a hot for-loop) whose body **calls** into
-//! another function — that's the path that genuinely pushes depth
-//! past 0 today.
+//! Call-triggered traces close on first re-entry, so the depth tracker
+//! for fib-style recursion is rarely exercised through that path. These
+//! tests therefore use **back-edge triggered** traces (a hot for-loop)
+//! whose body **calls** into another function — that's the path that
+//! genuinely pushes depth past 0.
 
 use luna_jit::version::LuaVersion;
 
@@ -73,15 +70,13 @@ fn recorder_keeps_depth_zero_on_pure_loop() {
 }
 
 /// Deep nested-call recursion in a hot loop hits the
-/// `MAX_INLINE_DEPTH` cap. P12-S4-step4a flipped the cap action from
-/// `abort` to `clean close` (the trace's body up to the cap forms the
-/// recorded body); count moved from `trace_aborted_count` to
-/// `trace_closed_count`. depth observation still saturates at
-/// MAX_INLINE_DEPTH (the over-cap op never pushes).
+/// `MAX_INLINE_DEPTH` cap. The cap is a clean close (the trace's body
+/// up to the cap forms the recorded body), counted in
+/// `trace_closed_count`, not `trace_aborted_count`. depth observation
+/// still saturates at MAX_INLINE_DEPTH (the over-cap op never pushes).
 ///
-/// P13-S13-B/C (`MAX_INLINE_DEPTH = 4 → 8 → 16`): widen the chain
-/// further so the recursion always over-runs the latest cap. The
-/// saturation assertion tracks `MAX_INLINE_DEPTH` directly.
+/// The recursion is deep enough to over-run the cap; the saturation
+/// assertion tracks `MAX_INLINE_DEPTH` directly.
 #[test]
 fn deep_nested_calls_in_hot_loop_trigger_max_inline_depth_close() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);

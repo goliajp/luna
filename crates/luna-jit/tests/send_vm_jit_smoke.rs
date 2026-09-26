@@ -1,14 +1,11 @@
-//! v2.0 Track J sub-step J-E — cross-thread JIT compile + dispatch
-//! smoke.
+//! Cross-thread JIT compile + dispatch smoke.
 //!
-//! This is the regression target the J prep doc §Sub 5 deferred from
-//! the J-A landing commit. Now that J-A (`SendJitModule` sleeve),
-//! J-B (per-`Vm` JIT storage), and J-D (`scoped_jit_vm_rebind` RAII
-//! TLS install/restore) have all landed, the cross-thread JIT story
-//! is verifiable end-to-end:
+//! With the `SendJitModule` sleeve, per-`Vm` JIT storage, and
+//! `scoped_jit_vm_rebind` RAII TLS install/restore, the cross-thread
+//! JIT story is verifiable end-to-end:
 //!
 //! 1. Build a JIT-equipped `Vm` on the main thread.
-//! 2. Wrap it in [`SendVm::from_vm`] (J-E's new constructor).
+//! 2. Wrap it in [`SendVm::from_vm`].
 //! 3. Move the `SendVm` across a `std::thread::spawn` boundary.
 //! 4. On the worker thread, eval a script that engages the trace JIT
 //!    (`set_trace_jit_enabled(true)` + a tight hot loop).
@@ -20,7 +17,7 @@
 //!    JIT noop'd").
 //!
 //! Gated behind `feature = "send"`. Run via:
-//!     cargo test -p luna-jit --features send --test cv_send_vm_jit_smoke
+//!     cargo test -p luna-jit --features send --test send_vm_jit_smoke
 
 #![cfg(feature = "send")]
 
@@ -67,8 +64,7 @@ fn single_thread_baseline() -> (i64, u64) {
     vm.open_base();
     vm.open_math();
     // Disable the chunk-compile JIT so the trace JIT is the sole
-    // engine that can lift the result (mirrors the diag_fib28_self_rec
-    // Row 2/3 setup); makes the `trace_dispatched_count > 0`
+    // engine that can lift the result; makes the `trace_dispatched_count > 0`
     // assertion below load-bearing rather than masked by the chunk
     // JIT serving the call.
     vm.set_jit_enabled(false);
@@ -89,18 +85,18 @@ fn single_thread_baseline() -> (i64, u64) {
 /// Verifies:
 ///
 /// 1. The `SendVm: Send` impl plus `JitHandle: Send` / `TraceHandle:
-///    Send` lifts (J-E Phase B) actually allow the move (compile-time).
+///    Send` lifts actually allow the move (compile-time).
 /// 2. The wrapped Vm's `JitState` survives the move with its
 ///    `chunk_compiler` / `trace_compiler` trait objects intact
 ///    (`Box<dyn Trait>` is `!Send` by default; the SendVm's outer
 ///    `unsafe impl Send` is what carries the safety claim).
-/// 3. On the worker thread, the J-D `scoped_jit_vm_rebind` RAII
+/// 3. On the worker thread, the `scoped_jit_vm_rebind` RAII
 ///    re-arms the `JIT_VM` / `JIT_CL` TLS slots so the dispatcher
 ///    can call into JIT helpers.
 /// 4. The trace recorder produces a compiled trace on the worker
 ///    thread's `JITModule` (its `SendJitModule` sleeve) and the
-///    handle parks on `Vm.jit.storage.trace_handles` (J-B's
-///    migration) so the entry pointer stays callable.
+///    handle parks on `Vm.jit.storage.trace_handles` so the entry
+///    pointer stays callable.
 /// 5. `trace_dispatched_count` bumps on the worker thread — the
 ///    canonical signal that JIT compile + dispatch fired (not just
 ///    interp).
@@ -167,7 +163,7 @@ fn jit_equipped_vm_crosses_thread_via_send_vm_and_dispatches_trace() {
 /// mcode (a `*const u8` raw pointer into a mmap'd page owned by the
 /// `SendJitModule`) MUST remain dispatchable from the worker thread
 /// after the move, because the parent module ships with the handle
-/// inside `Vm.jit.storage.trace_handles` (J-B's migration). If
+/// inside `Vm.jit.storage.trace_handles`. If
 /// `entry_raw` had any per-thread liveness assumption, this test
 /// would either crash or noop the dispatch.
 #[test]
@@ -180,7 +176,7 @@ fn trace_compiled_on_thread_a_remains_dispatchable_on_thread_b() {
 
     // Warm the trace JIT on the main thread first. The recorder
     // compiles a trace for the hot loop; `trace_handles` parks the
-    // resulting `TraceHandle` (J-B).
+    // resulting `TraceHandle`.
     let r0 = vm.eval(TRACE_HOT_LOOP).expect("main-thread warm eval");
     assert!(matches!(r0.first(), Some(Value::Int(EXPECTED_RESULT))));
     let warm_dispatched = vm.trace_dispatched_count();
@@ -221,30 +217,30 @@ fn trace_compiled_on_thread_a_remains_dispatchable_on_thread_b() {
     );
 }
 
-/// v2.1 Track J-C Phase D — IR-aware cross-thread smoke.
+/// IR-aware cross-thread smoke.
 ///
-/// J-C migrates the trace IR types (`CompiledTrace`,
-/// `Proto::traces`, `InlineSideExit`, …) to cfg-gated Send wrappers
+/// The trace IR types (`CompiledTrace`,
+/// `Proto::traces`, `InlineSideExit`, …) use cfg-gated Send wrappers
 /// (`TArc` / `TCellU32` / `TCellBool` / `TCellPtr` / `TRefLock`) so
 /// under `feature = "send"` the IR is *structurally* Send + Sync
 /// — no `unsafe impl Send` lifted past the trace types themselves.
 ///
-/// This test complements J-E's `trace_compiled_on_thread_a_remains_
-/// dispatchable_on_thread_b` by pinning the J-C invariants:
+/// This test complements `trace_compiled_on_thread_a_remains_
+/// dispatchable_on_thread_b` by pinning those invariants:
 ///
 /// 1. **Structural Send + Sync** of `CompiledTrace` and `Proto` at
 ///    the type system layer (compile-time `require_send_sync`
 ///    helpers). Under `feature = "send"` this is the load-bearing
 ///    claim — the SendVm move would be unsound without it.
 /// 2. **Cross-thread `trace_dispatched_count` growth** — same
-///    angle as J-E's smoke but with a longer scaled-up loop so the
+///    angle as the smoke above but with a longer scaled-up loop so the
 ///    `TCellU32` (under send: `AtomicU32`) cells inside the IR see
 ///    many writes during the worker eval. Proves the cell-API
 ///    swap (`Cell::get/set` → `Atomic::load/store(Relaxed)`) reads
 ///    + writes the same observable u32 across the thread move.
 ///
-/// If a future Cranelift bump or an unrelated change regresses the
-/// J-C invariants (e.g. a non-Send field sneaks into the IR), the
+/// If a future Cranelift bump or an unrelated change regresses these
+/// invariants (e.g. a non-Send field sneaks into the IR), the
 /// `require_send_sync` static assertion fails to compile — earlier
 /// signal than any runtime regression.
 #[test]
@@ -252,10 +248,10 @@ fn jit_aware_send_vm_ir_walks_cross_thread() {
     use luna_jit::jit::trace::CompiledTrace;
     use luna_jit::runtime::function::Proto;
 
-    // Static assertions — these are the J-C structural claims.
+    // Static assertions — these are the structural claims.
     //
     // CompiledTrace: every interior-mutability field flips to a
-    // Send + Sync wrapper under `feature = "send"` (J-C Phase B), so
+    // Send + Sync wrapper under `feature = "send"`, so
     // the whole struct becomes structurally Send + Sync — no
     // `unsafe impl Send for CompiledTrace` needed.
     const fn require_send_sync<T: Send + Sync>() {}
@@ -263,9 +259,8 @@ fn jit_aware_send_vm_ir_walks_cross_thread() {
     // `Proto` itself stays !Send + !Sync because it holds `Box<[Value]>`
     // and Value embeds `Gc<T>` = `NonNull<T>` which is unconditionally
     // !Send + !Sync. The SendVm wrapper's outer `unsafe impl Send`
-    // carries that around; J-C is explicitly the trace-IR scope, not
-    // the GC migration (that's a separate v2+ track). Assert only the
-    // `traces` field wrapper instead:
+    // carries that around. Assert only the `traces` field wrapper
+    // instead:
     const fn require_send<T: Send>() {}
     require_send::<
         luna_jit::jit::send_compat::TRefLock<Vec<luna_jit::jit::send_compat::TArc<CompiledTrace>>>,
@@ -324,17 +319,17 @@ fn jit_aware_send_vm_ir_walks_cross_thread() {
     );
 }
 
-/// v2.0 Track J sub-step J-E Phase E — wallclock perf parity bench.
+/// Wallclock perf parity bench.
 ///
-/// Charter target: cross-thread JIT eval must stay within 5% of
+/// Target: cross-thread JIT eval must stay within 5% of
 /// single-thread JIT eval. This measures the steady-state shape
 /// (one long-lived worker thread + N evals on it, joined once at
 /// the end) — NOT the spawn-per-iter shape. Rationale: the
 /// spawn-per-iter shape pays a fixed ~30-100µs thread::spawn cost
-/// every iteration, which is OS overhead, not J-E machinery
+/// every iteration, which is OS overhead, not cross-thread machinery
 /// overhead. The 5% gate is specifically pinning the cost of the
-/// J-A `SendJitModule` sleeve + J-B per-Vm storage + J-D RAII
-/// rebind, NOT the OS thread startup cost.
+/// `SendJitModule` sleeve + per-Vm storage + RAII rebind, NOT the
+/// OS thread startup cost.
 ///
 /// Comparison structure:
 ///   (a) Single-thread: warm the SendVm, run N evals on the
@@ -348,13 +343,12 @@ fn jit_aware_send_vm_ir_walks_cross_thread() {
 /// test` loop (scheduling variance would make the gate flaky).
 /// Run explicitly:
 /// `cargo test -p luna-jit --features send --test
-/// cv_send_vm_jit_smoke --release -- --ignored --nocapture`.
+/// send_vm_jit_smoke --release -- --ignored --nocapture`.
 ///
 /// IF the wallclock delta blows the 5% gate, the answer is NOT
-/// "loosen the gate" — that's the `exec/no-shrink-words` reflex.
-/// The right escalation is to instrument which specific cross-
-/// thread machinery cost grew. J-D's per-dispatch TLS install +
-/// restore is the prime suspect (`scoped_rebind.rs` projected
+/// "loosen the gate". The right escalation is to instrument which
+/// specific cross-thread machinery cost grew. The per-dispatch TLS
+/// install + restore is the prime suspect (`scoped_rebind.rs` projected
 /// ~5-10 cycles/dispatch).
 #[test]
 #[ignore]
@@ -428,7 +422,7 @@ fn perf_parity_single_thread_vs_cross_thread() {
 
     let delta_pct = (cross_thread_ns - single_thread_ns) / single_thread_ns * 100.0;
     println!(
-        "\nJ-E perf parity (N={} iters/sample, K={} samples, median):\n  {:40} = {:>10.0} ns/iter\n  {:40} = {:>10.0} ns/iter\n  delta = {:+.2}%",
+        "\nCross-thread perf parity (N={} iters/sample, K={} samples, median):\n  {:40} = {:>10.0} ns/iter\n  {:40} = {:>10.0} ns/iter\n  delta = {:+.2}%",
         N,
         K,
         "single-thread (no transfer)",
@@ -438,18 +432,18 @@ fn perf_parity_single_thread_vs_cross_thread() {
         delta_pct,
     );
 
-    // 5% gate from the J-E charter. This measures the steady-state
-    // J-E machinery overhead (sleeve + RAII + per-Vm storage) and
+    // 5% gate. This measures the steady-state cross-thread machinery
+    // overhead (sleeve + RAII + per-Vm storage) and
     // excludes OS thread startup cost. Median-of-K rejects single
     // OS-scheduling outliers without loosening the actual gate.
     let gate_pct = 5.0;
     assert!(
         delta_pct.abs() <= gate_pct,
-        "cross-thread perf parity blew the J-E charter gate of \
+        "cross-thread perf parity blew the gate of \
          ±{:.1}%: single-thread (median) = {:.0}ns/iter, cross-thread \
-         (median) = {:.0}ns/iter, delta = {:+.2}% — investigate J-D \
+         (median) = {:.0}ns/iter, delta = {:+.2}% — investigate scoped-rebind \
          RAII or SendJitModule sleeve regressions; DO NOT loosen \
-         the gate (exec/no-shrink-words reflex)",
+         the gate",
         gate_pct,
         single_thread_ns,
         cross_thread_ns,

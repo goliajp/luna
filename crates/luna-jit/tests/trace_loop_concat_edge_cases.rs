@@ -1,9 +1,9 @@
-//! P12-S12-D — hardening tests for the S12 sub-step family.
+//! Hardening tests for the Test/TestSet, generic-for and Concat trace
+//! paths.
 //!
-//! All previous S12 tests cover the **success path** of each
-//! feature (whitelist + emit + dispatch). v12-D fills the
-//! **sad/edge path** corners shipped during S12-A/B/C but not
-//! explicitly exercised:
+//! The other tests cover the **success path** of each feature
+//! (whitelist + emit + dispatch). These cover **sad/edge path**
+//! corners:
 //!
 //! - empty-iter generic for (ipairs over `{}`) — recorder must
 //!   not trigger, no compile failure
@@ -11,15 +11,12 @@
 //!   even when the operand chain is several Move levels removed
 //!   from the original Str entry slot
 //! - entry-tag cross-call shift — a function called with a Str
-//!   on one call then an Int on the next; the S12-C v3 dispatcher
-//!   entry guard must reject the second call's dispatch and let
-//!   interp handle it without panic / corruption
+//!   on one call then an Int on the next; the dispatcher entry
+//!   guard must reject the second call's dispatch and let interp
+//!   handle it without panic / corruption
 //! - ipairs trace that runs after a deopt — verifies the deopt
 //!   restore path properly cleans up so subsequent dispatches
 //!   continue working
-//!
-//! These tests don't ship new emit; they exercise paths already
-//! shipped but not previously asserted on.
 
 use luna_jit::version::LuaVersion;
 
@@ -59,7 +56,7 @@ fn empty_ipairs_does_not_trigger_recorder() {
 }
 
 /// Deep Move shuffle into Concat: `s = (a) .. (b)` where a, b
-/// flow through multiple temp slots. Verifies the v2 Str-kind
+/// flow through multiple temp slots. Verifies the Str-kind
 /// propagation across Move chains lands the right tag at the
 /// Concat operand spill.
 #[test]
@@ -94,7 +91,7 @@ fn deep_move_chain_into_concat() {
 
 /// Entry-tag cross-call shift: a function `f(x)` called with an
 /// Int x to hot-trigger a trace specialised to entry_tag[arg]=Int,
-/// then called with a Str x. The S12-C v3 dispatcher entry guard
+/// then called with a Str x. The dispatcher entry guard
 /// must skip dispatch on the Str call and let interp handle it
 /// without panic. Result correctness is the assertion.
 #[test]

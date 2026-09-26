@@ -1,12 +1,11 @@
-//! P12-S7-C — `Op::Close` joins the trace JIT whitelist via
-//! predict-and-deopt:
+//! `Op::Close` in the trace JIT whitelist via predict-and-deopt:
 //! - If any tbc slot ≥ A holds a non-nil/false value at helper
 //!   time, an `__close` handler would run → deopt to interp.
 //! - Otherwise close open upvals + drop drained tbc + continue.
 //!
-//! Combined with S7-A/B (Op::Closure), this unlocks the
-//! closure_alloc_10k cross_d cell's outer-for body trace
-//! (Closure + SetTable + Close + ForLoop pattern).
+//! Together with `Op::Closure`, this covers the closure_alloc_10k
+//! cross_d cell's outer-for body trace (Closure + SetTable + Close +
+//! ForLoop pattern).
 
 use luna_jit::version::LuaVersion;
 
@@ -42,7 +41,7 @@ fn closure_alloc_pattern_compiles_and_dispatches() {
     assert!(
         vm.trace_compiled_count() >= 1,
         "the outer for body (Closure + SetTable + Close + ForLoop) \
-         must compile post-S7-C; got closed={}, compiled={}, failed={}",
+         must compile; got closed={}, compiled={}, failed={}",
         vm.trace_closed_count(),
         vm.trace_compiled_count(),
         vm.trace_compile_failed_count()

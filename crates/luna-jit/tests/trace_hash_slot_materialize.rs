@@ -1,19 +1,16 @@
-//! P12-S11-B-v2 — hash slot materialise.
-//! `luna_jit_materialize_sunk_table` extended from 3 i64 args
-//! (cap, arr_raws, arr_kinds) to 7 i64 args (+ n_hash, hash_keys,
-//! hash_raws, hash_kinds). emit_materialize_live_sunk stacks-
-//! alloc 3 parallel hash buffers per site, fills them from
-//! virt_vars[cap..cap+n_hash] + virt_kinds + head_proto.consts
-//! (for key ptrs), then calls the extended helper.
+//! Hash slot materialise.
+//! `luna_jit_materialize_sunk_table` takes 7 i64 args (cap, arr_raws,
+//! arr_kinds, n_hash, hash_keys, hash_raws, hash_kinds).
+//! emit_materialize_live_sunk stack-allocs 3 parallel hash buffers per
+//! site, fills them from virt_vars[cap..cap+n_hash] + virt_kinds +
+//! head_proto.consts (for key ptrs), then calls the helper.
 //!
-//! The S11-B-v1 conservative `has_any_cmp` demote gate on hash
-//! sites is dropped — hash sites now survive cmp side-exits via
-//! `table.set(Value::Str(key), …)` at materialise time.
+//! Hash sites survive cmp side-exits via `table.set(Value::Str(key),
+//! …)` at materialise time.
 
 use luna_jit::version::LuaVersion;
 
-/// dict + cmp body: previously demoted by has_any_cmp gate.
-/// Post-S11-B-v2: hash site stays Sinkable, cmp side-exit
+/// dict + cmp body: hash site stays Sinkable, cmp side-exit
 /// reconstructs the table via the extended materialise helper.
 #[test]
 fn dict_with_cmp_now_sunk_emits() {
@@ -39,17 +36,17 @@ fn dict_with_cmp_now_sunk_emits() {
     );
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "post-S11-B-v2 dict+cmp must take sunk path (was demoted \
-         by has_any_cmp pre-v2); got sunk_alloc={}, compiled={}",
+        "dict+cmp must take sunk path (not demoted \
+         by has_any_cmp); got sunk_alloc={}, compiled={}",
         vm.trace_sunk_alloc_count(),
         vm.trace_compiled_count(),
     );
 }
 
-/// Sanity: array sunk regression. The helper's new signature
+/// Sanity: array sunk regression. The helper's signature
 /// must still handle pure-array sites (n_hash=0, null hash ptrs).
 #[test]
-fn array_sunk_still_works_post_v2() {
+fn array_sunk_still_works_with_hash_materialize() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);

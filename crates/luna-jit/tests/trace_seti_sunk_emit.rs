@@ -1,21 +1,19 @@
-//! P12-S8-B — `Op::SetI` (`R[A][B_imm] := R[C]`) sunk emit. When
-//! escape sweep tags `SetISunkWrite { site_idx, key }`, the trace
-//! IR `def_var`s `regs[C]` into the matching virt slot Variable
-//! (instead of calling the `set_int` heap helper).
+//! `Op::SetI` (`R[A][B_imm] := R[C]`) sunk emit. When the escape
+//! sweep tags `SetISunkWrite { site_idx, key }`, the trace IR
+//! `def_var`s `regs[C]` into the matching virt slot Variable (instead
+//! of calling the `set_int` heap helper).
 //!
-//! Combined with S8-A's Move alias tracking, this opens Lua 5.5
-//! frontend's `t[k] = v` pattern (lowered as `Move temp=R[t];
-//! SetI temp[k]=v`) to sunk emit when the table is a local literal
-//! constructor (`local t = {nil, nil}; t[1]=i; ...`).
+//! Combined with Move alias tracking, this opens Lua 5.5 frontend's
+//! `t[k] = v` pattern (lowered as `Move temp=R[t]; SetI temp[k]=v`)
+//! to sunk emit when the table is a local literal constructor
+//! (`local t = {nil, nil}; t[1]=i; ...`).
 
 use luna_jit::version::LuaVersion;
 
 /// `for i=1,N do local t = {nil, nil}; t[1] = i; t[2] = i*2;
-/// s = s + t[1] + t[2] end` — the seti_pattern. Pre-S8: Move
-/// `temp = t` escapes the site; SetI helper-paths run. Post-S8:
-/// Move aliases (S8-A), SetI sunk-emits into virt slots (S8-B),
-/// GetI reads back from virt slots (S5-B). Whole loop body runs
-/// without touching the heap.
+/// s = s + t[1] + t[2] end` — the seti_pattern. Move `temp = t`
+/// aliases, SetI sunk-emits into virt slots, GetI reads back from
+/// virt slots. Whole loop body runs without touching the heap.
 #[test]
 fn seti_pattern_sunk_emit_unlocks_full_body() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
@@ -42,7 +40,7 @@ fn seti_pattern_sunk_emit_unlocks_full_body() {
     );
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "post-S8-A/B, seti_pattern body must take the sunk path; \
+        "with Move alias + SetI sunk write, seti_pattern body must take the sunk path; \
          got sunk_alloc_count={}, sinkable_seen={}, compiled={}",
         vm.trace_sunk_alloc_count(),
         vm.trace_sinkable_seen_count(),

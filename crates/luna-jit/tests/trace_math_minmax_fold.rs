@@ -1,24 +1,23 @@
-//! v1.3 Phase P2A — `math.min` / `math.max` 2-arg trace JIT fold.
+//! `math.min` / `math.max` 2-arg trace JIT fold.
 //!
-//! Extends `try_match_trace_math_fold` (`trace.rs`) with `Min2 /
-//! Max2` arms. The fold collapses the `GetTabUp _ENV "math" +
-//! GetField "min"|"max" + ...arg-prep... + Call(B=3,C=2)` window
-//! into one Cranelift `smin/smax` (Int/Int) or `fcmp` + `select`
-//! (Float/Float) sequence; any other operand pair is not compiled
-//! (see `math_fold_semantics.rs`).
+//! `try_match_trace_math_fold` (`trace.rs`) has `Min2 / Max2` arms.
+//! The fold collapses the `GetTabUp _ENV "math" + GetField
+//! "min"|"max" + ...arg-prep... + Call(B=3,C=2)` window into one
+//! Cranelift `smin/smax` (Int/Int) or `fcmp` + `select` (Float/Float)
+//! sequence; any other operand pair is not compiled (see
+//! `math_fold_semantics.rs`).
 //!
 //! These tests pin:
 //!   1. The compiled-trace dispatch engages on the canonical
-//!      `math.min(K, expr)` Redis-Lua idiom (the audit's headline
-//!      win — `trace_dispatched_count > 0`).
+//!      `math.min(K, expr)` Redis-Lua idiom
+//!      (`trace_dispatched_count > 0`).
 //!   2. The fold preserves operand-type semantics:
 //!      Int  / Int   → Int  result
 //!      Float/ Float → Float result
 //!      mixed         → the interpreter's result
 //!   3. The fold result matches the interp / PUC-shape reference
 //!      across a battery of inputs incl. negatives and edges.
-//!   4. The pre-existing single-arg libm fold (Libm1) still
-//!      compiles + dispatches (back-compat regression).
+//!   4. The single-arg libm fold (Libm1) still compiles + dispatches.
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -32,11 +31,11 @@ fn run_with(src: &str, trace_jit: bool) -> Vec<Value> {
 }
 
 /// The token_bucket workload — the canonical 2-arg `math.min(K,
-/// expr)` Redis-Lua idiom. Pre-P2A: trace records + compiles
-/// but `dispatched_count = 0` (bailed at `GetField:inference-fail`
-/// inside the math.min Call window). Post-P2A: dispatches.
+/// expr)` Redis-Lua idiom. Without the fold the trace records +
+/// compiles but never dispatches (bails at `GetField:inference-fail`
+/// inside the math.min Call window).
 #[test]
-fn token_bucket_dispatches_post_p2a() {
+fn token_bucket_dispatches_with_minmax_fold() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
     vm.set_trace_jit_enabled(true);
     vm.open_base();
@@ -75,7 +74,7 @@ fn token_bucket_dispatches_post_p2a() {
 
     assert!(
         vm.trace_dispatched_count() > 0,
-        "P2A must engage trace dispatch on token_bucket; got dispatched={} compiled={} closed={} dispatch_off_reasons={:?}",
+        "the min/max fold must engage trace dispatch on token_bucket; got dispatched={} compiled={} closed={} dispatch_off_reasons={:?}",
         vm.trace_dispatched_count(),
         vm.trace_compiled_count(),
         vm.trace_closed_count(),
@@ -203,8 +202,8 @@ fn max2_negative_ints_correct() {
     assert!(matches!(jit[0], Value::Int(-3775)), "jit: {:?}", jit[0]);
 }
 
-/// Back-compat: the existing single-arg libm fold (`math.sqrt`) still
-/// works post-P2A. Regression sentinel for the recogniser refactor.
+/// The single-arg libm fold (`math.sqrt`) still works alongside the
+/// 2-arg arms.
 #[test]
 fn libm1_sqrt_still_folds() {
     let src = r#"

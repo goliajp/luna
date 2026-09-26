@@ -1,11 +1,11 @@
-//! v2.1 Phase 1I.B — table-field IC scaffold opt-in fire test.
+//! Table-field IC scaffold opt-in fire test.
 //!
 //! Verifies the `LUNA_JIT_FIELD_IC` env gate's end-to-end wiring:
 //!
 //! - **Env-OFF (default)**: the recorder never captures a
 //!   `FieldIcSnapshot`, so `Vm::trace_field_ic_snapshot_count`
-//!   stays 0; behavior is byte-identical to pre-Phase-1I.B (token-
-//!   bucket-style code still produces the expected result via the
+//!   stays 0; behavior is byte-identical to running without the
+//!   scaffold (token-bucket-style code still produces the expected result via the
 //!   existing helper path).
 //! - **Env-ON**: the recorder captures the snapshot at the first
 //!   eligible `Op::GetField` site, the lowerer emits the 4-guard +
@@ -46,7 +46,7 @@ use luna_jit::version::LuaVersion;
 /// 3. At least one trace compiled (the lowerer's IC emit path
 ///    didn't poison the compile step).
 #[test]
-fn phase_1i_b_ic_fires_under_env_on() {
+fn field_ic_fires_under_env_on() {
     // SAFETY: cargo test runs each #[test] fn serially within
     // one test binary by default; this is the only test in this
     // file and we set the env BEFORE constructing the Vm so the

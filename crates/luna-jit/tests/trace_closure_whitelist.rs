@@ -1,15 +1,12 @@
-//! P12-S7-A — `Op::Closure` joins the trace JIT whitelist (shared
-//! upvals + 0 upvals only; `in_stack: true` upvals bail compile
-//! and ship in S7-B).
+//! `Op::Closure` in the trace JIT whitelist.
 //!
-//! Pre-S7 every trace containing an `Op::Closure` bailed compile
-//! at the first non-whitelisted op. Three patterns this RFC opens:
+//! Patterns covered:
 //! - `local function f() return function() return 1 end end` —
 //!   inner has 0 upvals, f's body trace = `Closure + Return1`.
 //! - `function() return outer end` from a hot loop where `outer`
 //!   was already an upvalue (shared, `in_stack=false`).
-//! - Negative: in_stack upval (`local x = i; return function()
-//!   return x end`) still bails until S7-B.
+//! - `in_stack: true` upvals (`local x = i; return function()
+//!   return x end`), spilled to the stack before the Closure.
 
 use luna_jit::version::LuaVersion;
 
@@ -40,7 +37,7 @@ fn closure_no_upval_compiles() {
     );
     assert!(
         vm.trace_compiled_count() >= 1,
-        "f body (Closure + Return1) must compile post-S7-A; \
+        "f body (Closure + Return1) must compile; \
          got closed={}, compiled={}, failed={}",
         vm.trace_closed_count(),
         vm.trace_compiled_count(),
@@ -103,8 +100,8 @@ fn closure_with_shared_upval_compiles() {
 
 /// `local function f(x) return function() return x end end` — the
 /// inner closure has `x` as an `in_stack: true` upval (captured
-/// from f's R[0]). S7-B plumbs the per-upval pre-Closure spill,
-/// so f's body trace now compiles AND each iter's closure correctly
+/// from f's R[0]). The per-upval pre-Closure spill lets f's body
+/// trace compile AND each iter's closure correctly
 /// captures the iter-specific x via an open upval pointing to a
 /// freshly-spilled stack slot.
 #[test]
@@ -134,7 +131,7 @@ fn closure_with_in_stack_upval_compiles_via_spill() {
     );
     assert!(
         vm.trace_closure_emit_count() >= 1,
-        "in_stack Op::Closure must lower via S7-B spill; got \
+        "in_stack Op::Closure must lower via stack spill; got \
          closure_emit_count={}",
         vm.trace_closure_emit_count()
     );

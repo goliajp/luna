@@ -1,13 +1,11 @@
-//! P12-S12-B v1 — `Op::TForLoop` trace JIT back-edge trigger.
+//! `Op::TForLoop` trace JIT back-edge trigger.
 //!
-//! Pre-S12-B, generic-for loops (`for k,v in expr do ... end`) NEVER
-//! entered the trace recorder. The recorder is plumbed through
+//! Generic-for loops (`for k,v in expr do ... end`) enter the trace
+//! recorder through `Op::TForLoop`, the third back-edge alongside
 //! `Op::Jmp` neg-offset (`while`/`repeat`) and `Op::ForLoop` (numeric
-//! `for`); `Op::TForLoop` was the missing third back-edge. v1 wired
-//! the trigger; v2 (now landed) added whitelist + helper + emit so
-//! generic-for traces actually compile + dispatch. Tests here verify
-//! the recorder still triggers and correctness holds end-to-end. The
-//! v2 dispatch-counter assertions live in `trace_jit_s12_step_b_v2.rs`.
+//! `for`). Tests here verify the recorder triggers and correctness
+//! holds end-to-end. The dispatch-counter assertions live in
+//! `trace_generic_for_emit.rs`.
 
 use luna_jit::version::LuaVersion;
 
@@ -79,7 +77,7 @@ fn tforloop_empty_iter_does_not_trigger() {
     // (The OUTER numeric-for runs 500 iters, which does compile a
     // trace — so trace_closed_count CAN be non-zero. We only care
     // that the recorder didn't ABORT due to a generic-for shape it
-    // can't handle yet.)
+    // can't handle.)
     assert_eq!(
         vm.trace_aborted_count(),
         0,

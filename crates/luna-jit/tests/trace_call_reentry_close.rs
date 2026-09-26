@@ -1,29 +1,20 @@
-//! P12-S4-step2 — close-on-call-reentry for call-triggered traces.
+//! Close-on-call-reentry for call-triggered traces.
 //!
-//! A trace started by `begin_call`'s call-hot trigger (S4-step0)
-//! used to either abort (recursion never returned to the trace
-//! head's frame's pc=0 — the head pc is **fib's entry**, and the
-//! trace head was a specific invocation that does return) or run to
-//! `MAX_TRACE_LEN`. Step 2 changes the close detection to fire on
-//! **any** re-entry of `(head_proto, head_pc)` for call-triggered
-//! traces, giving the recorder a clean single-pass body — fib's
-//! depth-0 prefix from pc=0 up through the first recursive `Op::Call`.
+//! A trace started by `begin_call`'s call-hot trigger closes on
+//! **any** re-entry of `(head_proto, head_pc)`, giving the recorder a
+//! clean single-pass body — fib's depth-0 prefix from pc=0 up through
+//! the first recursive `Op::Call`. Without it the recording would
+//! either abort (recursion never returns to the trace head's frame's
+//! pc=0 — the head pc is **fib's entry**, and the trace head was a
+//! specific invocation that does return) or run to `MAX_TRACE_LEN`.
 //!
-//! The lowerer's existing S2.B-5 truncation handles the `Op::Call`
-//! as a side-exit boundary; the recorded prefix compiles to a tight
-//! native run that elides interp dispatch for the first ~6 ops of
-//! every fib invocation. Step 2 doesn't ship the GetUpval whitelist
-//! yet — actual compile of fib's trace currently fails at GetUpval
-//! validation, but the **close path** is verified end-to-end.
-//!
-//! (Step 2b adds Op::GetUpval; step 2c adds true depth>0 inline body
-//! emit so deeper recursion levels also speed up.)
+//! These tests verify the **close path** end-to-end.
 
 use luna_jit::version::LuaVersion;
 
 /// fib's trace must **close** (not abort) under the new
 /// close-on-call-reentry semantic. Whether compile succeeds is a
-/// separate question (GetUpval whitelist is step 2b).
+/// separate question (see `trace_getupval_whitelist.rs`).
 #[test]
 fn fib_trace_closes_on_first_recursive_reentry() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
@@ -52,7 +43,7 @@ fn fib_trace_closes_on_first_recursive_reentry() {
 /// Loop-triggered traces (back-edge from `Op::Jmp` neg or
 /// `Op::ForLoop`) must STILL require `cur_depth == 0` for close.
 /// This guards against accidentally relaxing the gate for the wrong
-/// flavor — the existing 21-test trace_jit_s1/s2c/s3 suite verifies
+/// flavor — the existing 21-test trace_recording_smoke/s2c/s3 suite verifies
 /// the loop close path didn't break.
 ///
 /// We assert via a tight loop that dispatches as expected (proves

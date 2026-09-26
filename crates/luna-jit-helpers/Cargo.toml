@@ -14,7 +14,7 @@ readme = "../../README.md"
 workspace = true
 
 [dependencies]
-# v2.1 Phase 1K.D.1 — helpers reach into Vm.heap, Vm.jit, Table, Gc,
+# Helpers reach into Vm.heap, Vm.jit, Table, Gc,
 # LuaClosure, Value, etc. luna-core owns those types; helpers only
 # `pub use` them. The 0-third-party-dep contract on luna-core is
 # unaffected because luna-jit-helpers is downstream of luna-core, not

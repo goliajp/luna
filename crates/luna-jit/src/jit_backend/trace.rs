@@ -1,4 +1,4 @@
-//! P12 — trace JIT data structures.
+//! Trace JIT data structures and lowering.
 //!
 //! Where `src/jit/mod.rs` is the *method* JIT (compiles one Proto's
 //! body to cranelift IR), this module is the *trace* JIT: it records
@@ -10,29 +10,13 @@
 //! method JIT (zero startup cost, no recording), while hot loops and
 //! recursive functions move to the trace JIT once the per-Proto hot
 //! counter passes [`TRACE_HOT_THRESHOLD`].
-//!
-//! ## Phase status
-//!
-//! - **S0** (commit 038c9ed): `Proto.trace_hot_count` field added.
-//! - **S1** (this commit): trace data structures + dispatcher entry
-//!   points. Counter wiring is feature-gated on
-//!   `Vm.trace_enabled` (default `false`), so existing benchmarks
-//!   are unaffected.
-//! - **S2**: lower `TraceRecord` to cranelift IR, cache on
-//!   `Proto.traces`.
-//! - **S3**: `Vm::run` checks the trace cache at back-edge targets;
-//!   side-exit returns continue in interpreter.
-//! - **S4**: inline self-recursive `Op::Call` during recording.
-//! - **S5**: escape analysis on `Op::NewTable` results.
-//!
 
 use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 use luna_core::runtime::Gc;
 use luna_core::runtime::function::Proto;
 use luna_core::vm::isa::{Inst, Op};
 
-// v1.1 A1 Session C — pure data types live in
-// `luna_core::jit::trace_types`. Re-export so existing
+// Pure data types live in `luna_core::jit::trace_types`. Re-export so existing
 // `crate::jit_backend::trace::TraceRecord` paths within luna continue
 // to resolve, and so the v1.0-compatible `luna_jit::jit::trace::*` surface
 // (assembled in `luna_jit::lib::jit::trace`) sees both type defs and
@@ -46,7 +30,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
-/// v1.3 Phase AOT Stage 7 sub-piece 2 — produce a `Value` of type
+/// produce a `Value` of type
 /// `I64` whose runtime contents are the live `Gc<LuaStr>` pointer for
 /// `key_v`. Used by the four `iconst(I64, key.as_ptr() as i64)` sites
 /// that feed `luna_jit_*_field` / `luna_jit_get_tab_up` helpers.
@@ -86,7 +70,7 @@ fn emit_str_key_arg<M: Module>(
     let bytes = key_v.as_bytes();
     let hex = strkey_hex_label(bytes);
 
-    // v1.3 Phase AOT Stage 7 sub-piece 3 — deploy-side resolver hook.
+    // deploy-side resolver hook.
     //
     // In addition to the (slot, bytes) pair, we emit a third *index*
     // data symbol per unique key: 16 bytes of `[bytes_addr, slot_addr]`,
@@ -176,7 +160,7 @@ fn emit_str_key_arg<M: Module>(
         // ignore the segment arg (segment is Mach-O specific) so the
         // change is a no-op there.
         //
-        // v1.3 Stage 7 polish 3 — Windows COFF host: PE section
+        // Windows COFF host: PE section
         // headers are fixed 8 bytes, and `link.exe` / `lld-link` drop
         // the COFF long-name string table when producing the final PE.
         // Use the short name `.lt_skix` (8 bytes, matches the C
@@ -226,7 +210,7 @@ fn strkey_hex_label(bytes: &[u8]) -> String {
     format!("{h:016x}")
 }
 
-/// v1.3 Phase AOT Stage 7 polish 6 — produce a `Value` of type `I64`
+/// produce a `Value` of type `I64`
 /// whose runtime contents are a pointer to the first
 /// `FrameMaterializeInfo` of an inline cmp@d>0 side-exit's frame chain.
 /// Used by the two `iconst(I64, Rc::as_ptr(&chain_rc) as ...)` sites
@@ -889,7 +873,7 @@ fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
     }
 }
 
-/// P12-S4-step2c — forward-look exit-tag inference for `Op::GetUpval`.
+/// forward-look exit-tag inference for `Op::GetUpval`.
 /// Walks the recorded ops following the GetUpval until either:
 /// - an `Op::Call` with `A == getupval_a` is found → the upval is
 ///   that Call's function target → `Some(ExitTag::Closure)`.
@@ -925,18 +909,6 @@ fn infer_upval_exit(getupval_a: u32, ops_after: &[RecordedOp]) -> Option<ExitTag
     None
 }
 
-// `pub enum ExitTag` moved to `trace_types.rs`; re-exported via
-// `pub use super::trace_types::*;` at the file head.
-
-// P13-S13-F — `ExitTag::MoveFrom(u8)` was deprecated by S2's
-// kind-propagation rewrite: `current_kinds` now tracks Move
-// sources at the Move op, so the dispatcher no longer needs a
-// deferred entry-tag lookup. The variant was last produced by
-// pre-S2 emit; modern emit + dispatcher don't reference it.
-// Dropping the variant lets ExitTag fit in a single byte (no
-// payload), which Rc<[ExitTag]> in CompiledTrace exit_tags +
-// per_exit_tags benefits from at the cache-line level.
-
 /// Per-register *current* kind tracked during the lowerer's forward
 /// sweep. Initial values come from the trace's `entry_tags`
 /// snapshot, then arith / Move / GetX / NewTable writers refine
@@ -948,13 +920,13 @@ enum RegKind {
     Int,
     Float,
     Table,
-    /// P12-S4-step2c — Lua closure pointer (raw payload is a
+    /// Lua closure pointer (raw payload is a
     /// `Gc<LuaClosure>` ptr). Produced today only by `Op::GetUpval`
     /// when `infer_upval_exit` pins the use site as Op::Call's
     /// target.
     Closure,
     Nil,
-    /// P12-S12-C v2 — interned string pointer (raw payload is a
+    /// interned string pointer (raw payload is a
     /// `Gc<LuaStr>` ptr). Produced by an entry slot tagged STR
     /// (via `from_entry_tag`), `LoadK` of a Str constant, or
     /// `Op::Move` propagation from a Str slot. Lets `Op::Concat`
@@ -978,7 +950,7 @@ impl RegKind {
     }
 }
 
-/// P12-S4-step3a — per-op register window offset.
+/// per-op register window offset.
 ///
 /// For a recorded trace with inline self-recursive `Op::Call`s, each
 /// `RecordedOp` at depth `d` views its `R[k]` as the trace's
@@ -992,12 +964,12 @@ impl RegKind {
 /// - On `Op::Return*` at depth d>0: depth drops to d-1, offset
 ///   reverts to the saved `offset[d-1]`.
 ///
-/// Used by S4-step3b's body emit to address registers across inlined
+/// Used by the body emit to address registers across inlined
 /// frames. The companion `enclosing_call_a` Vec gives the matching
 /// caller `Op::Call`'s A field for any depth>0 op (None at depth 0),
-/// which step 3b's `Op::Return*` emit consumes to compute the
+/// which the `Op::Return*` emit consumes to compute the
 /// caller's destination slot for return-value copy-back.
-/// P13-S13-A — pure-function depth invariant verifier.
+/// pure-function depth invariant verifier.
 ///
 /// Returns `true` iff the recorded op sequence's inline-depth
 /// trail is well-formed for `compute_op_offsets` to consume:
@@ -1108,19 +1080,17 @@ fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
         .collect()
 }
 
-/// P12-S5-A — escape state per NewTable site recorded in a trace.
-/// Today purely diagnostic; S5-B will read this to drive scalar
-/// replacement of the array part on Sinkable sites.
+/// Escape state per NewTable site recorded in a trace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EscapeState {
-    /// No observed use forces heap residency; emit may sink (S5-B+).
+    /// No observed use forces heap residency; emit may sink.
     Sinkable,
     /// A use forced materialisation — call argument, return value,
     /// stored into another sinkable table, observed at a side-exit.
     Escaped,
 }
 
-/// P12-S5-A — one NewTable site found in a recorded trace, tagged
+/// one NewTable site found in a recorded trace, tagged
 /// with the slot it lives in and the final [`EscapeState`].
 #[derive(Debug, Clone)]
 pub struct AllocSite {
@@ -1132,11 +1102,10 @@ pub struct AllocSite {
     pub a: u32,
     /// Inline depth at the time of the NewTable (0 = trace head).
     pub inline_depth: u8,
-    /// Array capacity decoded from NewTable.B (S5-A handles the
-    /// `B > 0, C = 0` form for array sunk; S11-B-v1 admits `B = 0`
-    /// for hash-only sites — array_cap = 0 in that case).
+    /// Array capacity decoded from NewTable.B (`B = 0` for hash-only
+    /// sites gives array_cap = 0).
     pub array_cap: u32,
-    /// P12-S11-B-v1 — unique string-key const indices touched by
+    /// unique string-key const indices touched by
     /// `Op::SetField` / `Op::GetField` on this site (in scan order).
     /// `virt_vars` indices [array_cap .. array_cap + hash_keys.len())
     /// hold the hash slots; SetFieldSunkWrite / GetFieldSunkRead
@@ -1146,14 +1115,12 @@ pub struct AllocSite {
     pub state: EscapeState,
 }
 
-/// P12-S5-B — per-op action recorded by the escape sweep when an op
+/// per-op action recorded by the escape sweep when an op
 /// reads or writes through a NewTable site. Emit consults this to
 /// take the sunk path (no helper call, virtual `Variable`s) instead
 /// of the heap-alloc helper path. Only set for ops whose sunk path
-/// is implemented today (S5-B v1: `NewTable`, `SetList`, `GetI`).
-/// Sweep marks the site Escaped on any unsupported op (SetI /
-/// SetTable / GetTable / Len / Move / Call arg / Return) so emit
-/// can rely on "Sinkable → all-ops sunk".
+/// is implemented. The sweep marks the site Escaped on any
+/// unsupported op so emit can rely on "Sinkable → all-ops sunk".
 #[derive(Debug, Clone, Copy)]
 pub enum OpAction {
     /// `Op::NewTable` allocating site_idx. Emit skips the
@@ -1176,7 +1143,7 @@ pub enum OpAction {
         /// 1-based array key being read.
         key: u32,
     },
-    /// P12-S8-B — `Op::SetI` writing into a sunk site's slot at a
+    /// `Op::SetI` writing into a sunk site's slot at a
     /// 1-based key. Emit `def_var`s the value register into the
     /// matching virt slot Variable and updates `virt_kinds` so the
     /// next `GetI` reads the right RegKind. The value source is
@@ -1187,7 +1154,7 @@ pub enum OpAction {
         /// 1-based array key being written.
         key: u32,
     },
-    /// P12-S8-C — `Op::SetTable` writing into a sunk site's slot
+    /// `Op::SetTable` writing into a sunk site's slot
     /// at a 1-based key const-folded from a backward scan of the
     /// trace (LoadI → Move chain → key). Same emit shape as
     /// SetISunkWrite; the key field is the resolved int.
@@ -1197,7 +1164,7 @@ pub enum OpAction {
         /// Const-folded 1-based array key.
         key: u32,
     },
-    /// P12-S11-B-v1 — `Op::SetField` writing into a sunk site's
+    /// `Op::SetField` writing into a sunk site's
     /// hash slot. `hash_slot` is the position of the key's const
     /// index in `AllocSite.hash_keys`. virt_vars index is
     /// `array_cap + hash_slot`.
@@ -1207,7 +1174,7 @@ pub enum OpAction {
         /// Position in [`AllocSite::hash_keys`] of the field key.
         hash_slot: u32,
     },
-    /// P12-S11-B-v1 — `Op::GetField` reading from a sunk site's
+    /// `Op::GetField` reading from a sunk site's
     /// hash slot. Same indexing as SetFieldSunkWrite.
     GetFieldSunkRead {
         /// Allocation site index.
@@ -1217,13 +1184,12 @@ pub enum OpAction {
     },
 }
 
-/// P14-S14-B v0 — buffer state for a candidate `Op::Concat`
-/// accumulator. Mirrors S5's [`EscapeState`] semantics.
+/// buffer state for a candidate `Op::Concat`
+/// accumulator. Mirrors [`EscapeState`] semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferState {
     /// No observed use forces materialisation of the buffered slot;
     /// emit may take the buffered path (per-trace `Vec<u8>` append).
-    /// Held back for v1+ — the v0 detector never emits this.
     Bufferable,
     /// A use forced materialisation — accumulator passed to a Call,
     /// Move'd elsewhere, observed at a side-exit with Str exit_tag,
@@ -1232,11 +1198,10 @@ pub enum BufferState {
     NonBuffered,
 }
 
-/// P14-S14-B v0 — one `Op::Concat A B=2` candidate found by
+/// one `Op::Concat A B=2` candidate found by
 /// `detect_accumulators` where `A` (the destination) is the same
 /// register as the first operand AND survives across the trace's
-/// back-edge. v0 ships the struct + an empty detection pass (no
-/// candidates produced yet) so v1+ can extend without API churn.
+/// back-edge.
 #[derive(Debug, Clone)]
 pub struct AccumSite {
     /// Index into `record.ops` of the `Op::Concat` op.
@@ -1248,17 +1213,17 @@ pub struct AccumSite {
     pub accum_slot: u32,
     /// The piece slot (= `Op::Concat.A + 1` since `B = 2`).
     pub piece_slot: u32,
-    /// Inline depth — v1 restricts to 0.
+    /// Inline depth; the detector only accepts 0.
     pub inline_depth: u8,
     /// Final buffer-state classification after escape-style sweep.
     pub state: BufferState,
 }
 
-/// P12-S5-A — result of the post-recording, pre-emit escape sweep
-/// run by [`try_compile_trace_with_options`]. S5-B emit reads
-/// `sites` (for the Sinkable list) and `op_actions` (per-op
-/// dispatch hint). S5-C consumes `live_at_op` at every cmp
-/// side-exit emit point to materialise the right virt slots.
+/// result of the post-recording, pre-emit escape sweep
+/// run by [`try_compile_trace_with_options`]. Emit reads `sites`
+/// (for the Sinkable list) and `op_actions` (per-op dispatch hint),
+/// and consumes `live_at_op` at every cmp side-exit emit point to
+/// materialise the right virt slots.
 #[derive(Debug, Default)]
 pub struct EscapeAnalysis {
     /// One [`AllocSite`] per `Op::NewTable` in the trace.
@@ -1268,18 +1233,15 @@ pub struct EscapeAnalysis {
     pub op_actions: Vec<Option<OpAction>>,
     /// Per-op snapshot of bound site indices (sites whose binding
     /// is live BEFORE this op processes), length = `effective_end`.
-    /// S5-C reads this at cmp emit sites to know which sites'
+    /// Read at cmp emit sites to know which sites'
     /// virt slots must materialise into a heap `Gc<Table>` on
     /// side-exit. Sites that end up Escaped after the sweep are
     /// still in the snapshot but emit gates on the final state.
     pub live_at_op: Vec<Vec<u32>>,
-    /// P14-S14-B v0 — accumulator sites identified in this trace.
-    /// Empty in v0 (`detect_accumulators` is a stub); v1+ will
-    /// populate.
+    /// Accumulator sites identified in this trace.
     pub accum_sites: Vec<AccumSite>,
-    /// P14-S14-B v0 — per-op snapshot of bound accumulator-site
-    /// indices, parallel to `live_at_op`. Length = `effective_end`
-    /// once populated; empty `Vec<Vec<u32>>` in v0.
+    /// per-op snapshot of bound accumulator-site
+    /// indices, parallel to `live_at_op`. Length = `effective_end`.
     pub accum_live_at_op: Vec<Vec<u32>>,
 }
 
@@ -1293,7 +1255,7 @@ impl EscapeAnalysis {
     }
 }
 
-/// P12-S5-C — map a [`RegKind`] to its matching
+/// map a [`RegKind`] to its matching
 /// [`luna_core::runtime::value::raw`] tag byte for the materialise
 /// helper's per-slot kind array. `Unset` slots become `NIL` so the
 /// helper writes Nil into the corresponding array index — matches
@@ -1310,7 +1272,7 @@ fn kind_to_raw_tag(k: RegKind) -> u8 {
     }
 }
 
-/// P12-S5-C — at a cmp side-exit emit point, materialise every
+/// at a cmp side-exit emit point, materialise every
 /// live Sinkable site at `inline_depth = 0`. For each site:
 /// stack-allocate two parallel buffers (`cap × i64` raws + `cap × u8`
 /// kind tags), fill from virt slot Variables + `virt_kinds`, call
@@ -1325,7 +1287,7 @@ fn kind_to_raw_tag(k: RegKind) -> u8 {
 /// gate), so this function only walks depth-0 sites. Inline sinking
 /// is a follow-up (would extend `regs_full[off + site.a]` indexing
 /// for the inlined frame's window).
-/// P12-S5-C / S10-A / S10-B — at a cmp side-exit emit point,
+/// at a cmp side-exit emit point,
 /// materialise every live Sinkable site (depth=0 AND depth>0) into
 /// the heap and update `kinds_snapshot` so the dispatcher's restore
 /// path repacks `RegKind::Table` for each materialised slot.
@@ -1333,8 +1295,8 @@ fn kind_to_raw_tag(k: RegKind) -> u8 {
 /// `kinds_snapshot` is updated in-place for each materialised
 /// site's slot — caller passes either a `max_stack`-sized snapshot
 /// (depth=0 cmp arm; bounds check skips depth>0 sites by index)
-/// or a window-sized snapshot (depth>0 cmp arm via S10-B; depth>0
-/// sites land inside the window).
+/// or a window-sized snapshot (depth>0 cmp arm; depth>0 sites land
+/// inside the window).
 ///
 /// Returns the number of sites materialised at this emit point.
 fn emit_materialize_live_sunk<M: Module>(
@@ -1349,7 +1311,7 @@ fn emit_materialize_live_sunk<M: Module>(
     cmp_op_idx: usize,
     kinds_snapshot: &mut [RegKind],
     head_proto: Gc<Proto>,
-    // v1.3 Phase AOT Stage 7 sub-piece 2 — relocation context. `aot
+    // relocation context. `aot
     // == false` keeps the original JIT-time iconst behaviour;
     // `aot == true` routes interned-key pointers through the
     // `__luna_aot_strkey_slot_<hex>` data section. `defined_aot_data`
@@ -1428,7 +1390,7 @@ fn emit_materialize_live_sunk<M: Module>(
                 bcx.ins().iconst(types::I64, 0),
             )
         };
-        // P12-S11-B-v2 — hash slot stack-alloc buffers (3 parallel
+        // hash slot stack-alloc buffers (3 parallel
         // arrays: keys, raws, kinds). For each hash slot, fill from
         // virt_vars[cap + slot] + virt_kinds[cap + slot]; key ptr
         // comes from head_proto.consts[site.hash_keys[slot]] at
@@ -1505,7 +1467,7 @@ fn emit_materialize_live_sunk<M: Module>(
     count
 }
 
-/// P12-S8-C — does this op write the register at `R[A]` as its
+/// does this op write the register at `R[A]` as its
 /// sole / primary destination? Used by `const_fold_int_key` to
 /// recognise the last writer of a key register. Conservative:
 /// excludes ops that write multiple regs (Call, ForLoop) or that
@@ -1544,7 +1506,7 @@ fn writes_target_a(op: Op) -> bool {
     )
 }
 
-/// P12-S8-C — walk backward from `set_table_idx` looking for the
+/// walk backward from `set_table_idx` looking for the
 /// most recent writer of `reg` at the same `inline_depth`. If it's
 /// `LoadI sbx` with `sbx in 1..=cap`, the key is the const `sbx`.
 /// `Move R[?] = R[src]` chains the search to `src` (up to
@@ -1589,7 +1551,7 @@ fn const_fold_int_key(
     None
 }
 
-/// P12-S5-A — forward sweep over `record.ops[..effective_end]` to
+/// forward sweep over `record.ops[..effective_end]` to
 /// classify NewTable sites. Conservative — over-escape is OK; the
 /// rules below are correctness-preserving for any future emit (a
 /// Sinkable site can always be heap-allocated; an Escaped site
@@ -1598,11 +1560,11 @@ fn const_fold_int_key(
 /// Sweep rules:
 /// - `Op::NewTable A=a B=cap C=0`, `cap > 0` → new `Sinkable` site
 ///   bound at `(depth, a)`. Hash-part (C != 0) or unknown cap (B == 0)
-///   → unbind A, no site (S5-B+ handles a wider shape).
+///   → unbind A, no site.
 /// - `Op::SetList A=a B=cap C=0` writing through a bound `(depth, a)`
 ///   whose site's `array_cap == B` → array init, no escape on the
 ///   target. Source slots `A+1..=A+B` that themselves bind sites →
-///   those sites escape (nested sinks not handled in S5-A).
+///   those sites escape (nested sinks are not handled).
 /// - `Op::SetI` / `Op::SetTable`: value slot bound → escape (stored
 ///   into a (different) table).
 /// - `Op::GetI` / `Op::GetTable` / `Op::Len`: read of B/A is fine;
@@ -1684,7 +1646,7 @@ fn escape_analyze(
 
     for i in 0..upper {
         let cur_depth = record.ops[i].inline_depth as usize;
-        // P12-S10-A — clear stale bindings from popped deeper
+        // clear stale bindings from popped deeper
         // inline frames. After a Return*, control transitions
         // from depth N+1 back to depth N (the next op is at depth
         // N). The bindings rows for depths > N hold sites that
@@ -1697,7 +1659,7 @@ fn escape_analyze(
                 *slot = None;
             }
         }
-        // P12-S5-C — snapshot live sunk bindings BEFORE the op
+        // snapshot live sunk bindings BEFORE the op
         // processes (each cmp emit uses live_at_op[cmp_idx] to
         // materialise the right virt slots).
         let mut live_snap: Vec<u32> = Vec::new();
@@ -1724,12 +1686,12 @@ fn escape_analyze(
 
         match op {
             Op::NewTable => {
-                // P12-S11-B-v1 — admit all NewTable shapes as
-                // potential sites (was: only `b > 0, c = 0`). For
-                // hash-only (b == 0) the array_cap is 0 and the
-                // site only sunk-emits via SetField/GetField. For
-                // mixed (b > 0, c > 0) array part sunk-emits as
-                // before; hash slots accumulate via SetField scan.
+                // admit all NewTable shapes as
+                // potential sites. For hash-only (b == 0) the
+                // array_cap is 0 and the site only sunk-emits via
+                // SetField/GetField. For mixed (b > 0, c > 0) the
+                // array part sunk-emits; hash slots accumulate via
+                // SetField scan.
                 let cap = ins.b();
                 let _c_hash = ins.c();
                 unbind(&mut bindings, depth, a);
@@ -1744,14 +1706,14 @@ fn escape_analyze(
                     state: EscapeState::Sinkable,
                 });
                 bindings[depth as usize][a as usize] = Some(sid);
-                // P12-S5-B — tag this op so emit can take the sunk
+                // tag this op so emit can take the sunk
                 // path (no NewTable helper call).
                 op_actions[i] = Some(OpAction::NewTableSite {
                     site_idx: sid as u32,
                 });
             }
             Op::SetList => {
-                // P12-S9-C — B=0 form: use the recorder's var_count
+                // B=0 form: use the recorder's var_count
                 // snapshot (= top - A - 1 at the SetList op) as the
                 // effective B. Otherwise the bytecode's B is the count.
                 let b_bytecode = ins.b();
@@ -1765,7 +1727,7 @@ fn escape_analyze(
                     if c != 0 || ins.k() || sites[sid].array_cap != effective_b {
                         mark_escape(&mut sites, sid);
                     } else {
-                        // P12-S5-B / P12-S9-C — supported form; tag for
+                        // supported form; tag for
                         // sunk emit (def_var virt slots from source
                         // registers). For B=0, the source range size
                         // is the recorded var_count.
@@ -1784,7 +1746,7 @@ fn escape_analyze(
                 }
             }
             Op::SetI => {
-                // P12-S8-B — `R[A][B_imm] := R[C]`. Target slot
+                // `R[A][B_imm] := R[C]`. Target slot
                 // bound to a Sinkable site + key in 1..=cap →
                 // tag SetISunkWrite (emit `def_var`s the value into
                 // the matching virt slot). Otherwise the target
@@ -1792,7 +1754,7 @@ fn escape_analyze(
                 // real heap table). The value source slot escapes
                 // unconditionally if it's bound — sinking a sunk
                 // table into another sunk table's slot would need
-                // pointer-aliasing the virt slot, deferred.
+                // pointer-aliasing the virt slot, which is unsupported.
                 let c = ins.c();
                 if (c as usize) < max_stack
                     && let Some(src_sid) = lookup(&bindings, depth, c)
@@ -1814,7 +1776,7 @@ fn escape_analyze(
                 }
             }
             Op::SetField => {
-                // P12-S11-B-v1 — `R[A][K[B]:string] := R[C]`. If R[A]
+                // `R[A][K[B]:string] := R[C]`. If R[A]
                 // is bound to a Sinkable site AND R[C]'s value is not
                 // itself a bound site (sinking a site into another
                 // site's hash slot is out of scope), tag sunk: push
@@ -1849,7 +1811,7 @@ fn escape_analyze(
                 }
             }
             Op::GetField => {
-                // P12-S11-B-v1 — `R[A] := R[B][K[C]:string]`. If R[B]
+                // `R[A] := R[B][K[C]:string]`. If R[B]
                 // is bound to a Sinkable site AND the key has been
                 // seen on this site (i.e. exists in site.hash_keys),
                 // tag sunk read. Unknown key (first GetField for it
@@ -1881,7 +1843,7 @@ fn escape_analyze(
                 unbind(&mut bindings, depth, a);
             }
             Op::SetTable => {
-                // P12-S8-C — `R[A][R[B]] := R[C]`. Sunk emit requires
+                // `R[A][R[B]] := R[C]`. Sunk emit requires
                 // a compile-time-known int key. `const_fold_int_key`
                 // walks back from this op looking for a LoadI (via a
                 // Move chain) that pinned R[B]'s value to a literal
@@ -1935,7 +1897,7 @@ fn escape_analyze(
             }
             Op::GetTable | Op::Len => {
                 // GetTable: dynamic key — can't constant-fold. Len:
-                // we know cap, but v1 doesn't sunk-emit Len. Either
+                // we know cap, but Len has no sunk emit. Either
                 // way, if B (source table) is bound, escape.
                 let b = ins.b();
                 if (b as usize) < max_stack
@@ -1946,15 +1908,14 @@ fn escape_analyze(
                 unbind(&mut bindings, depth, a);
             }
             Op::Move => {
-                // P12-S8-A — Move is a binding alias: the dst reg
+                // Move is a binding alias: the dst reg
                 // now references the same sunk site as src; src's
                 // own binding stays. No escape — both regs are
                 // interior-trace aliases, and downstream ops drive
                 // escape via their own rules (SetI/SetTable/Len/Call
-                // arg/Return1). Pre-S8-A this arm called
-                // mark_escape(src_sid), which collapsed any sunk site
-                // touched by Lua 5.5 frontend's `Move temp=R[t];
-                // SetI temp[k]=v` lowering of `t[k]=v`.
+                // arg/Return1). Escaping src here would collapse any
+                // sunk site touched by Lua 5.5 frontend's `Move
+                // temp=R[t]; SetI temp[k]=v` lowering of `t[k]=v`.
                 let b = ins.b();
                 let src_sid = if (b as usize) < max_stack {
                     lookup(&bindings, depth, b)
@@ -1990,8 +1951,8 @@ fn escape_analyze(
             }
             Op::Return0 => {}
             Op::Lt | Op::Le | Op::Eq | Op::EqK => {
-                // P12-S5-C — cmp side-exits no longer auto-escape
-                // live sunk sites. S5-C's `emit_materialize_*` runs
+                // cmp side-exits no longer auto-escape
+                // live sunk sites. `emit_materialize_*` runs
                 // at every cmp side-exit emit point to materialize
                 // the live virt slots into a heap `Gc<Table>` +
                 // override the per-exit-tags entry to `Table`.
@@ -1999,8 +1960,8 @@ fn escape_analyze(
                 // depth=0 cmps materialize at the side-exit emit
                 // path (Op::Lt/Le/Eq/EqK arm `else` branch — the
                 // non-inline path). depth>0 cmps would need the
-                // same machinery in the `per_exit_inline` arm; v1
-                // demotes the site to Escaped instead (see the
+                // same machinery in the `per_exit_inline` arm; the
+                // site is demoted to Escaped instead (see the
                 // `has_inline_cmp` gate in pre-emit demote).
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::IDiv | Op::Mod
@@ -2008,15 +1969,15 @@ fn escape_analyze(
             | Op::Unm | Op::BNot
             | Op::LoadI | Op::LoadF | Op::LoadK
             | Op::GetUpval | Op::GetTabUp | Op::Concat
-            // P12-S7-A — Op::Closure writes a fresh LuaClosure
+            // Op::Closure writes a fresh LuaClosure
             // pointer into R[A]; no NewTable site lives there.
-            // P12-S11-A — Op::GetField has its own arm above
+            // Op::GetField has its own arm above
             // (escapes R[B] receiver); not in this catch-all.
             | Op::Closure => {
                 unbind(&mut bindings, depth, a);
             }
             Op::LoadNil => {
-                // P12-S6-A2 — writes Nil to R[A..=A+B]. Each dest
+                // writes Nil to R[A..=A+B]. Each dest
                 // slot loses its binding (a sunk site whose A is
                 // overwritten with Nil is no longer reachable via
                 // that slot — the actual table pointer is gone).
@@ -2029,7 +1990,7 @@ fn escape_analyze(
                 }
             }
             Op::Close => {
-                // P12-S7-C — Op::Close A closes open upvals at slot
+                // Op::Close A closes open upvals at slot
                 // ≥ A. Open upvals point at vm.stack — the trace
                 // can't keep them only in virt slots, so any live
                 // sunk site whose slot ≥ A must escape (helper's
@@ -2077,7 +2038,7 @@ fn escape_analyze(
                 escape_all_live(&bindings, &mut sites);
             }
             TraceEnd::ForLoop => {
-                // P12-S5-D — DO NOT auto-escape on a ForLoop
+                // DO NOT auto-escape on a ForLoop
                 // terminator. ForLoop's IR side-exit fires on
                 // loop exit; interp resumes OUTSIDE the loop,
                 // where any `local t = {...}` declared inside
@@ -2103,7 +2064,7 @@ fn escape_analyze(
                 }
             }
             TraceEnd::SelfLink(_) => {
-                // P16-A — self-link close. Body loops with
+                // self-link close. Body loops with
                 // snapshot-restore (deepest-frame's window →
                 // head-frame's window). Every live binding at
                 // close must be marshalled back across the
@@ -2112,24 +2073,17 @@ fn escape_analyze(
                 escape_all_live(&bindings, &mut sites);
             }
             TraceEnd::DownRec { .. } => {
-                // v2.0 Track-R R3a — down-rec close. R3a routes
-                // the tail emit through R1's safe deopt path
-                // (dispatchable=false), so every live binding
-                // at close must be marshalled back into the
-                // caller window before the deopt return —
-                // same blanket-escape posture as SelfLink /
-                // InlineAbort. R3b's lowerer will keep this
-                // shape when it lifts to a real native back-edge:
-                // the retf-guard exit also returns through the
-                // caller window.
+                // down-rec close. Every exit (the safe deopt
+                // tail and the retf-guard exit alike) returns
+                // through the caller window, so every live
+                // binding at close must be marshalled back into
+                // it — same blanket-escape posture as SelfLink /
+                // InlineAbort.
                 escape_all_live(&bindings, &mut sites);
             }
         }
     }
 
-    // P14-S14-B v0 — detect accumulator sites. The v0 stub returns
-    // an empty Vec; v1+ will populate. Plumbed through here so the
-    // EscapeAnalysis surface is stable for downstream consumers.
     let accum_sites = detect_accumulators(record, effective_end, head_proto);
     let accum_live_at_op = vec![Vec::new(); op_actions.len()];
     EscapeAnalysis {
@@ -2141,7 +2095,7 @@ fn escape_analyze(
     }
 }
 
-/// P14-S14-B v1 — scan a trace for the `s = s .. v` 4-op idiom
+/// scan a trace for the `s = s .. v` 4-op idiom
 /// emitted by Lua's frontend, then run an escape sweep over the
 /// REAL accumulator slot.
 ///
@@ -2168,8 +2122,6 @@ fn escape_analyze(
 ///    — every reference to `s_slot` MUST be within the idiom (the
 ///    pre-Move src or post-Move dst) or the slot escapes.
 /// 4. Return matched idioms as `AccumSite` entries.
-///
-/// v1 stops at analysis; v2+ wires the OpAction + buffered emit.
 fn detect_accumulators(record: &TraceRecord, end: usize, _head_proto: Gc<Proto>) -> Vec<AccumSite> {
     use luna_core::vm::isa::Op;
 
@@ -2220,7 +2172,7 @@ fn detect_accumulators(record: &TraceRecord, end: usize, _head_proto: Gc<Proto>)
             continue;
         }
 
-        // P14-S14-B v4-fixup — both the accumulator slot and the
+        // both the accumulator slot and the
         // piece slot must be Str at recorder-fire time for the
         // buffered emit to be sound. `luna_jit_str_buf_extend`
         // unconditionally interprets the raw bits as a
@@ -2228,12 +2180,8 @@ fn detect_accumulators(record: &TraceRecord, end: usize, _head_proto: Gc<Proto>)
         // raw=1) would dereference address 0x1 → SIGSEGV. The
         // dispatcher's entry-tag guard (`src/vm/exec.rs:~5124`)
         // ensures runtime tags match `record.entry_tags`, so
-        // gating on Str-at-recorder-fire is sufficient.
-        // Pre-existing bug: bisect confirmed `0055c22` (S14-B
-        // v4-part2 real emit) — the snapshot would catch any
-        // tag, and the buffered path would extend that raw into
-        // the helper. Workload that exposed it:
-        // `trace_jit_s12_step_c_v3::ipairs_mixed_tag_array_deopts
+        // gating on Str-at-recorder-fire is sufficient. Covered by
+        // `trace_ipairs_val_tag_guard::ipairs_mixed_tag_array_deopts
         // _no_garbage` with `{'a', 1, 'c'}`.
         let entry_tags = &record.entry_tags;
         let s_tag = entry_tags.get(s_slot as usize).copied();
@@ -2386,7 +2334,7 @@ fn detect_accumulators(record: &TraceRecord, end: usize, _head_proto: Gc<Proto>)
     out
 }
 
-/// P15-A v2-E — per-op (reads, writes) slot analysis. Returns the
+/// per-op (reads, writes) slot analysis. Returns the
 /// slot indices an op READS from and WRITES to in the caller's
 /// register window. Conservative for unknown / not-yet-classified
 /// ops: read range is widened (assume reads everything in the
@@ -2554,7 +2502,7 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
     }
 }
 
-/// P15-A v2-E — compute the slot indices an op WRITES in the
+/// compute the slot indices an op WRITES in the
 /// caller's window, with the op's inline depth offset applied.
 /// Used by `compute_body_writes` and `compute_live_in_slots`.
 fn op_writes_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
@@ -2567,7 +2515,7 @@ fn op_reads_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
     r.into_iter().map(|s| op_offset + s).collect()
 }
 
-/// P15-A v2-E — compute the parent body's slot-write set. Walks
+/// compute the parent body's slot-write set. Walks
 /// `record.ops`, applying each op's `inline_depth` offset, and
 /// returns a sorted unique list of slot indices that ANY op writes.
 /// Stored on `CompiledTrace.body_writes` so child side traces can
@@ -2583,7 +2531,7 @@ pub fn compute_body_writes(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u32>
     s.into_iter().collect()
 }
 
-/// P15-A v2-E — compute the side trace's "live-in" slot set: slots
+/// compute the side trace's "live-in" slot set: slots
 /// READ by some op without any prior write to the same slot within
 /// `record.ops`. These are the values the side trace consumes from
 /// its entry state (= what the parent wrote to reg_state at its
@@ -2617,11 +2565,10 @@ pub fn compute_live_in_slots(record: &TraceRecord, op_offsets: &[u32]) -> Vec<u3
 /// `storage.trace_handles` Vec, keeping the entry fn pointer
 /// callable for the lifetime of that `Vm`.
 ///
-/// v2.0 Track J sub-step J-B Phase F — was thread-local
-/// `TRACE_JIT_HANDLES`. Mirrors the method JIT's `JitHandle` /
+/// Mirrors the method JIT's `JitHandle` /
 /// `storage.cache_handles` pattern (`jit_backend/mod.rs`).
 pub struct TraceHandle {
-    // v2.0 Track J sub-step J-D — sleeve `JITModule` in J-A's
+    // Sleeve `JITModule` in the
     // `SendJitModule` newtype so the module's `Send` claim is
     // expressed at the field type, not by an `unsafe impl Send` on
     // the outer struct. The wrapper is `repr(Rust)` newtype with
@@ -2631,21 +2578,21 @@ pub struct TraceHandle {
     _entry_raw: *const u8,
 }
 
-// SAFETY: `SendJitModule` (J-A) is `Send` because luna only ever
+// SAFETY: `SendJitModule` is `Send` because luna only ever
 // constructs `JITModule` with the default `SystemMemoryProvider`
 // (which is `Send`). `_entry_raw: *const u8` is `!Send` by default;
 // the manual `unsafe impl Send for TraceHandle` therefore stays
-// load-bearing for the outer struct, but the J-A wrapper localizes
+// load-bearing for the outer struct, but the wrapper localizes
 // the JITModule-side soundness reasoning to one place.
 //
-// v2.0 Track J sub-step J-E (audit): `_entry_raw` addresses mcode
+// `_entry_raw` addresses mcode
 // in `_module`'s mmap'd page. Because `_module` ships with the
 // handle (the handle owns it by-value as a `SendJitModule`), the
 // pointer remains dereferenceable on whichever OS thread the
 // handle lands on after a Vm move. The pointer is read-only on
 // the dispatch hot path (transmuted to an `extern "C"` fn and
 // called); no aliasing concerns. Per-dispatch `JIT_VM` / `JIT_CL`
-// TLS slots are scoped via J-D's `scoped_jit_vm_rebind` RAII so
+// TLS slots are scoped via `scoped_jit_vm_rebind` RAII so
 // any thread that calls into the dispatcher re-arms its own slot.
 // Mirror impl: `unsafe impl Send for JitHandle` at
 // `jit_backend/mod.rs` just after the `JitHandle` struct.
@@ -2654,31 +2601,26 @@ pub struct TraceHandle {
 unsafe impl Send for TraceHandle {}
 
 impl TraceHandle {
-    /// v2.0 Track J sub-step J-D — `#[doc(hidden)]` accessor returning
+    /// `#[doc(hidden)]` accessor returning
     /// the parked `_module` borrowed at the `SendJitModule` newtype.
-    /// Mirror of `JitHandle::__j_d_module`; lets
-    /// `tests/j_d_scoped_rebind_and_sleeve.rs` statically assert the
+    /// Mirror of `JitHandle::__send_module`; lets
+    /// `tests/jit_vm_scoped_rebind.rs` statically assert the
     /// field type.
     #[doc(hidden)]
     #[inline]
-    pub fn __j_d_module(&self) -> &super::SendJitModule {
+    pub fn __send_module(&self) -> &super::SendJitModule {
         &self._module
     }
 }
 
-// v2.0 Track J sub-step J-B Phase F — `TRACE_JIT_HANDLES` was a
-// `thread_local!<Vec<TraceHandle>>` here. Migrated to
-// `Vm.jit.storage.trace_handles`. Compiled fn pointers stay callable
-// for the lifetime of the owning `Vm` instead of the thread.
-
-/// Step 5 op whitelist. Anything outside this set bails the lowerer
+/// Op whitelist. Anything outside this set bails the lowerer
 /// to `None`, leaving the recorder to drop the trace.
 ///
 /// - `Move` — `R[A] = R[B]`. Type-agnostic (just copies 8-byte
-///   payload), so it composes with later steps when Float arrives.
+///   payload).
 /// - `Add / Sub / Mul` — Int-Int arithmetic. The lowerer assumes
 ///   the recorded operand types were Int; without value guards
-///   (S2.C / S3 dispatcher territory), the caller must ensure live
+///   in the dispatcher, the caller must ensure live
 ///   reg values match the recorded types before invoking the trace.
 /// - `Jmp` — emits no IR. Two valid roles:
 ///   (1) consumed-by-cmp — paired with a preceding `Lt / Le / Eq`
@@ -2695,10 +2637,8 @@ impl TraceHandle {
 ///   a runtime mismatch stores reg state back and returns the
 ///   failing PC.
 /// - `NewTable` — `R[A] = {}`. Lowered as a cranelift call to
-///   `luna_jit_new_table`. Step 4 ignores the asize / hsize hints
-///   (PUC's `Op::NewTable A B C` encodes them in B/C); step-4
-///   follow-up can swap in `luna_jit_new_table_sized` when a
-///   `for` loop pre-fold is detected.
+///   `luna_jit_new_table`. The asize / hsize hints (PUC's
+///   `Op::NewTable A B C` encodes them in B/C) are ignored.
 /// - `SetI / GetI` — `R[A][B_imm] = R[C_reg]` / `R[A] = R[B_reg][C_imm]`,
 ///   where the key is the bytecode immediate. Lowered as
 ///   `luna_jit_table_set_int` / `luna_jit_table_get_int`. Both
@@ -2713,12 +2653,9 @@ impl TraceHandle {
 ///   resumes with full reg state), and every recorded op after it
 ///   is dropped. The post-Call ops in `record.ops` are the callee
 ///   body / Return / post-call continuation that the recorder
-///   naturally inlines (S1.C always records `inline_depth = 0`),
-///   but the step-5 lowerer can't tell them apart from the outer
-///   frame and refuses to emit them; S4 (real inline) will handle
-///   that. The Call is **not** verified to be self-recursive at
-///   this step — the lowerer trusts the recorder to only feed
-///   sound recursive patterns.
+///   naturally inlines; the lowerer refuses to emit them. The Call
+///   is **not** verified to be self-recursive here — the lowerer
+///   trusts the recorder to only feed sound recursive patterns.
 /// Which terminating op (if any) sits at the trace's effective
 /// tail position. See the comment block in
 /// [`try_compile_trace_with_options`] for the contracts on each.
@@ -2726,17 +2663,17 @@ impl TraceHandle {
 enum TraceEnd {
     Call,
     ForLoop,
-    /// P12-S4-step3b — the trace's inline-recursion path hit something
+    /// the trace's inline-recursion path hit something
     /// the lowerer can't continue past (ForLoop@d>0, a non-self
     /// Call@d>0, depth past MAX_INLINE_DEPTH, or a proto mismatch).
     /// emit `ops[..i]` normally, then close the tail with a
     /// store-back + return of `record.ops[i].pc`. Dispatchable is
     /// forced false because the interp can't resume at that PC
-    /// without first materialising the depth>0 CallFrames — that's
-    /// step 4's job. cmp@d>0 used to land here too but step4b-C-2
-    /// now emits a real side-exit via the frame-mat helper.
+    /// without first materialising the depth>0 CallFrames. cmp@d>0
+    /// does not land here: it emits a real side-exit via the
+    /// frame-mat helper.
     InlineAbort,
-    /// P12-S4-step4b-C-2 — `Op::Return0` / `Op::Return1` at depth=0
+    /// `Op::Return0` / `Op::Return1` at depth=0
     /// terminates the trace (the caller frame unwinds). Treat as a
     /// truncation point: emit `ops[..i]` normally, then store back
     /// the caller window + return `record.ops[i].pc`. The interp
@@ -2744,7 +2681,7 @@ enum TraceEnd {
     /// shape as `TraceEnd::Call` but emitted by a different op, so
     /// kept as a separate variant for the tail dispatch.
     Return,
-    /// P16-A — recorder detected self-recursion via the cycle catch
+    /// Recorder detected self-recursion via the cycle catch
     /// (same-proto ancestor count > [`RECUNROLL_THRESHOLD`] at the
     /// head_pc on head_proto). The trace body covers the inlined
     /// recursion levels; the lowerer's tail emits a snapshot-restore
@@ -2754,7 +2691,7 @@ enum TraceEnd {
     /// `true` (DOES NOT pin `is_inline_abort_close`); the depth>0
     /// ops in the body are intentional inline content.
     SelfLink(SelfRecKind),
-    /// v2.0 Track-R R3a — recorder detected a down-recursion close
+    /// recorder detected a down-recursion close
     /// shape: a depth>0 `Op::Return` fired during recording AND the
     /// `rec.retfs` chain showed the trace bouncing in-and-out of the
     /// same caller-proto past [`RECUNROLL_THRESHOLD`]. Mirrors
@@ -2765,8 +2702,8 @@ enum TraceEnd {
     /// closes win over depth>0 self-link cycles.
     ///
     /// `return_pc` is the PC the inlined frame is unwinding to —
-    /// the future stitch-entry head_pc that R3b's lowerer will bake
-    /// into the retf-guard sequence (`asm_retf` equivalent).
+    /// the stitch-entry head_pc the lowerer bakes into the
+    /// retf-guard sequence (`asm_retf` equivalent).
     /// `target_proto_id` carries the target proto's `Gc::as_ptr()`
     /// as a raw `usize` so this enum stays `Copy` for the existing
     /// `end_idx_opt: Option<(usize, TraceEnd)>` plumbing. The
@@ -2774,10 +2711,8 @@ enum TraceEnd {
     /// target_proto` (not erased); the lowerer cross-references the
     /// two when emitting the guard.
     ///
-    /// **R3a constraint**: the lowerer still falls through to R1's
-    /// safe `dispatchable=false` deopt-tail (`"self-link-retf-r1"`
-    /// label retained) when this arm fires. R3b lifts that to a real
-    /// native back-edge by emitting the retf-guard + stitch sentinel.
+    /// The lowerer emits the retf-guard + stitch sentinel for this
+    /// arm, falling back to the safe deopt-tail on a guard miss.
     DownRec {
         /// PC the Return is unwinding to (caller's resume PC).
         return_pc: u32,
@@ -2809,7 +2744,7 @@ enum CmpDir {
     SkippedJmp,
 }
 
-fn is_whitelisted_step5(op: Op) -> bool {
+fn is_whitelisted_op(op: Op) -> bool {
     matches!(
         op,
         Op::Move
@@ -2844,19 +2779,19 @@ fn is_whitelisted_step5(op: Op) -> bool {
             | Op::LoadI
             | Op::LoadF
             | Op::LoadK
-            // P12-S6-A2 — Op::LoadNil writes Nil to R[A..=A+B].
+            // Op::LoadNil writes Nil to R[A..=A+B].
             // Emit: iconst(0) + def_var per slot + current_kinds[slot]
-            // = RegKind::Nil. ExitTag::Nil (S6-A1) carries the Nil
+            // = RegKind::Nil. ExitTag::Nil carries the Nil
             // through restore so non-Nil entry slots get repacked
             // as Value::Nil rather than mis-typed.
             | Op::LoadNil
-            // P12-S7-A — Op::Closure creates `R[A] := closure(proto[Bx])`.
+            // Op::Closure creates `R[A] := closure(proto[Bx])`.
             // Emit: call `luna_jit_op_closure(bx)` (shared-upval path
             // only; in_stack upvals bail compile in pre-emit). Result
             // is the Gc<LuaClosure> raw payload; current_kinds =
             // RegKind::Closure → ExitTag::Closure on side-exit restore.
             | Op::Closure
-            // P12-S7-C — Op::Close closes open upvals at slot ≥ A.
+            // Op::Close closes open upvals at slot ≥ A.
             // Emit: pre-Close spill of all live regs ≥ A, then
             // call `luna_jit_op_close(a)` returning 0 (continue) or
             // 1 (deopt). Deopt block writes store_back + returns
@@ -2864,7 +2799,7 @@ fn is_whitelisted_step5(op: Op) -> bool {
             // close_from is idempotent on the deopt path (open
             // upvals already popped).
             | Op::Close
-            // P12-S4-step2b — Op::GetUpval reads the trace head
+            // Op::GetUpval reads the trace head
             // closure's upvals[idx] via the `luna_jit_upval_get`
             // helper (the dispatcher's enter_jit pins JIT_CL).
             | Op::GetUpval
@@ -2873,24 +2808,24 @@ fn is_whitelisted_step5(op: Op) -> bool {
             // `folded_math[i]`.
             | Op::GetTabUp
             | Op::GetField
-            // P12-S11-A — Op::SetField writes `R[A][K[B]:string] = R[C]`.
+            // Op::SetField writes `R[A][K[B]:string] = R[C]`.
             // Helper-path emit calls luna_jit_table_set_field with the
             // string key's Gc<LuaStr> raw ptr baked into IR.
             | Op::SetField
-            // P12-S12-A — Op::Test gates `if x then ...` branches
+            // Op::Test gates `if x then ...` branches
             // when x isn't a comparison. Followed by Op::Jmp (taken
-            // or skipped depending on R[A] truthiness vs K). v1
-            // only handles kind-known truthy/falsy via compile-time
+            // or skipped depending on R[A] truthiness vs K).
+            // Kind-known truthy/falsy via compile-time
             // const fold (no IR — recorded direction is provably
             // stable); RegKind::Unset bails compile.
             | Op::Test
-            // P12-S12-A-v2 — Op::TestSet is `if R[B].truthy()==K
+            // Op::TestSet is `if R[B].truthy()==K
             // then R[A]=R[B] else pc++`. Same kind-fold approach
             // as Op::Test (truthy of R[B]); on test-pass branch
             // (TookJmp recorded), emit a Move-style def_var
             // R[A] = R[B].
             | Op::TestSet
-            // P12-S12-B-v2 — generic-for ops. TForPrep is a forward
+            // generic-for ops. TForPrep is a forward
             // pc-bump emitted before the body (head_pc = body_top,
             // so recorder never actually sees TForPrep in record —
             // whitelist only as a defensive arm). TForCall calls
@@ -2901,15 +2836,15 @@ fn is_whitelisted_step5(op: Op) -> bool {
             | Op::TForPrep
             | Op::TForCall
             | Op::TForLoop
-            // P12-S12-C v1 — Op::Concat A B does an N-operand
+            // Op::Concat A B does an N-operand
             // right-associative fold over `R[A..A+B-1]`, writing
             // the resulting string to R[A]. Trace emit spills the
             // operand window to vm.stack and calls
             // `luna_jit_op_concat(A, B)` helper which runs
             // concat_run + detects/deopts on the __concat
             // metamethod path. Helper-path equivalent to interp
-            // (perf wash); architectural completeness only — real
-            // perf wins live in P14 string subsystem.
+            // (perf wash); the perf wins live in the buffered string
+            // accumulator path.
             | Op::Concat
     )
 }
@@ -2990,7 +2925,7 @@ fn kind_tag(k: RegKind) -> u8 {
     }
 }
 
-/// P14-S14-B v4 — flush context for the buffered string
+/// flush context for the buffered string
 /// accumulator emit. When `Some`, both
 /// `emit_store_back_and_return_*` emit a `luna_jit_str_buf_intern`
 /// + `def_var(accum_slot, str_ptr)` + `luna_jit_str_buf_release`
@@ -3005,42 +2940,31 @@ struct FlushCtx {
     release_ref: cranelift_codegen::ir::FuncRef,
 }
 
-/// v2.0 Track-R R3.3+ sub-1 — depth-relative base address helper.
+/// depth-relative base address helper.
 ///
-/// Given the trace's `base_var` Variable (declared at entry block, see
-/// `lower_trace_into_named` sub-1 scaffold) plus an op's window
+/// Given the trace's `base_var` Variable (declared at entry block in
+/// `lower_trace_into_named`) plus an op's window
 /// offset (`op_offset_bytes` = `op_offsets[i] * 8`) plus a slot index
 /// within that op's window, returns a `(base_value, byte_offset)`
 /// pair suitable for `bcx.ins().load(..., base_value, byte_offset)`
 /// or `bcx.ins().store(..., base_value, byte_offset)`.
 ///
-/// Sub-1 caller contract: `base_var` is initialised to `iconst(0)` —
+/// Caller contract: `base_var` is initialised to `iconst(0)` —
 /// i.e., a depth-0 sentinel placeholder. Calling this helper produces
 /// load/store IR that addresses `[0 + op_offset_bytes + slot * 8]`,
-/// which is NOT a valid reg_state-relative address. Sub-1 op-arms
+/// which is NOT a valid reg_state-relative address. Op-arms
 /// MUST NOT call this helper (they keep using `regs_full[off + slot]`
-/// via `bcx.use_var` / `bcx.def_var`). The helper exists only as the
-/// threading-shape proof: sub-2 will (a) replace the iconst(0) init
-/// with `reg_state` itself + (b) start migrating Op::Move / Op::LoadK
-/// / Op::LoadNil arms to call this helper instead of indexing
-/// `regs_full`. Sub-3 will insert the R3d stitch_blk base-shift
-/// `iadd_imm(base_var, -8 * recorded_delta)` BETWEEN the cmp brif and
-/// the store-back so the deopt path lands at the caller window
-/// (Risk D1.R2 mitigation).
+/// via `bcx.use_var` / `bcx.def_var`).
 ///
 /// Why a helper (not inline `iadd_imm` at each call site): the
 /// op_offset + slot arithmetic is identical across all op-arms and
 /// LuaJIT's own sources show arm64's `ldr Xd, [Xn, #imm]` handles the pattern
 /// in a single addressing mode. Concentrating the math in one helper
 /// keeps the Cranelift mid-end's `iadd_imm` coalescing surface
-/// uniform (Risk D1.R1 mitigation) and lets sub-2 audit codegen at
-/// ONE site instead of ~30.
-// Sub-1 scaffold: no production caller yet (sub-2 will migrate op-arms
-// to call this; sub-1's only consumer is the regression test smoke
-// probe at `r3_3_sub1_base_var_scaffold.rs`). `pub(crate)` so the
-// test crate's hook can dispatch through `try_compile_trace_with_options`
-// — the helper itself stays internal because sub-2 is the place where
-// op-arm rewiring decides the final visibility.
+/// uniform and keeps codegen auditable at ONE site instead of ~30.
+// No production caller yet; the only consumer is the regression test
+// `base_var_scaffold.rs`. `pub(crate)` so the test crate's
+// hook can dispatch through `try_compile_trace_with_options`.
 #[allow(dead_code)]
 pub(crate) fn current_base_addr(
     bcx: &mut FunctionBuilder<'_>,
@@ -3063,7 +2987,7 @@ fn emit_flush_buf(bcx: &mut FunctionBuilder<'_>, ctx: &FlushCtx, regs: &[Variabl
     bcx.ins().call(ctx.release_ref, &[buf_ptr]);
 }
 
-/// P15-A v2-C-A2 — emit the indirect-call-or-return gate. Loads
+/// emit the indirect-call-or-return gate. Loads
 /// the cell at `side_trace_cell_addr`; if non-null, tail-calls the
 /// child fn via `call_indirect`, ORs sentinel bits 56..=63 into the
 /// child's i64 return, and returns. Otherwise runs the caller's
@@ -3078,16 +3002,15 @@ fn emit_side_trace_or_return(
     sentinel_code: u32,
     normal_return: impl FnOnce(&mut FunctionBuilder<'_>),
 ) {
-    // P15-A v2-C-A7 — `side_trace_cell_addr == 0` is the "no-gate"
+    // `side_trace_cell_addr == 0` is the "no-gate"
     // sentinel: emit the normal return only, skipping the load +
-    // icmp + brif + call_indirect IR. A6 mini N=3 showed the gate
-    // is a NET PERF LOSS when it fires at every dispatch site (19
-    // callsites × `load + icmp + brif` per parent dispatch >
-    // amortization from rare side-trace fires). A7 restricts the
-    // gate to TAG callsites (3) where hot exits actually live; the
-    // 14 GLOBAL + 2 INLINE callsites pass 0 here and avoid the
-    // overhead. The close-handler still writes child entry ptrs to
-    // the legacy `exit_side_trace_ptrs` + the per-kind cells so the
+    // icmp + brif + call_indirect IR. The gate is a net perf loss
+    // when it fires at every dispatch site (19 callsites × `load +
+    // icmp + brif` per parent dispatch > amortization from rare
+    // side-trace fires), so only the TAG callsites (3), where hot
+    // exits actually live, get a cell; the 14 GLOBAL + 2 INLINE
+    // callsites pass 0 here and avoid the overhead. The
+    // close-handler still writes child entry ptrs to the legacy `exit_side_trace_ptrs` + the per-kind cells so the
     // counters stay populated; only the IR gate emission is gated.
     if side_trace_cell_addr == 0 {
         normal_return(bcx);
@@ -3119,8 +3042,8 @@ fn emit_side_trace_or_return(
     let masked = bcx.ins().bor(body, mask_v);
     bcx.ins().return_(&[masked]);
 
-    // Exit block: caller-provided normal return path (the existing
-    // pre-v2-C encoded-return semantics).
+    // Exit block: caller-provided normal return path (plain
+    // encoded-return semantics).
     bcx.switch_to_block(do_exit_blk);
     bcx.seal_block(do_exit_blk);
     normal_return(bcx);
@@ -3408,7 +3331,7 @@ pub(crate) fn exit_pc(ret: i64) -> i64 {
     ret & 0xFFFF_FFFF
 }
 
-/// P12-S4-step4b-C-2 — inline cmp@d>0 side-exit return shape. The
+/// inline cmp@d>0 side-exit return shape. The
 /// upper 32 bits encode `site_idx + 1` (1-based; 0 means "no
 /// inline site, look up via cont_pc in `per_exit_tags`"); the lower
 /// 32 bits hold the resume PC. The dispatcher decodes this so a
@@ -3454,7 +3377,7 @@ fn emit_store_back_and_return_site(
     );
 }
 
-/// P12-S2.B step 5 — lowerer for Int arith + Move + Int-Int cmp
+/// lowerer for Int arith + Move + Int-Int cmp
 /// guards + Table ops + trace-truncating `Op::Call` on a
 /// single-Proto trace.
 ///
@@ -3469,20 +3392,16 @@ fn emit_store_back_and_return_site(
 /// op emits a cranelift `call` to the matching `luna_jit_*` helper
 /// (`Linkage::Import`, resolved via `JITBuilder::symbol`); helpers
 /// short-circuit on `vm.jit.pending_err` so a metatable-bearing
-/// table parks a deopt request the dispatcher (S2.C / S3) can
+/// table parks a deopt request the dispatcher can
 /// detect after the trace returns. The clean-close tail stores
 /// reg state back and returns `head_pc as i64`.
 ///
 /// Returns `None` if:
 /// - the record is not closed yet (open traces can't be entered
 ///   safely — the loop edge is the only sound entry/exit),
-/// - any recorded op is outside `is_whitelisted_step4`,
-/// - any recorded op comes from a Proto other than `head_proto`
-///   (inlined sub-calls don't ship until S4),
-/// - any recorded op has `inline_depth > 0` (same reason),
+/// - any recorded op is outside `is_whitelisted_op`,
 /// - any operand register index ≥ `head_proto.max_stack`,
-/// - a `Lt / Le / Eq` is not followed by a `Jmp` at `cmp.pc + 1`
-///   (the only direction step 3 captures),
+/// - a `Lt / Le / Eq` is not followed by a `Jmp` at `cmp.pc + 1`,
 /// - a `Jmp` is neither cmp-consumed nor at the trace's last
 ///   position,
 /// - cranelift codegen fails.
@@ -3491,18 +3410,14 @@ fn emit_store_back_and_return_site(
 /// `storage.trace_handles` so the returned `CompiledTrace.entry`
 /// stays callable for the lifetime of the owning `Vm`.
 ///
-/// **Caller contract for table ops** (step 4): before invoking the
-/// returned entry, the caller (a test harness today; the S3
-/// dispatcher tomorrow) must call [`crate::jit_backend::enter_jit`] to pin
+/// **Caller contract for table ops**: before invoking the
+/// returned entry, the caller (the dispatcher or a test harness)
+/// must call [`crate::jit_backend::enter_jit`] to pin
 /// the active Vm in the `JIT_VM` thread-local — the table helpers
 /// pick that up to reach `vm.heap`. After the call, the caller
 /// must inspect `vm.jit.pending_err` to decide whether a metatable
 /// deopt fired; on `Some`, treat the trace's result as invalid and
 /// re-run the work through the interpreter.
-///
-/// **Still no Vm::run caller** — `Vm::run` does not invoke this in
-/// step 4. Behavior change to the interpreter / benchmarks: none.
-/// S2.C will wire `try_compile_trace` into the close handler.
 ///
 /// This is a convenience wrapper for callers that don't need to
 /// pick options — it forwards to
@@ -3515,7 +3430,7 @@ pub fn try_compile_trace(
     try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
-// P13-S13-G v2.6 — last-checkpoint instrumentation for trace
+// last-checkpoint instrumentation for trace
 // compile failure diagnosis. `try_compile_trace_with_options`
 // updates the thread-local at each major phase; if the function
 // returns `None`, the most recent checkpoint set tells the
@@ -3526,12 +3441,11 @@ thread_local! {
         const { std::cell::Cell::new("not-entered") };
     pub(crate) static LAST_OP_ID: std::cell::Cell<u8> =
         const { std::cell::Cell::new(255) };
-    // v2.0 Track-R R3.3+ sub-1 — counter bumped exactly once per
+    // counter bumped exactly once per
     // `lower_trace_into_named` invocation that successfully declares
-    // the depth-relative `base_var` scaffold. Used by the sub-1
-    // regression test (`r3_3_sub1_base_var_scaffold.rs`) to assert
-    // the scaffold's declaration ran end-to-end without actually
-    // exercising any op-arm migration (sub-2 territory).
+    // the depth-relative `base_var` scaffold. Used by the regression
+    // test (`base_var_scaffold.rs`) to assert the
+    // scaffold's declaration ran end-to-end.
     //
     // Probe-only: dispatched + close-cause counters cover production
     // behaviour; this cell exists solely so the test can pin "scaffold
@@ -3563,25 +3477,21 @@ pub fn last_op_id() -> u8 {
     LAST_OP_ID.with(|c| c.get())
 }
 
-/// v2.0 Track-R R3.3+ sub-1 — count of successful `base_var` scaffold
+/// count of successful `base_var` scaffold
 /// declarations on this thread. Bumped exactly once per
 /// `lower_trace_into_named` invocation that reaches the post-entry
 /// emit point and runs `declare_var` + `def_var(iconst(0))` for the
-/// depth-relative base address handle. Sub-1 scaffold-only: NO op-arm
-/// migration (sub-2 territory); the Variable is in-scope for the
-/// entire lowerer body but `use_var(base_var)` doesn't happen yet.
+/// depth-relative base address handle. No op-arm reads it: the
+/// Variable is in-scope for the entire lowerer body but
+/// `use_var(base_var)` doesn't happen.
 ///
-/// Read by `r3_3_sub1_base_var_scaffold.rs`; production paths
+/// Read by `base_var_scaffold.rs`; production paths
 /// (dispatcher / close handler / vm) never read this.
-///
-/// shape decision (single-def_var, no audit anchor) + sub-2 handoff
-/// (replace `iconst(0)` init with `reg_state` + migrate Op::Move /
-/// Op::LoadK / Op::LoadNil arms to call `current_base_addr`).
 pub fn base_var_scaffold_declared_count() -> u64 {
     BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
 }
 
-/// v2.0 Track-R R3.3+ sub-1 — reset the scaffold-declared counter so
+/// reset the scaffold-declared counter so
 /// a regression test can assert "the next compile bumped it by 1"
 /// without depending on prior tests in the same thread. Test-only;
 /// production paths never call this.
@@ -3589,16 +3499,15 @@ pub fn reset_base_var_scaffold_declared_count() {
     BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(0));
 }
 
-/// v1.3 Phase AOT Stage 3 — build a fresh `JITModule` configured with
+/// build a fresh `JITModule` configured with
 /// every trace-side `luna_jit_*` helper symbol registered for
 /// `Linkage::Import` resolution at finalize time.
 ///
 /// Companion of [`super::build_jit_module_with_helpers`] (the int-chunk
 /// counterpart). The AOT pipeline (luna-aot) builds an `ObjectModule`
-/// instead and resolves the same symbols at static-link time — see
-/// IR (the shared lowerer)".
+/// instead and resolves the same symbols at static-link time.
 ///
-/// **Stage 3 status**: both the int-chunk lowerer
+/// Both the int-chunk lowerer
 /// ([`super::lower_int_chunk_into`]) and the trace lowerer
 /// ([`lower_trace_into`]) are fully generic over
 /// `M: cranelift_module::Module`. The two emit-time helper free fns
@@ -3629,7 +3538,7 @@ fn build_trace_jit_module() -> Option<JITModule> {
         .finish(settings::Flags::new(flag_builder))
         .ok()?;
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-    // Step 4 emits `Op::NewTable / SetI / GetI / Len` as calls to
+    // The lowerer emits `Op::NewTable / SetI / GetI / Len` as calls to
     // the method JIT's `luna_jit_*` helpers — register the symbols
     // so cranelift's `Linkage::Import` resolver finds them at
     // finalize time. (rlib link strips `#[no_mangle]` for executables
@@ -3655,7 +3564,7 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_table_get_field",
         super::luna_jit_table_get_field as *const u8,
     );
-    // v1.2 D3 Path B — standalone GetTabUp helper.
+    // standalone GetTabUp helper.
     builder.symbol(
         "luna_jit_op_get_tab_up",
         super::luna_jit_op_get_tab_up as *const u8,
@@ -3689,13 +3598,13 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_suppress_trace_admit",
         super::luna_jit_suppress_trace_admit as *const u8,
     );
-    // P12-S4-step2b — `Op::GetUpval` reads `cl.upvals[idx]` via this
+    // `Op::GetUpval` reads `cl.upvals[idx]` via this
     // helper. Reuses the method JIT helper; the trace dispatcher's
     // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
     // the closure at runtime.
     builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
-    // P12-S4-step4b-A — frame materialization helper. Step4b-C will
-    // emit calls to it from the cmp@d>0 side-exit path. Register the
+    // frame materialization helper, called from the cmp@d>0
+    // side-exit path. Register the
     // symbol unconditionally so the lowerer can declare the import
     // without needing per-trace gating; cranelift's dead-symbol
     // elimination drops the import if no IR references it.
@@ -3703,28 +3612,28 @@ fn build_trace_jit_module() -> Option<JITModule> {
         "luna_jit_trace_materialize_frames",
         super::luna_jit_trace_materialize_frames as *const u8,
     );
-    // P12-S5-C — sunk-table materialise helper. Emit calls it at
+    // sunk-table materialise helper. Emit calls it at
     // each cmp side-exit (depth=0 today) for every live Sinkable
     // site whose virt slots must reach interp via the heap path.
     builder.symbol(
         "luna_jit_materialize_sunk_table",
         super::luna_jit_materialize_sunk_table as *const u8,
     );
-    // P12-S7-A — Op::Closure shared-upval helper.
+    // Op::Closure shared-upval helper.
     builder.symbol(
         "luna_jit_op_closure",
         super::luna_jit_op_closure as *const u8,
     );
-    // P12-S7-B — pre-Closure spill helper. Emit calls this once
+    // pre-Closure spill helper. Emit calls this once
     // per in_stack upval just before luna_jit_op_closure so
     // find_or_create_upval sees a live vm.stack slot.
     builder.symbol(
         "luna_jit_spill_to_stack",
         super::luna_jit_spill_to_stack as *const u8,
     );
-    // P12-S7-C — Op::Close predict-and-deopt helper.
+    // Op::Close predict-and-deopt helper.
     builder.symbol("luna_jit_op_close", super::luna_jit_op_close as *const u8);
-    // P12-S12-B-v2 — generic-for helpers. `op_tforcall` runs the
+    // generic-for helpers. `op_tforcall` runs the
     // iterator function via vm.begin_call (Native iters only — Lua
     // closure iters deopt); `stack_load` / `stack_tag` read vm.stack
     // back into trace IR `Variable`s after the helper has mutated
@@ -3738,13 +3647,13 @@ fn build_trace_jit_module() -> Option<JITModule> {
         super::luna_jit_stack_load as *const u8,
     );
     builder.symbol("luna_jit_stack_tag", super::luna_jit_stack_tag as *const u8);
-    // P12-S12-C v1 — Op::Concat helpers.
+    // Op::Concat helpers.
     builder.symbol("luna_jit_op_concat", super::luna_jit_op_concat as *const u8);
     builder.symbol(
         "luna_jit_stack_update_raw",
         super::luna_jit_stack_update_raw as *const u8,
     );
-    // P14-S14-B v2 — string accumulator buffer pool helpers.
+    // string accumulator buffer pool helpers.
     builder.symbol(
         "luna_jit_str_buf_acquire",
         super::luna_jit_str_buf_acquire as *const u8,
@@ -3764,7 +3673,7 @@ fn build_trace_jit_module() -> Option<JITModule> {
     Some(JITModule::new(builder))
 }
 
-/// v1.3 Phase AOT Stage 3 placeholder `TraceFn` — installed in
+/// Placeholder `TraceFn` — installed in
 /// [`CompiledTrace::entry`] by the backend-agnostic [`lower_trace_into`]
 /// body and patched to the real finalized entry pointer by the JIT
 /// wrapper [`try_compile_trace_with_options`]. The AOT pipeline
@@ -3783,7 +3692,7 @@ unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
 /// — the close handler uses this with `internal_loop = true` so the
 /// JIT'd trace runs in a native loop until a cmp side-exits.
 ///
-/// v1.3 Phase AOT Stage 3 — thin wrapper around the backend-agnostic
+/// thin wrapper around the backend-agnostic
 /// [`lower_trace_into`] generic. Constructs a `JITModule`, finalizes
 /// the compiled trace into RWX memory, patches the real entry fn ptr
 /// into the returned [`CompiledTrace`], and stashes the module in
@@ -3802,11 +3711,9 @@ pub fn try_compile_trace_with_options(
     // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
     // is owned by `module`, which we park on the per-`Vm` storage's
     // `trace_handles` Vec immediately below.
-    // v2.0 Track J sub-step J-B Phase F — was `TRACE_JIT_HANDLES` TLS;
-    // now per-`Vm` field on storage.
     let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
     compiled.entry = entry_fn;
-    // v2.0 J-B follow-up — `from_storage` is `Result`-shaped now. On
+    // `from_storage` is `Result`-shaped. On
     // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
     // skip parking the handle and return `None` — the freshly built
     // `module` drops here and releases its mmap pages; the trace
@@ -3814,7 +3721,7 @@ pub fn try_compile_trace_with_options(
     // to interp dispatch. No SIGABRT across the C-ABI boundary.
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     cs.trace_handles.push(TraceHandle {
-        // v2.0 Track J sub-step J-D — wrap in `SendJitModule`
+        // Wrap in `SendJitModule`
         // sleeve. SAFETY: `build_trace_jit_module` uses the
         // default `SystemMemoryProvider` path (no
         // `JITBuilder::memory_provider` call).
@@ -3824,7 +3731,7 @@ pub fn try_compile_trace_with_options(
     Some(compiled)
 }
 
-/// v1.3 Phase AOT Stage 3 — backend-agnostic body of the trace
+/// backend-agnostic body of the trace
 /// lowerer. Generic over any `cranelift_module::Module` so the same
 /// codegen pipeline drives the runtime JIT (`JITModule`,
 /// [`try_compile_trace_with_options`]) and the AOT pipeline
@@ -3846,7 +3753,7 @@ pub fn lower_trace_into<M: Module>(
     lower_trace_into_named(module, record, opts, None)
 }
 
-/// v1.3 Phase AOT Stage 7 sub-piece 4 — like [`lower_trace_into`] but
+/// like [`lower_trace_into`] but
 /// lets the caller (luna-aot) pick a unique exported name for the
 /// trace function. Required for AOT: many traces from the same chunk
 /// would otherwise collide on `"luna_jit_trace"`, and `Linkage::Local`
@@ -3872,7 +3779,7 @@ pub fn lower_trace_into_named<M: Module>(
     }
     checkpoint("post:closed-check");
 
-    // v1.3 Phase AOT Stage 7 sub-piece 2 — track which AOT data slots
+    // track which AOT data slots
     // we've already `define_data`'d this lower call. `declare_data`
     // returns the same `DataId` for the same name (Cranelift name
     // interning), but `define_data` rejects redefinition with
@@ -3884,7 +3791,7 @@ pub fn lower_trace_into_named<M: Module>(
     let max_stack = head_proto.max_stack as usize;
     let n = record.ops.len();
 
-    // P12-S4-step3b — recorder invariant: the first recorded op is at
+    // recorder invariant: the first recorded op is at
     // depth 0 on `head_proto`. A record violating either would break
     // `compute_op_offsets`' depth-bump arithmetic; bail cleanly here
     // rather than panic deeper in.
@@ -3896,12 +3803,12 @@ pub fn lower_trace_into_named<M: Module>(
     }
     checkpoint("post:first-op-check");
 
-    // P15-A v2-E smart side-trace gate is moved BELOW
-    // `compute_op_offsets` so it can reuse the verified op_offsets
-    // (calling compute_op_offsets early can panic if the depth
-    // invariant fails — verify_depth_invariant runs at line ~3444).
+    // The smart side-trace gate sits BELOW `compute_op_offsets` so
+    // it can reuse the verified op_offsets (calling
+    // compute_op_offsets early can panic if the depth invariant
+    // fails — verify_depth_invariant runs first).
 
-    // P12-S4-step3b — per-op register-window offsets across inlined
+    // per-op register-window offsets across inlined
     // self-recursive frames. `op_offsets[i]` is the start of op i's
     // register window inside reg_state_buf; `enclosing_call_a[i]` is
     // the matching caller `Op::Call`'s A field (None at depth 0).
@@ -3911,7 +3818,7 @@ pub fn lower_trace_into_named<M: Module>(
     // its reg_state buffer; only [0..max_stack) is marshalled in
     // from the interp stack, [max_stack..window_size) is zero-init
     // and filled by the trace's own GetUpval / arith.
-    // P13-S13-A — consolidated depth invariant check. Bails if
+    // consolidated depth invariant check. Bails if
     // any of:
     //   - first op not at depth 0 (already checked above against
     //     head_proto, but kept here for the pure-function test)
@@ -3941,7 +3848,7 @@ pub fn lower_trace_into_named<M: Module>(
         .map(|&off| off + max_stack as u32)
         .max()
         .unwrap_or(max_stack as u32);
-    // P16-B — SelfLink close needs `regs_full` to extend through the
+    // SelfLink close needs `regs_full` to extend through the
     // would-be-next-depth's window so the snapshot-restore copy reads
     // from valid slots. Without this extension, compute_op_offsets
     // only covers the deepest CAPTURED depth (the recorder closed
@@ -3965,8 +3872,7 @@ pub fn lower_trace_into_named<M: Module>(
     }
     let window_size_us = window_size as usize;
 
-    // P15-A v2-E — SMART side-trace gate (replaces the v2-C-A6-5
-    // back-edge bail). Compute the child's read-before-write live-
+    // SMART side-trace gate. Compute the child's read-before-write live-
     // in slot set (slots READ without first being WRITTEN within
     // child's body — values carried in from the parent's exit
     // reg_state). Intersect with the parent's body_writes (slots
@@ -3977,10 +3883,10 @@ pub fn lower_trace_into_named<M: Module>(
     // trace is self-contained w.r.t. parent's writes — safe to
     // internal-loop OR forward-only — allow either.
     //
-    // More permissive than the v2-C-A6-5 back-edge bail (which
-    // banned ALL back-edge ops in side traces): self-contained
-    // back-edge side traces (e.g. recursive call branches that
-    // re-compute their inputs each iter) can now compile and
+    // More permissive than banning ALL back-edge ops in side
+    // traces: self-contained back-edge side traces (e.g. recursive
+    // call branches that re-compute their inputs each iter) can
+    // compile and
     // amortize the parent's hot-exit dispatch cost.
     if let Some((parent_proto, parent_head_pc, _)) = record.side_trace_parent {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
@@ -4063,26 +3969,25 @@ pub fn lower_trace_into_named<M: Module>(
     }
     checkpoint("post:side-trace-v2e-smart-gate");
 
-    // P12-S4-step4b-C-1 — per-inlined-frame metadata for the
+    // per-inlined-frame metadata for the
     // frame-mat helper. Walk record.ops; every self-recursive
     // Op::Call (next op at depth+1 on the same proto) describes one
     // callee frame the helper will push at side-exit time.
     //
     // Bail when:
     //   - any self-recursive Call has C != 2 (i.e. nresults != 1) —
-    //     step3b's Op::Return1 copy-back assumes one return value
+    //     the Op::Return1 copy-back assumes one return value
     //   - the head closure's proto is vararg — helper doesn't
     //     reconstruct the vararg rotation that `push_frame` does
     //
-    // P12-S4-step4b-C-2 — frame-mat data is now per-cmp-site (the
-    // RFC's "Lesson learned": single global indexed-by-depth array
-    // gave the wrong chain to sibling-Call branches and looped fib
-    // forever). Per-site `per_exit_metas` is built BELOW after
+    // frame-mat data is per-cmp-site: a single global
+    // indexed-by-depth array gives the wrong chain to sibling-Call
+    // branches and loops fib forever. Per-site `per_exit_metas` is built BELOW after
     // `cmp_dirs` are populated — that pass needs the cmp direction
     // to compute each site's side-exit PC.
     //
     // Pre-emit validation here: bail any self-recursive Call whose
-    // `C != 2` (nresults != 1) — step3b's `Op::Return1` copy-back
+    // `C != 2` (nresults != 1) — the `Op::Return1` copy-back
     // assumes one return value and the materialize helper bakes
     // whatever the meta says without validating.
     for (i, rop) in record.ops.iter().enumerate() {
@@ -4099,29 +4004,29 @@ pub fn lower_trace_into_named<M: Module>(
         if !std::ptr::eq(next.proto.as_ptr(), head_proto.as_ptr()) {
             continue;
         }
-        // P12-S9-B — accept Call C=2 (single ret, original S4 path)
+        // accept Call C=2 (single ret)
         // OR Call C=0 with var_count snapshot == 1 (multi-return
         // form that happens to return exactly 1 value, e.g.
         // binary_trees `make`'s `return {...}`). Both reduce to the
         // same emit (single-value Return1 copy-back from callee to
         // caller). For C=0 with var_count != 1, bail — multi-value
-        // copy-back is S9-D.
+        // copy-back is unsupported.
         let c = rop.inst.c();
         if c == 2 {
-            // OK, S4 path
+            // OK, single return
         } else if c == 0 && rop.var_count == Some(1) {
-            // OK, S9-B path (single return via variable form)
+            // OK, single return via variable form
         } else {
             checkpoint("bail:self-rec-Call-c-not-1");
             return None;
         }
     }
     checkpoint("post:self-rec-Call-validate");
-    // P12-S4-step4b-C-2 — also bail if the head proto is vararg.
+    // also bail if the head proto is vararg.
     // The materialize helper builds frames with `n_varargs = 0`,
     // which doesn't reconstruct the vararg-rotated layout that
     // `push_frame` lays out for vararg functions. fib + simple
-    // self-recursion isn't vararg; binary_trees TBD.
+    // self-recursion isn't vararg.
     if head_proto.is_vararg {
         for r in &record.ops {
             if r.inline_depth > 0 {
@@ -4134,11 +4039,10 @@ pub fn lower_trace_into_named<M: Module>(
 
     // Find the first trace-terminating op. Two species:
     //
-    // - `Op::Call` (step 5) *truncates* the trace: every op before
+    // - `Op::Call` *truncates* the trace: every op before
     //   gets normal IR, the Call emits a side-exit at its own PC,
-    //   and every op after is dropped. Used as a placeholder until
-    //   real Call inlining lands in S4.
-    // - `Op::ForLoop` (step 6) is the numeric-for back-edge: every
+    //   and every op after is dropped.
+    // - `Op::ForLoop` is the numeric-for back-edge: every
     //   op before is the loop body, the ForLoop emits its own cmp
     //   + step + brif at the tail. Continue branch is the internal
     //   back-edge (or `return head_pc` in one-shot mode); side-exit
@@ -4196,41 +4100,37 @@ pub fn lower_trace_into_named<M: Module>(
         }
     }
 
-    // P12-S4-step3b — the terminator scan now also accounts for
+    // the terminator scan also accounts for
     // inline self-recursion. Self-recursive Op::Call (next op is at
     // depth+1 on the same proto, within MAX_INLINE_DEPTH) is NOT a
     // terminator — body emit walks past it and op_offsets shifts the
     // register window for the callee.
     //
-    // P12-S4-step4b-C-2 — cmp@d>0 NO LONGER closes via InlineAbort:
+    // cmp@d>0 does not close via InlineAbort:
     // body emit calls the frame-mat helper at the side-exit then
     // returns side_exit_pc; dispatcher's restore loop walks the
     // newly-pushed inline frames. ForLoop@d>0 / non-self Call@d>0 /
     // depth past MAX_INLINE_DEPTH / proto mismatch still close via
-    // InlineAbort (deferred to step5+).
+    // InlineAbort.
     //
-    // P12-S4-step4b-C-2 — Op::Return0/Return1 at depth=0 terminates
+    // Op::Return0/Return1 at depth=0 terminates
     // the trace via `TraceEnd::Return` (caller frame unwind). The
     // recorder closes the trace cleanly past the return; without
     // this truncation the Return would fail the whitelist check and
     // bail the whole compile.
-    // v2.0 Track-R R3a — DownRec close wins over SelfLink: a depth>0
+    // DownRec close wins over SelfLink: a depth>0
     // `Op::Return` re-trip of the recunroll threshold (captured at
     // `exec.rs` recorder gate) routes here BEFORE the SelfLink arm.
-    // R3a only adds the variant + picker arm — the tail emit below
-    // still falls through to the R1 safe `dispatchable=false` path
-    // (the `self_link_idx_opt` arm) for now. R3b lifts that.
     //
-    // R3b — effective_end for DownRec is the index of the natural
+    // effective_end for DownRec is the index of the natural
     // terminator (depth-0 Return/Call/ForLoop) so the body emit's
-    // whitelist gate doesn't bail on the final op. R3a's effective_
-    // end = `record.ops.len()` walked the natural close op as a body
-    // op, which fails the `is_whitelisted_step5` check (Op::Return at
-    // depth 0 is end-shape, not body) and aborted compile before the
-    // DownRec tail arm could fire. R3b scans for the first natural
-    // terminator and uses that idx (mirrors TraceEnd::Return / Call's
-    // picker shape). Falls back to `record.ops.len()` only when no
-    // natural terminator is present (R3a behaviour).
+    // whitelist gate doesn't bail on the final op. Using
+    // `record.ops.len()` would walk the natural close op as a body
+    // op, which fails the `is_whitelisted_op` check (Op::Return at
+    // depth 0 is end-shape, not body) and aborts compile before the
+    // DownRec tail arm can fire. The scan mirrors TraceEnd::Return /
+    // Call's picker shape and falls back to `record.ops.len()` only
+    // when no natural terminator is present.
     let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
         let mut natural_end = record.ops.len();
         for (i, r) in record.ops.iter().enumerate() {
@@ -4258,7 +4158,7 @@ pub fn lower_trace_into_named<M: Module>(
             },
         ))
     } else if let Some(kind) = record.self_link_kind {
-        // P16-A/B — self-link close overrides the natural terminator
+        // Self-link close overrides the natural terminator
         // scan. Recorder stopped capturing AT the head_pc re-entry
         // (about to re-execute the deepest-inlined frame's first op);
         // every prior op is intentional inline body. effective_end =
@@ -4313,7 +4213,7 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     break;
                 }
-                // P12-S12-B-v2 — generic-for back-edge. Same tail
+                // generic-for back-edge. Same tail
                 // emit slot as Op::ForLoop (TraceEnd::ForLoop); the
                 // tail emit branches on `record.ops[idx].inst.op()`
                 // to pick the right side-exit predicate (count>0 vs
@@ -4331,7 +4231,7 @@ pub fn lower_trace_into_named<M: Module>(
                     break;
                 }
                 // depth>0 Returns are inline-path unwinds; the
-                // step3b emit loop handles them (Return0 no-op,
+                // body emit loop handles them (Return0 no-op,
                 // Return1 copy-back). Don't terminate.
                 _ => {}
             }
@@ -4339,9 +4239,9 @@ pub fn lower_trace_into_named<M: Module>(
         found
     };
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
-    // P12-S5-A/B — escape analysis over the recorded body +
-    // terminator. S5-B's pre-emit pass below demotes any Sinkable
-    // site that doesn't meet the v1 sunk-emit criteria back to
+    // escape analysis over the recorded body +
+    // terminator. The pre-emit pass below demotes any Sinkable
+    // site that doesn't meet the sunk-emit criteria back to
     // Escaped, so emit only honours sites we actually allocate
     // virt-slot Variables for.
     checkpoint("post:end-idx-found");
@@ -4353,15 +4253,15 @@ pub fn lower_trace_into_named<M: Module>(
     );
     checkpoint("post:escape-analyze");
 
-    // P14-S14-B v4-part2 — `flush_ctx` is declared mut here so
+    // `flush_ctx` is declared mut here so
     // the entry-block setup below can populate it with
     // `Some(FlushCtx { ... })` when an active_accum is detected.
     // The 19 `emit_store_back_and_return_*` call sites all read
     // `flush_ctx.as_ref()`; the helpers no-op when it's None.
     let mut flush_ctx: Option<FlushCtx> = None;
 
-    // P14-S14-B v4-part2 — detect the FIRST Bufferable AccumSite.
-    // v4 ships single-site buffered emit. The 4 idiom op indices
+    // detect the FIRST Bufferable AccumSite.
+    // Buffered emit handles a single site. The 4 idiom op indices
     // are pre1 = op_idx-2, pre2 = op_idx-1, concat = op_idx,
     // post = op_idx+1.
     #[derive(Clone, Copy, Debug)]
@@ -4402,20 +4302,15 @@ pub fn lower_trace_into_named<M: Module>(
         Some((i, TraceEnd::Return)) => Some(i),
         _ => None,
     };
-    // P16-B — `self_link_idx_opt = Some(effective_end)` when this is a
+    // `self_link_idx_opt = Some(effective_end)` when this is a
     // self-link close. Used to gate the new tail emit arm + override
     // `do_internal_loop` (the trace is designed to loop).
     let self_link_idx_opt: Option<(usize, SelfRecKind)> = match end_idx_opt {
         Some((i, TraceEnd::SelfLink(kind))) => Some((i, kind)),
         _ => None,
     };
-    // v2.0 Track-R R3a — `downrec_idx_opt` = `Some(effective_end, return_pc,
-    // target_proto_id, depth_delta)` when the down-rec catch tripped. R3a
-    // only collects the idx + close marker payload; the tail emit shares
-    // the SelfLink path's R1 safe-deopt code (R3b lifts to a real
-    // back-edge). Diagnostic only for R3a — the dispatch_off label
-    // `"self-link-retf-r1"` stays the same so R2's close-cause counters
-    // see the close-cause taxonomy that R3b will branch off.
+    // `downrec_idx_opt` = `Some(effective_end, return_pc,
+    // target_proto_id, depth_delta)` when the down-rec catch tripped.
     let downrec_idx_opt: Option<(usize, u32, usize, u8)> = match end_idx_opt {
         Some((
             i,
@@ -4428,7 +4323,7 @@ pub fn lower_trace_into_named<M: Module>(
         _ => None,
     };
 
-    // Pre-emit verification. Any op outside the step-5 contract
+    // Pre-emit verification. Any op outside the whitelist contract
     // bails so the trace becomes a no-op (the recorder counts it
     // toward the head PC's failure count and won't re-record
     // unless the back-edge counter rolls over again).
@@ -4450,13 +4345,13 @@ pub fn lower_trace_into_named<M: Module>(
         if folded_ops[i] {
             continue;
         }
-        // P12-S4-step3b — depth>0 ops are allowed inside the inline
+        // depth>0 ops are allowed inside the inline
         // self-recursion path. `end_idx_opt` already guards the path
         // (cmp@d>0 / ForLoop@d>0 / non-self Call / proto mismatch /
         // depth past MAX_INLINE_DEPTH all close the trace before they
         // hit emit), so any op reaching this point with depth>0 is
         // a same-proto inline body op the lowerer can handle.
-        // P13-S13-G v2.6 — capture op_id BEFORE per-op checks for
+        // capture op_id BEFORE per-op checks for
         // failure-phase narrowing.
         set_last_op_id(rop.inst.op() as u8);
         if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
@@ -4464,9 +4359,9 @@ pub fn lower_trace_into_named<M: Module>(
             return None;
         }
         let op = rop.inst.op();
-        // P12-S4-step3b — self-recursive Op::Call inside the inline
+        // self-recursive Op::Call inside the inline
         // path emits no IR (the next op shifts to the callee window
-        // via op_offsets). It's not in `is_whitelisted_step5`, so
+        // via op_offsets). It's not in `is_whitelisted_op`, so
         // accept it explicitly when depth>0 OR when the next op is
         // at depth+1 (the recorder's self-recursive marker).
         if matches!(op, Op::Call) {
@@ -4474,10 +4369,10 @@ pub fn lower_trace_into_named<M: Module>(
             // a self-recursive call. Skip the whitelist check.
             continue;
         }
-        // P12-S4-step3b — Op::Return0 / Op::Return1 at depth>0 are
-        // the inline path's unwind ops. They're not in the legacy
-        // step-5 whitelist (it only handled depth=0 traces with no
-        // return semantics); admit them when depth>0.
+        // Op::Return0 / Op::Return1 at depth>0 are
+        // the inline path's unwind ops. They're not in the
+        // whitelist (it only covers depth=0 ops with no return
+        // semantics); admit them when depth>0.
         if rop.inline_depth > 0 && matches!(op, Op::Return0 | Op::Return1) {
             // Bound the A operand for Return1 — Return0 has no A read.
             if matches!(op, Op::Return1) && (rop.inst.a() as usize) >= max_stack {
@@ -4486,13 +4381,13 @@ pub fn lower_trace_into_named<M: Module>(
             }
             continue;
         }
-        if !is_whitelisted_step5(op) {
+        if !is_whitelisted_op(op) {
             checkpoint("bail:cmp-dirs-op-not-whitelisted");
             return None;
         }
-        // P12-S11-A — Op::GetField is lowered standalone via
+        // Op::GetField is lowered standalone via
         // luna_jit_table_get_field (string key from Proto.consts).
-        // v1.2 D3 Path B — Op::GetTabUp also lowered standalone via
+        // Op::GetTabUp also lowered standalone via
         // luna_jit_op_get_tab_up. Both require K[C] = Str at compile
         // time (the const-pool string key is baked into IR). GetTabUp
         // additionally pins B = upvalue index in the trace head
@@ -4506,7 +4401,7 @@ pub fn lower_trace_into_named<M: Module>(
                 return None;
             }
         }
-        // P12-S11-A — Op::SetField uses K[B] as string key,
+        // Op::SetField uses K[B] as string key,
         // Op::GetField uses K[C]. Pre-emit verifies the const is Str.
         if matches!(op, Op::SetField) {
             let bx = rop.inst.b() as usize;
@@ -4542,7 +4437,7 @@ pub fn lower_trace_into_named<M: Module>(
                 "Op::TForLoop only appears at effective_end (close-on-back-edge guarded above)"
             ),
             Op::TForPrep => {
-                // P12-S12-B-v2 — generic-for prep: forward `add_pc(bx)`
+                // generic-for prep: forward `add_pc(bx)`
                 // to the body-tail (TForCall). Recorder enters at
                 // body_top = head_pc, AFTER TForPrep, so the record
                 // body never sees TForPrep in normal pickup; bail if
@@ -4554,7 +4449,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::TForCall => {
-                // P12-S12-B-v2 — generic-for body tail. Calls iter
+                // generic-for body tail. Calls iter
                 // via the `luna_jit_op_tforcall` helper. Bounds:
                 // helper accesses R[A..A+7] (gen/state/ctrl plus the
                 // generator-call window R[A+4..A+6] + space for the
@@ -4583,7 +4478,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::Concat => {
-                // P12-S12-C v1 — N-operand right-associative concat.
+                // N-operand right-associative concat.
                 // Helper reads vm.stack[base+A..base+A+B); spill all
                 // operand slots in body emit. Restrict to depth=0
                 // (helper resolves base via trace head's Lua frame).
@@ -4606,7 +4501,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::GetTabUp => {
-                // v1.2 D3 Path B — standalone GetTabUp body bounds.
+                // standalone GetTabUp body bounds.
                 // K[C] = Str validated by the upstream cmp-dirs gate;
                 // here we just bounds-check the A register.
                 if a >= max_stack {
@@ -4615,7 +4510,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::SetField | Op::GetField => {
-                // P12-S11-A — validated above (Str const at K[B] or
+                // validated above (Str const at K[B] or
                 // K[C] respectively); bounds-check the reg operands
                 // here.
                 if a >= max_stack {
@@ -4669,7 +4564,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::LoadNil => {
-                // P12-S6-A2 — R[A..=A+B] := nil. Validate the full
+                // R[A..=A+B] := nil. Validate the full
                 // range fits in window; emit pass writes iconst(0)
                 // per slot.
                 match a.checked_add(b) {
@@ -4678,8 +4573,8 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::Close => {
-                // P12-S7-C — close open upvals at slot ≥ A.
-                // S7-C limits to inline_depth=0 (helper reads vm.stack
+                // close open upvals at slot ≥ A.
+                // Limited to inline_depth=0 (helper reads vm.stack
                 // via the trace-head frame's base; inline frames aren't
                 // pushed). Bounds check on A.
                 if a >= max_stack {
@@ -4696,13 +4591,13 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::Closure => {
-                // P12-S7-A/B — R[A] := closure(proto.protos[Bx]).
-                // S7-A handled shared-upval / 0-upval; S7-B adds
-                // in_stack upval support via per-upval pre-Closure
+                // R[A] := closure(proto.protos[Bx]).
+                // Shared-upval / 0-upval closures, plus in_stack
+                // upval support via per-upval pre-Closure
                 // spill (emit writes vm.stack[base + d.index] from
                 // regs[d.index] before calling op_closure helper).
                 //
-                // Restrictions (S7-B scope):
+                // Restrictions:
                 // - depth = 0 only: spill writes vm.stack via the
                 //   trace-head frame's `base`; inline frames (depth>0)
                 //   aren't pushed during trace IR execution, so a
@@ -4845,7 +4740,7 @@ pub fn lower_trace_into_named<M: Module>(
                 consumed_by_cmp[i + 1] = true;
             }
             Op::Test => {
-                // P12-S12-A — `if (not R[A] == k) then pc++`. Same
+                // `if (not R[A] == k) then pc++`. Same
                 // direction inference as cmp ops: next.pc==pc+1 + Jmp
                 // → TookJmp (test failed); next.pc==pc+2 → SkippedJmp
                 // (test passed, K matched).
@@ -4885,7 +4780,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::TestSet => {
-                // P12-S12-A-v2 — `if R[B].truthy() == K then R[A]=R[B]
+                // `if R[B].truthy() == K then R[A]=R[B]
                 // else pc++`. R[B] is source; R[A] is move target on
                 // test-pass. Direction encoding inverted vs Op::Test:
                 //   TookJmp (pc+1 = Jmp) = test passed (no pc++)
@@ -4946,8 +4841,8 @@ pub fn lower_trace_into_named<M: Module>(
                 //   from `head_proto.code[cmp.pc + 1]` for the
                 //   side-exit PC.
                 // - Anything else: bail (cross-block path the
-                //   step-3 lowerer can't model).
-                // P13-S13-G v2.7 — relax to `record.ops.len()`:
+                //   lowerer can't model).
+                // relax to `record.ops.len()`:
                 // if the Cmp is at `effective_end - 1`, the
                 // terminator at `record.ops[effective_end]`
                 // still gives us a pc we can use for direction
@@ -5101,15 +4996,15 @@ pub fn lower_trace_into_named<M: Module>(
         }
     }
 
-    // Validate the truncating Op::Call (if any). step-5 doesn't
-    // verify self-recursion — the recorder is trusted to only
-    // feed sound patterns; future steps can tighten this.
+    // Validate the truncating Op::Call (if any). Self-recursion is
+    // not verified — the recorder is trusted to only feed sound
+    // patterns.
     if let Some(call_idx) = call_idx_opt {
-        // P12-S4-step3b — call_idx_opt only set for non-self
+        // call_idx_opt only set for non-self
         // Op::Call at depth 0 (self-recursive inline calls pass
         // through end_idx_opt without truncating; depth>0 closures
-        // close via TraceEnd::InlineAbort). The depth check below
-        // would now be redundant but is left as a debug assert.
+        // close via TraceEnd::InlineAbort), so the depth check below
+        // is only a debug assert.
         let rop = &record.ops[call_idx];
         debug_assert_eq!(rop.inline_depth, 0, "TraceEnd::Call only at depth 0");
         if !std::ptr::eq(rop.proto.as_ptr(), head_proto.as_ptr()) {
@@ -5128,7 +5023,7 @@ pub fn lower_trace_into_named<M: Module>(
     // is trusted that R[A..A+3] really do hold Ints at runtime;
     // the dispatcher's all-Int marshal gate enforces that
     // separately on the call boundary.
-    // P12-S4-step4b-C-2 — validate Op::Return0/Return1 at depth=0
+    // validate Op::Return0/Return1 at depth=0
     // (TraceEnd::Return). Same A bound rule as Call truncation
     // applies to Return1; Return0 has no A read.
     if let Some(return_idx) = return_idx_opt {
@@ -5171,8 +5066,6 @@ pub fn lower_trace_into_named<M: Module>(
                 // loop forever inside the trace. PUC's interp handles
                 // Float and Int ForLoop with separate semantics; the
                 // trace JIT only emits the Int path correctly.
-                // See docs/known-bugs/trace-jit-float-forloop-nested-
-                // hang.md for the symptom + investigation.
                 if a < record.entry_tags.len()
                     && record.entry_tags[a] == luna_core::runtime::value::raw::FLOAT
                 {
@@ -5180,7 +5073,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::TForLoop => {
-                // P12-S12-B-v2 — TForLoop reads R[A+4] (control
+                // TForLoop reads R[A+4] (control
                 // returned by the iterator) and writes R[A+2] on
                 // continue. R[A+4] must fit in the trace's frame.
                 if a + 4 >= max_stack {
@@ -5191,7 +5084,7 @@ pub fn lower_trace_into_named<M: Module>(
         }
     }
 
-    // v1.3 Phase AOT Stage 3 — `module` arrives as `&mut M` from the
+    // `module` arrives as `&mut M` from the
     // caller. The JIT wrapper [`try_compile_trace_with_options`]
     // constructs a `JITModule` via [`build_trace_jit_module`]; the AOT
     // pipeline (luna-aot) feeds an `ObjectModule` of its own. The
@@ -5233,7 +5126,7 @@ pub fn lower_trace_into_named<M: Module>(
             .ok()?,
     };
 
-    // P12-S11-A — `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
+    // `fn luna_jit_table_get_field(t, key_ptr) -> raw`.
     let mut get_field_sig = module.make_signature();
     get_field_sig.params.push(AbiParam::new(types::I64));
     get_field_sig.params.push(AbiParam::new(types::I64));
@@ -5242,7 +5135,7 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_table_get_field", Linkage::Import, &get_field_sig)
         .ok()?;
 
-    // v1.2 D3 Path B — `fn luna_jit_op_get_tab_up(upval_idx, key_ptr) -> raw`.
+    // `fn luna_jit_op_get_tab_up(upval_idx, key_ptr) -> raw`.
     let mut get_tab_up_sig = module.make_signature();
     get_tab_up_sig.params.push(AbiParam::new(types::I64));
     get_tab_up_sig.params.push(AbiParam::new(types::I64));
@@ -5280,7 +5173,7 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    // P12-S7-A — `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
+    // `fn luna_jit_op_closure(proto_idx: i64) -> i64`.
     // Returns the new Gc<LuaClosure> raw payload bits.
     let mut op_closure_sig = module.make_signature();
     op_closure_sig.params.push(AbiParam::new(types::I64));
@@ -5289,7 +5182,7 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_op_closure", Linkage::Import, &op_closure_sig)
         .ok()?;
 
-    // P12-S7-B — `fn luna_jit_spill_to_stack(slot_offset, tag, raw_bits)`.
+    // `fn luna_jit_spill_to_stack(slot_offset, tag, raw_bits)`.
     // Writes vm.stack[base + slot_offset] = Value::pack(tag, raw).
     let mut spill_sig = module.make_signature();
     spill_sig.params.push(AbiParam::new(types::I64));
@@ -5299,7 +5192,7 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_spill_to_stack", Linkage::Import, &spill_sig)
         .ok()?;
 
-    // P12-S7-C — `fn luna_jit_op_close(start_offset: i64) -> i64`.
+    // `fn luna_jit_op_close(start_offset: i64) -> i64`.
     // Returns 0 (continue) or 1 (deopt — handler would run or
     // pre-existing pending_err).
     let mut op_close_sig = module.make_signature();
@@ -5309,14 +5202,14 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_op_close", Linkage::Import, &op_close_sig)
         .ok()?;
 
-    // P12-S12-B-v4 — `fn luna_jit_op_tforcall(abs_offset, nvars,
+    // `fn luna_jit_op_tforcall(abs_offset, nvars,
     // ctrl_out: *mut i64, key_out: *mut i64, val_out: *mut i64) -> i64`.
-    // v4 batched: helper fills the three out pointers with raw bits
+    // Batched: helper fills the three out pointers with raw bits
     // of R[A+2] / R[A+4] / R[A+5] and returns R[A+4]'s tag byte
     // (0..=11) on success, -1 on deopt. Emit reads the buffer via
     // cranelift `stack_load` IR (skips per-slot `stack_load` /
-    // `stack_tag` helper calls — the 4-helpers-per-iter overhead
-    // v3 was bottlenecked on).
+    // `stack_tag` helper calls — 4 helpers per iter would be the
+    // bottleneck).
     let mut op_tforcall_sig = module.make_signature();
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
     op_tforcall_sig.params.push(AbiParam::new(types::I64));
@@ -5328,7 +5221,7 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_op_tforcall", Linkage::Import, &op_tforcall_sig)
         .ok()?;
 
-    // P12-S12-B-v2 — `fn luna_jit_stack_load(slot) -> i64` returns
+    // `fn luna_jit_stack_load(slot) -> i64` returns
     // raw bits of vm.stack[trace_head_frame.base + slot]. Used to
     // reload trace IR Variables after TForCall mutates vm.stack.
     let mut stack_load_sig = module.make_signature();
@@ -5338,10 +5231,10 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_stack_load", Linkage::Import, &stack_load_sig)
         .ok()?;
 
-    // P12-S12-B-v2 — `fn luna_jit_stack_tag(slot) -> i64` returns
+    // `fn luna_jit_stack_tag(slot) -> i64` returns
     // the raw::* tag byte of vm.stack[trace_head_frame.base + slot].
     // TForLoop tail emit dispatches on this to pick exit-on-Nil /
-    // continue-on-Int / deopt-on-other for v2.
+    // continue-on-Int / deopt-on-other.
     let mut stack_tag_sig = module.make_signature();
     stack_tag_sig.params.push(AbiParam::new(types::I64));
     stack_tag_sig.returns.push(AbiParam::new(types::I64));
@@ -5349,7 +5242,7 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_stack_tag", Linkage::Import, &stack_tag_sig)
         .ok()?;
 
-    // P12-S12-C v1 — `fn luna_jit_op_concat(a, n) -> i64`. Returns
+    // `fn luna_jit_op_concat(a, n) -> i64`. Returns
     // 0 on success (result at vm.stack[base+a]) or -1 on deopt
     // (metamethod path, type error, length overflow,
     // pre-existing pending_err).
@@ -5361,7 +5254,7 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_op_concat", Linkage::Import, &op_concat_sig)
         .ok()?;
 
-    // P14-S14-B v2 — `fn luna_jit_str_buf_acquire() -> i64`.
+    // `fn luna_jit_str_buf_acquire() -> i64`.
     // Returns a `*mut Vec<u8>` (boxed-leaked); used by buffered
     // accumulator emit at trace fn entry.
     let mut str_buf_acquire_sig = module.make_signature();
@@ -5374,7 +5267,7 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    // P14-S14-B v2 — `fn luna_jit_str_buf_release(buf: i64)`.
+    // `fn luna_jit_str_buf_release(buf: i64)`.
     let mut str_buf_release_sig = module.make_signature();
     str_buf_release_sig.params.push(AbiParam::new(types::I64));
     let str_buf_release_id = module
@@ -5385,7 +5278,7 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    // P14-S14-B v2 — `fn luna_jit_str_buf_extend(buf, str_ptr) -> i64`.
+    // `fn luna_jit_str_buf_extend(buf, str_ptr) -> i64`.
     let mut str_buf_extend_sig = module.make_signature();
     str_buf_extend_sig.params.push(AbiParam::new(types::I64));
     str_buf_extend_sig.params.push(AbiParam::new(types::I64));
@@ -5398,7 +5291,7 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    // P14-S14-B v2 — `fn luna_jit_str_buf_intern(buf) -> i64`.
+    // `fn luna_jit_str_buf_intern(buf) -> i64`.
     let mut str_buf_intern_sig = module.make_signature();
     str_buf_intern_sig.params.push(AbiParam::new(types::I64));
     str_buf_intern_sig.returns.push(AbiParam::new(types::I64));
@@ -5409,7 +5302,7 @@ pub fn lower_trace_into_named<M: Module>(
             &str_buf_intern_sig,
         )
         .ok()?;
-    // Squelch unused warnings for v2 — v3+ wires call sites.
+    // Squelch unused warnings.
     let _ = (
         str_buf_acquire_id,
         str_buf_release_id,
@@ -5417,7 +5310,7 @@ pub fn lower_trace_into_named<M: Module>(
         str_buf_intern_id,
     );
 
-    // P12-S12-C v1 — `fn luna_jit_stack_update_raw(slot, raw)`.
+    // `fn luna_jit_stack_update_raw(slot, raw)`.
     // Used in Op::Concat operand spill for Unset-kind slots.
     let mut update_raw_sig = module.make_signature();
     update_raw_sig.params.push(AbiParam::new(types::I64));
@@ -5464,13 +5357,12 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_table_len_checked", Linkage::Import, &len_sig)
         .ok()?;
 
-    // P12-S4-step2b — `fn luna_jit_upval_get(idx: i64) -> i64`. The
+    // `fn luna_jit_upval_get(idx: i64) -> i64`. The
     // helper reads `JIT_CL`'s upvals[idx], unpacks to raw payload,
     // returns it as i64. Type tag is lost across the ABI; the
     // dispatcher's exit_tags must use the Untouched fallback
     // (carry the entry tag through) since we can't statically
-    // determine what kind of Value an upval holds — historically
-    // this used the now-dropped `MoveFrom(u8)` variant (S13-F).
+    // determine what kind of Value an upval holds.
     let mut upval_get_sig = module.make_signature();
     upval_get_sig.params.push(AbiParam::new(types::I64));
     upval_get_sig.returns.push(AbiParam::new(types::I64));
@@ -5478,13 +5370,9 @@ pub fn lower_trace_into_named<M: Module>(
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
 
-    // P12-S4-step4b-A — `fn luna_jit_trace_materialize_frames(n: u64,
-    // metas: *const FrameMaterializeInfo) -> i64`. Step4b-B fills
-    // the real body; step4b-C wires the lowerer's cmp@d>0 emit to
-    // call it. Declared up-front so the import is in `module` when
-    // step4b-C lands without revisiting the helper-decl block.
-    // Unreferenced today; cranelift tree-shakes unused imports at
-    // optimization time so this is a zero-cost declaration.
+    // `fn luna_jit_trace_materialize_frames(n: u64,
+    // metas: *const FrameMaterializeInfo) -> i64`. Called by the
+    // lowerer's cmp@d>0 emit.
     let mut materialize_sig = module.make_signature();
     materialize_sig.params.push(AbiParam::new(types::I64));
     materialize_sig.params.push(AbiParam::new(types::I64));
@@ -5497,7 +5385,7 @@ pub fn lower_trace_into_named<M: Module>(
         )
         .ok()?;
 
-    // P12-S5-C — `fn luna_jit_materialize_sunk_table(cap: i64,
+    // `fn luna_jit_materialize_sunk_table(cap: i64,
     // raws_ptr: *const u64, kinds_ptr: *const u8) -> i64`. Emit
     // per cmp side-exit per live Sinkable site: stack-allocates
     // a `cap × 8` raws buffer + a `cap × 1` kinds buffer, fills
@@ -5505,7 +5393,7 @@ pub fn lower_trace_into_named<M: Module>(
     // calls this helper, writes the returned `Value::Table` raw
     // bits into the slot's regs Variable so the subsequent
     // `store_back` lands the heap pointer in `reg_state[a]`.
-    // P12-S5-C / S11-B-v2 — 7 i64 args:
+    // 7 i64 args:
     //   cap, arr_raws, arr_kinds, n_hash, hash_keys, hash_raws, hash_kinds
     // Returns: heap table raw payload (i64 Gc<Table> ptr).
     let mut mat_sunk_sig = module.make_signature();
@@ -5530,7 +5418,7 @@ pub fn lower_trace_into_named<M: Module>(
     sig.params.push(AbiParam::new(types::I64));
     // Return — continuation PC (head_pc on clean close).
     sig.returns.push(AbiParam::new(types::I64));
-    // v1.3 Phase AOT Stage 7 sub-piece 4 — caller-provided name +
+    // caller-provided name +
     // export linkage when driving the AOT pipeline. The JIT wrapper
     // (`try_compile_trace_with_options`) passes `None`, preserving the
     // original `luna_jit_trace` / `Linkage::Local` shape.
@@ -5561,7 +5449,7 @@ pub fn lower_trace_into_named<M: Module>(
     //   At the trace's clean close — when no `Op::Call` has
     //   truncated it — the tail emits a jump *back* to `body_loop`,
     //   so subsequent iterations stay inside the JIT'd code until
-    //   a cmp side-exits. The S3 dispatcher's per-iter marshal
+    //   a cmp side-exits. The dispatcher's per-iter marshal
     //   overhead amortizes across however many iterations the
     //   trace runs internally.
     //
@@ -5578,7 +5466,7 @@ pub fn lower_trace_into_named<M: Module>(
     bcx.seal_block(entry);
     let reg_state = bcx.block_params(entry)[0];
 
-    // P15-A v2-C-A2 — import the `TraceFn` ABI signature once so
+    // import the `TraceFn` ABI signature once so
     // every side-exit emit can `call_indirect` into a child side
     // trace. Matches the parent's own signature (`(I64) -> I64`).
     let trace_fn_sig_ref: cranelift_codegen::ir::SigRef = {
@@ -5587,7 +5475,7 @@ pub fn lower_trace_into_named<M: Module>(
         sig.returns.push(AbiParam::new(types::I64));
         bcx.func.import_signature(sig)
     };
-    // P15-A v2-C-A2 — singleton GLOBAL side-trace cell shared by
+    // singleton GLOBAL side-trace cell shared by
     // every non-INLINE / non-TAG callsite (clean-tail, Call
     // truncation, ForLoop / TForLoop exits, generic deopts). Each
     // such callsite bakes this Box's heap address into its IR.
@@ -5596,7 +5484,7 @@ pub fn lower_trace_into_named<M: Module>(
     let global_side_trace_box: Box<TCellPtr> = Box::new(TCellPtr::null());
     let _global_side_trace_cell_addr = (&*global_side_trace_box) as *const TCellPtr as i64;
 
-    // P12-S4-step3b — `regs_full` is sized to `window_size_us`, big
+    // `regs_full` is sized to `window_size_us`, big
     // enough for every inlined frame's register window. Slots
     // [0..max_stack) are loaded from reg_state (caller-marshalled);
     // [max_stack..window_size_us) start as `iconst(0)` so the
@@ -5624,7 +5512,7 @@ pub fn lower_trace_into_named<M: Module>(
         }
         regs_full.push(v);
     }
-    // P12-S12-B-v4 — Variable carrying R[A+4]'s tag byte across the
+    // Variable carrying R[A+4]'s tag byte across the
     // TForCall body emit → TForLoop tail emit boundary. TForCall's
     // batched helper returns the tag on success; tail emit reads
     // it via use_var to dispatch on Nil / Int / other instead of
@@ -5641,38 +5529,20 @@ pub fn lower_trace_into_named<M: Module>(
         bcx.def_var(tforcall_val_tag_var, z);
     }
 
-    // v2.0 Track-R R3.3+ sub-1 — depth-relative `base_var` scaffold.
+    // depth-relative `base_var` scaffold.
     //
+    // The Variable is declared at trace head (here, in the entry
+    // block immediately after the reg_state load prelude) and
+    // initialised to `iconst(0)` as the depth-0 sentinel
+    // placeholder. No op-arm reads it yet; they still index
+    // `regs_full[off + slot]`.
     //
-    // Sub-1 is SCAFFOLD-ONLY. The Variable is declared at trace head
-    // (here, in the entry block immediately after the reg_state load
-    // prelude) and initialised to `iconst(0)` as the depth-0 sentinel
-    // placeholder. Sub-2 will (a) replace the iconst(0) with a real
-    // `reg_state`-relative base address and (b) migrate Op::Move /
-    // Op::LoadK / Op::LoadNil arms to load/store via `base_var`
-    // instead of `regs_full[off + slot]`. Sub-3 will install the
-    // R3d stitch_blk base-shift sequencing (Risk D1.R2 mitigation).
-    //
-    // Threading: `lower_trace_into_named` is a monolithic function
-    // and every op-arm emit lives in its lexical scope, so `base_var`
-    // is automatically in scope for sub-2 op-arm migration. No struct
-    // refactor needed at this batch — the explicit "compile context"
-    // the RFC names is the lexical closure of this fn body, not a
-    // separate type.
-    //
-    // Codegen audit (Risk D1.R1): an unused Variable initialized via
-    // a single iconst gets DCE'd by Cranelift's mid-end, so this
-    // scaffold has the desired property of being overhead-neutral
-    // vs. the pre-sub-1 build. The single `iadd_imm(base_var, 0)` +
-    // use below intentionally KEEPS one read live so `cargo asm` can
-    // verify the GlobalValue/Variable threading path produces clean
-    // codegen (mitigation §8 D1.R1): if Cranelift fails to fold the
-    // `+ 0` and emits a spurious add, sub-2 needs the GlobalValue
-    // escape route (RFC §8 mitigation) before op-arm migration.
+    // An unused Variable initialized via a single iconst gets DCE'd
+    // by Cranelift's mid-end, so the scaffold is overhead-neutral.
     //
     // Probe: `BASE_VAR_SCAFFOLD_DECLARED` bumps exactly once at the
     // post-def_var point so the regression test
-    // `r3_3_sub1_base_var_scaffold.rs` can assert "scaffold ran" on
+    // `base_var_scaffold.rs` can assert "scaffold ran" on
     // an arbitrary fixture trace without scraping IR text. Bump
     // happens after `def_var` so a `declare_var` panic earlier leaves
     // the counter unchanged.
@@ -5683,21 +5553,17 @@ pub fn lower_trace_into_named<M: Module>(
         // Mirror the tforcall_tag_var declaration pattern exactly
         // (declare + iconst init + def_var, no anchor use). Cranelift
         // tree-shakes the unused Variable in optimized builds, so the
-        // sub-1 scaffold adds zero machine-code residue vs. pre-sub-1.
-        // Risk D1.R1 mitigation is deferred to sub-2 where op-arm
-        // migration actually exercises `bcx.use_var(base_var)` —
-        // that's the codegen surface that matters for the
-        // GlobalValue-vs-Variable escape route decision.
+        // scaffold adds zero machine-code residue.
         BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
-    // P12-S5-B — allocate virtual `Variable`s for each Sinkable
-    // site that meets v1's sunk-emit criteria. Sites that don't
+    // allocate virtual `Variable`s for each Sinkable
+    // site that meets the sunk-emit criteria. Sites that don't
     // meet the criteria are demoted to Escaped right here so the
     // body emit's site-state check naturally falls through to the
     // existing heap-alloc helper path. Criteria:
     //   - `inline_depth == 0` (trace head's frame only — inline
-    //     sinking is S5-C territory, requires extra plumbing for
+    //     sinking requires extra plumbing for
     //     the materialize helper to address inlined windows)
     //   - `array_cap` in `1..=MAX_SUNK_CAP` (cap = 0 means the
     //     site didn't decode an array part; cap > MAX is a
@@ -5705,14 +5571,13 @@ pub fn lower_trace_into_named<M: Module>(
     //   - the site's slot is NOT the trace-terminator `Op::Return1`
     //     R[A] — sinking that case needs the materialize helper
     //     to repack the array into a heap `Gc<Table>` on the way
-    //     out, deferred to a follow-up
+    //     out
     //   - the trace's body has NO cmp ops (`Lt`/`Le`/`Eq`/`EqK`) —
     //     a cmp emits a side-exit and the interp resume needs the
-    //     heap table; today's sweep escapes all live bindings on
+    //     heap table; the sweep escapes all live bindings on
     //     a cmp, but we ALSO need to bail on body cmps that fire
     //     AFTER the site dies (no live binding to escape, but the
-    //     trace still has a back-edge candidate). Materialise-on-
-    //     deopt + per-side-exit live-set is S5-D territory.
+    //     trace still has a back-edge candidate).
     //
     // Note: looping traces (`opts.internal_loop = true`) that have
     // any cmp in body are already excluded by the sweep escape
@@ -5731,15 +5596,15 @@ pub fn lower_trace_into_named<M: Module>(
         }
         _ => None,
     };
-    // P12-S5-C / S10-B — inline-cmp gate was dropped: inline cmp
-    // side-exits (per_exit_inline arm) now call
+    // There is no inline-cmp gate: inline cmp
+    // side-exits (per_exit_inline arm) call
     // `emit_materialize_live_sunk` to reconstruct live sunk sites
-    // before the frame-mat helper pushes inline frames. depth>0
-    // cmp no longer demotes sites.
+    // before the frame-mat helper pushes inline frames, so a
+    // depth>0 cmp doesn't demote sites.
     let mut virt_vars: Vec<Option<Vec<Variable>>> = vec![None; escape.sites.len()];
     let mut virt_kinds: Vec<Option<Vec<RegKind>>> = vec![None; escape.sites.len()];
     let mut sunk_alloc_seen: u32 = 0;
-    // P12-S5-C — incremented at each cmp side-exit emit point that
+    // incremented at each cmp side-exit emit point that
     // materialises ≥1 live Sinkable site. Telemetry only; the
     // dispatcher's runtime materialise calls are not counted here
     // (this is a per-trace static count of emit sites that emit
@@ -5750,14 +5615,13 @@ pub fn lower_trace_into_named<M: Module>(
         if site.state != EscapeState::Sinkable {
             continue;
         }
-        // P12-S10-A/B — depth>0 sites are sunk-eligible. Materialise
+        // depth>0 sites are sunk-eligible. Materialise
         // (`emit_materialize_live_sunk`) handles BOTH depth=0 and
         // depth>0 sites at depth=0 cmp arm AND inline cmp
-        // (per_exit_inline) arm — `has_inline_cmp` gate dropped in
-        // S10-B since inline cmp side-exits now reconstruct live
-        // sunk sites. `return_a` check only matters for depth=0
+        // (per_exit_inline) arm, since inline cmp side-exits
+        // reconstruct live sunk sites. `return_a` check only matters for depth=0
         // (TraceEnd::Return applies at the trace-head frame).
-        // P12-S11-B-v1 — total virt slot count = array_cap + hash_keys.
+        // total virt slot count = array_cap + hash_keys.
         // - array-only site:    cap = array_cap,           hash = 0
         // - hash-only site:     cap = 0,                   hash = hash_keys.len()
         // - mixed array+hash:   cap = array_cap > 0,       hash > 0
@@ -5772,11 +5636,10 @@ pub fn lower_trace_into_named<M: Module>(
             site.state = EscapeState::Escaped;
             continue;
         }
-        // P12-S11-B-v2 — hash slot materialise is now plumbed into
+        // hash slot materialise is plumbed into
         // emit_materialize_live_sunk (extended helper signature
-        // carries hash_keys + hash_raws + hash_kinds buffers); the
-        // S11-B-v1 conservative has_any_cmp gate is no longer
-        // required. Hash sites survive cmp side-exits via
+        // carries hash_keys + hash_raws + hash_kinds buffers), so no
+        // has_any_cmp gate is needed. Hash sites survive cmp side-exits via
         // table.set(Value::Str(key), ...) at materialise time.
         let mut vars = Vec::with_capacity(total_slots);
         for _ in 0..total_slots {
@@ -5790,7 +5653,7 @@ pub fn lower_trace_into_named<M: Module>(
         sunk_alloc_seen += 1;
     }
 
-    // P14-S14-B v4-part2 — if an active_accum is in play,
+    // if an active_accum is in play,
     // declare buf_var, emit acquire IR, and populate flush_ctx
     // with Some(FlushCtx { ... }). All 19 existing
     // emit_store_back_and_return_* call sites then auto-flush
@@ -5805,7 +5668,7 @@ pub fn lower_trace_into_named<M: Module>(
         let call_inst = bcx.ins().call(acquire_ref, &[]);
         let ptr = bcx.inst_results(call_inst)[0];
         bcx.def_var(buf_var, ptr);
-        // P14-S14-B v4 — prepend the accumulator slot's current
+        // prepend the accumulator slot's current
         // bytes into the buffer. The dispatcher always fires on
         // iter 2+ (interp's TForLoop trigger fires AFTER iter 1's
         // body has run), so by the time the trace fn entry
@@ -5870,7 +5733,7 @@ pub fn lower_trace_into_named<M: Module>(
     // back to Int semantics in the arith / cmp emit — that
     // matches the legacy all-Int behavior for traces built from
     // test harnesses that pass an empty entry_tags vec.
-    // P12-S4-step3b — sized to `window_size_us` (mirrors `regs_full`).
+    // sized to `window_size_us` (mirrors `regs_full`).
     // [0..max_stack) seeded from entry_tags; [max_stack..) start Unset
     // because the dispatcher zero-initialises the corresponding
     // reg_state slots and trace IR fills them via writers.
@@ -5884,34 +5747,34 @@ pub fn lower_trace_into_named<M: Module>(
         })
         .collect();
     let mut dispatchable: bool = true;
-    // P13-S13-G v2.5 — the first emit-pass site that flips
+    // the first emit-pass site that flips
     // dispatchable to false wins this label; CompiledTrace
     // exposes it via `dispatch_off_reason` for probe diagnostics.
     let mut dispatch_off_reason: Option<&'static str> = None;
-    // P12-S4-step2c — per-side-exit RegKind snapshot. Pushed at each
+    // per-side-exit RegKind snapshot. Pushed at each
     // true side-exit emit site (Lt/Le/Eq + Jmp) so later writers
     // (e.g. `Op::GetUpval` whose result we infer as `Closure`) don't
     // pollute the side-exit's restore with a tag the slot hasn't
     // actually become at that exit. The clean-tail and call-truncation
     // paths reuse the final `current_kinds` via `ct.exit_tags`.
-    // P15-A v2-C-A2 — 3rd element is the per-entry `Box<Cell<*const
+    // 3rd element is the per-entry `Box<Cell<*const
     // u8>>` whose heap address is baked into the corresponding
     // emit_store_back_and_return_pc callsite. Allocated at each push
     // site BEFORE the helper call so the IR's `iconst`-baked address
     // exists. Transported through into `tags_side_trace_ptrs` at the
     // end of emit (the cell never moves).
     let mut per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)> = Vec::new();
-    // P12-S4-step4b-C-2 — per inline cmp@d>0 side-exit. Each entry
+    // per inline cmp@d>0 side-exit. Each entry
     // is built at the cmp emit site and includes the side-exit PC,
     // a window-sized exit-tag snapshot, and the frame-mat chain. The
     // IR encodes `(site_idx + 1)` in the upper 32 bits of the
     // returned i64 so the dispatcher can pick the right entry
     // without colliding on shared cont_pc values (fib's cmp@d=0
     // through cmp@d=4 all side-exit to the same PC).
-    // P15-A v2-C-A2 — 5th element is the per-site `Box<Cell<*const
+    // 5th element is the per-site `Box<Cell<*const
     // u8>>` whose heap address is baked into the IR's
     // `emit_store_back_and_return_site` gate. Allocated at each push
-    // site BEFORE the helper call (the v2-B pattern: address is
+    // site BEFORE the helper call (address is
     // stable across `Vec → Rc<[]>` moves because Box transfers
     // ownership without moving the heap cell).
     let mut per_exit_inline_vec: Vec<(
@@ -5944,7 +5807,7 @@ pub fn lower_trace_into_named<M: Module>(
     // Only the *normal* range (`record.ops[..effective_end]`) is
     // emitted. If `Op::Call` truncates the trace, the tail emits
     // a side-exit at the Call's PC instead of the head_pc close.
-    // Path C IR-density attack #1 — memoize GetUpval(idx) per dispatch.
+    // Memoize GetUpval(idx) per dispatch.
     // For self-recursive traces (fib, factorial, etc.), the trace head
     // is entered with one closure and `JIT_CL` stays pinned to it for
     // the entire dispatch; all inlined-depth GetUpval(idx) calls return
@@ -5968,11 +5831,9 @@ pub fn lower_trace_into_named<M: Module>(
     //   the cache is never populated and reuse never happens — correct.
     let mut upval_cache: std::collections::HashMap<u32, Variable> =
         std::collections::HashMap::new();
-    // Path C #2 experiment skipped — iconst memoization adds little
-    // since the arm64 backend folds `iconst+isub`/`iconst+icmp` into
-    // immediate-form instructions at codegen. See layer-6 doc §3 for
-    // attack #2 candidates that ARE structural (block3 dead-slot store
-    // elimination, side-exit materialize call ABI consolidation).
+    // No iconst memoization: the arm64 backend folds
+    // `iconst+isub`/`iconst+icmp` into immediate-form instructions
+    // at codegen, so it would add little.
     // A guard that fails leaves the trace at `$pc` (the op being
     // guarded, re-executed by the interpreter) exactly as a cmp side
     // exit does: live sunk tables are materialised and, when the op sits
@@ -6194,7 +6055,7 @@ pub fn lower_trace_into_named<M: Module>(
                 *slot = None;
             }
         }
-        // P12-S4-step3b — `off` is the start of this op's register
+        // `off` is the start of this op's register
         // window inside reg_state_buf. `regs` is shadowed to the
         // matching slice of `regs_full`, so existing `regs[ins.X()]`
         // indexing auto-shifts across inlined frames. `current_kinds`
@@ -6203,7 +6064,7 @@ pub fn lower_trace_into_named<M: Module>(
         // Vec with explicit `off + X` indexing.
         let off = op_offsets[i] as usize;
         let regs: &[Variable] = &regs_full[off..off + max_stack];
-        // P14-S14-B v4-part2 — body emit handler for the 4-op
+        // body emit handler for the 4-op
         // string-accumulator idiom. Skip the 2 pre-Moves + the
         // post-Move (they're collapsed into the buffered emit).
         // Replace the Concat with `luna_jit_str_buf_extend(buf,
@@ -6516,10 +6377,10 @@ pub fn lower_trace_into_named<M: Module>(
                 current_kinds[off + ins.a() as usize] = RegKind::Float;
             }
             Op::LoadNil => {
-                // P12-S6-A2 — R[A..=A+B] := nil. NIL raw payload bits
+                // R[A..=A+B] := nil. NIL raw payload bits
                 // are 0; emit one iconst(0) and def_var it into each
                 // target slot, marking current_kinds = Nil so the
-                // exit-tag derivation (kinds_to_exit_tags, S6-A1)
+                // exit-tag derivation (kinds_to_exit_tags)
                 // produces ExitTag::Nil for slots the trace touched.
                 let a_us = ins.a() as usize;
                 let b_us = ins.b() as usize;
@@ -6777,7 +6638,7 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.switch_to_block(side_exit_blk);
                 bcx.seal_block(side_exit_blk);
                 let side_exit_pc = rop.pc + 2;
-                // P12-S4-step4b-C-2 — at depth>0, the side-exit must
+                // at depth>0, the side-exit must
                 // materialise the inlined frames before the interp can
                 // resume at the cmp's PC. See the matching Lt/Le/Eq
                 // arm below for the chain-build details.
@@ -6795,7 +6656,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
-                    // P12-S10-B — materialise live Sinkable sites
+                    // materialise live Sinkable sites
                     // BEFORE the frame_materialize_frames helper
                     // pushes the inline frames. The window-sized
                     // snapshot updates in-place so per_exit_inline's
@@ -6850,7 +6711,7 @@ pub fn lower_trace_into_named<M: Module>(
                         trace_fn_sig_ref,
                     );
                 } else {
-                    // P12-S5-C / S10-A — materialise every live
+                    // materialise every live
                     // Sinkable site at this depth=0 cmp side-exit.
                     // The snapshot carries `RegKind::Table` for each
                     // materialised caller-window slot so the
@@ -6898,11 +6759,11 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.seal_block(continue_blk);
             }
             Op::Test => {
-                // P12-S12-A v1 / v3 — `if (not R[A] == K) then pc++`.
+                // `if (not R[A] == K) then pc++`.
                 //
-                // v1: known kind → compile-time fold (`truthy_known`
+                // Known kind → compile-time fold (`truthy_known`
                 // table). Match recorded → no IR; mismatch → bail.
-                // v3: Unset → emit runtime guard via
+                // Unset → emit runtime guard via
                 // `luna_jit_stack_tag(A)` + `(tag > 1) == truthy`
                 // check; runtime mismatch → deopt store_back +
                 // return test.pc. The Subsequent Jmp (if TookJmp)
@@ -6929,7 +6790,7 @@ pub fn lower_trace_into_named<M: Module>(
                     // Test consumed; no IR. Match guaranteed at
                     // compile time.
                 } else {
-                    // v3 — runtime tag-based truthy guard.
+                    // Runtime tag-based truthy guard.
                     let slot_arg = bcx.ins().iconst(types::I64, ins.a() as i64);
                     let stack_tag_ref = module.declare_func_in_func(stack_tag_id, bcx.func);
                     let tag_call = bcx.ins().call(stack_tag_ref, &[slot_arg]);
@@ -6965,12 +6826,12 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::TestSet => {
-                // P12-S12-A-v2 / v3 — `if truthy(R[B]) == K then
+                // `if truthy(R[B]) == K then
                 // R[A] = R[B] else pc++`.
                 //
-                // v2: known kind → compile-time fold + emit Move
+                // Known kind → compile-time fold + emit Move
                 // on `TookJmp` recorded path.
-                // v3: Unset → emit runtime guard via stack_tag;
+                // Unset → emit runtime guard via stack_tag;
                 // when match + TookJmp recorded, emit Move under
                 // the `cont` block (so deopt path skips the Move).
                 let b_kind = k_op(&current_kinds, off as u32 + ins.b());
@@ -6996,7 +6857,7 @@ pub fn lower_trace_into_named<M: Module>(
                         current_kinds[off + ins.a() as usize] = b_kind;
                     }
                 } else {
-                    // v3 — runtime guard. Same shape as Op::Test
+                    // Runtime guard. Same shape as Op::Test
                     // but the basis is `is_truthy` (not `!is_truthy`).
                     let slot_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
                     let stack_tag_ref = module.declare_func_in_func(stack_tag_id, bcx.func);
@@ -7103,10 +6964,10 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 bcx.switch_to_block(side_exit_blk);
                 bcx.seal_block(side_exit_blk);
-                // P12-S4-step4b-C-2 — at depth>0, snapshot the live
+                // at depth>0, snapshot the live
                 // `call_chain` (each cmp@d>0 site has its OWN chain;
-                // the v1 single-global-array attempt looped fib
-                // forever because sibling Calls produced wrong
+                // a single global depth-indexed array loops fib
+                // forever because sibling Calls produce wrong
                 // chains under the depth-indexed lookup). The
                 // innermost frame's pc is overwritten with this
                 // site's side-exit PC so the materialize helper
@@ -7122,7 +6983,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
                     let site_idx = per_exit_inline_vec.len() as u32;
-                    // P12-S10-B — materialise live Sinkable sites
+                    // materialise live Sinkable sites
                     // (depth=0 + depth>0) before frame-mat helper
                     // pushes the inline frames.
                     let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
@@ -7175,7 +7036,7 @@ pub fn lower_trace_into_named<M: Module>(
                         trace_fn_sig_ref,
                     );
                 } else {
-                    // P12-S5-C / S10-A — materialise-on-deopt for
+                    // materialise-on-deopt for
                     // depth=0 cmp's live Sinkable sites.
                     let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
                     let mat_count = emit_materialize_live_sunk(
@@ -7218,7 +7079,7 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.seal_block(continue_blk);
             }
             Op::NewTable => {
-                // P12-S5-B — sunk path: skip the heap alloc helper.
+                // sunk path: skip the heap alloc helper.
                 // The site's virt slot Variables (allocated pre-emit)
                 // hold the array elements directly. `current_kinds`
                 // for the site's slot stays at its entry value
@@ -7237,7 +7098,7 @@ pub fn lower_trace_into_named<M: Module>(
                 current_kinds[off + ins.a() as usize] = RegKind::Table;
             }
             Op::GetI => {
-                // P12-S5-B — sunk path: a GetI from a Sinkable site
+                // sunk path: a GetI from a Sinkable site
                 // at a key in `1..=cap` becomes a `use_var` of the
                 // matching virt slot Variable, with kind carried
                 // from `virt_kinds`.
@@ -7305,7 +7166,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::SetField => {
-                // P12-S11-B-v1 — sunk path: when escape sweep tagged
+                // sunk path: when escape sweep tagged
                 // SetFieldSunkWrite, def_var the source register into
                 // the matching virt slot (array_cap + hash_slot) +
                 // propagate the source RegKind into virt_kinds.
@@ -7330,7 +7191,7 @@ pub fn lower_trace_into_named<M: Module>(
                     kinds_vec[slot] = src_kind;
                     continue;
                 }
-                // P12-S11-A — helper path: R[A][K[B]:string] := R[C].
+                // helper path: R[A][K[B]:string] := R[C].
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let key_v = match head_proto.consts[ins.b() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
@@ -7357,7 +7218,7 @@ pub fn lower_trace_into_named<M: Module>(
                 guard!(done, i, rop.pc);
             }
             Op::GetField => {
-                // P12-S11-B-v1 — sunk path: use_var the virt slot
+                // sunk path: use_var the virt slot
                 // for hash_slot, def_var R[A], propagate kind.
                 if let Some(OpAction::GetFieldSunkRead {
                     site_idx,
@@ -7376,7 +7237,7 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = k;
                     continue;
                 }
-                // P12-S11-A — helper path.
+                // helper path.
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key_v = match head_proto.consts[ins.c() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
@@ -7391,7 +7252,7 @@ pub fn lower_trace_into_named<M: Module>(
                 };
                 let want = getx_want(inferred);
 
-                // v2.1 Phase 1I.B — table-field IC scaffold.
+                // table-field IC scaffold.
                 //
                 // When `LUNA_JIT_FIELD_IC=1` and this op is the
                 // recorder-captured snapshot site, emit an inline
@@ -7541,7 +7402,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::GetTabUp => {
-                // v1.2 D3 Path B — `R[A] := upvals[B][K[C]:string]`.
+                // `R[A] := upvals[B][K[C]:string]`.
                 // Helper path mirrors GetField's; the sunk-table
                 // optimization does NOT apply (upvalue tables are
                 // the global env, not trace-internal alloc). Exit-tag
@@ -7579,7 +7440,7 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::SetI => {
-                // P12-S8-B — sunk path: when escape sweep tagged
+                // sunk path: when escape sweep tagged
                 // SetISunkWrite, def_var the source register into
                 // the matching virt slot Variable + propagate the
                 // source RegKind into virt_kinds so the next
@@ -7624,7 +7485,7 @@ pub fn lower_trace_into_named<M: Module>(
                 guard!(done, i, rop.pc);
             }
             Op::SetTable => {
-                // P12-S8-C — sunk path: escape sweep tagged
+                // sunk path: escape sweep tagged
                 // SetTableSunkWrite when the key reg was const-folded
                 // to a 1..=cap literal. Emit shape mirrors SetI sunk
                 // (def_var virt slot + propagate kind into virt_kinds).
@@ -7669,7 +7530,7 @@ pub fn lower_trace_into_named<M: Module>(
                 guard!(done, i, rop.pc);
             }
             Op::SetList => {
-                // P12-S5-B / P12-S9-C — `R[A][C+i] := R[A+i]` for i in
+                // `R[A][C+i] := R[A+i]` for i in
                 // 1..=effective_b. effective_b = bytecode B if B>0,
                 // else recorder's var_count snapshot (top - A - 1
                 // at the op). For sunk path, effective_b == cap
@@ -7747,9 +7608,9 @@ pub fn lower_trace_into_named<M: Module>(
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
             }
             Op::Closure => {
-                // P12-S7-A/B — R[A] := closure(proto.protos[Bx]).
-                // Emit per-in_stack-upval spill (S7-B) followed by a
-                // single op_closure helper call (S7-A). Spill writes
+                // R[A] := closure(proto.protos[Bx]).
+                // Emit per-in_stack-upval spill followed by a
+                // single op_closure helper call. Spill writes
                 // vm.stack[base + d.index] = Value::pack(tag, raw)
                 // so the helper's find_or_create_upval captures a
                 // live slot. Restrictions enforced in pre-emit:
@@ -7793,7 +7654,7 @@ pub fn lower_trace_into_named<M: Module>(
                 closure_seen += 1;
             }
             Op::Close => {
-                // P12-S7-C — close open upvals at slot ≥ A.
+                // close open upvals at slot ≥ A.
                 //
                 // Sequence:
                 //  1. Pre-Close spill every slot in [A..max_stack)
@@ -7841,15 +7702,15 @@ pub fn lower_trace_into_named<M: Module>(
             Op::GetUpval => {
                 // R[A] := UpVal[B]. The helper reads JIT_CL's
                 // upvals[B] and returns the raw 8-byte payload.
-                // P12-S4-step2c — use-site inference (`infer_upval_exit`)
+                // use-site inference (`infer_upval_exit`)
                 // pins the kind when the immediate use is `Op::Call`
                 // on R[A] (the call target must be a closure). Any
                 // other shape leaves dispatchable=false. Per-side-exit
-                // exit_tags (also step 2c) guard side-exits firing
+                // exit_tags guard side-exits firing
                 // BEFORE this GetUpval: they snapshot the pre-GetUpval
                 // current_kinds, so those exits restore as Untouched.
                 //
-                // Path C #1 — memoize per upval idx via `upval_cache`.
+                // memoize per upval idx via `upval_cache`.
                 let idx_b = ins.b();
                 let v = if let Some(&cached_var) = upval_cache.get(&idx_b) {
                     bcx.use_var(cached_var)
@@ -7884,18 +7745,18 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                 }
             }
-            // P12-S4-step3b — inline self-recursive Call: emit nothing.
+            // inline self-recursive Call: emit nothing.
             // The recorder's depth bump (next op at depth+1) drives the
             // op_offsets shift; subsequent emit lands in the callee's
             // register window via the `off` shadow.
             //
-            // P12-S4-step4b-C-2 — push the callee frame onto `call_chain`
+            // push the callee frame onto `call_chain`
             // so subsequent cmp@d>0 sites can snapshot the chain. The
             // pushed `pc` is the caller's resume PC (Call.pc + 1); the
             // innermost frame's pc is overwritten with the side-exit PC
             // at snapshot time.
             Op::Call => {
-                // P16-B — SelfLink close: the LAST recorded op is the
+                // SelfLink close: the LAST recorded op is the
                 // Op::Call whose "next" op (the tripping deepest-depth
                 // entry) was never captured. Skip the call_chain push
                 // for that trailing Call — the SelfLink tail emit
@@ -7920,13 +7781,13 @@ pub fn lower_trace_into_named<M: Module>(
                     nresults: 1,
                 });
             }
-            // P12-S4-step3b — inline Return0: callee returns no values
+            // inline Return0: callee returns no values
             // back to the caller. The caller's R[call_a..] slots stay
             // whatever the caller had written (Lua semantics: the
             // return values are nil if the caller's call expected
             // more than the callee delivered; here recorder snapshots
             // a single concrete trip so trust the recorded trace).
-            // P12-S4-step4b-C-2 — pop the matching call_chain frame.
+            // pop the matching call_chain frame.
             Op::Return0 => {
                 debug_assert!(
                     !call_chain.is_empty(),
@@ -7934,7 +7795,7 @@ pub fn lower_trace_into_named<M: Module>(
                 );
                 call_chain.pop();
             }
-            // P12-S4-step3b — inline Return1: copy callee's R[A]
+            // inline Return1: copy callee's R[A]
             // into the caller's R[call_a]. `op_offsets` for the
             // following ops will revert to the caller's window, but
             // the value lives in `regs_full[caller_off + call_a]`
@@ -7956,14 +7817,14 @@ pub fn lower_trace_into_named<M: Module>(
                 // Propagate the kind so the caller's continuation
                 // sees the right type.
                 current_kinds[caller_off + call_a] = current_kinds[off + a_callee];
-                // P12-S4-step4b-C-2 — pop matching call_chain frame.
+                // pop matching call_chain frame.
                 debug_assert!(
                     !call_chain.is_empty(),
                     "Return1 at depth>0 has a matching frame"
                 );
                 call_chain.pop();
             }
-            // P12-S12-B-v2 — generic-for body tail. Sequence:
+            // generic-for body tail. Sequence:
             //   1. Spill regs[A..=A+2] (iter / state / control) to
             //      vm.stack so the helper's
             //      `vm.stack[A+4..=A+6] = vm.stack[A..=A+2]` copy
@@ -7981,7 +7842,7 @@ pub fn lower_trace_into_named<M: Module>(
             Op::TForCall => {
                 let a_us = ins.a() as usize;
                 let nvars = ins.c() as i64;
-                // P12-S12-B-v5 — ipairs detection. Recorder's TForLoop
+                // ipairs detection. Recorder's TForLoop
                 // trigger snapshots `R[A]` if Native; we compare against
                 // `ipairs_iter`'s address to specialise emit into inline
                 // Table aget IR (skip the `op_tforcall` C call entirely
@@ -7991,7 +7852,7 @@ pub fn lower_trace_into_named<M: Module>(
                     as usize;
                 let is_ipairs_trace = record.tfor_iter_ptr == Some(ipairs_addr);
 
-                // P12-S12-B-v5 — spill discipline:
+                // spill discipline:
                 // - non-ipairs case: spill R[A..=A+2] upfront (helper
                 //   path runs unconditionally; needs vm.stack populated).
                 // - ipairs case: SKIP the upfront spill on the hot
@@ -8139,7 +8000,7 @@ pub fn lower_trace_into_named<M: Module>(
                         .ins()
                         .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
                     let is_nil = bcx.ins().icmp(IntCC::Equal, val_tag, nil_const);
-                    // P12-S12-C v3 — runtime val_tag guard. Snapshot
+                    // runtime val_tag guard. Snapshot
                     // at recorder fire (R[A+5]'s tag) is the
                     // *expected* iter val tag. The trace's
                     // downstream emit (Move propagation, Concat
@@ -8227,7 +8088,7 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + a_us + 5] = RegKind::Unset;
                 }
             }
-            // P12-S12-C v1 — N-operand concat via helper.
+            // N-operand concat via helper.
             Op::Concat => {
                 let a_us = ins.a() as usize;
                 let n_operands = ins.b() as usize;
@@ -8277,12 +8138,12 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.def_var(regs[a_us], result_raw);
                 current_kinds[off + a_us] = RegKind::Str;
             }
-            // P12-S12-B-v2 — generic-for prep is the leading pc-bump
+            // generic-for prep is the leading pc-bump
             // before body_top. Recorder enters at body_top, so this
             // arm is defensive only — pre-emit pass bails before we
             // reach it.
             Op::TForPrep => unreachable!("Op::TForPrep bailed in pre-emit pass"),
-            // P12-S12-B-v2 — TForLoop is the trace's terminator; tail
+            // TForLoop is the trace's terminator; tail
             // emit handles the side-exit + back-edge.
             Op::TForLoop => unreachable!("Op::TForLoop only appears at effective_end"),
             _ => unreachable!("non-whitelisted op rejected in pre-emit pass"),
@@ -8314,78 +8175,49 @@ pub fn lower_trace_into_named<M: Module>(
     let has_cmp = record.ops[..effective_end]
         .iter()
         .any(|r| matches!(r.inst.op(), Op::Lt | Op::Le | Op::Eq));
-    // P16-B — SelfLink close ALSO permits internal loop (in fact it
+    // SelfLink close ALSO permits internal loop (in fact it
     // REQUIRES it — the whole point of the trace is to loop with
     // bump-base + branch-to-self). Treat self_link_idx_opt the same as
     // the cmp/ForLoop loop-permission predicates, and (critically)
     // don't trip on inline_abort_idx_opt — the SelfLink close path
     // doesn't go through that arm.
-    // v2.0 Track-R R3a — `downrec_idx_opt` does NOT permit internal
-    // loop (R3a routes through the R1 safe deopt path, single-shot).
-    // R3b's lift to a real native back-edge will introduce its own
-    // tail shape; until then, treat DownRec the same as a hard
-    // truncation marker that forces one-shot dispatch.
+    // `downrec_idx_opt` does NOT permit internal loop: its tail
+    // either stitches through the dispatcher or deopts, so DownRec
+    // is a hard truncation marker that forces one-shot dispatch.
     let do_internal_loop = opts.internal_loop
         && (has_cmp || for_loop_idx_opt.is_some() || self_link_idx_opt.is_some())
         && call_idx_opt.is_none()
         && return_idx_opt.is_none()
         && inline_abort_idx_opt.is_none()
         && downrec_idx_opt.is_none();
-    // P12-S4-step3b — every tail `emit_store_back_and_return_pc`
+    // every tail `emit_store_back_and_return_pc`
     // passes `&regs_full[..max_stack]` so the store-back ONLY writes
     // the caller's window back to interp stack. Slots at
     // [max_stack..window_size) are inline-frame scratch and must not
     // leak into the dispatcher's reg_state restore.
     let caller_regs: &[Variable] = &regs_full[..max_stack];
-    // v2.0 Track-R R3b — populated by the `downrec_idx_opt` arm when
+    // populated by the `downrec_idx_opt` arm when
     // it emits the stitch sentinel. Flows into `CompiledTrace.
     // downrec_link` at the struct literal below. `None` for every
     // other close shape.
     let mut downrec_link_for_compiled: Option<(u32, u32)> = None;
     let mut downrec_multi_way_count_for_compiled: u8 = 0;
     if let Some((_dr_idx, dr_return_pc, _target_proto_id, _depth_delta)) = downrec_idx_opt {
-        // v2.0 Track-R R3b — `TraceEnd::DownRec` close: emit the
-        // stitch-sentinel + caller-pc-guard scaffold.
+        // `TraceEnd::DownRec` close: emit the
+        // stitch-sentinel + caller-pc-guard.
         //
         // Shape mirrors LuaJIT's `asm_retf` (`lj_asm_arm64.h:565`):
-        //   1. Load saved caller PC stand-in.
-        //   2. CMP against IR-baked `dr_return_pc`.
+        //   1. Load the saved caller PC.
+        //   2. CMP against IR-baked candidate caller PCs.
         //   3. brif eq → stitch_blk: return DOWNREC sentinel +
-        //      `record.head_pc` so the dispatcher (R3c) can walk
+        //      `record.head_pc` so the dispatcher can walk
         //      `downrec_link` + RetfRecord chain to materialise the
         //      inlined frame and tail-call into the stitched child
         //      trace.
-        //   4. brif ne → deopt_blk: R1's safe deopt-tail — store
+        //   4. brif ne → deopt_blk: safe deopt-tail — store
         //      back caller window + return `head_pc` through the
         //      GLOBAL sentinel; the dispatcher resumes interp at
-        //      head_pc with the trace's `dispatchable = false` gate
-        //      blocking re-entry.
-        //
-        // Why the guard's load operand is `iconst(0)` today (NOT a
-        // real `[reg_state + reserved_slot * 8]` load): luna's
-        // trace ABI is `fn(reg_state: *mut i64) -> i64` — there is
-        // no slot in the current `reg_state` buffer that the
-        // dispatcher populates with the runtime saved caller PC.
-        // Wiring that slot is R3c's job (it must touch the
-        // dispatcher pre-trace-invoke path in `exec.rs` to write the
-        // saved PC into a reserved position). Until then, the
-        // immediate `iconst(0)` makes the guard's runtime
-        // comparison `0 == dr_return_pc`; cranelift constant-folds
-        // this to "always false" at codegen time (`dr_return_pc !=
-        // 0` for every valid recording — Op::Return's PC is past
-        // the prologue), so the emitted machine code unconditionally
-        // jumps to `deopt_blk`. Net behaviour identical to R3a's
-        // safe fall-through; both R3b's `downrec_link = Some(_)`
-        // scaffold AND the safe deopt land in this commit, ready
-        // for R3c to swap the `iconst(0)` for a real saved-PC load
-        // once the dispatcher exposes the slot.
-        //
-        // `_target_proto_id` / `_depth_delta` consumed in IR by R3c
-        // (target_proto_id becomes the helper-call argument that
-        // walks `parent_ct.downrec_close.target_proto`; depth_delta
-        // tunes how many CallFrames to push). R3b leaves them
-        // touched as `let _ = ...` to keep rustc seeing the fields
-        // as live for the next sub-step's hookup.
+        //      head_pc.
         debug_assert!(
             dr_return_pc != 0,
             "DownRec recorder should never trip on a PC=0 Op::Return — Op::Return's PC is past the prologue"
@@ -8396,11 +8228,11 @@ pub fn lower_trace_into_named<M: Module>(
         let stitch_blk = bcx.create_block();
         let deopt_blk = bcx.create_block();
 
-        // v2.0 Track-R R3d — multi-way caller-pc guard. R3c shipped a
-        // single CMP (`saved_pc == dr_return_pc`) which measured a
-        // 90% miss-rate on fib(3) hot-loop (R3c verdict §3) because
+        // multi-way caller-pc guard. A single CMP
+        // (`saved_pc == dr_return_pc`) misses ~90% of the time on a
+        // fib(3) hot loop because
         // the typical fib body has TWO call sites at distinct
-        // `pc + 1` caller_pcs — only one of them ever matched
+        // `pc + 1` caller_pcs — only one of them ever matches
         // `dr_return_pc` (the recorder picks the most-recent
         // threshold-tripping one). The recorder's `rec.retfs`
         // side-channel already collected every depth>0 Return's
@@ -8413,7 +8245,7 @@ pub fn lower_trace_into_named<M: Module>(
         // the close marker's `target_proto`).
         //
         // Saved-PC slot (`reg_state[window_size_us * 8]`) populated
-        // by R3c's dispatcher pre-invoke (see `crates/luna-core/src/
+        // by the dispatcher pre-invoke (see `crates/luna-core/src/
         // vm/exec.rs` `is_downrec_entry` block) with the parent
         // (caller) frame's `pc` — the runtime analogue of LuaJIT's
         // `[base-8]` in `asm_retf` (`lj_asm_arm64.h:565`).
@@ -8467,7 +8299,7 @@ pub fn lower_trace_into_named<M: Module>(
         //           | (record.head_pc as u64)
         // (bit 63 set so the dispatcher's `from_side_trace` branch
         // at `exec.rs:6354+` decodes through the sentinel switch).
-        // R3c's stitch arm reads `parent_ct.downrec_link` for the
+        // The dispatcher's stitch arm reads `parent_ct.downrec_link` for the
         // stitch target rather than looking up via `side_trace_cache`.
         bcx.switch_to_block(stitch_blk);
         bcx.seal_block(stitch_blk);
@@ -8476,7 +8308,7 @@ pub fn lower_trace_into_named<M: Module>(
         let stitch_ret = bcx.ins().iconst(types::I64, raw_ret as i64);
         bcx.ins().return_(&[stitch_ret]);
 
-        // Miss: R1's safe deopt-tail (identical to R3a's emit).
+        // Miss: safe deopt-tail.
         bcx.switch_to_block(deopt_blk);
         bcx.seal_block(deopt_blk);
         emit_store_back_and_return_pc(
@@ -8491,19 +8323,19 @@ pub fn lower_trace_into_named<M: Module>(
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
 
-        // R3b populates downrec_link with the placeholder
+        // Populate downrec_link with the placeholder
         // (trace_id=0, target_head_pc=record.head_pc). The
         // `trace_id=0` sentinel means "self-stitch — target is the
-        // trace currently dispatching"; R3c interprets this when
-        // resolving the stitch target.
+        // trace currently dispatching"; the dispatcher interprets
+        // this when resolving the stitch target.
         downrec_link_for_compiled = Some((0, record.head_pc));
 
-        // v2.0 Track-R R3d — lift `dispatchable = true` when the
+        // lift `dispatchable = true` when the
         // multi-way guard collected at least 2 distinct caller_pc
         // candidates. The single-CMP fallback (count == 1) keeps
-        // R3c's `dispatchable = false` + `"downrec-stitch-pending"`
-        // pin because the 90% miss-rate measured at R3c verdict §3
-        // would translate to 90% extra deopt cost if the primary
+        // `dispatchable = false` + `"downrec-stitch-pending"`
+        // because its ~90% miss-rate would translate to 90% extra
+        // deopt cost if the primary
         // dispatcher arm admitted the trace unconditionally. The
         // dispatcher's `is_downrec_entry` arm (see `crates/luna-core/
         // src/vm/exec.rs`) keys on `ct.downrec_link.is_some()` so
@@ -8512,10 +8344,6 @@ pub fn lower_trace_into_named<M: Module>(
         // unlifted (dispatchable=false) cases — only the find
         // predicate's admit arm differs.
         //
-        // `"downrec-stitch-lifted"` is a new close-cause label that
-        // mirrors R3b's `"downrec-stitch-pending"` for the lifted
-        // case (so probes can tally "how many traces took which
-        // R3d branch" via `trace_close_cause_counts`). The
         // `dispatch_off_reason` only sets in the unlifted branch
         // because `dispatchable=true` traces have no `dispatch_off`
         // by definition.
@@ -8535,17 +8363,12 @@ pub fn lower_trace_into_named<M: Module>(
         downrec_multi_way_count_for_compiled =
             multi_way_candidate_count.min(u8::MAX as usize) as u8;
     } else if let Some((_self_link_idx, _kind)) = self_link_idx_opt {
-        // v2.0 Track-R R1 — RETF-guards correctness primitive replaces
-        // the previous P16-B snapshot-restore tail.
+        // Self-link close deopts instead of looping natively.
         //
-        // The legacy P16-B emit was:
-        //   1. Compute `bump_off` from the last captured Op::Call's
-        //      `caller_offset + A + 1`.
-        //   2. Slot-copy `regs_full[i] = regs_full[bump_off + i]` for
-        //      `i in 0..max_stack` (deepest inlined frame → head frame).
-        //   3. `jump(body_loop)` for a tight native back-edge.
-        //
-        // That mirrored LuaJIT's `asm_tail_link` (`lj_asm.c:2131`) only
+        // A native tail (slot-copy `regs_full[i] = regs_full[bump_off
+        // + i]` for `i in 0..max_stack`, deepest inlined frame → head
+        // frame, then `jump(body_loop)`) would mirror LuaJIT's
+        // `asm_tail_link` (`lj_asm.c:2131`) only
         // syntactically. LuaJIT's pre-op snapshots distinguish each
         // frame's typed-slot mapping; luna's slot-copy assumes deepest
         // frame layout == head frame layout, which is sound for plain
@@ -8553,28 +8376,27 @@ pub fn lower_trace_into_named<M: Module>(
         // non-tail-call body (fib: `Lt → branch → Sub Call Sub Call Add
         // Return`, with depth-0 Sub writes polluting head-frame slots
         // BEFORE the recursive Call, plus a depth>0 base-case Return
-        // whose deeper frame layout doesn't match head's). R0 measured
-        // fib(28) returning 45 (vs 317_811) on the p16-on path.
+        // whose deeper frame layout doesn't match head's). With that
+        // tail fib(28) returns 45 instead of 317_811.
         //
-        // R1 swaps the slot-copy + back-edge for a clean deopt: store
+        // So the tail is a clean deopt: store
         // back the caller window, return `head_pc`, and pin
         // `dispatchable = false`. The trace still compiles (cranelift
         // accepts a valid back-edge-free fn so the body's mcode and
         // window_size extension stay sound) but the dispatcher's
         // pre-invoke `dispatchable` check refuses to enter it, so
         // interp runs the recursion naturally and produces the correct
-        // result on the p16-on path.
+        // result.
         //
         // The `RetfRecord` side-channel populated by the recorder
-        // (exec.rs gate on `p16_self_link_enabled`) captures the
-        // inlined-frame topology that R3's down-rec stitch will consume
-        // to guard a real native back-edge. R1 is the correctness floor;
-        // R3 lifts dispatchable back to true via the stitch.
+        // (exec.rs gate on `self_link_enabled`) captures the
+        // inlined-frame topology that the down-rec stitch consumes
+        // to guard a real native back-edge.
         //
-        // `window_size_us` extension above (line ~3350 `record.self_link
+        // The `window_size_us` extension above (`record.self_link
         // _kind.is_some()` arm) stays intact — body emit still writes
-        // depth>0 slots into the extended buffer, the writes are simply
-        // dead until R3 reads them via stitch.
+        // depth>0 slots into the extended buffer; the writes are
+        // simply dead here.
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
@@ -8601,10 +8423,10 @@ pub fn lower_trace_into_named<M: Module>(
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     } else if let Some(inline_abort_idx) = inline_abort_idx_opt {
-        // P12-S4-step3b — InlineAbort: emit-up-to-i, then store back
+        // InlineAbort: emit-up-to-i, then store back
         // + return record.ops[i].pc. Dispatchable is forced false
         // below (the interp can't resume at a depth>0 PC without the
-        // CallFrames the trace inlined past — that's step 4).
+        // CallFrames the trace inlined past).
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
@@ -8617,7 +8439,7 @@ pub fn lower_trace_into_named<M: Module>(
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     } else if let Some(return_idx) = return_idx_opt {
-        // P12-S4-step4b-C-2 — Return0/Return1 at depth=0: caller frame
+        // Return0/Return1 at depth=0: caller frame
         // unwinds. Same shape as Call truncation — store back caller
         // window + return the Return op's PC so the interp re-executes
         // it with the correct register state. Subject to the same
@@ -8702,8 +8524,6 @@ pub fn lower_trace_into_named<M: Module>(
                     // loop exit — returning record.head_pc would
                     // re-enter the ForLoop op and double-advance the
                     // counter. Compute the body start explicitly.
-                    // See docs/known-bugs/trace-jit-nested-loop-
-                    // wrong-result.md §5-§7 for the diagnosis.
                     let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
                     emit_store_back_and_return_pc(
                         &mut bcx,
@@ -8719,9 +8539,9 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::TForLoop => {
-                // P12-S12-B-v2/v4 — generic-for back-edge:
+                // generic-for back-edge:
                 //
-                //   tag = tforcall_tag_var  // v4: from TForCall's
+                //   tag = tforcall_tag_var  // from TForCall's
                 //                           //     batched helper
                 //                           //     return value
                 //   if tag == NIL:  side-exit at tforloop.pc + 1
@@ -8872,7 +8692,7 @@ pub fn lower_trace_into_named<M: Module>(
 
     bcx.finalize();
     drop_unused_block_params(&mut ctx.func);
-    // Path C — `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
+    // `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction
     // tool for layer-6 attribution (per-call IR op count is the gap).
     if std::env::var("LUNA_TRACE_IR_DUMP")
@@ -8886,7 +8706,7 @@ pub fn lower_trace_into_named<M: Module>(
             ctx.func.display()
         );
     }
-    // v2.1 Phase 1I.D — `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
+    // `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
     // emit the post-regalloc machine-code disassembly (vcode) and dumps
     // it to stderr after `define_function`. Used for the cargo-asm
     // decomposition of the table-field IC under env-OFF vs env-ON.
@@ -8909,7 +8729,7 @@ pub fn lower_trace_into_named<M: Module>(
         );
     }
     module.clear_context(&mut ctx);
-    // v1.3 Phase AOT Stage 3 — module finalization is the JIT-specific
+    // module finalization is the JIT-specific
     // wrapper's job (see [`try_compile_trace_with_options`]). The
     // generic body emits the function definition and stops at
     // `clear_context`; the JIT wrapper calls `finalize_definitions`
@@ -8943,36 +8763,33 @@ pub fn lower_trace_into_named<M: Module>(
     // Derive exit_tags from the kind tracker's final state. Slots
     // the trace never touched stay `Untouched` (dispatcher restores
     // the entry tag); slots the trace wrote take the writer's
-    // determined kind. The legacy `MoveFrom` variant isn't produced
-    // by this pass — `current_kinds` propagates source kinds at the
-    // Move op so the dispatcher doesn't need the deferred entry-tag
-    // lookup.
-    // P12-S4-step2c — dispatch heuristic: a `Op::Call`-truncated
+    // determined kind. `current_kinds` propagates source kinds at
+    // the Move op so the dispatcher doesn't need a deferred
+    // entry-tag lookup.
+    // dispatch heuristic: a `Op::Call`-truncated
     // trace whose body is too short to amortise the dispatcher's
     // marshal-in + transmute + restore overhead is a net loss vs the
-    // interpreter (measured at ~1.8× slower on fib_28's ~7-op body,
-    // even after the Rc<[]> exit_tags fix). Keep such traces cached
-    // (compile cost is paid) but pin dispatchable=false until
-    // step 3's inline emit makes the per-dispatch body large enough
-    // to win. `MIN_DISPATCHABLE_TRUNC_BODY_BASE` is tuned to fib's
+    // interpreter (measured at ~1.8× slower on fib_28's ~7-op body).
+    // Keep such traces cached (compile cost is paid) but pin
+    // dispatchable=false unless the per-dispatch body is large
+    // enough to win. `MIN_DISPATCHABLE_TRUNC_BODY_BASE` is tuned to fib's
     // 7-op body being just below the gate at depth=0.
     //
-    // P13-S13-C — scale the gate down as `max_depth_used` grows:
+    // scale the gate down as `max_depth_used` grows:
     // each extra inline level amortises ~2 ops worth of marshal
     // overhead per dispatch (one dispatch processes the full
     // chain of depth+1 frames). Saturating-sub so deep traces
     // never miss-fire on the length gate.
     const MIN_DISPATCHABLE_TRUNC_BODY_BASE: usize = 20;
-    // P13-S13-G v3 — floor at 40 ops/dispatch (the empirical
+    // floor at 40 ops/dispatch (the empirical
     // dispatcher-overhead amortisation line: ~80ns per dispatch /
-    // ~2ns per body op). S13-C's adaptive `BASE - depth*2`
-    // formula could drop the gate to 0 at MAX_INLINE_DEPTH=16,
+    // ~2ns per body op). The adaptive `BASE - depth*2`
+    // formula alone could drop the gate to 0 at MAX_INLINE_DEPTH=16,
     // letting tiny-body inline traces dispatch and pay overhead
-    // they can't amortise (binary_trees_d4 0.73× regression
-    // — see `docs/rfcs/20260622-p13-s13g-cross-proto-call/design.md`
-    // Cause C). The floor doesn't affect fib_28 (~112 ops body
-    // post-S13-C — well above the floor) but bails the
-    // binary_trees pathological case.
+    // they can't amortise (binary_trees_d4 runs 0.73× without the
+    // floor). The floor doesn't affect fib_28 (~112 ops body —
+    // well above the floor) but bails the binary_trees
+    // pathological case.
     const MIN_DISPATCHABLE_TRUNC_BODY_FLOOR: usize = 40;
     let max_depth_used = record
         .ops
@@ -8982,19 +8799,19 @@ pub fn lower_trace_into_named<M: Module>(
         .unwrap_or(0);
     let adaptive = MIN_DISPATCHABLE_TRUNC_BODY_BASE.saturating_sub(max_depth_used * 2);
     let min_dispatchable_trunc_body = adaptive.max(MIN_DISPATCHABLE_TRUNC_BODY_FLOOR);
-    // P12-S4-step4b-C-2 — inline traces (per_exit_metas non-empty)
+    // inline traces (per_exit_metas non-empty)
     // skip the length-gate. Each dispatch tears through multiple
     // inlined frames so body-length isn't a useful proxy for the
     // dispatcher's marshal overhead; the gate would dump fib's
     // ~8-op-by-the-time-MAX_DEPTH-hits prefix even though one
     // dispatch processes 4 recursion levels.
     //
-    // P12-S5-B — sunk-alloc traces also skip the length-gate.
+    // sunk-alloc traces also skip the length-gate.
     // Skipping even a single `Heap::new_table()` per dispatch
     // dwarfs the marshal-in/out overhead on a 7-op body, so the
     // gate's conservative default is a net loss here.
     //
-    // P12-S7-A NOTE: closure-creating traces do NOT skip the
+    // Closure-creating traces do NOT skip the
     // length-gate. Unlike sunk emit which avoids `Heap::new_table()`,
     // the Op::Closure helper still calls `Heap::new_closure_inline`
     // — emit replaces only the interp's match-arm dispatch +
@@ -9004,10 +8821,9 @@ pub fn lower_trace_into_named<M: Module>(
     // (probe: `closure_no_upval_for_500k` mac measured 0.53× when
     // the gate was skipped). Closure traces only earn dispatch when
     // body length passes the gate organically.
-    // P12-S4-step3b — InlineAbort traces close before any frame
-    // materialization machinery exists (step 4's job). The interp
-    // can't resume at the inline-abort PC without the matching
-    // CallFrames; gate dispatch off until step 4 adds the helper.
+    // InlineAbort traces close without materialising frames. The
+    // interp can't resume at the inline-abort PC without the
+    // matching CallFrames, so gate dispatch off.
     // Recorded before the length gate: the first reason is the one
     // kept, and side-trace wiring tells a trace that is unsafe to run
     // from one that is only too short to dispatch by it.
@@ -9024,13 +8840,13 @@ pub fn lower_trace_into_named<M: Module>(
         dispatch_off_reason = dispatch_off_reason.or(Some("length-gate"));
     }
 
-    // P12-S4-step3b — clean-tail `exit_tags` cover the caller window
+    // clean-tail `exit_tags` cover the caller window
     // only ([0..max_stack)). Per-side-exit `per_exit_tags` for inline
-    // cmp sites (step4b-C-2) carry the full `window_size` snapshot
+    // cmp sites carry the full `window_size` snapshot
     // because the dispatcher must restore EVERY pushed frame's
     // register window, not just the caller's.
     let mut exit_tags_vec = kinds_to_exit_tags(&current_kinds[..max_stack]);
-    // P12-S5-B — for every sunk site at depth=0 (depth>0 is rejected
+    // for every sunk site at depth=0 (depth>0 is rejected
     // in pre-emit), force the slot's exit tag to `Untouched` so the
     // dispatcher carries the entry tag in the restore. Without this
     // override the slot's `current_kinds` could read as Table (from
@@ -9047,7 +8863,7 @@ pub fn lower_trace_into_named<M: Module>(
     }
     let global_tag_res_kind = classify_exit_tags(&exit_tags_vec);
     let exit_tags: TArc<[ExitTag]> = exit_tags_vec.into();
-    // P15-A v2-C-A2 — split per_exit_kinds's 3-tuple into the
+    // split per_exit_kinds's 3-tuple into the
     // 2-tuple `per_exit_tags` for the dispatcher AND the parallel
     // `tags_side_trace_ptrs` Box slice the close handler writes to.
     // The Box transports the cell's heap address (baked into the
@@ -9057,7 +8873,7 @@ pub fn lower_trace_into_named<M: Module>(
     let per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]> = per_exit_kinds
         .into_iter()
         .map(|(pc, kinds, side_box)| {
-            // step4b-C-2 — the cmp emit site pushed the right slice
+            // The cmp emit site pushed the right slice
             // length (caller-window for depth=0, full window for
             // depth>0). Hand it through verbatim — the dispatcher
             // iterates `exit_tags_for_pc.len()` and walks both
@@ -9084,16 +8900,16 @@ pub fn lower_trace_into_named<M: Module>(
         .into();
 
     checkpoint("post:emit-pass-done");
-    // P15-prep — pre-compute exit_hit_counts before the struct
+    // pre-compute exit_hit_counts before the struct
     // init so per_exit_tags's len is still accessible.
     let exit_hit_counts: TArc<[TCellU32]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
         let v: Vec<TCellU32> = (0..total).map(|_| TCellU32::new(0)).collect();
         v.into()
     };
-    // P15-A v2-A — parallel per-exit raw fn-ptr slots, all null
+    // parallel per-exit raw fn-ptr slots, all null
     // until a child side trace compiles for the slot. Same length
-    // as exit_hit_counts; v2-B/C will read these from IR.
+    // as exit_hit_counts.
     let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
         let v: Vec<TCellPtr> = (0..total).map(|_| TCellPtr::null()).collect();
@@ -9101,12 +8917,12 @@ pub fn lower_trace_into_named<M: Module>(
     };
     let compiled = CompiledTrace {
         head_pc: record.head_pc,
-        // v1.3 Phase AOT Stage 3 — caller (JIT wrapper or AOT pipeline)
+        // caller (JIT wrapper or AOT pipeline)
         // patches `entry` after finalize. See [`placeholder_trace_fn`].
         entry: placeholder_trace_fn,
         n_ops: record.ops.len() as u32,
         dispatchable,
-        // P12-S4-step3b — real window_size now ≥ max_stack; the
+        // real window_size ≥ max_stack; the
         // dispatcher reads this to size its reg_state buffer.
         window_size,
         exit_tags,
@@ -9119,7 +8935,7 @@ pub fn lower_trace_into_named<M: Module>(
         },
         entry_tags: record.entry_tags.clone().into(),
         per_exit_tags,
-        // P12-S4-step4b-C-2 — populated by the cmp@d>0 emit sites
+        // populated by the cmp@d>0 emit sites
         // above; the IR encodes `(site_idx + 1)` in the upper 32
         // bits of its return value so the dispatcher can pull the
         // right entry. Holding the inner Rc<[FrameMaterializeInfo]>
@@ -9127,50 +8943,50 @@ pub fn lower_trace_into_named<M: Module>(
         // (cranelift IR has the raw pointer baked in via iconst).
         exit_hit_counts,
         exit_side_trace_ptrs,
-        // P15-A v2-C-A2 — per-TAG-entry side-trace cells (parallel
+        // per-TAG-entry side-trace cells (parallel
         // to per_exit_tags) + the GLOBAL singleton cell. Both
         // collected from Boxes allocated AT each emit callsite so
         // the IR has baked the right heap address.
         tags_side_trace_ptrs,
         global_side_trace_ptr: global_side_trace_box,
-        // P15-A v2-C-A1 — empty at compile; close handler fills
+        // empty at compile; close handler fills
         // it as child side traces compile for this trace's hot
         // exits.
         side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
         has_any_side_wired: TCellBool::new(false),
         per_exit_inline,
-        // P12-S5-A — diagnostic only; counts Sinkable sites from the
-        // pre-emit sweep. Vm sums these into `trace_sinkable_seen_count`
-        // for sprint-level visibility.
+        // diagnostic only; counts Sinkable sites from the
+        // pre-emit sweep. Vm sums these into
+        // `trace_sinkable_seen_count`.
         sinkable_sites_seen: escape.sinkable_count(),
         accum_bufferable_seen: escape
             .accum_sites
             .iter()
             .filter(|s| s.state == BufferState::Bufferable)
             .count() as u32,
-        // P12-S5-B — count of sites that actually took the sunk-emit
+        // count of sites that actually took the sunk-emit
         // path in this trace's body (NewTable replaced by virt slot
         // Variables, no heap alloc helper called). Vm bumps
         // `trace_sunk_alloc_count` by this on compile success.
         sunk_alloc_seen,
-        // P12-S5-C — count of materialise emit sites for sunk slot
+        // count of materialise emit sites for sunk slot
         // recovery at cmp side-exits.
         materialize_emit_count,
-        // P12-S7-A — count of Op::Closure ops the trace lowered.
+        // count of Op::Closure ops the trace lowered.
         closure_seen,
-        // P15-A v2-E — compute body_writes for the smart side-trace
+        // compute body_writes for the smart side-trace
         // gate. Uses op_offsets (already computed above) to apply
         // inline-depth offsets per op.
         body_writes: compute_body_writes(record, &op_offsets).into(),
-        // v2.0 Track-R R3b — populated by the `downrec_idx_opt` arm
+        // populated by the `downrec_idx_opt` arm
         // above into `downrec_link_for_compiled`. When the arm
         // emitted a stitch sentinel + caller-pc guard, this carries
-        // `Some((0, head_pc))`; otherwise `None`. R3b deliberately
-        // keeps `dispatchable = false` even when `Some(_)` — R3d
-        // lifts to `dispatchable = true` when the multi-way candidate
-        // count >= 2 (see `downrec_multi_way_count` below).
+        // `Some((0, head_pc))`; otherwise `None`. `Some(_)` alone
+        // doesn't make the trace dispatchable — that takes a
+        // multi-way candidate count >= 2 (see
+        // `downrec_multi_way_count` below).
         downrec_link: downrec_link_for_compiled,
-        // v2.0 Track-R R3d — multi-way guard candidate count baked
+        // multi-way guard candidate count baked
         // into the IR's CMP-chain. `0` for non-DownRec closes;
         // `1` for single-CMP-fallback DownRec; `>= 2` for the
         // lifted `dispatchable = true` path.
@@ -9181,10 +8997,7 @@ pub fn lower_trace_into_named<M: Module>(
 
 #[cfg(test)]
 mod s14b_v0_scaffolding {
-    //! P14-S14-B v0 — surface tests for the accumulator-detection
-    //! scaffolding. v0 is a stub: the API shape is committed but
-    //! the detector returns an empty Vec. These tests pin the
-    //! surface so v1+ code can extend without API churn.
+    //! surface tests for the accumulator-detection types.
     use super::{AccumSite, BufferState, EscapeAnalysis};
 
     #[test]
@@ -9219,7 +9032,7 @@ mod s14b_v0_scaffolding {
 
 #[cfg(test)]
 mod s13a_depth_invariant {
-    //! P13-S13-A — pure-function tests for `verify_depth_invariant`.
+    //! pure-function tests for `verify_depth_invariant`.
     //! Synthetic `(depth, is_call)` sequences exercise the depth
     //! contract without needing a `Gc<Proto>`.
     use super::{MAX_INLINE_DEPTH, verify_depth_invariant};
@@ -9348,7 +9161,7 @@ mod s2b_arith {
     }
 
     /// Chunk source sized for ≥ 4 regs (`max_stack` = 5) — enough
-    /// for every step-2 test that touches R[0..=3].
+    /// for every test that touches R[0..=3].
     const WIDE_SRC: &[u8] = b"local a,b,c,d = 0,0,0,0; return a+b+c+d";
 
     fn make_record(head_pc: u32, ops: &[Inst], proto: Gc<Proto>) -> TraceRecord {
@@ -9515,8 +9328,8 @@ mod s2b_arith {
     fn unsupported_op_bails() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
-        // Op::Concat is not in the whitelist (and unlike Op::Return0
-        // which step4b-C-2 promoted to a truncation point, Concat
+        // Op::Concat is not in the whitelist (and unlike Op::Return0,
+        // which is a truncation point, Concat
         // has no special treatment and falls through to a bail).
         let prog = [Inst::iabc(Op::Concat, 0, 0, 0, false)];
         let rec = make_record(0, &prog, p);
@@ -9552,8 +9365,7 @@ mod s2b_arith {
         let p2 = load_proto(&mut vm2, WIDE_SRC);
         // Distinct `Vm::new` runs → distinct Proto allocations,
         // even though both compile from the same source. The
-        // lowerer must reject any cross-Proto op (inlined sub-calls
-        // are S4 territory).
+        // lowerer must reject any cross-Proto op.
         let mut rec = TraceRecord::start(
             p1,
             0,
@@ -9835,7 +9647,7 @@ mod s2b_cmp {
 
     #[test]
     fn cmp_at_trailing_position_bails() {
-        // No Jmp follows — step 3 doesn't capture the
+        // No Jmp follows — the lowerer doesn't capture the
         // "cmp didn't match K, Jmp skipped" direction.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
@@ -9916,7 +9728,7 @@ mod s2b_cmp {
     #[test]
     fn orphan_jmp_mid_trace_bails() {
         // A Jmp that's not consumed by a cmp and not at the last
-        // position must bail (step-3 doesn't know what to do with
+        // position must bail (the lowerer doesn't know what to do with
         // a free-floating unconditional jump).
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
@@ -10058,7 +9870,7 @@ mod s2b_table_ops {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         // Trace: R[0] = {}. The B/C size hints don't matter — the
-        // step-4 lowerer reaches for the unsized helper.
+        // lowerer reaches for the unsized helper.
         let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 0, 0, 0, false)]);
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
@@ -10353,7 +10165,7 @@ mod s2b_call_truncation {
         let p = load_proto(&mut vm, WIDE_SRC);
         // [Add, Call, Mul] — Mul never executes; specifically, a
         // Mul reading R[200] (out of bounds) would normally bail
-        // the lowerer, but step-5 skips post-truncation ops so it
+        // the lowerer, but post-truncation ops are skipped so it
         // compiles fine.
         let prog = [
             Inst::iabc(Op::Add, 0, 1, 2, false),
@@ -10382,7 +10194,7 @@ mod s2b_call_truncation {
     fn cmp_immediately_before_call_bails() {
         // The cmp's "took the Jmp" recording requires a Jmp at
         // cmp_pc + 1. If that slot is an Op::Call instead, the
-        // recorded direction can't be lowered as step-5 understands
+        // recorded direction can't be lowered as the lowerer understands
         // it — bail.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
@@ -10511,14 +10323,11 @@ mod s2b_call_truncation {
         state[2] = 1; // step
         state[3] = 0;
         let r = unsafe { (ct.entry)(state.as_mut_ptr()) };
-        // Per the nested-loop bug fix (docs/known-bugs/trace-jit-
-        // nested-loop-wrong-result.md), ForLoop continue returns the
-        // BODY START pc = (rop.pc + 1) - bx, not head_pc. In this
-        // synthetic test the closed_record helper assigns sequential
-        // pcs starting from 0, so rop.pc=0, bx=0, body_pc=1. The
-        // earlier test expected head_pc=9 which was the buggy
-        // behavior — re-dispatching the same ForLoop op would double-
-        // advance the counter (the nested-loop bug fix). For a real
+        // ForLoop continue returns the BODY START pc = (rop.pc + 1) -
+        // bx, not head_pc: re-dispatching the same ForLoop op would
+        // double-advance the counter. In this synthetic test the
+        // closed_record helper assigns sequential pcs starting from
+        // 0, so rop.pc=0, bx=0, body_pc=1. For a real
         // loop with non-zero bx, body_pc would land on the loop body
         // start; for this synthetic op chain body_pc just exits past
         // the ForLoop.
@@ -10579,7 +10388,7 @@ mod s2b_call_truncation {
 
 #[cfg(test)]
 mod s4_step3a_op_offsets {
-    //! P12-S4-step3a — `compute_op_offsets` correctness tests.
+    //! `compute_op_offsets` correctness tests.
     //!
     //! The helper is a pure function over `TraceRecord.ops`'s
     //! `inline_depth` field. These tests build synthetic records
@@ -10690,11 +10499,10 @@ mod s4_step3a_op_offsets {
 
 #[cfg(test)]
 mod s4_step3b_inline_emit {
-    //! P12-S4-step3b — body emit consumes the offset/enclosing/window
+    //! body emit consumes the offset/enclosing/window
     //! triple from `compute_op_offsets`. These tests craft synthetic
-    //! `TraceRecord`s with depth>0 ops (the recorder doesn't produce
-    //! them on real Lua code yet — step 4's job) to verify the new
-    //! emit paths in isolation.
+    //! `TraceRecord`s with depth>0 ops to verify the inline emit
+    //! paths in isolation.
     use super::*;
     use luna_core::version::LuaVersion;
     use luna_core::vm::Vm;
@@ -10706,8 +10514,8 @@ mod s4_step3b_inline_emit {
         vm.load(src, b"=t").expect("compile").proto
     }
 
-    /// step4b-C-2 supersedes the InlineAbort-for-cmp behavior: a
-    /// cmp@d>0 now emits a real side-exit via the frame-mat helper.
+    /// A cmp@d>0 emits a real side-exit via the frame-mat helper
+    /// rather than closing via InlineAbort.
     /// The trace is dispatchable (subject to other gates). See
     /// `s4_step4b_skeleton::per_exit_metas_populated_for_cmp_at_depth_one`
     /// for the positive coverage; this slot is kept as a regression
@@ -10716,8 +10524,8 @@ mod s4_step3b_inline_emit {
     #[test]
     fn cmp_at_depth_one_no_longer_aborts_via_inline_abort() {
         // Trace with a non-vararg head proto containing one
-        // self-rec Call followed by a cmp+Jmp at depth=1. With the
-        // step4b-C-2 emit path, end_idx_opt finds NO InlineAbort
+        // self-rec Call followed by a cmp+Jmp at depth=1.
+        // end_idx_opt finds NO InlineAbort
         // terminator at the cmp — it falls through to normal emit.
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         // Find a non-vararg inner proto: `local function f(a,b)
@@ -10827,16 +10635,10 @@ mod s4_step3b_inline_emit {
 
 #[cfg(test)]
 mod s4_step4b_skeleton {
-    //! P12-S4-step4b-A — frame-mat helper + data structures wired
-    //! but no IR emit site yet. These tests pin the contracts the
-    //! later sub-steps build on:
+    //! frame-mat helper + data structures. These tests pin:
     //!   - FrameMaterializeInfo layout is repr(C) (12 bytes amd64)
-    //!   - CompiledTrace.frame_metas is empty for all current
-    //!     production trace shapes (no path through the lowerer
-    //!     populates it yet)
-    //!   - helper symbol resolves and the skeleton returns -1
-    //!     (preventing any accidental call from advancing past
-    //!     deopt until step4b-B fills the body)
+    //!   - `per_exit_inline` is empty for traces with no cmp@d>0 site
+    //!   - the helper returns -1 when there is no live Lua frame
     use super::*;
     use luna_core::version::LuaVersion;
     use luna_core::vm::Vm;
@@ -10852,7 +10654,7 @@ mod s4_step4b_skeleton {
     fn frame_materialize_info_layout_is_stable() {
         // 12-byte layout on every supported target — 4 + 4 + 4. If
         // padding ever sneaks in here the IR's pointer-arithmetic
-        // load in step4b-C would read garbage.
+        // load would read garbage.
         assert_eq!(std::mem::size_of::<FrameMaterializeInfo>(), 12);
         assert_eq!(std::mem::align_of::<FrameMaterializeInfo>(), 4);
     }
@@ -10903,7 +10705,7 @@ mod s4_step4b_skeleton {
         assert_eq!(r, -1, "no live Lua frame → helper returns deopt sentinel");
     }
 
-    /// step4b-B: helper with a live trace-head frame pushes N inlined
+    /// Helper with a live trace-head frame pushes N inlined
     /// frames with `base = head.base + meta.base_offset`, `pc` from
     /// the meta, `func_slot = base - 1`, and `nresults` from the
     /// meta. `cl.proto` is the same closure pinned by enter_jit.
@@ -10955,7 +10757,7 @@ mod s4_step4b_skeleton {
         assert_eq!(pushed.n_varargs, 0);
     }
 
-    /// step4b-C-2: a single self-recursive Call followed by a cmp@d=1
+    /// A single self-recursive Call followed by a cmp@d=1
     /// produces ONE per_exit_metas entry — the cmp's chain has one
     /// frame (the inlined callee) with base_offset matching
     /// op_offsets[2] and pc overridden to the cmp's side-exit PC
@@ -10963,7 +10765,7 @@ mod s4_step4b_skeleton {
     #[test]
     fn per_exit_metas_populated_for_cmp_at_depth_one() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
-        // Non-vararg inner proto needed — step4b-C-2's vararg bail
+        // Non-vararg inner proto needed — the vararg bail
         // refuses the self-rec inline path on a vararg head.
         let cl = vm
             .load(b"local function f(a,b) return a+b end return f", b"=t")
@@ -11028,8 +10830,8 @@ mod s4_step4b_skeleton {
         assert_eq!(m.nresults, 1);
     }
 
-    /// step4b-C-1: Op::Call with C != 2 (i.e. nresults != 1) bails
-    /// the whole trace — step3b's Op::Return1 copy-back assumes one
+    /// Op::Call with C != 2 (i.e. nresults != 1) bails
+    /// the whole trace — the Op::Return1 copy-back assumes one
     /// value, and the helper passes through whatever `nresults` the
     /// meta says without validating.
     #[test]
@@ -11097,10 +10899,10 @@ mod s4_step4b_skeleton {
 
 #[cfg(test)]
 mod s6_step_a1 {
-    //! P12-S6-A1 — `ExitTag::Nil` variant exists and
-    //! `kinds_to_exit_tags` produces it for `RegKind::Nil`. Foundation
-    //! for the S6-A2 LoadNil emit (which actually writes Nil to a
-    //! slot whose entry tag may not be Nil).
+    //! `ExitTag::Nil` variant exists and
+    //! `kinds_to_exit_tags` produces it for `RegKind::Nil`, which the
+    //! LoadNil emit relies on (it writes Nil to a slot whose entry
+    //! tag may not be Nil).
     use super::*;
 
     #[test]

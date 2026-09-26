@@ -1,4 +1,4 @@
-//! mlua-style `Lua` facade (B12, Phase 2 P2-D).
+//! mlua-style `Lua` facade.
 //!
 //! A thin wrapper around [`luna_core::vm::Vm`] that exposes the same
 //! API in a shape familiar to embedders coming from `rlua` / `mlua`:
@@ -25,7 +25,7 @@
 //! keep their referenced `Gc<T>` alive across calls (so a `LuaTable`
 //! survives a GC cycle even when no Lua-side reference exists).
 //!
-//! v1.3 Phase SR added slot recycling — a single handle can be
+//! Slots are recycled — a single handle can be
 //! released via [`Lua::unpin`]; the whole batch via
 //! [`Lua::unpin_all`]. Both operations bump the slot's generation,
 //! invalidating any further use of `LuaFunction` / `LuaTable` /
@@ -191,7 +191,7 @@ impl Lua {
         LuaRoot { ticket }
     }
 
-    /// Release a single pinned handle (v1.3 Phase SR). The handle's
+    /// Release a single pinned handle. The handle's
     /// slot is recycled; the supplied `LuaFunction` / `LuaTable` /
     /// `LuaRoot` value (and any `Copy`-cloned aliases) becomes stale
     /// and will panic on subsequent reads / calls.
@@ -211,15 +211,14 @@ impl Lua {
         self.0.unpin_all();
     }
 
-    /// Number of currently-pinned handles (diagnostic). v1.3 Phase
-    /// SR: counts live (non-free) slots, so a steady `pin → unpin`
+    /// Number of currently-pinned handles (diagnostic). Counts live (non-free) slots, so a steady `pin → unpin`
     /// loop holds at 1 instead of growing monotonically.
     pub fn pinned_count(&self) -> usize {
         self.0.host_root_count()
     }
 }
 
-/// v1.3 Phase SR — common trait for handle types that wrap a
+/// Common trait for handle types that wrap a
 /// [`HostRootTicket`]. Lets [`Lua::unpin`] accept `LuaFunction` /
 /// `LuaTable` / `LuaRoot` uniformly.
 pub trait PinnedHandle {

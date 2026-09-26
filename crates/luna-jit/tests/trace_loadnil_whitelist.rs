@@ -1,6 +1,6 @@
-//! P12-S6-A2 — `Op::LoadNil` joins the trace JIT whitelist.
+//! `Op::LoadNil` in the trace JIT whitelist.
 //!
-//! Pre-S6 these patterns all bailed compile at the first
+//! Without it these patterns bail compile at the first
 //! non-whitelisted op:
 //! - `{nil, nil}` table constructor (`NewTable + LoadNil×N +
 //!   SetList`) — common Lua frontend shape for `local t = {nil,
@@ -10,17 +10,16 @@
 //!   itemcheck leaf shape.
 //!
 //! These tests verify (a) the recorded trace closes AND compiles
-//! (was: closed + compile_failed) and (b) the helper path with a
-//! Nil source writes Value::Nil into the heap table via the new
-//! `luna_jit_table_set_nil` helper rather than coercing to
-//! Value::Int(0).
+//! and (b) the helper path with a Nil source writes Value::Nil into
+//! the heap table via the `luna_jit_table_set_nil` helper rather
+//! than coercing to Value::Int(0).
 
 use luna_jit::version::LuaVersion;
 
 /// `for i=1,1000 do local t = {nil, nil}; if t[1] == nil then s = s + 1 end end`.
 /// Body shape: `NewTable + LoadNil×2 + SetList + GetI + LoadNil +
 /// Eq + ...`. Both LoadNil writers must pass the whitelist for
-/// compile to succeed. Asserts `compiled >= 1` (was 0).
+/// compile to succeed. Asserts `compiled >= 1`.
 #[test]
 fn loadnil_in_for_body_compiles() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
@@ -53,7 +52,7 @@ fn loadnil_in_for_body_compiles() {
     assert_eq!(
         vm.trace_compile_failed_count(),
         0,
-        "no fail path expected (was: 1+ pre-S6); got compile_failed={}",
+        "no fail path expected (LoadNil is whitelisted); got compile_failed={}",
         vm.trace_compile_failed_count()
     );
 }

@@ -1,20 +1,17 @@
-//! v2.0 Track J sub-step J-B regression — `Vm.jit.storage` field
-//! migration of `JIT_CACHE` / `JIT_CACHE_HANDLES` / `TRACE_JIT_HANDLES`
-//! from `thread_local!` to per-`Vm` field storage.
+//! `Vm.jit.storage` regression — the JIT cache and compiled-handle
+//! collections live in per-`Vm` field storage, not `thread_local!`.
 //!
-//! What we assert (single-threaded; cross-thread comes in J-D / J-E):
+//! What we assert (single-threaded; cross-thread is covered by
+//! `send_vm_jit_smoke.rs`):
 //!
 //! 1. Two separate `Vm`s on the same thread maintain SEPARATE JIT
-//!    caches. Pre-J-B, both Vms shared the thread-local `JIT_CACHE`;
-//!    post-J-B each Vm carries its own `storage.cache`.
+//!    caches; each Vm carries its own `storage.cache`.
 //!
 //! 2. Within a single `Vm`, the JIT cache still serves second-call
-//!    hits (no regression versus the pre-J-B per-thread cache for
-//!    intra-`Vm` reuse).
+//!    hits (intra-`Vm` reuse).
 //!
 //! 3. Trace JIT compilation parks the trace's `JITModule` on the
-//!    `Vm`'s `storage.trace_handles` Vec instead of the deleted
-//!    `TRACE_JIT_HANDLES` TLS. Re-evaluating a trace-hot loop on a
+//!    `Vm`'s `storage.trace_handles` Vec. Re-evaluating a trace-hot loop on a
 //!    second Vm does not error or share trace handles.
 //!
 
@@ -38,13 +35,12 @@ fn two_vms_have_independent_jit_caches() {
     let n_a = luna_jit::jit_backend::cache_entry_count(&vm_a);
     assert_eq!(n_a, 1, "vm_a cached its compile exactly once");
 
-    // Fresh Vm B; cache is independent from vm_a (pre-J-B both Vms
-    // shared the thread-local `JIT_CACHE`).
+    // Fresh Vm B; cache is independent from vm_a.
     let mut vm_b = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
     let n_b_before = luna_jit::jit_backend::cache_entry_count(&vm_b);
     assert_eq!(
         n_b_before, 0,
-        "fresh vm_b starts with an empty per-Vm cache (was non-zero pre-J-B if vm_a had populated the shared TLS)"
+        "fresh vm_b starts with an empty per-Vm cache (it would be non-zero if the cache were shared thread-local state)"
     );
     let cl_b = vm_b.load(src, b"=t").expect("vm_b load");
     let r_b = vm_b
@@ -66,8 +62,7 @@ fn two_vms_have_independent_jit_caches() {
 }
 
 /// Within a single Vm, a second call on the same closure hits the
-/// per-Vm cache and does not bump the entry count. (Same semantics as
-/// pre-J-B; intra-Vm reuse preserved.)
+/// per-Vm cache and does not bump the entry count.
 #[test]
 fn intra_vm_second_call_hits_cache() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);

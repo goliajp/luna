@@ -1,16 +1,17 @@
-//! P15-A v1 — dispatcher side-trace TRIGGER. When a side-exit's
+//! Dispatcher side-trace TRIGGER. When a side-exit's
 //! `exit_hit_counts` slot crosses `HOTEXIT_THRESHOLD` while no
 //! recording is active, the dispatcher starts a fresh
 //! `TraceRecord::start_side_trace` with `side_trace_parent`
-//! metadata. The recording's compile/link wiring lands in v2; v1
-//! only verifies the TRIGGER fires.
+//! metadata. Compile/link is covered by
+//! `trace_side_trace_compile_link.rs`; this file only verifies the
+//! TRIGGER fires.
 //!
-//! Targets (per `e52e67a` P15-prep probe data):
+//! Targets (measured exit hit counts):
 //! - fib_28 idx 8 = 237877 hits (≫ threshold 10) → must trigger
 //! - binary_trees_d4 idx 6 = 988 hits → must trigger
 //! - concat_str_for_10k: 1 hit total → must NOT trigger
 //!
-//! v1 is observability-only:`trace_side_trace_started_count` must
+//! The checks are observability-only: `trace_side_trace_started_count` must
 //! be > 0 on positive cases and == 0 on the negative case.
 
 use luna_jit::version::LuaVersion;

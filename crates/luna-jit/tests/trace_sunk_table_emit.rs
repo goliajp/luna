@@ -1,7 +1,7 @@
-//! P12-S5-B — actual sunk-emit for `NewTable` / `SetList` / `GetI`
-//! in non-cmp, non-looping traces. NewTable becomes a no-op; the
-//! array part lives as Cranelift `Variable`s; GetI is a `use_var`
-//! of the corresponding virt slot.
+//! Sunk emit for `NewTable` / `SetList` / `GetI` in non-cmp,
+//! non-looping traces. NewTable becomes a no-op; the array part lives
+//! as Cranelift `Variable`s; GetI is a `use_var` of the corresponding
+//! virt slot.
 //!
 //! These tests verify:
 //! 1. Positive — a call-triggered trace through a function with a
@@ -67,7 +67,7 @@ fn sunk_callee_table_dispatches_with_correct_sum() {
 
 /// Negative path: f() = `local t = {1,2}; return t`. The Return1's
 /// R[A] IS the site's slot — pre-emit demotion drops the site to
-/// Escaped because v1 doesn't materialise on return. The trace
+/// Escaped because sunk sites are not materialised on return. The trace
 /// still compiles (heap path) and returns the table.
 #[test]
 fn returning_the_table_skips_sunk_path() {
@@ -95,7 +95,7 @@ fn returning_the_table_skips_sunk_path() {
         vm.trace_sunk_alloc_count(),
         0,
         "f returns the table itself; pre-emit demotion blocks sunk \
-         emit until S5-C adds the materialise helper. \
+         emit for a returned table. \
          got sunk_alloc_count={}",
         vm.trace_sunk_alloc_count()
     );

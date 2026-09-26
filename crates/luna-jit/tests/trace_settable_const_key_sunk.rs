@@ -1,4 +1,4 @@
-//! P12-S8-C — `Op::SetTable` sunk emit via key const-fold.
+//! `Op::SetTable` sunk emit via key const-fold.
 //! `const_fold_int_key` walks backward from a SetTable looking
 //! for a LoadI (via a Move chain) that pinned R[B]'s value to a
 //! literal in 1..=cap. If found, tag `SetTableSunkWrite` and

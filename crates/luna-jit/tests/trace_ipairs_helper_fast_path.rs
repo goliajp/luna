@@ -1,12 +1,11 @@
-//! P12-S12-B v3 — ipairs `inext` fast path in `luna_jit_op_tforcall`.
+//! ipairs `inext` fast path in `luna_jit_op_tforcall`.
 //!
-//! v2 (`1e66908`) routed every generic-for iter through `begin_call`
-//! → `ipairs_iter` Rust dispatch. v3 detects `R[A]=Native(ipairs_iter)`
-//! + `R[A+1]=Table` (no metatable) + `R[A+2]=Int` at the top of
-//! `jit_op_tforcall` and short-circuits to `Table::get_int(next_i)`,
-//! skipping begin_call / nat_arg / nat_return. Anything else falls
-//! through to the v2 generic path, so semantics + tests for non-
-//! ipairs traces stay unchanged.
+//! `jit_op_tforcall` detects `R[A]=Native(ipairs_iter)` + `R[A+1]=Table`
+//! (no metatable) + `R[A+2]=Int` at the top and short-circuits to
+//! `Table::get_int(next_i)`, skipping begin_call / nat_arg /
+//! nat_return. Anything else falls through to the generic
+//! `begin_call` → `ipairs_iter` path, so semantics for non-ipairs
+//! traces stay unchanged.
 
 use luna_jit::version::LuaVersion;
 
@@ -45,7 +44,7 @@ fn ipairs_fast_path_correctness_and_dispatch() {
 }
 
 /// Table with `__index` metatable — fast path must fall through to
-/// the v2 generic path so user-defined indexing still works.
+/// the generic path so user-defined indexing still works.
 #[test]
 fn ipairs_with_metatable_falls_through() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

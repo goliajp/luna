@@ -1,4 +1,4 @@
-//! MacroLua demo (v1.3 Phase ML) — opt-in compile-time macros.
+//! MacroLua demo — opt-in compile-time macros.
 //!
 //! Run: `cargo run --example macro_lua_demo -p luna-jit`
 //!
@@ -98,6 +98,6 @@ fn main() {
     //     before — MacroLua is purely additive.
     //   - Macro expansion happens once per `load()` call; there is no
     //     runtime overhead. The JIT never sees macros.
-    //   - Hygiene is gensym-only in v1.3 (implicit quote-body scope
-    //     rewrite is a future enhancement; see audit §5).
+    //   - Hygiene is gensym-only (no implicit quote-body scope
+    //     rewrite).
 }

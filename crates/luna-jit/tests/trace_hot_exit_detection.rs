@@ -1,12 +1,11 @@
-//! P15-A v0 — `HotExitInfo` + `Vm::hot_exit_iter` accessor.
+//! `HotExitInfo` + `Vm::hot_exit_iter` accessor.
 //!
-//! Foundation for side trace tree: the walker surfaces every
-//! `exit_hit_counts` slot whose hit count crosses
-//! `HOTEXIT_THRESHOLD = 10` (LuaJIT 2.1 default). Per-exit data was
-//! shipped in `e52e67a` (P15-prep); this commit only exposes the
-//! detection layer — no recording, no side trace compile yet.
+//! The walker surfaces every `exit_hit_counts` slot whose hit count
+//! crosses `HOTEXIT_THRESHOLD = 10` (LuaJIT 2.1 default). These tests
+//! cover the detection layer only — no recording, no side trace
+//! compile.
 //!
-//! Probe-verified targets (from P15-prep ship message):
+//! Measured targets:
 //! - fib_28:          5 nonzero exits, idx 8 = 237877 hits (55%)
 //! - binary_trees_d4: 4 nonzero exits, idx 6 = 988 hits (42%)
 //! - concat_str_for_10k: 1 dispatch total → 1 exit hit, BELOW threshold
@@ -59,20 +58,20 @@ fn fib_28_hot_exit_surfaces() {
             info.exit_idx
         );
     }
-    // The dominant exit per P15-prep probe is in the fib inner
+    // The dominant exit is in the fib inner
     // proto's trace, NOT the outer chunk's. The walker recurses, so
     // it must reach the inner proto's trace.
     let max_hits = hot.iter().map(|h| h.hits).max().unwrap();
     assert!(
         max_hits >= 100_000,
-        "fib_28 hottest exit should report ≥100k hits (P15-prep probe \
+        "fib_28 hottest exit should report ≥100k hits (the exit-count probe \
          saw 237k at idx 8); got max_hits={}",
         max_hits
     );
 }
 
 /// binary_trees_d4 — at least one hot side-exit must surface and
-/// satisfy the threshold predicate. Per P15-prep probe, idx 6 hits
+/// satisfy the threshold predicate. Measured: idx 6 hits
 /// 988× across 2371 dispatches.
 #[test]
 fn binary_trees_d4_hot_exit_surfaces() {

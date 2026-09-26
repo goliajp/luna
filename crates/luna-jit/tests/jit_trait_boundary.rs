@@ -1,4 +1,4 @@
-//! v1.1 A1 Session A — smoke tests for the JIT trait boundary.
+//! Smoke tests for the JIT trait boundary.
 //!
 //! Verifies that:
 //! 1. `Vm::install_null_jit()` swaps the dispatcher onto the no-op

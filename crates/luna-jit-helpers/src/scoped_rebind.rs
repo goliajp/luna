@@ -1,31 +1,28 @@
-//! v2.0 Track J sub-step J-D — RAII rebind of the per-dispatch
-//! `JIT_VM` / `JIT_CL` TLS slots.
+//! RAII rebind of the per-dispatch `JIT_VM` / `JIT_CL` TLS slots.
 //!
 //! ## Why this exists
 //!
-//! Prior to J-D, [`super::enter_jit`] simply overwrote the TLS slots
-//! and returned a [`luna_core::jit::JitVmGuard`] whose drop was a
-//! no-op. That worked under the single-thread, single-level dispatch
-//! invariant: every fresh `enter_jit` overwrites the slots before any
-//! helper consults them, so stale values left after a previous
-//! dispatch were harmless.
+//! Simply overwriting the TLS slots in [`super::enter_jit`] and
+//! returning a no-op [`luna_core::jit::JitVmGuard`] is only correct
+//! under a single-thread, single-level dispatch invariant, where every
+//! fresh `enter_jit` overwrites the slots before any helper consults
+//! them.
 //!
-//! J-B installed `Vm.jit.storage` so cross-thread Vm move under
-//! `feature = "send"` (the J-E flip) can park its JIT cache + handles
-//! with the Vm itself. The TLS slots that `JIT_VM` / `JIT_CL`
-//! synthesize, however, are per-OS-thread — they can't follow a Vm
+//! `Vm.jit.storage` lets a Vm moved across threads under
+//! `feature = "send"` carry its JIT cache + handles with it. The TLS
+//! slots that `JIT_VM` / `JIT_CL` synthesize, however, are per-OS-thread — they can't follow a Vm
 //! across threads, and they can't naively persist across nested JIT
 //! dispatches either (a JIT'd op that calls Lua via a metamethod
 //! ends up reentering `enter_jit`; on return the outer entry would
 //! be left looking at the inner Vm's slot).
 //!
-//! J-D fixes both by:
+//! This module handles both by:
 //!
 //! 1. Capturing the prior `(JIT_VM, JIT_CL)` values at every
-//!    [`super::enter_jit`] entry (Phase B of the sub-step).
-//! 2. Installing the new values exactly as before.
+//!    [`super::enter_jit`] entry.
+//! 2. Installing the new values.
 //! 3. Restoring the captured prior values from `Drop` on the returned
-//!    guard (Phase C wires the guard into [`super::CraneliftBackend::enter`]).
+//!    guard (held by [`super::CraneliftBackend::enter`]).
 //!
 //! ## Nesting semantics
 //!
@@ -37,12 +34,12 @@
 //!
 //! ## Single-thread perf cost
 //!
-//! Each dispatch now pays 2 extra TLS writes on the way out (~5-10
+//! Each dispatch pays 2 extra TLS writes on the way out (~5-10
 //! cycles each on arm64). On a 434k-dispatch fib_28 run that's
 //! ~1.5 ms aggregate. Correctness wins over the elision; if the
-//! single-thread fast path is ever a measured bottleneck again, a
+//! single-thread fast path is ever a measured bottleneck, a
 //! cfg-gated `#[cfg(not(feature = "send"))]` no-op drop variant can
-//! be reintroduced as a `J-E perf polish` follow-up — see
+//! be reintroduced.
 
 use luna_core::jit::{JitVmGuard, JitVmRebindRestore};
 use luna_core::runtime::{Gc, LuaClosure};
@@ -65,7 +62,7 @@ pub(super) unsafe fn restore_tls(prev_vm: *mut Vm, prev_cl: *const LuaClosure) {
     JIT_CL.with(|c| c.set(prev_cl));
 }
 
-/// J-D's scoped rebind front-door, called by [`super::enter_jit`].
+/// Scoped rebind front-door, called by [`super::enter_jit`].
 ///
 /// 1. Snapshots `(JIT_VM, JIT_CL)` into `prev_vm` / `prev_cl`.
 /// 2. Installs the dispatcher's new `(vm, cl)` pair.

@@ -132,7 +132,7 @@ fn save_history(entries: &[String]) {
 
 /// True if `msg` indicates the parser ran out of input mid-block
 /// (incomplete `if … then`, `do … end`, `function … end`, long string,
-/// etc.). Per R-A1 audit: luna's `SyntaxError::msg` carries `near
+/// etc.). luna's `SyntaxError::msg` carries `near
 /// <eof>` / `unfinished … near <eof>` markers exactly when more input
 /// would let the parser continue. The single counter-example is the
 /// explicit `'<eof>' expected` form, which means the parser saw EXTRA
@@ -144,10 +144,10 @@ fn is_incomplete_syntax(msg: &str) -> bool {
     msg.contains(" near <eof>")
 }
 
-/// Interactive REPL entry point. v1.3 R3: dispatches to the
+/// Interactive REPL entry point. Dispatches to the
 /// rustyline-backed editor when built with `--features
 /// repl-line-editor` (tab completion against `Vm` globals + Lua
-/// syntax highlighting); otherwise falls through to the v1.2 plain
+/// syntax highlighting); otherwise falls through to the plain
 /// path. The default `cargo install luna-jit` keeps a tiny dep
 /// surface (no rustyline) by leaving the feature off.
 fn repl(vm: &mut Vm) {
@@ -157,7 +157,7 @@ fn repl(vm: &mut Vm) {
     repl_plain(vm);
 }
 
-/// v1.2 plain-stdin REPL — single-line + multi-line continuation +
+/// Plain-stdin REPL — single-line + multi-line continuation +
 /// `~/.luna_history`. Always available; the rustyline build falls
 /// back here when terminal init fails.
 ///
@@ -241,11 +241,10 @@ fn repl_plain(vm: &mut Vm) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// v1.3 R3 — rustyline-backed REPL (opt-in via `--features
+// rustyline-backed REPL (opt-in via `--features
 // repl-line-editor`).
 //
-// The non-feature build keeps the v1.2 `repl_plain` path above
-// unchanged so the default `cargo install luna-jit` doesn't pick up
+// The non-feature build keeps the `repl_plain` path above so the default `cargo install luna-jit` doesn't pick up
 // rustyline. luna-core remains 0-dep regardless.
 //
 // Layered on top of the same eval / multi-line continuation logic:
@@ -256,7 +255,7 @@ fn repl_plain(vm: &mut Vm) {
 //     emitting ANSI colour escapes via rustyline's `Highlighter`
 //     trait. No dep on syntect / tree-sitter.
 //   * History — rustyline manages `~/.luna_history` natively;
-//     same file the v1.2 path writes, so flipping the feature bit
+//     same file the plain path writes, so flipping the feature bit
 //     doesn't lose history.
 // ─────────────────────────────────────────────────────────────────
 
@@ -1175,7 +1174,7 @@ fn traceback_51(vm: &mut Vm, err: Value) -> Result<Value, LuaError> {
 }
 
 fn new_vm(opts: &LunaOpts) -> Vm {
-    // v1.1 A1 Session C — luna-core's `Vm::new` defaults to the no-op
+    // luna-core's `Vm::new` defaults to the no-op
     // JIT backend; the `luna` bin always wants Cranelift, so go
     // through the wrapper. --no-jit then opts back out.
     let mut vm = if opts.sandbox {

@@ -1,27 +1,25 @@
-//! P12-S10-B — inline-cmp + materialise combine. The
-//! `has_inline_cmp` gate was dropped: inline cmp side-exits
-//! (`per_exit_inline` arm) now call `emit_materialize_live_sunk`
-//! to reconstruct live sunk sites BEFORE the frame-materialize
-//! helper pushes the inline frames.
+//! Inline-cmp + materialise combine. Inline cmp side-exits
+//! (`per_exit_inline` arm) call `emit_materialize_live_sunk` to
+//! reconstruct live sunk sites BEFORE the frame-materialize helper
+//! pushes the inline frames.
 //!
-//! S10-B's measurable unlock requires a recorder that cleanly
-//! closes a recursive body with inline-depth NewTable +
-//! inline-depth cmp (binary_trees `make`'s shape). The recorder
-//! currently exits the recursive trace via bail / depth cap /
-//! length cap, leaving only leaf shapes closed. Per-trace tests
-//! here verify correctness preservation + leaf-trace regression.
+//! The measurable gain requires a recorder that cleanly closes a
+//! recursive body with inline-depth NewTable + inline-depth cmp
+//! (binary_trees `make`'s shape). The recorder exits the recursive
+//! trace via bail / depth cap / length cap, leaving only leaf shapes
+//! closed. Per-trace tests here verify correctness preservation +
+//! leaf-trace regression.
 
 use luna_jit::version::LuaVersion;
 
-/// binary_trees full program — result must be correct. Pre-S10-B
-/// the `has_inline_cmp` gate demoted all sites when ANY cmp@d>0
-/// appeared in the trace body. Post-S10-B sites survive + the
-/// inline cmp side-exit reconstructs them. Even if the recursive
+/// binary_trees full program — result must be correct. Sites
+/// survive a cmp@d>0 in the trace body; the inline cmp side-exit
+/// reconstructs them. Even if the recursive
 /// trace itself never dispatches (recorder doesn't close it
 /// cleanly), the closed leaf traces + interp must produce the
 /// right tree sum.
 #[test]
-fn binary_trees_correct_post_s10b() {
+fn binary_trees_correct_with_inline_cmp_materialize() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -48,11 +46,11 @@ fn binary_trees_correct_post_s10b() {
     );
 }
 
-/// fib(28) regression: deep recursion with cmp at every depth.
-/// Pre-S10-B fib had no NewTable so `has_inline_cmp` didn't gate
-/// anything. Post-S10-B should still dispatch identically.
+/// fib(28) regression: deep recursion with cmp at every depth. fib
+/// has no NewTable, so it must dispatch as it would without sunk
+/// sites.
 #[test]
-fn fib_28_unchanged_post_s10b() {
+fn fib_28_unchanged_with_inline_cmp_materialize() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -71,11 +69,10 @@ fn fib_28_unchanged_post_s10b() {
     );
 }
 
-/// S5/S6/S8 sunk depth=0 patterns regression — make sure the
-/// emit_materialize refactor's `&mut snapshot` API didn't break
-/// depth=0 cmp materialise.
+/// Sunk depth=0 patterns regression — the `&mut snapshot`
+/// emit_materialize API must not break depth=0 cmp materialise.
 #[test]
-fn sunk_loadnil_for_body_still_sunk_emits_post_s10b() {
+fn sunk_loadnil_for_body_still_sunk_emits() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);

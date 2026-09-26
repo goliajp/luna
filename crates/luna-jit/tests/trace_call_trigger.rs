@@ -1,22 +1,20 @@
-//! P12-S4-step0 smoke tests — verify the trace-on-call trigger fires
-//! on a self-recursive function whose body has no negative back-edge
+//! Smoke tests — verify the trace-on-call trigger fires on a
+//! self-recursive function whose body has no negative back-edge
 //! (`fib`, recursive `make`/`check` in `binary_trees`).
 //!
-//! Step 0 wires the trigger and the depth==0 close gate. Step 2
-//! refined close detection: call-triggered traces now close on any
-//! re-entry of `(head_proto, head_pc)`, while back-edge triggered
-//! traces still require `cur_depth == 0` (the gate's original
-//! purpose — keep loop traces from prematurely closing when the
+//! Both call-triggered and back-edge triggered traces close on a
+//! re-entry of `(head_proto, head_pc)` at `cur_depth == 0`; the
+//! depth gate keeps a loop trace from closing prematurely when the
 //! loop body calls a function that happens to land at the trace
-//! head's pc).
+//! head's pc.
 
 use luna_jit::version::LuaVersion;
 
 /// fib(12) = 144. fib's Proto is called 145 times in total (1 outer +
 /// 144 inner recursions across the tree), which crosses the call-hot
 /// threshold of 64 well before completion. We must compute the right
-/// answer and the trigger must have fired at least once. Per step 2,
-/// the call-triggered trace closes on first recursive `Op::Call`'s
+/// answer and the trigger must have fired at least once. The
+/// call-triggered trace closes on first recursive `Op::Call`'s
 /// re-entry to fib's pc=0 — so `trace_closed_count >= 1` is the
 /// canonical signal.
 #[test]
@@ -41,7 +39,7 @@ fn trace_on_call_fires_on_fib_recursion_and_result_matches_interp() {
     };
     assert_eq!(got, 144, "fib(12) must equal 144");
 
-    // Either we closed (step 2 single-pass: closes on call-reentry)
+    // Either we closed (single-pass: closes on call-reentry)
     // or aborted (e.g., trigger fired on a base-case n<2 frame, then
     // returned past the trace head). Either way the trigger fired.
     let fired = vm.trace_aborted_count() + vm.trace_closed_count();
@@ -62,10 +60,6 @@ fn trace_on_call_fires_on_fib_recursion_and_result_matches_interp() {
 /// function whose pc=0 happened to equal the trace head pc, the
 /// trace would close mid-iteration. The gate forces `cur_depth==0`
 /// before considering close, so only true loop back-edges close.
-///
-/// This is the original step-0 invariant; step 2 only relaxed it for
-/// **call-triggered** traces (which need to close at depth>=0 to
-/// produce a usable single-pass body).
 #[test]
 fn depth_zero_gate_holds_for_loop_triggered_traces() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
@@ -107,10 +101,10 @@ fn depth_zero_gate_holds_for_loop_triggered_traces() {
 fn gate_off_keeps_all_trace_counters_zero() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
-    // v1.3 TA3 flipped trace_enabled ship default to `true` (commit
-    // `7274887`); explicitly disable so this regression guard for the
-    // "trace-on-call branch even when gated" mistake still tests the
-    // gated-off path regardless of ship default.
+    // trace_enabled ships defaulting to `true`; explicitly disable so
+    // this regression guard for the "trace-on-call branch even when
+    // gated" mistake still tests the gated-off path regardless of
+    // ship default.
     vm.set_trace_jit_enabled(false);
 
     let r = vm

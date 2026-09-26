@@ -1,15 +1,11 @@
-//! P12-S12-A v3 — `Op::Test` / `Op::TestSet` runtime tag-based
-//! truthy guard for `RegKind::Unset` slots.
+//! `Op::Test` / `Op::TestSet` runtime tag-based truthy guard for
+//! `RegKind::Unset` slots.
 //!
-//! v1 (`ff719da`) / v2 (`9346090`) implemented compile-time
-//! truthy folding for known kinds (Int/Float/Table/Closure/Nil,
-//! plus Str added by C-v2 `7504ef1`). Unset bailed compile.
-//!
-//! v3 resurrects the `luna_jit_stack_tag` helper (dormant since
-//! v4 of S12-B replaced its main use site) and emits a runtime
-//! guard for Unset slots: `is_truthy = (tag > 1)` (Lua truthy is
-//! anything not Nil(0) or Bool(false)(1)). The guard compares
-//! to the recorded direction; mismatch → store_back + return
+//! Known kinds (Int/Float/Table/Closure/Nil/Str) fold at compile
+//! time. For Unset slots the trace calls the `luna_jit_stack_tag`
+//! helper and emits a runtime guard: `is_truthy = (tag > 1)` (Lua
+//! truthy is anything not Nil(0) or Bool(false)(1)). The guard
+//! compares to the recorded direction; mismatch → store_back + return
 //! the op's PC so interp redoes the test.
 //!
 //! Common Unset producers: `luna_jit_stack_load` reload after
@@ -21,7 +17,7 @@ use luna_jit::version::LuaVersion;
 
 /// `if v then ... end` over an Unset-kind v derived from a
 /// helper-reloaded slot. Verifies the trace compiles and
-/// dispatches; v before v3 would bail compile here.
+/// dispatches; without the runtime guard it would bail compile.
 #[test]
 fn test_unset_kind_compiles_with_runtime_guard() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
@@ -81,7 +77,7 @@ fn testset_unset_kind_truthy_takes_move() {
     );
 }
 
-/// Boolean-valued Unset: `local b = (i > 0)` produces a Bool. v3
+/// Boolean-valued Unset: `local b = (i > 0)` produces a Bool. The
 /// guard handles tag=TRUE(2) and tag=FALSE(1) at runtime via the
 /// `tag > 1` check.
 #[test]

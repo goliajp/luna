@@ -1,13 +1,9 @@
-//! P12-S11-B-v1 — hash-part sunk emit. NewTable site admits any
-//! shape (b/c don't constrain anymore); SetField on a bound site
-//! allocates a per-key hash slot; GetField on a known key reads
-//! from the same slot. virt_vars index space:
+//! Hash-part sunk emit. NewTable site admits any shape (b/c don't
+//! constrain); SetField on a bound site allocates a per-key hash slot;
+//! GetField on a known key reads from the same slot. virt_vars index
+//! space:
 //!   [0 .. array_cap)              → array slots
 //!   [array_cap .. array_cap+n_hash) → hash slots
-//!
-//! Materialise (deopt) helper only knows array slots, so hash
-//! sites demote when the trace has ANY cmp (S11-B.2 will extend
-//! materialise with hash slot support).
 
 use luna_jit::version::LuaVersion;
 
@@ -41,7 +37,7 @@ fn dict_assign_then_read_sunk_dispatches() {
     );
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "post-S11-B-v1 dict_assign body must take the sunk path; \
+        "dict_assign body must take the sunk path; \
          got sunk_alloc_count={}, sinkable_seen={}, compiled={}",
         vm.trace_sunk_alloc_count(),
         vm.trace_sinkable_seen_count(),
@@ -49,9 +45,8 @@ fn dict_assign_then_read_sunk_dispatches() {
     );
 }
 
-/// dict with cmp in body — hash site demoted (materialise helper
-/// can't reconstruct hash slots yet). Helper path runs; result
-/// stays correct.
+/// dict with cmp in body — result stays correct whichever path
+/// (sunk + materialise, or helper) runs.
 #[test]
 fn dict_with_cmp_falls_back_to_helper_path() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
@@ -75,9 +70,8 @@ fn dict_with_cmp_falls_back_to_helper_path() {
         "expected Int(500500), got {:?}",
         r[0]
     );
-    // hash sunk is demoted by has_any_cmp gate; the trace may
-    // still compile (helper path through SetField/GetField from
-    // S11-A) but `sunk_alloc_count` won't include hash sites.
+    // Only the result is asserted; the sunk count depends on which
+    // path the trace takes.
     let _ = vm.trace_sunk_alloc_count();
 }
 
