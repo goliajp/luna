@@ -32,17 +32,11 @@ pub(crate) fn open_os_io(vm: &mut Vm) {
         let fv = vm.native(f);
         set_field(vm, os, name, fv);
     }
-    // the locale in effect per category, which `os.setlocale` reads and sets
-    let locale = vm.heap.new_table();
-    for i in 1..=LC_COUNT {
-        let c = Value::Str(vm.heap.intern(b"C"));
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { locale.as_mut() }
-            .set(&mut vm.heap, Value::Int(i as i64), c)
-            .expect("valid key");
-    }
-    vm.barrier_back_table(locale);
-    let sl = vm.native_with(os_setlocale, Box::new([Value::Table(locale)]));
+    // the locale in effect per category, which `os.setlocale` reads and
+    // sets: strings, so a script reading them through `debug.getupvalue`
+    // cannot change them
+    let c = Value::Str(vm.heap.intern(b"C"));
+    let sl = vm.native_with(os_setlocale, vec![c; LC_COUNT].into_boxed_slice());
     set_field(vm, os, "setlocale", sl);
     vm.set_global("os", Value::Table(os))
         .expect("stdlib registration");
@@ -789,14 +783,11 @@ fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let name = argcheck::opt_string(vm, a, 0)?.map(|s| lib_io::c_str(s.as_bytes()).to_vec());
     let cat = argcheck::check_option(vm, a, 1, Some("all"), &LC_NAMES)?;
-    let Value::Table(state) = vm.nat_upval(fs, 0) else {
-        unreachable!("setlocale's upvalue is its state table");
-    };
-    // table slots 1..=6: collate, ctype, monetary, numeric, time, messages
-    let slots: Vec<i64> = if cat == 0 {
-        (1..=LC_COUNT as i64).collect()
+    // upvalues 0..6: collate, ctype, monetary, numeric, time, messages
+    let slots: Vec<usize> = if cat == 0 {
+        (0..LC_COUNT).collect()
     } else {
-        vec![cat as i64]
+        vec![cat - 1]
     };
     if let Some(name) = name {
         let resolved = if name.is_empty() {
@@ -809,18 +800,14 @@ fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         let v = Value::Str(vm.heap.intern(&resolved));
         for &i in &slots {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { state.as_mut() }
-                .set(&mut vm.heap, Value::Int(i), v)
-                .expect("valid key");
+            vm.nat_set_upval(fs, i, v);
         }
-        vm.barrier_back_table(state);
     }
     let names: Vec<Vec<u8>> = slots
         .iter()
-        .map(|&i| match state.get(Value::Int(i)) {
+        .map(|&i| match vm.nat_upval(fs, i) {
             Value::Str(s) => s.as_bytes().to_vec(),
-            _ => unreachable!("every category holds a locale name"),
+            _ => unreachable!("only os.setlocale writes its upvalues, always strings"),
         })
         .collect();
     // a mixed "all" reads as the categories joined by '/'

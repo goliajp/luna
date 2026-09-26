@@ -503,7 +503,7 @@ fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Str(s)
     } else {
         out.extend_from_slice(&src[pos..]);
-        Value::Str(vm.heap.intern(&out))
+        vm.built_str(&out)?
     };
     Ok(vm.nat_return(fs, &[res, Value::Int(n as i64)]))
 }

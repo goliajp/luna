@@ -481,7 +481,9 @@ fn visible_upvalue_index(vm: &Vm, cl: Gc<LuaClosure>, n: i64) -> Option<usize> {
             .nth((n - 1) as usize)
             .map(|(idx, _)| idx);
     }
-    ((n as usize) <= cl.upvals().len()).then(|| (n - 1) as usize)
+    // `load` gives a chunk without upvalues a closure with one cell for
+    // `_ENV` anyway; the prototype is what says which upvalues exist
+    ((n as usize) <= cl.proto.upvals.len()).then(|| (n - 1) as usize)
 }
 
 /// PUC `aux_upvalue`'s name for upvalue `idx` of a Lua closure: `None` when
@@ -536,17 +538,10 @@ fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let value = check_any(vm, a, 2)?;
     let (f, n) = upvalue_args(vm, a)?;
     let name = match f {
-        Value::Native(_) if vm.version() == LuaVersion::Lua51 => None,
-        Value::Native(nc) => match usize::try_from(n - 1) {
-            Ok(i) if i < nc.upvals.len() => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { nc.as_mut() }.upvals[i] = value;
-                vm.heap
-                    .barrier_back(nc.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                Some(String::new())
-            }
-            _ => None,
-        },
+        // library and embedder natives trust what they keep in their
+        // upvalues (a state table, a function pointer); none of them may
+        // be replaced from Lua
+        Value::Native(_) => None,
         Value::Closure(cl) => match visible_upvalue_index(vm, cl, n) {
             Some(idx) => {
                 let name = upvalue_name(vm, cl, idx);
@@ -735,9 +730,10 @@ fn traceback_51(
     let level = match stack.get(1).and_then(|&v| to_num(vm, v)) {
         Some(n) => {
             stack.pop();
+            // `db_errorfb` keeps the level in a C `int`
             match n {
-                crate::numeric::Num::Int(i) => i,
-                crate::numeric::Num::Float(f) => f as i64,
+                crate::numeric::Num::Int(i) => i as i32 as i64,
+                crate::numeric::Num::Float(f) => f as i64 as i32 as i64,
             }
         }
         None => default_level,
@@ -861,16 +857,15 @@ fn run_debug_command(vm: &mut Vm, line: &[u8]) -> Result<(), Vec<u8>> {
     if v >= LuaVersion::Lua55 && crate::vm::dump::is_binary_chunk(line) {
         return Err(b"attempt to load a binary chunk (mode is 't')".to_vec());
     }
-    let f = match vm.load(line, b"=(debug command)") {
-        Ok(cl) => cl,
-        Err(e) => {
-            let id = crate::vm::callstack::syntax_chunk_id(v, b"=(debug command)");
-            return Err(e.render(&id));
-        }
-    };
-    let err = match vm.call_protected(Value::Closure(f), &[]) {
-        Ok(_) => return Ok(()),
-        Err(e) => e.0,
+    // `luaL_loadbuffer` parses under the running message handler (5.4+
+    // raise a too-deep command's "C stack overflow" through it); the
+    // command itself runs under `lua_pcall` without one
+    let err = match vm.load(line, b"=(debug command)") {
+        Ok(f) => match vm.call_protected(Value::Closure(f), &[]) {
+            Ok(_) => return Ok(()),
+            Err(e) => e.0,
+        },
+        Err(e) => vm.load_error_value(&e, b"=(debug command)"),
     };
     Err(match err {
         Value::Str(s) => s.as_bytes().to_vec(),
