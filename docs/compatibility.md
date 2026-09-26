@@ -339,10 +339,30 @@ luna's own options:
 | `-h`, `--help` | Print the help |
 
 They may appear anywhere before the script. Everything else follows the
-selected dialect's standalone interpreter, `lua.c`: the options `-e`,
-`-l`, `-i`, `-v`, `-E` (5.2 on), `-W` (5.4 on), `--` and `-`; the `arg`
-table and the script's `...`; and running stdin as a program when there
-is no script and stdin is not a terminal (the REPL starts when it is).
+selected dialect's standalone interpreter, `lua.c`:
+
+| Option | Behaviour |
+|---|---|
+| `-e stat` | Run `stat` (a chunk named `(command line)`) |
+| `-l mod` | `require` the module into the global `mod` (5.1 only requires it). 5.4 on: `-l g=mod` stores it in `g`, and a `-suffix` of `mod` is left out of the global's name |
+| `-i` | Enter the REPL after the script; implies `-v` |
+| `-v` | Print the version line (5.1: on stderr) before anything runs; stdin is then not run as a program |
+| `-E` | 5.2 on: skip `LUA_INIT`, and let the package library ignore `LUA_PATH` / `LUA_CPATH` (the registry's `LUA_NOENV` is true) |
+| `-W` | 5.4 on: turn warnings on |
+| `--` | Stop handling options; what follows is the script |
+| `-` | Stop handling options and run stdin as the script |
+
+The options each dialect's `lua.c` does not know, and the ones that must
+stand alone given with more letters (`-vx`; `-Ex` from 5.3 on), print that
+dialect's usage message. The `arg` table and the script's `...` are laid
+out as `lua.c` lays them out. With no script and none of `-e`, `-i` and
+`-v`, stdin is run as a program, or, when it is a terminal, the version
+line is printed and the REPL starts.
+
+`LUA_INIT` runs before the options' chunks (in 5.1 before the options are
+even read, so it runs ahead of a usage message): its value is a chunk
+named after the variable, or `@file` to run a file. From 5.2 on
+`LUA_INIT_5_x` is taken first, and `-E` skips both.
 
 Errors are reported as `lua.c` reports them. An uncaught error prints
 `<argv[0]>: <message>` on stderr followed by the traceback of `lua.c`'s
@@ -357,17 +377,34 @@ an error in a program read from stdin without `-` is reported but leaves
 the exit status 0. `crates/luna-jit/tests/cli_errors.rs` pins each case
 to the text the PUC interpreters print.
 
-Two things differ from `lua.c`: `-v` prints luna's version line, and the
-values a script or `-e` chunk returns are printed after it (`=> value`).
-`LUA_INIT` is not read.
+The REPL is `lua.c`'s as it runs when built without readline. It
+prompts with `_PROMPT` / `_PROMPT2` (`> ` / `>> ` when unset) on stdout
+and reads stdin a line at a time, sharing stdin with `io.read`; a line
+longer than `lua.c`'s 512-byte buffer is read in pieces. It reads more
+lines while a statement is incomplete. From 5.3 on a line is first tried
+as `return <line>;`; through 5.4 a first line `=expr` means
+`return expr`; 5.5 warns about a line starting with `local`. The results
+go through the global `print` and an error is reported with its
+traceback, without the program name. End of input ends it with a
+newline. The cases `crates/luna-jit/tests/cli_repl.rs` and
+`cli_repl_edges.rs` pin include the dialects' quirks, such as 5.3
+reporting its `_PROMPT2` value when the input ends inside a statement.
 
-The REPL evaluates each line first as an expression (prefixed with
-`return`), then retries it as a statement on syntax error, so both
-expressions and assignments work. It has multi-line continuation and
-history at `~/.luna_history`, honours `--lua=X`, and exits on Ctrl-D.
-Tab completion and syntax highlighting are behind the
-`repl-line-editor` feature. It reports errors in its own format
-(`error: <message>`, no traceback), unlike `lua.c`'s REPL.
+Things that differ from `lua.c`:
+
+- `-v` and the start of the REPL print luna's version line, not PUC's
+  copyright line.
+- The values a script or `-e` chunk returns are printed after it
+  (`=> value`).
+- `package.path` and `package.cpath` default to `./?.lua;./?/init.lua`
+  and the empty string, as luna has no install prefix and loads no C
+  modules.
+- With the `repl-line-editor` feature and stdin a terminal, the REPL
+  reads lines through a line editor in place of readline: tab completion
+  against the globals, syntax highlighting, and history in
+  `~/.luna_history`; Ctrl-C drops the statement being typed. 5.5's
+  `lua.c` loads readline at run time and, when that fails, warns (seen
+  with `-W`); luna loads no library and does not warn.
 
 ## Quick verification
 
