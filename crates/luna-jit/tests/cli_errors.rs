@@ -1015,6 +1015,51 @@ fn warnings_on_with_w_option() {
     ]);
 }
 
+/// A `debug.debug` command nested too deep for the parser: 5.4+ raise the
+/// parser's "C stack overflow" through the running message handler, as
+/// `load` does (lua.c's handler adds a traceback, an xpcall handler
+/// rewrites it, pcall has none); a command that runs and fails has no
+/// handler.
+#[test]
+fn debug_debug_deep_command() {
+    let deep = format!("x={}", "(".repeat(240));
+    let stdin = format!("{deep}\ncont\n{deep}\ncont\n{deep}\ncont\n");
+    let case = Case {
+        files: &[(
+            "dd.lua",
+            "debug.debug()\nprint(pcall(debug.debug))\nprint(xpcall(debug.debug, function(m) return \"H:\" .. m end))\n",
+        )],
+        args: &["dd.lua"],
+        stdin: Some(Box::leak(stdin.into_boxed_str())),
+    };
+    case.expect(&[
+        Expect {
+            dialects: &["5.1"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> (debug command):1: chunk has too many syntax levels\nlua_debug> lua_debug> (debug command):1: chunk has too many syntax levels\nlua_debug> lua_debug> (debug command):1: chunk has too many syntax levels\nlua_debug> ",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.2", "5.3"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> (debug command):1: too many C levels (limit is 200) in main function near '('\nlua_debug> lua_debug> (debug command):1: too many C levels (limit is 200) in main function near '('\nlua_debug> lua_debug> (debug command):1: too many C levels (limit is 200) in main function near '('\nlua_debug> ",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.4"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> C stack overflow\nstack traceback:\n\t[C]: in function 'debug.debug'\n\tdd.lua:1: in main chunk\n\t[C]: in ?\nlua_debug> lua_debug> C stack overflow\nlua_debug> lua_debug> H:C stack overflow\nlua_debug> ",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.5"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> C stack overflow\nstack traceback:\n\t[C]: in field 'debug'\n\tdd.lua:1: in main chunk\n\t[C]: in ?\nlua_debug> lua_debug> C stack overflow\nlua_debug> lua_debug> H:C stack overflow\nlua_debug> ",
+            status: 0,
+        },
+    ]);
+}
+
 #[test]
 fn error_in_arg_order() {
     let case = Case {
@@ -1046,6 +1091,7 @@ fn error_in_arg_order() {
         },
     ]);
 }
+
 /// 5.4 on: the parser's "C stack overflow" is a runtime error raised
 /// inside `load`'s protected parser, which keeps the running message
 /// handler, so lua.c's handler (or an enclosing xpcall's) turns the

@@ -1558,34 +1558,45 @@ fn const_fold_int_key(
 /// MUST be).
 ///
 /// Sweep rules:
-/// - `Op::NewTable A=a B=cap C=0`, `cap > 0` → new `Sinkable` site
-///   bound at `(depth, a)`. Hash-part (C != 0) or unknown cap (B == 0)
-///   → unbind A, no site.
-/// - `Op::SetList A=a B=cap C=0` writing through a bound `(depth, a)`
-///   whose site's `array_cap == B` → array init, no escape on the
-///   target. Source slots `A+1..=A+B` that themselves bind sites →
-///   those sites escape (nested sinks are not handled).
-/// - `Op::SetI` / `Op::SetTable`: value slot bound → escape (stored
-///   into a (different) table).
-/// - `Op::GetI` / `Op::GetTable` / `Op::Len`: read of B/A is fine;
-///   write to A → unbind A.
-/// - `Op::Move A=dst B=src`: src bound → conservatively escape src
-///   (no aliasing). Always unbind A.
-/// - `Op::Call A=fn B=narg+1`: any bound site in `[A+1..A+B-1]` (call
-///   argument) or at A (the function being called) escapes. After
-///   the Call, A holds the return value → unbind.
-/// - `Op::Return1 A=a`: bound site at A escapes (carried to caller).
-/// - `Op::Return0`: no value transfer.
-/// - Cmp ops (`Op::Lt/Le/Eq/EqK`): every live binding escapes (the
-///   cmp emits a side-exit and the interp may resume needing the
-///   heap table).
-/// - Other writer ops (arith / loads / GetUpval / GetField / etc.):
-///   unbind A.
+/// - `Op::NewTable A=a B=cap`: always a new `Sinkable` site bound at
+///   `(depth, a)` with `array_cap = B` (0 for `B == 0`, whose site
+///   can only sink hash writes through `SetField`).
+/// - `Op::SetList A=a`: the count is B, or the recorded `var_count`
+///   when `B == 0`. Through a bound site with `C == 0`, no `k` and
+///   `array_cap` equal to that count → sunk array init; otherwise the
+///   site escapes. Bound source slots `A+1..=A+count` escape (nested
+///   sinks are not handled).
+/// - `Op::SetI A B_imm C`: a bound value slot C escapes. Through a
+///   bound target, a key in `1..=array_cap` → sunk write; any other
+///   key escapes the target.
+/// - `Op::SetTable`: as `SetI`, with the key folded from a `LoadI`
+///   (through `Move`s) by `const_fold_int_key`; no folded key → the
+///   target escapes.
+/// - `Op::SetField`: a bound value slot escapes; through a bound
+///   target the constant key gets a hash slot → sunk write.
+/// - `Op::GetI`: bound B with a key in `1..=array_cap` → sunk read,
+///   else B escapes. `Op::GetField`: bound B with a key some earlier
+///   `SetField` gave a slot → sunk read, else B escapes.
+///   `Op::GetTable` / `Op::Len`: bound B escapes. All unbind A.
+/// - `Op::Move A=dst B=src`: A becomes an alias of src's site (or
+///   unbound); src stays bound and does not escape.
+/// - `Op::Call A=fn B=narg+1`: bound argument slots `A+1..A+B-1` and a
+///   bound A escape; A is unbound afterwards.
+/// - `Op::Return1 A=a`: a bound A escapes. `Op::Return0`: nothing.
+/// - Cmp ops (`Op::Lt/Le/Eq/EqK`): nothing escapes; the side-exit
+///   emit materializes live sites at depth 0, and pre-emit demotes
+///   sites when a cmp sits at depth > 0.
+/// - `Op::LoadNil`: unbinds `A..=A+B`. `Op::Close`: every live
+///   binding escapes.
+/// - Other writer ops (arith / loads / GetUpval / GetTabUp / Concat /
+///   Closure / etc.): unbind A.
 ///
 /// Terminator handling (the op at `effective_end`, if any):
 /// - `TraceEnd::Call`: terminator's args + fn slot escape live bindings.
-/// - `TraceEnd::ForLoop` / `TraceEnd::InlineAbort`: every live binding
-///   escapes (loop exit / interp resume).
+/// - `TraceEnd::ForLoop`: nothing escapes; the loop exit resumes
+///   outside the body, where its locals are dead.
+/// - `TraceEnd::InlineAbort` / `SelfLink` / `DownRec`: every live
+///   binding escapes.
 /// - `TraceEnd::Return`: `Return1` only → R[A] escapes; `Return0` is
 ///   a no-op.
 fn escape_analyze(
@@ -2613,49 +2624,6 @@ impl TraceHandle {
     }
 }
 
-/// Op whitelist. Anything outside this set bails the lowerer
-/// to `None`, leaving the recorder to drop the trace.
-///
-/// - `Move` — `R[A] = R[B]`. Type-agnostic (just copies 8-byte
-///   payload).
-/// - `Add / Sub / Mul` — Int-Int arithmetic. The lowerer assumes
-///   the recorded operand types were Int; without value guards
-///   in the dispatcher, the caller must ensure live
-///   reg values match the recorded types before invoking the trace.
-/// - `Jmp` — emits no IR. Two valid roles:
-///   (1) consumed-by-cmp — paired with a preceding `Lt / Le / Eq`
-///   at `cmp.pc + 1`; the cmp's brif's "continue" branch already
-///   represents control passing past the Jmp, so emitting jump
-///   IR would be wrong.
-///   (2) trailing back-edge — the last op of the trace, closing
-///   the loop back to `head_pc`. The tail's `return iconst(head_pc)`
-///   carries the control transfer; no IR for the Jmp itself.
-///   A Jmp in any other position bails the trace.
-/// - `Lt / Le / Eq` — Int-Int comparison + side-exit guard. Each
-///   cmp must be followed by a `Jmp` at `cmp.pc + 1` encoding the
-///   "took the Jmp" direction. The lowerer emits `icmp` + `brif`:
-///   a runtime mismatch stores reg state back and returns the
-///   failing PC.
-/// - `NewTable` — `R[A] = {}`. Lowered as a cranelift call to
-///   `luna_jit_new_table`. The asize / hsize hints (PUC's
-///   `Op::NewTable A B C` encodes them in B/C) are ignored.
-/// - `SetI / GetI` — `R[A][B_imm] = R[C_reg]` / `R[A] = R[B_reg][C_imm]`,
-///   where the key is the bytecode immediate. Lowered as
-///   `luna_jit_table_set_int` / `luna_jit_table_get_int`. Both
-///   helpers park `vm.jit.pending_err` on a metatable hit so the
-///   dispatcher can deopt — semantics that bypass `__index` /
-///   `__newindex` would silently miscompile.
-/// - `Len` — `R[A] = #R[B]`. Lowered as `luna_jit_table_len`,
-///   which also short-circuits on a metatable (5.4+ `__len`).
-/// - `Call` — *trace-truncating* side-exit. The first `Op::Call`
-///   in the recorded ops ends the trace: every op before it gets
-///   normal IR, the Call emits a side-exit at its own PC (interp
-///   resumes with full reg state), and every recorded op after it
-///   is dropped. The post-Call ops in `record.ops` are the callee
-///   body / Return / post-call continuation that the recorder
-///   naturally inlines; the lowerer refuses to emit them. The Call
-///   is **not** verified to be self-recursive here — the lowerer
-///   trusts the recorder to only feed sound recursive patterns.
 /// Which terminating op (if any) sits at the trace's effective
 /// tail position. See the comment block in
 /// [`try_compile_trace_with_options`] for the contracts on each.
@@ -2742,6 +2710,24 @@ enum CmpDir {
     SkippedJmp,
 }
 
+/// First filter on a recorded op: an op outside this set makes the
+/// lowerer return `None` and the recorder drops the trace. Admission is
+/// not compilation: the pre-emit pass of
+/// [`try_compile_trace_with_options`] still bails on operand kinds,
+/// register bounds and shapes it cannot lower (for example `GetTabUp` /
+/// `GetField` outside a math fold).
+///
+/// - `Move` copies the 8-byte payload whatever its type.
+/// - Arithmetic, bitwise and compare ops lower for the operand kinds
+///   recorded in the trace.
+/// - `Jmp` emits no IR: it is either consumed by the compare before it
+///   or the trailing back edge.
+/// - Table reads and writes go through the `luna_jit_table_*` helpers,
+///   or through the virtual slots of a site `escape_analyze` sank. A
+///   helper that meets a metatable reports it and the trace side-exits,
+///   so the interpreter runs the metamethod.
+/// - `Call`, `ForLoop`, `TForLoop` and returns end the trace (see
+///   [`TraceEnd`]), except self-recursive calls, which are inlined.
 fn is_whitelisted_op(op: Op) -> bool {
     matches!(
         op,
@@ -7113,6 +7099,16 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = k;
                     continue;
                 }
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.b()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.c() as i64);
                 // GetX inference: look at the immediate next op. The read
@@ -7137,6 +7133,16 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::GetTable => {
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.b()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key = bcx.use_var(regs[ins.c() as usize]);
                 let inferred = if i + 1 < effective_end {
@@ -7190,6 +7196,16 @@ pub fn lower_trace_into_named<M: Module>(
                     continue;
                 }
                 // helper path: R[A][K[B]:string] := R[C].
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.a()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let key_v = match head_proto.consts[ins.b() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
@@ -7236,6 +7252,16 @@ pub fn lower_trace_into_named<M: Module>(
                     continue;
                 }
                 // helper path.
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.b()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let key_v = match head_proto.consts[ins.c() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
@@ -7462,6 +7488,16 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 // R[A][B_imm] := R[C] helper path. Dispatch by R[C]
                 // kind via emit_table_set (Nil / Int / Closure / etc.).
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.a()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let k_imm = bcx.ins().iconst(types::I64, ins.b() as i64);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
@@ -7506,6 +7542,16 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 // R[A][R[B]] := R[C] helper path. Same kind-dispatch
                 // as Op::SetI.
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.a()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.a() as usize]);
                 let key = bcx.use_var(regs[ins.b() as usize]);
                 let key_kind = k_op(&current_kinds, off as u32 + ins.b());
@@ -7570,6 +7616,16 @@ pub fn lower_trace_into_named<M: Module>(
                 // Helper path: same loop with effective_b iters.
                 let a = ins.a() as usize;
                 let c_off = ins.c() as i64;
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + a as u32) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[a]);
                 for ii in 1..=effective_b {
                     let key = bcx.ins().iconst(types::I64, c_off + ii as i64);
@@ -7595,6 +7651,16 @@ pub fn lower_trace_into_named<M: Module>(
             }
             Op::Len => {
                 // R[A] := #R[B] — call luna_jit_table_len(t) -> i64.
+                // the helpers read the operand as a table: another kind
+                // leaves the op to the interpreter
+                match k_op(&current_kinds, off as u32 + ins.b()) {
+                    RegKind::Table => {}
+                    RegKind::Unset => {
+                        dispatchable = false;
+                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                    }
+                    _ => return None,
+                }
                 let t = bcx.use_var(regs[ins.b() as usize]);
                 let func_ref = module.declare_func_in_func(len_checked_id, bcx.func);
                 let call = bcx.ins().call(func_ref, &[t]);
