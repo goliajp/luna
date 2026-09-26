@@ -86,10 +86,12 @@ pub(crate) fn open_package(vm: &mut Vm) {
         _ => raw_set(vm, pkg, "searchers", Value::Table(searchers)),
     }
 
-    let path = env_path(v, "LUA_PATH", LUA_PATH_DEFAULT);
+    // 5.2 on: `-E` (the registry's LUA_NOENV) keeps the defaults
+    let noenv = vm.ignore_env && v >= LuaVersion::Lua52;
+    let path = env_path(v, noenv, "LUA_PATH", LUA_PATH_DEFAULT);
     let path = Value::Str(vm.heap.intern(&path));
     raw_set(vm, pkg, "path", path);
-    let cpath = env_path(v, "LUA_CPATH", LUA_CPATH_DEFAULT);
+    let cpath = env_path(v, noenv, "LUA_CPATH", LUA_CPATH_DEFAULT);
     let cpath = Value::Str(vm.heap.intern(&cpath));
     raw_set(vm, pkg, "cpath", cpath);
     // dir separator, path separator, template mark, executable-dir mark,
@@ -127,6 +129,17 @@ pub(crate) fn open_package(vm: &mut Vm) {
     vm.barrier_back_table(loaded);
 }
 
+impl Vm {
+    /// lua.c's `-E`: the package library opened after this takes its
+    /// default `path` and `cpath` instead of reading `LUA_PATH` /
+    /// `LUA_CPATH` (5.2 on; 5.1 has no such switch), and a registry the
+    /// debug library makes after it holds `LUA_NOENV = true`, as lua.c sets
+    /// it for the libraries.
+    pub fn set_ignore_env(&mut self, ignore: bool) {
+        self.ignore_env = ignore;
+    }
+}
+
 fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
     let k = Value::Str(vm.heap.intern(k.as_bytes()));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -152,10 +165,14 @@ fn registry_table(vm: &mut Vm, name: &str) -> Gc<Table> {
     t
 }
 
-/// `setpath`: the environment's path (5.2+ try `NAME_5_x` first) with
-/// ";;" replaced by the default, else the default. 5.1–5.3 replace every
-/// ";;"; 5.4 replaces the first and drops a separator left dangling.
-fn env_path(v: LuaVersion, var: &str, dft: &[u8]) -> Vec<u8> {
+/// `setpath`: unless `noenv`, the environment's path (5.2+ try `NAME_5_x`
+/// first) with ";;" replaced by the default, else the default. 5.1–5.3
+/// replace every ";;"; 5.4 replaces the first and drops a separator left
+/// dangling.
+fn env_path(v: LuaVersion, noenv: bool, var: &str, dft: &[u8]) -> Vec<u8> {
+    if noenv {
+        return dft.to_vec();
+    }
     let suffix = match v {
         LuaVersion::Lua52 => "_5_2",
         LuaVersion::Lua53 => "_5_3",

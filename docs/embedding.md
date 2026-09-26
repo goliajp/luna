@@ -41,9 +41,8 @@ The CLI binary lives in `luna`:
 cargo install luna-jit  # installs the `luna` REPL + script runner
 ```
 
-The default install keeps the `luna` binary minimal: stdin REPL with
-multi-line continuation + `~/.luna_history`, no extra deps beyond
-Cranelift. For an interactive editor with **tab completion against
+The default install keeps the `luna` binary minimal: `lua.c`'s REPL
+reading plain lines from stdin, no extra deps beyond Cranelift. For an interactive editor with **tab completion against
 your `Vm` globals** and **Lua syntax highlighting**, opt into the
 `repl-line-editor` feature (pulls `rustyline` and friends; luna-core
 stays 0-dep regardless):

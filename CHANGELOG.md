@@ -21,7 +21,29 @@ optimization.
 
 ## [Unreleased]
 
+### Added
+
+- The `luna` CLI runs `LUA_INIT` as each dialect's `lua.c` does: a chunk
+  named after the variable, or `@file`; from 5.2 on `LUA_INIT_5_x` is
+  taken first and `-E` skips it; 5.1 runs it before reading the options.
+- `-E` (5.2 on) now also makes the package library ignore `LUA_PATH` /
+  `LUA_CPATH`, and sets the registry's `LUA_NOENV`, as in `lua.c`.
+- `Vm::set_ignore_env` (`lua.c`'s `-E` for the libraries opened after
+  it), `Vm::read_stdin_line` (`fgets` on stdin, through the io library's
+  buffer) and `Vm::tostring_value` (`luaL_tolstring`) are public.
+
 ### Changed
+
+- The `luna` REPL (`-i`, or no script with stdin a terminal) is each
+  dialect's `lua.c` REPL: `_PROMPT` / `_PROMPT2` on stdout, a line tried
+  as `return <line>;` first from 5.3 on and `=expr` through 5.4, results
+  through the global `print`, errors with their traceback and without the
+  program name, the version line first when stdin is a terminal, and a
+  newline at the end of input. It used to print its own banner and
+  prompts on stderr, render the results itself and report an error as
+  `error: <message>`. Without the `repl-line-editor` feature it no longer
+  writes `~/.luna_history`, as `lua.c` without readline keeps no history;
+  the line editor still does.
 
 - `Vm::set_p16_self_link_enabled` / `Vm::p16_self_link_enabled` are now
   `Vm::set_self_link_enabled` / `Vm::self_link_enabled`. The old names
