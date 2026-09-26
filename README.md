@@ -100,11 +100,6 @@ Cookbook: [`docs/embedding.md`](docs/embedding.md). Threat model and
 what is explicitly *not* contained:
 [`docs/security.md`](docs/security.md).
 
-> **Looking for embedders.** luna wants production users and the
-> feedback that comes with them. See
-> [`docs/embedder-recruitment.md`](docs/embedder-recruitment.md) for
-> what it offers, what it does not, and how to try it.
-
 ## Correctness
 
 Compatibility here is a measurement, not a claim.
