@@ -1,4 +1,4 @@
-//! P2-C B5 smoke tests: native_typed + FromLuaValue/FromLuaArgs/IntoLuaReturn.
+//! Smoke tests: native_typed + FromLuaValue/FromLuaArgs/IntoLuaReturn.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

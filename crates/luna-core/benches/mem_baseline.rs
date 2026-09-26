@@ -1,23 +1,21 @@
-//! v2.0 Phase 5 Track MM — memory baseline bench.
+//! Memory baseline bench.
 //!
 //! Measures `luna-core` heap usage across 5 representative workloads.
-//! **Measurement-only** at this phase — no layout changes, no
-//! `Vm::heap_stats()` API. Goal:
+//! **Measurement-only** — no `Vm::heap_stats()` API. Goal:
 //!
 //! 1. Establish reproducible peak / steady / alloc-count / alloc-byte
-//!    numbers per workload so future Track MM layout attacks (Userdata
+//!    numbers per workload so memory-layout changes (Userdata
 //!    io-field split, Node bitpack, StringTable load-factor,
 //!    table_pool cap) can be A/B'd against ground truth.
-//! 2. Surface surprising hot allocations the Phase 0 audit could only
-//!    estimate.
+//! 2. Surface surprising hot allocations that static estimates miss.
 //!
 //! `dhat` (the heap profiler) is wired in as a `[dev-dependency]`, so
 //! the prod `cargo tree -p luna-core --edges normal` still reports
 //! exactly 1 crate. The CI `zero-dep` gate uses `--edges normal`
-//! explicitly so dev-deps cannot regress the F1 0-third-party-dep
+//! explicitly so dev-deps cannot regress the 0-third-party-dep
 //! contract.
 //!
-//! ## Workloads (per audit Track MM §plan)
+//! ## Workloads
 //!
 //! - `cold_start`        — fresh `Vm::new` + 1 `eval("return 0")`
 //! - `repl_idle`         — 100 simple eval statements, REPL-shape
@@ -174,8 +172,7 @@ fn workload_alloc_collect() -> Vm {
     // Tighter inner loop than 1M individual evals — eval overhead would
     // dwarf the table churn we are measuring. 10 iterations × 100
     // tables/iter for the GC-cadence portion, then one bulk eval for
-    // the remaining ~999,000 tables to hit the audit's "1M tables"
-    // headline.
+    // the remaining ~999,000 tables to reach 1M tables.
     let src = r#"
         for i = 1, 100 do
             local x = {}
@@ -200,7 +197,7 @@ fn workload_alloc_collect() -> Vm {
 //
 // luna's Userdata API is meant for embedder-side Rust types; for a
 // pure-Lua heap-pressure proxy we use the `__gc` metamethod path,
-// which is what the v1.2 LuaUserdata trait sugar lowers to under the
+// which is what the LuaUserdata trait sugar lowers to under the
 // hood. This exercises the same finalizer queue + extra GC pass that
 // real Userdata allocations would hit.
 // ──────────────────────────────────────────────────────────────────────

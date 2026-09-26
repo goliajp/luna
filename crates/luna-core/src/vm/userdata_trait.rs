@@ -1,7 +1,7 @@
-//! `LuaUserdata` trait sugar (v1.2 Track B).
+//! `LuaUserdata` trait sugar.
 //!
-//! Layered on top of v1.1 B8 (`UserdataPayload::Host`, `Vm::create_userdata`,
-//! `Vm::userdata_borrow`). The B8 base lets embedders stash a `T: 'static`
+//! Layered on top of host userdata (`UserdataPayload::Host`, `Vm::create_userdata`,
+//! `Vm::userdata_borrow`), which lets embedders stash a `T: 'static`
 //! Rust value inside a `Value::Userdata`; this module is what makes that
 //! userdata *callable from Lua* — methods, metamethods, and a cached
 //! per-Vm metatable.
@@ -51,7 +51,7 @@ use crate::vm::typed_native::{FromLuaArgs, IntoLuaReturn};
 
 // ─────────────────────────────────────────────────────────────────────
 // UserdataMarker — public facade over the GC marker passed to
-// `LuaUserdata::trace`. Phase TB (v1.3).
+// `LuaUserdata::trace`.
 // ─────────────────────────────────────────────────────────────────────
 
 /// Public facade over the GC mark accumulator passed to
@@ -223,7 +223,7 @@ impl MetaMethod {
 /// to registering nothing — yielding a userdata that still type-checks
 /// as `"userdata"` but only carries identity + `__name`. An empty impl
 /// (`impl LuaUserdata for MyType {}`) is the source-compatible bridge
-/// for B8 callers upgrading from v1.1.
+/// for types written against v1.1.
 ///
 /// [`add_methods`]: LuaUserdata::add_methods
 ///
@@ -249,9 +249,9 @@ impl MetaMethod {
 /// lifetime is not otherwise rooted risks dangling references after
 /// collection.
 ///
-/// v1.2 forbade Gc-bearing payloads entirely; v1.3 Phase TB lifts the
-/// limitation by giving the trait a default [`trace`] method and
-/// storing a monomorphic adapter in [`crate::runtime::userdata::UserdataPayload::Host`].
+/// Gc-bearing payloads are supported since v1.3: the trait has a default
+/// [`trace`] method, and [`crate::runtime::userdata::UserdataPayload::Host`]
+/// stores a monomorphic adapter for it.
 ///
 /// [`trace`]: LuaUserdata::trace
 pub trait LuaUserdata: 'static + Sized {
@@ -298,7 +298,7 @@ pub trait LuaUserdata: 'static + Sized {
     /// ```
     ///
     /// Overriding `trace` does not require touching any other trait
-    /// method; existing B8 / v1.2 types remain source-compatible with
+    /// method; existing types remain source-compatible with
     /// an unchanged empty `impl LuaUserdata for T {}` (the default
     /// no-op runs and no Gc tracing is performed).
     fn trace(&self, _m: &mut UserdataMarker) {}
@@ -355,7 +355,7 @@ pub trait UserdataMethods<T> {
     /// Field-getter sugar: equivalent to [`add_method`](Self::add_method)
     /// with no args and a single-value return.
     ///
-    /// **v1.3 (UD1+UD2)**: true field-style `obj.name` (no parens) is
+    /// True field-style `obj.name` (no parens) is
     /// supported alongside the legacy call-syntax `obj:name()` shape.
     /// When any `add_field_method_get` is registered, `MetatableBuilder`
     /// emits a native trampoline for `__index` that dispatches in the
@@ -366,12 +366,12 @@ pub trait UserdataMethods<T> {
         F: Fn(&mut Vm, &T) -> Result<R, LuaError> + Copy + 'static,
         R: IntoLuaReturn + 'static;
 
-    /// Field-setter sugar: registers a setter for `obj.name = value`
-    /// (v1.3 UD1). When any `add_field_method_set` is registered,
+    /// Field-setter sugar: registers a setter for `obj.name = value`.
+    /// When any `add_field_method_set` is registered,
     /// `MetatableBuilder` installs a `__newindex` trampoline that
     /// dispatches `(self, value)` to the registered setter. Unknown
     /// fields raise a runtime error rather than silently dropping the
-    /// write (matches `code/no-unsolicited-fallback`).
+    /// write.
     fn add_field_method_set<F, A>(&mut self, name: &str, f: F)
     where
         F: Fn(&mut Vm, &mut T, A) -> Result<(), LuaError> + Copy + 'static,
@@ -389,9 +389,9 @@ pub struct MetatableBuilder<'vm, T> {
     vm: &'vm mut Vm,
     /// `__index` sub-table entries (regular methods).
     methods: Vec<(Gc<crate::runtime::LuaStr>, Value)>,
-    /// Field getters for true field-style `obj.name` (v1.3 UD2).
+    /// Field getters for true field-style `obj.name`.
     fields_get: Vec<(Gc<crate::runtime::LuaStr>, Value)>,
-    /// Field setters for `obj.name = value` (v1.3 UD1).
+    /// Field setters for `obj.name = value`.
     fields_set: Vec<(Gc<crate::runtime::LuaStr>, Value)>,
     /// Direct metatable entries (metamethods + static functions).
     meta_entries: Vec<(Gc<crate::runtime::LuaStr>, Value)>,
@@ -423,7 +423,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
     ///
     /// Three-way fork on `__index`:
     /// 1. **No methods, no field getters** → no `__index` slot.
-    /// 2. **Methods only, no field getters** → v1.2 fast path:
+    /// 2. **Methods only, no field getters** → fast path:
     ///    `__index` is a plain `Value::Table` of methods.
     /// 3. **Any field getters registered** → `__index` is a native
     ///    trampoline ([`index_trampoline`]) with upvals
@@ -431,7 +431,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
     ///    *methods → field-getters → nil*.
     ///
     /// `__newindex` is installed only when any field setter is
-    /// registered (Phase UD1).
+    /// registered.
     fn finalize(self) -> Result<Gc<Table>, LuaError> {
         let MetatableBuilder {
             vm,
@@ -468,7 +468,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
 
         // __index — fork on whether any field getters are registered.
         if fields_get.is_empty() {
-            // Methods-only fast path (v1.2 shape preserved).
+            // Methods-only fast path.
             if let Some(idx) = mk_bucket(vm, methods)? {
                 let key = vm.heap.intern(b"__index");
                 // SAFETY: mt is freshly allocated.
@@ -579,12 +579,12 @@ impl<'vm, T: LuaUserdata> UserdataMethods<T> for MetatableBuilder<'vm, T> {
     {
         // Adapt to add_method's (this, args) shape with A = ().
         let adapter = move |vm: &mut Vm, this: &T, _args: ()| f(vm, this);
-        // v1.3 UD2: getter lives ONLY in the fields_get bucket. The
+        // The getter lives ONLY in the fields_get bucket. The
         // `__index` trampoline calls it with `(self,)` so `obj.name`
         // returns the field value directly.
         //
-        // **Breaking change from v1.2**: the v1.2 call-syntax shape
-        // (`obj:name()`) no longer works for getters defined this way
+        // The call-syntax shape
+        // (`obj:name()`) does not work for getters defined this way
         // — the trampoline calls the getter and returns its value, so
         // `obj.name` is `Value::Int(...)` not the closure, and
         // `obj:name()` evaluates to `Int(...)(obj)` which errors.
@@ -592,8 +592,7 @@ impl<'vm, T: LuaUserdata> UserdataMethods<T> for MetatableBuilder<'vm, T> {
         // `add_method("name", ...)` (returns the closure unchanged
         // through the table-`__index` fallback) alongside the
         // `add_field_method_get` if a same-named field-getter is also
-        // wanted. The audit's "dual registration" idea was
-        // load-bearing-broken — see CHANGELOG [1.3.0] for migration.
+        // wanted.
         let (raw_fn, upvals) = pack_method::<T, _, (), R>(adapter);
         let v = self.make_native(raw_fn, upvals);
         let k = self.intern(name);
@@ -703,7 +702,7 @@ where
     f(vm, args).into_lua_return(vm, fs)
 }
 
-/// `__index` trampoline (v1.3 UD2). Installed by
+/// `__index` trampoline. Installed by
 /// [`MetatableBuilder::finalize`] whenever any field getter is
 /// registered. Upvals:
 ///
@@ -714,7 +713,7 @@ where
 /// Args (PUC `__index` calling convention): `(self_userdata, key)`.
 ///
 /// Dispatch order: methods → field getters → nil. Methods win on
-/// collision; v1.2 callers using `add_method("foo")` keep the existing
+/// collision; callers using `add_method("foo")` keep the existing
 /// shape even if a same-named getter is registered later.
 fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let methods_upval = vm.nat_upval(fs, 0);
@@ -722,7 +721,7 @@ fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let self_val = vm.nat_arg(fs, nargs, 0);
     let key = vm.nat_arg(fs, nargs, 1);
 
-    // 1. methods first (preserves v1.2 precedence).
+    // 1. methods first (preserves the plain-table precedence).
     if let Value::Table(m) = methods_upval {
         let v = m.get(key);
         if !v.is_nil() {
@@ -746,7 +745,7 @@ fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(vm.nat_return(fs, &[Value::Nil]))
 }
 
-/// `__newindex` trampoline (v1.3 UD1). Installed by
+/// `__newindex` trampoline. Installed by
 /// [`MetatableBuilder::finalize`] whenever any field setter is
 /// registered. Upvals:
 ///
@@ -755,7 +754,7 @@ fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 ///
 /// Args (PUC `__newindex` calling convention): `(self_userdata, key,
 /// value)`. Unknown fields raise a runtime error rather than silently
-/// dropping the write (matches `code/no-unsolicited-fallback`).
+/// dropping the write.
 fn newindex_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let setters_upval = vm.nat_upval(fs, 0);
     let type_name_upval = vm.nat_upval(fs, 1);

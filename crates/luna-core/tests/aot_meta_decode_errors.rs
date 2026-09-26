@@ -1,9 +1,9 @@
-//! v2.0 Phase 5 CV gap fill — `jit::aot_meta` walker error paths.
+//! `jit::aot_meta` walker error paths.
 //!
 //! Existing inline tests in `aot_meta.rs` cover round-trip happy
 //! paths + magic / version mismatch + payload truncation + v3
-//! chain misalignment + v1/v2 shape tolerance. The audit-flagged
-//! gap is **the per-tail truncation arms** — the v2 / v3 walkers
+//! chain misalignment + v1/v2 shape tolerance. The gap covered here
+//! is **the per-tail truncation arms** — the v2 / v3 walkers
 //! each have multiple "shorter than X" return-points and the
 //! decoder is the load-bearing wire-format contract for deploy-side
 //! `luna-aot` install. Each malformed shape MUST produce a stable

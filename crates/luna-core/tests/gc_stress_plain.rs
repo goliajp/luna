@@ -1,9 +1,8 @@
-//! v2.13 Track WUC Prong B — plain (native-heap) gc.lua stress.
+//! Plain (native-heap) gc.lua stress.
 //!
 //! Same loop as `gc_stress_poison.rs` but WITHOUT the allocator
 //! override: on Windows this exercises the real Heap Manager
-//! freed-memory behavior that UAF-C manifests under
-//!. Driven by
+//! freed-memory behavior the use-after-free shows up under. Driven by
 //! `.github/workflows/uafc-windows-stress.yml` on windows-latest
 //! to measure the repro rate; also runnable anywhere for a
 //! baseline.
@@ -41,12 +40,12 @@ fn run_one(file: &str) -> Result<(), String> {
         })
         .map_err(|e| format!("spawn {label}: {e}"))?
         .join()
-        .map_err(|_| format!("{file}: worker thread panicked (UAF-C candidate!)"))?;
+        .map_err(|_| format!("{file}: worker thread panicked (possible use-after-free)"))?;
     rx.recv().map_err(|e| format!("recv: {e}"))?
 }
 
 #[test]
-#[ignore = "UAF-C diagnostic stress (slow); run with --ignored"]
+#[ignore = "use-after-free diagnostic stress (slow); run with --ignored"]
 fn gc_lua_family_plain_stress() {
     let n: usize = std::env::var("LUNA_GC_STRESS_N")
         .ok()

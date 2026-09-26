@@ -16,7 +16,7 @@
 //! one Vm per worker thread and exchange data via channels; async
 //! embedders use `tokio::main(flavor = "current_thread")` or a
 //! `LocalSet`. See [`docs/threading.md`](../../docs/threading.md) for
-//! canonical patterns and the post-v1.1 `feature = "send"` roadmap.
+//! canonical patterns and the `feature = "send"` wrapper.
 //!
 //! # Embedding contract (script-host sandbox)
 //!
@@ -76,13 +76,12 @@
 //!   embedding; flag if the threat model includes side-channel
 //!   probing.
 
-// v1.3 Phase SS-B — `send` feature gate lit. Embedders opt in via
+// `send` feature: embedders opt in via
 // `cargo add luna-core --features send`; this surfaces the
 // `vm::SendVm` newtype (`Arc<UnsafeCell<Vm>>` + `Arc<RwLock<()>>`
-// behind the scenes) for cross-thread embedding. v1.3 ships
-// `SendVm` interp-only (`NullJitBackend`); JIT-aware `SendVm` is a
-// post-v1.3 polish item. Default-feature builds are unchanged —
-// `Vm` stays `!Send + !Sync` and bit-identical with v1.2. See
+// behind the scenes) for cross-thread embedding. `SendVm` is
+// interp-only (`NullJitBackend`). Default-feature builds are
+// unchanged — `Vm` stays `!Send + !Sync`. See
 // `docs/threading.md` for the embedder-facing usage patterns.
 
 pub mod compiler;

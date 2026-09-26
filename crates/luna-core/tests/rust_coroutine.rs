@@ -1,4 +1,4 @@
-//! B9 smoke tests: Rust-side coroutine drive.
+//! Smoke tests: Rust-side coroutine drive.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

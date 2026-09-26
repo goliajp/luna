@@ -11,7 +11,7 @@ categories.workspace = true
 readme = "../../README.md"
 
 [lib]
-# Same shape as the v1.0 root crate so embedders can swap `luna` →
+# Same shape as the `luna` crate so embedders can swap `luna` →
 # `luna-core` without re-evaluating their linkage model. cdylib +
 # staticlib live in the `luna` crate (capi side); luna-core stays
 # `rlib`-only — embedders that need a C ABI bring in `luna`.
@@ -21,18 +21,16 @@ crate-type = ["rlib"]
 workspace = true
 
 [features]
-# Default: no features. Vm stays !Send + !Sync (the v1.0/v1.1 default).
+# Default: no features. Vm stays !Send + !Sync.
 default = []
-# v1.3 Phase SS-B: opt-in cross-thread `SendVm` wrapper. Lights up
+# Opt-in cross-thread `SendVm` wrapper. Lights up
 # `luna_core::vm::SendVm`, an `Arc<UnsafeCell<Vm>> + Arc<RwLock<()>>`
 # newtype that is `Send` at the type level and serializes access at
-# runtime. Interp-only at v1.3 ship (JIT-aware SendVm is a post-v1.3
-# polish item). Default-feature
-# builds (no feature) keep `Vm` `!Send + !Sync` and bit-identical with
-# the v1.2 baseline. luna-core 0-dep contract preserved (Arc, UnsafeCell,
-# RwLock are all stdlib).
+# runtime. Interp-only (no JIT-aware SendVm). Default-feature
+# builds (no feature) keep `Vm` `!Send + !Sync`. luna-core 0-dep
+# contract preserved (Arc, UnsafeCell, RwLock are all stdlib).
 send = []
-# v2.13 Track WUC: post-sweep GC invariant checker (PUC
+# Post-sweep GC invariant checker (PUC
 # lua_checkmemory analogue). After every completed sweep, walk all
 # live tables and panic on the first collectable key/value/metatable
 # whose object is no longer on the heap's `all` list — surfacing
@@ -42,11 +40,11 @@ send = []
 gc-verify = []
 
 [dependencies]
-# v1.1 F1 acceptance: this list must remain empty so
+# This list must remain empty so
 # `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` == 1.
 
 [dev-dependencies]
-# v2.0 Phase 5 Track MM (memory budget) — `dhat` is a dev-only heap
+# `dhat` is a dev-only heap
 # profiler used by the `mem_baseline` bench. It is gated to
 # `[dev-dependencies]` so prod `cargo tree -p luna-core` still reports
 # exactly 1 crate (luna-core itself), preserving the zero-dependency

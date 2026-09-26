@@ -1,21 +1,14 @@
 //! Binary-chunk dump / undump entry point.
 //!
-//! Phase LB Wave 1 (v1.3): refactored from the single 380-LOC `dump.rs`
-//! into a directory module to give Wave 2's five per-dialect PUC
-//! translators a stable surface to land in parallel without stepping on
-//! one another.
-//!
 //! Sub-modules:
 //! - `luna` — luna's own dump / undump (per-dialect PUC header + a
 //!   luna-specific body sentinel-tagged `"\x00LunaV1\x00"`).
 //! - `reader` — shared byte-stream reader + PUC `loadSize` ULEB128 port
 //!   (0-dep — luna-core contract forbids `leb128` / `byteorder` crates).
-//! - `puc` — magic-byte → per-dialect PUC undumper dispatch. Wave 1
-//!   ships stubs that return `Err("… not yet implemented (Phase LBN)")`
-//!   for each of `5.{1,2,3,4,5}`; Wave 2 fills them in.
+//! - `puc` — magic-byte → per-dialect PUC undumper dispatch.
 //!
-//! Public surface (re-exported here so the 6 call sites — `builtins.rs`,
-//! `exec.rs`, `lib_os_io.rs`, `lib_string.rs` — keep compiling):
+//! Public surface (used by `builtins.rs`, `exec.rs`, `lib_os_io.rs`,
+//! `lib_string.rs`):
 //! - [`dump`] — `Proto → Vec<u8>` (luna body format)
 //! - [`undump`] — bytes → `Gc<Proto>`, routes by leading magic byte
 //! - [`is_binary_chunk`] — true for any `\x1b`-prefixed input (matches
@@ -37,8 +30,7 @@ use crate::version::LuaVersion;
 ///
 /// Delegates to `luna::dump` (private sibling module); output is luna's
 /// own body format (PUC dialect header + `"\x00LunaV1\x00"` sentinel +
-/// luna body). Not PUC-loadable — see RFC v1.3 §"open questions"-4 for
-/// the PUC-output `string.dump` v1.4 candidate.
+/// luna body). Not PUC-loadable.
 pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
     luna::dump(proto, strip, version)
 }
@@ -61,13 +53,12 @@ pub fn is_binary_chunk(bytes: &[u8]) -> bool {
 ///   reports the truncation.
 /// - otherwise a `\x1bLua` chunk with a `0x51..0x55` version byte is PUC's
 ///   → `puc::undump_puc`, gated by `allow_puc`. This includes a chunk from
-///   the running dialect's own PUC version, which routing by version byte
-///   alone used to send to luna's loader.
+///   the running dialect's own PUC version, which the version byte alone
+///   cannot tell apart from a luna chunk.
 /// - anything else → `luna::undump` for its error.
 ///
 /// `allow_puc` mirrors `Vm::puc_bytecode_loading()`. Default off — PUC
-/// bytecode is a strictly larger trust surface than luna's own (the v1.3
-/// audit calls this out as the embedder gate per §"Cross-dialect risks").
+/// bytecode is a strictly larger trust surface than luna's own.
 ///
 /// Whichever reader produced it, the prototype tree is verified before it is
 /// returned (see the `verify` module). A refused chunk's message is worded

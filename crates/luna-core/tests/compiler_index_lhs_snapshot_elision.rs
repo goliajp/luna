@@ -1,8 +1,8 @@
-//! v2.1 Phase 11 — A4' attack regression tests.
+//! Index-LHS object-snapshot elision regression tests.
 //!
 //! Cover the Index-LHS object-snapshot Move elision wired at
 //! `crates/luna-core/src/compiler/mod.rs` `assign_stat` Index-LHS branch
-//! (line 2487 region) via the prereq gate
+//! via the gate
 //! [`Compiler::assign_stat_can_skip_obj_snapshot`].
 //!
 //! Each test compiles a focused snippet via the public `compile_chunk`
@@ -11,12 +11,12 @@
 //! `Vm` to cross-check that the elision did not change observable
 //! semantics (no silent behaviour change).
 //!
-//! The Move count assertions discriminate A4' (the obj snapshot Move,
-//! whose source is the local-bucket register) from A4'' (the RHS
-//! materialization Move whose source is the *RHS* local reg, deferred
-//! to a later v2.1 ship). Helper `count_moves_from_reg(src, b)` counts
-//! only Moves whose source operand is `b`, isolating the A4' decision
-//! from A4'' residual noise.
+//! The Move count assertions discriminate the obj snapshot Move (whose
+//! source is the local-bucket register) from the RHS materialization
+//! Move (whose source is the *RHS* local reg). Helper
+//! `count_moves_from_reg(src, b)` counts only Moves whose source operand
+//! is `b`, isolating the snapshot decision from RHS-materialization
+//! noise.
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
@@ -32,12 +32,12 @@ use luna_core::vm::isa::{Inst, Op};
 fn compile_main(src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
     let mut heap = Heap::new();
-    let proto = compile_chunk(&ast, LuaVersion::Lua55, b"=a4_prime", &mut heap).expect("compile");
+    let proto = compile_chunk(&ast, LuaVersion::Lua55, b"=index_lhs", &mut heap).expect("compile");
     proto.code.to_vec()
 }
 
 /// Count `Op::Move` ops in the main proto whose source-register
-/// operand `b` equals `src_reg`. The A4' snapshot Move always has
+/// operand `b` equals `src_reg`. The obj snapshot Move always has
 /// `b == obj_local_reg`.
 fn count_moves_from_reg(code: &[Inst], src_reg: u32) -> usize {
     code.iter()
@@ -46,7 +46,7 @@ fn count_moves_from_reg(code: &[Inst], src_reg: u32) -> usize {
 }
 
 /// Count all `Op::Move` ops (used where we want the total instead of
-/// the A4'-specific source-reg filter).
+/// the snapshot-specific source-reg filter).
 fn count_all_moves(code: &[Inst]) -> usize {
     code.iter().filter(|i| matches!(i.op(), Op::Move)).count()
 }
@@ -80,7 +80,7 @@ fn eval_int_pair(src: &str) -> (i64, i64) {
 }
 
 // =====================================================================
-// Safe path — A4' snapshot Move elided
+// Safe path — obj snapshot Move elided
 // =====================================================================
 
 #[test]
@@ -108,7 +108,7 @@ fn safe_math_min_rhs_elides_snapshot() {
     // Headline token_bucket pc 20 shape: math.min(...) is the
     // OnlyKnownPure RHS class. Gate accepts → bucket@r0 has no
     // snapshot Move. (The Call op's self-arg-shuffle Move appears
-    // with src != 0 if it appears at all; not under the A4' filter.)
+    // with src != 0 if it appears at all; not under the snapshot filter.)
     let src = r#"
         local bucket = { tokens = 0 }
         bucket.tokens = math.min(1000, bucket.tokens + 10)
@@ -124,11 +124,10 @@ fn safe_math_min_rhs_elides_snapshot() {
 }
 
 #[test]
-fn safe_literal_local_rhs_elides_a4prime_snapshot_only() {
-    // `bucket.last = now` (now is a local reg). A4' elides the obj
-    // snapshot (no Move with src=bucket@r0). With the A4'' bundle
-    // shipped,
-    // the RHS local force-materialization Move (src=now@r1) is ALSO
+fn safe_literal_local_rhs_elides_both_moves() {
+    // `bucket.last = now` (now is a local reg). The obj snapshot is
+    // elided (no Move with src=bucket@r0), and the RHS local
+    // force-materialization Move (src=now@r1) is ALSO
     // elided — the SetField now reads `now` directly. Both halves
     // assert zero Moves; the SetField uses `now@r1` directly as its
     // C operand (cross-verified by `eval_int`).
@@ -147,13 +146,13 @@ fn safe_literal_local_rhs_elides_a4prime_snapshot_only() {
     assert_eq!(
         count_moves_from_reg(&code, 1),
         0,
-        "A4'' RHS materialization Move (src=now@r1) is now elided by the bundle"
+        "the RHS materialization Move (src=now@r1) is now elided by the bundle"
     );
     assert_eq!(eval_int(src), 7);
 }
 
 // =====================================================================
-// Unsafe paths — A4' snapshot Move preserved
+// Unsafe paths — obj snapshot Move preserved
 // =====================================================================
 
 #[test]
@@ -243,7 +242,7 @@ fn unsafe_captured_obj_preserves_snapshot() {
 #[test]
 fn unsafe_dotted_chain_lhs_falls_back_correctly() {
     // `outer.inner.x = 5` — obj is `outer.inner`, not a bare Name.
-    // Gate rejects per RFC §5 conservative gap 4. The obj snapshot
+    // Gate rejects conservatively. The obj snapshot
     // is structurally a GetField Reloc patch (not a Move op), so
     // we only check semantic equivalence here.
     let src = r#"
@@ -297,7 +296,7 @@ fn elision_preserves_newindex_semantics_on_fresh_key() {
 fn elision_preserves_present_key_in_place_update() {
     // Present-key SetField under safe path: bucket.tokens is already
     // present → in-place update via try_set_existing collapse;
-    // __newindex must NOT fire. The A4' elision composes with A3 +
+    // __newindex must NOT fire. The snapshot elision composes with the
     // try_set_existing single-walk semantics.
     let src = r#"
         local fires = 0

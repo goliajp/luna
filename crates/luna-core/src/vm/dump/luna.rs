@@ -7,7 +7,7 @@
 //! PUC would. The body that follows is luna-specific — luna's VM cannot
 //! execute PUC bytecode through this path (different opcode encoding,
 //! register conventions, etc.); PUC bytecode loading lives in
-//! `super::puc` (Phase LB Wave 2). `strip` drops debug names (local-variable
+//! `super::puc`. `strip` drops debug names (local-variable
 //! records and upvalue names); line info is always kept because the VM
 //! indexes it for error positions.
 
@@ -219,7 +219,7 @@ pub(super) fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
 }
 
 // `Reader` lives in `super::reader` so the per-dialect PUC translators
-// (`super::puc_5{1,2,3,4,5}` in Wave 2) can share the same primitives.
+// (`super::puc`) can share the same primitives.
 
 fn r_const(
     r: &mut Reader,

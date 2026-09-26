@@ -1,7 +1,7 @@
-//! v1.1 A2 — `JitState` sidecar: JIT-specific Vm state factored out
+//! `JitState` sidecar: JIT-specific Vm state factored out
 //! of the [`crate::vm::Vm`] struct.
 //!
-//! rationale. The interpreter dispatch loop reads `self.heap`,
+//! The interpreter dispatch loop reads `self.heap`,
 //! `self.stack`, `self.frames`, ... as inherent fields; JIT state
 //! lives one field hop away (`self.jit.active_trace` instead of
 //! `self.active_trace`). The goal is physical separation between
@@ -16,8 +16,8 @@
 //! hot path for no benefit.
 //!
 //! Visibility: `#[doc(hidden)] pub` mirrors the existing pattern
-//! used by the 18 `#[doc(hidden)] pub fn jit_*` Vm helper methods
-//! (Session C). Cross-crate access from `luna::jit_backend::*`
+//! used by the `#[doc(hidden)] pub fn jit_*` Vm helper methods.
+//! Cross-crate access from `luna::jit_backend::*`
 //! (which writes `vm.jit.pending_err` from `extern "C"` Cranelift
 //! helpers) requires the struct + field to be `pub` somewhere
 //! reachable, and `#[doc(hidden)]` keeps it out of the public
@@ -28,16 +28,14 @@ use crate::vm::error::LuaError;
 /// JIT-specific Vm state. See module docs.
 #[doc(hidden)]
 pub struct JitState {
-    /// Master JIT switch (was `Vm::jit_enabled`). Default `true`.
+    /// Master JIT switch. Default `true`.
     /// Sandbox embedders that rely on `instr_budget` for DoS
     /// containment **must** call `Vm::set_jit_enabled(false)` —
     /// JIT'd counted-for loops compile to native Cranelift IR
     /// that does not tick the budget.
     pub enabled: bool,
 
-    /// P12-S1 — trace JIT subswitch (was `Vm::trace_jit_enabled`).
-    /// `false` by default so existing benchmarks see zero overhead
-    /// while the sprint develops.
+    /// Trace JIT subswitch.
     pub trace_enabled: bool,
 
     /// Back-edge visits before a loop is recorded as a trace, and calls
@@ -48,68 +46,60 @@ pub struct JitState {
     /// See [`Self::trace_hot_threshold`].
     pub call_hot_threshold: u32,
 
-    /// P16-A — opt-in flag for the self-link cycle catch (was
-    /// `Vm::p16_self_link_enabled`). Default `false` —
-    /// SHIPPED-DISABLED in v1.0 due to P16-B correctness blocker.
-    pub p16_self_link_enabled: bool,
+    /// Opt-in flag for the self-link cycle catch. Default `false`:
+    /// the catch has a known correctness problem, so it ships disabled.
+    pub self_link_enabled: bool,
 
-    /// P12-S1 — the trace currently being recorded, or `None` if
-    /// the dispatch loop is in normal interpretation mode. (Was
-    /// `Vm::active_trace`.)
+    /// The trace currently being recorded, or `None` if
+    /// the dispatch loop is in normal interpretation mode.
     pub active_trace: Option<Box<crate::jit::trace::TraceRecord>>,
 
-    /// P12-S4 — index into `Vm.frames` of the Lua frame that the
-    /// recorder started in. (Was `Vm::recording_frame_base`.)
+    /// Index into `Vm.frames` of the Lua frame that the
+    /// recorder started in.
     pub recording_frame_base: usize,
 
-    /// P12-S4-step1 — running max of `inline_depth` observed on
-    /// any `RecordedOp` pushed by the recorder. (Was
-    /// `Vm::trace_max_depth_seen`.)
+    /// Running max of `inline_depth` observed on
+    /// any `RecordedOp` pushed by the recorder.
     pub max_depth_seen: u8,
 
     /// Diagnostic counters; see [`JitCounters`].
     pub counters: JitCounters,
 
-    /// P11-S5d.E' — JIT-side error inbox set by a JIT table helper
+    /// JIT-side error inbox set by a JIT table helper
     /// when it detects a metatable on the target table. Taken by
     /// the dispatcher after the JIT entry returns; the interp path
     /// re-executes the call with proper `__index`/`__newindex`
     /// semantics. Always `None` outside a JIT entry window.
-    /// (Was `Vm::jit_pending_err` — the one `pub` field on Vm
-    /// reached from `luna::jit_backend::*` Cranelift helpers.)
+    /// Written from `luna::jit_backend::*` Cranelift helpers.
     pub pending_err: Option<LuaError>,
 
-    /// P13-S13-D — reusable buffer for the trace JIT dispatcher's
-    /// per-entry `reg_state`. (Was `Vm::jit_reg_state_buf`.)
+    /// Reusable buffer for the trace JIT dispatcher's
+    /// per-entry `reg_state`.
     pub reg_state_buf: Vec<i64>,
 
-    /// P14-S14-B v2 — pool of reusable per-trace string accumulator
-    /// buffers. (Was `Vm::jit_str_buf_pool`.)
+    /// Pool of reusable per-trace string accumulator
+    /// buffers.
     pub str_buf_pool: Vec<Vec<u8>>,
 
-    /// P14-S14-B v2 — cap on the buffer pool size. (Was
-    /// `Vm::jit_str_buf_pool_cap`.)
+    /// Cap on the buffer pool size.
     pub str_buf_pool_cap: usize,
 
-    /// P13-S13-D — companion buffer for `entry_tags` (one u8 per
-    /// register at trace dispatch entry). (Was
-    /// `Vm::jit_entry_tags_buf`.)
+    /// Companion buffer for `entry_tags` (one u8 per
+    /// register at trace dispatch entry).
     pub entry_tags_buf: Vec<u8>,
 
-    /// v1.1 A1 Session A — closure-compile backend the dispatcher
+    /// Closure-compile backend the dispatcher
     /// routes through. Default is [`crate::jit::NullJitBackend`];
     /// `Vm::install_jit_backend` swaps in caller-supplied
     /// backends (the `luna` crate installs `CraneliftBackend`).
-    /// (Was `Vm::chunk_compiler`.)
     pub chunk_compiler: Box<dyn crate::jit::IntChunkCompiler>,
 
-    /// v1.1 A1 Session A — trace-JIT backend. (Was
-    /// `Vm::trace_compiler`.)
+    /// Trace-JIT backend.
     pub trace_compiler: Box<dyn crate::jit::TraceCompiler>,
 
-    /// v2.0 Track-R R3c — bounded stitch-back depth remaining for
+    /// Bounded stitch-back depth remaining for
     /// the dispatcher's `is_downrec_sentinel` admit path. Cycle-
-    /// safety checkpoint per R3 prep §7.5: a `downrec_link`-bearing
+    /// safety checkpoint: a `downrec_link`-bearing
     /// trace whose stitch target is itself can in principle keep
     /// returning the DOWNREC sentinel forever, and the dispatcher
     /// would forever re-admit it on the next interpreter loop
@@ -122,7 +112,7 @@ pub struct JitState {
     /// past `head_pc` re-arms the budget). Default = the constant.
     pub stitch_depth_remaining: u32,
 
-    /// v2.0 Track-R R3c — one-shot suppression flag for the
+    /// One-shot suppression flag for the
     /// dispatcher's trace admit. Set when a trace hands control back
     /// at its own `head_pc` without having run the op there: the
     /// dispatcher when it force-deopts a downrec entry (guard miss OR
@@ -134,23 +124,19 @@ pub struct JitState {
     /// time the dispatcher reads it.
     pub suppress_downrec_admit_once: bool,
 
-    /// v2.0 Track J sub-step J-B — per-`Vm` JIT storage holder.
+    /// Per-`Vm` JIT storage holder.
     /// Default is [`crate::jit::NullJitStorage`]; the `luna_jit`
     /// crate's `install_default_jit` swaps in a
     /// `CraneliftJitStorage` carrying the cache + compiled-handle
-    /// collections that used to live in `thread_local!`s on
-    /// `luna_jit::jit_backend::{mod,trace}`. Accessed via downcast
-    /// from the `CraneliftBackend` trait impls. See
+    /// collections. Accessed via downcast
+    /// from the `CraneliftBackend` trait impls.
     pub storage: Box<dyn crate::jit::JitStorage>,
 }
 
 impl JitState {
-    /// v2.0 Track-R R3c/R3d — default per-dispatch stitch-back depth.
-    /// R3c shipped with `1` as the conservative floor because the
-    /// dispatcher's downrec admit went through the R3b
-    /// `dispatchable=false` fallback arm — a runaway HIT loop would
-    /// have admitted on every interp tick. R3d's multi-way CMP-chain
-    /// is a real runtime guard (not constant-folded), so the only
+    /// Default per-dispatch stitch-back depth. The downrec admit
+    /// is gated by a multi-way CMP-chain that is a real runtime
+    /// guard (not constant-folded), so the only
     /// way a downrec trace HITs is when `saved_pc` from the parent
     /// frame matches one of the recorded `caller_pc` candidates;
     /// each natural admit corresponds to ONE Lua call chain pop, so
@@ -169,128 +155,105 @@ impl JitState {
 #[doc(hidden)]
 #[derive(Default)]
 pub struct JitCounters {
-    /// P12-S1.D — number of traces that have closed cleanly. (Was
-    /// `Vm::trace_closed_count`.)
+    /// Number of traces that have closed cleanly.
     pub closed: u64,
-    /// P12-S1.D — number of traces that have aborted. (Was
-    /// `Vm::trace_aborted_count`.)
+    /// Number of traces that have aborted.
     pub aborted: u64,
-    /// P13-S13-G v2 — number of compiled traces that closed at a
-    /// `TraceEnd::InlineAbort` exit. (Was
-    /// `Vm::trace_inline_abort_count`.)
+    /// Number of compiled traces that closed at a
+    /// `TraceEnd::InlineAbort` exit.
     pub inline_abort: u64,
-    /// P12-S2.C — count of closed traces the lowerer compiled.
-    /// (Was `Vm::trace_compiled_count`.)
+    /// Count of closed traces the lowerer compiled.
     pub compiled: u64,
-    /// P12-S2.C — count of closed traces the lowerer rejected.
-    /// (Was `Vm::trace_compile_failed_count`.)
+    /// Count of closed traces the lowerer rejected.
     pub compile_failed: u64,
-    /// P12-S3 — number of trace dispatch entries. (Was
-    /// `Vm::trace_dispatched_count`.)
+    /// Number of trace dispatch entries.
     pub dispatched: u64,
-    /// P12-S3 — number of trace entries that came back with
-    /// `jit_pending_err` set. (Was `Vm::trace_deopt_count`.)
+    /// Number of trace entries that came back with
+    /// `jit_pending_err` set.
     pub deopt: u64,
-    /// P15-A v1 — count of side-trace recordings the dispatcher
-    /// started. (Was `Vm::trace_side_trace_started_count`.)
+    /// Count of side-trace recordings the dispatcher
+    /// started.
     pub side_trace_started: u64,
-    /// P15-A v2-A — count of side-trace recordings that closed
-    /// AND reached the lowerer with a non-None outcome. (Was
-    /// `Vm::trace_side_trace_compiled_count`.)
+    /// Count of side-trace recordings that closed
+    /// AND reached the lowerer with a non-None outcome.
     pub side_trace_compiled: u64,
-    /// P15-A v2-C-A5-C — count of side traces that compiled but
-    /// failed the shape-match gate. (Was
-    /// `Vm::trace_side_trace_shape_mismatch_count`.)
+    /// Count of side traces that compiled but
+    /// failed the shape-match gate.
     pub side_trace_shape_mismatch: u64,
-    /// P12-S5-A — tally of NewTable sites flagged Sinkable. (Was
-    /// `Vm::trace_sinkable_seen_count`.)
+    /// Tally of NewTable sites flagged Sinkable.
     pub sinkable_seen: u64,
-    /// P14-S14-B v1 — cumulative count of `BufferState::Bufferable`
-    /// accumulator sites. (Was `Vm::trace_accum_bufferable_seen_count`.)
+    /// Cumulative count of `BufferState::Bufferable`
+    /// accumulator sites.
     pub accum_bufferable_seen: u64,
-    /// P12-S5-B — tally of Sinkable sites that took the sunk-emit
-    /// path. (Was `Vm::trace_sunk_alloc_count`.)
+    /// Tally of Sinkable sites that took the sunk-emit
+    /// path.
     pub sunk_alloc: u64,
-    /// P12-S5-C — tally of materialise-helper emit sites. (Was
-    /// `Vm::trace_materialize_emit_count`.)
+    /// Tally of materialise-helper emit sites.
     pub materialize_emit: u64,
-    /// v2.0 Stage 7 polish 6 fire experiment — number of compiled
+    /// Number of compiled
     /// traces whose `CompiledTrace.per_exit_inline.len() > 0` (depth>0
     /// inlined cmp side-exits were emitted). Probed via
     /// `Vm::trace_per_exit_inline_compiled_count`. Together with
     /// `per_exit_inline_dispatchable`, lets a diag distinguish
     /// "recorder + lowerer can produce inline side-exits" from
     /// "compiled trace is dispatchable enough to exercise the AOT
-    /// polish 6 chain-reloc + deploy-resolver path".
+    /// inline-chain reloc + deploy-resolver path".
     pub per_exit_inline_compiled: u64,
-    /// v2.0 Stage 7 polish 6 fire experiment — subset of
+    /// Subset of
     /// `per_exit_inline_compiled` that ALSO has `dispatchable == true`.
     /// This is the count of traces that would actually exercise the
-    /// AOT polish 6 inline-chain reloc + deploy-resolver path. Probed
+    /// AOT inline-chain reloc + deploy-resolver path. Probed
     /// via `Vm::trace_per_exit_inline_dispatchable_count`.
     pub per_exit_inline_dispatchable: u64,
-    /// P12-S7-A — total `Op::Closure` ops the trace JIT lowered to
-    /// `luna_jit_op_closure` helper calls. (Was
-    /// `Vm::trace_closure_emit_count`.)
+    /// Total `Op::Closure` ops the trace JIT lowered to
+    /// `luna_jit_op_closure` helper calls.
     pub closure_emit: u64,
-    /// P13-S13-G v2.5 — every compiled trace's `dispatch_off_reason`
-    /// pushed at compile time. (Was `Vm::trace_dispatch_off_reasons`.)
+    /// Every compiled trace's `dispatch_off_reason`
+    /// pushed at compile time.
     pub dispatch_off_reasons: Vec<&'static str>,
-    /// P13-S13-G v2.6 — every `try_compile_trace_with_options` None
-    /// return's last checkpoint. (Was
-    /// `Vm::trace_compile_failed_reasons`.)
+    /// Every `try_compile_trace_with_options` None
+    /// return's last checkpoint.
     pub compile_failed_reasons: Vec<&'static str>,
-    /// P13-S13-H — every closed trace's `(is_call_triggered, ops_len)`.
-    /// (Was `Vm::trace_closed_lens`.)
+    /// Every closed trace's `(is_call_triggered, ops_len)`.
     pub closed_lens: Vec<(bool, usize)>,
-    /// v2.0 Track-R R2 — close-cause hygiene. Single per-reason bucket
+    /// Close-cause counts. Single per-reason bucket
     /// that covers BOTH recorder-side abort/discard outcomes AND
     /// lowerer-side dispatch_off (`dispatchable=false` post-compile)
-    /// outcomes. Pre-R2 the close-cause taxonomy was split across
-    /// `aborted` (u64, no reason label), `closed_lens` (mixes real
-    /// closes and partial-coverage discards), and
-    /// `dispatch_off_reasons` (Vec ordered append, O(N) to count by
-    /// reason). R2 lifts the four known recorder/lowerer close sites
-    /// into this single HashMap via `bump_close_cause` so probes can
-    /// answer "how many of each reason fired" in O(1).
+    /// outcomes, so probes can answer "how many of each reason fired"
+    /// in O(1); `aborted`, `closed_lens` and `dispatch_off_reasons`
+    /// carry no per-reason count.
     ///
     /// Labels currently bumped (see `bump_close_cause` callers):
     /// - `"trace-overflow"` (recorder MAX_TRACE_LEN overflow)
-    /// - `"partial-coverage-discard"` (recorder S13-I cap-not-reached discard)
-    /// - `"self-link-retf-r1"` (lowerer SelfLink-R1 dispatchable=false)
-    /// - `"selflink-yields-to-downrec"` (R3.3+ sub-0 recorder SelfLink
+    /// - `"partial-coverage-discard"` (recorder cap-not-reached discard)
+    /// - `"self-link-retf-r1"` (lowerer self-link dispatchable=false)
+    /// - `"selflink-yields-to-downrec"` (recorder self-link
     ///   trip rerouted to `downrec_close` when `cur_depth >= 2` AND a
-    ///   parent `Op::Call` ancestor exists in `rec.ops`; lifts fib(28)-
-    ///   like shapes off the R1 safety pin onto the R3a/R3b/R3d DownRec
-    ///   lowerer arm — single-candidate guard chain keeps dispatchable=
-    ///   false + `"downrec-stitch-pending"` label until sub-1/2/3/4
-    ///   ship base_var threading)
+    ///   parent `Op::Call` ancestor exists in `rec.ops`; moves fib(28)-
+    ///   like shapes onto the DownRec lowerer arm — a single-candidate
+    ///   guard chain keeps dispatchable=false + the
+    ///   `"downrec-stitch-pending"` label)
     /// - `"length-gate"` / `"InlineAbort-gate"` / `"GetI:inference-fail"`
     ///   / `"GetTable:inference-fail"` / `"GetField:inference-fail"`
     ///   / `"GetTabUp:inference-fail"` / `"GetUpval:not-Closure-use"`
     ///   (every lowerer-side dispatch_off label that already exists
     ///   on `CompiledTrace.dispatch_off_reason`)
     pub close_cause_counts: std::collections::HashMap<&'static str, u64>,
-    /// v2.1 Phase 1I.B — number of times the trace recorder captured
+    /// Number of times the trace recorder captured
     /// a [`crate::jit::trace_types::FieldIcSnapshot`] for the first
     /// eligible `Op::GetField` site under `LUNA_JIT_FIELD_IC=1`.
     /// Bumped exactly once per recording (the snapshot field is
     /// `Option<_>` so subsequent GetFields short-circuit). 0 on the
-    /// env-default path. Probed by the Phase 1I.B opt-in fire test
-    /// (`tests/phase_1i_b_ic_scaffold.rs`).
+    /// env-default path.
     pub field_ic_snapshot_captured: u64,
-    /// v2.0 Track-R R3b — number of compiled traces whose
+    /// Number of compiled traces whose
     /// `CompiledTrace.downrec_link` is `Some(_)`. Bumped at trace
     /// finalisation alongside the `dispatch_off_reasons.push` site
     /// (`exec.rs` close handler) when the lowerer's
     /// `downrec_idx_opt` arm emitted the stitch sentinel + caller-pc
-    /// guard scaffold. Probe surface for the R3b regression test
-    /// (`r3b_lowerer_stitch_sentinel`) and R3d's e2e smoke. R3b
-    /// keeps `CompiledTrace.dispatchable = false` even when this
-    /// counter bumps; R3d will lift `dispatchable` after R3c wires
-    /// the dispatcher consumer.
+    /// guard scaffold.
     pub downrec_link_compiled: u64,
-    /// v2.0 Track-R R3c — number of times the dispatcher's
+    /// Number of times the dispatcher's
     /// `is_downrec_sentinel` arm in
     /// `crates/luna-core/src/vm/exec.rs` fired with the caller-pc
     /// guard reporting a HIT (saved-PC at `reg_state[window_size]`
@@ -299,36 +262,28 @@ pub struct JitCounters {
     /// `SIDE_SENT_DOWNREC_CODE` sentinel and the dispatcher fed the
     /// trace's `head_pc` back to the interpreter loop so the
     /// admit-by-`downrec_link` gate re-enters the trace (bounded by
-    /// the dispatcher's `stitch_depth_remaining` checkpoint). R3c's
-    /// regression test (`r3c_dispatcher_stitch_dispatch`) gates on
-    /// `downrec_dispatched > 0 OR downrec_deopt > 0`.
+    /// the dispatcher's `stitch_depth_remaining` checkpoint).
     pub downrec_dispatched: u64,
-    /// v2.0 Track-R R3c — number of times the dispatcher's
+    /// Number of times the dispatcher's
     /// `is_downrec_sentinel` arm observed a guard MISS (the trace
     /// invocation returned with `downrec_link.is_some()` but the
     /// returned sentinel was NOT [`SIDE_SENT_DOWNREC_CODE`] — i.e.
     /// the lowerer's `deopt_blk` arm fired, returning `head_pc` via
     /// the GLOBAL sentinel). Bumped on the dispatcher side via the
-    /// post-invoke check so R3c can measure caller-pc guard
-    /// miss-rate via `downrec_dispatched + downrec_deopt` without
-    /// lifting `dispatchable = true`. R3d uses this to decide
-    /// whether the lifted `dispatchable = true` would flip perf
-    /// negative (R3 prep §7.1 mitigation).
+    /// post-invoke check so the caller-pc guard miss-rate can be
+    /// measured via `downrec_dispatched + downrec_deopt`.
     pub downrec_deopt: u64,
-    /// v2.0 Track-R R3d — number of compiled traces whose
+    /// Number of compiled traces whose
     /// `CompiledTrace.downrec_multi_way_count >= 2`. Bumped at the
     /// close handler in `crates/luna-core/src/vm/exec.rs` alongside
-    /// `downrec_link_compiled`. Probe surface for R3d's regression
-    /// test (`r3d_multi_way_guard_dispatch`) to assert the lowerer's
-    /// `dispatchable = true` lift triggered at least once. R3c's
-    /// single-CMP shape never bumps this counter; it always reports
-    /// `0`. Independent of the dispatcher's `downrec_dispatched` /
+    /// `downrec_link_compiled`. A single-CMP guard never bumps this
+    /// counter. Independent of the dispatcher's `downrec_dispatched` /
     /// `downrec_deopt` counters, which measure runtime guard hit-rate.
     pub multi_way_guard_emitted: u64,
 }
 
 impl JitCounters {
-    /// v2.0 Track-R R2 — bump the close-cause bucket for `reason`.
+    /// Bump the close-cause bucket for `reason`.
     /// Mirrors the existing per-site pattern (`aborted += 1`,
     /// `dispatch_off_reasons.push(reason)`) but with O(1) per-reason
     /// access via a `HashMap`. Single source of truth for the
@@ -342,13 +297,9 @@ impl JitCounters {
 
 impl JitState {
     /// Build an inert `JitState` whose backends are
-    /// [`crate::jit::NullJitBackend`]. `enabled = true` (preserves
-    /// v1.0 surface behavior); **`trace_enabled = true`** (v1.3 TA3 flip
-    /// after Phase P2A Path B math.min/max fold landed `trace_dispatched_count
-    /// 0 → 200/200` on token_bucket and Linux taskset perf-gate confirmed
-    /// `redis_lua_shape ≥ 1.0×` baseline). Embedders that want the
-    /// v1.2 interp-only default call `vm.set_trace_jit_enabled(false)`
-    /// explicitly.
+    /// [`crate::jit::NullJitBackend`], with `enabled = true` and
+    /// `trace_enabled = true`. Embedders that want an interp-only
+    /// Vm call `vm.set_trace_jit_enabled(false)` explicitly.
     /// `Vm::new_inner` calls this; the `luna` crate's
     /// `Vm::new_minimal_with_jit` then swaps the backends to
     /// `CraneliftBackend` via `Vm::install_jit_backend`.
@@ -358,7 +309,7 @@ impl JitState {
             trace_enabled: true,
             trace_hot_threshold: crate::jit::trace::TRACE_HOT_THRESHOLD,
             call_hot_threshold: crate::jit::trace::CALL_HOT_THRESHOLD,
-            p16_self_link_enabled: false,
+            self_link_enabled: false,
             active_trace: None,
             recording_frame_base: 0,
             max_depth_seen: 0,

@@ -1,6 +1,5 @@
-//! The interpreter. Dispatch is a plain match over opcodes (the P10 ceiling
-//! pass owns dispatch optimization). Lua→Lua calls share one loop and never
-//! recurse the Rust stack; only native↔Lua boundaries do (e.g. pcall).
+//! The interpreter. Dispatch is a plain match over opcodes. Lua→Lua calls
+//! share one loop and never recurse the Rust stack; only native↔Lua boundaries do (e.g. pcall).
 //!
 //! Varargs follow 5.5 semantics: a vararg call materializes a vararg table
 //! (fields 1..n plus "n") kept in the function's own stack slot; `...`
@@ -41,7 +40,7 @@ use crate::vm::isa::{Inst, Op};
 /// must_be_send::<luna_core::Vm>(); // error[E0277]: `Vm` cannot be sent between threads safely
 /// ```
 ///
-/// A future `feature = "send"` (post-v1.1 sprint) will gate an
+/// A future `feature = "send"` will gate an
 /// opt-in `Arc<RwLock<T>>` mode with a hard ≤8% perf regression
 /// budget.
 pub struct Vm {
@@ -59,12 +58,11 @@ pub struct Vm {
     /// `frames` rather than in `Frame` because `Frame` is public with all
     /// fields public, where a new field is a breaking change.
     pub(crate) frame_ccmt: Vec<u8>,
-    /// P17-D Week 1 shadow — frames_top mirrors `self.frames.len()`.
-    /// Synced on every push/pop in `frames_push_sync`/`frames_pop_sync`
-    /// helpers (debug-asserted on use). NOT consumed by readers yet;
-    /// week 1 is pure scaffold. Week 2-N migrations replace readers
-    /// one slice at a time, then remove `frames: Vec<CallFrame>` in
-    /// favour of a flat `[CallFrame; MAX_FRAMES]` indexed by frames_top.
+    /// Shadow of `self.frames.len()`. Synced on every push/pop in the
+    /// `frames_push_sync`/`frames_pop_sync` helpers (debug-asserted on
+    /// use). Not consumed by readers yet; it is scaffolding for replacing
+    /// `frames: Vec<CallFrame>` with a flat `[CallFrame; MAX_FRAMES]`
+    /// indexed by frames_top.
     frames_top: u32,
     /// open upvalues, sorted ascending by stack slot
     open_upvals: Vec<(u32, Gc<Upvalue>)>,
@@ -73,7 +71,7 @@ pub struct Vm {
     /// logical stack top for multi-result sequences
     pub(crate) top: u32,
     globals: Gc<Table>,
-    /// shared metatable for all strings (populated by the string lib, P04)
+    /// shared metatable for all strings (populated by the string lib)
     /// per-basic-type metatables (PUC luaT): indexed by `type_mt_slot`
     /// (0 nil, 1 boolean, 2 number, 3 string, 4 function); tables carry their
     /// own. Settable via debug.setmetatable.
@@ -117,7 +115,7 @@ pub struct Vm {
     /// root for the duration (a handler may trigger collection)
     closing_err: Option<Value>,
     /// the coroutine whose context is currently live in the fields above;
-    /// `None` while the main thread runs (P05)
+    /// `None` while the main thread runs
     pub(crate) current: Option<Gc<crate::runtime::Coro>>,
     /// the main thread's saved execution context while a coroutine runs
     main_ctx: Option<SavedCtx>,
@@ -173,25 +171,15 @@ pub struct Vm {
     /// keep the older raise semantics).
     pub(crate) warn_state: WarnState,
     pub(crate) warn_buf: Vec<u8>,
-    /// P09 embedding cooperative budget: a per-Vm tick counter that the run
+    /// Embedding cooperative budget: a per-Vm tick counter that the run
     /// loop decrements once per dispatch turn. When it hits zero the loop
     /// raises a catchable "instruction budget exceeded" error so the embedder
     /// can yield control back to its caller (short-script eval, game
     /// frame budgets). `None` = unbounded; reset on each call via
     /// `set_instr_budget`.
     pub(crate) instr_budget: Option<i64>,
-    // v1.1 A2 — JIT-specific fields moved to `JitState` sidecar; see
-    // `self.jit` below + `crate::vm::jit_state` for field docs.
-    // (Was: jit_enabled here.)
-    // v1.1 A2 — was: trace_jit_enabled (moved to JitState).
-    // v1.1 A2 — was: p16_self_link_enabled (moved to JitState).
-    // v1.1 A2 — was: active_trace, recording_frame_base, trace_max_depth_seen,
-    // trace_closed_count, trace_aborted_count, trace_inline_abort_count,
-    // trace_dispatch_off_reasons, trace_compile_failed_reasons, trace_closed_lens,
-    // trace_compiled_count, trace_compile_failed_count, trace_dispatched_count,
-    // trace_deopt_count, trace_side_trace_{started,compiled,shape_mismatch}_count,
-    // trace_{sinkable,accum_bufferable}_seen_count, trace_{sunk_alloc,
-    // materialize_emit,closure_emit}_count — all moved to JitState.
+    // JIT-specific state lives in the `JitState` sidecar; see `self.jit`
+    // below and `crate::vm::jit_state` for field docs.
     /// Bytecode-loading gate. Default `true`. Sandbox embedders should
     /// call `set_bytecode_loading(false)` so `load`/`loadstring` reject
     /// precompiled chunks (which bypass the parser's depth / opcode
@@ -202,8 +190,7 @@ pub struct Vm {
     /// a strictly larger trust surface than luna's own dump format
     /// (third-party toolchain bugs, malformed chunks, unknown opcode
     /// shapes). When `true`, the loader routes `\x1bLua\x{51..55}` inputs
-    /// through the per-dialect PUC translators in `crate::vm::dump::puc`
-    /// (Phase LB Wave 2 — currently returns "not yet implemented" stubs).
+    /// through the per-dialect PUC translators in `crate::vm::dump::puc`.
     /// Embedder toggles via `set_puc_bytecode_loading`.
     pub(crate) puc_bytecode_loading: bool,
     /// Byte budget for source fed into `load` / `loadstring` / `Vm::load`.
@@ -213,7 +200,7 @@ pub struct Vm {
     /// `not enough memory` error before the host allocator is asked to
     /// hold the next chunk. Defends against `heavy.lua::loadrep`-style
     /// 7 GB+ feeder loops that would otherwise SIGSEGV when `Vec::push`
-    /// crosses `isize::MAX` or the host runs out of RAM. Tracked at
+    /// crosses `isize::MAX` or the host runs out of RAM.
     /// Embedders that genuinely need to load > 256 MiB sources widen the
     /// cap via [`Vm::set_loader_input_budget`].
     pub(crate) loader_input_budget: usize,
@@ -312,36 +299,28 @@ pub struct Vm {
     /// Index into `running_natives` where the running thread's own natives
     /// begin; the ones below belong to the threads that resumed it.
     pub(crate) natives_base: usize,
-    // v1.1 A2 — was: jit_pending_err, jit_reg_state_buf, jit_str_buf_pool,
-    // jit_str_buf_pool_cap, jit_entry_tags_buf, chunk_compiler,
-    // trace_compiler — all moved to JitState. See `jit` below.
-    /// v1.1 A2 — JIT sidecar. Always present (never `Option`); inert
+    /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
     /// [`crate::jit::NullJitBackend`]. See [`crate::vm::jit_state`].
     ///
     /// `#[doc(hidden)] pub` so the `luna` crate's
     /// `extern "C"` JIT helpers can write `vm.jit.pending_err`
-    /// directly (same pattern as the pre-A2 `pub Vm::jit_pending_err`
-    /// field). Not part of the embedder-facing API surface.
+    /// directly. Not part of the embedder-facing API surface.
     #[doc(hidden)]
     pub jit: crate::vm::jit_state::JitState,
 
-    /// B12 host roots — append-only `Vec<Value>` traced as an extra
-    /// GC root set. `Lua` facade handles (`LuaFunction`, `LuaTable`,
-    /// `LuaRoot`) hold indices into this vector so the underlying
-    /// `Gc<T>` stays alive across `eval` calls / yield boundaries.
-    ///
-    /// v1.1 strategy: append-only with explicit `unpin_all` / new Vm.
-    /// Slot recycling lands in Phase 3 alongside B8 LuaUserdata, when
-    /// the trade-offs between `Drop` plumbing and append-only memory
-    /// growth have a richer ergonomics envelope to live in.
+    /// Host roots — a `Vec<Value>` traced as an extra GC root set.
+    /// `Lua` facade handles (`LuaFunction`, `LuaTable`, `LuaRoot`) hold
+    /// indices into this vector so the underlying `Gc<T>` stays alive
+    /// across `eval` calls / yield boundaries. Freed slots are recycled
+    /// through `host_roots_free`.
     pub(crate) host_roots: Vec<crate::vm::host_roots::HostRootSlot>,
-    /// v1.3 Phase SR — recycled-slot index pool. `pin_host` pops the
+    /// Recycled-slot index pool. `pin_host` pops the
     /// back if non-empty, else extends `host_roots`. Generation
     /// overflow at `u32::MAX` retires the slot (NOT pushed here).
     pub(crate) host_roots_free: Vec<u32>,
 
-    /// v2.1 — GC-rooted scratch stack for `table.sort` (and any other
+    /// GC-rooted scratch stack for `table.sort` (and any other
     /// builtin that needs a Rust-side `Vec<Value>` to outlive a user
     /// callback). Each entry is one in-flight working buffer; `gc_roots`
     /// extends with every contained `Value` so a `collectgarbage()`
@@ -351,7 +330,7 @@ pub struct Vm {
     /// regression).
     pub(crate) sort_scratch: Vec<Vec<Value>>,
 
-    /// v1.3 Phase ML — MacroLua compile-time macro registry.
+    /// MacroLua compile-time macro registry.
     /// Pre-populated with built-in macros (`@quote` / `@unquote` /
     /// `@if` / `@gensym`) at construction time when `version ==
     /// LuaVersion::MacroLua`; embedders register custom macros via
@@ -359,7 +338,7 @@ pub struct Vm {
     /// between lexing and parsing (only when `is_macro_lua()`).
     pub(crate) macro_registry: crate::frontend::macro_expander::MacroRegistry,
 
-    /// v1.2 Track B — per-Vm cache of `Gc<Table>` metatables keyed
+    /// Per-Vm cache of `Gc<Table>` metatables keyed
     /// by `TypeId::of::<T>()` for embedder types implementing
     /// [`crate::vm::userdata_trait::LuaUserdata`]. Populated lazily by
     /// [`Vm::register_userdata`]; metatables are pinned via
@@ -368,42 +347,40 @@ pub struct Vm {
     pub(crate) userdata_metatables:
         std::collections::HashMap<std::any::TypeId, Gc<crate::runtime::table::Table>>,
 
-    /// B6 — classification of the most recent error raised on this Vm.
+    /// Classification of the most recent error raised on this Vm.
     /// Embedders read via [`Vm::error_kind`]; the dispatcher sets it
     /// at well-known sites (syntax errors, instr-budget trips, native
     /// callback errors, type errors).
     pub(crate) last_error_kind: crate::vm::error::LuaErrorKind,
 
-    /// B6 — `(source_name, line)` of the most recent error. Set by the
+    /// `(source_name, line)` of the most recent error. Set by the
     /// dispatcher / lexer / parser; cleared when a new call_value
     /// enters cleanly.
     pub(crate) last_error_source: Option<(String, u32)>,
 
-    /// v1.1 B10 Stage 1 — when `true`, `instr_budget` exhaustion in
+    /// When `true`, `instr_budget` exhaustion in
     /// the dispatcher hot loop yields cooperatively (sets
     /// [`Vm::host_yield_pending`] + returns a sentinel `Err` walked up
     /// to `EvalFuture::poll`) instead of returning a real
     /// "instruction budget exceeded" error. Set by [`Vm::eval_async`]
     /// for the duration of the future; restored to `false` on
     /// `Poll::Ready`. The sync `Vm::eval` / `Vm::call_value` paths
-    /// leave it `false` so v1.0 behavior is preserved exactly.
+    /// leave it `false` so budget exhaustion stays a real error there.
     pub(crate) async_mode: bool,
 
-    /// v1.1 B10 Stage 1 — host waker cloned by `EvalFuture::poll`
-    /// before driving a slice. The dispatcher itself does not call it
-    /// (the future's poll loop does `wake_by_ref` after observing
-    /// `BudgetExhausted`), but storing the waker keeps the door open
-    /// for Stage 2 async natives to wake the host directly from a
-    /// helper future.
+    /// Host waker cloned by `EvalFuture::poll` before driving a slice.
+    /// The dispatcher itself does not call it (the future's poll loop
+    /// does `wake_by_ref` after observing `BudgetExhausted`); it is kept
+    /// so async natives can wake the host directly from a helper future.
     pub(crate) async_waker: Option<std::task::Waker>,
 
-    /// v1.1 B10 Stage 1 — per-poll opcode quota loaded into
+    /// Per-poll opcode quota loaded into
     /// `instr_budget` at the start of each `EvalFuture::poll` slice.
-    /// Default 10_000 (RFC §D5). Tunable via
+    /// Default 10_000. Tunable via
     /// [`Vm::set_async_slice`].
     pub(crate) async_slice_size: i64,
 
-    /// v1.1 B10 Stage 1 — set by the dispatcher when an async-mode
+    /// Set by the dispatcher when an async-mode
     /// budget exhaustion fires; checked by `exec_with` (so the
     /// sentinel propagates without `unwind` running, mirroring
     /// `yielding.is_some()`) and by `call_value_impl` (so the call
@@ -411,7 +388,7 @@ pub struct Vm {
     /// after translating it to `DispatchOutcome::BudgetExhausted`.
     pub(crate) host_yield_pending: bool,
 
-    /// v1.1 B10 Stage 2 — set by the dispatcher's native-call path
+    /// Set by the dispatcher's native-call path
     /// when an async-marked [`NativeClosure`] is invoked under
     /// `async_mode`. The Vm pauses the dispatcher (same sentinel-Err
     /// mechanism as `host_yield_pending` — see `exec_with` +
@@ -423,7 +400,7 @@ pub struct Vm {
     pub(crate) pending_async_native_fut:
         Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<u32, LuaError>>>>>,
 
-    /// v1.1 B10 Stage 2 — companion to `pending_async_native_fut`:
+    /// Companion to `pending_async_native_fut`:
     /// the `(func_slot, nargs, nresults, gc_top)` quad needed to
     /// commit the future's eventual `Ok(nret)` back into the calling
     /// frame's expected result slots. Recorded by the dispatcher;
@@ -432,7 +409,7 @@ pub struct Vm {
     pub(crate) pending_async_native_ctx: Option<AsyncNativeCallCtx>,
 }
 
-/// v1.1 B10 Stage 2 — call-site context an in-flight async native
+/// Call-site context an in-flight async native
 /// needs preserved across the cooperative-yield boundary.
 ///
 /// The dispatcher records this when it routes a `NativeClosure` with
@@ -444,15 +421,15 @@ pub struct Vm {
 pub(crate) struct AsyncNativeCallCtx {
     pub func_slot: u32,
     /// Recorded for parity with the sync native-call path's
-    /// `native_nresults`/`gc_top` bookkeeping; reserved for Stage 3+
-    /// hook firing + traceback shaping. Not yet read in Stage 2.
+    /// `native_nresults`/`gc_top` bookkeeping; reserved for hook
+    /// firing + traceback shaping. Not read yet.
     #[allow(dead_code)]
     pub nargs: u32,
     pub nresults: i32,
-    /// Recorded for Stage 3+ traceback + GC-root-window auditing.
-    /// Stage 2 reads `Vm.gc_top` directly post-resume, so this is
-    /// unread today; carried so an Stage 3 audit can confirm the
-    /// pre-suspend root window matches the post-resume one.
+    /// Recorded for traceback + GC-root-window checks. The resume path
+    /// reads `Vm.gc_top` directly, so this is unread today; carried so a
+    /// check can confirm the pre-suspend root window matches the
+    /// post-resume one.
     #[allow(dead_code)]
     pub gc_top: u32,
 }
@@ -463,7 +440,7 @@ pub(crate) struct AsyncNativeCallCtx {
 pub struct HookState {
     /// the hook function (`None` when no hook is installed)
     pub func: Option<Value>,
-    /// v1.1 B11 — Rust-side debug hook. Fires alongside the Lua hook
+    /// Rust-side debug hook. Fires alongside the Lua hook
     /// (Rust first); both can be installed simultaneously, but most
     /// embedders pick one.
     pub rust_func: Option<RustDebugHook>,
@@ -481,7 +458,7 @@ pub struct HookState {
     pub count_left: i64,
 }
 
-/// Rust-side debug hook callback (B11). Receives the `Vm` plus a
+/// Rust-side debug hook callback. Receives the `Vm` plus a
 /// classified event. The callback runs synchronously in the
 /// dispatcher; the hook flag (`in_hook`) is set for its duration so
 /// hook recursion is suppressed.
@@ -655,8 +632,8 @@ fn mm_event_name(op: crate::vm::isa::Op) -> Option<&'static str> {
 /// PUC MAXTAGLOOP (5.3+): bound on `__index`/`__newindex` chains.
 const MAX_TAG_LOOP: u32 = 2000;
 /// PUC `MAXCCMT`: bound on a `__call` metamethod chain (lvm.c). 200 chains
-/// is more than any reasonable program needs and matches PUC 5.4/5.5; the
-/// earlier `15` here was tight enough to fire on calls.lua :194 (N=20).
+/// is more than any reasonable program needs and matches PUC 5.4/5.5; a
+/// bound of `15` is tight enough to fire on calls.lua :194 (N=20).
 const MAX_CCMT: u32 = 200;
 /// PUC LUAI_MAXCCALLS analogue: native↔Lua nesting bound.
 pub(crate) const MAX_C_DEPTH: u32 = 200;
@@ -750,23 +727,21 @@ impl Drop for Vm {
     }
 }
 
-// P17-D Week 1 scaffold — split-borrow free fn helpers for frames
-// push/pop with shadow counter `frames_top: u32`. Free fns (not Vm
-// methods) so callers can pass `&mut self.frames` + `&mut self.frames_top`
-// as split borrows, allowing other `&mut self.field` reads inside the
-// CallFrame construction (e.g. `std::mem::take(&mut self.pending_tm)`).
+// Split-borrow free fn helpers for frames push/pop with shadow counter
+// `frames_top: u32`. Free fns (not Vm methods) so callers can pass
+// `&mut self.frames` + `&mut self.frames_top` as split borrows, allowing
+// other `&mut self.field` reads inside the CallFrame construction (e.g.
+// `std::mem::take(&mut self.pending_tm)`).
 //
-// Week 1 has NO readers yet; the shadow just stays in sync + asserts.
-// Week 2 begins migrating hot-path readers (materialize_frames helper)
-// to consume `frames_top` and a flat array in place of the Vec.
+// The shadow has no readers yet; it just stays in sync + asserts.
 #[inline(always)]
 fn frames_push_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32, cf: CallFrame) {
     frames.push(cf);
     // Shadow maintenance is debug-only: release builds skip the
-    // increment + assertion entirely. The shadow's purpose in Week 1
-    // is to VERIFY the assumed invariant (frames_top == frames.len())
-    // across all push/pop sites; once Week 2+ migrates readers to
-    // consume the shadow, release will run the increment unconditionally.
+    // increment + assertion entirely. While nothing reads the shadow,
+    // its purpose is to VERIFY the assumed invariant
+    // (frames_top == frames.len()) across all push/pop sites; once readers
+    // consume it, release must run the increment unconditionally.
     #[cfg(debug_assertions)]
     {
         *frames_top += 1;
@@ -799,7 +774,7 @@ fn frames_pop_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32) -> Option<
     r
 }
 
-/// v1.3 Phase AOT Stage 7 sub-piece 4 — one-time env-var read for
+/// One-time env-var read for
 /// `LUNA_AOT_PROBE`. Returns `true` iff the env var is set to any
 /// non-empty value. The result is cached in a `OnceLock` so the
 /// dispatcher's hot path pays a single atomic load per process. Off
@@ -815,12 +790,12 @@ fn jit_probe_enabled() -> bool {
 }
 
 impl Vm {
-    /// P17-D Week 1 — re-sync `frames_top` after a bulk `frames: Vec`
+    /// Re-sync `frames_top` after a bulk `frames: Vec`
     /// swap (take_ctx, put_ctx, load_coro_ctx). Must be called after
     /// the Vec replacement to keep the shadow valid.
     #[inline(always)]
     fn frames_resync(&mut self) {
-        // Debug-only Week 1 — see `frames_push_sync` comment.
+        // Debug-only — see `frames_push_sync` comment.
         #[cfg(debug_assertions)]
         {
             self.frames_top = self.frames.len() as u32;
@@ -828,12 +803,11 @@ impl Vm {
     }
 
     // ====================================================================
-    // P17-D v2 Phase 2 — stack-inline frame metadata accessors (unused).
+    // Stack-inline frame metadata accessors (unused).
     //
     // These methods read/write the LJ_FR2 marker slots at `stack[base-2]`
-    // (closure GCRef) and `stack[base-1]` (FrameMarker as i64). Phase 2
-    // ships them WITHOUT call-site usage; Phase 3 migrates push/pop
-    // sites to consume them. Phase 4 removes Vec<CallFrame>.
+    // (closure GCRef) and `stack[base-1]` (FrameMarker as i64). No call
+    // site uses them yet.
     //
     // Preconditions (debug-asserted):
     // - base >= 2 (slots base-2 and base-1 must exist below the frame)
@@ -848,7 +822,7 @@ impl Vm {
     /// The caller must ensure `base >= 2` and the slot is within the
     /// stack's allocated range.
     #[inline]
-    #[allow(dead_code)] // Phase 2 — consumer is Phase 3.
+    #[allow(dead_code)] // no consumer yet
     fn write_frame_closure(&mut self, base: u32, cl: crate::runtime::Gc<LuaClosure>) {
         debug_assert!(
             base >= 2,
@@ -864,7 +838,7 @@ impl Vm {
     /// Returns `None` if the slot doesn't hold a closure (caller is
     /// expected to treat that as a corrupt frame).
     ///
-    /// P17-D v2 Direction E2 — uses E1's [`Value::tag_byte`] fast-path
+    /// Uses the [`Value::tag_byte`] fast-path
     /// to avoid the enum-match cost on the hot path. Tag check via
     /// 1-byte load + branch + `as_closure_unchecked` payload load.
     #[inline]
@@ -898,7 +872,7 @@ impl Vm {
     /// corrupt frame); the kind tag itself may still be invalid, in
     /// which case [`FrameMarker::kind`] returns `None` on the result.
     ///
-    /// P17-D v2 Direction E2 — uses E1's [`Value::tag_byte`] fast-path
+    /// Uses the [`Value::tag_byte`] fast-path
     /// for the tag check + `as_int_unchecked` for the payload load.
     #[inline]
     #[allow(dead_code)]
@@ -958,7 +932,7 @@ impl Vm {
             main_coro: None,
             // PUC 5.4+ boots in GENERATIONAL mode (the first
             // `collectgarbage("generational")` reports "generational"
-            // as the previous mode — v2.14 dialect fixture 5.4/549;
+            // as the previous mode on stock lua5.4;
             // 5.5 behaves the same, probed against lua5.5). luna's
             // collector is a single incremental engine either way;
             // this field is the MODE REPORT the stdlib exposes.
@@ -1005,14 +979,14 @@ impl Vm {
             running_natives: Vec::new(),
             running_native_acts: Vec::new(),
             natives_base: 0,
-            // v1.1 A2 — JIT-specific state factored into `JitState`
+            // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
             // `install_jit_backend` / `luaL_newstate` swap in
             // `CraneliftBackend` for callers that want JIT acceleration.
             jit: crate::vm::jit_state::JitState::with_null_backend(),
-            // v1.1 B12 — host roots ticket pool for the `Lua` facade.
+            // host roots ticket pool for the `Lua` facade
             host_roots: Vec::new(),
-            // v1.3 Phase ML — MacroLua registry. Pre-populated with
+            // MacroLua registry. Pre-populated with
             // built-ins (`@quote` / `@unquote` / `@if` / `@gensym`)
             // when this Vm is constructed under `LuaVersion::MacroLua`.
             macro_registry: if version == LuaVersion::MacroLua {
@@ -1022,22 +996,22 @@ impl Vm {
             },
             host_roots_free: Vec::new(),
             sort_scratch: Vec::new(),
-            // v1.2 Track B — LuaUserdata trait sugar's per-Vm
+            // LuaUserdata trait sugar's per-Vm
             // metatable cache. Populated lazily by register_userdata.
             userdata_metatables: std::collections::HashMap::new(),
-            // v1.1 B6 — error classification metadata. Defaults to
+            // Error classification metadata. Defaults to
             // Runtime; set at known sites (syntax / budget trip /
             // native error / type error).
             last_error_kind: crate::vm::error::LuaErrorKind::default(),
             last_error_source: None,
-            // v1.1 B10 Stage 1 — async embedder fields. Defaults
-            // preserve sync behavior bit-for-bit (`async_mode = false`
-            // means the budget hot loop errors out exactly as v1.0).
+            // Async embedder fields. Defaults preserve sync behavior
+            // bit-for-bit (`async_mode = false` means the budget hot loop
+            // errors out instead of yielding).
             async_mode: false,
             async_waker: None,
             async_slice_size: 10_000,
             host_yield_pending: false,
-            // v1.1 B10 Stage 2 — pending async-native state. Empty by
+            // Pending async-native state. Empty by
             // default; populated only by the dispatcher when an
             // async-marked NativeClosure is invoked under async_mode.
             pending_async_native_fut: None,
@@ -1054,7 +1028,7 @@ impl Vm {
         vm
     }
 
-    /// P09 embedding: build a Vm with no standard libraries loaded. Embedders
+    /// Build a Vm with no standard libraries loaded. Embedders
     /// that want a sandbox (Redis-style scripts, in-game scripting with
     /// a curated API) call this and then `open_base` / `open_math` / etc.
     /// selectively. The Vm is otherwise fully initialized (main coroutine,
@@ -1070,7 +1044,7 @@ impl Vm {
         vm
     }
 
-    /// v1.1 A1 Session C — install a caller-supplied JIT backend. The
+    /// Install a caller-supplied JIT backend. The
     /// `luna` crate uses this to swap in its `CraneliftBackend`; tests
     /// or third-party backends pass their own [`crate::jit::IntChunkCompiler`] /
     /// [`crate::jit::TraceCompiler`] implementations. Re-installing on a Vm whose
@@ -1090,13 +1064,12 @@ impl Vm {
         self.jit.trace_compiler = Box::new(trace);
     }
 
-    /// v2.0 Track J sub-step J-B — install a caller-supplied JIT
+    /// Install a caller-supplied JIT
     /// storage holder. Default is [`crate::jit::NullJitStorage`];
     /// the `luna_jit` crate's `install_default_jit` pairs this with
     /// `install_jit_backend(CraneliftBackend, CraneliftBackend)` to
     /// also install a fresh `CraneliftJitStorage`. Storage holds
-    /// the per-`Vm` JIT cache + handle collections that used to be
-    /// `thread_local!`s in `luna_jit::jit_backend`.
+    /// the per-`Vm` JIT cache + handle collections.
     ///
     /// Idempotency: re-installing storage on a Vm that already
     /// holds compiled-trace pointers WILL evict their owners (the
@@ -1109,12 +1082,11 @@ impl Vm {
         self.jit.storage = Box::new(storage);
     }
 
-    /// v1.1 A1 Session A — install the no-op JIT backend. `try_compile`
+    /// Install the no-op JIT backend. `try_compile`
     /// reports "skipped" so every closure stays on the interpreter
     /// path, and the trace recorder's compile attempt always returns
     /// `None`. Intended for tests that want to verify the trait
-    /// boundary works in a JIT-free configuration, and for the future
-    /// `luna-core` build path that ships without Cranelift.
+    /// boundary works in a JIT-free configuration.
     ///
     /// Calling this on a Vm whose closures already populated
     /// `Proto.jit: JitProtoState::Compiled` does NOT evict those
@@ -1140,7 +1112,7 @@ impl Vm {
         // PUC 5.2 introduced `bit32`; 5.3 retired it in the manual BUT
         // the stock 5.3 build ships -DLUA_COMPAT_5_2, which keeps the
         // library loaded. The diff ground truth is the default build
-        // (v2.14 dialect fixture 5.3/535), so expose it under 5.2 AND
+        // (stock lua5.3), so expose it under 5.2 AND
         // 5.3; 5.4 dropped the compat default for real.
         if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
             self.open_bit32();
@@ -1254,7 +1226,7 @@ impl Vm {
         Value::Native(self.heap.new_native(f, upvals))
     }
 
-    /// Install the shared string metatable (string library, P04).
+    /// Install the shared string metatable (string library).
     pub fn set_string_metatable(&mut self, mt: Option<Gc<Table>>) {
         self.type_mt[3] = mt;
     }
@@ -1339,7 +1311,7 @@ impl Vm {
             .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, child);
     }
 
-    /// v1.3 Phase ML — register a MacroLua macro under `name`. Inert
+    /// Register a MacroLua macro under `name`. Inert
     /// under non-MacroLua dialects (the macro is stored but the load
     /// path only consults the registry when
     /// `self.version == LuaVersion::MacroLua`).
@@ -1350,8 +1322,8 @@ impl Vm {
         self.macro_registry.register(name, m);
     }
 
-    /// v1.3 Phase ML — drop all MacroLua macros (built-in + custom).
-    /// Mostly useful for tests / dogfood resets.
+    /// Drop all MacroLua macros (built-in + custom).
+    /// Mostly useful for tests.
     pub fn clear_macros(&mut self) {
         self.macro_registry.clear();
     }
@@ -1410,7 +1382,7 @@ impl Vm {
             crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
                 .map_err(SyntaxError::unpositioned)?
         } else if self.version.is_macro_lua() {
-            // v1.3 Phase ML — MacroLua dialect: drain the lexer into a
+            // MacroLua dialect: drain the lexer into a
             // token vec, run the macro expander pre-pass against the
             // per-Vm registry, then hand the rewritten stream to
             // `parse_tokens`. The AST + compiler are dialect-agnostic
@@ -1509,7 +1481,7 @@ impl Vm {
     /// (the result must be a string) before collapsing to the
     /// `"(error object is a … value)"` tag. Needs `&mut self` because
     /// `__tostring` runs arbitrary Lua — `error_text` remains the
-    /// non-executing variant (v2.14 CV.2, fixture 5.5/321).
+    /// non-executing variant.
     pub fn error_display(&mut self, e: &LuaError) -> String {
         match e.0 {
             Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
@@ -1583,8 +1555,8 @@ impl Vm {
             self.error_traceback = None;
         }
         self.public_call_depth += 1;
-        // P11-S2 — JIT fast path. A host call with no args targeting a Lua
-        // chunk whose body fits the S1 int-arith whitelist short-circuits
+        // JIT fast path. A host call with no args targeting a Lua
+        // chunk whose body fits the int-arith whitelist short-circuits
         // the whole interpreter dispatch and runs straight through the
         // mmap'd native code. The lookup is one Cell::get + one match —
         // the slow path (compile attempt on first reach) is paid once per
@@ -1601,7 +1573,7 @@ impl Vm {
         r
     }
 
-    /// P11-S2 — peek/populate the Proto's JIT cache slot, returning
+    /// Peek/populate the Proto's JIT cache slot, returning
     /// `Some(values)` when the cached native fn is callable for a
     /// zero-arg call. (Non-zero-arg dispatch is handled by
     /// `try_jit_call_op` from inside `begin_call`.)
@@ -1626,13 +1598,13 @@ impl Vm {
             } => {
                 // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
                 let f: crate::jit::IntChunkFn = unsafe { std::mem::transmute(entry) };
-                // P11-S5c / S5d.J — install the active Vm + closure
+                // Install the active Vm + closure
                 // for any Rust helper the JIT'd code may call (e.g.
                 // `luna_jit_new_table`, `luna_jit_upval_get`) via
                 // cranelift `Linkage::Import`. RAII clear on return.
                 // Chunks with no upvalue reads don't touch the closure
                 // slot, paying nothing.
-                // v1.1 A1 Session A — route through chunk_compiler so
+                // Route through chunk_compiler so
                 // the NullJitBackend path stays inert. Raw-ptr arg
                 // avoids the &mut self borrow conflict against the
                 // shared self.jit.chunk_compiler read.
@@ -1641,7 +1613,7 @@ impl Vm {
                 // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                 let r = unsafe { f() };
                 drop(_jit_vm_guard);
-                // P11-S5d.E' — a JIT helper may have detected a metatable
+                // A JIT helper may have detected a metatable
                 // on a table operand and parked a deopt request here.
                 // Discard the sentinel value and return None so the caller
                 // re-runs the call through the interpreter, which honours
@@ -1670,11 +1642,11 @@ impl Vm {
         }
     }
 
-    /// P11-S2 / S2c — populate the cache slot. Flips `Untried` to either
+    /// Populate the cache slot. Flips `Untried` to either
     /// `Compiled { … }` or `Failed`; idempotent on already-populated
     /// states (call sites guard with a get before invoking).
     ///
-    /// S4: consults a thread-local cross-`Vm` cache keyed by a hash of
+    /// Consults a thread-local cross-`Vm` cache keyed by a hash of
     /// `proto.code`. Compiled artefacts live in the thread-local
     /// `JITModule` so their mmap pages outlive the `Vm`; subsequent
     /// `Vm`s loading the same source skip the cranelift compile step
@@ -1683,11 +1655,11 @@ impl Vm {
         use crate::runtime::function::JitProtoState;
         let version = self.version();
         let pre53 = version <= crate::version::LuaVersion::Lua53;
-        // P11-S5d.J — 5.1 and 5.2 have no Int subtype (all numbers
+        // 5.1 and 5.2 have no Int subtype (all numbers
         // are Float). The JIT's `GetUpval` ValueRead path uses this
         // to default-pin upvalue reads to Float without a tag check.
         let float_only = version <= crate::version::LuaVersion::Lua52;
-        // v2.0 Track J sub-step J-B — split-borrow JitState so the
+        // Split-borrow JitState so the
         // trait method can take `&mut dyn JitStorage` without
         // double-borrowing self.jit.
         let jit = &mut self.jit;
@@ -1721,7 +1693,7 @@ impl Vm {
         }
     }
 
-    /// P11-S2c.B — `Op::Call` JIT fast path. Run inside `begin_call`
+    /// `Op::Call` JIT fast path. Run inside `begin_call`
     /// before `push_frame`. Returns `true` when the call was handled
     /// in-place (no new Lua frame). Constraints: every arg slot must
     /// be `Value::Int`, the cached arity must match the call site's
@@ -1790,9 +1762,8 @@ impl Vm {
                 _ => return false,
             };
         }
-        // P11-S5c / S5d.J — Vm + closure pin for helpers; see the
-        // matching guard in `try_jit_call`.
-        // v1.1 A1 Session A — route through chunk_compiler.
+        // Vm + closure pin for helpers, routed through chunk_compiler;
+        // see the matching guard in `try_jit_call`.
         let vm_ptr: *mut Vm = self;
         let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
         // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
@@ -1813,7 +1784,7 @@ impl Vm {
             }
         };
         drop(_jit_vm_guard);
-        // P11-S5d.E' — see matching path in `try_jit_call`. A helper
+        // See matching path in `try_jit_call`. A helper
         // flagged a metatable on a table operand; bail to the interpreter
         // so `push_frame` runs the call from scratch.
         if self.jit.pending_err.take().is_some() {
@@ -1879,7 +1850,7 @@ impl Vm {
             // sit at/above `func_slot`) must survive for the next resume — so we
             // only truncate on a real error. A self-close termination is in the
             // same boat: the dying thread's state is discarded wholesale.
-            // v1.1 B10 — a `host_yield_pending` cooperative yield is in
+            // A `host_yield_pending` cooperative yield is in
             // the same boat as `yielding`: the next `EvalFuture::poll`
             // resumes the same call, so the in-flight frames must
             // survive.
@@ -1905,7 +1876,7 @@ impl Vm {
         r
     }
 
-    // ---- coroutines (P05) ----
+    // ---- coroutines ----
 
     pub(crate) fn new_coro(&mut self, body: Value) -> Gc<Coro> {
         // The new coroutine inherits the creating thread's current globals
@@ -2163,7 +2134,7 @@ impl Vm {
             hook: self.hook,
             globals: self.globals,
         };
-        self.frames_resync(); // P17-D Week 1 — frames now empty.
+        self.frames_resync(); // frames now empty
         saved
     }
 
@@ -2177,7 +2148,7 @@ impl Vm {
         self.pcall_depth = c.pcall_depth;
         self.hook = c.hook;
         self.globals = c.globals;
-        self.frames_resync(); // P17-D Week 1 — sync shadow to new Vec.
+        self.frames_resync(); // sync shadow to new Vec
     }
 
     /// Move a coroutine's saved context into the live VM fields.
@@ -2190,7 +2161,7 @@ impl Vm {
         self.open_upvals = std::mem::take(&mut m.open_upvals);
         self.tbc = std::mem::take(&mut m.tbc);
         self.top = m.top;
-        self.frames_resync(); // P17-D Week 1 — sync shadow to coro's frames.
+        self.frames_resync(); // sync shadow to coro's frames
         self.pcall_depth = m.pcall_depth;
         self.hook = m.hook;
         self.globals = m.globals;
@@ -2490,7 +2461,7 @@ impl Vm {
             self.hook_ftransfer = 0;
             self.hook_ntransfer = 0;
         }
-        // v1.1 B11 — Rust hook fires first (no Vm reentrancy via call_value;
+        // Rust hook fires first (no Vm reentrancy via call_value;
         // synchronous fn pointer call). Both Rust and Lua hooks may be
         // installed; both observe each event.
         if let Some(rh) = self.hook.rust_func {
@@ -2661,7 +2632,7 @@ impl Vm {
 
     /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
     fn op_index(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
-        // v2.13 WUC read-time probe: a collectable key must be live at
+        // Read-time probe: a collectable key must be live at
         // the moment it is used. O(1) membership test against the
         // freed-pointer log — gc-verify diagnostic builds only; exact
         // under quarantining allocators (ASAN).
@@ -2904,11 +2875,9 @@ impl Vm {
     /// Interpreter safe-point auto-GC: FULL incremental Propagate + adaptive
     /// paced sweep via `Vm::gc_step`.
     ///
-    /// Round 1/2 of this attempt SIGABRT'd under coroutine + finalizer stress
-    /// (suspected missed barrier). Round 3 (STW-mark + paced sweep) hung
-    /// heavy.lua. With **born-black during Propagate** landed (@92b22b3) the
-    /// suspected UAF is structurally closed — born objects no longer become
-    /// dead-white at atomic flip — so Propagate is safe to re-enable here.
+    /// Running Propagate from a safe-point relies on objects being **born
+    /// black during Propagate**: a newly allocated object never becomes
+    /// dead-white at the atomic flip.
     ///
     /// Adaptive budget scales with heap size: 100M-object heap (heavy.lua's
     /// `loadrep` stress) gets a 25M-object budget so a cycle completes in
@@ -2921,12 +2890,10 @@ impl Vm {
         if !self.heap.gc_due() {
             return;
         }
-        // v2.5 P1B-2E: tighten to bare `live_top`. The v2.2.0
-        // `live_top.max(self.top)` workaround is now obsoleted by
-        // v2.3's `finish_results` slot-clear + v2.5 P1B-2A
-        // (Op::TailCall collapse slot-clear) + v2.5 P1B-2B
-        // (pcall unwind slot-clear). PUC L->top discipline is now
-        // mirrored at every frame-pop site.
+        // Bare `live_top`, no `max(self.top)` widening: every frame-pop
+        // site (`finish_results`, the Op::TailCall collapse, pcall
+        // unwind) clears the slots it vacates, mirroring PUC's L->top
+        // discipline.
         self.gc_top = live_top;
         // PUC stepmul: % of allocation rate. Higher = more GC work per
         // safe-point (lower memory, more CPU). Default 100 = `live / 4` per
@@ -2962,10 +2929,9 @@ impl Vm {
         // `L->top = func + 1 + nargs` C-call discipline. Without that
         // raise, an explicit `collectgarbage()` collected with a STALE
         // cursor from some earlier (lower) safe-point and freed its own
-        // caller's register-held strings — UAF-C
+        // caller's register-held strings
         // (STATUS_ACCESS_VIOLATION on Windows / ASAN heap-use-after-free
-        // on Linux; the v2.13 WUC gc-verify frame audit pinpointed the
-        // under-rooted slots). Values stranded above the cursor stay
+        // on Linux). Values stranded above the cursor stay
         // excluded so weak-table entries are not spuriously pinned
         // (gc.lua:544 suspended-coroutine collection).
         let live = (self.gc_top as usize).min(self.stack.len());
@@ -2998,15 +2964,15 @@ impl Vm {
         if let Some(e) = self.closing_err {
             roots.push(e);
         }
-        // B12 host roots — Lua-facade handles keep their referenced
+        // Host roots — Lua-facade handles keep their referenced
         // values alive across calls/yields. Trace the whole vector;
         // unused slots (post-`unpin_all`) carry Value::Nil which the
         // GC ignores.
         for slot in &self.host_roots {
-            // v1.3 SR — free-list slots carry Value::Nil (GC no-op).
+            // free-list slots carry Value::Nil (GC no-op)
             roots.push(slot.value);
         }
-        // v2.1 — `table.sort` and similar builtins stash their working
+        // `table.sort` and similar builtins stash their working
         // `Vec<Value>` here so a `collectgarbage()` invoked inside the
         // comparator callback doesn't free strings/tables snapshotted
         // off the live table (sort.lua's `load(..)(); collectgarbage()`
@@ -3014,9 +2980,9 @@ impl Vm {
         for buf in &self.sort_scratch {
             roots.extend_from_slice(buf);
         }
-        // v2.1 — the running-natives chain holds Gc<NativeClosure>s
+        // The running-natives chain holds Gc<NativeClosure>s
         // mid-execution. Without rooting them here, a `collectgarbage()`
-        // invoked inside the running native (sort.lua AA `load(..)();
+        // invoked inside the running native (sort.lua's `load(..)();
         // collectgarbage()` compare callback regression) sweeps the
         // closure that's actively executing, leaving `nc.upvals`
         // dangling and the Rust local `nc` pointing at recycled memory
@@ -3097,11 +3063,11 @@ impl Vm {
         freed
     }
 
-    /// v2.13 WUC `gc-verify` — after a collect, every register slot the
+    /// `gc-verify`: after a collect, every register slot the
     /// collector just rooted (`[0, max(gc_top, top))` — the same bound
     /// `gc_roots` uses) must hold a live value. A dead value inside the
     /// rooted range means the root snapshot and the sweep disagreed —
-    /// the bug class behind UAF-C. (Slots ABOVE the bound may hold
+    /// a use-after-free waiting to happen. (Slots ABOVE the bound may hold
     /// stale dead values legitimately; the interpreter's contract is
     /// that it writes them before reading.)
     #[cfg(feature = "gc-verify")]
@@ -3228,7 +3194,7 @@ impl Vm {
         std::mem::take(&mut self.warn_log)
     }
 
-    /// Arm the cooperative instruction budget (P09 embedding). The run loop
+    /// Arm the cooperative instruction budget. The run loop
     /// decrements this once per dispatch turn; on zero it raises a catchable
     /// `"instruction budget exceeded"` error and disarms itself so the host
     /// can resume with a fresh budget on the next call. `None` removes the
@@ -3243,7 +3209,7 @@ impl Vm {
         self.instr_budget
     }
 
-    /// Toggle the cranelift JIT (P11). Default `true`. Sandbox embedders
+    /// Toggle the cranelift JIT. Default `true`. Sandbox embedders
     /// **must** disable JIT when relying on `instr_budget` — see the
     /// `jit_enabled` field doc for the rationale.
     pub fn set_jit_enabled(&mut self, enabled: bool) {
@@ -3255,25 +3221,35 @@ impl Vm {
         self.jit.enabled
     }
 
-    /// Toggle the trace JIT (P12). Off by default while the sprint
-    /// develops. When enabled, hot back-edges are counted on
-    /// `Proto.trace_hot_count`; once the counter passes
-    /// `TRACE_HOT_THRESHOLD`, the dispatch loop enters recording
-    /// mode at the back-edge target. Stays a no-op until S2's
-    /// trace lowerer and S3's dispatcher land.
+    /// Toggle the trace JIT. Off by default. When enabled, hot
+    /// back-edges are counted on `Proto.trace_hot_count`; once the
+    /// counter passes `TRACE_HOT_THRESHOLD`, the dispatch loop enters
+    /// recording mode at the back-edge target.
     pub fn set_trace_jit_enabled(&mut self, enabled: bool) {
         self.jit.trace_enabled = enabled;
     }
 
-    /// P16-A — opt-in flag for the self-link cycle catch. See field
+    /// Opt-in flag for the self-link cycle catch. See field
     /// docs for the correctness blocker. Default `false`.
-    pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {
-        self.jit.p16_self_link_enabled = enabled;
+    pub fn set_self_link_enabled(&mut self, enabled: bool) {
+        self.jit.self_link_enabled = enabled;
     }
 
-    /// Current state of the P16-A self-link cycle catch.
+    /// Current state of the self-link cycle catch.
+    pub fn self_link_enabled(&self) -> bool {
+        self.jit.self_link_enabled
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "3.1.1", note = "renamed to `set_self_link_enabled`")]
+    pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {
+        self.set_self_link_enabled(enabled);
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "3.1.1", note = "renamed to `self_link_enabled`")]
     pub fn p16_self_link_enabled(&self) -> bool {
-        self.jit.p16_self_link_enabled
+        self.self_link_enabled()
     }
 
     /// Current trace-JIT enable state.
@@ -3283,63 +3259,59 @@ impl Vm {
 
     /// Number of traces that have closed cleanly (looped back to the
     /// head PC) since this Vm was constructed. Cumulative; used by
-    /// tests + tuning. Will become the dominant signal once S2's
-    /// compile + cache lands.
+    /// tests + tuning.
     pub fn trace_closed_count(&self) -> u64 {
         self.jit.counters.closed
     }
 
     /// Number of traces that have aborted (exceeded MAX_TRACE_LEN or
-    /// hit an un-recordable op — the latter lands at S2).
+    /// hit an un-recordable op).
     pub fn trace_aborted_count(&self) -> u64 {
         self.jit.counters.aborted
     }
 
-    /// P13-S13-G v2 — number of compiled traces whose close shape
+    /// Number of compiled traces whose close shape
     /// is `TraceEnd::InlineAbort` (depth>0 boundary). Such traces
     /// pin `dispatchable=false` because the dispatcher can't
     /// resume at a depth>0 PC without the matching CallFrames.
-    /// S4-step4b's frame-mat helper could synthesise those, but
-    /// the InlineAbort emit path isn't wired up yet — fresh
-    /// pickup work for S13-G v2-full.
+    /// The frame-materialisation helper could synthesise those, but
+    /// the InlineAbort emit path isn't wired up to it.
     pub fn trace_inline_abort_count(&self) -> u64 {
         self.jit.counters.inline_abort
     }
 
-    /// P13-S13-G v2.5 — see `JitCounters::dispatch_off_reasons`.
+    /// See `JitCounters::dispatch_off_reasons`.
     pub fn trace_dispatch_off_reasons(&self) -> &[&'static str] {
         &self.jit.counters.dispatch_off_reasons
     }
 
-    /// P13-S13-G v2.6 — see `JitCounters::compile_failed_reasons`.
+    /// See `JitCounters::compile_failed_reasons`.
     pub fn trace_compile_failed_reasons(&self) -> &[&'static str] {
         &self.jit.counters.compile_failed_reasons
     }
 
-    /// P13-S13-H — see `JitCounters::closed_lens`. Returns
+    /// See `JitCounters::closed_lens`. Returns
     /// `(is_call_triggered, ops_len)` for every trace that closed.
     pub fn trace_closed_lens(&self) -> &[(bool, usize)] {
         &self.jit.counters.closed_lens
     }
 
-    /// v2.0 Track-R R2 — see [`crate::vm::jit_state::JitCounters::close_cause_counts`].
+    /// See [`crate::vm::jit_state::JitCounters::close_cause_counts`].
     /// Per-reason close-cause counts (recorder-side abort/discard +
     /// lowerer-side dispatch_off labels) keyed by `&'static str`.
     pub fn trace_close_cause_counts(&self) -> &std::collections::HashMap<&'static str, u64> {
         &self.jit.counters.close_cause_counts
     }
 
-    /// v2.0 Track-R R3b — number of compiled traces whose
+    /// Number of compiled traces whose
     /// `CompiledTrace.downrec_link` is `Some(_)` (lowerer's
     /// `downrec_idx_opt` arm emitted the stitch sentinel + caller-pc
-    /// guard scaffold). R3b regression pin checks `>= 1` on a fib(3)
-    /// hot loop with p16-on. R3b keeps `dispatchable = false` even
-    /// when this count bumps; R3d will lift it.
+    /// guard scaffold).
     pub fn trace_downrec_link_compiled_count(&self) -> u64 {
         self.jit.counters.downrec_link_compiled
     }
 
-    /// v2.0 Track-R R3c — see
+    /// See
     /// [`crate::vm::jit_state::JitCounters::downrec_dispatched`]. Number
     /// of times the dispatcher's `is_downrec_sentinel` arm fired and
     /// classified the return as a caller-pc-guard HIT.
@@ -3347,7 +3319,7 @@ impl Vm {
         self.jit.counters.downrec_dispatched
     }
 
-    /// v2.0 Track-R R3c — see
+    /// See
     /// [`crate::vm::jit_state::JitCounters::downrec_deopt`]. Number of
     /// times the dispatcher entered a `downrec_link`-bearing trace and
     /// the trace returned via the lowerer's deopt block (caller-pc
@@ -3357,7 +3329,7 @@ impl Vm {
         self.jit.counters.downrec_deopt
     }
 
-    /// v2.0 Track-R R3d — see
+    /// See
     /// [`crate::vm::jit_state::JitCounters::multi_way_guard_emitted`].
     /// Number of compiled traces whose lowerer emitted a multi-way
     /// caller-pc guard chain (>= 2 distinct `caller_pc` candidates)
@@ -3366,7 +3338,7 @@ impl Vm {
         self.jit.counters.multi_way_guard_emitted
     }
 
-    /// P12-S2.C — number of closed traces the lowerer compiled and
+    /// Number of closed traces the lowerer compiled and
     /// parked on `Proto.traces`. Re-records of the same head_pc are
     /// deduped (the second close finds the head_pc already cached
     /// and skips compile), so this never exceeds `trace_closed_count`.
@@ -3374,24 +3346,24 @@ impl Vm {
         self.jit.counters.compiled
     }
 
-    /// v2.1 Phase 1I.B — number of times the recorder captured a
+    /// Number of times the recorder captured a
     /// [`crate::jit::trace_types::FieldIcSnapshot`] under
     /// `LUNA_JIT_FIELD_IC=1`. Stays 0 on the env-default path. Used
-    /// by the Phase 1I.B opt-in fire test to verify the env gate
+    /// by the opt-in fire test to verify the env gate
     /// wiring round-trips end-to-end (env -> recorder -> snapshot
     /// -> counter -> getter -> assertion).
     pub fn trace_field_ic_snapshot_count(&self) -> u64 {
         self.jit.counters.field_ic_snapshot_captured
     }
 
-    /// P12-S2.C — number of closed traces the lowerer rejected
+    /// Number of closed traces the lowerer rejected
     /// (any of the bail conditions in
     /// `crate::jit::trace::try_compile_trace`).
     pub fn trace_compile_failed_count(&self) -> u64 {
         self.jit.counters.compile_failed
     }
 
-    /// P12-S3 — number of times the dispatcher jumped into a
+    /// Number of times the dispatcher jumped into a
     /// compiled trace. Bumps on every entry; `trace_deopt_count`
     /// counts the subset where the trace returned with a parked
     /// `jit_pending_err`.
@@ -3399,7 +3371,7 @@ impl Vm {
         self.jit.counters.dispatched
     }
 
-    /// P12-S3 — number of trace entries that came back with
+    /// Number of trace entries that came back with
     /// `jit_pending_err` set (typically a metatable shadowed an
     /// index inside a helper, forcing the dispatcher to fall back
     /// to the interpreter without committing the trace's result).
@@ -3407,7 +3379,7 @@ impl Vm {
         self.jit.counters.deopt
     }
 
-    /// P15-A v1 — number of times the dispatcher started a side
+    /// Number of times the dispatcher started a side
     /// trace recording (an `exit_hit_counts` slot crossed
     /// [`crate::jit::trace::HOTEXIT_THRESHOLD`] while `active_trace`
     /// was None and trace JIT was enabled). Each unit is exactly one
@@ -3415,23 +3387,19 @@ impl Vm {
     /// under [`Self::trace_compiled_count`] like any other trace.
     /// Probe use: distinguishes the "side-trace pipeline fired"
     /// signal from the "primary back-edge / call-trigger fired"
-    /// signal so v0-v3 architectural progress is visible without
-    /// reading per-counter histograms.
+    /// signal without reading per-counter histograms.
     pub fn trace_side_trace_started_count(&self) -> u64 {
         self.jit.counters.side_trace_started
     }
 
-    /// P15-A v2-A — number of side-trace recordings that closed,
+    /// Number of side-trace recordings that closed,
     /// compiled successfully, AND patched their parent's
-    /// `exit_side_trace_ptrs[exit_idx]`. The parent's IR doesn't
-    /// dispatch through these ptrs yet (v2-B/C job), but the
-    /// counter + ptr write proves the compile + link pipeline is
-    /// complete end-to-end.
+    /// `exit_side_trace_ptrs[exit_idx]`.
     pub fn trace_side_trace_compiled_count(&self) -> u64 {
         self.jit.counters.side_trace_compiled
     }
 
-    /// P15-A v2-C-A5-C — number of side traces that compiled
+    /// Number of side traces that compiled
     /// successfully but were SHEDDED by the close-handler shape-
     /// match gate (`exit_tags_match_entry_tags`). High ratios
     /// vs. `trace_side_trace_compiled_count` indicate the
@@ -3443,23 +3411,23 @@ impl Vm {
         self.jit.counters.side_trace_shape_mismatch
     }
 
-    /// P12-S5-A — sum of NewTable sites the pre-emit escape sweep
+    /// Sum of NewTable sites the pre-emit escape sweep
     /// classified as `crate::jit::trace::EscapeState::Sinkable`
     /// across every successfully compiled trace on this Vm. The
     /// count is post-demotion: sites pre-emit drops back to Escaped
-    /// for not meeting v1 sunk-emit criteria are NOT counted.
+    /// for not meeting the sunk-emit criteria are NOT counted.
     /// `trace_sunk_alloc_count` matches one-for-one today (every
     /// surviving Sinkable site goes through sunk emit).
     pub fn trace_sinkable_seen_count(&self) -> u64 {
         self.jit.counters.sinkable_seen
     }
 
-    /// P14-S14-B v1 — see `JitCounters::accum_bufferable_seen`.
+    /// See `JitCounters::accum_bufferable_seen`.
     pub fn trace_accum_bufferable_seen_count(&self) -> u64 {
         self.jit.counters.accum_bufferable_seen
     }
 
-    /// P15-prep — total dispatch hits across all known traces,
+    /// Total dispatch hits across all known traces,
     /// broken into hot-exit telemetry (max single-exit count,
     /// total dispatches, exit count). Used by probes to identify
     /// hot side-exits as side-trace candidates.
@@ -3487,7 +3455,7 @@ impl Vm {
         out
     }
 
-    /// P15-A v0 — surface every side-exit slot whose hit count is
+    /// Surface every side-exit slot whose hit count is
     /// `>= HOTEXIT_THRESHOLD` across every trace reachable from
     /// `cl.proto` (recursively walking `proto.protos`). Returned
     /// entries are side-trace candidates: each carries the parent
@@ -3552,7 +3520,7 @@ impl Vm {
         out
     }
 
-    /// P12-S5-B — sum of NewTable sites that actually took the
+    /// Sum of NewTable sites that actually took the
     /// sunk-emit path across every successfully compiled trace on
     /// this Vm. Each counted site skips its heap `Gc<Table>`
     /// allocation per dispatch; the array part lives as Cranelift
@@ -3561,16 +3529,15 @@ impl Vm {
         self.jit.counters.sunk_alloc
     }
 
-    /// P12-S5-C — sum of materialise-helper emit sites across every
+    /// Sum of materialise-helper emit sites across every
     /// successfully compiled trace on this Vm. Each unit is a
     /// (site × cmp side-exit) pair whose IR reconstructs a heap
-    /// `Gc<Table>` from the virt slots on deopt — proves S5-C
-    /// emit is wiring materialise into the right side-exits.
+    /// `Gc<Table>` from the virt slots on deopt.
     pub fn trace_materialize_emit_count(&self) -> u64 {
         self.jit.counters.materialize_emit
     }
 
-    /// P12-S7-A diagnostic — total `Op::Closure` ops the trace JIT
+    /// Diagnostic: total `Op::Closure` ops the trace JIT
     /// lowered to the `luna_jit_op_closure` helper. Each emitted op
     /// replaces a `Heap::new_closure_inline` call on the dispatch
     /// path; the count is static (one per matching op per compiled
@@ -3579,7 +3546,7 @@ impl Vm {
         self.jit.counters.closure_emit
     }
 
-    /// v2.0 Stage 7 polish 6 fire experiment — see
+    /// See
     /// [`crate::vm::jit_state::JitCounters::per_exit_inline_compiled`].
     /// Number of compiled traces whose `per_exit_inline.len() > 0`
     /// (depth>0 inlined cmp side-exits emitted).
@@ -3587,17 +3554,17 @@ impl Vm {
         self.jit.counters.per_exit_inline_compiled
     }
 
-    /// v2.0 Stage 7 polish 6 fire experiment — see
+    /// See
     /// [`crate::vm::jit_state::JitCounters::per_exit_inline_dispatchable`].
     /// Number of compiled traces with `per_exit_inline.len() > 0` AND
     /// `dispatchable == true` — i.e. the count of compiled traces
-    /// that would actually exercise the AOT polish 6 chain-reloc +
+    /// that would actually exercise the AOT chain-reloc +
     /// deploy-resolver path.
     pub fn trace_per_exit_inline_dispatchable_count(&self) -> u64 {
         self.jit.counters.per_exit_inline_dispatchable
     }
 
-    /// P12-S4-step1 diagnostic — max `inline_depth` ever seen on any
+    /// Diagnostic: max `inline_depth` ever seen on any
     /// `RecordedOp` pushed by the recorder. Tells tests + tuning
     /// whether a self-recursive function actually walked the depth
     /// tracker past 0. Saturates at `MAX_INLINE_DEPTH`. Persists
@@ -3606,7 +3573,7 @@ impl Vm {
         self.jit.max_depth_seen
     }
 
-    /// P12-S4-step4b — last live Lua frame (the trace head's frame at
+    /// Last live Lua frame (the trace head's frame at
     /// dispatch time). The frame-materialization helper reads `.base`
     /// to compute offsets for each inlined frame's window.
     #[doc(hidden)]
@@ -3617,7 +3584,7 @@ impl Vm {
         }
     }
 
-    /// v2.0 Track TL Phase 2 — read-only borrow of the current call
+    /// Read-only borrow of the current call
     /// stack, for the [`crate::vm::inspect`] pure-read accessors used
     /// by `luna-tools` (`luna-profile`'s sampler walks this from
     /// inside a `Count` hook). Sibling-module scope: not part of the
@@ -3627,7 +3594,7 @@ impl Vm {
         &self.frames
     }
 
-    /// P12-S4-step4b — ensure the value stack covers indices
+    /// Ensure the value stack covers indices
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
@@ -3638,7 +3605,7 @@ impl Vm {
         }
     }
 
-    /// P12-S7-C — trace JIT path for `Op::Close A`. Predicts whether
+    /// Trace JIT path for `Op::Close A`. Predicts whether
     /// `__close` handlers would run (any active tbc slot ≥ from
     /// holding a non-nil/false Value); if so, returns 1 without doing
     /// anything and the trace side-exits at the op, so the interpreter
@@ -3676,7 +3643,7 @@ impl Vm {
         0
     }
 
-    /// P12-S7-B — spill the trace's current value for a register to
+    /// Spill the trace's current value for a register to
     /// the underlying `vm.stack[base + slot_offset]`. Required before
     /// an `Op::Closure` whose inner proto has an `in_stack: true`
     /// upval at `slot_offset` — the helper's `find_or_create_upval`
@@ -3686,7 +3653,7 @@ impl Vm {
     ///
     /// Parameters arrive as i64 from the IR: `slot_offset` is the
     /// caller-frame register index (`u32` in practice, depth=0
-    /// only — S7-B doesn't support depth>0 Closure); `tag` is the
+    /// only — depth>0 Closure is not supported); `tag` is the
     /// `crate::runtime::value::raw` byte for the slot's RegKind;
     /// `raw_bits` is the trace Variable's `use_var` payload
     /// (i64-shaped — Float is its bit-pattern, Table/Closure is the
@@ -3710,20 +3677,7 @@ impl Vm {
         self.stack[idx] = v;
     }
 
-    /// P12-S12-B-v2 — trace JIT path for `Op::TForCall A 0 C`.
-    /// Mirrors the interp arm (this file ~L5316): copies the
-    /// generator/state/control triple from `R[A..=A+2]` to
-    /// `R[A+4..=A+6]` (resizing the stack if needed), then enters
-    /// the iterator function via `begin_call`. v2 only handles
-    /// `Value::Native` iterators (the canonical `ipairs_iter` /
-    /// `next` builtins) — a Lua-closure iterator would push a Lua
-    /// frame mid-trace, breaking `recording_frame_base`, so it
-    /// returns `-1` and the trace side-exits at the op.
-    ///
-    /// `slot_offset` is the caller-frame register index (=
-    /// `inst.a()` decoded from a u32-wide field). `nvars` is
-    /// `inst.c() as i32` — the caller's expected return count.
-    /// P12-S12-C v1 — refresh only the raw payload of
+    /// Refresh only the raw payload of
     /// `vm.stack[base + slot_offset]`, preserving its existing
     /// `Value` tag. The caller (trace JIT Op::Concat body emit)
     /// uses this when the slot's `RegKind` is `Unset` (no compile-
@@ -3747,7 +3701,7 @@ impl Vm {
         };
     }
 
-    /// P12-S12-C v1 — trace JIT path for `Op::Concat A B`.
+    /// Trace JIT path for `Op::Concat A B`.
     ///
     /// Mirrors the interp arm (this file ~L5112): `self.top =
     /// base + a + n; concat_run(base + a)`. Result lands at
@@ -3784,7 +3738,7 @@ impl Vm {
         0
     }
 
-    /// P14-S14-B v2 — pop a reusable `Vec<u8>` from the JIT
+    /// Pop a reusable `Vec<u8>` from the JIT
     /// accumulator buffer pool, returning a raw pointer. The trace
     /// fn's IR holds this pointer in a stack slot through the loop
     /// and calls `jit_str_buf_extend` per iter. If the pool is
@@ -3800,7 +3754,7 @@ impl Vm {
         Box::into_raw(Box::new(buf))
     }
 
-    /// P14-S14-B v2 — return a previously-acquired buffer to the
+    /// Return a previously-acquired buffer to the
     /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
     /// buffer is `clear`ed (capacity retained) so the next acquire
     /// gets a ready-to-extend Vec.
@@ -3822,7 +3776,7 @@ impl Vm {
         // Else: drop the buffer.
     }
 
-    /// P14-S14-B v2 — append a LuaStr's bytes to the accumulator
+    /// Append a LuaStr's bytes to the accumulator
     /// buffer. The trace IR computes the `str_ptr` (= raw bits of
     /// the piece slot) and passes it through; we treat it as a
     /// `*mut LuaStr` and append its bytes.
@@ -3847,12 +3801,12 @@ impl Vm {
         0
     }
 
-    /// P14-S14-B v2 — drain the accumulator buffer into a fresh
+    /// Drain the accumulator buffer into a fresh
     /// `LuaStr` via `heap.intern`, returning the raw ptr bits for
     /// the trace to write into the accumulator slot.
     ///
     /// Returns the LuaStr ptr as i64 on success, 0 on overflow
-    /// (the v2 hard cap; the trace deopts).
+    /// (the hard cap; the trace deopts).
     ///
     /// Safety: `buf` from prior `acquire`. The buffer is left
     /// CLEAR (drained) ready for `release`.
@@ -3865,7 +3819,7 @@ impl Vm {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         let buf = unsafe { &mut *buf };
         let bytes = std::mem::take(buf);
-        // v2 hard cap at 256KB per RFC Q3.
+        // hard cap at 256KB
         if bytes.len() > 256 * 1024 {
             return 0;
         }
@@ -3873,13 +3827,13 @@ impl Vm {
         gc.as_ptr() as i64
     }
 
-    /// P12-S12-B v2/v3/v4 — trace JIT helper for `Op::TForCall A 0 C`.
+    /// Trace JIT helper for `Op::TForCall A 0 C`.
     ///
-    /// v2 base: copy R[A..=A+2] → R[A+4..=A+6] + `begin_call`.
-    /// v3: ipairs `inext` fast path at the top — skip begin_call
+    /// Base path: copy R[A..=A+2] → R[A+4..=A+6] + `begin_call`.
+    /// ipairs `inext` fast path at the top — skip begin_call
     ///     when R[A]=Native(ipairs_iter), R[A+1]=Table no-mt,
     ///     R[A+2]=Int.
-    /// v4: batched out-ptr writeback — fill ctrl/key/val raws into
+    /// Batched out-ptr writeback — fill ctrl/key/val raws into
     ///     caller-provided buffers + return R[A+4]'s tag byte. Lets
     ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
     ///     `luna_jit_stack_tag` call by reading the buffer via
@@ -3904,7 +3858,7 @@ impl Vm {
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
         }
-        // v3 fast path.
+        // ipairs fast path
         let took_fast_path = if let Value::Native(n) = self.stack[abs as usize]
             && std::ptr::fn_addr_eq(
                 n.f,
@@ -3935,7 +3889,7 @@ impl Vm {
             false
         };
         if !took_fast_path {
-            // v2 slow path: copy R[A..=A+2] → R[A+4..=A+6], then
+            // slow path: copy R[A..=A+2] → R[A+4..=A+6], then
             // route through begin_call. Lua-closure iters would push
             // a Lua frame mid-trace → deopt.
             self.stack[(abs + 4) as usize] = self.stack[abs as usize];
@@ -3949,7 +3903,7 @@ impl Vm {
                 return -1;
             }
         }
-        // v4 batched writeback — fill the caller's buffers with the
+        // Batched writeback — fill the caller's buffers with the
         // raw bits of R[A+2] / R[A+4] / R[A+5] so the trace IR can
         // reload via cranelift `stack_load` instead of separate
         // `luna_jit_stack_load` helper calls.
@@ -3974,7 +3928,7 @@ impl Vm {
         i64::from(key_tag) | i64::from(val_tag) << 8
     }
 
-    /// P12-S12-B-v2 — load the raw `i64` payload of
+    /// Load the raw `i64` payload of
     /// `vm.stack[base + slot_offset]` for the active trace's head
     /// Lua frame. Used to reload trace IR `Variable`s after a
     /// helper has written to `vm.stack` directly (e.g. TForCall's
@@ -3994,11 +3948,11 @@ impl Vm {
         unsafe { raw.zero as i64 }
     }
 
-    /// P12-S12-B-v2 — read the tag byte of
+    /// Read the tag byte of
     /// `vm.stack[base + slot_offset]`. Used by `Op::TForLoop` emit
     /// to dispatch on the iterator's return-key tag at runtime
     /// (`raw::NIL` → loop end exit, `raw::INT` → continue, other →
-    /// deopt for v2).
+    /// deopt).
     #[doc(hidden)]
     pub fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {
         let Some(f) = self.jit_last_lua_frame() else {
@@ -4011,7 +3965,7 @@ impl Vm {
         self.stack[idx].unpack().0
     }
 
-    /// P12-S4-step4b — push a Lua frame onto the call stack with
+    /// Push a Lua frame onto the call stack with
     /// JIT-known metadata. Used by `luna_jit_trace_materialize_frames`
     /// at trace side-exits to recreate the inlined call activations
     /// the lowerer compiled past. The contract (enforced by the
@@ -4067,7 +4021,7 @@ impl Vm {
     /// bytecode is a strictly larger trust surface than luna's own dump
     /// format (third-party toolchain bugs, malformed chunks, unknown
     /// opcode shapes). Enable only for trusted PUC chunks. Per-dialect
-    /// translators (Phase LB Wave 2) live in `crate::vm::dump::puc`.
+    /// translators live in `crate::vm::dump::puc`.
     pub fn set_puc_bytecode_loading(&mut self, enabled: bool) {
         self.puc_bytecode_loading = enabled;
     }
@@ -4126,7 +4080,7 @@ impl Vm {
         out
     }
 
-    /// Arm the soft memory cap (P09 embedding). The run loop checks the
+    /// Arm the soft memory cap. The run loop checks the
     /// heap's tracked byte usage between dispatch turns; on overshoot it
     /// first runs a full collect, and if `bytes` still exceeds the cap it
     /// raises a catchable `"memory cap exceeded"` Lua error and disarms
@@ -4332,7 +4286,7 @@ impl Vm {
         loop {
             match self.stack[func_slot as usize] {
                 Value::Closure(cl) => {
-                    // P11-S2c.B JIT fast path: if the Proto's body fits
+                    // JIT fast path: if the Proto's body fits
                     // the int-arith whitelist, every arg is `Value::Int`,
                     // and the cached arity matches, skip frame setup and
                     // run the cached native fn in-place.
@@ -4347,7 +4301,7 @@ impl Vm {
                         chain as u8
                     };
                     self.push_frame(cl, func_slot, nargs, nresults, from_c)?;
-                    // P12-S4-step0 — trace-on-call trigger. The frame
+                    // Trace-on-call trigger. The frame
                     // we just pushed is the callee whose body the
                     // recorder will trace. Bump the per-Proto call
                     // counter; once it crosses `CALL_HOT_THRESHOLD`
@@ -4365,8 +4319,8 @@ impl Vm {
                         if c < u32::MAX / 2 {
                             proto.call_hot_count.set(c + 1);
                         }
-                        // P13-S13-H — relaxed call-trigger:
-                        // `c >= THRESHOLD` (was `c == THRESHOLD`) +
+                        // Relaxed call-trigger:
+                        // `c >= THRESHOLD` (not `c == THRESHOLD`) +
                         // `!already_cached` short-circuit. Lets a
                         // discarded short call-trigger close retry
                         // on the next call (fib(10/15/20/25)
@@ -4378,8 +4332,8 @@ impl Vm {
                         // condition would re-record over a cached
                         // trace every call.
                         //
-                        // P13-S13-K — additionally short-circuit on
-                        // `proto.trace_gave_up`. The S13-I discard
+                        // Additionally short-circuit on
+                        // `proto.trace_gave_up`. The per-Proto discard
                         // cap force-compiles a partial trace and
                         // flips this flag; subsequent calls into
                         // this Proto skip the RefCell borrow + Vec
@@ -4422,7 +4376,7 @@ impl Vm {
                     return Ok(true);
                 }
                 Value::Native(nc) => {
-                    // v1.1 B10 Stage 2 — async-marked NativeClosure.
+                    // Async-marked NativeClosure.
                     // Route through the cooperative-yield mechanism
                     // when async_mode is on; reject when called from
                     // a sync `eval`/`call_value` path (would have no
@@ -4441,7 +4395,7 @@ impl Vm {
                         // keeps the arg window live.
                         self.native_nresults = nresults;
                         self.gc_top = func_slot + nargs + 1;
-                        // v1.3 Phase AS — fire the "call" hook BEFORE
+                        // Fire the "call" hook BEFORE
                         // building the future. Mirrors the sync native
                         // path's `hook_call(true, nargs)` site
                         // (`exec.rs` further down) so embedders with a
@@ -4450,15 +4404,13 @@ impl Vm {
                         // path. The matching "return" hook fires from
                         // `commit_async_native_result` in
                         // `async_drive.rs` after the future resolves.
-                        // Placement follows audit §"Open questions"
-                        // Q6: after the `native_nresults` / `gc_top`
+                        // Placement: after the `native_nresults` / `gc_top`
                         // pin, before the future is constructed, so a
                         // hook body that triggers GC observes the
                         // correct pinned window. On hook error the
                         // sentinel never returns and
                         // `pending_async_native_*` remain `None` —
-                        // the executor sees `DispatchOutcome::Error`
-                        // (audit §A.1 edge cases).
+                        // the executor sees `DispatchOutcome::Error`.
                         self.hook_call(true, nargs)?;
                         // Transmute the stored NativeFn back to its
                         // real AsyncNativeFn shape. Sound because
@@ -4550,8 +4502,8 @@ impl Vm {
                     // arguments. Without this raise the cursor is stale —
                     // parked at some earlier, possibly much lower
                     // safe-point — and the collect frees register-held
-                    // values of the native's own caller (UAF-C, v2.13
-                    // Track WUC). Never lower it: a re-entrant chain
+                    // values of the native's own caller (use-after-free).
+                    // Never lower it: a re-entrant chain
                     // (native → Lua → native) must keep the outermost
                     // window rooted.
                     self.gc_top = self.gc_top.max(func_slot + 1 + nargs);
@@ -4563,7 +4515,7 @@ impl Vm {
                         self.running_native_acts.pop();
                         return Err(e);
                     }
-                    // P09: trap a Rust panic in the native and surface it as
+                    // Trap a Rust panic in the native and surface it as
                     // a Lua error rather than letting it unwind through the
                     // VM into the embedder. The VM's internal state may still
                     // be inconsistent after a panic (half-pushed args,
@@ -4865,7 +4817,7 @@ impl Vm {
         let handler = self.stack[(func_slot + 2) as usize];
         // 5.1: `xpcall (f, err)` takes exactly two parameters — extra
         // arguments are NOT forwarded to `f` (5.2 added forwarding;
-        // 5.1 calls f with zero args). v2.14 dialect fixture 5.1/519.
+        // 5.1 calls f with zero args).
         let nfargs = if forward { nargs - 2 } else { 0 };
         for i in 0..nfargs {
             self.stack[(func_slot + 2 + i) as usize] = self.stack[(func_slot + 3 + i) as usize];
@@ -4973,7 +4925,7 @@ impl Vm {
 
     /// Pad/announce results sitting at func_slot.
     pub(crate) fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
-        // v2.3 P1B-A: capture the call's high-water-mark before
+        // Capture the call's high-water-mark before
         // setting the new top so we can Nil-clear slots that the
         // call temporarily wrote but no longer holds — matching
         // PUC's `L->top` discipline (slots past L->top are "free"
@@ -4982,8 +4934,8 @@ impl Vm {
         // itself, when wanted = 0) sits at `func_slot` and a
         // later GC with wider `gc_top` traces it after the
         // closure has been freed by a previous narrow safe-point
-        // GC → heap-buffer-overflow in `Marker::header` (UAF-A
-        // sort.lua AA case).
+        // GC → heap-buffer-overflow in `Marker::header` (sort.lua
+        // comparator case).
         let prev_top = self.top as usize;
         if wanted < 0 {
             self.top = func_slot + nret;
@@ -5007,7 +4959,7 @@ impl Vm {
         }
     }
 
-    /// v1.1 B10 Stage 1 — current Lua call-frame depth (read-only).
+    /// Current Lua call-frame depth (read-only).
     /// Used by `EvalFuture` on the bootstrap poll to compute the
     /// `entry_depth` it will pass to subsequent resume slices.
     pub(crate) fn frame_count(&self) -> usize {
@@ -5756,11 +5708,11 @@ impl Vm {
     /// Run from the current top frame down to (but not past) `entry_depth`
     /// frames. Coroutine driving passes `entry_depth = 1` so the whole thread
     /// runs to completion or a yield.
-    /// v1.1 B10 Stage 1 — resume the dispatcher from the saved
+    /// Resume the dispatcher from the saved
     /// `entry_depth` (captured pre-yield by `drive_one`). Called by
     /// `EvalFuture::poll` on every poll after the first to walk the
     /// existing call frames until the next `BudgetExhausted` or
-    /// terminal `Ok`/`Err`. Not a public-API surface in Stage 1; the
+    /// terminal `Ok`/`Err`. Not a public-API surface; the
     /// embedder reaches it through `Vm::eval_async`.
     pub(crate) fn exec_with_async(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
         self.exec_with(entry_depth)
@@ -5779,7 +5731,7 @@ impl Vm {
                 // are the suspended coroutine's saved state) and propagate to
                 // resume. A self-close termination propagates the same way, so a
                 // protecting pcall on the way out cannot catch (unwind) it.
-                // v1.1 B10 — `host_yield_pending` is the async-mode
+                // `host_yield_pending` is the async-mode
                 // analogue: the sentinel must reach `drive_one` without
                 // a protecting `pcall` swallowing it.
                 return r;
@@ -5935,7 +5887,7 @@ impl Vm {
                     // (and a top-level propagation into the host, whose
                     // `error_display` plays msghandler) still sees the raw
                     // nil. 5.4- keep nil everywhere (errors.lua :49 asserts
-                    // `doit("error()") == nil`). v2.14 fixture 5.5/334.
+                    // `doit("error()") == nil`).
                     let result = if matches!(result, Value::Nil)
                         && self.version >= crate::version::LuaVersion::Lua55
                     {
@@ -5989,7 +5941,7 @@ impl Vm {
                     } else if self.stack.len() > restore {
                         self.stack.truncate(restore);
                     }
-                    // v2.5 P1B-2B: clear slots vacated by the popped
+                    // Clear slots vacated by the popped
                     // frames the unwind walked over. finish_results
                     // above clears `[nc.func_slot + nresults ..
                     // nc.func_slot + 2)`, which only covers the
@@ -5997,9 +5949,8 @@ impl Vm {
                     // frames' locals in `[nc.func_slot + 2 .. restore)`
                     // are still in place with whatever Gc-bearing
                     // Values they last held. Without this clear, a
-                    // later GC marks the stale pointers (UAF-A family
-                    // analog of the v2.3 Op::Return finish_results
-                    // path). PUC's `luaD_pcall` similarly truncates
+                    // later GC marks the stale pointers (same hazard as
+                    // the Op::Return finish_results path). PUC's `luaD_pcall` similarly truncates
                     // L->top to the catcher's level — luna's
                     // truncate above resizes the Vec but doesn't
                     // touch slots [func_slot+2..restore) that were
@@ -6063,7 +6014,7 @@ impl Vm {
                     *b -= 1;
                     if *b <= 0 {
                         self.instr_budget = None;
-                        // v1.1 B10 Stage 1 — async-mode cooperative
+                        // Async-mode cooperative
                         // yield. Set a sentinel flag so `exec_with`
                         // propagates the Err without `unwind` running
                         // (mirroring the `yielding.is_some()` path),
@@ -6077,7 +6028,7 @@ impl Vm {
                             self.host_yield_pending = true;
                             return Err(LuaError(Value::Nil));
                         }
-                        // B6: classify the trip so embedders can
+                        // Classify the trip so embedders can
                         // distinguish budget exhaustion from a
                         // generic Runtime error and retry / give up
                         // accordingly.
@@ -6095,9 +6046,9 @@ impl Vm {
                     // disarm + raise if the cap is still breached after
                     // collection. PUC's `LUA_GCEMERGENCY` path matches.
                     //
-                    // v2.6 A.2: tighten mem-cap-fire over-root from
-                    // entire `self.stack.len()` (whole heap) to the
-                    // deepest Lua frame's `base + max_stack` window
+                    // Root up to the deepest Lua frame's
+                    // `base + max_stack` window rather than the entire
+                    // `self.stack.len()`
                     // (covers register operands the current opcode
                     // might reference). The cap fires during table
                     // mutation in a tight `a[i] = i` loop where `a`
@@ -6111,11 +6062,10 @@ impl Vm {
                     // func_slot are live; slots past callee
                     // func_slot in caller's frame are dead until
                     // caller resumes). For fire-once cap path this
-                    // residual over-root is acceptable; full
-                    // per-frame walk was canceled per
-                    // (charter §2.1's strong/weak pass split is
-                    // semantically impossible — weak pass depends on
-                    // strong-pass marks).
+                    // residual over-root is acceptable; there is no
+                    // full per-frame walk because a strong/weak pass
+                    // split is semantically impossible — the weak pass
+                    // depends on strong-pass marks.
                     let cap_root_top = self
                         .frames
                         .iter()
@@ -6239,38 +6189,37 @@ impl Vm {
             // `vmfetch` uses the equivalent unchecked load.
             let inst = unsafe { *cl.proto.code.get_unchecked(pc as usize) };
 
-            // P12-S1.C/D — trace recording append + close detection.
+            // Trace recording append + close detection.
             // Gated on `trace_jit_enabled` + `active_trace.is_some()`
             // so default dispatch keeps a single not-taken branch.
             //
             // - At the head PC with a non-empty record, the trace has
             //   looped back to its start: mark `closed = true` and
-            //   take the record (S2 will compile + cache).
+            //   take the record for compile + cache.
             // - Otherwise, capture the op. If the record overflows
             //   MAX_TRACE_LEN, abort by dropping it.
             if self.jit.trace_enabled
                 && let Some(_rec) = self.jit.active_trace.as_mut()
             {
-                // P12-S4 — depth tracking. The trace head's frame is
+                // Depth tracking. The trace head's frame is
                 // at index `recording_frame_base`; every Op::Call that
                 // pushes a new frame bumps the live depth, every
                 // Op::Return that pops one decrements it.
                 //
-                // **Three clean-close conditions** (P12-S4-step4a):
+                // **Three clean-close conditions**:
                 // - `at_head`: cur_depth == 0 AND about-to-execute the
                 //   trace's head_pc on its head_proto (loop closed back
                 //   to start). Same for loop-triggered and call-triggered
-                //   traces — step4a unified the gating so call-triggered
-                //   no longer closes on the first re-entry (that left
-                //   fib's body at 7 depth=0 ops; step4a lets it inline
-                //   up to MAX_INLINE_DEPTH levels before any close).
+                //   traces, so a call-triggered trace does not close on
+                //   the first re-entry (that would leave fib's body at 7
+                //   depth=0 ops); it inlines up to MAX_INLINE_DEPTH
+                //   levels before any close.
                 // - `returned_past_head`: trace head's frame is gone
                 //   (callee returned past it, or the call-trigger
                 //   started a recording inside a callee that has now
                 //   returned). Whatever ops were recorded form the
                 //   trace body; the lowerer treats the partial trace
-                //   the same as InlineAbort (dispatchable=false until
-                //   step4b's frame materialization lands).
+                //   the same as InlineAbort.
                 // - `depth_cap_hit`: cur_depth > MAX_INLINE_DEPTH.
                 //   Recording any deeper would just bloat the IR; close
                 //   with the body we have. Lowerer's existing length
@@ -6288,7 +6237,7 @@ impl Vm {
                     && !returned_past_head
                     && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
                     && pc == rec.head_pc;
-                // P16-A — self-link cycle catch (mirrors LuaJIT's
+                // Self-link cycle catch (mirrors LuaJIT's
                 // `check_call_unroll` at `lj_record.c:1869`). Trips when:
                 //   1. We're about to execute the head_pc on head_proto
                 //      at depth > 0 (we're re-entering the trace head
@@ -6314,7 +6263,7 @@ impl Vm {
                 // tail-call elision pops the caller frame and we'd
                 // hit `at_head_loop` instead.
                 let self_link_trip: Option<crate::jit::trace::SelfRecKind> = {
-                    if self.jit.p16_self_link_enabled
+                    if self.jit.self_link_enabled
                         && !returned_past_head
                         && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
                         && pc == rec.head_pc
@@ -6347,21 +6296,20 @@ impl Vm {
                     }
                 };
                 if let Some(kind) = self_link_trip {
-                    // v2.0 Track-R R3.3+ sub-0 — SelfLink relax for
-                    // self-recursive patterns at frame depth >= 2.
+                    // SelfLink relax for self-recursive patterns at frame
+                    // depth >= 2.
                     //
-                    // Pre sub-0: a SelfLink trip at the head_pc re-entry
-                    // unconditionally stamped `self_link_kind`. The
-                    // R3a `downrec_close` marker can only fire from the
+                    // Stamping `self_link_kind` unconditionally at the
+                    // head_pc re-entry would never dispatch: the
+                    // `downrec_close` marker can only fire from the
                     // depth>0 Op::Return path (`rec.retfs` chain),
                     // which never reaches the recorder for fib(28)-like
                     // shapes that hit the SelfLink cycle catch BEFORE
                     // any base-case Return — leaving `downrec_close`
-                    // None and routing the trace through R1's safe
-                    // `dispatchable=false` `"self-link-retf-r1"` path
-                    // (audit measured `trace_dispatched = 0`).
+                    // None and routing the trace through the safe
+                    // `dispatchable=false` `"self-link-retf-r1"` path.
                     //
-                    // Sub-0 lift: when the SelfLink trip fires AND
+                    // So when the SelfLink trip fires AND
                     // `cur_depth >= 2` (the count > RECUNROLL_THRESHOLD
                     // gate already requires this — kept explicit as a
                     // safety floor), route the close through `downrec_
@@ -6370,27 +6318,26 @@ impl Vm {
                     // recent Op::Call at depth `cur_depth - 1`:
                     //   - `return_pc` = `call.pc + 1` (caller's resume
                     //     PC after the recursive call returns; mirror
-                    //     of R3a's `caller_pc` derivation at the
+                    //     of the `caller_pc` derivation at the
                     //     depth>0 Op::Return capture path below).
                     //   - `target_proto` = `call.proto` (caller's
                     //     proto; equals `rec.head_proto` for self-
                     //     recursion).
-                    //   - `depth_delta` = `1` (today's recorder always
-                    //     unrolls one level; R3a uses the same
-                    //     constant).
+                    //   - `depth_delta` = `1` (the recorder always
+                    //     unrolls one level; the Op::Return path uses
+                    //     the same constant).
                     //
-                    // The lowerer's `end_idx` picker (`trace.rs:3729`)
-                    // routes through `TraceEnd::DownRec` ahead of the
-                    // `self_link_kind` arm; the R3b/R3d lowerer arm
-                    // emits the stitch-sentinel + caller-pc-guard
-                    // scaffold. Single-candidate guard chain (sub-0's
-                    // recorder produces 1 caller_pc candidate because
-                    // `rec.retfs` is empty) keeps `dispatchable=false`
-                    // + `"downrec-stitch-pending"` label (per R3d's
-                    // `multi_way_candidate_count >= 2` gate at
-                    // `trace.rs:7385`). Net behaviour: trace compiles
-                    // under DownRec routing; interp runs the
-                    // recursion naturally → result 317811.
+                    // The lowerer's `end_idx` picker routes through
+                    // `TraceEnd::DownRec` ahead of the `self_link_kind`
+                    // arm and emits the stitch-sentinel +
+                    // caller-pc-guard scaffold. A single-candidate guard
+                    // chain (this path produces 1 caller_pc candidate
+                    // because `rec.retfs` is empty) keeps
+                    // `dispatchable=false` + `"downrec-stitch-pending"`
+                    // label (the lowerer requires
+                    // `multi_way_candidate_count >= 2`). Net behaviour:
+                    // trace compiles under DownRec routing; interp runs
+                    // the recursion naturally.
                     //
                     // The `cur_depth >= 2` gate is automatically
                     // satisfied by the count > RECUNROLL_THRESHOLD=2
@@ -6400,12 +6347,9 @@ impl Vm {
                     // doesn't silently flip shallow-recursion
                     // shapes (cur_depth == 1) onto the DownRec arm.
                     //
-                    // R3.3+ sub-1/2/3/4 will replace the depth-baked
-                    // op_offsets[] addressing with runtime base_var
-                    // threading so the trace's recorded body is
-                    // depth-relative and the DownRec dispatch
-                    // becomes wall-clock-positive. Sub-0 is the
-                    // routing scaffold; it does not aim for gain.
+                    // The recorded body still uses depth-baked
+                    // op_offsets[] addressing, so this is routing
+                    // scaffolding and gives no speedup by itself.
                     let _ = kind;
                     let relaxed_to_downrec = cur_depth >= 2 && rec.downrec_close.is_none() && {
                         let caller_depth_u8 = (cur_depth - 1) as u8;
@@ -6424,9 +6368,9 @@ impl Vm {
                         }
                     };
                     if relaxed_to_downrec {
-                        // R2 close-cause taxonomy: tag the lift so
+                        // Close-cause taxonomy: tag the lift so
                         // probes can tally the fire rate. Mirrors
-                        // R3a's `"downrec-restart"` bump for the
+                        // the `"downrec-restart"` bump for the
                         // depth>0 Op::Return path (different trip
                         // origin, same downstream routing). The
                         // existing `"self-link-retf-r1"` label still
@@ -6445,7 +6389,7 @@ impl Vm {
                 let should_close =
                     at_head_loop || returned_past_head || depth_cap_hit || self_link_trip.is_some();
                 if should_close {
-                    // P13-S13-H — long-trace bias: a call-triggered
+                    // Long-trace bias: a call-triggered
                     // recording that closed with a very short body
                     // (fib base case: `Lt`/`Jmp`/`Return1` = 3 ops,
                     // binary_trees `make(0)`: 4 ops) is pathological.
@@ -6466,7 +6410,7 @@ impl Vm {
                     // tight numeric-for loop's body is legitimately
                     // 3 ops (`Add`, ForLoop) and DOES dispatch
                     // usefully when re-entered many times.
-                    // P13-S13-H — coverage heuristic to detect
+                    // Coverage heuristic to detect
                     // pathologically partial call-triggered traces:
                     // for self-recursive / branchy protos like
                     // `fib` (~17 bytecode ops) or
@@ -6488,7 +6432,7 @@ impl Vm {
                     // simple wrappers: `LoadI + Return1` = 2 ops)
                     // record 100% coverage even at length 2 — those
                     // ARE legitimately short and the closure /
-                    // sunk-emit lowering paths (S7-A / S9-C) make
+                    // sunk-emit lowering paths make
                     // them worth compiling. The heuristic admits
                     // them. fib's `[Lt, Jmp, Return1]` (3 of ~17)
                     // and make's `[Lt, Jmp, LoadI, Return1]` (4 of
@@ -6511,8 +6455,8 @@ impl Vm {
                     // can still record + cache a real trace.
                     let proto_code_len = rec.head_proto.code.len();
                     let is_partial_coverage = rec.ops.len() * 2 < proto_code_len;
-                    // P13-S13-I — per-Proto discard cap. The S13-H
-                    // relaxed trigger condition (`c >= THRESHOLD &&
+                    // Per-Proto discard cap. The relaxed
+                    // trigger condition (`c >= THRESHOLD &&
                     // !already_cached`) means a Proto whose every
                     // recording is partial-coverage will re-fire the
                     // trigger every call indefinitely (1500+ in
@@ -6527,7 +6471,7 @@ impl Vm {
                     const MAX_DISCARDS_PER_PROTO: u32 = 5;
                     let prior_discards = rec.head_proto.trace_discard_count.get();
                     let cap_reached = prior_discards >= MAX_DISCARDS_PER_PROTO;
-                    // P13-S13-K — flip the `gave_up` flag the
+                    // Flip the `gave_up` flag the
                     // moment cap is reached (BEFORE the close-
                     // dispatching branch below). The trigger gates
                     // short-circuit on this flag, skipping the
@@ -6547,7 +6491,7 @@ impl Vm {
                         // without compile/cache. Use the existing
                         // closed-lens accumulator so probes can
                         // observe the discarded shape.
-                        // P13-S13-I — bump discard count BEFORE
+                        // Bump discard count BEFORE
                         // dropping the recording so the next
                         // close sees the updated counter.
                         rec.head_proto.trace_discard_count.set(prior_discards + 1);
@@ -6556,12 +6500,10 @@ impl Vm {
                             .counters
                             .closed_lens
                             .push((rec.is_call_triggered, rec.ops.len()));
-                        // v2.0 Track-R R2 — partial-coverage discard
-                        // close path. Pre-R2 this site bumped `closed`
-                        // + `closed_lens` (visibility) but no per-
-                        // reason label, so probes couldn't separate a
-                        // real successful close from a discard tally.
-                        // Tag explicitly to make the recorder-side
+                        // Partial-coverage discard close path.
+                        // `closed` + `closed_lens` alone can't separate
+                        // a real successful close from a discard tally,
+                        // so tag explicitly to keep the recorder-side
                         // close-cause taxonomy single-source.
                         self.jit
                             .counters
@@ -6573,18 +6515,16 @@ impl Vm {
                         // the outer loop iteration handles it.
                     } else {
                         rec.closed = true;
-                        // P12-S2.C — detach the closed record, then try
+                        // Detach the closed record, then try
                         // to compile it. Dedup by `head_pc`: a Proto
                         // already carrying a CompiledTrace for this PC
                         // skips recompile (the hot counter caps
                         // re-recording at `u32::MAX / 2` anyway, but
                         // explicit dedup keeps `Proto.traces` short
-                        // for the S3 dispatcher's linear scan).
+                        // for the dispatcher's linear scan).
                         //
-                        // No `Vm::run` change for failure: we just bump
-                        // the failed counter and drop the record. S3
-                        // will read `Proto.traces` to decide whether to
-                        // dispatch — until then, this is bookkeeping.
+                        // On failure we just bump the failed counter
+                        // and drop the record.
                         let head_pc_val = rec.head_pc;
                         let closed_record = self
                             .jit
@@ -6596,7 +6536,7 @@ impl Vm {
                             .counters
                             .closed_lens
                             .push((closed_record.is_call_triggered, closed_record.ops.len()));
-                        // P12-S5-B fix: cache the trace on the
+                        // Cache the trace on the
                         // recorder's *head proto*, not the current
                         // closure's proto. For non-recursive
                         // call-triggered traces, close fires after
@@ -6606,9 +6546,8 @@ impl Vm {
                         // proto (the one we actually want the trace
                         // to be discoverable from on the next call).
                         // Self-recursive fib closed via depth-cap
-                        // mid-recursion so `cl.proto == head_proto`
-                        // happened to coincide — this fix makes that
-                        // accidental coincidence intentional.
+                        // mid-recursion, so `cl.proto == head_proto`
+                        // there, but only by coincidence.
                         let head_proto = closed_record.head_proto;
                         let already_cached = head_proto
                             .traces
@@ -6624,7 +6563,7 @@ impl Vm {
                             // stays valid. The lowerer auto-downgrades
                             // to one-shot for cmp-less or Call-truncating
                             // traces.
-                            // P15-A v2-C-A6-5 — side traces MUST NOT
+                            // Side traces MUST NOT
                             // internal-loop. The parent's recorded prefix
                             // (ops at PCs < side trace's head_pc) defines
                             // values for registers the child's body reads
@@ -6645,8 +6584,7 @@ impl Vm {
                                 pre53: self.version() <= LuaVersion::Lua53,
                                 aot: false,
                             };
-                            // v1.1 A1 Session A — route through trace_compiler.
-                            // v2.0 Track J sub-step J-B — split-borrow JitState
+                            // Route through trace_compiler; split-borrow JitState
                             // so the trait method can take `&mut dyn JitStorage`.
                             let result = {
                                 let jit = &mut self.jit;
@@ -6656,7 +6594,7 @@ impl Vm {
                             };
                             match result {
                                 Some(mut ct) => {
-                                    // P12-S5-A/B/C — tally Sinkable sites
+                                    // Tally Sinkable sites
                                     // + actually-sunk-emit sites + materialise
                                     // emit sites before moving `ct` into
                                     // Proto.traces.
@@ -6671,8 +6609,7 @@ impl Vm {
                                     if ct.is_inline_abort_close {
                                         self.jit.counters.inline_abort += 1;
                                     }
-                                    // v2.0 Stage 7 polish 6 fire
-                                    // experiment — split tally so a
+                                    // Split tally so a
                                     // probe can answer the AOT
                                     // `accepted_with_per_exit_inline`
                                     // gate's question at the JIT
@@ -6692,7 +6629,7 @@ impl Vm {
                                     }
                                     if let Some(reason) = ct.dispatch_off_reason {
                                         self.jit.counters.dispatch_off_reasons.push(reason);
-                                        // v2.0 Track-R R2 — mirror
+                                        // Mirror
                                         // the ordered Vec push into
                                         // the per-reason HashMap so
                                         // probes can answer "how many
@@ -6703,42 +6640,39 @@ impl Vm {
                                         // abort/discard tags above.
                                         self.jit.counters.bump_close_cause(reason);
                                     }
-                                    // v2.0 Track-R R3b — count
-                                    // compiled traces that carry a
-                                    // down-recursion stitch link.
-                                    // Bumped here (not at the lowerer
-                                    // emit site) because the Vm's
-                                    // JitCounters live on the Vm,
+                                    // Count compiled traces that
+                                    // carry a down-recursion stitch
+                                    // link. Bumped here (not at the
+                                    // lowerer emit site) because the
+                                    // Vm's JitCounters live on the Vm,
                                     // and the lowerer doesn't have a
-                                    // Vm handle. R3b's regression
-                                    // pin reads this via
+                                    // Vm handle. Read via
                                     // `Vm::trace_downrec_link_compiled_count`.
                                     if ct.downrec_link.is_some() {
                                         self.jit.counters.downrec_link_compiled += 1;
                                     }
-                                    // v2.0 Track-R R3d — multi-way
-                                    // guard emit counter. Bumped when
-                                    // the lowerer's R3d arm collected
+                                    // Multi-way guard emit counter.
+                                    // Bumped when the lowerer collected
                                     // >= 2 distinct caller_pc candidates
                                     // and lifted `dispatchable=true`.
-                                    // R3c's single-CMP shape stores
+                                    // The single-CMP shape stores
                                     // `1` here without bumping; non-
                                     // DownRec closes store `0`.
                                     if ct.downrec_multi_way_count >= 2 {
                                         self.jit.counters.multi_way_guard_emitted += 1;
                                     }
-                                    // P15-A v2-A — side-trace finalisation.
+                                    // Side-trace finalisation.
                                     // Pin `dispatchable=false` so the
                                     // primary lookup `traces.find(|t|
                                     // t.head_pc == pc && t.dispatchable)`
                                     // never matches this entry — the
                                     // side trace is meant to be entered
                                     // ONLY through the parent's exit
-                                    // indirection (v2-B/C IR), not the
+                                    // indirection, not the
                                     // back-edge / call-trigger paths.
                                     // Then write the entry fn ptr into
                                     // the parent's `exit_side_trace_ptrs`
-                                    // slot so v2-B/C IR can read it.
+                                    // slot so the parent's IR can read it.
                                     if let Some((parent_proto, parent_head_pc, parent_exit_idx)) =
                                         closed_record.side_trace_parent
                                     {
@@ -6761,14 +6695,14 @@ impl Vm {
                                             .iter()
                                             .find(|t| t.head_pc == parent_head_pc)
                                         {
-                                            // P15-A v2-C-A5-C — shape-match
+                                            // Shape-match
                                             // gate. Find the parent's per-exit
                                             // tag snapshot at the wired exit
                                             // (inline / tag / global) and
                                             // check the child's entry_tags
                                             // match. If not, leave the cell
                                             // null + skip cache populate so
-                                            // the future v2-C-A2 IR's
+                                            // the parent IR's
                                             // `call_indirect` stays inert at
                                             // this exit (the child's
                                             // shape-specialised IR would
@@ -6801,17 +6735,17 @@ impl Vm {
                                                 self.jit.counters.side_trace_shape_mismatch += 1;
                                             }
                                             let shape_ok = runnable && shape_matches;
-                                            // P15-A v2-C-A4 — write the child's
+                                            // Write the child's
                                             // entry fn ptr to BOTH the legacy
-                                            // v2-A `exit_side_trace_ptrs[idx]`
-                                            // cell (kept so v2-A's
-                                            // walk_any_side_ptr_non_null tests
-                                            // stay green) AND the per-kind cell
+                                            // `exit_side_trace_ptrs[idx]`
+                                            // cell (read by the
+                                            // walk_any_side_ptr_non_null tests)
+                                            // AND the per-kind cell
                                             // whose heap address the parent's
-                                            // IR baked (v2-C-A2). The IR-baked
+                                            // IR baked. The IR-baked
                                             // cell is what the call_indirect
                                             // gate actually reads. Only write
-                                            // when A5-C shape gate passes.
+                                            // when the shape gate passes.
                                             if shape_ok {
                                                 if let Some(cell) = parent_ct
                                                     .exit_side_trace_ptrs
@@ -6850,7 +6784,7 @@ impl Vm {
                                                     (crate::jit::trace::SIDE_SENT_KIND_GLOBAL, 0)
                                                 };
                                                 self.jit.counters.side_trace_compiled += 1;
-                                                // P15-A v2-D-A8 — flip the
+                                                // Flip the
                                                 // parent's fast-path hint so
                                                 // the dispatcher knows to do
                                                 // the tentative decode + cell
@@ -6860,7 +6794,7 @@ impl Vm {
                                                 // a side trace today).
                                                 parent_ct.has_any_side_wired.set(true);
 
-                                                // P15-A v2-C-A1/A4 — populate
+                                                // Populate
                                                 // the O(1) lookup cache the
                                                 // dispatcher consults on
                                                 // sentinel-bit-set returns.
@@ -6901,9 +6835,9 @@ impl Vm {
                                 }
                             }
                         }
-                    } // P13-S13-H — close the long-trace-bias else branch
+                    } // close the long-trace-bias else branch
                 } else {
-                    // P12-S4-step1 + step4a — depth-aware push at the
+                    // Depth-aware push at the
                     // current `cur_depth`. The `depth_cap_hit` /
                     // `returned_past_head` early-exit is handled by
                     // the `should_close` branch above; reaching here
@@ -6913,7 +6847,7 @@ impl Vm {
                     if depth_u8 > self.jit.max_depth_seen {
                         self.jit.max_depth_seen = depth_u8;
                     }
-                    // P12-S9-A — fix up a prior `Op::Call C=0` (multi-
+                    // Fix up a prior `Op::Call C=0` (multi-
                     // return / variable return count). Recorder pushed
                     // it with var_count=None before the call dispatched;
                     // now that the call has returned and we're about to
@@ -6930,7 +6864,7 @@ impl Vm {
                             last.var_count = Some(self.top - from);
                         }
                     }
-                    // P12-S9-A/C — for SetList B=0, snapshot the source
+                    // For SetList B=0, snapshot the source
                     // count = top - A - 1 (mirrors Lua's `n = top - ra
                     // - 1` from lvm.c OP_SETLIST). Sources are
                     // R[A+1..top), exclusive top. For Call C=0's
@@ -6958,10 +6892,10 @@ impl Vm {
                         inline_depth: depth_u8,
                         var_count,
                     };
-                    // v2.0 Track-R R1 — depth>0 Return0/Return1 mirrors
+                    // Depth>0 Return0/Return1 mirrors
                     // LuaJIT's `IR_RETF` (lj_record.c:922+ lj_record_ret).
                     // Captured as a side-channel `RetfRecord` parallel to
-                    // `ops` when `p16_self_link_enabled` is on. R3's
+                    // `ops` when `self_link_enabled` is on. The
                     // down-rec stitch consumes these to guard side-trace
                     // inlined-frame topology against the recorded shape.
                     // Gated on the same flag as the cycle catch so the
@@ -6969,7 +6903,7 @@ impl Vm {
                     // change. `caller_pc` is the recorded enclosing Call's
                     // pc + 1 — interp's resume point after the inlined
                     // frame pops.
-                    if self.jit.p16_self_link_enabled
+                    if self.jit.self_link_enabled
                         && depth_u8 > 0
                         && matches!(
                             inst.op(),
@@ -6991,7 +6925,7 @@ impl Vm {
                                 && matches!(r.inst.op(), crate::vm::isa::Op::Call)
                         });
                         let caller_pc = caller_call.map(|r| r.pc + 1).unwrap_or(pc);
-                        // v2.0 Track-R R3a — capture the caller's proto
+                        // Capture the caller's proto
                         // for the RetfRecord. LuaJIT `IR_RETF.op1`
                         // equivalent. For fib(28) the caller's proto
                         // equals the trace head; for future mutual
@@ -7007,7 +6941,7 @@ impl Vm {
                             caller_pc,
                             proto: caller_proto,
                         });
-                        // v2.0 Track-R R3a — DownRec close trigger:
+                        // DownRec close trigger:
                         // count RetfRecords on this recording whose
                         // `proto` matches `caller_proto` (LuaJIT
                         // `check_downrec_unroll` chain filter
@@ -7016,10 +6950,7 @@ impl Vm {
                         // `downrec_close` marker, subsequent retfs
                         // keep the marker without overwrite. The
                         // lowerer's end_idx picker routes through
-                        // TraceEnd::DownRec when the marker is set;
-                        // R3a's tail emit still falls through to R1's
-                        // safe deopt path so fib(28) result stays
-                        // 317_811. R3b lifts.
+                        // TraceEnd::DownRec when the marker is set.
                         if rec.downrec_close.is_none() {
                             let caller_proto_ptr = caller_proto.as_ptr();
                             let prior_match_count = rec
@@ -7036,16 +6967,16 @@ impl Vm {
                                     target_proto: caller_proto,
                                     depth_delta: 1,
                                 });
-                                // R2 close-cause taxonomy: tag the
-                                // restart with `"downrec-restart"`. R3b
-                                // adds `"downrec-stitch-failed"` when
+                                // Close-cause taxonomy: tag the
+                                // restart with `"downrec-restart"`. The
+                                // lowerer adds `"downrec-stitch-failed"` when
                                 // the lifted back-edge falls back to
                                 // deopt.
                                 self.jit.counters.bump_close_cause("downrec-restart");
                             }
                         }
                     }
-                    // v2.1 Phase 1I.B — capture FieldIcSnapshot for the
+                    // Capture FieldIcSnapshot for the
                     // FIRST eligible Op::GetField site under env-gate
                     // LUNA_JIT_FIELD_IC=1. "Eligible" means:
                     //   - R[B] is Value::Table with metatable.is_none()
@@ -7088,14 +7019,10 @@ impl Vm {
                         }
                     }
                     if !rec.push(op) {
-                        // v2.0 Track-R R2 — recorder overflow
-                        // (MAX_TRACE_LEN). Pre-R2 this site bumped
-                        // `aborted` with no reason label, leaving the
-                        // overflow indistinguishable from any other
-                        // abort cause that might be added later.
-                        // Tag it explicitly under the close-cause
-                        // bucket so probes can tally overflow vs
-                        // other abort causes in O(1).
+                        // Recorder overflow (MAX_TRACE_LEN). Tag it
+                        // explicitly under the close-cause bucket so
+                        // probes can tally overflow vs other abort
+                        // causes in O(1).
                         self.jit.active_trace = None;
                         self.jit.counters.aborted += 1;
                         self.jit.counters.bump_close_cause("trace-overflow");
@@ -7103,7 +7030,7 @@ impl Vm {
                 }
             }
 
-            // P12-S3 — trace JIT dispatcher.
+            // Trace JIT dispatcher.
             //
             // When the dispatch loop is about to execute the op at
             // `pc` and there's a `numeric_only` CompiledTrace cached
@@ -7130,14 +7057,11 @@ impl Vm {
             // interpreter run from the same `pc`. The trace itself
             // is left cached — a future entry might find no
             // metatable in the way and succeed.
-            // P17-A1 (Path C #3) — single Rc<CompiledTrace> clone instead
-            // of 6 per-field Rc clones. proto.traces is now
-            // Vec<Rc<CompiledTrace>>; the dispatcher clones ONE Rc and
-            // reads fields via auto-deref. fib_28 saves ~5 Rc::clone
-            // operations per dispatch × 434k = ~2.2M Rc atomic ops
-            // (~1-2% gain measured separately).
-            // v2.0 Track-R R3c — one-shot consume of the
-            // `suppress_downrec_admit_once` flag. Set by the R3c
+            // Single Rc<CompiledTrace> clone instead of per-field Rc
+            // clones: proto.traces is Vec<Rc<CompiledTrace>>; the
+            // dispatcher clones ONE Rc and reads fields via auto-deref.
+            // One-shot consume of the
+            // `suppress_downrec_admit_once` flag. Set by the
             // downrec post-invoke arm below when it force-deopts the
             // trace (caller-pc guard miss OR cycle-budget exhausted)
             // so the NEXT interpreter loop iteration skips the
@@ -7159,11 +7083,11 @@ impl Vm {
                                 return false;
                             }
                             let is_downrec = t.downrec_link.is_some();
-                            // v2.0 Track-R R3c — the one-shot suppress
+                            // The one-shot suppress
                             // flag blocks any admit (primary or fallback)
                             // for `downrec_link`-bearing traces so the
                             // next interp iter can run the natural op
-                            // at `head_pc` and advance past it. R3d's
+                            // at `head_pc` and advance past it. The multi-way
                             // `dispatchable=true` lift means the suppress
                             // must also cover the primary `t.dispatchable`
                             // arm — otherwise the lifted lookup would
@@ -7173,8 +7097,8 @@ impl Vm {
                                 return false;
                             }
                             // Primary arm: `dispatchable=true` traces
-                            // (R3d-lifted DownRec or normal traces).
-                            // Fallback arm: R3c-shape `dispatchable=false`
+                            // (lifted multi-way DownRec or normal traces).
+                            // Fallback arm: single-CMP `dispatchable=false`
                             // DownRec traces (single-CMP guard kept
                             // pinned because the 90% miss-rate would
                             // make blind admit perf-negative).
@@ -7183,10 +7107,10 @@ impl Vm {
                         .cloned()
                 }
             {
-                // Path C #6 — borrow Rc<[T]> fields as &Rc<[T]> instead
+                // Borrow Rc<[T]> fields as &Rc<[T]> instead
                 // of cloning. The outer `ct: Rc<CompiledTrace>` is held
                 // across the entire dispatch block so the fields outlive
-                // all consumers. Saves 5 Rc::clone per dispatch.
+                // all consumers.
                 let entry_fn = ct.entry;
                 let head_pc_val = ct.head_pc;
                 let window_size = ct.window_size;
@@ -7199,13 +7123,12 @@ impl Vm {
                 let max_stack = cl.proto.max_stack as usize;
                 let window_size_us = window_size as usize;
                 let base_us = base as usize;
-                // P12-S4-step3a — `reg_state` sized to the trace's
-                // `window_size`, which today equals max_stack but
-                // S4-step3b will expand for inlined frames.
+                // `reg_state` sized to the trace's `window_size`, which
+                // may exceed max_stack.
                 // Marshal-in still only writes [0..max_stack); slots
                 // [max_stack..window_size) are zero-initialised and
                 // filled by the trace's own GetUpval / arith.
-                // P13-S13-D — reuse the Vm's amortised buffers
+                // Reuse the Vm's amortised buffers
                 // instead of allocating fresh Vecs each dispatch.
                 // mem::take leaves an empty placeholder we restore
                 // at the end of the dispatch block (success +
@@ -7213,25 +7136,25 @@ impl Vm {
                 let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
                 entry_tags.clear();
                 entry_tags.reserve(max_stack);
-                // v2.0 Track-R R3c — this trace was admitted via the
+                // This trace was admitted via the
                 // `downrec_link.is_some()` arm rather than the normal
                 // `dispatchable=true` arm. The pre-invoke path
                 // populates a reserved saved-PC slot just past the
-                // normal register window so R3b's lowerer guard load
+                // normal register window so the lowerer's guard load
                 // (`reg_state[window_size]`) compares the runtime
                 // saved caller PC against the recorded `dr_return_pc`.
                 //
-                // v2.0 Track-R R3d — drop the `!ct.dispatchable`
-                // gate. After R3d lifts `dispatchable = true` for
-                // multi-way guards, the trace's body still emits the
-                // R3b/R3d sentinel shape on return — the saved-PC slot
+                // No `!ct.dispatchable` gate: when the lowerer lifts
+                // `dispatchable = true` for multi-way guards, the
+                // trace's body still emits the downrec sentinel shape
+                // on return — the saved-PC slot
                 // and post-invoke classifier must keep firing.
                 // `downrec_link.is_some()` is the unique structural
                 // signal that the trace closes via DownRec.
                 let is_downrec_entry = ct.downrec_link.is_some();
                 let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
                 reg_state.clear();
-                // v2.0 Track-R R3c — when admitting a downrec trace,
+                // When admitting a downrec trace,
                 // size the buffer to `window_size + 1` so the lowerer
                 // can `load(I64, ..., reg_state, window_size * 8)`
                 // for the saved caller PC guard input. The extra slot
@@ -7248,7 +7171,7 @@ impl Vm {
                     let v = self.stack[base_us + i];
                     let (tag, raw) = v.unpack();
                     entry_tags.push(tag);
-                    // P12-S12-C v3 — entry tag guard. The trace's IR
+                    // Entry tag guard. The trace's IR
                     // is specialised to the compile-time entry tags
                     // (via current_kinds propagation from
                     // from_entry_tag). A runtime tag mismatch means
@@ -7270,13 +7193,13 @@ impl Vm {
                         | crate::runtime::value::raw::FLOAT
                         | crate::runtime::value::raw::TABLE
                         | crate::runtime::value::raw::CLOSURE
-                        // P12-S12-B-v2 — Native iter slots (e.g.
+                        // Native iter slots (e.g.
                         // R[A] = ipairs_iter) are present in
                         // generic-for traces; the raw bits are a
                         // valid `*mut NativeClosure` and round-trip
                         // cleanly.
                         | crate::runtime::value::raw::NATIVE
-                        // P12-S12-C v1 — Str slots show up in
+                        // Str slots show up in
                         // string-concat traces; raw bits = `*mut
                         // LuaStr` (interned, GC-managed). Round-
                         // trips cleanly as a heap pointer.
@@ -7304,18 +7227,17 @@ impl Vm {
                         self.jit.counters.bump_close_cause("reached-compiled-trace");
                     }
                     self.jit.pending_err = None;
-                    // P12-S4-step4b-C-2 — snapshot the pre-entry frame
+                    // Snapshot the pre-entry frame
                     // count. A cmp@d>0 side-exit calls the materialize
                     // helper which pushes inlined frames onto
                     // `vm.frames`; on deopt those frames must be popped
                     // before falling through to the interpreter, else
                     // the stack grows unboundedly per deopted dispatch.
                     let pre_frames = self.frames.len();
-                    // v2.0 Track-R R3c — saved-PC slot population. The
+                    // Saved-PC slot population. The
                     // recorded `dr_return_pc` on the closing trace is
                     // the caller's resume PC captured at a depth>0
-                    // Return push (recorder push site, see R3a verdict
-                    // §3). The natural runtime analogue for self-
+                    // Return push (recorder push site). The natural runtime analogue for self-
                     // stitch is the dispatching frame's PARENT frame's
                     // PC: the trace's head_pc sits inside a Lua frame,
                     // and the parent (caller) frame's `pc` is what
@@ -7325,9 +7247,8 @@ impl Vm {
                     // — first invocation through `call_value`), no
                     // saved PC exists; we write 0, which always
                     // mismatches the recorded `dr_return_pc != 0`
-                    // invariant pinned by R3b
-                    // (`crates/luna-jit/src/jit_backend/trace.rs:7206
-                    // debug_assert!(dr_return_pc != 0, ...)`).
+                    // invariant (debug-asserted in the luna-jit trace
+                    // lowerer).
                     if is_downrec_entry {
                         let saved_pc: i64 = if pre_frames >= 2 {
                             match &self.frames[pre_frames - 2] {
@@ -7339,7 +7260,7 @@ impl Vm {
                         };
                         reg_state[window_size_us] = saved_pc;
                     }
-                    // v1.3 Phase AOT Stage 7 sub-piece 4 — `LUNA_AOT_PROBE`
+                    // `LUNA_AOT_PROBE`
                     // diagnostic hook. The probe fires once per trace dispatch
                     // (regardless of JIT vs AOT origin — both go through this
                     // arm), letting the AOT smoke test verify mcode actually
@@ -7351,7 +7272,7 @@ impl Vm {
                         eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
                     }
                     let continuation_pc = {
-                        // v1.1 A1 Session A — chunk_compiler.enter
+                        // chunk_compiler.enter
                         // (CraneliftBackend delegates to enter_jit;
                         // NullJitBackend returns an inert guard).
                         let vm_ptr: *mut Vm = self;
@@ -7364,7 +7285,7 @@ impl Vm {
                     if self.jit.pending_err.is_some() {
                         self.jit.pending_err = None;
                         self.jit.counters.deopt += 1;
-                        // P12-S4-step4b-C-2 — unwind any helper-pushed
+                        // Unwind any helper-pushed
                         // inlined frames before the interpreter resumes.
                         // Don't restore reg_state — the trace's partial
                         // writes are discarded; interp re-executes from
@@ -7373,7 +7294,7 @@ impl Vm {
                             frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         }
                         if is_downrec_entry {
-                            // v2.0 Track-R R3c — pending_err observed
+                            // pending_err observed
                             // mid-trace inside a downrec admit. Treat
                             // it as a guard miss: bump `downrec_deopt`
                             // and suppress the next downrec admit so
@@ -7384,7 +7305,7 @@ impl Vm {
                             self.jit.suppress_downrec_admit_once = true;
                         }
                     } else if is_downrec_entry && {
-                        // v2.0 Track-R R3d — only enter the R3c/R3d
+                        // Only enter the
                         // downrec classifier for returns whose shape
                         // matches the lowerer's `downrec_idx_opt` tail
                         // emit: either the stitch_blk DOWNREC sentinel
@@ -7397,10 +7318,10 @@ impl Vm {
                         // downrec close — classify those through the
                         // normal decode path (else branch below) so
                         // reg_state restores + pc advances correctly.
-                        // The pre-R3d behavior (R3c) classified them all
-                        // as MISS and skipped the normal restore, which
-                        // inflated `downrec_deopt` with non-downrec
-                        // events and lost the trace's mid-flight writes.
+                        // Classifying them all as MISS would skip the
+                        // normal restore, inflating `downrec_deopt` with
+                        // non-downrec events and losing the trace's
+                        // mid-flight writes.
                         let raw_ret = continuation_pc as u64;
                         let from_side_trace = (raw_ret >> 63) & 1 == 1;
                         let sentinel_code = if from_side_trace {
@@ -7418,7 +7339,7 @@ impl Vm {
                                 || (sentinel_code == global_deopt_code
                                     && raw_body == head_pc_val as u64))
                     } {
-                        // R3d downrec event classifier.
+                        // Downrec event classifier.
                         let raw_ret = continuation_pc as u64;
                         let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
                         if crate::jit::trace_types::is_downrec_sentinel(sentinel_code) {
@@ -7428,7 +7349,7 @@ impl Vm {
                             // sentinel. Cycle-safety checkpoint:
                             // decrement budget; on underflow,
                             // reclassify as deopt + reset budget.
-                            // R3d's `STITCH_DEPTH_DEFAULT = 32` lets
+                            // `STITCH_DEPTH_DEFAULT = 32` lets
                             // ~all natural HITs in a hot loop fire
                             // before reset pressure.
                             if self.jit.stitch_depth_remaining > 0 {
@@ -7451,7 +7372,7 @@ impl Vm {
                         }
                         self.jit.suppress_downrec_admit_once = true;
                         // Pop helper-pushed inlined frames (defensive —
-                        // R3d's emit shape doesn't push frames in the
+                        // the downrec emit shape doesn't push frames in the
                         // tail, but a body side-exit before reaching
                         // the tail may have via the materialize helper).
                         while self.frames.len() > pre_frames {
@@ -7463,17 +7384,17 @@ impl Vm {
                     } else {
                         // Restore each slot using the trace's
                         // exit-tag analysis (see ExitTag docs).
-                        // P12-S4-step4b-C-2 — decode the IR's
+                        // Decode the IR's
                         // side-exit shape. Upper 32 bits = (site_idx
                         // + 1) for inline cmp side-exits, 0 for
                         // legacy clean-tail / non-inline exits.
-                        // P15-A v2-C-A0 — decode lives in
+                        // The decode lives in
                         // `crate::jit::trace::decode_exit_shape` so
-                        // v2-C-A3 can reuse it with the SIDE TRACE's
-                        // shape inputs when the sentinel bit
-                        // (v2-C-A2) is set on `raw_ret`.
+                        // side-trace returns can reuse it with the SIDE
+                        // TRACE's shape inputs when the sentinel bit
+                        // is set on `raw_ret`.
                         let raw_ret = continuation_pc as u64;
-                        // P15-A v2-C-A3 — side-trace return decode.
+                        // Side-trace return decode.
                         // Bit 63 of `raw_ret` is the side-trace
                         // marker the parent's IR OR'd in when it
                         // tail-called into a wired child trace.
@@ -7554,27 +7475,14 @@ impl Vm {
                                 )
                             }
                         } else {
-                            // P15-A v2-D — dispatcher-level side-trace
-                            // invocation. Replaces v2-C's universal IR
-                            // gate (`load + icmp + brif` at every
-                            // emit_store_back callsite, which A6/A7
-                            // measured as a net perf regression).
-                            // A8 fast-path: skip the tentative decode +
-                            // child lookup entirely when `has_any_side
-                            // _wired == false` (the common case until
-                            // the first side trace compiles for this
-                            // parent). For fib_10_x10k and other tight
-                            // short-trace workloads where most parent
-                            // traces never get a wired child, this
-                            // collapses the v2-D overhead to a single
-                            // `Cell::get()` on the cold path.
-                            // A8-revert: A8 had `parent_has_side` short-
-                            // circuit + snapshot hoist; mini N=3 showed
-                            // A8 lost the btrees_d8 1.02× win (dropped
-                            // to 0.95×) WITHOUT helping fib_10 (same
-                            // 0.86×). Drop A8 — accept the always-run
-                            // v2-D path; the tentative decode + cell
-                            // load is cheaper than the cost A8 added.
+                            // Dispatcher-level side-trace invocation,
+                            // rather than an IR gate (`load + icmp +
+                            // brif`) at every emit_store_back callsite,
+                            // which measured as a net slowdown. The
+                            // tentative decode + cell load always runs:
+                            // short-circuiting it on a
+                            // `parent_has_side` hint measured slower on
+                            // btrees_d8 and no faster on fib_10.
                             {
                                 let tentative = crate::jit::trace::decode_exit_shape(
                                     raw_ret,
@@ -7612,7 +7520,7 @@ impl Vm {
                                 };
                                 if let Some((cent, cpi, cpt, cet, chc)) = child_invoke {
                                     let child_raw_ret = {
-                                        // v1.1 A1 Session A — chunk_compiler.enter
+                                        // chunk_compiler.enter
                                         // (side-trace entry).
                                         let vm_ptr: *mut Vm = self;
                                         let _guard =
@@ -7642,20 +7550,19 @@ impl Vm {
                         let cont_pc = decoded.cont_pc;
                         let exit_hit_idx = decoded.exit_hit_idx;
                         let exit_tags_for_pc = decoded.exit_tags_for_pc;
-                        // P15-A v2-C-A3 — for side-trace returns
+                        // For side-trace returns
                         // force using_global_exit_tags=false so the
                         // restore loop always takes the per-tag slow
                         // path (the child's global_tag_res_kind
-                        // classification isn't plumbed through yet
-                        // — TODO for a future polish step).
+                        // classification isn't plumbed through).
                         let using_global_exit_tags = if from_side_trace {
                             false
                         } else {
                             decoded.using_global_exit_tags
                         };
-                        // P15-prep — increment the counter (saturate
+                        // Increment the counter (saturate
                         // at u32::MAX to avoid wrap on long runs).
-                        // P15-A v1 — track whether this increment is
+                        // Track whether this increment is
                         // the one that crossed `HOTEXIT_THRESHOLD`
                         // (transition: previous v < threshold, new v
                         // == threshold). The side-trace start is
@@ -7663,7 +7570,7 @@ impl Vm {
                         // vm.stack and frame.pc are fully restored
                         // (the snapshot reads post-restore values).
                         let mut side_trace_should_start = false;
-                        // P15-A v2-C-A3 — for side-trace returns the
+                        // For side-trace returns the
                         // counter to bump is the CHILD's (decoded
                         // shape lookup) — `exit_hit_idx` is into the
                         // decoded layout, so use the matching
@@ -7682,7 +7589,7 @@ impl Vm {
                                 side_trace_should_start = true;
                             }
                         }
-                        // P12-S4-step4b-C-2 — at an inline cmp@d>0
+                        // At an inline cmp@d>0
                         // side-exit, the helper has pushed N frames on
                         // top of the trace head's frame and
                         // `exit_tags_for_pc.len()` covers the full
@@ -7694,7 +7601,7 @@ impl Vm {
                         // we write to interp stack at `base + i` which
                         // mirrors `op_offsets`-derived layout.
                         let slot_count = exit_tags_for_pc.len();
-                        // P12-S4-step4b-C-2 — the helper only extends
+                        // The helper only extends
                         // vm.stack up to the deepest pushed frame's
                         // window, but the exit_tags snapshot covers
                         // the trace's full `window_size` (which
@@ -7709,7 +7616,7 @@ impl Vm {
                             self.stack
                                 .resize(base_us + slot_count, crate::runtime::Value::Nil);
                         }
-                        // P13-S13-E — fast-path restore loop. When
+                        // Fast-path restore loop. When
                         // we landed on the global `exit_tags`,
                         // dispatch on the compile-time
                         // classification: skip the loop entirely
@@ -7781,7 +7688,7 @@ impl Vm {
                                     crate::jit::trace::ExitTag::Closure => {
                                         crate::runtime::value::raw::CLOSURE
                                     }
-                                    // P12-S6-A1 — trace actively wrote Nil
+                                    // Trace actively wrote Nil
                                     // to this slot (e.g. via Op::LoadNil).
                                     // Restore as Nil regardless of the entry
                                     // tag, since the i64 payload is 0 and
@@ -7790,7 +7697,7 @@ impl Vm {
                                     crate::jit::trace::ExitTag::Nil => {
                                         crate::runtime::value::raw::NIL
                                     }
-                                    // P12-S12-C v2 — trace wrote a Str ptr
+                                    // Trace wrote a Str ptr
                                     // to this slot (LoadK Str / Move from
                                     // Str / Concat result). Restore as
                                     // Value::Str with raw bits round-
@@ -7816,7 +7723,7 @@ impl Vm {
                                 };
                             }
                         }
-                        // P12-S4-step4b-C-2 — for non-inline exits the
+                        // For non-inline exits the
                         // helper was never called (no metas chain for
                         // this cont_pc), so `frames.last()` is the
                         // trace head's frame and we set its pc to
@@ -7828,7 +7735,7 @@ impl Vm {
                         // = cont_pc` is a redundant-but-correct
                         // confirmation.
                         let _ = &per_exit_inline; // hold the Rc alive across dispatch
-                        // P12-S4-step4b-C-2 — for inline side-exits the
+                        // For inline side-exits the
                         // helper has pushed N frames on top. The trace
                         // head frame is at `pre_frames - 1`; set its
                         // pc to `head_resume_pc` so when the chain
@@ -7870,7 +7777,7 @@ impl Vm {
                             }
                             _ => unreachable!("Cont frame at trace dispatch"),
                         }
-                        // P15-A v1 — deferred side-trace start. The
+                        // Deferred side-trace start. The
                         // increment block above flagged this exit's
                         // hit count crossing HOTEXIT_THRESHOLD; now
                         // that vm.stack is restored and frame.pc is
@@ -7918,7 +7825,7 @@ impl Vm {
                             self.jit.recording_frame_base = self.frames.len() - 1;
                             self.jit.counters.side_trace_started += 1;
                         }
-                        // P13-S13-D — put the dispatch buffers back
+                        // Put the dispatch buffers back
                         // before the `continue;` so the next
                         // dispatch picks up the same allocation.
                         self.jit.reg_state_buf = reg_state;
@@ -7926,7 +7833,7 @@ impl Vm {
                         continue;
                     }
                 }
-                // P13-S13-D — !dispatch_ok / deopt path / non-cont
+                // !dispatch_ok / deopt path / non-cont
                 // exit also restore the buffers before falling
                 // through to the interp.
                 self.jit.reg_state_buf = reg_state;
@@ -8060,13 +7967,12 @@ impl Vm {
                 Op::GetField => {
                     let t = self.r(base, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    // v1.2 D4 A1 — fast path: known-Str const key + no
+                    // Fast path: known-Str const key + no
                     // metatable on the table → skip `op_index` /
                     // `index_step`'s MAX_TAG_LOOP setup and the outer
                     // `Value` match. Falls through to the slow path
-                    // unchanged when either invariant breaks (so
-                    // `__index` metamethods, non-Table receivers, and
-                    // non-Str keys behave exactly as before).
+                    // when either invariant breaks (`__index`
+                    // metamethods, non-Table receivers, non-Str keys).
                     if let Value::Table(tb) = t
                         && tb.metatable().is_none()
                         && let Value::Str(s) = key
@@ -8252,12 +8158,11 @@ impl Vm {
                 }
                 Op::Jmp => {
                     let off = inst.sj();
-                    // P12-S1.B — trace JIT back-edge counter. A negative
+                    // Trace JIT back-edge counter. A negative
                     // jump offset is a loop back-edge (the only canonical
                     // backward jumps the compiler emits — `while`, `for`,
                     // `repeat`). Tick the per-Proto counter and, once it
-                    // exceeds the threshold, log a stub promotion that
-                    // S1.C will turn into actual trace recording. The
+                    // exceeds the threshold, start a trace recording. The
                     // whole block is gated on `trace_jit_enabled` so
                     // existing benches see one branch-not-taken and no
                     // counter writes.
@@ -8267,8 +8172,8 @@ impl Vm {
                         if c < u32::MAX / 2 {
                             proto.trace_hot_count.set(c + 1);
                         }
-                        // P13-S13-H — relaxed back-edge trigger:
-                        // `c >= THRESHOLD` (was `c == THRESHOLD`) so
+                        // Relaxed back-edge trigger:
+                        // `c >= THRESHOLD` (not `c == THRESHOLD`) so
                         // a missed crossing (active_trace busy with
                         // a call-trigger, or the recorder slot
                         // happened to be in use) doesn't permanently
@@ -8277,14 +8182,14 @@ impl Vm {
                         // duplicate recordings: once a trace is
                         // cached for this target, subsequent
                         // crossings skip the start. This pairs with
-                        // S13-H's discard-on-partial-coverage close
+                        // the discard-on-partial-coverage close
                         // handling — when a short call-trigger is
                         // discarded, the back-edge can still find an
                         // open slot at the next iteration.
                         let target_pc = (pc as i32 + 1 + off as i32).max(0) as u32;
-                        // P13-S13-K — gave-up short-circuit. Skip
+                        // Gave-up short-circuit. Skip
                         // the RefCell borrow + scan when the
-                        // S13-I cap force-compiled a partial
+                        // discard cap force-compiled a partial
                         // trace on this Proto.
                         let back_edge_already_cached = if proto.trace_gave_up.get() {
                             true
@@ -8315,7 +8220,7 @@ impl Vm {
                                 Some(Box::new(crate::jit::trace::TraceRecord::start(
                                     cl.proto, target, entry_tags, false,
                                 )));
-                            // P12-S4 — record the frame the trace
+                            // Record the frame the trace
                             // started in. `self.frames.len() - 1`
                             // since we're inside the currently-running
                             // Lua frame's dispatch.
@@ -8471,7 +8376,7 @@ impl Vm {
                             self.stack[(fr.func_slot + i) as usize] =
                                 self.stack[(abs + i) as usize];
                         }
-                        // v2.5 P1B-2A: clear the slot range that's now
+                        // Clear the slot range that's now
                         // stranded by the tail-call collapse. The args
                         // were copied to `[fr.func_slot..fr.func_slot+
                         // nargs+1)`; the source slots `[abs..abs+
@@ -8479,8 +8384,8 @@ impl Vm {
                         // / Value::Str / ...` entries, but they're past
                         // the new call's window. Without this clear, a
                         // later GC with wider gc_top would mark stale
-                        // pointers there (same UAF-A family the v2.3
-                        // finish_results slot-clear closed for the
+                        // pointers there (same hazard the
+                        // finish_results slot-clear closes for the
                         // Op::Return path).
                         let new_top_lower_bound = fr.func_slot + nargs + 1;
                         let prev_top = (self.top as usize).min(self.stack.len());
@@ -8553,7 +8458,7 @@ impl Vm {
                 }
                 Op::ForPrep => self.for_prep(inst, base)?,
                 Op::ForLoop => {
-                    // P12 — trace JIT back-edge counter on the
+                    // Trace JIT back-edge counter on the
                     // numeric-for back-edge. ForLoop is always at
                     // a back-edge position (when it continues);
                     // for the trace recorder we treat it as the
@@ -8605,7 +8510,7 @@ impl Vm {
                                     Some(Box::new(crate::jit::trace::TraceRecord::start(
                                         cl.proto, target, entry_tags, false,
                                     )));
-                                // P12-S4 — record the frame the trace
+                                // Record the frame the trace
                                 // started in. The currently-running
                                 // Lua frame is at len() - 1.
                                 self.jit.recording_frame_base = self.frames.len() - 1;
@@ -8635,14 +8540,13 @@ impl Vm {
                     let a = inst.a();
                     let ctrl = self.r(base, a + 4);
                     if !ctrl.is_nil() {
-                        // P12-S12-B v1 — trace JIT back-edge counter on
+                        // Trace JIT back-edge counter on
                         // generic-for back-edge. TForLoop sits at the
                         // tail of `for k,v in expr do ... end`; recorder
                         // treats it as the close-detection equivalent of
                         // a negative Op::Jmp. Gate on `take_back_edge`
                         // (= `ctrl != nil`) so empty-iter loops don't
-                        // pollute hot_count. v1 only adds the trigger;
-                        // whitelist + helper + emit live in v2.
+                        // pollute hot_count.
                         if self.jit.trace_enabled {
                             let proto = cl.proto;
                             let c = proto.trace_hot_count.get();
@@ -8664,7 +8568,7 @@ impl Vm {
                                     let (tag, _) = self.stack[base_us + i].unpack();
                                     entry_tags.push(tag);
                                 }
-                                // P12-S12-B-v5 — snapshot the iter
+                                // Snapshot the iter
                                 // fn's address if Native, so the
                                 // lowerer can specialise ipairs into
                                 // inline Table aget IR.
@@ -8674,14 +8578,14 @@ impl Vm {
                                     } else {
                                         None
                                     };
-                                // P12-S12-C v3 — snapshot R[A+5]'s
+                                // Snapshot R[A+5]'s
                                 // tag (= current iter's val from
-                                // the just-fired TForCall). The v5
+                                // the just-fired TForCall). The
                                 // inline aget fast_blk emits a
                                 // runtime guard against this tag;
                                 // mixed-tag arrays deopt rather
                                 // than producing garbage pointers
-                                // through the v2 spill path.
+                                // through the spill path.
                                 let val_slot = base_us + (a as usize) + 5;
                                 let val_tag = if val_slot < self.stack.len() {
                                     Some(self.stack[val_slot].unpack().0)
@@ -8704,7 +8608,7 @@ impl Vm {
                 Op::Closure => {
                     let proto = cl.proto.protos[inst.bx() as usize];
                     let n_ups = proto.upvals.len();
-                    // P11-S5d.M — build upvals on the stack for small
+                    // Build upvals on the stack for small
                     // closures, skipping the per-call Vec/Box alloc
                     // that closure_alloc's 10k iters pay. INLINE_UPVALS_N
                     // = 2 covers most Lua source (1 captured local, or
@@ -9075,7 +8979,7 @@ impl Vm {
     /// performed inline (returning `Done`); only a function metamethod (`Mm`)
     /// needs an actual call — which the caller may run yieldably.
     fn newindex_step(&mut self, t: Value, key: Value, v: Value) -> Result<MmOut, LuaError> {
-        // v2.13 WUC read-time probe (gc-verify): a dead query key at a
+        // Read-time probe (gc-verify): a dead query key at a
         // WRITE site, attributed to the instruction that produced it.
         #[cfg(feature = "gc-verify")]
         if let Some(p) = match key {
@@ -9110,12 +9014,12 @@ impl Vm {
         for _ in 0..self.tag_loop_limit() {
             let mm = match cur {
                 Value::Table(tb) => {
-                    // PI-A3 single-walk collapse — Table::try_set_existing
+                    // Single-walk collapse — Table::try_set_existing
                     // fuses the prior `tb.get(key).is_nil()` gate and
                     // `raw_set` walk into one chain traversal when the
                     // key is already present with a non-nil value. The
                     // __newindex chain semantics are preserved by the
-                    // identity (slot_nil ⇔ fire_newindex); see
+                    // identity (slot_nil ⇔ fire_newindex).
                     //
                     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the
                     // heap is single-threaded and the pointer is live as
@@ -9897,7 +9801,7 @@ impl Vm {
         Ok(self.tostring_basic(v))
     }
 
-    /// The dialect's float-rendering flavor (v2.14 HD): ≤5.2 %.14g
+    /// The dialect's float-rendering flavor: ≤5.2 %.14g
     /// bare, 5.3/5.4 %.14g + ".0", 5.5 two-stage %.15g/%.17g + ".0".
     pub(crate) fn float_fmt(&self) -> numeric::FloatFmt {
         use crate::version::LuaVersion::*;
@@ -10361,7 +10265,7 @@ impl Vm {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// v1.3 Phase AOT Stage 7 sub-piece 4 — AOT trace dispatch install.
+// AOT trace dispatch install.
 //
 // The deploy-side resolver in `luna-runtime-helpers` walks the binary's
 // trace-meta section after `vm.load`, resolves each entry's
@@ -10379,7 +10283,7 @@ impl Vm {
 // ────────────────────────────────────────────────────────────────────
 
 impl Vm {
-    /// v1.3 Phase AOT Stage 7 sub-piece 4 — install a precompiled
+    /// Install a precompiled
     /// `CompiledTrace` onto `proto.traces` so the interp dispatcher
     /// fires it at the trace's `head_pc`. This is the runtime install
     /// API the deploy-side `luna-runtime-helpers` resolver calls once
@@ -10438,7 +10342,7 @@ impl Vm {
         proto.traces.borrow_mut().push(TArc::new(trace));
     }
 
-    /// v1.3 Phase AOT Stage 7 sub-piece 4 — walk the proto tree
+    /// Walk the proto tree
     /// reachable from `root` and return `(proto, stable_hash)` pairs
     /// for every Proto found. Used by the deploy-side resolver to
     /// match AOT-emitted `proto_hash` keys against the freshly

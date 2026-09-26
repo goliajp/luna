@@ -1,4 +1,4 @@
-//! v2.0 Phase 9 C4 — `Table::find_node_str` + `Table::get_str` +
+//! `Table::find_node_str` + `Table::get_str` +
 //! `Table::try_set_existing_str` str-key fast-path regression tests.
 //!
 //! The fast-path skips `find_node`'s 12-arm `raw_eq` and `hash_key`'s
@@ -135,7 +135,7 @@ fn setfield_round_trips_via_getfield_and_gettable() {
 
 #[test]
 fn setfield_overwrites_existing_no_metatable() {
-    // Stay on the C4 fast-path: bare table, no metatable, Str key.
+    // Stay on the str-key fast-path: bare table, no metatable, Str key.
     let v = eval_int(
         r#"
         local t = { tokens = 1000, last = 0, rate = 100 }
@@ -202,8 +202,8 @@ fn setfield_with_metatable_routes_through_newindex_chain() {
 
 #[test]
 fn setfield_present_key_with_newindex_metatable_still_in_place() {
-    // PI A3 collapse rule: present-with-non-nil writes NEVER fire
-    // __newindex even with a metatable installed. The C4 SetField fast
+    // Collapse rule: present-with-non-nil writes NEVER fire
+    // __newindex even with a metatable installed. The str-key SetField fast
     // path is gated by metatable.is_none() so this case falls to
     // op_newindex / try_set_existing — must preserve the rule.
     let v = eval_int(
@@ -246,13 +246,13 @@ fn long_string_key_via_getfield_matches_gettable() {
 }
 
 // ---------------------------------------------------------------------
-// Token-bucket replica — the chartered workload shape
+// Token-bucket replica — the benchmark workload shape
 // ---------------------------------------------------------------------
 
 #[test]
 fn token_bucket_shape_terminates_with_expected_state() {
     // Mirror the token_bucket_1k inner loop (5 GetField + 3 SetField/
-    // iter on the bucket table). Verifies the C4 fast-path produces
+    // iter on the bucket table). Verifies the str-key fast-path produces
     // the same state vector as the reference Lua semantics.
     let v = eval_int(
         r#"

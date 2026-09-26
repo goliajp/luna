@@ -1,12 +1,9 @@
-//! v2.1 PI — A4''' prereq jump-target tracker subsystem tests.
+//! Jump-target tracker tests.
 //!
 //! Cover the `Level::last_target` PUC `fs->lasttarget` equivalent and the
-//! `patch_to_here` / `mark_target` wiring at
-//! `crates/luna-core/src/compiler/mod.rs`. The tracker is currently
-//! behaviour-neutral (no codegen path reads it yet — see
-//! `prev_emit_is_safe_peephole_site`), so these tests verify the
-//! tracker is correct against PUC `fs->lasttarget` semantics in
-//! preparation for the A4''' Reloc-landing peephole follow-up.
+//! `patch_to_here` / `mark_target` wiring in
+//! `crates/luna-core/src/compiler/mod.rs`, checked against PUC
+//! `fs->lasttarget` semantics.
 //!
 //! Per-pattern coverage:
 //! - chunk with no jumps: tracker stays at `None`
@@ -33,8 +30,9 @@ use luna_core::version::LuaVersion;
 fn compile_last_target(src: &str) -> (Vec<luna_core::vm::isa::Inst>, Option<usize>) {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
     let mut heap = Heap::new();
-    let (proto, lt) = compile_chunk_with_last_target(&ast, LuaVersion::Lua55, b"=a4ppp", &mut heap)
-        .expect("compile");
+    let (proto, lt) =
+        compile_chunk_with_last_target(&ast, LuaVersion::Lua55, b"=jump_targets", &mut heap)
+            .expect("compile");
     (proto.code.to_vec(), lt)
 }
 

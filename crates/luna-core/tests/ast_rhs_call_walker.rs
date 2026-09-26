@@ -1,5 +1,5 @@
-//! v2.1 Phase 11 — A4' prerequisite tests for the RHS Call walker and the
-//! AST-side metamethod-safety gate.
+//! Tests for the RHS Call walker and the AST-side metamethod-safety
+//! gate.
 //!
 //! These cover the helpers added in
 //! `crates/luna-core/src/frontend/ast.rs`:
@@ -7,7 +7,7 @@
 //! - [`walk_rhs_for_calls`] — partitions reachable Call / MethodCall sites
 //!   into `None / OnlyKnownPure / UserOrUnknown`.
 //! - [`metamethod_safe_for_index_lhs`] — the bare-Name obj + safe-RHS
-//!   gate the consumer (a future A4' attack) will compose with the
+//!   gate the Index-LHS snapshot elision composes with the
 //!   `LocalVar.captured` check inside `Compiler`.
 //!
 //! Each test parses a one-statement Lua snippet (an assignment), reaches
@@ -163,7 +163,7 @@ fn walker_paren_and_unop_preserve_pure() {
 #[test]
 fn walker_os_clock_is_user_or_unknown() {
     // `os` is intentionally NOT on the known-pure root list — even
-    // os.clock is conservatively treated as unknown for v2.1 ship.
+    // os.clock is conservatively treated as unknown.
     let c = p("local t = {} t.v = os.clock()");
     let (_, exprs) = assign_parts(&c);
     assert_eq!(walk_rhs_for_calls(&c, exprs[0]), RhsCallScan::UserOrUnknown);
@@ -183,7 +183,7 @@ fn gate_safe_for_local_obj_with_literal_rhs() {
 
 #[test]
 fn gate_safe_for_local_obj_with_math_min_rhs() {
-    // The exact token_bucket pc 20 shape (RFC §2.2).
+    // The exact token_bucket pc 20 shape.
     let c = p("local bucket = {tokens=0} bucket.tokens = math.min(1000, bucket.tokens + 1)");
     let (targets, exprs) = assign_parts(&c);
     let (obj, _) = index_obj_key(&c, targets[0]);
@@ -211,7 +211,7 @@ fn gate_rejects_method_call_rhs() {
 #[test]
 fn gate_rejects_non_name_obj_dotted_chain() {
     // `t.a.b = 1` — obj is itself `Index{ t, "a" }`, not a bare Name.
-    // A4' v1 does not handle this case.
+    // The elision does not handle this case.
     let c = p("local t = {a={}} t.a.b = 1");
     let (targets, exprs) = assign_parts(&c);
     let (obj, _) = index_obj_key(&c, targets[0]);

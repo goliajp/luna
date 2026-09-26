@@ -1,6 +1,5 @@
 //! Byte-stream reader shared by `super::luna` (luna's own body format) and
-//! the per-dialect PUC translators landing in Phase LB Wave 2
-//! (`super::puc::puc_5{1,2,3,4,5}`).
+//! the per-dialect PUC translators (`super::puc::puc_5{1,2,3,4,5}`).
 //!
 //! Stays stdlib-only — the luna-core 0-dep contract forbids pulling in
 //! `byteorder`, `nom`, or a ULEB128 crate.
@@ -15,7 +14,7 @@ pub(super) struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     /// Start a reader at byte offset 0.
-    #[allow(dead_code)] // not yet used; Phase LB Wave 2 will via puc::undump_puc
+    #[allow(dead_code)] // not used yet
     pub(super) fn new(b: &'a [u8]) -> Self {
         Self { b, p: 0 }
     }
@@ -98,13 +97,12 @@ impl<'a> Reader<'a> {
 /// > `acc = (acc << 7) | (b & 0x7f)`.
 ///
 /// (Note: this is the MIRROR of LEB128 / DWARF "continuation = high bit
-/// set, LSB-first". Wave 1's stub doc-comment had it backwards; corrected
-/// here from a direct read of `lua-5.5.1/src/ldump.c::dumpVarint` and
+/// set, LSB-first"; see `lua-5.5.1/src/ldump.c::dumpVarint` and
 /// `lua-5.5.1/src/lundump.c::loadVarint`.)
 ///
 /// Hand-rolled to keep the luna-core 0-dep contract (no `leb128` crate).
 /// Caps at 10 payload bytes (u64 saturation); rejects overflow.
-#[allow(dead_code)] // Phase LB Wave 2 (5.4 / 5.5 translators) call this
+#[allow(dead_code)] // only the PUC translators call this
 pub(super) fn read_puc_varint(r: &mut Reader) -> Result<u64, Bad> {
     let mut acc: u64 = 0;
     for _ in 0..10 {

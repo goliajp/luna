@@ -1,4 +1,4 @@
-//! P3 B8 smoke tests: host userdata payloads + downcast.
+//! Smoke tests: host userdata payloads + downcast.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

@@ -1,5 +1,4 @@
-//! v1.3 Phase AOT Stage 7 sub-piece 4 — wire format for AOT trace
-//! metadata.
+//! Wire format for AOT trace metadata.
 //!
 //! # Why a luna-core module
 //!
@@ -18,18 +17,18 @@
 //!
 //! # 0-dep contract
 //!
-//! Hand-rolled `u8` packing — no `bincode`, no `serde`. Format is
-//! stable across the v1.3 line (header carries [`AOT_META_MAGIC`] +
+//! Hand-rolled `u8` packing — no `bincode`, no `serde`. The header
+//! carries [`AOT_META_MAGIC`] +
 //! [`AOT_META_VERSION`]; a mismatch on the deploy side is a hard
-//! reject, not silent fallback).
+//! reject, not silent fallback.
 //!
 //! # Wire format versions
 //!
-//! - **v1** — sub-piece-4 minimal cut. Fields: `head_pc`, `n_ops`,
+//! - **v1** — minimal format. Fields: `head_pc`, `n_ops`,
 //!   `window_size`, `dispatchable`, `entry_tags`, `exit_tags`,
 //!   `global_tag_res_kind`. Only "simple" traces (no inline side-
 //!   exits, no per-cont_pc tag exits) installable.
-//! - **v2** — Stage 7 trace-coverage follow-up. Appends a trailing
+//! - **v2** — Appends a trailing
 //!   `per_exit_tags` array (`(cont_pc, [ExitTag])` per entry) so
 //!   traces with typed-register side-exit guards (GetUpval-heavy
 //!   closures, type-specialized GetField loops) are AOT-installable.
@@ -104,14 +103,14 @@ use crate::jit::trace_types::{ExitTag, FrameMaterializeInfo, TagResKind};
 /// causing arbitrary deserialization.
 pub const AOT_META_MAGIC: u32 = 0xAA77_0001;
 
-/// Wire-format version. v1 = minimal cut (sub-piece 4). v2 = appends
+/// Wire-format version. v1 = minimal format. v2 = appends
 /// trailing `per_exit_tags` block so typed-register side-exits
 /// (GetUpval-heavy traces) install at deploy time. v3 = appends a
 /// second trailing block carrying `per_exit_inline` data so
 /// depth>0 inlined cmp side-exits can be rebuilt at install time
 /// (the trace mcode side still needs a relocatable-slot scheme
 /// before non-empty inline entries can actually be emitted —
-/// module docs go into the staging plan).
+/// see the module docs).
 ///
 /// **Forward compatibility contract**: a v3 writer emits the same
 /// fixed-prefix header layout as v1/v2 plus the v2 tail (always

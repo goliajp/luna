@@ -1,4 +1,4 @@
-//! coroutine library (P05): create / resume / yield / wrap / status / running /
+//! coroutine library: create / resume / yield / wrap / status / running /
 //! isyieldable / close. The heavy lifting (context swapping, the yield signal)
 //! lives on `Vm` in exec.rs; these are the thin library wrappers, shaped per
 //! dialect after 5.1's lbaselib and 5.2–5.5's lcorolib.

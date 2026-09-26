@@ -1,7 +1,7 @@
-//! v2.1 Track J-C Phase C — 0-cost default verification.
+//! 0-cost default verification.
 //!
 //! Pins the invariant that bare `Vm` (default features) pays NO
-//! Arc/Atomic overhead from the J-C IR migration. The trace-IR
+//! Arc/Atomic overhead from the Send-capable trace IR. The trace-IR
 //! wrapper types in `luna_core::jit::send_compat` are
 //! `#[repr(transparent)]` over their inner `Cell` / `RefCell` under
 //! the default feature set; this test pins the byte-equivalence at
@@ -82,7 +82,7 @@ fn t_ref_lock_matches_ref_cell() {
 
 /// `Box<TCellPtr>` is `Box<Cell<*const u8>>` — pointer to a cell on
 /// the heap; the IR bakes the inner cell's heap address via this
-/// type. Critical for the IR-layout invariant in Phase B.
+/// type. Critical for the IR-layout invariant.
 #[test]
 fn boxed_t_cell_ptr_matches_boxed_cell_ptr() {
     assert_eq!(
@@ -96,12 +96,11 @@ fn boxed_t_cell_ptr_matches_boxed_cell_ptr() {
     );
 }
 
-/// Bare `Vm` size must not balloon from the J-C migration. We can't
-/// pin an exact byte count (changes with new fields landing in other
-/// tracks), but we can pin a ceiling derived from pre-J-C develop tip
-/// `e2ce3ac` (~2.2 KB on arm64). If future Vm growth pushes past this
-/// in the J-C path, the assertion will surface so the bump can be
-/// reviewed before merge.
+/// Bare `Vm` size must not balloon from the Send-capable IR wrappers.
+/// We can't pin an exact byte count (it changes as new fields land),
+/// but we can pin a ceiling derived from the size before the wrappers
+/// existed (~2.2 KB on arm64). If Vm growth pushes past this, the
+/// assertion will surface so the bump can be reviewed before merge.
 #[test]
 fn vm_size_default_features_stays_modest() {
     let sz = std::mem::size_of::<luna_core::vm::Vm>();

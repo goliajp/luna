@@ -1,8 +1,8 @@
-//! v2.0 Phase 5 CV gap fill — Lua-surface pattern-matching coverage.
+//! Lua-surface pattern-matching coverage.
 //!
 //! `crates/luna-core/src/pattern.rs` has a small inline `#[cfg(test)]`
 //! module covering basics + sets/quantifiers + captures + a handful
-//! of error cases. The audit-flagged gap is **integration-level
+//! of error cases. The gap covered here is **integration-level
 //! coverage through the `string.match` / `string.find` /
 //! `string.gmatch` / `string.gsub` Lua APIs** — the path that
 //! actually carries real-world traffic and that wires
@@ -31,7 +31,9 @@ fn vm() -> Vm {
 }
 
 fn eval_str(vm: &mut Vm, src: &str) -> String {
-    let cl = vm.load(src.as_bytes(), b"=cv_pattern").expect("load");
+    let cl = vm
+        .load(src.as_bytes(), b"=string_pattern_matching")
+        .expect("load");
     let r = vm.call_value(Value::Closure(cl), &[]).expect("eval");
     match r.into_iter().next().unwrap_or(Value::Nil) {
         Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).to_string(),
@@ -40,7 +42,9 @@ fn eval_str(vm: &mut Vm, src: &str) -> String {
 }
 
 fn eval_int(vm: &mut Vm, src: &str) -> i64 {
-    let cl = vm.load(src.as_bytes(), b"=cv_pattern").expect("load");
+    let cl = vm
+        .load(src.as_bytes(), b"=string_pattern_matching")
+        .expect("load");
     let r = vm.call_value(Value::Closure(cl), &[]).expect("eval");
     match r.into_iter().next().unwrap_or(Value::Nil) {
         Value::Int(n) => n,
@@ -183,7 +187,7 @@ fn pattern_multi_capture_groups() {
         .load(
             br#"local a, b, c = string.match("abc123xyz", "(%a+)(%d+)(%a+)")
                return a .. "|" .. b .. "|" .. c"#,
-            b"=cv_pattern",
+            b"=string_pattern_matching",
         )
         .expect("load");
     let r = v.call_value(Value::Closure(cl), &[]).expect("eval");
@@ -237,7 +241,7 @@ fn pattern_gmatch_iterator() {
                  out[#out+1] = w
                end
                return out[1] .. "|" .. out[2] .. "|" .. out[3] .. "|" .. #out"#,
-            b"=cv_pattern",
+            b"=string_pattern_matching",
         )
         .expect("load");
     let r = v.call_value(Value::Closure(cl), &[]).expect("eval");
@@ -259,7 +263,7 @@ fn pattern_gmatch_yields_captures() {
                  out = out .. k .. ":" .. v .. ";"
                end
                return out"#,
-            b"=cv_pattern",
+            b"=string_pattern_matching",
         )
         .expect("load");
     let r = v.call_value(Value::Closure(cl), &[]).expect("eval");
@@ -306,7 +310,7 @@ fn pattern_gsub_count_return() {
         .load(
             br#"local s, n = string.gsub("a-b-c-d", "-", "/")
                return s .. ":" .. n"#,
-            b"=cv_pattern",
+            b"=string_pattern_matching",
         )
         .expect("load");
     let r = v.call_value(Value::Closure(cl), &[]).expect("eval");
@@ -324,7 +328,7 @@ fn pattern_gsub_max_replacements() {
         .load(
             br#"local s, n = string.gsub("a-b-c-d-e", "-", "/", 2)
                return s .. ":" .. n"#,
-            b"=cv_pattern",
+            b"=string_pattern_matching",
         )
         .expect("load");
     let r = v.call_value(Value::Closure(cl), &[]).expect("eval");

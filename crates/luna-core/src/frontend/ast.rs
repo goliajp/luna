@@ -448,7 +448,7 @@ impl Chunk {
     }
 }
 
-/// P11-S5d.N — does any expression in `block` (and nested control-flow,
+/// Does any expression in `block` (and nested control-flow,
 /// but NOT nested `Expr::Function` bodies) use `Expr::Vararg`?
 ///
 /// PUC 5.1 `LUAI_COMPAT_VARARG` heuristic: a `(...)` function gets a
@@ -545,22 +545,18 @@ fn table_field_uses_vararg(chunk: &Chunk, f: &TableField) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// v2.1 Phase 11 — A4' prerequisite: RHS Call walker + metamethod-safety gate.
+// RHS Call walker + metamethod-safety gate.
 // ---------------------------------------------------------------------------
 //
-// A4' (RFC `v2.0-pi-phase11-a4-prime-rfc.md` §2) wants to skip the Index-LHS
-// object snapshot Move at `compiler/mod.rs:2490` when the RHS of an assignment
-// cannot re-bind the LHS local through a `__newindex` closure. The two helpers
-// below model just the AST-side gate; the consumer (a future A4' attack) is
-// expected to combine them with `LocalVar.captured` and target-arity checks.
-//
-// Pure additive in this batch: no current compile path calls these, so the
-// only risk is dead-code warnings, which are silenced via #[allow] on the
-// pub(crate) wrappers below until A4' wires them up.
+// The compiler skips the Index-LHS object snapshot Move in `assign_stat` when
+// the RHS of an assignment cannot re-bind the LHS local through a `__newindex`
+// closure. The two helpers below model just the AST-side gate; the consumer
+// (`assign_stat_can_skip_obj_snapshot`) combines them with
+// `LocalVar.captured` and target-arity checks.
 
 /// Classification of call sites discovered in an RHS expression tree.
 ///
-/// The walker partitions expressions into three buckets; an A4'-style gate
+/// The walker partitions expressions into three buckets; the snapshot gate
 /// only accepts the bottom two (`None` and `OnlyKnownPure`) because
 /// `UserOrUnknown` call sites can — through `__newindex` metamethod closure
 /// capture — re-bind any local the closure has captured, which would
@@ -584,7 +580,7 @@ pub enum RhsCallScan {
     OnlyKnownPure,
     /// At least one `Call` or `MethodCall` site whose callee is not a
     /// known-pure stdlib lookup — could invoke user-defined Lua that
-    /// re-binds locals via captured upvalues. A4' must reject this case.
+    /// re-binds locals via captured upvalues. The gate must reject this case.
     UserOrUnknown,
 }
 
@@ -608,9 +604,8 @@ impl RhsCallScan {
 /// can yield, `debug.sethook` invokes Lua, `os.exit` runs `__close`, etc.)
 /// or are user-mutable.
 ///
-/// Future-extensible: a Phase 11 attack may grow this list to include
-/// `select` (top-level builtin), `tostring`, `tonumber`, etc. via a flat
-/// names list. Left small intentionally for v2.1 ship.
+/// Left small intentionally; `select` (top-level builtin), `tostring`,
+/// `tonumber`, etc. could be added via a flat names list.
 fn is_known_pure_stdlib_root(text: &str) -> bool {
     matches!(text, "math" | "string" | "table")
 }
@@ -624,7 +619,7 @@ fn is_known_pure_stdlib_root(text: &str) -> bool {
 /// O(n) in expression tree size — n is bounded by the source-character
 /// count of the statement RHS. No allocation.
 #[doc(hidden)]
-#[allow(dead_code)] // wired by the future A4' attack; pure additive in this batch.
+#[allow(dead_code)]
 pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
     use RhsCallScan::*;
     match chunk.expr(eid) {
@@ -724,12 +719,12 @@ fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
     }
 }
 
-/// Metamethod-safety gate for the Index-LHS snapshot elision attack
+/// Metamethod-safety gate for the Index-LHS snapshot elision
 ///
 /// Returns `true` only when, based purely on AST shape:
 ///
-/// 1. `obj_eid` is a bare local-name reference (`Expr::Name`). A4'
-///    requires the LHS object to be a stable, non-captured local. The
+/// 1. `obj_eid` is a bare local-name reference (`Expr::Name`). The
+///    elision requires the LHS object to be a stable, non-captured local. The
 ///    consumer is still expected to verify `captured == false` against
 ///    `LocalVar` at the call site — this gate only handles the AST half.
 /// 2. `rhs_eid`'s call sites are all classified as
@@ -743,15 +738,15 @@ fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
 /// - Closure-capture modeling is NOT performed. Even an
 ///   `OnlyKnownPure` RHS could in principle re-bind via a closure
 ///   stored on the metatable, but luna's stdlib does not call back
-///   into Lua, so the gate is sound for the v2.1 ship surface.
+///   into Lua, so the gate is sound for the current stdlib surface.
 /// - `_ENV.math.min` (dotted global through the env upvalue) is treated
 ///   as unsafe even though it ultimately resolves to the same builtin.
 /// - Local `f` aliased to `math.min` (e.g. `local m = math.min; m(x)`)
 ///   is treated as unsafe. Variable-tracking is a separate subsystem.
 /// - `obj` that is itself an Index (e.g. `t.a.b = v`) is rejected —
-///   only direct local Index-LHS is in scope for A4' v1.
+///   only direct local Index-LHS is in scope.
 #[doc(hidden)]
-#[allow(dead_code)] // wired by the future A4' attack; pure additive in this batch.
+#[allow(dead_code)]
 pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: ExprId) -> bool {
     if !matches!(chunk.expr(obj_eid), Expr::Name(_)) {
         return false;

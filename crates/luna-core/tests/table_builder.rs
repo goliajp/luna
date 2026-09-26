@@ -1,4 +1,4 @@
-//! P2-B B3+B4 smoke tests: IntoValue + TableBuilder + table_of + generic set_global.
+//! Smoke tests: IntoValue + TableBuilder + table_of + generic set_global.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -37,7 +37,7 @@ fn set_global_f64_str_bool_nil() {
 #[test]
 fn set_global_value_identity_still_works() {
     let mut vm = sandbox(LuaVersion::Lua55);
-    // Pre-B4 callers passing `Value::*` directly still compile.
+    // Callers passing `Value::*` directly still compile.
     vm.set_global("seven", Value::Int(7)).unwrap();
     let r = vm.eval("return seven").unwrap();
     assert!(matches!(r[0], Value::Int(7)));

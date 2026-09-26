@@ -1,8 +1,4 @@
-//! v2.0 Phase 1 CB-edge — GC finalizer edge cases.
-//!
-//! Audit:
-//! GC finalizer in finalizer / cycle with weak ref + finalizer /
-//! hashmap key is a newly-collected userdata — 3-5 spot tests.
+//! GC finalizer edge cases.
 //!
 //! Pinned shapes:
 //! 1. `__gc` handler that triggers another GC cycle (recursive collection).

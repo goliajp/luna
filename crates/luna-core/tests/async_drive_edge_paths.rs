@@ -1,10 +1,10 @@
-//! v2.0 Phase 5 CV gap fill — `vm::async_drive` paths not covered by
+//! `vm::async_drive` paths not covered by
 //! the existing `eval_async.rs` smoke set.
 //!
 //! Existing coverage in `eval_async.rs` exercises the happy path
 //! (compile-err / runtime-err / long-loop yield / multi-value /
 //! slice accessors / sync-after-async). This file targets the
-//! audit-flagged gaps:
+//! remaining gaps:
 //!
 //! 1. `EvalFuture::drop` mid-execution restores `jit_enabled` and
 //!    clears `async_mode` / `async_waker` so the Vm is reusable.
@@ -104,7 +104,7 @@ fn eval_future_drop_mid_execution_restores_state() {
     // A fresh sync eval must work — proves async_mode / waker are
     // cleared (otherwise the dispatcher would refuse or misbehave).
     // Note: orphaned Lua call frames from the dropped chunk may
-    // linger per the Stage-1 RFC defer; we exercise a fresh chunk
+    // linger; we exercise a fresh chunk
     // that doesn't depend on a quiescent call stack.
     let r = vm.eval("return 21 + 21").expect("sync eval after drop");
     assert_eq!(r.len(), 1);
