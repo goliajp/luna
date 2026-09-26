@@ -1,16 +1,16 @@
-//! P12-S1 smoke tests — verify the trace recording skeleton wires
-//! up correctly when `Vm::set_trace_jit_enabled(true)` is called.
+//! Smoke tests — verify the trace recording skeleton wires up
+//! correctly when `Vm::set_trace_jit_enabled(true)` is called.
 
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
 #[test]
 fn trace_recording_inactive_when_disabled() {
-    // v1.3 TA3 flipped trace_enabled default to `true` (commit
-    // `7274887`). This test asserts the *disabled* path still works
-    // — explicitly turn off, then verify a loop runs to completion
-    // and a fresh eval still returns the correct value (the gate is
-    // genuinely closed, no stale trace state interferes).
+    // trace_enabled defaults to `true`. This test asserts the
+    // *disabled* path still works — explicitly turn off, then verify
+    // a loop runs to completion and a fresh eval still returns the
+    // correct value (the gate is genuinely closed, no stale trace
+    // state interferes).
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_trace_jit_enabled(false);
     assert!(!vm.trace_jit_enabled());
@@ -45,7 +45,7 @@ fn trace_recording_closes_on_simple_loop() {
     // A `for i = 1, N do s = s + i end` body has 2 ops (Add + ForLoop).
     // After 64 back-edge crossings the recorder starts at the loop head;
     // the very next iteration loops back to the head — trace closes.
-    // We do not yet compile, but `trace_closed_count` must increment.
+    // Compile is not checked here, but `trace_closed_count` must increment.
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     // Disable method JIT so the loop's back-edges actually dispatch
     // through the interpreter — method JIT compiles `for i=1,N` whole
@@ -53,8 +53,7 @@ fn trace_recording_closes_on_simple_loop() {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
     // Use `while`/`repeat` (compile to Op::Jmp back-edges) rather than
-    // numeric `for` (which uses dedicated ForLoop opcode — back-edge
-    // tracking for that is S1.E).
+    // numeric `for` (which uses the dedicated ForLoop opcode).
     let _ = vm
         .eval("local i, s = 0, 0; while i < 1000 do i = i + 1; s = s + i end; return s")
         .unwrap();
@@ -68,7 +67,7 @@ fn trace_recording_closes_on_simple_loop() {
 
 #[test]
 fn trace_jit_toggle_round_trip() {
-    // v1.3 TA3 default is `true`; explicitly toggle through false →
+    // The default is `true`; explicitly toggle through false →
     // true → false so the test exercises every transition regardless
     // of the ship default.
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

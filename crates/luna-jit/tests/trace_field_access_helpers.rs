@@ -1,18 +1,17 @@
-//! P12-S11-A — Op::SetField / Op::GetField whitelist (helper path).
-//! String-keyed table operations (`t.x = v`, `v = t.x`) now compile
-//! via `luna_jit_table_set_field` / `luna_jit_table_get_field`
-//! helpers; the const string key is baked into the IR from
-//! head_proto.consts at emit time. No sunk emit yet — hash-part
-//! sunk is S11-B.
+//! Op::SetField / Op::GetField whitelist (helper path). String-keyed
+//! table operations (`t.x = v`, `v = t.x`) compile via
+//! `luna_jit_table_set_field` / `luna_jit_table_get_field` helpers;
+//! the const string key is baked into the IR from head_proto.consts
+//! at emit time.
 
 use luna_jit::version::LuaVersion;
 
 /// `local t = {}; t.x = i; t.y = i*2; s = s + t.x + t.y` — pure
-/// hash-keyed table operations. Pre-S11-A: SetField / GetField
-/// (outside math fold) bailed compile. Post-S11-A: helper-path
-/// compile + dispatch (subject to length-gate).
+/// hash-keyed table operations. SetField / GetField (outside math
+/// fold) compile + dispatch via the helper path (subject to
+/// length-gate).
 #[test]
-fn dict_assign_then_read_compiles_post_s11a() {
+fn dict_assign_then_read_compiles() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -35,11 +34,11 @@ fn dict_assign_then_read_compiles_post_s11a() {
         "expected Int(1501500), got {:?}",
         r[0]
     );
-    // Pre-S11-A this trace bailed compile. Post-S11-A at least one
-    // trace compiles (the for-loop body containing SetField/GetField).
+    // At least one trace compiles (the for-loop body containing
+    // SetField/GetField).
     assert!(
         vm.trace_compiled_count() >= 1,
-        "post-S11-A dict_assign body must compile; got closed={} \
+        "dict_assign body must compile; got closed={} \
          compiled={} fail={}",
         vm.trace_closed_count(),
         vm.trace_compiled_count(),
@@ -78,7 +77,7 @@ fn setfield_non_str_const_still_bails() {
 /// initialised via SetField in the constructor, then read via
 /// GetField. Verifies the helper path round-trips both kinds.
 #[test]
-fn getfield_returns_correct_value_post_s11a() {
+fn getfield_returns_correct_value() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);

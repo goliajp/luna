@@ -1,23 +1,21 @@
-//! P12-S9-B — pre-emit accepts `Op::Call C=0` (variable-return
-//! form) when the recorder's `var_count` snapshot pinned the
-//! actual return count to 1. Reduces to the same emit shape as
-//! `Op::Call C=2` (single return value Return1 copy-back).
+//! Pre-emit accepts `Op::Call C=0` (variable-return form) when the
+//! recorder's `var_count` snapshot pinned the actual return count to
+//! 1. It reduces to the same emit shape as `Op::Call C=2` (single
+//! return value Return1 copy-back).
 //!
-//! Common pattern: Lua's frontend uses Call C=0 for the LAST call
-//! of a multi-value expression (`{f(), g()}` — g is Call C=0 to
-//! splice all g's returns into the SetList tail). When g returns
-//! exactly 1 value (the binary_trees `make`'s `return {...}`),
-//! S9-B unblocks compile success of make's body trace.
+//! Common pattern: Lua's frontend uses Call C=0 for the LAST call of
+//! a multi-value expression (`{f(), g()}` — g is Call C=0 to splice
+//! all g's returns into the SetList tail). When g returns exactly 1
+//! value (the binary_trees `make`'s `return {...}`), make's body
+//! trace compiles.
 
 use luna_jit::version::LuaVersion;
 
-/// binary_trees `make` body pre-S9-B bailed compile at the
-/// self-recursive `Call C=0`. Post-S9-B, var_count=1 → compile
-/// succeeds. Even if the trace doesn't yet dispatch (still
-/// pending S9-C SetList B=0 emit), the compile-success move is
-/// the contract this test locks.
+/// binary_trees `make` body: the self-recursive `Call C=0` has
+/// var_count=1, so compile succeeds. Compile success is the
+/// contract this test locks, not dispatch.
 #[test]
-fn binary_trees_make_compiles_post_s9b() {
+fn binary_trees_make_compiles_with_call_c_zero() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -43,13 +41,12 @@ fn binary_trees_make_compiles_post_s9b() {
         "expected Int(20470), got {:?}",
         r[0]
     );
-    // S9-B unlocks compile-success on Call C=0 var_count==1.
-    // Combined with S6/S7/S8 ops, make body now compiles. Exact
+    // Call C=0 with var_count==1 lets make's body compile. Exact
     // count depends on which traces trigger; we just require some
     // trace did compile (≥ 1) and no spurious fails.
     assert!(
         vm.trace_compiled_count() >= 1,
-        "binary_trees pattern must compile post-S9-B; got \
+        "binary_trees pattern must compile; got \
          closed={} compiled={} fail={}",
         vm.trace_closed_count(),
         vm.trace_compiled_count(),
@@ -58,7 +55,7 @@ fn binary_trees_make_compiles_post_s9b() {
 }
 
 /// Negative guard: Op::Call C=0 with var_count != 1 still bails
-/// (multi-value return needs S9-D for multi-Return copy-back).
+/// (multi-value return needs multi-Return copy-back).
 /// Synthesized via a pattern that returns multiple values.
 #[test]
 fn call_c_zero_with_var_count_gt_1_still_bails_or_runs_via_interp() {
@@ -84,7 +81,7 @@ fn call_c_zero_with_var_count_gt_1_still_bails_or_runs_via_interp() {
         "expected Int(6000), got {:?}",
         r[0]
     );
-    // Either the trace compiled via S9-B (var_count==2 path bails
+    // Either the trace compiled (var_count==2 path bails
     // pre-emit; trace runs via interp) OR it compiled and
     // dispatched correctly. Both are valid — the contract is
     // RESULT correctness.
@@ -92,9 +89,8 @@ fn call_c_zero_with_var_count_gt_1_still_bails_or_runs_via_interp() {
 }
 
 /// `Op::Call C=2` (single return) still compiles + dispatches as
-/// before (S4 regression check). Trace JIT shouldn't have changed
-/// for the non-S9-B path. fib(28) is the canonical deep-recursion
-/// shape that fires multiple-frame inline + dispatches per S4-step4b.
+/// before. fib(28) is the canonical deep-recursion shape that fires
+/// multiple-frame inline + dispatches.
 #[test]
 fn call_c_two_single_return_still_works() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
@@ -115,7 +111,7 @@ fn call_c_two_single_return_still_works() {
     );
     assert!(
         vm.trace_dispatched_count() >= 1,
-        "fib trace must still dispatch (S4 baseline); got {}",
+        "fib trace must still dispatch (no regression); got {}",
         vm.trace_dispatched_count()
     );
 }

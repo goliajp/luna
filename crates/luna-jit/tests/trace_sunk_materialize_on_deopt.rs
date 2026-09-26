@@ -1,15 +1,14 @@
-//! P12-S5-C — materialise-on-deopt at cmp side-exits.
+//! Materialise-on-deopt at cmp side-exits.
 //!
-//! Removes the S5-B `body_has_cmp` gate. The escape sweep no longer
-//! auto-escapes live sunk sites at an `Op::Lt`/`Op::Le`/`Op::Eq`/
-//! `Op::EqK`. Emit instead inserts a `luna_jit_materialize_sunk_table`
-//! call at every depth=0 cmp side-exit for each live Sinkable site:
-//! stack-allocates a `cap × i64` raws buffer + `cap × u8` kinds
-//! buffer, fills them from virt slots + `virt_kinds`, calls the
-//! helper, `def_var`s the returned heap-table bits into
-//! `regs_full[site.a]`, and overrides the per-exit-tags snapshot
-//! entry for the slot to `RegKind::Table` so the dispatcher
-//! repacks correctly on deopt.
+//! The escape sweep does not auto-escape live sunk sites at an
+//! `Op::Lt`/`Op::Le`/`Op::Eq`/`Op::EqK`. Emit instead inserts a
+//! `luna_jit_materialize_sunk_table` call at every depth=0 cmp
+//! side-exit for each live Sinkable site: stack-allocates a
+//! `cap × i64` raws buffer + `cap × u8` kinds buffer, fills them from
+//! virt slots + `virt_kinds`, calls the helper, `def_var`s the returned
+//! heap-table bits into `regs_full[site.a]`, and overrides the
+//! per-exit-tags snapshot entry for the slot to `RegKind::Table` so
+//! the dispatcher repacks correctly on deopt.
 //!
 //! These tests verify:
 //! 1. Side-exit fires on a fraction of iterations → interp resume
@@ -20,8 +19,7 @@
 //!    which it does because the recorder only ever sees one
 //!    direction, and the side-exit handles the other.
 //! 3. Inline-cmp gate: a recursive function with a body cmp at
-//!    inline_depth>0 still demotes (S5-C v1 only materialises at
-//!    depth=0 cmps).
+//!    inline_depth>0 still demotes.
 
 use luna_jit::version::LuaVersion;
 
@@ -56,7 +54,7 @@ fn cmp_side_exit_materialises_for_interp_resume() {
     );
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "site stays Sinkable under S5-C; got sunk_alloc_count={}",
+        "site stays Sinkable across cmp side-exits; got sunk_alloc_count={}",
         vm.trace_sunk_alloc_count()
     );
     assert!(
@@ -102,10 +100,9 @@ fn cmp_side_exit_both_branches_access_table() {
 }
 
 /// Self-recursive `f(n)` with a NewTable in its body. The base-case
-/// cmp `if n < 2 then return n end` is at inline_depth>0 during
-/// step4b inlining. The `has_inline_cmp` pre-emit gate demotes any
-/// Sinkable site since v1's materialise emit only covers depth=0
-/// cmps. Heap path stays; result still correct.
+/// cmp `if n < 2 then return n end` is at inline_depth>0 once the
+/// recursion is inlined. The pre-emit gate demotes the Sinkable
+/// site. Heap path stays; result still correct.
 #[test]
 fn inline_cmp_demotes_sunk_site() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

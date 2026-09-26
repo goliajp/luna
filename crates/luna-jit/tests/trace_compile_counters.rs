@@ -1,11 +1,9 @@
-//! P12-S2.C smoke tests — verify the close handler wires
-//! `try_compile_trace` into `Vm::run` and updates the
-//! `trace_compiled_count` / `trace_compile_failed_count` counters.
+//! Smoke tests — verify the close handler wires `try_compile_trace`
+//! into `Vm::run` and updates the `trace_compiled_count` /
+//! `trace_compile_failed_count` counters.
 //!
-//! The S3 dispatcher (next phase) reads `Proto.traces`, so these
-//! tests only assert that *something* lands there — they don't
-//! invoke the compiled trace. That stays the trace JIT contract
-//! until S3.
+//! These tests only assert that *something* lands in `Proto.traces`;
+//! they don't check the compiled trace's dispatch.
 
 use luna_jit::version::LuaVersion;
 
@@ -53,7 +51,7 @@ fn closed_traces_split_across_compiled_and_failed_buckets() {
 /// We can't see `Proto.traces` from the outside cleanly, but
 /// `trace_compiled_count` ticking up proves the wiring lands.
 #[test]
-fn step5_compatible_repeat_until_loop_compiles() {
+fn whitelisted_repeat_until_loop_compiles() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -63,7 +61,7 @@ fn step5_compatible_repeat_until_loop_compiles() {
     // `repeat ... until i >= limit` puts the exit-cmp at the
     // bottom of the loop — the recorded direction is
     // "matches K=1 → take back-edge Jmp", which is the only
-    // direction step 3 accepts.
+    // direction the trace compiler accepts.
     let r = vm
         .eval(
             "local i, s, step, limit = 0, 0, 1, 1000
@@ -85,7 +83,7 @@ fn step5_compatible_repeat_until_loop_compiles() {
 
     assert!(
         vm.trace_compiled_count() >= 1,
-        "expected ≥1 step-5-compatible trace to compile, got \
+        "expected ≥1 whitelist-compatible trace to compile, got \
          compiled={} failed={} closed={}",
         vm.trace_compiled_count(),
         vm.trace_compile_failed_count(),
@@ -116,7 +114,7 @@ fn trace_jit_disabled_keeps_compile_counters_at_zero() {
 }
 
 /// Re-running the same loop body shouldn't keep compiling new
-/// traces — the hot counter caps at `u32::MAX / 2`, and S2.C's
+/// traces — the hot counter caps at `u32::MAX / 2`, and the
 /// explicit dedup on `head_pc` prevents the same Proto from
 /// stacking duplicate traces in `Proto.traces`.
 #[test]

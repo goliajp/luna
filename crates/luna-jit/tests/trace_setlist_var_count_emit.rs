@@ -1,10 +1,9 @@
-//! P12-S9-C — emit Op::SetList B=0 using the recorder's var_count
-//! snapshot as the effective B. Both the sunk path (def_var virt
-//! slots) and the helper path (per-source emit_table_set) honor
-//! the snapshot length.
+//! Emit Op::SetList B=0 using the recorder's var_count snapshot as
+//! the effective B. Both the sunk path (def_var virt slots) and the
+//! helper path (per-source emit_table_set) honor the snapshot length.
 //!
-//! Together with S9-B (Call C=0 var_count==1 accept), this opens
-//! the Lua frontend pattern
+//! Together with Call C=0 var_count==1 acceptance, this opens the Lua
+//! frontend pattern
 //!     local t = {f(), g()}
 //! when g returns 1 value (Call C=0 → top=A+1) and SetList B=0 →
 //! effective B = top-A-1. binary_trees `make`'s
@@ -14,7 +13,7 @@ use luna_jit::version::LuaVersion;
 
 /// `local t = {a, f()}` where f returns 1 value — Lua frontend
 /// emits Call C=0 + SetList B=0 (the LAST arg uses variable form).
-/// Post-S9-B/C, the SetList B=0 + Call C=0 var_count=1 combo
+/// The SetList B=0 + Call C=0 var_count=1 combo
 /// matches cap=2 (a + f() = 2 source slots) → sunk emit.
 #[test]
 fn setlist_b_zero_with_call_c_zero_sunk_emits() {
@@ -39,9 +38,9 @@ fn setlist_b_zero_with_call_c_zero_sunk_emits() {
         "expected Int(501500), got {:?}",
         r[0]
     );
-    // Compile-success contract: the trace body MUST compile post-
-    // S9-B/C (Call C=0 var_count=1 accepted; SetList B=0 uses
-    // var_count as effective B and matches cap=2 → sunk).
+    // Compile-success contract: the trace body MUST compile
+    // (Call C=0 var_count=1 accepted; SetList B=0 uses var_count
+    // as effective B and matches cap=2 → sunk).
     assert!(
         vm.trace_compiled_count() >= 1,
         "trace must compile; got closed={} compiled={} fail={}",

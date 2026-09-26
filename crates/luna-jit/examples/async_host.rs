@@ -1,4 +1,4 @@
-//! Async embedding walkthrough (A7 artifact 5 / B10 example).
+//! Async embedding walkthrough.
 //!
 //! Demonstrates:
 //! - `vm.eval_async(src)` driving a Lua script with cooperative yields

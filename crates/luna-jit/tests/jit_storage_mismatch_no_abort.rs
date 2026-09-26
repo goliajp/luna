@@ -1,7 +1,7 @@
-//! v2.0 J-B follow-up regression — `from_storage` `StorageMismatch`
+//! Regression — `from_storage` `StorageMismatch`
 //! must NOT abort the process.
 //!
-//! Background: J-B (`e894e90`) moved `JIT_CACHE` / `JIT_CACHE_HANDLES`
+//! Background: an earlier change moved `JIT_CACHE` / `JIT_CACHE_HANDLES`
 //! / `TRACE_JIT_HANDLES` from thread-local!s to `Vm.jit.storage`.
 //! The three `from_storage` call sites in `luna_jit::jit_backend`
 //! downcast the polymorphic `&mut dyn JitStorage` to the concrete
@@ -43,7 +43,7 @@ use luna_core::version::LuaVersion;
 ///
 /// We don't go through `install_default_jit` / `new_minimal_with_jit`
 /// because both correctly install the paired `CraneliftJitStorage`.
-/// Instead we mimic the v2.0 J-B-era `luaL_newstate` shape: install the
+/// Instead we mimic the old `luaL_newstate` shape: install the
 /// backend only, leave storage at the default `NullJitStorage` (which
 /// `Vm::new_minimal` populates via `JitState::with_null_backend()`).
 fn vm_with_mismatched_storage() -> luna_core::vm::Vm {

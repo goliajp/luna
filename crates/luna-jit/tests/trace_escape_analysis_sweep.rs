@@ -1,9 +1,8 @@
-//! P12-S5-A — escape-analysis sweep scaffold tests.
+//! Escape-analysis sweep tests.
 //!
 //! The sweep runs post-recording, pre-emit, inside
-//! `try_compile_trace_with_options`. Emit IGNORES the result in this
-//! step; the Sinkable-site count flows into
-//! `CompiledTrace.sinkable_sites_seen`, which the close handler
+//! `try_compile_trace_with_options`. The Sinkable-site count flows
+//! into `CompiledTrace.sinkable_sites_seen`, which the close handler
 //! sums into `Vm::trace_sinkable_seen_count`.
 //!
 //! These tests verify three shapes:
@@ -70,7 +69,7 @@ fn for_body_newtable_compiles_under_sweep() {
         .unwrap();
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(6000)));
     // The trace may or may not compile depending on lowerer support
-    // for the exact SetList + GetI shape; what S5-A guarantees is
+    // for the exact SetList + GetI shape; what the sweep guarantees is
     // that the analysis itself never panics. A compiled trace
     // implies the sweep ran successfully.
     assert!(

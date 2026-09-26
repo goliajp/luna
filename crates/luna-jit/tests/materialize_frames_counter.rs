@@ -1,4 +1,4 @@
-//! v2.0 Phase 5 Track AO sub-track AO-PF — in-process smoke for the
+//! In-process smoke for the
 //! `trace_materialize_frames_fires` counter. Confirms the counter
 //! wiring is sound: a JIT-mode fib(28) run that exercises the inline
 //! self-rec dispatch path must leave the counter > 0.
@@ -33,7 +33,7 @@ fn counter_increments_on_fib_inline_self_rec_dispatch() {
     let after = trace_materialize_frames_fires();
     let delta = after - before;
     eprintln!(
-        "AO-PF counter: before={before} after={after} delta={delta} \
+        "materialize-frames counter: before={before} after={after} delta={delta} \
          trace_compiled={} trace_dispatched={}",
         vm.trace_compiled_count(),
         vm.trace_dispatched_count()

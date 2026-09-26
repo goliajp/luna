@@ -1,15 +1,9 @@
-//! P15-A v2-A — side-trace COMPILE + parent ptr LINK. The
-//! observability layer v1 wired up the recorder; v2-A lifts the
-//! discard short-circuit and lets side traces compile through the
-//! normal lowerer path. The compiled side trace is pinned
-//! `dispatchable=false` (entered only via parent's exit ptr in
-//! v2-B/C, not via the back-edge / call-trigger lookup), and its
+//! Side-trace COMPILE + parent ptr LINK. Side traces compile
+//! through the normal lowerer path. The compiled side trace is
+//! pinned `dispatchable=false` (entered only via the parent's exit
+//! ptr, not via the back-edge / call-trigger lookup), and its
 //! entry fn ptr is written into the parent's
 //! `exit_side_trace_ptrs[parent_exit_idx]` Cell.
-//!
-//! v2-A is the LINK foundation. v2-B/C will modify the IR at the
-//! parent's 22 emit_store_back_and_return_pc sites to read the
-//! ptr and indirect-call when non-null.
 
 use luna_jit::version::LuaVersion;
 
@@ -51,7 +45,7 @@ fn fib_28_compiles_side_trace() {
         started,
         compiled
     );
-    // v2-A invariant: compiled ≤ started (gap = abort / compile fail).
+    // invariant: compiled ≤ started (gap = abort / compile fail).
     assert!(
         compiled <= started,
         "compiled ({}) must be <= started ({})",
@@ -138,11 +132,10 @@ fn concat_str_does_not_compile_side_trace() {
 /// Side traces are pinned `dispatchable=false`. The dispatched
 /// counter on fib_28 must reflect ONLY primary-trace dispatches —
 /// the side trace's `entry` is never invoked via the standard
-/// `traces.find(|t| t.head_pc == pc && t.dispatchable)` path. Until
-/// v2-B/C wires the indirect call, the primary dispatch count must
-/// remain non-zero (interp path still hot).
+/// `traces.find(|t| t.head_pc == pc && t.dispatchable)` path, so the
+/// primary dispatch count must remain non-zero.
 #[test]
-fn side_trace_pinned_non_dispatchable_for_v2_a() {
+fn side_trace_pinned_non_dispatchable() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);

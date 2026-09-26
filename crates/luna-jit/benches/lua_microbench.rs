@@ -1,4 +1,4 @@
-//! P10 ceiling — Lua microbench harness. Quantitative baseline for luna's
+//! Lua microbench harness. Quantitative baseline for luna's
 //! interpreter ceiling, with optional PUC 5.5 and LuaJIT 2.1 comparison
 //! when their binaries are on `PATH`.
 //!

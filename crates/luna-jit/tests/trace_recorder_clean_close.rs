@@ -1,19 +1,13 @@
-//! P12-S4-step4a — recorder close-detection unification.
+//! Recorder close-detection.
 //!
-//! Before: call-triggered traces closed on **any** re-entry of
-//! head_pc (giving fib a 7-op depth=0 prefix); back-edge traces
-//! closed on `cur_depth == 0` re-entry; `MAX_INLINE_DEPTH` cap and
-//! `frames.len() <= recording_frame_base` both **aborted** the trace
-//! (drop the body, count toward `trace_aborted_count`).
-//!
-//! After: both trigger flavours use `cur_depth == 0` for the head_pc
-//! re-entry close. The depth cap and returned-past-head conditions
-//! become **clean closes** — whatever was recorded up to that point
-//! is the trace body, eligible to compile (and emit via the existing
-//! `TraceEnd::InlineAbort` path until step4b's frame-materialisation
-//! helper lands). End result: recorder produces traces with depth>0
-//! ops on real Lua code (fib, deep recursion), feeding the inline
-//! emit plumbing step3b shipped.
+//! Both trigger flavours close on a `cur_depth == 0` re-entry of
+//! head_pc. The `MAX_INLINE_DEPTH` cap and the returned-past-head
+//! condition (`frames.len() <= recording_frame_base`) are **clean
+//! closes**, not aborts — whatever was recorded up to that point is
+//! the trace body, eligible to compile (and emit via the
+//! `TraceEnd::InlineAbort` path). The recorder therefore produces
+//! traces with depth>0 ops on real Lua code (fib, deep recursion),
+//! feeding the inline emit.
 
 use luna_jit::version::LuaVersion;
 
@@ -38,13 +32,13 @@ fn fib_28_recorder_now_walks_into_callee() {
 
     assert!(
         vm.trace_max_depth_seen() >= 1,
-        "step4a recorder must walk into the self-recursive callee; \
+        "the recorder must walk into the self-recursive callee; \
          got max_depth_seen={}",
         vm.trace_max_depth_seen(),
     );
     assert!(
         vm.trace_closed_count() >= 1,
-        "fib's trace must close at least once after step4a; got closed={}",
+        "fib's trace must close at least once; got closed={}",
         vm.trace_closed_count(),
     );
 }
@@ -69,8 +63,8 @@ fn deep_recursion_no_longer_aborts_traces() {
         .unwrap();
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(1400)));
 
-    // Step4a flipped both abort paths (depth-cap, returned-past-head)
-    // to clean close. The one other abort source for this workload is a
+    // Both the depth-cap and returned-past-head paths are clean
+    // closes. The one other abort source for this workload is a
     // recording that reaches a trace the dispatcher runs natively (the
     // recording cannot see its ops), so only those may be counted.
     let reached = vm
@@ -81,8 +75,8 @@ fn deep_recursion_no_longer_aborts_traces() {
     assert_eq!(
         vm.trace_aborted_count(),
         reached,
-        "step4a turned MAX_INLINE_DEPTH + returned-past-head aborts \
-         into clean closes; got aborted={}",
+        "MAX_INLINE_DEPTH + returned-past-head must be \
+         clean closes, not aborts; got aborted={}",
         vm.trace_aborted_count(),
     );
     assert!(
@@ -111,7 +105,7 @@ fn numeric_loop_close_path_unchanged() {
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(500500)));
     assert!(
         vm.trace_dispatched_count() >= 1,
-        "numeric for trace must still dispatch after step4a; got dispatched={}",
+        "numeric for trace must still dispatch; got dispatched={}",
         vm.trace_dispatched_count(),
     );
 }

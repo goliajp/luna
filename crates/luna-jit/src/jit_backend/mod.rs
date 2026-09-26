@@ -1,14 +1,12 @@
-//! P11 — JIT pipeline (luna crate side; the trait surface and pure
+//! JIT pipeline (luna crate side; the trait surface and pure
 //! data types live in `luna_core::jit`).
 //!
-//! Closed sub-steps:
-//!   - S0: cranelift substrate hookup (`2984c8b`).
-//!   - S1: Proto → Cranelift IR lowerer for an int-arith subset (`9341c6c`).
-//!   - S2: dispatch wire — `Vm::call_value` short-circuits to a cached
-//!     native fn when the Proto fits the whitelist (`560bcfb`).
-//!   - S2b: block-structured lowerer with conditional + unconditional
-//!     branches. Whitelist gains `Jmp`, `Lt`, `Le`, `Eq` — a paired
-//!     `Lt|Le|Eq` + `Jmp` is lowered as a cranelift `brif`.
+//! - Proto → Cranelift IR lowerer for a whitelisted opcode subset.
+//! - Dispatch wire: `Vm::call_value` short-circuits to a cached
+//!   native fn when the Proto fits the whitelist.
+//! - Block-structured lowering with conditional + unconditional
+//!   branches; a paired `Lt|Le|Eq` + `Jmp` is lowered as a cranelift
+//!   `brif`.
 //!
 //! `try_compile_int_chunk` accepts a Proto when every opcode falls in
 //! the cumulative whitelist; out-of-whitelist returns `None` and the
@@ -29,7 +27,7 @@ use luna_core::runtime::function::Proto;
 use luna_core::runtime::{Gc, LuaStr};
 use luna_core::vm::isa::{Inst, Op};
 
-/// P11-S3 — per-Lua-register type lattice. `Unset` is the bottom;
+/// per-Lua-register type lattice. `Unset` is the bottom;
 /// `Int` and `Float` are incomparable monotypes. A register that's
 /// pinned to both Int and Float in the same Proto causes the lowerer
 /// to bail (`unify_kind` returns false). `Unset` registers that
@@ -40,7 +38,7 @@ enum RegKind {
     Unset,
     Int,
     Float,
-    /// P11-S5c — `Gc<Table>` raw pointer pun. Represented as I64 at the
+    /// `Gc<Table>` raw pointer pun. Represented as I64 at the
     /// Cranelift level (same shape as `RegKind::Int`) but kept distinct
     /// in the lattice so a register pinned to a table can't unify with
     /// one pinned to an integer; the whitelist gates on Table where it
@@ -58,11 +56,11 @@ impl RegKind {
                 true
             }
             (a, b) if a == b => true,
-            // P11-S5d.C — Int+Table coexist (both I64-shaped at the
+            // Int+Table coexist (both I64-shaped at the
             // Cranelift level; `maybe_table[reg]` + Table-bail on
             // arith/cmp/ForPrep keeps the semantic guard).
             (RegKind::Int, RegKind::Table) | (RegKind::Table, RegKind::Int) => true,
-            // P11-S5d.D step 3 — Float+Table coexist via I64↔F64
+            // Float+Table coexist via I64↔F64
             // bitcast. The Variable is declared in whichever shape
             // the first writer pinned (F64 if Float first, I64 if
             // Table first); `aligned_def` handles the writer-side
@@ -73,55 +71,50 @@ impl RegKind {
             // u64).to_bits()` round-trips exactly). Unlocks the
             // 5.1/5.2 `binary_trees` pattern: `if d == 0` uses
             // LoadF R[1]=0 (Float) in one BB, NewTable R[1]
-            // (Table) in another — both safe per-BB, but our
-            // pre-S5d.D `unify` rejected the slot reuse globally.
+            // (Table) in another — both safe per-BB, but a stricter
+            // `unify` would reject the slot reuse globally.
             (RegKind::Float, RegKind::Table) | (RegKind::Table, RegKind::Float) => true,
             _ => false,
         }
     }
 }
 
-// v1.1 A1 Session C — codegen-bearing modules live here on the luna
+// codegen-bearing modules live here on the luna
 // side. `IntChunkFn`, the trait surface (`IntChunkCompiler`,
 // `TraceCompiler`, `CompileResult`, `NullJitBackend`), `JitVmGuard`,
 // and the pure trace data types moved to `luna_core::jit` so embedders
 // who depend on luna-core alone never link Cranelift.
 pub mod trace;
 
-// v2.0 Track J sub-step J-A — `Send` wrapper newtype for
-// `cranelift_jit::JITModule`. Pre-positioned for J-B's field
-// migration of `JIT_CACHE` / `JIT_CACHE_HANDLES` /
-// `TRACE_JIT_HANDLES` from `thread_local!` onto `Vm.VmJitStorage`.
-// Scoped `pub(crate)` — no embedder surface.
+// `Send` wrapper newtype for `cranelift_jit::JITModule`, used by the
+// per-`Vm` JIT storage. Scoped `pub(crate)` — no embedder surface.
 mod send_jit_module;
-#[allow(unused_imports)] // J-B will consume; J-A wires the wrapper only.
+#[allow(unused_imports)]
 pub use send_jit_module::SendJitModule;
 
-// v2.1 Phase 1K.D.1 — `JIT_VM` / `JIT_CL` TLS slots, the helper
+// `JIT_VM` / `JIT_CL` TLS slots, the helper
 // extern "C" fns, `enter_jit`, and `scoped_rebind` all moved to
 // the sibling `luna-jit-helpers` crate so `luna-jit-llvm`
-// (v2.1 alt backend) can reuse them without dragging Cranelift in.
+// (alt backend) can reuse them without dragging Cranelift in.
 // Star-re-export preserves every existing `super::luna_jit_*` /
 // `crate::jit_backend::*` call path inside this crate.
 pub use luna_jit_helpers::*;
 
-// v2.0 Track J sub-step J-B — concrete per-`Vm` JIT storage struct
+// concrete per-`Vm` JIT storage struct
 // (cache + cache_handles + trace_handles). Installed alongside the
 // `CraneliftBackend` by `crate::install_default_jit`. luna-core sees
 // it through the opaque `JitStorage` trait only.
 pub(crate) mod storage;
 
-// v1.1 A1 Session C — inline `#[cfg(test)] mod xx { ... }` blocks
+// inline `#[cfg(test)] mod xx { ... }` blocks
 // throughout this file call `crate::jit_backend::test_vm_new(version)` / `crate::jit_backend::test_vm_new_minimal(version)`
-// and historically expected the Cranelift backend to be installed
-// (v1.0 default). After the workspace split luna-core's `Vm::new`
-// defaults to `NullJitBackend`, so we wrap construction in these
-// helpers and replace the call sites by name.
+// and expect the Cranelift backend to be installed. luna-core's
+// `Vm::new` defaults to `NullJitBackend`, so these helpers install it.
 #[cfg(test)]
 fn test_vm_new(version: luna_core::version::LuaVersion) -> luna_core::vm::Vm {
     let mut vm = luna_core::vm::Vm::new(version);
     vm.install_jit_backend(CraneliftBackend, CraneliftBackend);
-    // v2.0 Track J sub-step J-B — pair the backend install with the
+    // pair the backend install with the
     // CraneliftJitStorage so cache lookups can downcast.
     vm.install_jit_storage(storage::CraneliftJitStorage::default());
     vm
@@ -135,7 +128,7 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
     vm
 }
 
-/// S4 — cross-`Vm` JIT cache. Look up the proto by a hash of its
+/// cross-`Vm` JIT cache. Look up the proto by a hash of its
 /// bytecode + structural ABI fields; on miss, compile through
 /// `try_compile_int_chunk` and store the result. Compiled mmap
 /// pages live in the cache's `JITModule` so they outlast any single
@@ -145,7 +138,7 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
 /// `None` when the proto's body falls outside the cumulative
 /// whitelist.
 ///
-/// S5a — `pre53` distinguishes dialects whose `ForPrep` / `ForLoop`
+/// `pre53` distinguishes dialects whose `ForPrep` / `ForLoop`
 /// use the pre-5.3 `R[A] -= step + jmp` form (Lua 5.1 / 5.2 / 5.3)
 /// from the 5.4+ count form (Lua 5.4 / 5.5). The same source loaded
 /// in dialects on opposite sides of that split needs distinct
@@ -153,8 +146,8 @@ fn test_vm_new_minimal(version: luna_core::version::LuaVersion) -> luna_core::vm
 /// don't touch `for` loops the bit is still hashed — same-source
 /// 5.5 vs 5.5 still share; same-source 5.5 vs 5.1 don't.
 ///
-/// S5d — adds `arg_table_mask` (per-arg `Gc<Table>` indicator) and
-/// `ret_is_table` (true ↔ Return1 yields a `Gc<Table>` ptr).
+/// `arg_table_mask` is the per-arg `Gc<Table>` indicator and
+/// `ret_is_table` is true ↔ Return1 yields a `Gc<Table>` ptr.
 pub fn cache_lookup_or_compile(
     storage: &mut dyn luna_core::jit::JitStorage,
     proto: luna_core::runtime::Gc<Proto>,
@@ -162,10 +155,9 @@ pub fn cache_lookup_or_compile(
     float_only: bool,
 ) -> Option<(*const u8, u8, bool, u8, u8, bool, bool)> {
     let key = proto_cache_key(&proto, pre53, float_only);
-    // v2.0 Track J sub-step J-B Phase D — cache lookups read from the
-    // per-`Vm` `storage.cache` field instead of the `JIT_CACHE` TLS.
+    // cache lookups read from the per-`Vm` `storage.cache` field.
     //
-    // v2.0 J-B follow-up — `from_storage` returns `Result`; on
+    // `from_storage` returns `Result`; on
     // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
     // skip JIT entirely. The dispatcher already treats `None` as
     // "this Proto stays on interp", so graceful skip = no JIT for
@@ -203,13 +195,12 @@ pub fn cache_lookup_or_compile(
             let arg_table_mask = handle.arg_table_mask();
             let ret_is_float = handle.ret_is_float();
             let ret_is_table = handle.ret_is_table();
-            // v2.0 Track J sub-step J-B Phase E — the JITModule the
+            // the JITModule the
             // handle owns holds the mmap. Park the handle on the
             // per-`Vm` storage so the entry_raw pointer stays valid
             // for the lifetime of this `Vm`. Append-only.
             //
-            // v2.0 J-B follow-up — `from_storage` is `Result`-shaped
-            // now. The `.ok()?` short-circuit above already verified
+            // `from_storage` is `Result`-shaped. The `.ok()?` short-circuit above already verified
             // the storage was a `CraneliftJitStorage`, so on a sane
             // call this branch is unreachable. Guard with `match`
             // for honesty: on the impossible Err arm the compiled
@@ -231,7 +222,7 @@ pub fn cache_lookup_or_compile(
         }
         None => CacheEntry::Failed,
     };
-    // v2.0 J-B follow-up — same `from_storage` is-Result rationale as
+    // same `from_storage` is-Result rationale as
     // above; on the impossible Err branch we drop the freshly built
     // `entry` (it was `Copy`, no resource loss) and skip the cache
     // insert.
@@ -275,9 +266,9 @@ pub(crate) enum CacheEntry {
     },
 }
 
-/// P11-S5d.J — classify every `Op::GetUpval` in `proto` as either the
+/// classify every `Op::GetUpval` in `proto` as either the
 /// existing **SelfMarker** role (the loaded value is used only as a
-/// `Op::Call` func slot — S2c.C lowers that as a direct cranelift call
+/// `Op::Call` func slot — lowered as a direct cranelift call
 /// without ever materialising the upvalue) or the new **ValueRead**
 /// role (the loaded value flows into arith / cmp / unary, so we need
 /// the real value at runtime via `luna_jit_upval_get` and the pre53
@@ -396,16 +387,15 @@ fn writes_register_a(ins: Inst, target_a: usize) -> bool {
     }
 }
 
-/// S4 introspection (test-only): number of *Compiled* entries in
+/// Introspection (test-only): number of *Compiled* entries in
 /// the given Vm's JIT cache (Failed cache slots are excluded so test
 /// assertions over "compiled exactly once" don't drift when the
 /// outer chunk's bail also occupies a slot).
 ///
-/// v2.0 Track J sub-step J-B Phase D — takes `&Vm` since the cache
-/// is now per-`Vm` (was thread-local). Pre-J-B was `#[cfg(test)]` —
-/// lifted to pub so the J-B integration test (external binary, not
-/// cfg(test) from this crate's POV) can probe per-`Vm` cache size
-/// without a downcast. Harmless utility for any embedder.
+/// Takes `&Vm` since the cache is per-`Vm`. Public so integration
+/// tests (external binaries, not cfg(test) from this crate's POV) can
+/// probe per-`Vm` cache size without a downcast. Harmless utility for
+/// any embedder.
 pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
     let storage = vm.jit.storage.as_ref().as_any();
     let cs = storage
@@ -417,18 +407,17 @@ pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
         .count()
 }
 
-/// S4 introspection (test-only): empty the Vm's JIT cache. Used
+/// Introspection (test-only): empty the Vm's JIT cache. Used
 /// between tests that want to measure first-compile vs cache-hit
 /// behaviour in isolation.
 ///
-/// v2.0 Track J sub-step J-B Phase D — takes `&mut Vm` since the
-/// cache is now per-`Vm` (was thread-local). Pre-J-B was
-/// `#[cfg(test)]` — see [`cache_entry_count`] for the rationale.
+/// Takes `&mut Vm` since the cache is per-`Vm`. Public for the same
+/// reason as [`cache_entry_count`].
 pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
     let storage = vm.jit.storage.as_mut().as_any_mut();
     if let Some(cs) = storage.downcast_mut::<storage::CraneliftJitStorage>() {
         cs.cache.clear();
-        // v2.0 Track J sub-step J-B Phase E — also drop the cached
+        // also drop the cached
         // handles. Dropping each `JitHandle`'s `JITModule` releases
         // its mmap; tests that call `cache_clear` then re-eval can
         // observe the fresh compile.
@@ -442,13 +431,13 @@ pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
 /// lowerer reads; two protos with identical bytecode AND identical
 /// constants AND matching dialect share native code.
 ///
-/// S3 added const hashing because two protos with identical
+/// Constants are hashed because two protos with identical
 /// `LoadK k0 + Return1` shape but different `consts[0]` values
 /// (e.g. `return 1+0.5` → Float(1.5) vs `return 0/0` → Float(NaN))
-/// used to collide and the second chunk would return the first's
-/// compiled constant.
+/// would otherwise collide and the second chunk would return the
+/// first's compiled constant.
 ///
-/// S5a added the dialect bit: a `for i = 1, N do … end` chunk
+/// The dialect bit is hashed because a `for i = 1, N do … end` chunk
 /// compiles to a different shape in Lua 5.3 (pre-decrement + jmp
 /// form) vs Lua 5.4/5.5 (count form). Mixing them in one cache
 /// slot would either crash or compute the wrong sum.
@@ -468,7 +457,7 @@ fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
                 1u8.hash(&mut h);
                 f.to_bits().hash(&mut h);
             }
-            // P11-S5b — string consts participate in the cache key via
+            // string consts participate in the cache key via
             // their byte contents, not just their discriminant.
             // Two protos with identical bytecode but different
             // `GetField` k-operand strings (e.g. `math.sin` vs
@@ -495,14 +484,14 @@ fn proto_cache_key(proto: &Proto, pre53: bool, float_only: bool) -> u64 {
     float_only.hash(&mut h);
     h.finish()
 }
-// v1.1 A1 Session C — `IntFn1..4` + `MAX_JIT_ARITY` moved to
-// `luna_core::jit` so `vm/exec.rs` (now in luna-core) can name them
+// `IntFn1..4` + `MAX_JIT_ARITY` live in
+// `luna_core::jit` so `vm/exec.rs` (in luna-core) can name them
 // when transmuting JIT entry pointers. Bumping the arity cap stays
 // mechanical: extend the alias list in `luna-core/src/jit/abi.rs`,
 // add the matching match arm in `luna-core/src/vm/exec.rs`, then
 // add the matching `IntFnN` codegen here.
 
-/// P11-S5b — supported `math.<fn>(arg)` libm folds. Each entry is
+/// supported `math.<fn>(arg)` libm folds. Each entry is
 /// the Lua-side method name (as it appears in `consts` after the
 /// `GetField` k-operand) paired with the libm symbol the cranelift
 /// `Linkage::Import` resolves to via `dlsym(RTLD_DEFAULT)`. Same
@@ -535,7 +524,7 @@ fn is_rounding(fn_name: &str) -> bool {
     matches!(fn_name, "floor" | "ceil")
 }
 
-/// P11-S5c.C — `Table` layout constants used by the inline-aset
+/// `Table` layout constants used by the inline-aset
 /// fast path. Cranelift IR walks past the helper call ABI by
 /// loading the table's array pointer and length directly from the
 /// `Gc<Table>` raw ptr, skipping the per-iter thread-local read
@@ -548,7 +537,7 @@ fn is_rounding(fn_name: &str) -> bool {
 /// itself can't verify (`Box<[u64]>` as a `(ptr, len)` fat pointer,
 /// `RawVal` packed to 8 bytes, and the `Table.asize` field width).
 ///
-/// P11-S5d.H/I — Table now keeps `array_ptr: *mut u8` as the single
+/// Table keeps `array_ptr: *mut u8` as the single
 /// source of truth for "where does the array part live?". The pointer
 /// targets either the inline storage embedded in the Table struct
 /// (asize <= INLINE_ASIZE) or an external `slab: Box<[u64]>`. The JIT
@@ -557,13 +546,13 @@ fn is_rounding(fn_name: &str) -> bool {
 pub(crate) const TABLE_ARRAY_PTR_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, array_ptr);
 pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::runtime::Table, asize);
-/// P11-S5d.K — `Option<Gc<Table>>` is 8 bytes via NPO; 0 ⇔ None.
+/// `Option<Gc<Table>>` is 8 bytes via NPO; 0 ⇔ None.
 /// Inline aget reads this to short-circuit on metatable.is_none()
 /// rather than always going through the helper's metatable check.
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
 
-/// v2.1 Phase 1I.B — table-field IC scaffold.
+/// table-field IC scaffold.
 ///
 /// Byte offset of the `nodes: Box<[Node]>` field's low fat-pointer
 /// word (the data pointer). luna-core's `runtime::table::jit_layout`
@@ -573,7 +562,7 @@ pub(crate) const TABLE_METATABLE_OFFSET: usize =
 /// Fat-pointer layout: `(data_ptr, len)` — the data ptr is at
 /// `TABLE_NODES_PTR_OFFSET`, length at `TABLE_NODES_LEN_OFFSET`
 /// (= `..PTR_OFFSET + 8`). See
-/// `runtime/table.rs::phase_1i_b_node_layout_pinned` for the runtime
+/// `runtime/table.rs::node_layout_pinned` for the runtime
 /// assertion that pins this ABI.
 #[allow(dead_code)]
 pub(crate) const TABLE_NODES_PTR_OFFSET: usize =
@@ -625,13 +614,13 @@ const _: () = {
     assert!(std::mem::size_of::<*mut u8>() == 8);
     assert!(std::mem::size_of::<luna_core::runtime::value::RawVal>() == 8);
     assert!(std::mem::align_of::<luna_core::runtime::value::RawVal>() == 8);
-    // P11-S5d.H — `asize` is u64 so a single `load i64` yields the
+    // `asize` is u64 so a single `load i64` yields the
     // array-part length; the JIT then shifts left 3 to multiply by 8
     // for the `atags_ptr = array_ptr + asize * 8` computation.
     assert!(std::mem::size_of::<u64>() == 8);
 };
 
-/// P11-S5b — a single recognized `math.<fn>(arg)` fold. The four
+/// a single recognized `math.<fn>(arg)` fold. The four
 /// participating PCs are `start_pc + 0..=3` (GetTabUp / GetField /
 /// Move / Call). At emit time only the `GetTabUp` PC produces IR —
 /// the other three are no-ops and the outer pc cursor jumps past
@@ -665,7 +654,7 @@ impl MathFold {
     }
 }
 
-/// v1.3 Phase AOT Stage 3 — backend-agnostic metadata describing one
+/// backend-agnostic metadata describing one
 /// lowered Lua chunk's ABI shape. Returned by [`lower_int_chunk_into`]
 /// so callers (runtime JIT today, ahead-of-time `luna-aot` tomorrow)
 /// can wrap the produced [`FuncId`] in their own dispatch handle.
@@ -686,7 +675,7 @@ pub struct ChunkMeta {
     pub ret_is_table: bool,
 }
 
-/// v1.3 Phase AOT Stage 3 — build a fresh `JITModule` configured with
+/// build a fresh `JITModule` configured with
 /// all `luna_jit_*` helper symbols pre-registered. Shared by the
 /// runtime JIT entry [`try_compile_int_chunk`] and tests; the AOT
 /// pipeline (luna-aot) builds an `ObjectModule` instead and feeds it
@@ -706,11 +695,11 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
         .finish(settings::Flags::new(flag_builder))
         .ok()?;
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-    // P11-S5c — register Rust helper symbols so the cranelift JIT can
+    // register Rust helper symbols so the cranelift JIT can
     // resolve them at finalize time. Without this, executables that
     // link luna as an rlib strip the `#[no_mangle]` symbols at link
     // time and the default `dlsym(RTLD_DEFAULT)` resolver fails. The
-    // libm symbols S5b uses (`sin`, `cos`, …) are linked from libc
+    // libm symbols the math folds use (`sin`, `cos`, …) are linked from libc
     // and stay resolvable via dlsym, so they don't need this step.
     builder.symbol("luna_jit_new_table", luna_jit_new_table as *const u8);
     builder.symbol(
@@ -762,12 +751,11 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
 /// Try to JIT-compile `proto`. Returns `None` when any opcode in the
 /// body falls outside the cumulative whitelist — the interpreter then
 /// handles the chunk unchanged. `pre53` (Lua 5.1 / 5.2 / 5.3) selects
-/// the pre-5.3 `ForPrep` / `ForLoop` form and currently makes S5a's
-/// loop lowering bail; pass `false` (Lua 5.4 / 5.5) to enable the
-/// counted-loop emit. The dialect bit also participates in the
-/// thread-local cache key — see `proto_cache_key`.
+/// the pre-5.3 `ForPrep` / `ForLoop` form; pass `false` (Lua 5.4 /
+/// 5.5) for the counted-loop form. The dialect bit also participates
+/// in the cache key — see `proto_cache_key`.
 ///
-/// v1.3 Phase AOT Stage 3 — thin wrapper around the backend-agnostic
+/// thin wrapper around the backend-agnostic
 /// [`lower_int_chunk_into`] generic; constructs a `JITModule`,
 /// finalizes the compiled fn into RWX memory, and wraps the entry ptr
 /// in a [`JitHandle`] that owns the module for the entry's lifetime.
@@ -776,9 +764,9 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
     let (fn_id, meta) = lower_int_chunk_into(&mut module, proto, pre53, float_only)?;
     module.finalize_definitions().ok()?;
 
-    // P11-S5d.C diag — `LUNA_JIT_TRACE=1` prints one line per
+    // `LUNA_JIT_TRACE=1` prints one line per
     // successful JIT compile with the Proto's source location +
-    // signature. Future S5d.C work hitting a regression in
+    // signature. A regression in
     // (e.g.) errors.lua can grep this trace to pinpoint the
     // exact `load(...)` snippet that JIT'd, instead of bisecting
     // by hand. The check is one TLS read per compile when the
@@ -806,7 +794,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
 
     let ptr = module.get_finalized_function(fn_id);
     Some(JitHandle {
-        // v2.0 Track J sub-step J-D — wrap with the `SendJitModule`
+        // wrap with the `SendJitModule`
         // sleeve. SAFETY criterion (default `SystemMemoryProvider`) is
         // satisfied by `build_jit_module_with_helpers` which never
         // calls `JITBuilder::memory_provider`; see send_jit_module.rs.
@@ -925,7 +913,7 @@ fn emit_checked_get<M: Module>(
     Some(bcx.block_params(merge_blk)[0])
 }
 
-/// v1.3 Phase AOT Stage 3 — backend-agnostic body of the int-chunk
+/// backend-agnostic body of the int-chunk
 /// lowerer. Generic over any `cranelift_module::Module` so the same
 /// codegen pipeline drives the runtime JIT (`JITModule`,
 /// [`try_compile_int_chunk`]) and the AOT pipeline (`ObjectModule` in
@@ -947,10 +935,10 @@ pub fn lower_int_chunk_into<M: Module>(
         return None;
     }
     let num_params = proto.num_params as usize;
-    // S2c.C — luna's `local function f(...) end` idiom binds upvalue 0
+    // luna's `local function f(...) end` idiom binds upvalue 0
     // (Lua 5.5/5.4/5.3/5.2) or upvalue 1 (Lua 5.1 — slot 0 is the
-    // `_ENV` placeholder) to the closure itself. S3 generalises the
-    // upvalue tracking: the scanner watches GetUpval(b) and pins the
+    // `_ENV` placeholder) to the closure itself. Upvalue
+    // tracking is general: the scanner watches GetUpval(b) and pins the
     // self-upval index from the first occurrence; subsequent
     // GetUpval(b') with b' != self-upval-idx bails. Upvals count is
     // bounded only to avoid pathological cases.
@@ -973,9 +961,9 @@ pub fn lower_int_chunk_into<M: Module>(
     // lower. Indexed by Lua register number.
     let max_stack = (proto.max_stack as usize).max(num_params);
     let mut self_upval: Vec<bool> = vec![false; max_stack];
-    // P11-S5d.J — per-PC role for `Op::GetUpval`. SelfMarker (true at
+    // per-PC role for `Op::GetUpval`. SelfMarker (true at
     // the bool position is misleading — see the enum-like split below)
-    // is the original S2c.C behavior; ValueRead enables fetching the
+    // is the call-target shortcut; ValueRead enables fetching the
     // upvalue value at runtime via `luna_jit_upval_get` so chunks like
     // `function () return k * k end` can JIT. `is_upval_value_read[pc]`
     // is true iff the role is ValueRead. Pre-pass below decides via
@@ -984,17 +972,17 @@ pub fn lower_int_chunk_into<M: Module>(
     // PC of every Op::Call that resolves to the self-recursion edge.
     // Emit-side consumes this to lower as a cranelift `call fn_id`.
     let mut self_call_pcs: Vec<bool> = vec![false; n];
-    // S5a — track each register's last-written `LoadI` immediate (or
+    // track each register's last-written `LoadI` immediate (or
     // None when it was overwritten by anything else). `ForPrep` reads
     // `step_const[A+2]` to check that the step is a compile-time
     // constant ≠ 0 — non-immediate steps bail to the interpreter.
     let mut step_const: Vec<Option<i64>> = vec![None; max_stack];
-    // S5a — every JIT'd ForPrep/ForLoop pair, in source order. Each
+    // every JIT'd ForPrep/ForLoop pair, in source order. Each
     // tuple is `(prep_pc, loop_pc, step_imm)`. Emit consumes this to
     // lay out the counted-loop blocks.
     let mut for_loops: Vec<(usize, usize, i64)> = Vec::new();
 
-    // P11-S5c — `defines_table[reg]` tracks whether a `NewTable` or
+    // `defines_table[reg]` tracks whether a `NewTable` or
     // `Move` from a defined table reg has run by the current scan
     // position. Reset on any non-table-producing write to the
     // register. SetTable / GetI / Len require the operand to be
@@ -1010,7 +998,7 @@ pub fn lower_int_chunk_into<M: Module>(
     // merging the table ptr with the entry-block iconst(0), and
     // the false-branch path would feed NULL into the Rust helper.
     let mut defines_table: Vec<bool> = vec![false; max_stack];
-    // P11-S5d.A — function params are guaranteed defined by the
+    // function params are guaranteed defined by the
     // caller. The dispatcher's `try_jit_call_op` only marshals
     // `Value::Table` into a Table-typed slot (via `arg_table_mask`),
     // so a Table-typed param truly holds a valid `Gc<Table>` ptr at
@@ -1023,7 +1011,7 @@ pub fn lower_int_chunk_into<M: Module>(
         }
     }
 
-    // P11-S5c.B — per-PC presize hint for `Op::NewTable`. When a
+    // per-PC presize hint for `Op::NewTable`. When a
     // NewTable is immediately followed by the canonical
     // `LoadI init / LoadI/LoadK limit / LoadI step / ForPrep`
     // window with `init = 1`, `step = 1`, `limit = N` (Int const),
@@ -1036,7 +1024,7 @@ pub fn lower_int_chunk_into<M: Module>(
     let mut presize_for_newtable: std::collections::HashMap<usize, i64> =
         std::collections::HashMap::new();
 
-    // P11-S5b — pre-scan: detect `math.<fn>(arg)` 4-op folds. The
+    // pre-scan: detect `math.<fn>(arg)` 4-op folds. The
     // pattern is dialect-invariant — Lua 5.1 through 5.5 all emit
     // the same `GetTabUp / GetField / Move / Call` window for
     // `<env>.math.<fn>(<reg>)`. When a window matches, every
@@ -1107,7 +1095,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::LoadK => {
-                // S3 — Float constants pass. S5a — Int constants also
+                // Float constants pass. Int constants also
                 // pass. Lua compilers reach for `LoadK Int(v)` when the
                 // immediate doesn't fit in `LoadI`'s ±MAX_SBX range
                 // (e.g. `for i = 1, 1000000` puts 1000000 in a
@@ -1122,7 +1110,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     *slot = false;
                 }
                 if let Some(slot) = step_const.get_mut(a) {
-                    // S5a — a `LoadK Int(v)` also pins the register
+                    // a `LoadK Int(v)` also pins the register
                     // to a known compile-time constant. ForPrep can
                     // use this register as its step source just like
                     // a `LoadI`.
@@ -1133,7 +1121,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::LoadNil => {
-                // P11-S5d.G — `R[A..=A+B] = nil`. The whitelist accepts
+                // `R[A..=A+B] = nil`. The whitelist accepts
                 // LoadNil for the cross_dialect `binary_trees` shape
                 // (`{nil, nil}` leaf), where the freshly-NewTable'd
                 // array slots are written nil by LoadNil and then
@@ -1170,7 +1158,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 if let Some(slot) = step_const.get_mut(a) {
                     *slot = None;
                 }
-                // P11-S5c — propagate table-defined-ness through
+                // propagate table-defined-ness through
                 // Move. Note this is a single-pass walk; the
                 // fixed-point below catches cases where the Move
                 // precedes the NewTable in source order (back-edge
@@ -1184,7 +1172,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 // Reading a self-upval-tagged register in arith means the
                 // GetUpval was a generic upvalue read (e.g., `n + 1` over
                 // an outer-local upvalue), not the self-recursion shortcut.
-                // Bail out — S2c.C only handles the call-target case.
+                // Bail out — only the call-target case is handled.
                 let b = ins.b() as usize;
                 let c = ins.c() as usize;
                 if self_upval.get(b).copied().unwrap_or(false)
@@ -1205,7 +1193,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 if (b as usize) >= proto.upvals.len() {
                     return None;
                 }
-                // P11-S5d.J — ValueRead role: `R[A]` is consumed as
+                // ValueRead role: `R[A]` is consumed as
                 // a real value (not a self-recursion call target).
                 // For now we restrict to **Float-only dialects**
                 // (5.1/5.2) so we can default-pin the upvalue's
@@ -1230,7 +1218,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     pc += 1;
                     continue;
                 }
-                // SelfMarker — existing S2c.C behavior.
+                // SelfMarker — self-recursion call target.
                 if !allows_self_recursion {
                     return None;
                 }
@@ -1259,7 +1247,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 //
                 let nargs = ins.b().checked_sub(1)?;
                 let c = ins.c();
-                // P11-S5d.C — variadic Call (C=0) paired with a
+                // variadic Call (C=0) paired with a
                 // variadic SetList (B=0) at PC+1 is the
                 // `{make(d-1), make(d-1)}` shape — luna's frontend
                 // emits the second sibling's `Call` as variadic so
@@ -1281,13 +1269,13 @@ pub fn lower_int_chunk_into<M: Module>(
                     return None;
                 }
                 if folded_math[pc] {
-                    // P11-S5b — math libcall fold. Emit-side folds the
+                    // math libcall fold. Emit-side folds the
                     // 4-op window into one cranelift libm call; here
                     // we just clear the per-register trackers.
                 } else if self_upval.get(a).copied().unwrap_or(false)
                     && nargs as usize == num_params
                 {
-                    // S2c.C — self-recursive call, lowered as a direct
+                    // self-recursive call, lowered as a direct
                     // call of the compiled body, whose signature takes
                     // exactly the function's parameters. The upvalue may
                     // hold another function (the entry check catches that
@@ -1305,7 +1293,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::GetTabUp | Op::GetField => {
-                // P11-S5b — accepted only as part of a recognized
+                // accepted only as part of a recognized
                 // math libcall fold. The fold's emit consumes all
                 // four PCs; the per-register trackers for R[A] get
                 // cleared so post-fold uses see fresh state.
@@ -1323,7 +1311,7 @@ pub fn lower_int_chunk_into<M: Module>(
             Op::Return1 => {
                 // A Return1 of a self-upval-tagged register would return
                 // the (mismarked) closure value back to the caller — not
-                // a generic shape S2c.C handles. Bail.
+                // a shape the lowerer handles. Bail.
                 if self_upval.get(ins.a() as usize).copied().unwrap_or(false) {
                     return None;
                 }
@@ -1349,8 +1337,8 @@ pub fn lower_int_chunk_into<M: Module>(
             }
             Op::Lt | Op::Le | Op::Eq => {
                 // Reading a tagged register here is a generic-upvalue
-                // comparison (e.g. `if n_upval < 3 then …`) which S2c.C
-                // doesn't model.
+                // comparison (e.g. `if n_upval < 3 then …`) which the
+                // lowerer doesn't model.
                 if self_upval.get(ins.a() as usize).copied().unwrap_or(false)
                     || self_upval.get(ins.b() as usize).copied().unwrap_or(false)
                 {
@@ -1376,7 +1364,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 pc = jmp_pc; // outer pc += 1 below moves past the Jmp
             }
             Op::ForPrep => {
-                // S5a + S5a.B — both forms admitted. The dialect-
+                // both forms admitted. The dialect-
                 // specific shape is picked up in emit, gated by `pre53`.
                 let a = ins.a() as usize;
                 // The step has to be a compile-time-known `LoadI`
@@ -1442,9 +1430,9 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::NewTable => {
-                // P11-S5c — empty-table form. luna's frontend emits
+                // empty-table form. luna's frontend emits
                 // NewTable a=A b=0 c=0 for `{}`.
-                // P11-S5d.B — also accept `b > 0` (array presize for
+                // Also accept `b > 0` (array presize for
                 // `{...}` literals); the emit-side calls
                 // `luna_jit_new_table_sized(b)`. `c > 0` (hash part
                 // presize) still bails — none of our headline cells
@@ -1465,15 +1453,15 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::SetTable => {
-                // P11-S5c — register-keyed set. The proper safety
+                // register-keyed set. The proper safety
                 // gate (R[A] must be a definitively-defined table at
                 // this PC) lives in the BB-level dataflow check
                 // below; the linear `defines_table` walk would
                 // wrongly accept a false-branch-only NewTable.
             }
             Op::SetList => {
-                // P11-S5d.B — fixed-count array literal initializer
-                // (B > 0). P11-S5d.C — variadic form (B == 0, C ==
+                // fixed-count array literal initializer
+                // (B > 0). Variadic form (B == 0, C ==
                 // 0) accepted when paired with the immediately
                 // preceding `Op::Call C=0`; the JIT'd self-recursive
                 // callee returns exactly 1 value, so the static
@@ -1502,7 +1490,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 // not into R[A..A+B] themselves.
             }
             Op::GetI => {
-                // P11-S5c — `R[A] = R[B][imm(C)]`. BB-level dataflow
+                // `R[A] = R[B][imm(C)]`. BB-level dataflow
                 // verifies R[B] is a table at this PC.
                 let a = ins.a() as usize;
                 if let Some(slot) = self_upval.get_mut(a) {
@@ -1518,7 +1506,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::GetTable => {
-                // P11-S5d.E' — `R[A] = R[B][R[C]]`. BB-level dataflow
+                // `R[A] = R[B][R[C]]`. BB-level dataflow
                 // verifies R[B] is a table at this PC. Parallel to
                 // GetI but the key is in a register (5.1/5.2 lower
                 // `t[1]` this way because they have no Int subtype:
@@ -1536,7 +1524,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::Len => {
-                // P11-S5c — `R[A] = #R[B]`. BB-level dataflow
+                // `R[A] = #R[B]`. BB-level dataflow
                 // verifies R[B] is a table at this PC.
                 let a = ins.a() as usize;
                 if let Some(slot) = self_upval.get_mut(a) {
@@ -1554,10 +1542,10 @@ pub fn lower_int_chunk_into<M: Module>(
         pc += 1;
     }
 
-    // P11-S5d.B — BB-level dataflow for "is this register a
-    // table at the use site". Replaces S5c's
-    // `has_new_table && has_conditional → bail` blanket safety
-    // net: that gate was sound but rejected the make-style
+    // BB-level dataflow for "is this register a
+    // table at the use site". A blanket
+    // `has_new_table && has_conditional → bail` safety
+    // net would be sound but would reject the make-style
     // pattern where both branches of an Op::Eq + Jmp split
     // independently `NewTable R[A]` and then SetList into it.
     //
@@ -1729,7 +1717,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::LoadNil => {
-                    // P11-S5d.G — LoadNil writes Nil to R[A..=A+B];
+                    // LoadNil writes Nil to R[A..=A+B];
                     // none of those are table refs.
                     let a = ins.a() as usize;
                     for off in 0..=(ins.b() as usize) {
@@ -1773,7 +1761,7 @@ pub fn lower_int_chunk_into<M: Module>(
         }
     };
 
-    // P11-S5d.B — "must-defined" dataflow uses intersection at
+    // "must-defined" dataflow uses intersection at
     // joins, so we initialise non-entry BBs at the TOP element
     // (every register considered defined) and refine downward.
     // Starting at BOTTOM (false) would make the intersection at
@@ -1901,7 +1889,7 @@ pub fn lower_int_chunk_into<M: Module>(
         }
     }
 
-    // P11-S5c.B — find every NewTable that opens a
+    // find every NewTable that opens a
     // `NewTable R[A]=`{}`; LoadI R[A+1]=1; LoadI|LoadK R[A+2]=N;
     // LoadI R[A+3]=1; ForPrep R[A+1]` window. The matching ForPrep
     // is already in `for_loops`; we walk that list and look 4 PCs
@@ -1962,7 +1950,7 @@ pub fn lower_int_chunk_into<M: Module>(
         presize_for_newtable.insert(nt_pc, limit_val);
     }
 
-    // P11-S5b — every math fold's internal PCs (+1, +2, +3) must
+    // every math fold's internal PCs (+1, +2, +3) must
     // sit inside a single basic block. A Jmp target landing on one
     // of them would leave a half-emitted fold straddling a Cranelift
     // block boundary (the BB algorithm marks the target as a block
@@ -1977,7 +1965,7 @@ pub fn lower_int_chunk_into<M: Module>(
         }
     }
 
-    // S2c.C correctness gate: every JIT-recognised self-recursive call
+    // Correctness gate: every JIT-recognised self-recursive call
     // bypasses luna's `c_depth` / `frames.len()` budget. A self-call
     // with no base case before it would blow the OS stack (the
     // `runtime_stack_overflow_is_caught` regression). Require at least
@@ -2052,7 +2040,7 @@ pub fn lower_int_chunk_into<M: Module>(
         }
     }
 
-    // S3 — per-register type inference. Each Lua register holds either
+    // per-register type inference. Each Lua register holds either
     // an Int (i64) or a Float (f64). A register that's pinned to both
     // shapes within the same Proto bails the lowerer. The sweep is
     // forward-only with a fixpoint loop because a self-recursive Call
@@ -2060,20 +2048,19 @@ pub fn lower_int_chunk_into<M: Module>(
     // `ret_kind`); successive passes propagate the resolved kind.
     let mut reg_kinds: Vec<RegKind> = vec![RegKind::Unset; max_stack];
     let mut ret_kind: RegKind = RegKind::Unset;
-    // P11-S5d.C scaffolding (unused until per-BB kind tracking lands)
-    // — `latest_writer_kind[reg]` records the kind written to `reg`
+    // `latest_writer_kind[reg]` records the kind written to `reg`
     // by the most recent writer op in linear PC order during this
     // sweep pass. With the current per-proto `RegKind` model
     // (strict Int/Table conflict), this tracker is a no-op: every
     // op that writes a Variable's kind also passes through the
     // global unify, so latest_writer_kind never disagrees with
-    // reg_kinds. The scaffold is wired in so a future S5d.C can
-    // relax `unify` (e.g. Int + Table → joint) and the Return1 ret
+    // reg_kinds. The scaffold is wired in so a relaxed
+    // `unify` (e.g. Int + Table → joint) lets the Return1 ret
     // kind can be picked from the latest writer rather than the
     // joint kind. See `make_proto_5_5_round_trip` (currently still
     // bails) for the motivating shape.
     let mut latest_writer_kind: Vec<RegKind>;
-    // P11-S5d.C — `maybe_table[reg]` is set when the register
+    // `maybe_table[reg]` is set when the register
     // could hold a Table pointer at runtime even though
     // `reg_kinds[reg]` says Int. The classic case is
     // `Op::GetI R[A] = R[B][c]`: the helper returns the raw
@@ -2083,7 +2070,7 @@ pub fn lower_int_chunk_into<M: Module>(
     // bail conservatively (interp would have raised; the JIT'd
     // `iadd` / `icmp` would silently compute garbage).
     let mut maybe_table: Vec<bool>;
-    // P11-S5d.G — parallel to `maybe_table`: this register's most
+    // parallel to `maybe_table`: this register's most
     // recent writer was `Op::LoadNil`, so a kind-sensitive reader
     // (arith, cmp, SetTable's helper) would silently read `Int(0)`
     // where the Lua semantics demand a Nil error or Nil tag. SetList
@@ -2145,7 +2132,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     is_nil_writer[ins.a() as usize] = false;
                 }
                 Op::LoadNil => {
-                    // P11-S5d.G — `R[A..=A+B] = nil`. Leave `reg_kinds`
+                    // `R[A..=A+B] = nil`. Leave `reg_kinds`
                     // alone so a downstream writer (e.g. 5.1/5.2's
                     // `LoadF R[3] = 1.0` after an earlier
                     // `LoadNil R[3]` in the same Proto) can pin its
@@ -2173,7 +2160,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::Move => {
-                    // P11-S5b — fold-internal Move (slot +2 of a math
+                    // fold-internal Move (slot +2 of a math
                     // libcall) writes a temp register the libm emit
                     // never reads (the emit pulls the arg straight
                     // from `fold.arg_reg`). The temp gets clobbered
@@ -2197,7 +2184,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 Op::Add | Op::Sub | Op::Mul | Op::Div => {
                     let b = ins.b() as usize;
                     let c = ins.c() as usize;
-                    // P11-S5d.C — Table operand makes Lua's interp
+                    // Table operand makes Lua's interp
                     // error ("attempt to perform arithmetic on a
                     // table value") while the JIT's `iadd` would
                     // happily compute on ptr bits. Check
@@ -2213,7 +2200,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     {
                         return None;
                     }
-                    // P11-S5d.G — `nil + x` / `x + nil` raises in interp
+                    // `nil + x` / `x + nil` raises in interp
                     // (`attempt to perform arithmetic on a nil value`);
                     // the JIT would silently `iadd(0, x)`. Bail so the
                     // interpreter surfaces the error.
@@ -2263,7 +2250,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 Op::Lt | Op::Le | Op::Eq => {
                     let a = ins.a() as usize;
                     let b = ins.b() as usize;
-                    // P11-S5d.C — Lt/Le errors on a Table; Eq is
+                    // Lt/Le errors on a Table; Eq is
                     // semantically safe (Lua's Eq across types is
                     // always false, and our icmp on ptr bits
                     // matches that for typical addresses).
@@ -2277,7 +2264,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     {
                         return None;
                     }
-                    // P11-S5d.G — `nil < x` / `nil <= x` raise; `nil == x`
+                    // `nil < x` / `nil <= x` raise; `nil == x`
                     // is well-defined in Lua but our icmp would compare
                     // raw 0 bits ≠ proper Nil tag and miss the nil-aware
                     // path. Bail conservatively.
@@ -2294,7 +2281,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::GetUpval => {
-                    // S3 — no kind constraint for the SelfMarker role.
+                    // no kind constraint for the SelfMarker role.
                     // The self-upval marker is never read as a real
                     // value (the matching Op::Call rewrites to a
                     // direct cranelift call, bypassing the register).
@@ -2310,7 +2297,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // Float self-result. Pinning Int here would conflict
                     // with the LoadF and bail the whole Proto.
                     //
-                    // P11-S5d.J — ValueRead role: pin R[A] to Float so
+                    // ValueRead role: pin R[A] to Float so
                     // downstream arith picks `fadd`/`fmul`. Restricted
                     // to pre53 (linear pre-pass already bails non-pre53
                     // value-read).
@@ -2326,7 +2313,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 Op::Call => {
                     if folded_math[pc] {
-                        // P11-S5b — pin R[A] (= Call.A = the fold's
+                        // pin R[A] (= Call.A = the fold's
                         // result slot) to the fold's result kind.
                         let k = math_folds
                             .iter()
@@ -2355,7 +2342,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::GetTabUp | Op::GetField => {
-                    // P11-S5b — folded GetTabUp / GetField don't ever
+                    // folded GetTabUp / GetField don't ever
                     // observe their stored values (the next fold op
                     // overwrites R[A]). The Call PC pins R[A] to
                     // Float on its own; nothing to do here.
@@ -2364,7 +2351,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::Return1 => {
-                    // P11-S5d.G — Return1 on a LoadNil-written register
+                    // Return1 on a LoadNil-written register
                     // would wrap `Int(0)` instead of `Nil` (the helper
                     // ABI is i64 bits; the dispatcher uses ret_kind to
                     // decide Int vs Float, not Nil). Bail to interp so
@@ -2373,7 +2360,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     if is_nil_writer[ins.a() as usize] {
                         return None;
                     }
-                    // P11-S5d.C — pick from the most recent writer
+                    // pick from the most recent writer
                     // instead of the unified `reg_kinds` slot so a
                     // `LoadI 0 → Eq → NewTable → Return1` chain
                     // sees the Return as a Table return (not Int).
@@ -2390,7 +2377,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // back-propagate to R[A] so a Float ret pins the
                     // register's type even when R[A] was Unset.
                     //
-                    // P11-S5d.E' — guard on Unset: a 5.1/5.2
+                    // guard on Unset: a 5.1/5.2
                     // `LoadF + GetTable + Return1` chain reuses R[A]
                     // as the Float-key holder before GetTable stores
                     // the raw-payload result. `reg_kinds[a]` already
@@ -2408,7 +2395,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 Op::Return0 | Op::Jmp => {}
                 Op::ForPrep | Op::ForLoop => {
-                    // S5a / S5a.B — Int loop. S5a.C — Float loop (5.1 /
+                    // Int loop, or Float loop (5.1 /
                     // 5.2 numeric `for` keeps the loop var Float). The
                     // loop kind is decided by R[A]'s scanned kind: Float
                     // at any pass forces Float for R[A], R[A+1], R[A+3]
@@ -2419,7 +2406,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // pin it Int regardless and the Float emit promotes
                     // the immediate to f64const at use sites.
                     //
-                    // P11-S5d.C — with the relaxed Int+Table `unify`
+                    // with the relaxed Int+Table `unify`
                     // a `for i = 1, {}, 10 do … end` chunk's `limit`
                     // slot (R[A+1]) holds a Table while `reg_kinds`
                     // says Int. The interpreter raises "for limit
@@ -2463,7 +2450,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     is_nil_writer[a + 2] = false;
                 }
                 Op::NewTable => {
-                    // S5c — R[A] = fresh empty table.
+                    // R[A] = fresh empty table.
                     if !RegKind::unify(&mut reg_kinds[ins.a() as usize], RegKind::Table) {
                         return None;
                     }
@@ -2476,7 +2463,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     is_nil_writer[ins.a() as usize] = false;
                 }
                 Op::SetList => {
-                    // P11-S5d.B — `R[A][1..=B] = R[A+1..A+B]`. R[A]
+                    // `R[A][1..=B] = R[A+1..A+B]`. R[A]
                     // must be Table; the per-element kinds (Int /
                     // Float / Table / Nil) are inspected at emit time
                     // (current_kinds + current_is_nil) so we tag-store
@@ -2487,7 +2474,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::SetTable => {
-                    // S5c — R[A] (table) Table. Key/value pair must
+                    // R[A] (table) Table. Key/value pair must
                     // be either (Int, Int) or (Float, Float). Mixed
                     // shapes (Int key + Float value) aren't required
                     // by any current bench source — luna's frontend
@@ -2500,7 +2487,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     if !RegKind::unify(&mut reg_kinds[a], RegKind::Table) {
                         return None;
                     }
-                    // P11-S5d.G — `t[nil] = x` raises in interp (
+                    // `t[nil] = x` raises in interp (
                     // "table index is nil"); the JIT's Int helper
                     // would silently set `t[0] = x`. `t[k] = nil`
                     // would write `Int(0)` instead of removing the
@@ -2536,10 +2523,10 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::GetI => {
-                    // S5c — R[A] = R[B][imm(C)]. R[B] must be Table;
+                    // R[A] = R[B][imm(C)]. R[B] must be Table;
                     // R[A] is Int (matches the static Int-only store
                     // expectation of `luna_jit_table_get_int`).
-                    // P11-S5d.C — the helper returns raw payload
+                    // the helper returns raw payload
                     // bits regardless of the slot's actual Value
                     // tag; if the table stored a Table at that
                     // index the read value is a Gc<Table> pun.
@@ -2557,7 +2544,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     is_nil_writer[a] = false;
                 }
                 Op::GetTable => {
-                    // P11-S5d.E' — R[A] = R[B][R[C]]. R[B] is Table.
+                    // R[A] = R[B][R[C]]. R[B] is Table.
                     // R[C] is a key — Int or Float are both fine
                     // (helper handles Float keys via `Table::get`,
                     // which normalises integral Floats back to the
@@ -2585,7 +2572,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     {
                         return None;
                     }
-                    // P11-S5d.G — Nil key would call `Table::get(Nil)`
+                    // Nil key would call `Table::get(Nil)`
                     // which is well-defined (returns Nil) but the
                     // raw-payload contract breaks: 0 bits for Nil
                     // can't be distinguished from a valid `Int(0)`
@@ -2605,9 +2592,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // NOTE: `pre53` (= version ≤ 5.3) is INCORRECT here
                     // — it includes 5.3 which has the integer subtype.
                     // Use `float_only` (= version ≤ 5.2) to gate the
-                    // Float default. See
-                    // `docs/known-bugs/fixed/jit-51-52-table-int-tag.md`
-                    // and the 5.3 audit test
+                    // Float default. See the 5.3 test
                     // `tests/jit_dialect_audit.rs::audit_gettable_computed_key`.
                     let default_kind = if float_only {
                         RegKind::Float
@@ -2622,14 +2607,14 @@ pub fn lower_int_chunk_into<M: Module>(
                     is_nil_writer[a] = false;
                 }
                 Op::Len => {
-                    // S5c — R[A] = #R[B]. R[B] Table; R[A] holds the
+                    // R[A] = #R[B]. R[B] Table; R[A] holds the
                     // Int length helper return.
                     let a = ins.a() as usize;
                     let b = ins.b() as usize;
                     if !RegKind::unify(&mut reg_kinds[b], RegKind::Table) {
                         return None;
                     }
-                    // P11-S5d.F — Len's i64 helper return goes through
+                    // Len's i64 helper return goes through
                     // `aligned_def`'s bitcast on the writer side, so
                     // the slot's declared type need not be Int. A
                     // Float-pinned slot (5.1/5.2 reuse the ForPrep
@@ -2666,10 +2651,9 @@ pub fn lower_int_chunk_into<M: Module>(
     // nothing) is treated as Int so the dispatcher's masking is
     // well-defined.
     //
-    // P11-S5d — Table-typed params now go through the dispatcher's
+    // Table-typed params go through the dispatcher's
     // `Value::Table` marshalling path (`arg_table_mask`); they
-    // pass the raw `Gc<Table>` ptr as the i64 ABI slot. S5c's
-    // earlier bail (no Table path in the dispatcher) is lifted.
+    // pass the raw `Gc<Table>` ptr as the i64 ABI slot.
     let mut arg_float_mask: u8 = 0;
     let mut arg_table_mask: u8 = 0;
     for i in 0..num_params {
@@ -2682,23 +2666,19 @@ pub fn lower_int_chunk_into<M: Module>(
     let ret_is_float = matches!(ret_kind, RegKind::Float);
     let ret_is_table = matches!(ret_kind, RegKind::Table);
 
-    // P11-S5d.D step 2 — per-BB RegKind dataflow.
+    // per-BB RegKind dataflow.
     //
     // `bb_entry_kinds[bb][r]` is the active kind (latest-writer kind on
     // every path reaching this BB) for register `r` at the BB's entry
     // PC. emit-time `current_kinds` resets to this on every BB switch
     // so an alternate-path writer's kind doesn't leak into the
-    // current path. Step 4 will gate the readers behind this so
-    // Float-vs-Int / Float-vs-Table register reuse across BBs can
-    // unify globally (Float+Int unify is the gate for 5.1/5.2
-    // binary_trees + table_alloc).
+    // current path. Readers gate behind this so Float-vs-Table
+    // register reuse across BBs can unify globally (the 5.1/5.2
+    // binary_trees + table_alloc shapes).
     //
-    // Step 2 itself is functionally a near no-op: the only existing
-    // reader of `current_kinds` is `Op::SetList`, which reads regs it
-    // just wrote inside the same BB (writers always immediately
-    // precede the SetList). The reset can't change SetList's view in
-    // any currently-JIT'd shape; future readers added in step 4 will
-    // depend on it.
+    // `Op::SetList` reads regs it just wrote inside the same BB
+    // (writers always immediately precede the SetList), so the reset
+    // never changes SetList's view.
     //
     // Lattice:
     //   TOP = `RegKind::Unset` (initial non-entry BB entry; encodes
@@ -2706,9 +2686,9 @@ pub fn lower_int_chunk_into<M: Module>(
     //         `reg_kinds`" at emit time).
     //   `Int` / `Float` / `Table` = definite kinds.
     //   meet(X, X) = X; meet(X, Unset) = X; meet(X, Y) for X ≠ Y =
-    //   Unset (join conflict — emit's step-4 reader will fall back).
+    //   Unset (join conflict — emit-side readers fall back).
     //
-    // Mirrors S5d.B's `defines_table` dataflow shape: forward, fixed
+    // Mirrors the `defines_table` dataflow shape: forward, fixed
     // point with intersection-at-joins, non-entry BBs init at TOP, BB
     // 0 init from param kinds.
     let init_kind_for_reg = |i: usize| -> RegKind {
@@ -2912,7 +2892,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     }
                 }
                 Op::LoadNil => {
-                    // P11-S5d.G — emit writes iconst(0) into each
+                    // emit writes iconst(0) into each
                     // `R[A..=A+B]` slot. The declared kind (Int by
                     // the sweep's Unset→Int default, or whatever a
                     // prior writer pinned) stays. The emit-side
@@ -3059,7 +3039,7 @@ pub fn lower_int_chunk_into<M: Module>(
         regs.push(v);
     }
 
-    // P11-S5d.C — emit-side per-PC kind tracker. Initialized from
+    // emit-side per-PC kind tracker. Initialized from
     // the per-arg masks (Float bit → Float, Table bit → Table, else
     // Int) and updated forward at every writer op below. Used by
     // `SetList` to tag-store each element correctly and by
@@ -3075,7 +3055,7 @@ pub fn lower_int_chunk_into<M: Module>(
             RegKind::Int
         };
     }
-    // P11-S5d.G — parallel to `current_kinds`: tracks "the value
+    // parallel to `current_kinds`: tracks "the value
     // last written here is a Nil sentinel (raw bits = 0)". Set by
     // `Op::LoadNil` emit; cleared by any other writer touching the
     // same register. Reset to all-false at every BB switch (the
@@ -3102,14 +3082,14 @@ pub fn lower_int_chunk_into<M: Module>(
             bcx.switch_to_block(next_blk);
             current_block = next_blk;
             terminated = false;
-            // P11-S5d.D step 2 — reset emit-side `current_kinds` to
+            // reset emit-side `current_kinds` to
             // the per-BB dataflow result so an alternate-path
             // writer's kind doesn't leak forward. The linear writer
             // updates below continue to refine `current_kinds` as
             // emit progresses through the new BB.
             let new_bb_idx = pc_to_bb[pc];
             current_kinds = bb_entry_kinds[new_bb_idx].clone();
-            // P11-S5d.G — Nil writes don't cross BB joins in the
+            // Nil writes don't cross BB joins in the
             // patterns we lower; reset rather than fold them into
             // a separate per-BB dataflow.
             for slot in current_is_nil.iter_mut() {
@@ -3147,7 +3127,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 current_is_nil[ins.a() as usize] = false;
             }
             Op::LoadNil => {
-                // P11-S5d.G — `R[A..=A+B] = nil`. Lower to a sequence of
+                // `R[A..=A+B] = nil`. Lower to a sequence of
                 // `iconst(0)` writes, then flag `current_is_nil` so the
                 // matching SetList in this BB picks `RAW_TAG_NIL` over
                 // the default Int tag. The `aligned_def` accepts any
@@ -3225,7 +3205,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 terminated = true;
             }
             Op::GetTabUp => {
-                // P11-S5b — emit-side fold consumer. PCs +1..+3 are
+                // emit-side fold consumer. PCs +1..+3 are
                 // also folded; the outer loop advances `pc` by 3 (plus
                 // the trailing `pc += 1`) so we skip past `GetField`,
                 // `Move`, and the `Call`.
@@ -3332,7 +3312,7 @@ pub fn lower_int_chunk_into<M: Module>(
             Op::GetUpval => {
                 let a = ins.a() as usize;
                 if is_upval_value_read[pc] {
-                    // P11-S5d.J — ValueRead: fetch the upvalue at
+                    // ValueRead: fetch the upvalue at
                     // runtime via `luna_jit_upval_get_float`, which deopts
                     // on anything but a float. The dispatcher
                     // has pinned `JIT_CL` to the active closure for
@@ -3354,7 +3334,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     current_kinds[a] = reg_kinds[a];
                     current_is_nil[a] = false;
                 } else {
-                    // S2c.C — SelfMarker placeholder. The matching
+                    // SelfMarker placeholder. The matching
                     // Op::Call gets rewritten to a direct cranelift
                     // call; this register's value is never read.
                     let zero = if matches!(a_kind(&reg_kinds, ins.a()), RegKind::Float) {
@@ -3398,7 +3378,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     result_i64
                 };
                 aligned_def(&mut bcx, &regs, &reg_kinds, a, result);
-                // P11-S5d.C — self-recursive call returns ret_kind.
+                // self-recursive call returns ret_kind.
                 if !matches!(ret_kind, RegKind::Unset) {
                     current_kinds[a] = ret_kind;
                 }
@@ -3415,7 +3395,7 @@ pub fn lower_int_chunk_into<M: Module>(
 
                 match (pre53, is_float) {
                     (true, false) => {
-                        // S5a.B — pre-5.3 Int form. R[A] = init - step
+                        // pre-5.3 Int form. R[A] = init - step
                         // (so ForLoop's first add lands on init), copy
                         // limit + step over, unconditional jump to the
                         // ForLoop block. R[A+3] left alone — pre53
@@ -3434,7 +3414,7 @@ pub fn lower_int_chunk_into<M: Module>(
                         terminated = true;
                     }
                     (false, false) => {
-                        // S5a — 5.4+ Int count form.
+                        // 5.4+ Int count form.
                         let init = bcx.use_var(regs[a]);
                         let limit = bcx.use_var(regs[a + 1]);
 
@@ -3472,7 +3452,7 @@ pub fn lower_int_chunk_into<M: Module>(
                         terminated = true;
                     }
                     (true, true) => {
-                        // S5a.C — pre-5.3 Float form. R[A] = init - step,
+                        // pre-5.3 Float form. R[A] = init - step,
                         // R[A+1] = limit, R[A+2] = step, unconditional
                         // jump to the ForLoop block. step_imm is the
                         // (Int) immediate the bytecode put in R[A+2];
@@ -3493,7 +3473,7 @@ pub fn lower_int_chunk_into<M: Module>(
                         terminated = true;
                     }
                     (false, true) => {
-                        // S5a.C — 5.4+ Float form. Mirrors interp's
+                        // 5.4+ Float form. Mirrors interp's
                         // post53 Float branch in `for_prep`: empty test
                         // `init > limit` (positive step) / `init < limit`
                         // (negative step), and on continue write R[A] =
@@ -3546,7 +3526,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let is_float = matches!(a_kind(&reg_kinds, ins.a()), RegKind::Float);
 
                 if is_float {
-                    // S5a.C — Float ForLoop. Same shape for pre53 and
+                    // Float ForLoop. Same shape for pre53 and
                     // post53 (Float Loop never used the count form).
                     // next = R[A] + step; cont = next ≤ limit (positive)
                     // / next ≥ limit (negative). On continue → R[A] =
@@ -3574,7 +3554,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     current_kinds[a + 3] = RegKind::Float;
                     bcx.ins().jump(body_blk, &[]);
                 } else if pre53 {
-                    // S5a.B — pre-5.3 Int form. R[A] += step; check vs
+                    // pre-5.3 Int form. R[A] += step; check vs
                     // R[A+1] = limit; continue → write R[A+3] = R[A]
                     // + backward jump.
                     let cur = bcx.use_var(regs[a]);
@@ -3600,7 +3580,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     current_kinds[a + 3] = RegKind::Int;
                     bcx.ins().jump(body_blk, &[]);
                 } else {
-                    // S5a — 5.4+ Int count form.
+                    // 5.4+ Int count form.
                     let count = bcx.use_var(regs[a + 1]);
                     let zero_i = bcx.ins().iconst(types::I64, 0);
                     // unsigned count (see ForPrep)
@@ -3671,23 +3651,23 @@ pub fn lower_int_chunk_into<M: Module>(
                 pc += 1; // consume the paired Jmp; outer increment moves past it
             }
             Op::NewTable => {
-                // P11-S5c — `R[A] = {}` lowers to a call into the
+                // `R[A] = {}` lowers to a call into the
                 // `luna_jit_new_table` Rust helper. The helper reads
                 // the active Vm pointer from the thread-local set by
                 // `enter_jit`. Result is the `Gc<Table>` pointer
                 // pun'd to I64, written into R[A].
                 //
-                // P11-S5c.B — when the scan recorded a presize hint
+                // when the scan recorded a presize hint
                 // (the NewTable opens a counted `for i = 1, N`
                 // window), reach for the `_sized` variant with N
                 // as an i64 const arg. Skips the O(log N) rehash
                 // chain that would otherwise dominate the loop.
                 //
-                // P11-S5d.B — also honour `NewTable.B` as a presize
+                // also honour `NewTable.B` as a presize
                 // hint: luna's frontend emits `NewTable A B=N` for
                 // `{a, b, c, ...}` literals (the SetList that
                 // follows fills exactly N entries). Either source —
-                // S5c.B window or NewTable.B — feeds the sized
+                // the scanned window or NewTable.B — feeds the sized
                 // helper; the explicit window wins on overlap.
                 let presize = presize_for_newtable.get(&pc).copied().or_else(|| {
                     let b = ins.b();
@@ -3719,12 +3699,12 @@ pub fn lower_int_chunk_into<M: Module>(
                 current_is_nil[ins.a() as usize] = false;
             }
             Op::SetTable => {
-                // P11-S5c — `R[A][R[B]] = R[C]`. Pick the Int/Int vs
+                // `R[A][R[B]] = R[C]`. Pick the Int/Int vs
                 // Float/Float helper at emit time based on R[B]'s
                 // resolved kind (the scan pinned R[B] and R[C] to
                 // the same kind).
                 //
-                // P11-S5c.C — for the Int/Int variant, emit an inline
+                // for the Int/Int variant, emit an inline
                 // aset fast path: skip the helper call when the key
                 // falls inside the table's array part. The cranelift
                 // IR reads `atags.len`, `atags.ptr`, `avals.ptr`
@@ -3737,7 +3717,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let b = ins.b() as usize;
                 let c = ins.c() as usize;
                 let t_raw = bcx.use_var(regs[a]);
-                // P11-S5d.D step 3+4 — when `R[A]` is Float-declared
+                // when `R[A]` is Float-declared
                 // because of a same-slot Float writer in another BB
                 // (the binary_trees 5.1/5.2 pattern), `use_var` hands
                 // back F64. Bitcast back to I64 so the inline aset
@@ -3758,7 +3738,7 @@ pub fn lower_int_chunk_into<M: Module>(
 
                 if !is_float {
                     // Inline aset fast path (Int key + Int val).
-                    // P11-S5d.H — load `asize` (u64) once for both the
+                    // load `asize` (u64) once for both the
                     // in-range check and the `atags_ptr = avals_ptr +
                     // asize * 8` computation. Avals occupy `slab` from
                     // offset 0; atags trail at byte offset `asize * 8`.
@@ -3836,7 +3816,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::SetList => {
-                // P11-S5d.B — `R[A][1..=B] = R[A+1..A+B]`. Inline
+                // `R[A][1..=B] = R[A+1..A+B]`. Inline
                 // each store via the same atags/avals fast-path the
                 // SetTable inline aset uses, since the table was
                 // just freshly NewTable'd (with B as the array
@@ -3847,7 +3827,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 //   Float   → raw::FLOAT   (bitcast f64 → i64)
                 //   Table   → raw::TABLE   (i64 ptr verbatim)
                 //
-                // P11-S5d.C — `B == 0` variadic form: the matching
+                // `B == 0` variadic form: the matching
                 // preceding `Op::Call C=0` returns exactly 1 value
                 // (the self-recursive callee's `returns_one == true`
                 // guarantee), so the static count is
@@ -3862,7 +3842,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     b_field as usize
                 };
                 let t_raw = bcx.use_var(regs[a]);
-                // P11-S5d.D step 3+4 — Float-declared Table operand
+                // Float-declared Table operand
                 // bitcast to I64; see SetTable for the rationale.
                 let t = if matches!(
                     reg_kinds.get(a).copied().unwrap_or(RegKind::Int),
@@ -3872,7 +3852,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 } else {
                     t_raw
                 };
-                // P11-S5d.H — load slab.ptr (= avals base) and asize,
+                // load slab.ptr (= avals base) and asize,
                 // compute `atags_ptr = avals_ptr + asize * 8` once for
                 // the whole literal store.
                 let avals_ptr = bcx.ins().load(
@@ -3893,12 +3873,12 @@ pub fn lower_int_chunk_into<M: Module>(
                 for i in 0..b {
                     let src = a + 1 + i;
                     let v = bcx.use_var(regs[src]);
-                    // P11-S5d.C — per-PC kind from `current_kinds`,
+                    // per-PC kind from `current_kinds`,
                     // not the global `reg_kinds`. R[A+i] may legitimately
                     // hold an Int at one SetList PC and a Table at
                     // another (the binary_trees `make` pattern).
                     let kind = current_kinds.get(src).copied().unwrap_or(RegKind::Int);
-                    // P11-S5d.D step 3+4 — collapse to I64 first
+                    // collapse to I64 first
                     // (lossless when declared F64), then pick the
                     // tag. Handles all (declared × active) ∈ {F64,
                     // I64} × {Int, Float, Table} correctly: a
@@ -3907,7 +3887,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // verbatim under the right tag.
                     let is_nil_src = current_is_nil.get(src).copied().unwrap_or(false);
                     let (tag, bits) = if is_nil_src {
-                        // P11-S5d.G — slot was last written by LoadNil
+                        // slot was last written by LoadNil
                         // in this BB; store the Nil tag + 0 bits so
                         // `t[i] = nil`. Without this an `if t[i] ==
                         // nil` check would see `Int(0)` and miscompile.
@@ -3939,11 +3919,11 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::GetI => {
-                // P11-S5c — `R[A] = R[B][imm(C)]`. P11-S5d.K — inline
+                // `R[A] = R[B][imm(C)]`. Inline
                 // aget fast path: when the immediate `C` key fits the
                 // array part AND the table has no metatable, load the
                 // raw 8-byte payload from `array_ptr[key-1] * 8`
-                // directly. Mirrors S5c.C's inline aset shape:
+                // directly. Mirrors the inline aset shape:
                 //   if (key - 1) as u64 < asize AND metatable.is_none()
                 //     avals_ptr = load array_ptr
                 //     bits = load i64 at avals_ptr + (key - 1) * 8
@@ -4000,8 +3980,8 @@ pub fn lower_int_chunk_into<M: Module>(
                 current_is_nil[a] = false;
             }
             Op::GetTable => {
-                // P11-S5d.E' / S5d.L — `R[A] = R[B][R[C]]`. Same fast
-                // path shape as the GetI inline aget (S5d.K), but the
+                // `R[A] = R[B][R[C]]`. Same fast
+                // path shape as the GetI inline aget, but the
                 // key sits in a register rather than as an immediate.
                 // Float keys (5.1/5.2 `t[1.0]`) get an exactness check
                 // (in the i64 range, and fcvt + fcvt back == original)
@@ -4078,11 +4058,11 @@ pub fn lower_int_chunk_into<M: Module>(
                 current_is_nil[a] = false;
             }
             Op::Len => {
-                // P11-S5c — `R[A] = #R[B]`.
+                // `R[A] = #R[B]`.
                 let a = ins.a() as usize;
                 let b = ins.b() as usize;
                 let t_raw = bcx.use_var(regs[b]);
-                // P11-S5d.D step 3+4 — Float-declared table operand
+                // Float-declared table operand
                 // bitcast to I64; see SetTable.
                 let t = if matches!(
                     reg_kinds.get(b).copied().unwrap_or(RegKind::Int),
@@ -4143,9 +4123,8 @@ pub fn lower_int_chunk_into<M: Module>(
         fn_id
     };
 
-    // v1.3 Phase AOT Stage 3 — diag of the lowered chunk's shape
-    // (used to live with the JIT finalize step; moved alongside in
-    // the runtime wrapper [`try_compile_int_chunk`]). The generic
+    // diag of the lowered chunk's shape lives in the runtime
+    // wrapper [`try_compile_int_chunk`]. The generic
     // body only emits the function; finalize is the caller's job.
     let _ = ret_kind; // tracked for diag in the JIT wrapper; backend-agnostic here.
 
@@ -4260,7 +4239,7 @@ fn define_checked_entry<M: Module>(
     Some(entry_id)
 }
 
-/// S3 — align a value with the Variable's declared Cranelift type
+/// align a value with the Variable's declared Cranelift type
 /// before def_var. The scan should have pinned every register's kind
 /// tightly; this acts as a safety net so a slipped Unset register
 /// (rare, e.g. a register whose only writer is on a path the BFS
@@ -4288,7 +4267,7 @@ fn aligned_def(
     bcx.def_var(regs[idx], aligned);
 }
 
-/// P11-S5b — try to recognize the 4-op `<env>.math.<fn>(R[arg])` window
+/// try to recognize the 4-op `<env>.math.<fn>(R[arg])` window
 /// starting at `start_pc`. Returns `Some(MathFold)` on match, `None`
 /// otherwise. Pure inspection — no side effects, no whitelist
 /// promotion. Caller (`try_compile_int_chunk`'s pre-scan) marks the
@@ -4378,16 +4357,16 @@ fn jmp_target(pc: usize, inst: Inst) -> usize {
 /// Owns the JIT module + holds the entry fn ptr alive for the
 /// lifetime of the executable mmap. Drop deallocates the mmap.
 ///
-/// v2.0 Track J sub-step J-D — `_module` is typed as
-/// [`SendJitModule`] (J-A's sleeve newtype) so the module's
+/// `_module` is typed as
+/// [`SendJitModule`] (the `Send` sleeve newtype) so the module's
 /// `Send` story stays type-system-asserted at this field. The
 /// wrapper is a `#[repr(Rust)]` newtype with `Deref<Target = JITModule>`
 /// + `DerefMut`, so existing call sites that touched
 /// `handle._module.<method>` keep working transparently. The wrapper
 /// also gates `Send` for any future container that wants to hold a
 /// `JitHandle`; today the handle itself stays `!Send` because
-/// `entry_raw: *const u8` is `!Send`, but the module sleeve is the
-/// J-A/J-E join point.
+/// `entry_raw: *const u8` is `!Send`; the manual `Send` impl below
+/// builds on the module sleeve.
 pub struct JitHandle {
     _module: SendJitModule,
     entry_raw: *const u8,
@@ -4397,33 +4376,33 @@ pub struct JitHandle {
     num_args: u8,
     /// True when the Lua chunk this fn was lowered from contains a
     /// `Return1`; false when only `Return0` is present. Drives the
-    /// S2 dispatch wrap (Int wrap vs empty Vec).
+    /// dispatch wrap (Int wrap vs empty Vec).
     returns_one: bool,
-    /// P11-S3 — bit `i = 1` ↔ arg slot `i` is f64 (passed as i64
+    /// bit `i = 1` ↔ arg slot `i` is f64 (passed as i64
     /// bit-pattern across the ABI, bitcast inside the JIT). Bits
     /// ≥ MAX_JIT_ARITY are always zero.
     arg_float_mask: u8,
-    /// P11-S5d — bit `i = 1` ↔ arg slot `i` is `Gc<Table>` raw ptr.
+    /// bit `i = 1` ↔ arg slot `i` is `Gc<Table>` raw ptr.
     /// Mutually exclusive with `arg_float_mask` for the same bit.
     arg_table_mask: u8,
-    /// P11-S3 — true iff the Proto's `Return1` value is f64.
+    /// true iff the Proto's `Return1` value is f64.
     /// Meaningful only when `returns_one == true`.
     ret_is_float: bool,
-    /// P11-S5d — true iff the Proto's `Return1` value is a
+    /// true iff the Proto's `Return1` value is a
     /// `Gc<Table>` raw ptr. Mutually exclusive with `ret_is_float`.
     ret_is_table: bool,
 }
 
-// v2.0 Track J sub-step J-E — sibling of the always-on
-// `unsafe impl Send for TraceHandle` at `trace.rs:2506`. JitHandle
-// holds the same shape: a `SendJitModule` (Send via J-A's wrapper,
+// sibling of the always-on
+// `unsafe impl Send for TraceHandle` in `trace.rs`. JitHandle
+// holds the same shape: a `SendJitModule` (Send via its wrapper,
 // see `send_jit_module.rs`) plus an `entry_raw: *const u8` raw
 // fn pointer addressing mcode owned by `_module`. The raw pointer
 // is `!Send` by default — this manual impl is the explicit lift.
 //
 // SAFETY: each field is safely Send:
-//   - `_module: SendJitModule` — Send via J-A's `unsafe impl Send
-//     for SendJitModule` (`send_jit_module.rs:65`). luna only
+//   - `_module: SendJitModule` — Send via the `unsafe impl Send
+//     for SendJitModule` in `send_jit_module.rs`. luna only
 //     constructs `JITModule` with `SystemMemoryProvider` (Send,
 //     per cranelift-jit's `memory/system.rs:126`).
 //   - `entry_raw: *const u8` — addresses mcode in `_module`'s
@@ -4434,11 +4413,11 @@ pub struct JitHandle {
 //     called). No aliasing.
 //   - remaining fields are primitive scalars.
 //
-// Cross-thread dispatch is gated separately on the J-D
+// Cross-thread dispatch is gated separately on the
 // `scoped_jit_vm_rebind` RAII (per-`enter_jit` TLS install +
 // restore), which works on any OS thread because the TLS slot is
 // captured-and-restored at function scope rather than statically
-// pinned. Track J-E ship doc:
+// pinned.
 unsafe impl Send for JitHandle {}
 
 impl JitHandle {
@@ -4478,7 +4457,7 @@ impl JitHandle {
         }
     }
 
-    /// Raw entry fn ptr. S2 stashes a copy in `Proto.jit` so the
+    /// Raw entry fn ptr. The dispatcher stashes a copy in `Proto.jit` so the
     /// dispatch hot-path doesn't have to borrow back through the
     /// handle on every call. The handle itself stays parked in
     /// `Vm.jit_handles` to keep the mmap alive.
@@ -4487,16 +4466,16 @@ impl JitHandle {
         self.entry_raw
     }
 
-    /// v2.0 Track J sub-step J-D — `#[doc(hidden)]` accessor returning
+    /// `#[doc(hidden)]` accessor returning
     /// the parked `_module` borrowed at the `SendJitModule` newtype.
-    /// Lets the J-D regression test
-    /// (`tests/j_d_scoped_rebind_and_sleeve.rs`) statically assert the
-    /// field type is the J-A sleeve. The borrow checker enforces the
+    /// Lets the regression test
+    /// (`tests/jit_vm_scoped_rebind.rs`) statically assert the
+    /// field type is the `Send` sleeve. The borrow checker enforces the
     /// type match at this fn's signature — if `_module` ever degrades
     /// to bare `JITModule` again, this signature stops compiling.
     #[doc(hidden)]
     #[inline]
-    pub fn __j_d_module(&self) -> &SendJitModule {
+    pub fn __send_module(&self) -> &SendJitModule {
         &self._module
     }
 
@@ -4515,7 +4494,7 @@ impl JitHandle {
         self.returns_one
     }
 
-    /// P11-S3 — packed Float-arg mask. Bit `i = 1` ↔ arg slot `i`
+    /// packed Float-arg mask. Bit `i = 1` ↔ arg slot `i`
     /// is f64 (the dispatcher passes `f64::to_bits` packed into the
     /// i64 ABI slot).
     #[inline]
@@ -4523,7 +4502,7 @@ impl JitHandle {
         self.arg_float_mask
     }
 
-    /// P11-S3 — true iff the Proto's `Return1` value is f64. The
+    /// true iff the Proto's `Return1` value is f64. The
     /// dispatcher wraps the i64 ABI return as `Value::Float(
     /// f64::from_bits(r))` when set, `Value::Int(r)` otherwise.
     #[inline]
@@ -4531,7 +4510,7 @@ impl JitHandle {
         self.ret_is_float
     }
 
-    /// P11-S5d — packed Table-arg mask. Bit `i = 1` ↔ arg slot `i`
+    /// packed Table-arg mask. Bit `i = 1` ↔ arg slot `i`
     /// is `Gc<Table>` (the dispatcher passes the raw `as_ptr() as
     /// i64` value).
     #[inline]
@@ -4539,7 +4518,7 @@ impl JitHandle {
         self.arg_table_mask
     }
 
-    /// P11-S5d — true iff the Proto's `Return1` value is a
+    /// true iff the Proto's `Return1` value is a
     /// `Gc<Table>` raw ptr. The dispatcher wraps the i64 ABI return
     /// as `Value::Table(Gc::from_ptr(r as *mut Table))`.
     #[inline]
@@ -4556,7 +4535,7 @@ mod smoke {
     use cranelift_jit::{JITBuilder, JITModule};
     use cranelift_module::{Linkage, Module};
 
-    /// S0 smoke (carried forward): hand-build recursive
+    /// Smoke test: hand-build recursive
     /// `fib(n: i64) -> i64` directly in cranelift IR, mmap-execute,
     /// and assert fib(28) == 317811.
     #[test]
@@ -4761,7 +4740,7 @@ mod s2 {
 
 #[cfg(test)]
 mod s2b {
-    //! S2b — block-structured lowering with conditional + unconditional
+    //! block-structured lowering with conditional + unconditional
     //! branches. Lt / Le / Eq + Jmp pair into a cranelift `brif`.
 
     use super::try_compile_int_chunk;
@@ -4857,10 +4836,10 @@ mod s2b {
 
 #[cfg(test)]
 mod s2c_a {
-    //! S2c.A — Protos with `num_params > 0` are JIT-compilable. The
+    //! Protos with `num_params > 0` are JIT-compilable. The
     //! generated `extern "C" fn(...)` takes one i64 per Lua param.
     //! Tested by directly transmuting the raw entry ptr (the
-    //! interpreter-side dispatch wire is S2c.B).
+    //! interpreter-side dispatch wire is tested separately).
 
     use super::{IntFn1, IntFn2, try_compile_int_chunk};
     use luna_core::runtime::Value;
@@ -4960,7 +4939,7 @@ mod s2c_a {
 
 #[cfg(test)]
 mod s2c_b {
-    //! S2c.B — interpreter `Op::Call` fast path. When the target
+    //! interpreter `Op::Call` fast path. When the target
     //! closure's Proto is cached as `Compiled { num_args > 0 }`
     //! AND every arg slot is `Value::Int`, `begin_call` skips the
     //! interpreter frame setup and runs the cached native fn
@@ -5037,7 +5016,7 @@ mod s2c_b {
 
 #[cfg(test)]
 mod s2c_c {
-    //! S2c.C — self-recursion through `Op::GetUpval(0)` + `Op::Call`.
+    //! self-recursion through `Op::GetUpval(0)` + `Op::Call`.
     //! fib is the canonical shape; the lowerer recognises the paired
     //! ops and emits a direct cranelift `call` to the current fn,
     //! sidestepping any actual upvalue load.
@@ -5145,9 +5124,9 @@ mod s2c_c_perf_check {
 
 #[cfg(test)]
 mod s3 {
-    //! S3 — Float fast path. Per-register type inference + Float
+    //! Float fast path. Per-register type inference + Float
     //! arith / cmp lowerings + bitcast bookends at the i64 ABI
-    //! boundary. fib_28 5.1/5.2 (Float-typed n) now JIT-compiles
+    //! boundary. fib_28 5.1/5.2 (Float-typed n) JIT-compiles
     //! end-to-end, matching the 5.3/5.4/5.5 path.
 
     use super::try_compile_int_chunk;
@@ -5279,8 +5258,8 @@ mod s3 {
 
     /// Cache-key correctness regression: two protos with identical
     /// bytecode shape (`LoadK k0 + Return1`) but different `consts[0]`
-    /// must not share a slot. Before S3 added `proto.consts` to the
-    /// hash, the second proto inherited the first's compiled constant.
+    /// must not share a slot. Without `proto.consts` in the hash, the
+    /// second proto would inherit the first's compiled constant.
     #[test]
     fn cache_key_includes_consts() {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
@@ -5306,11 +5285,10 @@ mod s3 {
 
 #[cfg(test)]
 mod s5a {
-    //! S5a — `ForPrep` / `ForLoop` whitelist for Lua 5.4+ Int loops.
-    //! `loop_int_1m` cells under 5.4 / 5.5 now compile to a Cranelift
-    //! counted loop. Pre-5.3 dialects continue through the interpreter
-    //! (S5a.B target); Float loops continue through the interpreter
-    //! (S5a.C target).
+    //! `ForPrep` / `ForLoop` whitelist for Lua 5.4+ Int loops.
+    //! `loop_int_1m` cells under 5.4 / 5.5 compile to a Cranelift
+    //! counted loop. The pre-5.3 and Float forms are covered by
+    //! `s5a_b` and `s5a_c`.
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
@@ -5394,9 +5372,8 @@ mod s5a {
         assert_eq!(eval_int_with(LuaVersion::Lua54, src), 500000500000);
     }
 
-    /// Pre-5.3 dialects use the pre-decrement ForPrep form, which S5a
-    /// doesn't handle. The chunk still has to run correctly through
-    /// the interpreter and yield the same answer.
+    /// Pre-5.3 dialects use the pre-decrement ForPrep form. The chunk
+    /// has to yield the same answer.
     #[test]
     fn loop_int_1k_pre53_runs_through_interpreter() {
         let src = "local s = 0 for i = 1, 1000 do s = s + i end return s";
@@ -5417,10 +5394,8 @@ mod s5a {
     /// 5.3 (pre53) lands in distinct cache slots — each compiles to a
     /// different form (count form vs pre-decrement form). The dialect
     /// bit in `proto_cache_key` is what keeps these from sharing a
-    /// slot. (Before S5a.B, the 5.3 slot would be `Failed` for the
-    /// same reason; after S5a.B both forms are emitted, so the assert
-    /// shape is "two distinct Compiled slots, both with the right
-    /// loop semantics".)
+    /// slot. Both forms are emitted, so the assert shape is "two
+    /// distinct Compiled slots, both with the right loop semantics".
     #[test]
     fn cache_pre53_post53_distinct() {
         use luna_core::runtime::function::JitProtoState;
@@ -5444,13 +5419,10 @@ mod s5a {
         ));
         assert!(matches!(r53.first(), Some(&Value::Int(5050))));
 
-        // v2.0 Track J sub-step J-B Phase D — cache is per-`Vm` now,
-        // so each Vm carries exactly one entry for its own dialect.
-        // Pre-J-B this asserted `cache_entry_count() == 2` over the
-        // thread-local cache (both Vms shared the cross-Vm cache and
-        // their distinct dialect bit produced two entries). The
-        // dialect-distinguishing invariant under test is preserved by
-        // asserting each Vm cached its own version exactly once.
+        // cache is per-`Vm`, so each Vm carries exactly one entry for
+        // its own dialect; the dialect-distinguishing invariant is
+        // checked by asserting each Vm cached its own version exactly
+        // once.
         assert_eq!(crate::jit_backend::cache_entry_count(&vm55), 1);
         assert_eq!(crate::jit_backend::cache_entry_count(&vm53), 1);
     }
@@ -5477,11 +5449,10 @@ mod s5a {
 
 #[cfg(test)]
 mod s5a_b {
-    //! S5a.B — `ForPrep` / `ForLoop` pre-5.3 (limit-compare) form.
-    //! Lua 5.3 `for i = 1, N` chunks now JIT-compile under the
+    //! `ForPrep` / `ForLoop` pre-5.3 (limit-compare) form.
+    //! Lua 5.3 `for i = 1, N` chunks JIT-compile under the
     //! pre-decrement ForPrep + limit-compare ForLoop emit. 5.1 / 5.2
-    //! still go through the interpreter because their loop variable
-    //! lives in a Float register (S5a.C target).
+    //! loop variables live in a Float register (see `s5a_c`).
 
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
@@ -5553,20 +5524,20 @@ mod s5a_b {
 
 #[cfg(test)]
 mod s5a_c {
-    //! S5a.C — `ForPrep` / `ForLoop` Float form (pre53 + post53).
+    //! `ForPrep` / `ForLoop` Float form (pre53 + post53).
     //!
     //! Lua 5.1 / 5.2 have no Int subtype, so numeric `for i = 1, N`
     //! lowers to a Float-typed loop var (R[A] = LoadF 1, R[A+1] =
-    //! LoadK Float(N) or LoadF, R[A+2] = LoadI step). S5a.C extends the
-    //! scanner to pick the loop kind from R[A]'s scanned kind and adds
-    //! Float emit branches to ForPrep / ForLoop.
+    //! LoadK Float(N) or LoadF, R[A+2] = LoadI step). The scanner
+    //! picks the loop kind from R[A]'s scanned kind and ForPrep /
+    //! ForLoop have Float emit branches.
     //!
     //! The Float ForLoop has the same shape for pre53 and post53 (Lua's
     //! Float branch never had a count form). The Float ForPrep splits
     //! by dialect: pre53 pre-decrement + unconditional jump, post53
     //! empty-test + state-set + fall through.
     //!
-    //! Body arithmetic on Float locals was already covered by S3, so
+    //! Body arithmetic on Float locals is supported, so
     //! `s = s + i` inside the body lowers to fadd against the visible
     //! R[A+3] register.
     use luna_core::runtime::Value;
@@ -5607,7 +5578,7 @@ mod s5a_c {
     }
 
     /// 5.1 headline cell — `for i = 1, 1000000` lowers to LoadF init +
-    /// LoadK Float(1e6) limit + LoadI step. With S5a.C the chunk
+    /// LoadK Float(1e6) limit + LoadI step. The chunk
     /// JIT-compiles end-to-end.
     #[test]
     fn loop_int_1m_5_1_matches_interpreter() {
@@ -5703,14 +5674,14 @@ mod s5a_c {
 
 #[cfg(test)]
 mod s5b {
-    //! S5b — `math.<fn>(arg)` libcall fold.
+    //! `math.<fn>(arg)` libcall fold.
     //!
     //! Recognized 4-op windows (`GetTabUp _ENV "math"` → `GetField R[A]
     //! "<fn>"` → `Move R[A+1] R[arg]` → `Call R[A] B=2 C=2`) collapse
     //! into a single cranelift `call` to libm. Bytecode is
     //! dialect-invariant: the same window appears across 5.1 – 5.5.
-    //! Loop kind (Int vs Float) varies per dialect — S5a.C handles the
-    //! loop, and S5b's emit converts an Int loop var to f64 at the
+    //! Loop kind (Int vs Float) varies per dialect; the fold's
+    //! emit converts an Int loop var to f64 at the
     //! libm call boundary via `fcvt_from_sint`.
     //!
     //! Correctness baseline for each cell is the interpreter's exact
@@ -5764,8 +5735,8 @@ mod s5b {
     }
 
     /// Symmetric `math.cos(i)` check — exercises the second entry in
-    /// `MATH_LIBM_FNS` and the const-bytes cache-key extension (sin
-    /// and cos chunks no longer collide).
+    /// `MATH_LIBM_FNS` and the const-bytes cache key (sin
+    /// and cos chunks must not collide).
     #[test]
     fn math_cos_5_5_matches_libm() {
         let src = "local s = 0.0 for i = 1, 100 do s = s + math.cos(i) end return s";
@@ -5779,7 +5750,7 @@ mod s5b {
 
     /// Two folds in one body: `math.sin(i) * math.cos(i)`. The cos
     /// fold writes back into a register that the sin fold's
-    /// `Move` temp also targeted; S5b's RegKind handler skips the
+    /// `Move` temp also targeted; the fold's RegKind handler skips the
     /// Move's unification on folded PCs so the conflicting kinds
     /// (Int from Move-of-loop-var, Float from cos result) don't
     /// abort compile.
@@ -5875,7 +5846,7 @@ mod s5b {
     /// even though their bytecode shape is identical bar the `C`
     /// operand of GetField.
     ///
-    /// v2.0 Track J sub-step J-B Phase D — refactored to one Vm
+    /// refactored to one Vm
     /// (cache is per-`Vm` now). The invariant under test (distinct
     /// libcall name → distinct slot) is preserved by asserting the
     /// cache grew from 1 (after sin) to 2 (after cos) in the same Vm.
@@ -5939,7 +5910,7 @@ mod s5b {
 
 #[cfg(test)]
 mod s5c {
-    //! S5c — `NewTable` / `SetTable` / `GetI` / `Len` JIT via Rust
+    //! `NewTable` / `SetTable` / `GetI` / `Len` JIT via Rust
     //! helpers. The dispatcher pins the active `Vm` in the
     //! `JIT_VM` thread-local; cranelift `Linkage::Import` calls
     //! land in `luna_jit_new_table` / `_table_set_int` /
@@ -5950,7 +5921,7 @@ mod s5c {
     //! Headline cell: `table_alloc_10k` 5.3 / 5.4 / 5.5 (Int-loop
     //! dialects). 5.1 / 5.2 use a Float loop var that conflicts
     //! with the `Len` result's Int kind on the same register —
-    //! documented bail; revisit in S5c.B if the cell needs it.
+    //! documented bail.
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
@@ -6040,9 +6011,9 @@ mod s5c {
         );
     }
 
-    /// P11-S5d.F — Float loop var + Int `Len` result re-using the
-    /// same register slot now JIT-compiles. The `Len` scan no
-    /// longer force-unifies R[A] with `Int`; instead it leaves the
+    /// Float loop var + Int `Len` result re-using the
+    /// same register slot JIT-compiles. The `Len` scan does not
+    /// force-unify R[A] with `Int`; instead it leaves the
     /// declared kind alone when it's already Float/Int (and pins
     /// Int only when Unset). The helper's i64 return goes through
     /// `aligned_def`'s I64↔F64 bitcast on the writer side, and the
@@ -6055,7 +6026,7 @@ mod s5c {
         table_alloc_10k_jit_compiles_for_version(LuaVersion::Lua52);
     }
 
-    /// P11-S5d.F — symmetric to the 5.2 case: 5.1's frontend lowers
+    /// symmetric to the 5.2 case: 5.1's frontend lowers
     /// `for i = 1, 10000` with a Float loop var (no Int subtype), so
     /// the same Float/Int slot reuse at `#t` post-loop applies.
     #[test]
@@ -6087,8 +6058,8 @@ mod s5c {
         assert!(matches!(cl.proto.jit.get(), JitProtoState::Failed));
     }
 
-    /// NewTable with a presized array (`b > 0`) now compiles via
-    /// S5d.B (the `NewTable.B` field feeds
+    /// NewTable with a presized array (`b > 0`) compiles (the
+    /// `NewTable.B` field feeds
     /// `luna_jit_new_table_sized`, and SetList builds the literal
     /// inline). The chunk loads `{10, 20, 30}` then reads `t[2]`;
     /// both ops are whitelisted.
@@ -6105,7 +6076,7 @@ mod s5c {
 
 #[cfg(test)]
 mod s5c_b {
-    //! S5c.B — `NewTable` presize fold. When the bytecode opens a
+    //! `NewTable` presize fold. When the bytecode opens a
     //! counted `for i = 1, N do … end` window immediately after
     //! a `local t = {}`, the JIT emits
     //! `luna_jit_new_table_sized(N)` instead of the plain
@@ -6191,7 +6162,7 @@ mod s5c_b {
     }
 
     /// `for i = 1, N, 2 do …` — step ≠ 1. The presize map skips
-    /// this entry; the chunk still compiles (S5c path) but uses
+    /// this entry; the chunk still compiles but uses
     /// the non-sized helper. Correctness unaffected.
     #[test]
     fn step_ne_1_falls_back_to_empty_helper() {
@@ -6207,7 +6178,7 @@ mod s5c_b {
         );
     }
 
-    /// P11-S5c.C — inline aset writes the **right** payload at the
+    /// inline aset writes the **right** payload at the
     /// **right** offset. Sum-of-cubes is sensitive to either a
     /// stride-1 error in `key_minus_1 * 8` (would corrupt avals
     /// indexing) or a misaligned atag write (interp would read back
@@ -6246,20 +6217,16 @@ mod s5c_b {
 
 #[cfg(test)]
 mod s5d_a {
-    //! S5d.A — ABI extension: `arg_table_mask` + `ret_is_table`.
+    //! ABI extension: `arg_table_mask` + `ret_is_table`.
     //! Threads `Value::Table` through the JIT entry as a raw
-    //! `Gc<Table>` ptr and back. No new ops yet — this commit only
-    //! lifts the S5c bail on Table-typed params and adds the
-    //! dispatcher path. The follow-up sub-step (S5d.B) adds
-    //! NewTable b>0 + SetList so binary_trees' `make` Proto can
-    //! actually compile.
+    //! `Gc<Table>` ptr and back through the dispatcher.
     use luna_core::runtime::Value;
     use luna_core::version::LuaVersion;
 
     /// `function f(t) return t[1] end` — Table param + Int return.
     /// JIT path: param marshalled as Gc ptr, GetI reads array slot,
     /// Return1 sends Int back. Verifies the ABI plumbing without
-    /// any of S5d.B's NewTable/SetList plumbing.
+    /// any NewTable/SetList plumbing.
     #[test]
     fn table_param_int_return_round_trip_5_5() {
         use luna_core::runtime::function::JitProtoState;
@@ -6304,11 +6271,11 @@ mod s5d_a {
 
 #[cfg(test)]
 mod s5d_b {
-    //! S5d.B — `NewTable b > 0` (presize hint from the bytecode
+    //! `NewTable b > 0` (presize hint from the bytecode
     //! field) + `Op::SetList` (fixed-count `{a, b, c}` literals) +
-    //! BB-level `defines_table` dataflow (replaces the S5c blanket
-    //! "has_conditional && has_new_table → bail" gate with a sound
-    //! intersection-at-joins must-defined analysis).
+    //! BB-level `defines_table` dataflow (a sound
+    //! intersection-at-joins must-defined analysis rather than a blanket
+    //! "has_conditional && has_new_table → bail" gate).
     //!
     //! The BB dataflow accepts patterns like `make`'s two-branch
     //! structure — both branches independently `NewTable + SetList`
@@ -6316,10 +6283,9 @@ mod s5d_b {
     //! the unsound false-branch-only-define case the linear forward
     //! walk would let through.
     //!
-    //! Per-register RegKind across branches is still single-kind:
-    //! a register that's `Int` in BB-then and `Table` in BB-else
-    //! still bails. The full make / check Protos hit this; S5d.C
-    //! is the BB-level kind tracking that unblocks them.
+    //! Register kind reuse across branches (e.g. `Int` in BB-then and
+    //! `Table` in BB-else) is covered by the `make_proto_*` tests
+    //! below.
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
@@ -6365,9 +6331,9 @@ mod s5d_b {
 
     /// Both branches independently `NewTable + SetList` into R[A]
     /// before `Return1` — proves the BB-level dataflow accepts
-    /// what S5c's blanket gate would have blocked. The function
+    /// what a blanket gate would have blocked. The function
     /// param is an Int so we don't hit the RegKind reuse conflict
-    /// the binary_trees `make` Proto carries (that's S5d.C).
+    /// the binary_trees `make` Proto carries.
     #[test]
     fn conditional_both_branches_new_table_5_5() {
         let src = "local function f(flag)
@@ -6381,7 +6347,7 @@ mod s5d_b {
         assert!(matches!(r.first(), Some(&Value::Int(5))));
     }
 
-    /// S5d.C — the binary_trees `make` Proto now JIT-compiles:
+    /// the binary_trees `make` Proto JIT-compiles:
     /// the Int-to-Table re-use on R[1] (LoadI 0 for an Eq compare,
     /// then `NewTable` for the table) is allowed via the relaxed
     /// `RegKind::unify`; `latest_writer_kind` carries the per-PC
@@ -6425,11 +6391,11 @@ mod s5d_b {
         assert!(matches!(r.first(), Some(&Value::Int(32752))));
     }
 
-    /// S5d.D step 3+4 — 5.1/5.2 binary_trees `make` Proto JIT-
+    /// 5.1/5.2 binary_trees `make` Proto JIT-
     /// compiles. The frontend uses `LoadF R[1]=0` for the `if d
     /// == 0` Eq compare in one BB and `NewTable R[1]` for the
     /// returned table in another, so R[1] sees Float+Table on
-    /// disjoint paths. S5d.D's relaxed `unify(Float, Table)` lets
+    /// disjoint paths. The relaxed `unify(Float, Table)` lets
     /// the scan keep R[1] declared in whichever shape the first
     /// writer pinned; emit-side `use_var` callers for Table
     /// operands bitcast F64→I64 when the slot is Float-declared.
@@ -6468,7 +6434,7 @@ mod s5d_b {
         make_proto_jit_compiles_for_version(LuaVersion::Lua52);
     }
 
-    /// P11-S5d.G — `binary_trees`' cross_dialect harness uses
+    /// `binary_trees`' cross_dialect harness uses
     /// `{nil, nil}` as the leaf node. LoadNil + SetList must
     /// JIT-compile so `make` stops bailing across all dialects.
     fn make_nil_proto_jit_compiles_for_version(ver: LuaVersion) {
@@ -6515,7 +6481,7 @@ mod s5d_b {
         make_nil_proto_jit_compiles_for_version(LuaVersion::Lua55);
     }
 
-    /// P11-S5d.G — `return nil` must NOT JIT into `Value::Int(0)`
+    /// `return nil` must NOT JIT into `Value::Int(0)`
     /// (the dispatcher's ret_is_float=false default would wrap the
     /// i64 helper return as `Int`, masking the Nil). The Return1
     /// scan bails on a LoadNil source so the interp returns the
@@ -6553,7 +6519,7 @@ mod s5d_b {
         assert!(matches!(r.first(), Some(&Value::Int(3))));
     }
 
-    /// P11-S5d.E' — a Table-typed param + a single `R[B][R[C]]`
+    /// a Table-typed param + a single `R[B][R[C]]`
     /// read is the minimal `OP_GETTABLE` shape; it must JIT in
     /// 5.1 / 5.2 (which lower `t[1]` as GetTable + a Float key,
     /// not GetI + an immediate Int). The chunk returns the read
@@ -6601,8 +6567,8 @@ mod s5d_b {
 
     /// binary_trees' `check` Proto in 5.1 / 5.2 — same source as the
     /// 5.5 test, but lowering uses `OP_GETTABLE` for `t[1]` / `t[2]`
-    /// (no GetI). Reaches `JitProtoState::Compiled` once S5d.E'
-    /// whitelists GetTable.
+    /// (no GetI). Reaches `JitProtoState::Compiled` because GetTable
+    /// is whitelisted.
     fn check_proto_jit_compiles_pre53(ver: LuaVersion) {
         let src = "local function check(t)
                      if t[1] == 1 then return 1 end
@@ -6632,8 +6598,7 @@ mod s5d_b {
     }
 }
 
-// v1.1 A1 Session C — Default Cranelift-backed JIT. Moved here from
-// `src/jit/abi.rs` (Session A's in-place introduction) because the
+// Default Cranelift-backed JIT. Lives in this crate because the
 // trait impls call into Cranelift-bound free fns
 // (`cache_lookup_or_compile`, `enter_jit`,
 // `try_compile_trace_with_options`, `last_compile_checkpoint`) that
@@ -6648,7 +6613,7 @@ mod s5d_b {
 pub struct CraneliftBackend;
 
 impl IntChunkCompiler for CraneliftBackend {
-    // v2.0 Track J sub-step J-B Phases D/E — pass storage through to
+    // pass storage through to
     // `cache_lookup_or_compile`; the cache lookup + handle park both
     // operate on `Vm.jit.storage.{cache,cache_handles}`.
     fn try_compile(
@@ -6700,7 +6665,7 @@ impl IntChunkCompiler for CraneliftBackend {
 }
 
 impl TraceCompiler for CraneliftBackend {
-    // v2.0 Track J sub-step J-B Phase F — pass storage through so
+    // pass storage through so
     // `try_compile_trace_with_options` parks the trace's `JITModule`
     // on the per-`Vm` `storage.trace_handles` Vec.
     fn try_compile_trace(

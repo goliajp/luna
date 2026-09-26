@@ -1,33 +1,27 @@
-//! P12-S12-C v2 — `RegKind::Str` + `ExitTag::Str` + Move
-//! propagation across the emit pass.
+//! `RegKind::Str` + `ExitTag::Str` + Move propagation across the emit
+//! pass.
 //!
-//! v1 (`cf6cb28`) shipped `Op::Concat` whitelist + helper but
-//! Str operands fell into the `Unset` kind and routed through
-//! `luna_jit_stack_update_raw` (preserves vm.stack's existing
-//! tag) — which broke for fresh frames where vm.stack[temp]'s
-//! tag was Nil (from push_frame init). v2 adds the `Str` variant
-//! to both `RegKind` and `ExitTag`, threading it through:
+//! Without a Str kind, Str operands fall into the `Unset` kind and
+//! route through `luna_jit_stack_update_raw` (preserves vm.stack's
+//! existing tag) — which breaks for fresh frames where
+//! vm.stack[temp]'s tag is Nil (from push_frame init). The `Str`
+//! variant of `RegKind` and `ExitTag` is threaded through:
 //! - `from_entry_tag(STR) → Some(Str)`
 //! - `kinds_to_exit_tags(Str → ExitTag::Str)`
 //! - dispatcher restore: `ExitTag::Str → raw::STR`
 //! - every `tag_byte` match in emit (spill / Op::Closure in_stack
 //!   upval / set_int / set_raw paths)
-//! - `Op::Concat` emit's operand spill now picks `raw::STR` (not
+//! - `Op::Concat` emit's operand spill picks `raw::STR` (not
 //!   `update_raw`) for `RegKind::Str` slots
 //!
-//! Unlocks `s = s .. v` over ipairs (Str-valued arrays) and any
+//! This covers `s = s .. v` over ipairs (Str-valued arrays) and any
 //! Concat where operands flow through Move from Str entry slots.
-//!
-//! Known limitation (v3 future): the trace doesn't add a runtime
-//! `val_tag == STR` guard inside the ipairs inline aget fast path.
-//! For a mixed-tag array (e.g. `{'a', 1, 'c'}`), val_tag varies
-//! per iter and the spill writes `pack(STR, int_bits)` → garbage
-//! pointer. Tests stick to uniform-Str arrays.
+//! Mixed-tag arrays are covered in `trace_ipairs_val_tag_guard.rs`.
 
 use luna_jit::version::LuaVersion;
 
 /// `s = s .. v` over an ipairs-iterated Str array — the canonical
-/// case v1 couldn't compile. Verifies correctness + dispatch.
+/// case. Verifies correctness + dispatch.
 #[test]
 fn ipairs_concat_str_array_correctness_and_dispatch() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

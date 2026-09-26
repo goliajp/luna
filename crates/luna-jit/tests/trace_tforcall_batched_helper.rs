@@ -1,11 +1,11 @@
-//! P12-S12-B v4 — TForCall batched helper + cranelift `ld` replaces
-//! the per-iter `luna_jit_stack_load` and `luna_jit_stack_tag` calls.
+//! TForCall batched helper + cranelift `ld` replace the per-iter
+//! `luna_jit_stack_load` and `luna_jit_stack_tag` calls.
 //!
-//! v3 (`1df1806`) had 4 helper calls per iter (op_tforcall +
-//! stack_tag + 2×stack_load). v4 collapses 3 of them by passing 3
-//! out-pointers to `luna_jit_op_tforcall` and emitting cranelift
-//! `stack_load` IR from the buffer for the reload, plus stashing the
-//! returned tag in a Variable that TForLoop tail reads via use_var.
+//! Instead of 4 helper calls per iter (op_tforcall + stack_tag +
+//! 2×stack_load), the trace passes 3 out-pointers to
+//! `luna_jit_op_tforcall` and emits cranelift `stack_load` IR from
+//! the buffer for the reload, stashing the returned tag in a Variable
+//! that the TForLoop tail reads via use_var.
 //!
 //! Tests verify correctness across patterns that exercise:
 //! (1) the batched out-ptr writeback (ctrl/key/val all reachable),
@@ -89,7 +89,7 @@ fn ipairs_function_reads_both_key_and_value() {
     );
 }
 
-/// Multiple invocations of the same function — ensures the v4
+/// Multiple invocations of the same function — ensures the
 /// `tforcall_tag_var` Variable behaves correctly across re-entries
 /// (each dispatch must re-establish the tag from the helper's
 /// return value, not carry a stale value across calls).

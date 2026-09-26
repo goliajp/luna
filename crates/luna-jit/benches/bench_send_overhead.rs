@@ -1,10 +1,9 @@
-//! SS-A — Send-wrapper overhead baseline.
+//! Send-wrapper overhead baseline.
 //!
 //! Measures the irreducible cost of wrapping a `Vm` behind a `Send`-shaped
 //! indirection layer (`Arc<UnsafeCell<Vm>>` plus `unsafe impl Send`) **before
-//! any real Arc-of-fields / RwLock semantics land**. This is the framework
-//! tax that Phase SS-B `SendVm` will pay on top of (or instead of) the
-//! the per-deref cost of `Gc<T>`.
+//! any Arc-of-fields / RwLock semantics**. This is the framework tax that
+//! `SendVm` pays on top of the per-deref cost of `Gc<T>`.
 //!
 //! ## What this bench is not
 //!
@@ -14,8 +13,7 @@
 //!   `Arc` load + one `UnsafeCell::get()` per outer call.
 //! - **Not** thread-safe in any meaningful sense — the `unsafe impl Send`
 //!   exists only so the wrapper has the right *type-level* shape; the
-//!   bench drives it from one thread. (Genuine cross-thread tests land
-//!   in SS-D.)
+//!   bench drives it from one thread.
 //!
 //! ## Reading the output
 //!
@@ -24,20 +22,19 @@
 //! - `bare_vm_eval` vs `wrapped_vm_eval` — minimal-eval cost ratio
 //! - `bare_vm_token_bucket` vs `wrapped_vm_token_bucket` — real workload ratio
 //!
-//! The audit projects:
+//! Projected costs:
 //!
-//! | arch    | per-deref `Arc<UnsafeCell<T>>` cost | full SendVm regression projection (B2) |
+//! | arch    | per-deref `Arc<UnsafeCell<T>>` cost | full SendVm regression projection |
 //! |---------|-------------------------------------|----------------------------------------|
 //! | ARM M-series | ~3 ns | ~3 % |
 //! | x86_64 Linux | ~6 ns | ~6 % |
 //!
 //! This bench measures only the **outer Vm-handle** indirection, not the
-//! per-`Gc<T>` deref cost (that lands in SS-A.1 luna-core bench separately).
+//! per-`Gc<T>` deref cost (measured by a separate luna-core bench).
 //! If `wrapped_vm_token_bucket` overhead exceeds 5 % on macOS at this
-//! handle-only layer, flag it: it means the SS-B SendVm projection in the
-//! audit is optimistic and SS-B should re-scope. (Counterpart: < 1 %
-//! confirms the framework itself is cheap and the SS-B cost budget can
-//! focus entirely on per-`Gc<T>` deref.)
+//! handle-only layer, the SendVm projection above is optimistic.
+//! (Counterpart: < 1 % confirms the framework itself is cheap and the
+//! SendVm cost is dominated by per-`Gc<T>` deref.)
 //!
 //! ## Linux taskset note
 //!
@@ -52,7 +49,7 @@
 //!   `cargo bench --bench bench_send_overhead`
 //!   `cargo bench --bench bench_send_overhead -- wrapped_vm_token_bucket`
 //!
-//! ## SS-B addition: real `SendVm` cases
+//! Real `SendVm` cases
 //!
 //! With `--features send` the bench additionally measures the
 //! production `luna_core::vm::SendVm` (real `Arc<UnsafeCell<Vm>>` +
@@ -78,20 +75,20 @@ use luna_jit::version::LuaVersion;
 
 // ── NoOpSendWrapper ────────────────────────────────────────────────────
 //
-// Shape mirror for SS-B `SendVm`: holds the Vm behind an `Arc<UnsafeCell>`
+// Shape mirror for `SendVm`: holds the Vm behind an `Arc<UnsafeCell>`
 // indirection so the wrapper type can be `Send`-shaped even though the
 // inner `Vm` is `!Send`. SAFETY of the `unsafe impl Send` claim below is
 // **not** a real safety story — it is a measurement scaffold. The bench
 // only drives the wrapper from a single thread; never clone the `Arc` and
-// move both ends across threads. The real SS-B `SendVm` will earn `Send`
-// via per-field Arc-ification (audit §3.2), not via this fiction.
+// move both ends across threads. The real `SendVm` earns `Send` via
+// per-field Arc-ification, not via this fiction.
 //
 struct NoOpSendWrapper {
     inner: Arc<UnsafeCell<Vm>>,
 }
 
 // SAFETY: see module-level note. This impl exists *only* so the wrapper has
-// the same type-level shape as the future SS-B `SendVm` for codegen-cost
+// the same type-level shape as `SendVm` for codegen-cost
 // measurement; the bench drives it from one thread and never shares it.
 unsafe impl Send for NoOpSendWrapper {}
 
@@ -132,7 +129,7 @@ const MINIMAL_EVAL: &str = "return 1+2";
 
 /// The Redis-Lua token-bucket workload from `redis_lua_shape.rs`. Real
 /// embedder shape; the framework-overhead measurement on this workload
-/// is the load-bearing number for projecting Phase SS-B's full-stack cost.
+/// is the load-bearing number for projecting `SendVm`'s full-stack cost.
 const TOKEN_BUCKET_1K: &str = r#"
     local bucket = { tokens = 1000, last = 0, rate = 100 }
     local now = 1
@@ -168,7 +165,7 @@ fn fresh_vm() -> Vm {
 fn fresh_vm_interp() -> Vm {
     // Interp-only counterpart of `fresh_vm`: same library set, no
     // JIT installed. The SendVm comparison is apples-to-apples
-    // against this shape since the v1.3 SendVm is interp-only.
+    // against this shape since SendVm is interp-only.
     let mut vm = Vm::new_minimal(LuaVersion::Lua54);
     vm.open_base();
     vm.open_math();
@@ -243,18 +240,18 @@ fn bench_send_overhead(c: &mut Criterion) {
         );
     });
 
-    // ── SS-B: real SendVm pairs (feature-gated) ─────────────────────
+    // ── real SendVm pairs (feature-gated) ───────────────────────────
     //
     // The numbers above measure the *shape*-only `NoOpSendWrapper`
     // (an `Arc<UnsafeCell<Vm>>` with no actual lock). The pairs below
     // measure the production `luna_core::vm::SendVm` which adds a
     // real `RwLock<()>` write-acquire per method call. The delta
-    // between `wrapped_vm_*` (SS-A wrapper) and `send_vm_*` (SS-B
-    // real) is the *lock acquire cost* in isolation.
+    // between `wrapped_vm_*` (no-op wrapper) and `send_vm_*` (real)
+    // is the *lock acquire cost* in isolation.
     //
     // Comparison anchor is `bare_vm_interp_*` (no JIT installed) so
     // the ratio is apples-to-apples — SendVm is interp-only by
-    // design in v1.3 (see `vm/send_vm.rs` module docs).
+    // design (see `vm/send_vm.rs` module docs).
     #[cfg(feature = "send")]
     {
         group.bench_function("bare_vm_interp_eval", |bencher| {

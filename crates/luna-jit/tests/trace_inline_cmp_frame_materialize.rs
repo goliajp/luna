@@ -1,21 +1,19 @@
-//! P12-S4-step4b-C-2 — inline cmp@d>0 side-exits dispatch via the
-//! frame-materialisation helper. Each cmp@d>0 site builds its OWN
-//! `FrameMaterializeInfo` chain (sibling self-rec Calls in fib's
-//! body have DIFFERENT chains under each branch — the v1 attempt
-//! that used a single global array indexed by depth looped fib
-//! forever).
+//! Inline cmp@d>0 side-exits dispatch via the frame-materialisation
+//! helper. Each cmp@d>0 site builds its OWN `FrameMaterializeInfo`
+//! chain (sibling self-rec Calls in fib's body have DIFFERENT chains
+//! under each branch — a single global array indexed by depth loops
+//! fib forever).
 //!
 //! The headline test runs fib(28) under the trace JIT and asserts
 //! (1) the correct result and (2) that the trace dispatches, with a
-//! finite count proving the C-2 redo broke the v1 infinite loop.
+//! finite count.
 
 use luna_jit::version::LuaVersion;
 
-/// fib(28) under inline self-rec dispatch — the v2 of step4b-C-2's
-/// per-cmp-site array. Asserts the recursive descent computes
-/// 317811 and the dispatch counter is non-zero and FINITE (the v1
-/// failure mode was an infinite loop, so a successful return is
-/// itself the no-loop guarantee).
+/// fib(28) under inline self-rec dispatch with per-cmp-site chains.
+/// Asserts the recursive descent computes 317811 and the dispatch
+/// counter is non-zero and FINITE (a shared chain loops forever, so
+/// a successful return is itself the no-loop guarantee).
 #[test]
 fn fib_28_dispatches_via_inline_chain() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
@@ -34,12 +32,12 @@ fn fib_28_dispatches_via_inline_chain() {
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(317811)));
     assert!(
         vm.trace_compiled_count() >= 1,
-        "fib's trace must compile under step4b-C-2; got compiled={}",
+        "fib's trace must compile; got compiled={}",
         vm.trace_compiled_count()
     );
     assert!(
         vm.trace_dispatched_count() >= 1,
-        "step4b-C-2 lifts the length-gate for inline traces — fib should dispatch; \
+        "the length-gate is lifted for inline traces — fib should dispatch; \
          got dispatched={}",
         vm.trace_dispatched_count()
     );
@@ -77,7 +75,7 @@ fn fib_20_correct_under_inline_dispatch() {
 /// non-inline dispatch path. Regression guard against the cmp emit
 /// refactor breaking the cont_pc-based per_exit_tags lookup.
 #[test]
-fn numeric_loop_still_dispatches_after_c2() {
+fn numeric_loop_still_dispatches_with_inline_chain() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);

@@ -1,22 +1,15 @@
-//! P12-S4-step2b — Op::GetUpval whitelist + emit.
+//! `Op::GetUpval` whitelist + emit.
 //!
 //! fib's body fetches the recursive callee via `GetUpval(0)` to
 //! reach the local `f` (captured as upval inside the closure
 //! literal). Without this op in the trace JIT whitelist, fib's
-//! recorded trace failed compile validation at the first GetUpval.
-//! Step 2b adds:
+//! recorded trace fails compile validation at the first GetUpval.
+//! The trace JIT has:
 //!
-//! - `Op::GetUpval` to `is_whitelisted_step5`
+//! - `Op::GetUpval` in `is_whitelisted_op`
 //! - `luna_jit_upval_get` symbol registration + sig declaration in
 //!   the lowerer's JITModule setup
 //! - body emit: `call upval_get(B)` → store raw payload to R[A]
-//! - mark `dispatchable = false` because the upval's type isn't
-//!   inferable from B alone (closure, Int, Table — anything)
-//!
-//! Result: fib's trace **closes** (step 2), **compiles** (step 2b
-//! adds the missing op), but **doesn't dispatch** (dispatchable
-//! false until step 2c refines exit_tag inference for upvals). Real
-//! perf gain still gated on step 2c.
 
 use luna_jit::version::LuaVersion;
 
@@ -39,22 +32,22 @@ fn fib_trace_compiles_after_getupval_whitelist() {
 
     assert!(
         vm.trace_closed_count() >= 1,
-        "fib's trace must close (step 2 semantic); got closed={}",
+        "fib's trace must close (close on call re-entry); got closed={}",
         vm.trace_closed_count()
     );
     assert!(
         vm.trace_compiled_count() >= 1,
-        "fib's trace must compile (step 2b whitelists GetUpval); \
+        "fib's trace must compile (GetUpval is whitelisted); \
          got compiled={} failed={}",
         vm.trace_compiled_count(),
         vm.trace_compile_failed_count()
     );
-    // P12-S4-step4b-C-2 — fib's trace now dispatches via the inline
-    // self-rec emit path. The MIN_DISPATCHABLE_TRUNC_BODY length-gate
-    // is skipped when `per_exit_inline` is non-empty (inline traces
-    // are dispatch-productive regardless of body length — one
-    // dispatch tears through multiple recursion levels via the
-    // frame-mat helper). dispatched > 0 is the new invariant.
+    // fib's trace dispatches via the inline self-rec emit path. The
+    // MIN_DISPATCHABLE_TRUNC_BODY length-gate is skipped when
+    // `per_exit_inline` is non-empty (inline traces are
+    // dispatch-productive regardless of body length — one dispatch
+    // tears through multiple recursion levels via the frame-mat
+    // helper).
     assert!(
         vm.trace_dispatched_count() >= 1,
         "fib's trace must dispatch via the inline emit path; \

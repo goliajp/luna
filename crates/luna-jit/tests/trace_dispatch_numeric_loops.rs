@@ -1,6 +1,5 @@
-//! P12-S3 smoke tests — verify the trace JIT dispatcher fires on
-//! numeric loops, returns the right result, and stays quiet
-//! otherwise.
+//! Smoke tests — verify the trace JIT dispatcher fires on numeric
+//! loops, returns the right result, and stays quiet otherwise.
 
 use luna_jit::version::LuaVersion;
 
@@ -121,7 +120,7 @@ fn numeric_loop_dispatches_just_once_thanks_to_internal_loop() {
 }
 
 /// Numeric `for i = 1, N do ... end` is the most common loop
-/// shape in Lua and now sits in the trace JIT's whitelist via
+/// shape in Lua and sits in the trace JIT's whitelist via
 /// Op::ForLoop. Same fast-path checks as the repeat-until case:
 /// the trace runs natively until count hits 0 and side-exits at
 /// `forloop.pc + 1`. Verifies result + dispatched=1.
@@ -156,7 +155,7 @@ fn for_loop_dispatches_once_and_returns_correct_sum() {
     );
 }
 
-/// Stage-B exit-tag tracking: a `t[i] = i` loop now reaches the
+/// Exit-tag tracking: a `t[i] = i` loop reaches the
 /// dispatcher via per-register exit-tag analysis. The trace's
 /// Move + SetTable + ForLoop ops feed the exit_tags pass; at
 /// restore time the dispatcher uses the tag to repack each slot

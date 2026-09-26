@@ -1,13 +1,12 @@
-//! P12-S10-A — depth>0 site sunk emit. The `site.inline_depth != 0`
-//! demote gate is lifted; emit_materialize_live_sunk now uses
-//! `op_offsets[site.op_idx]` to address inline-frame sites' window.
-//! `has_inline_cmp` gate stays (S10-B's domain).
+//! depth>0 site sunk emit. emit_materialize_live_sunk uses
+//! `op_offsets[site.op_idx]` to address inline-frame sites' window,
+//! so sites at `site.inline_depth != 0` are not demoted.
 //!
-//! S10-A enables inline sites in traces with NO cmp at depth>0.
-//! For binary_trees, `make`'s body has `if d == 0` at depth>0 →
-//! `has_inline_cmp` still demotes. Patterns where the inline call
-//! has NO cmp inside its body (e.g. a tail Closure) can sunk-emit
-//! inline sites.
+//! Inline sites sunk-emit in traces with NO cmp at depth>0. For
+//! binary_trees, `make`'s body has `if d == 0` at depth>0 →
+//! `has_inline_cmp` demotes. Patterns where the inline call has NO
+//! cmp inside its body (e.g. a tail Closure) can sunk-emit inline
+//! sites.
 
 use luna_jit::version::LuaVersion;
 
@@ -16,7 +15,7 @@ use luna_jit::version::LuaVersion;
 /// shape; even though `has_inline_cmp` demotes the inner make
 /// site, the result must stay correct.
 #[test]
-fn binary_trees_pattern_correct_post_s10a() {
+fn binary_trees_pattern_correct_with_inline_sunk() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -44,10 +43,10 @@ fn binary_trees_pattern_correct_post_s10a() {
 }
 
 /// fib regression: deep self-recursion (depth>0) with NewTable-less
-/// body shouldn't be affected by S10-A. fib(28) trace must still
+/// body shouldn't be affected by depth>0 sinking. fib(28) trace must still
 /// compile + dispatch as before.
 #[test]
-fn fib_28_still_dispatches_post_s10a() {
+fn fib_28_still_dispatches_with_inline_sunk() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -66,7 +65,7 @@ fn fib_28_still_dispatches_post_s10a() {
     );
 }
 
-/// S6 sunk_loadnil pattern regression: depth=0 site sunk emit
+/// sunk_loadnil pattern regression: depth=0 site sunk emit
 /// must still work. `local t = {nil, nil}; if t[1] == nil`
 /// inside a hot for-loop body.
 #[test]
@@ -88,7 +87,7 @@ fn sunk_loadnil_for_body_still_sunk_emits() {
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(1000)));
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "depth=0 sunk emit must keep working post-S10-A; got \
+        "depth=0 sunk emit must keep working with inline sites; got \
          sunk_alloc_count={}",
         vm.trace_sunk_alloc_count(),
     );

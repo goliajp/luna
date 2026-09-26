@@ -1,6 +1,6 @@
-//! P12-S12-A-v2 — Op::TestSet kind-fold. Mirrors S12-A-v1 Op::Test
-//! but the source is R[B] (not R[A]) and the on-test-pass branch
-//! emits a Move-style def_var R[A] = R[B] with kind propagation.
+//! Op::TestSet kind-fold. Mirrors the Op::Test fold, but the source
+//! is R[B] (not R[A]) and the on-test-pass branch emits a Move-style
+//! def_var R[A] = R[B] with kind propagation.
 
 use luna_jit::version::LuaVersion;
 

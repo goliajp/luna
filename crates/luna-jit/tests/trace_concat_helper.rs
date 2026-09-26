@@ -1,26 +1,15 @@
-//! P12-S12-C v1 — `Op::Concat` trace JIT whitelist + helper.
+//! `Op::Concat` trace JIT whitelist + helper.
 //!
-//! Pre-S12-C, any hot loop body with `s = s .. v` (string concat)
-//! bailed compile because `Op::Concat` wasn't in
-//! `is_whitelisted_step5`. v1 adds the white-listing + a thin
-//! helper (`luna_jit_op_concat`) that runs `concat_run` on the
-//! same vm.stack the interp would touch + detects/deopts on the
-//! `__concat` metamethod path (frame-push detection).
+//! A hot loop body with `s = s .. v` (string concat) compiles:
+//! `Op::Concat` is in `is_whitelisted_op`, and a thin helper
+//! (`luna_jit_op_concat`) runs `concat_run` on the same vm.stack the
+//! interp would touch + detects/deopts on the `__concat` metamethod
+//! path (frame-push detection).
 //!
-//! **v1 known limitation**: Concat operands whose `current_kinds`
-//! is `Unset` (typically Str slots — `RegKind` has no Str variant
-//! today) get spilled via `luna_jit_stack_update_raw` which
-//! *preserves* vm.stack's existing tag. When the slot's prior
-//! interp-written tag matches (Str), correctness holds; when the
-//! slot was uninitialised (Nil) or held a stale type from earlier
-//! ops, the helper sees the wrong Value type and either deopts or
-//! produces wrong output. The v1 tests use Int/Float Concat
-//! operands (compiler-known kinds) where this isn't an issue;
-//! mixed Str+Unset cases (e.g. `s = s .. v` in `for _,v in
-//! ipairs(t)` where v is a Str) wait for v2 to add `RegKind::Str`.
+//! These tests use Int/Float Concat operands (compiler-known kinds);
+//! Str operands are covered in `trace_concat_str_kind.rs`.
 //!
-//! No perf claim — helper walks the same algorithm as interp.
-//! Real perf wins are P14 (string subsystem rope/builder model).
+//! No perf claim — the helper walks the same algorithm as interp.
 
 use luna_jit::version::LuaVersion;
 

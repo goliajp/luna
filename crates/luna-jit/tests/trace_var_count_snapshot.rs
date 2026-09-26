@@ -1,15 +1,12 @@
-//! P12-S9-A — recorder snapshots `top - A` into `RecordedOp.
-//! var_count` for `Op::SetList B=0` (at op push time) and
-//! `Op::Call C=0` (fixed up at the next op's push, after the call
-//! returned). var_count is the prerequisite for S9-B/C which will
-//! emit Op::Call C=0 (multi-return) + Op::SetList B=0 (variable-
-//! length) using these values as compile-time constants guarded
-//! by a runtime equality check.
+//! The recorder snapshots `top - A` into `RecordedOp.var_count` for
+//! `Op::SetList B=0` (at op push time) and `Op::Call C=0` (fixed up at
+//! the next op's push, after the call returned). The lowerer uses
+//! these values as compile-time constants guarded by a runtime
+//! equality check when it emits Op::Call C=0 (multi-return) and
+//! Op::SetList B=0 (variable-length).
 //!
-//! S9-A doesn't enable any new compile pattern; the existing
-//! lowerer still bails on Call C != 2 / SetList B != array_cap.
-//! These tests verify the snapshot mechanism itself by inspecting
-//! the recorder's intermediate state via a dedicated probe.
+//! These tests verify the snapshot mechanism itself by inspecting the
+//! recorder's intermediate state via a dedicated probe.
 
 use luna_jit::version::LuaVersion;
 
@@ -75,7 +72,7 @@ fn setlist_b_zero_records_var_count() {
 /// `for i=1,N do local t = {f(), g()} end` — two Call C=2 single-
 /// return calls. SetList B=2 (NOT B=0) because Lua frontend uses
 /// fixed count when both calls have C=2. var_count is None here.
-/// Sanity that S9-A's None default for non-B=0 SetList doesn't
+/// Sanity that the None default for non-B=0 SetList doesn't
 /// disturb existing sunk-emit behaviour (sunk_tuple_call_200k
 /// patterns).
 #[test]

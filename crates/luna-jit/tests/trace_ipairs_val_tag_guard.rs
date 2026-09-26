@@ -1,12 +1,11 @@
-//! P12-S12-C v3 — ipairs `val_tag` runtime guard.
+//! ipairs `val_tag` runtime guard.
 //!
-//! v2 unlocked ipairs+Concat for uniform-Str arrays via implicit
-//! specialisation on `entry_tag of R[A+5]`, but mixed-tag arrays
-//! (e.g. `{'a', 1, 'c'}`) had a real correctness hole — the
-//! v5 inline aget fast_blk would pack non-Str raw bits as a Str
-//! pointer on the v2 spill path, producing garbage.
+//! Uniform-Str arrays specialise on `entry_tag of R[A+5]`, but for
+//! mixed-tag arrays (e.g. `{'a', 1, 'c'}`) the inline aget fast_blk
+//! would pack non-Str raw bits as a Str pointer on the spill path,
+//! producing garbage.
 //!
-//! v3 adds a runtime guard inside fast_blk: after loading
+//! A runtime guard inside fast_blk handles this: after loading
 //! `val_tag` from the Table's atag byte, emit
 //! `is_nil OR val_tag == expected_tag` and brif. Mismatch → deopt
 //! to interp (which handles arbitrary tags correctly).
@@ -18,7 +17,7 @@
 
 use luna_jit::version::LuaVersion;
 
-/// v2 regression smoke: uniform-Str array still works post-v3
+/// Regression smoke: uniform-Str array still works with the guard
 /// (guard always matches → no deopts on this shape).
 #[test]
 fn ipairs_uniform_str_array_no_regression() {
@@ -87,8 +86,8 @@ fn ipairs_mixed_tag_array_deopts_no_garbage() {
 
 /// Uniform-Int array: snapshot = INT, so guard expects INT.
 /// `s = s + v` arithmetic body (no Concat) traces with the Int
-/// path; just verifies the v3 guard's INT-snapshot variant
-/// doesn't break the existing v5 ipairs Int trace.
+/// path; just verifies the guard's INT-snapshot variant doesn't
+/// break the inline-aget ipairs Int trace.
 #[test]
 fn ipairs_uniform_int_array_arith_still_works() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

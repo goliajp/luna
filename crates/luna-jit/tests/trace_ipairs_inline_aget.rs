@@ -1,14 +1,11 @@
-//! P12-S12-B v5 — `Op::TForCall` inline aget specialised on
-//! `ipairs_iter`.
+//! `Op::TForCall` inline aget specialised on `ipairs_iter`.
 //!
-//! v4 (`37e3fcd`) consolidated 4 per-iter helper calls into one
-//! `luna_jit_op_tforcall`. v5 takes the next swing: snapshot the
-//! iter fn pointer at recorder-start, and when it matches
-//! `ipairs_iter`, emit inline Table aget IR (load array_ptr, load
-//! asize, load val_raw + val_tag from the array slot) — skip the
-//! `op_tforcall` C call on the fast path entirely. Slow path
-//! (hash-key / metatable present / not in array range) still
-//! falls back to the v4 helper.
+//! The recorder snapshots the iter fn pointer at recorder-start, and
+//! when it matches `ipairs_iter`, the trace emits inline Table aget IR
+//! (load array_ptr, load asize, load val_raw + val_tag from the array
+//! slot) — skipping the `op_tforcall` call on the fast path entirely.
+//! The slow path (hash-key / metatable present / not in array range)
+//! falls back to the batched `luna_jit_op_tforcall` helper.
 //!
 //! Tests cover correctness across:
 //! - inline aget fast path over inline-storage Int arrays

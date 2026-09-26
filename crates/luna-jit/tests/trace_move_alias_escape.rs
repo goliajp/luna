@@ -1,21 +1,19 @@
-//! P12-S8-A — `Op::Move` is now a binding alias in the escape
-//! sweep (was: mark_escape on src). Lua 5.5 frontend's pattern
-//! `Move R[temp] = R[t]; SetI R[temp][k] = v` no longer collapses
-//! the sunk site at the Move; downstream ops drive escape/sunk
-//! decisions on the aliased reg per their own rules.
+//! `Op::Move` is a binding alias in the escape sweep (not a
+//! mark_escape on src). Lua 5.5 frontend's pattern `Move R[temp] =
+//! R[t]; SetI R[temp][k] = v` does not collapse the sunk site at the
+//! Move; downstream ops drive escape/sunk decisions on the aliased
+//! reg per their own rules.
 //!
-//! S8-A is foundation only — SetI/SetTable still drive escape on
-//! target slot bound (their sunk emit is S8-B/C). The tests here
-//! exercise patterns where the post-Move use is a sunk-allowed op
-//! (GetI / SetList writeback) to verify the alias propagates.
+//! The tests here exercise patterns where the post-Move use is a
+//! sunk-allowed op (GetI / SetList writeback) to verify the alias
+//! propagates.
 
 use luna_jit::version::LuaVersion;
 
 /// `for i = 1, N do local t = {1,2,3}; local u = t; s = s + u[1] +
 /// u[2] + u[3] end` — Move u=t propagates the binding; GetI on u
-/// reads the sunk slots. Pre-S8-A: Move escapes the site, GetI
-/// goes through `_table_get_int` heap helper. Post-S8-A: alias
-/// keeps site Sinkable, GetI hits virt slot.
+/// reads the sunk slots. The alias keeps the site Sinkable, so GetI
+/// hits the virt slot instead of the `_table_get_int` heap helper.
 #[test]
 fn move_alias_lets_get_i_sunk_emit_fire() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
@@ -40,7 +38,7 @@ fn move_alias_lets_get_i_sunk_emit_fire() {
     );
     assert!(
         vm.trace_sunk_alloc_count() >= 1,
-        "post-S8-A, Move-aliased GetI must take the sunk path; \
+        "Move-aliased GetI must take the sunk path; \
          got sunk_alloc_count={}, sinkable_seen={}, compiled={}",
         vm.trace_sunk_alloc_count(),
         vm.trace_sinkable_seen_count(),

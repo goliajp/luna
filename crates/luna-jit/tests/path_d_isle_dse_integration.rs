@@ -1,8 +1,7 @@
-//! v2.1 Path D Phase 1D — integration test for the ISLE redundant-store DCE
-//! rule landed in Phase 1C (`crates/vendored/wasmtime/cranelift/codegen/src/
-//! opts/skeleton.isle:48-71`).
+//! Integration test for the ISLE redundant-store DCE rule
+//! (`crates/vendored/wasmtime/cranelift/codegen/src/opts/skeleton.isle:48-71`).
 //!
-//! Builds a Cranelift `Function` that replicates the sub-2B Phase F shape
+//! Builds a Cranelift `Function` that replicates the dual-write shape
 //!
 //! ```text
 //! block1:
@@ -12,15 +11,14 @@
 //! ```
 //!
 //! Two consecutive `MemFlags::trusted()` stores to the same address (offset 0)
-//! with only pure-arithmetic between them. Phase 1C's rule should erase the
+//! with only pure-arithmetic between them. The rule should erase the
 //! prior store, leaving only the `imul` store behind.
 //!
 //! ### Why IR inspection instead of `EgraphPass::stats().skeleton_inst_dse`
 //!
 //! The `skeleton_inst_dse` counter on `cranelift_codegen::egraph::Stats` is
-//! `pub(crate)`, and Phase 1D's scope hard-bars editing existing Cranelift
-//! Rust source (only the new filetest `.clif` is allowed in the fork this
-//! phase). Direct IR-shape inspection is **strictly stronger evidence** than
+//! `pub(crate)`, and exposing it would mean editing existing Cranelift
+//! Rust source in the fork. Direct IR-shape inspection is **strictly stronger evidence** than
 //! a counter bump anyway: it proves the actual layout transformation, not
 //! just that some internal book-keeping incremented. The companion filetest
 //! at `crates/vendored/wasmtime/cranelift/filetests/filetests/egraph/dse.clif`
@@ -52,7 +50,7 @@ fn count_stores(func: &Function) -> usize {
         .count()
 }
 
-/// Mirrors the sub-2B Phase F `move_then_mul_propagates_via_move` block1
+/// Mirrors the dual-write `move_then_mul_propagates_via_move` block1
 /// shape. `v_arg` is a runtime block param so the `imul` cannot be constant-
 /// folded into an `iconst` (which would defeat the value-provenance check
 /// below).
@@ -73,7 +71,7 @@ fn build_move_then_mul_fixture() -> Function {
     let addr_ptr = bcx.block_params(block0)[0];
     let v_arg = bcx.block_params(block0)[1];
 
-    // PRIOR store — the "Op::Move STORE" that sub-2B Phase F observed
+    // PRIOR store — the "Op::Move STORE" observed
     // surviving with cranelift 0.124's stock store-DCE.
     let v_stale = bcx.ins().iconst(types::I64, 999);
     bcx.ins().store(MemFlags::trusted(), v_stale, addr_ptr, 0);
@@ -148,7 +146,7 @@ fn isle_dse_rule_fires_on_move_then_mul_shape() {
 
 /// Negative control: an intervening must-aliased load between the two stores
 /// flips the `observed` bit on the prior store's `mem_values` entry, which
-/// Phase 1C's `find_dead_store_at` rejects (precondition 5). Both stores must
+/// `find_dead_store_at` rejects (precondition 5). Both stores must
 /// survive even though cranelift's load-to-store forwarding will erase the
 /// intervening load itself.
 #[test]
@@ -193,17 +191,16 @@ fn isle_dse_rule_does_not_fire_with_intervening_load() {
 }
 
 // -------------------------------------------------------------------------
-// Phase 1G.B.5 — cross-block DSE integration cases.
+// Cross-block DSE integration cases.
 //
-// These exercise the Phase 1G.B.2 strict-chain check and Phase 1G.B.3
-// deopt-safe relaxation that ship in vendored cranelift's
-// `AliasAnalysis::find_dead_store_at`. The same-block Phase 1C cases
-// above remain the regression floor.
+// These exercise the strict-chain check and deopt-safe relaxation
+// in vendored cranelift's `AliasAnalysis::find_dead_store_at`. The
+// same-block cases above remain the regression floor.
 // -------------------------------------------------------------------------
 
 /// Positive — linear two-block strict chain. block0 stores `iconst 999`
 /// and falls through (jump) to block1, which stores an `imul` result.
-/// The Phase 1G.B.2 strict-chain check must accept (no can_trap, no
+/// The strict-chain check must accept (no can_trap, no
 /// off-chain branches), so the prior store in block0 is dead.
 #[test]
 fn isle_dse_cross_block_strict_chain_fires() {
@@ -264,7 +261,7 @@ fn isle_dse_cross_block_strict_chain_fires() {
 /// Positive — deopt-safe relaxation. block0 stores prior + brifs into
 /// (block1=continue, block2=deopt). block1 holds the current store;
 /// block2 contains a plain (non-notrap) Store to the same `(addr, 0)`
-/// before returning. Phase 1G.B.3 must accept the off-chain block2 as
+/// before returning. The deopt-safe relaxation must accept the off-chain block2 as
 /// deopt-safe, so the prior store is dead.
 #[test]
 fn isle_dse_cross_block_deopt_safe_relaxation_fires() {

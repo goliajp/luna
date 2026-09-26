@@ -1,8 +1,9 @@
-//! P12-S12-A v1 — Op::Test whitelist (kind-known truthy fold).
+//! Op::Test whitelist (kind-known truthy fold).
 //! `if R[A] then ...` patterns where R[A]'s kind is known stable
 //! (Int / Float / Table / Closure / Nil) fold to no-IR — the
 //! recorded direction is provably reproducible at every dispatch.
-//! Unset kind bails compile (runtime truthy check is v2 scope).
+//! Unset kinds get a runtime truthy guard (see
+//! `trace_truthy_runtime_guard.rs`).
 
 use luna_jit::version::LuaVersion;
 
