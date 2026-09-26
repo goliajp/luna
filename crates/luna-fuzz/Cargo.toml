@@ -91,6 +91,15 @@ test = false
 doc = false
 bench = false
 
+# PUC-format string.dump: luna dumps a generated program, PUC runs the
+# dump, and the output must match PUC running the source.
+[[bin]]
+name = "fuzz_dump_puc"
+path = "fuzz_targets/fuzz_dump_puc.rs"
+test = false
+doc = false
+bench = false
+
 # Differential vs LuaJIT fuzz target. Same
 # shape as fuzz_diff_puc but runs against `$LUAJIT` reference
 # binary and uses LuaVersion::Lua51 (LuaJIT's base dialect).
