@@ -221,6 +221,11 @@ pub struct Vm {
     /// io library default input/output streams (PUC registry IO_INPUT/IO_OUTPUT)
     pub(crate) io_input: Option<Gc<crate::runtime::Userdata>>,
     pub(crate) io_output: Option<Gc<crate::runtime::Userdata>>,
+    /// `io.stdin` as the io library made it, whatever the script later does
+    /// to the `io` table: the stream a host's line reads share
+    pub(crate) io_stdin: Option<Gc<crate::runtime::Userdata>>,
+    /// lua.c's `-E`: libraries opened from now on ignore the environment
+    pub(crate) ignore_env: bool,
     /// the running thread's debug hook state (`debug.sethook`); per-thread,
     /// swapped with the execution context on a coroutine resume/yield
     pub(crate) hook: HookState,
@@ -960,6 +965,8 @@ impl Vm {
             file_mt: None,
             io_input: None,
             io_output: None,
+            io_stdin: None,
+            ignore_env: false,
             hook: HookState::default(),
             in_hook: false,
             pending_tailcalls: 0,
@@ -3014,6 +3021,9 @@ impl Vm {
             roots.push(Value::Userdata(f));
         }
         if let Some(f) = self.io_output {
+            roots.push(Value::Userdata(f));
+        }
+        if let Some(f) = self.io_stdin {
             roots.push(Value::Userdata(f));
         }
         // the main thread's saved context while a coroutine runs
@@ -9767,7 +9777,7 @@ impl Vm {
     /// `luaL_tolstring`: `__tostring` (whose result must be a string or a
     /// number, rendered), else the basic rendering, where 5.3+ names a value
     /// by a string `__name` metafield.
-    pub(crate) fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
+    pub fn tostring_value(&mut self, v: Value) -> Result<Vec<u8>, LuaError> {
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.

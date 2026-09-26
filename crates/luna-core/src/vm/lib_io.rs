@@ -104,7 +104,10 @@ pub(crate) fn open_io(vm: &mut Vm) {
         let h = new_file(vm, fh, writable);
         put(vm, io, name, Value::Userdata(h));
         match name {
-            "stdin" => vm.io_input = Some(h),
+            "stdin" => {
+                vm.io_input = Some(h);
+                vm.io_stdin = Some(h);
+            }
             "stdout" => vm.io_output = Some(h),
             _ => {}
         }
@@ -112,6 +115,44 @@ pub(crate) fn open_io(vm: &mut Vm) {
     vm.set_global("io", Value::Table(io))
         .expect("stdlib registration");
     vm.barrier_back_table(io);
+}
+
+impl Vm {
+    /// C `fgets(buf, size, stdin)`, for a host that reads lines as lua.c's
+    /// REPL does: the bytes up to and including the next newline, at most
+    /// `size - 1` of them; `None` at the end of input. The bytes come
+    /// through the io library's `io.stdin` buffer, so Lua code reading
+    /// stdin in between sees what follows, as it shares C's `stdin`.
+    pub fn read_stdin_line(&mut self, size: usize) -> std::io::Result<Option<Vec<u8>>> {
+        let mut line = Vec::new();
+        if let Some(u) = self.io_stdin {
+            while line.len() + 1 < size {
+                let Some(b) = getc(u)? else { break };
+                line.push(b);
+                if b == b'\n' {
+                    break;
+                }
+            }
+        } else {
+            // no io library: nothing else buffers stdin
+            use std::io::BufRead;
+            let mut input = std::io::stdin().lock();
+            while line.len() + 1 < size && line.last() != Some(&b'\n') {
+                let buf = input.fill_buf()?;
+                if buf.is_empty() {
+                    break;
+                }
+                let room = &buf[..buf.len().min(size - 1 - line.len())];
+                let n = room
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map_or(room.len(), |i| i + 1);
+                line.extend_from_slice(&room[..n]);
+                input.consume(n);
+            }
+        }
+        Ok((!line.is_empty()).then_some(line))
+    }
 }
 
 fn put(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
