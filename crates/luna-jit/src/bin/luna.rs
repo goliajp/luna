@@ -755,7 +755,9 @@ fn pmain(interp: &mut Interp, argv: &[String], args: &LuaArgs) -> bool {
         }
         // lua.c ignores how this ends: an error in it is reported, and
         // the exit status stays 0
-        interp.dofile(None).map(show);
+        if let Some(vals) = interp.dofile(None) {
+            show(vals);
+        }
     }
     true
 }
