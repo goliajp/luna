@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Luna per-PR perf-gate (v2.6 Track B)
+# Luna per-PR perf-gate
 #
 # Usage:
 #   scripts/perf-gate.sh [BASELINE_JSON] [THRESHOLD]
@@ -21,7 +21,7 @@
 #   --measurement-time 8 --warm-up-time 2` was run before this script.
 set -euo pipefail
 
-# v2.7 B.2: auto-select baseline by runner OS. CI sets
+# Auto-select baseline by runner OS. CI sets
 # $RUNNER_OS (Linux / macOS / Windows); local dev defaults to
 # macOS arm64 baseline.
 if [[ -z "${1:-}" ]]; then

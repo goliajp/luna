@@ -1,6 +1,6 @@
 name: docs
 
-# v2.0 Track DO-CI — docs rot gate.
+# Docs rot gate.
 #
 # Three gates fail the build the moment docs drift:
 #
@@ -51,8 +51,8 @@ jobs:
         # Exclude LLVM-backed crates: they link against system LLVM 18
         # + Polly, which the hosted ubuntu-latest runner doesn't ship
         # (`could not find native static library Polly`). They are
-        # dev-only alt-backend audit crates (v2.1 Cranelift alt-backend
-        # RFC); not in the embedder surface and not required for
+        # dev-only alt-backend crates, not in the embedder surface and
+        # not required for
         # docs-rot detection on the mainline crates. See header comment
         # for the `--all-features` removal rationale.
         run: cargo doc --no-deps --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
@@ -90,10 +90,8 @@ jobs:
         with:
           # --include-fragments turns on
           # in-doc anchor checks (catches renamed section headers).
-          # v2.20 D7: web/ joined the scope. The site is live at
-          # luna.golia.jp, so a broken link there is publicly visible —
-          # and until now nothing checked it. 57 links across the six
-          # locale pages.
+          # web/ is in scope: the site is live at luna.golia.jp, so a
+          # broken link there is publicly visible.
           # `--root-dir` is required for the site: its pages use
           # root-relative hrefs (`/assets/luna-icon.svg`), which lychee
           # cannot resolve against a local file without being told what

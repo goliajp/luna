@@ -28,21 +28,17 @@ jobs:
         with:
           command: check
           log-level: warn
-          # v2.17 H7: `--all-features` is a cargo-deny GLOBAL flag, so it
+          # `--all-features` is a cargo-deny GLOBAL flag, so it
           # goes in `arguments` (placed BEFORE the sub-command), not in
           # `command-arguments` — same placement rule the comment below
           # spells out for `--hide-inclusion-graph`.
           #
           # Without it, cargo-deny resolves only the default feature set
           # and never sees the crates behind luna-tools' opt-in
-          # `flame-graph` / `mcode-disasm` features. That silently
-          # dropped coverage: our two quick-xml ignores started
-          # reporting `advisory-not-detected` (the advisory could not be
-          # reached to be ignored), and a yanked `spin 0.10.0` behind
-          # `pprof` went unnoticed until this flag was restored. The
-          # luna-tools Cargo.toml comment claiming cargo-deny "walks the
-          # whole lockfile regardless of feature gating" was true of an
-          # older cargo-deny and is not true now.
+          # `flame-graph` / `mcode-disasm` features: the quick-xml
+          # ignores report `advisory-not-detected` and yanked crates
+          # behind `pprof` go unnoticed. Current cargo-deny does not
+          # walk the whole lockfile regardless of feature gating.
           arguments: --all-features
           # `--hide-inclusion-graph` is a `check` sub-command option,
           # not a cargo-deny global option. cargo-deny-action's
@@ -70,9 +66,9 @@ jobs:
         run: |
           set -euo pipefail
           # `--edges normal` excludes dev-dependencies (e.g. `dhat`, used
-          # by the v2.0 Track MM `mem_baseline` bench) and build-deps —
-          # those never link into the published crate, so the F1
-          # 0-third-party-dep contract is preserved.
+          # by the `mem_baseline` bench) and build-deps — those never
+          # link into the published crate, so the 0-third-party-dep
+          # contract is preserved.
           OUTPUT=$(cargo tree -p luna-core --prefix none --edges normal)
           echo "$OUTPUT"
           COUNT=$(echo "$OUTPUT" | grep -cE ' v[0-9]')

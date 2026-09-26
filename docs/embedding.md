@@ -698,7 +698,7 @@ and survive across calls. They wrap an opaque
 `luna_core::vm::HostRootTicket` (8 bytes) that the underlying
 slot-recycling pool issues at `pin_host` time.
 
-**v1.3 Phase SR — slot recycling**: long-running embedders
+**Slot recycling** (since v1.3): long-running embedders
 (request-per-script loops, edge workers) release individual handles
 via `lua.unpin(handle)`; the slot is recycled for the next pin so
 the pool size stays bounded. The whole batch can still be released
@@ -756,13 +756,12 @@ The constraint is type-system-enforced; a compile_fail doctest on
 
 ---
 
-## 13. Stable API contract (v3.0 acceptance #7)
+## 13. Stable API contract
 
 Starting at v2.7.0 (2026-07-01) luna's public API is
 partitioned into a **stable** surface (SemVer-major to break)
 and an **unstable / internal** surface (may break in minor
-releases). Source-of-truth for the classification is the
-v2.7 API audit (private dev material). The public contract:
+releases). The public contract:
 
 ### Stable — SemVer-major to break
 
@@ -794,10 +793,6 @@ If your embedder currently reaches into an unstable surface,
 please file an issue — that's the signal we need to
 promote the symbol into the stable set for future
 compatibility.
-
-The 6-month stability clock (v3.0 acceptance #7) starts at
-v2.7.0 = 2026-07-01. Any stable-surface break resets the
-clock. v3.0 ship target ≥ 2027-01-01 at earliest.
 
 ---
 

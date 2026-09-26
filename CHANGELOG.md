@@ -19,6 +19,16 @@ optimization.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- `Vm::set_p16_self_link_enabled` / `Vm::p16_self_link_enabled` are now
+  `Vm::set_self_link_enabled` / `Vm::self_link_enabled`. The old names
+  still work and are deprecated.
+- The published `luna-aot` description matches what it does: the trace
+  JIT's machine code is part of the produced binary.
+
 ## [3.1.0] — 2026-09-25
 
 A parity release. **No breaking change**: code written against 3.0 builds
