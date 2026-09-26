@@ -20,12 +20,12 @@ const DIALECT: &str = "PUC 5.2";
 /// Header: signature, version, format, endianness, the sizes of `int`,
 /// `size_t`, `Instruction` and `lua_Number`, the integral flag, then
 /// `LUAC_TAIL`.
-const HEADER: &[u8] = &[
+pub(in crate::vm::dump) const HEADER: &[u8] = &[
     0x1b, b'L', b'u', b'a', 0x52, 0, 1, 4, 8, 4, 8, 0, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
 ];
 
 /// Opcode numbers, lopcodes.h 5.2.4.
-const OPS: &[Kind] = &[
+pub(in crate::vm::dump) const OPS: &[Kind] = &[
     Kind::Move,
     Kind::LoadK,
     Kind::LoadKx,

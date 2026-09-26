@@ -30,7 +30,7 @@ const DIALECT: &str = "PUC 5.5";
 /// Header: signature, version, format, `LUAC_DATA`, then size-prefixed
 /// samples of `int` (`LUAC_INT` = -0x5678), `Instruction` (0x12345678),
 /// `lua_Integer` (-0x5678) and `lua_Number` (-370.5), all little-endian.
-const HEADER: &[u8] = &[
+pub(in crate::vm::dump) const HEADER: &[u8] = &[
     0x1b, b'L', b'u', b'a', 0x55, 0, // signature, version, format
     0x19, 0x93, b'\r', b'\n', 0x1a, b'\n', // LUAC_DATA
     4, 0x88, 0xA9, 0xFF, 0xFF, // int
@@ -45,7 +45,7 @@ const PF_VAHID: u8 = 1;
 const PF_VATAB: u8 = 2;
 
 /// Opcode numbers, lopcodes.h 5.5.1.
-const OPS: &[Kind] = &[
+pub(in crate::vm::dump) const OPS: &[Kind] = &[
     Kind::Move,
     Kind::LoadI,
     Kind::LoadF,

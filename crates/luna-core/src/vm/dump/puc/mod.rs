@@ -6,14 +6,14 @@
 //! the shared machinery in [`lower`]. `lower`'s module docs list what luna's
 //! interpreter trusts a translated proto to satisfy.
 
-mod classic;
+pub(in crate::vm::dump) mod classic;
 mod lower;
-mod modern;
-mod puc_51;
-mod puc_52;
-mod puc_53;
-mod puc_54;
-mod puc_55;
+pub(in crate::vm::dump) mod modern;
+pub(in crate::vm::dump) mod puc_51;
+pub(in crate::vm::dump) mod puc_52;
+pub(in crate::vm::dump) mod puc_53;
+pub(in crate::vm::dump) mod puc_54;
+pub(in crate::vm::dump) mod puc_55;
 
 use super::error::Bad;
 use crate::runtime::function::Proto;
