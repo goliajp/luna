@@ -17,8 +17,7 @@
 //! `_G.assert` to bump two integer counters (`__luna_assert_total`,
 //! `__luna_assert_hit`). After the chunk completes (or errors) the
 //! counters are read back from the Vm globals and accumulated into a
-//! per-file report written under the workspace's local `.dev/`
-//! directory, which is developer scratch space and is not published.
+//! per-file report written to the workspace's `target/` directory.
 //! The report exposes which `_port` / `_soft` / `_noposix` gates are
 //! silently skipping large blocks of `assert(...)` calls so future scope
 //! decisions are evidence-based. The wrapper sits at file scope and
@@ -881,8 +880,8 @@ fn official_suites_expected_pass() {
     );
 }
 
-/// Write the coverage report into the workspace's local `.dev/rfcs/`
-/// directory, resolved against the luna-core manifest dir.
+/// Write the coverage report into the workspace's `target/` directory,
+/// resolved against the luna-core manifest dir.
 ///
 /// Emits one Markdown table with one row per file (sorted by hit-rate
 /// ascending so low-coverage files surface at the top) plus aggregate
@@ -891,16 +890,16 @@ fn official_suites_expected_pass() {
 /// likely skipping body.
 fn write_coverage_report(coverage: &[FileCoverage]) -> std::io::Result<()> {
     // CARGO_MANIFEST_DIR for luna-core is `<workspace>/crates/luna-core`,
-    // so the report lands in the workspace's `.dev/rfcs/` regardless of
+    // so the report lands in the workspace's `target/` regardless of
     // whether we run from the main checkout or a worktree.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
         .and_then(|p| p.parent())
         .expect("CARGO_MANIFEST_DIR has at least 2 ancestors");
-    let dest_dir = workspace_root.join(".dev").join("rfcs");
+    let dest_dir = workspace_root.join("target");
     std::fs::create_dir_all(&dest_dir)?;
-    let dest = dest_dir.join("v2.0-cb-or-coverage-report.md");
+    let dest = dest_dir.join("official-assert-coverage.md");
 
     // Aggregate. `wrapper_skipped` files are counted separately so the
     // ge80/lt80 buckets reflect only files where the wrapper actually

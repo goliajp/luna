@@ -5,9 +5,8 @@
 #   scripts/perf-gate.sh [BASELINE_JSON] [THRESHOLD]
 #
 # Args:
-#   BASELINE_JSON: path to baseline file. The default lives under
-#     .dev/perf-baselines/, a local developer directory that is not
-#     published — pass your own path if you do not have one.
+#   BASELINE_JSON: path to baseline file. The default is the file for
+#     the host platform under crates/luna-jit/perf-baselines/.
 #   THRESHOLD: regression factor allowed (default: 1.05 = 5%)
 #
 # Behavior:
