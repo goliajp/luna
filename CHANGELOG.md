@@ -23,11 +23,28 @@ optimization.
 
 ### Changed
 
+- `string.dump` writes PUC bytecode of the running dialect (5.1, 5.2, 5.3,
+  5.4 or 5.5), which that version's stock `lua` loads and runs;
+  `string.dump(f, true)` strips debug information as PUC does. A function
+  the dialect's instruction set cannot express raises `unable to dump given
+  function`. `luna_core::vm::dump::dump` still writes luna's own format,
+  and MacroLua's `string.dump` keeps it too (MacroLua has no PUC format).
+- A binary chunk in the running dialect's own PUC format, which is what
+  `string.dump` now produces, loads under the same switch as luna's own
+  chunks (`Vm::set_bytecode_loading`, on by default); chunks of the other
+  PUC versions still need `Vm::set_puc_bytecode_loading(true)`.
+
 - `Vm::set_p16_self_link_enabled` / `Vm::p16_self_link_enabled` are now
   `Vm::set_self_link_enabled` / `Vm::self_link_enabled`. The old names
   still work and are deprecated.
 - The published `luna-aot` description matches what it does: the trace
   JIT's machine code is part of the produced binary.
+
+### Fixed
+
+- A stripped PUC chunk loaded into luna reported line 0 for every
+  instruction instead of having no line information (`currentline` is now
+  -1, and errors are placed at `?`, as in PUC).
 
 ## [3.1.0] — 2026-09-25
 

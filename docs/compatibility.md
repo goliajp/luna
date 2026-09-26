@@ -31,8 +31,9 @@ single binary. The dialect is chosen per-`Vm` at construction
 different dialects concurrently without interference.
 
 PUC-compiled `.luac` files of any dialect load through the per-dialect
-translators (see [below](#loading-puc-luac-files)); luna's own
-`string.dump` uses a luna-specific body format, not PUC's.
+translators (see [below](#loading-puc-luac-files)), and `string.dump`
+writes the running dialect's PUC bytecode, which the stock interpreter of
+that version runs (see [`string.dump`](#stringdump-writes-puc-bytecode)).
 
 ### Per-dialect feature matrix
 
@@ -162,25 +163,47 @@ richer than the C one — see [`embedding.md`](embedding.md).
 
 ## Bytecode
 
+### `string.dump` writes PUC bytecode
+
+`string.dump(f)` returns a chunk in the running dialect's PUC format:
+stock PUC 5.1.5, 5.2.4, 5.3.6, 5.4.9 or 5.5.1 loads it with `load` or
+runs it as `lua file`. `string.dump(f, true)` (5.3 and later, where the
+argument exists) drops debug information as PUC's `strip` does. luna
+re-encodes each function into that version's instruction set; where the
+dialect cannot express something luna's compiler produced, `string.dump`
+raises `unable to dump given function` instead of writing a chunk that
+would behave differently, for example a 5.1 function that uses its
+environment table as a value (5.1 reaches globals only through
+`GETGLOBAL`/`SETGLOBAL`). No diff_puc fixture hits a refusal.
+
+Every diff_puc fixture is compiled by luna, dumped, and run by the stock
+interpreter of its dialect, matching PUC running the source byte for byte
+in stdout (and in the error text for `_err` fixtures); the stripped dump
+matches PUC running the same program compiled by `luac -s`; and the dump
+loads back into luna to the same result (`tests/puc_dump.rs`).
+
+`load` accepts a chunk of the running dialect's own PUC version under the
+same switch as luna's own format (below), since it is what `string.dump`
+produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
+
 ### luna's own dumps
 
-`string.dump` and `Vm::dump` emit luna's own binary format: the running
-dialect's PUC header, then a `"\x00LunaV1\x00"` sentinel and a body in
-luna's 65-op instruction set. It is **not** PUC's body format — a luna
-dump loads back into luna, not into PUC, and a PUC `.luac` is read by the
-translators below, not by this loader. luna does not emit PUC-format
-bytecode; a `string.dump` that PUC could load is a separate feature the
-owner has not committed to.
+`luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
+format: the running dialect's PUC header, then a `"\x00LunaV1\x00"`
+sentinel and a body in luna's 65-op instruction set. It loads back into
+luna, not into PUC.
 
-Loading a luna dump is gated by `Vm::set_bytecode_loading(false)` (on by
-default; the `sandbox` builder turns it off). Every loaded chunk, in
-either format, is verified before it runs; see "Verification on load"
-below. The verifier checks structure, not everything a crafted chunk can
-reach, so a host taking untrusted input should still close the gate.
+Loading a luna dump, or a chunk of the running dialect's PUC version, is
+gated by `Vm::set_bytecode_loading(false)` (on by default; the `sandbox`
+builder turns it off). Every loaded chunk, in either format, is verified
+before it runs; see "Verification on load" below. The verifier checks
+structure, not everything a crafted chunk can reach, so a host taking
+untrusted input should still close the gate.
 
 ### Loading PUC `.luac` files
 
-Opt in with `Vm::set_puc_bytecode_loading(true)`, **off by default**. The
+A chunk of another dialect's PUC version needs
+`Vm::set_puc_bytecode_loading(true)`, **off by default**. The
 translator decodes a PUC chunk of any of the five dialects and re-encodes
 its body into luna's 65-op set; the resulting Proto then runs on luna's
 interpreter and JIT like any other. This is a strictly larger trust
