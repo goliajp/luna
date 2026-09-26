@@ -715,6 +715,10 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
         luna_jit_table_set_float_float as *const u8,
     );
     builder.symbol(
+        "luna_jit_table_set_raw",
+        luna_jit_table_set_raw as *const u8,
+    );
+    builder.symbol(
         "luna_jit_table_get_int",
         luna_jit_table_get_int as *const u8,
     );
@@ -1467,7 +1471,9 @@ pub fn lower_int_chunk_into<M: Module>(
                 // callee returns exactly 1 value, so the static
                 // count is `A_call - A_list`.
                 let b = ins.b();
-                if ins.c() != 0 {
+                // the emit stores from index 1: no offset, and no
+                // `ExtraArg` offset either
+                if ins.c() != 0 || ins.k() {
                     return None;
                 }
                 if b == 0 {
@@ -3154,6 +3160,13 @@ pub fn lower_int_chunk_into<M: Module>(
                 // `reg_kinds` — `current_kinds[a]` reflects pre-write
                 // state and may still be Unset before this op runs.
                 let k = a_kind(&reg_kinds, ins.a());
+                // a register a table was stored in first keeps the Table
+                // kind when a later arithmetic result lands there; its
+                // result tag would be wrong, so leave the function to the
+                // interpreter
+                if k == RegKind::Table {
+                    return None;
+                }
                 // A float result converts an integer operand first
                 // (`a / b` of two integers, or `i + 0.5`).
                 let (lhs, rhs) = if k == RegKind::Float {
@@ -3263,7 +3276,8 @@ pub fn lower_int_chunk_into<M: Module>(
                         }
                         // An integer is its own floor and ceiling.
                         RegKind::Int | RegKind::Unset => arg_var,
-                        RegKind::Table => unreachable!("math fold arg can't be Table"),
+                        // `math.floor(t)` raises in the interpreter
+                        RegKind::Table => return None,
                     }
                 } else {
                     let arg_f64 = match arg_kind {
@@ -3271,12 +3285,8 @@ pub fn lower_int_chunk_into<M: Module>(
                         RegKind::Int | RegKind::Unset => {
                             bcx.ins().fcvt_from_sint(types::F64, arg_var)
                         }
-                        // The fold's `Move` source can only be a Lua
-                        // numeric — the whitelist's `Op::Call B=2` gate
-                        // implies a numeric arg. A Table-typed source
-                        // would have been bailed earlier by the kind
-                        // sweep mismatching the fold's Float result.
-                        RegKind::Table => unreachable!("math fold arg can't be Table"),
+                        // `math.sin(t)` raises in the interpreter
+                        RegKind::Table => return None,
                     };
                     // 5.3+ `atan(y)` is `atan2(y, 1)` (lmathlib.c), which
                     // libm rounds differently from `atan(y)`.
@@ -3434,7 +3444,9 @@ pub fn lower_int_chunk_into<M: Module>(
                         } else {
                             bcx.ins().isub(init, limit)
                         };
-                        let abs_step = bcx.ins().iconst(types::I64, step_imm.abs());
+                        // `math.mininteger` as a step: its magnitude is
+                        // 2^63, which only the unsigned division sees right
+                        let abs_step = bcx.ins().iconst(types::I64, step_imm.unsigned_abs() as i64);
                         let count = bcx.ins().udiv(span, abs_step);
 
                         aligned_def(&mut bcx, &regs, &reg_kinds, a, init);
@@ -3816,13 +3828,13 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::SetList => {
-                // `R[A][1..=B] = R[A+1..A+B]`. Inline
-                // each store via the same atags/avals fast-path the
-                // SetTable inline aset uses, since the table was
-                // just freshly NewTable'd (with B as the array
-                // presize) and the key range is guaranteed in
-                // bounds. Each element's tag is picked at emit time
-                // from `RegKind[A+i]`:
+                // `R[A][1..=B] = R[A+1..A+B]`. Each store goes inline
+                // through the atags/avals layout the SetTable fast path
+                // uses when the array part holds all B slots; the table
+                // is normally the preceding `NewTable` presized to B, but
+                // that is not proven here, so a smaller array part takes
+                // the helper path, which grows the table. Each element's
+                // tag is picked at emit time from `RegKind[A+i]`:
                 //   Int     → raw::INT     (i64 verbatim)
                 //   Float   → raw::FLOAT   (bitcast f64 → i64)
                 //   Table   → raw::TABLE   (i64 ptr verbatim)
@@ -3852,24 +3864,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 } else {
                     t_raw
                 };
-                // load slab.ptr (= avals base) and asize,
-                // compute `atags_ptr = avals_ptr + asize * 8` once for
-                // the whole literal store.
-                let avals_ptr = bcx.ins().load(
-                    types::I64,
-                    MemFlags::trusted(),
-                    t,
-                    TABLE_ARRAY_PTR_OFFSET as i32,
-                );
-                let asize = bcx.ins().load(
-                    types::I64,
-                    MemFlags::trusted(),
-                    t,
-                    TABLE_ASIZE_OFFSET as i32,
-                );
-                let three_imm = bcx.ins().iconst(types::I64, 3);
-                let avals_bytes = bcx.ins().ishl(asize, three_imm);
-                let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
+                let mut elems = Vec::with_capacity(b);
                 for i in 0..b {
                     let src = a + 1 + i;
                     let v = bcx.use_var(regs[src]);
@@ -3909,6 +3904,37 @@ pub fn lower_int_chunk_into<M: Module>(
                         };
                         (tag, bits)
                     };
+                    elems.push((tag, bits));
+                }
+                let asize = bcx.ins().load(
+                    types::I64,
+                    MemFlags::trusted(),
+                    t,
+                    TABLE_ASIZE_OFFSET as i32,
+                );
+                let b_v = bcx.ins().iconst(types::I64, b as i64);
+                let fits = bcx
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, asize, b_v);
+                let fast_blk = bcx.create_block();
+                let slow_blk = bcx.create_block();
+                let merge_blk = bcx.create_block();
+                bcx.ins().brif(fits, fast_blk, &[], slow_blk, &[]);
+
+                bcx.switch_to_block(fast_blk);
+                bcx.seal_block(fast_blk);
+                // `atags_ptr = avals_ptr + asize * 8`, once for the
+                // whole literal
+                let avals_ptr = bcx.ins().load(
+                    types::I64,
+                    MemFlags::trusted(),
+                    t,
+                    TABLE_ARRAY_PTR_OFFSET as i32,
+                );
+                let three_imm = bcx.ins().iconst(types::I64, 3);
+                let avals_bytes = bcx.ins().ishl(asize, three_imm);
+                let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
+                for (i, &(tag, bits)) in elems.iter().enumerate() {
                     let idx_const = bcx.ins().iconst(types::I64, i as i64);
                     let tag_dst = bcx.ins().iadd(atags_ptr, idx_const);
                     let tag_byte = bcx.ins().iconst(types::I8, tag);
@@ -3917,6 +3943,27 @@ pub fn lower_int_chunk_into<M: Module>(
                     let val_dst = bcx.ins().iadd(avals_ptr, val_off);
                     bcx.ins().store(MemFlags::trusted(), bits, val_dst, 0);
                 }
+                bcx.ins().jump(merge_blk, &[]);
+
+                bcx.switch_to_block(slow_blk);
+                bcx.seal_block(slow_blk);
+                let mut sig = module.make_signature();
+                for _ in 0..4 {
+                    sig.params.push(AbiParam::new(types::I64));
+                }
+                let id = module
+                    .declare_function("luna_jit_table_set_raw", Linkage::Import, &sig)
+                    .ok()?;
+                let r = module.declare_func_in_func(id, bcx.func);
+                for (i, &(tag, bits)) in elems.iter().enumerate() {
+                    let key = bcx.ins().iconst(types::I64, i as i64 + 1);
+                    let tag_v = bcx.ins().iconst(types::I64, tag as i64);
+                    let _ = bcx.ins().call(r, &[t, key, bits, tag_v]);
+                }
+                bcx.ins().jump(merge_blk, &[]);
+
+                bcx.switch_to_block(merge_blk);
+                bcx.seal_block(merge_blk);
             }
             Op::GetI => {
                 // `R[A] = R[B][imm(C)]`. Inline
