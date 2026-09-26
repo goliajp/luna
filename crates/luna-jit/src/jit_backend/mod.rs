@@ -3957,7 +3957,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let r = module.declare_func_in_func(id, bcx.func);
                 for (i, &(tag, bits)) in elems.iter().enumerate() {
                     let key = bcx.ins().iconst(types::I64, i as i64 + 1);
-                    let tag_v = bcx.ins().iconst(types::I64, tag as i64);
+                    let tag_v = bcx.ins().iconst(types::I64, tag);
                     let _ = bcx.ins().call(r, &[t, key, bits, tag_v]);
                 }
                 bcx.ins().jump(merge_blk, &[]);

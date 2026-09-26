@@ -7099,10 +7099,12 @@ pub fn lower_trace_into_named<M: Module>(
                     current_kinds[off + ins.a() as usize] = k;
                     continue;
                 }
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7133,10 +7135,12 @@ pub fn lower_trace_into_named<M: Module>(
                 }
             }
             Op::GetTable => {
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7196,10 +7200,12 @@ pub fn lower_trace_into_named<M: Module>(
                     continue;
                 }
                 // helper path: R[A][K[B]:string] := R[C].
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.a()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7252,10 +7258,12 @@ pub fn lower_trace_into_named<M: Module>(
                     continue;
                 }
                 // helper path.
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7488,10 +7496,12 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 // R[A][B_imm] := R[C] helper path. Dispatch by R[C]
                 // kind via emit_table_set (Nil / Int / Closure / etc.).
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.a()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7542,10 +7552,12 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 // R[A][R[B]] := R[C] helper path. Same kind-dispatch
                 // as Op::SetI.
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.a()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7616,10 +7628,12 @@ pub fn lower_trace_into_named<M: Module>(
                 // Helper path: same loop with effective_b iters.
                 let a = ins.a() as usize;
                 let c_off = ins.c() as i64;
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + a as u32) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -7651,10 +7665,12 @@ pub fn lower_trace_into_named<M: Module>(
             }
             Op::Len => {
                 // R[A] := #R[B] — call luna_jit_table_len(t) -> i64.
-                // the helpers read the operand as a table: another kind
-                // leaves the op to the interpreter
+                // the helpers read the operand as a table. A number,
+                // string or closure (entry-guarded or computed here) leaves
+                // the op to the interpreter; Nil can be a lookahead guess
+                // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
-                    RegKind::Table => {}
+                    RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
@@ -10020,7 +10036,7 @@ mod s2b_table_ops {
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
         // R[0][1] = R[1]; R[2][1] = R[1]
-        let rec = closed_record(
+        let mut rec = closed_record(
             p,
             0,
             &[
@@ -10028,6 +10044,8 @@ mod s2b_table_ops {
                 Inst::iabc(Op::SetI, 2, 1, 1, false),
             ],
         );
+        rec.entry_tags[0] = luna_core::runtime::value::raw::TABLE;
+        rec.entry_tags[2] = luna_core::runtime::value::raw::TABLE;
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -10055,7 +10073,8 @@ mod s2b_table_ops {
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
         // Trace: R[1] = R[0][1].
-        let rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
+        let mut rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
+        rec.entry_tags[0] = luna_core::runtime::value::raw::TABLE;
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -10075,7 +10094,7 @@ mod s2b_table_ops {
         unsafe { t.as_mut() }.set_metatable(Some(mt));
 
         // R[0][1] = R[1]; R[3] = #R[2]
-        let rec = closed_record(
+        let mut rec = closed_record(
             p,
             0,
             &[
@@ -10083,6 +10102,8 @@ mod s2b_table_ops {
                 Inst::iabc(Op::Len, 3, 2, 0, false),
             ],
         );
+        rec.entry_tags[0] = luna_core::runtime::value::raw::TABLE;
+        rec.entry_tags[2] = luna_core::runtime::value::raw::TABLE;
         let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
         let mut state: Vec<i64> = vec![0; p.max_stack as usize];
