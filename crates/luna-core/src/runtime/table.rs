@@ -1471,11 +1471,10 @@ impl Table {
     /// from the SoA arrays. Used by `soa_rehash_to` (re-insert pass)
     /// and by `soa_insert` (new-key path after the explicit
     /// soa_find_slot check). This routine does NOT auto-grow on a
-    /// load-factor trigger (caller's responsibility), but DOES signal
-    /// back to the caller via `Err(())` when the PSL bound of 63 is
-    /// hit before finding an empty slot — Robin Hood's long-tail
-    /// max-PSL exceeds the 6-bit storage budget at unfavourable hash
-    /// distributions even under the nominal 0.75 load gate. The caller (`soa_insert`) handles by growing & retrying.
+    /// load-factor trigger (caller's responsibility), but hands the
+    /// pending pair back as `Err((k, v))` when the probe sequence
+    /// passes `meta_bits::PSL_MAX` before an empty slot turns up. The
+    /// caller (`soa_insert`) grows and retries.
     ///
     /// On success returns the slot index where the new key landed
     /// (after any rob-from-rich shuffle, the original `k` value is at

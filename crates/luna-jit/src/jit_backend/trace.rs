@@ -2684,12 +2684,10 @@ enum TraceEnd {
     /// Recorder detected self-recursion via the cycle catch
     /// (same-proto ancestor count > [`RECUNROLL_THRESHOLD`] at the
     /// head_pc on head_proto). The trace body covers the inlined
-    /// recursion levels; the lowerer's tail emits a snapshot-restore
-    /// (copy the deepest-inlined-frame's window into the head frame's
-    /// window) + branch to `body_loop`. Each iter absorbs
-    /// `RECUNROLL_THRESHOLD + 1` recursion levels. Dispatchable is
-    /// `true` (DOES NOT pin `is_inline_abort_close`); the depth>0
-    /// ops in the body are intentional inline content.
+    /// recursion levels, but the lowerer's tail is a plain deopt
+    /// (store back the caller window, return `head_pc`) and the trace
+    /// is not dispatchable: restoring a snapshot across the back-edge
+    /// gives wrong results for non-tail self-recursion such as fib.
     SelfLink(SelfRecKind),
     /// recorder detected a down-recursion close
     /// shape: a depth>0 `Op::Return` fired during recording AND the
