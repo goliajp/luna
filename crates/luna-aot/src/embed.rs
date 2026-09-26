@@ -375,12 +375,6 @@ fn link_with_cc(objects: &[&Path], out_path: &Path) -> Result<(), AotError> {
 /// cross-compile builds a per-triple staticlib (`cargo build
 /// --target=<triple> -p luna-runtime-helpers`) and uses the matching
 /// cc driver.
-///
-/// `cargo_dir` overrides the working directory `cargo build` runs in
-/// (defaults to the workspace this crate lives in, looked up via
-/// `CARGO_MANIFEST_DIR`). Useful for downstream embedders that ship
-/// a vendored copy of the workspace and want the build to land in a
-/// known cache dir.
 pub fn compile_and_link(
     source_path: &Path,
     out_path: &Path,
