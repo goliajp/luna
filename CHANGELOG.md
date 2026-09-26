@@ -21,7 +21,51 @@ optimization.
 
 ## [Unreleased]
 
+### Fixed
+
+- A numeric `for` loop whose hidden state was changed by `debug.setlocal`
+  or by a crafted binary chunk panicked the host; it now raises
+  `'for' state corrupted`. On 5.1/5.2 a number of the other
+  representation is accepted there and the loop continues, as in PUC.
+- A table constructor whose table was replaced the same way panicked; it
+  now raises `attempt to index a <type> value`.
+- The method JIT wrote the elements of a table constructor into the
+  table's array part without checking its size; a smaller array part now
+  takes the checked path. It also no longer compiles a constructor with a
+  large start index, and no longer panics while compiling a function
+  whose arithmetic result lands in a register that held a table, a math
+  call on a table, or a `math.mininteger` loop step.
+- The trace JIT passed a value that was not a table (a string's length,
+  a field read through the string metatable, an index of a number with a
+  metatable) to its table helpers, which read it as a table and could
+  crash the process. Those operations are left to the interpreter.
+- A generic `for` whose iterator is `pcall`, `xpcall` or `pairs` with a
+  `__pairs` metamethod could corrupt the call stack inside a trace; the
+  trace now leaves to the interpreter for it.
+- `debug.debug`: a command nested too deep for the parser (5.4+) now goes
+  through the running message handler, as `load` does.
+- Panics reachable from Lua scripts or loaded chunks, now Lua errors or
+  the PUC result: `debug.getupvalue` / `debug.setupvalue` on a function
+  loaded without upvalues; `debug.setupvalue` on a standard-library
+  function (see Changed); `string.format` with a width past the machine
+  word; `file:seek("cur", math.mininteger)` after a read; `bit32` shifts
+  by `math.mininteger`; 5.1/5.2 `table.sort` on a range ending at
+  `2^31-1`; `table.sort` with a huge `__len`; a 5.5 named vararg table
+  whose `n` exceeds the stack (`stack overflow`); 5.1
+  `debug.traceback` with a level past a C `int`; stores into a full
+  table by `require`, `module`, `package.seeall`, `coroutine.wrap` and
+  5.1/5.2 `table.insert` (`table overflow`); library-built strings
+  longer than a string can hold (`string length overflow`); a binary
+  chunk whose local names a register out of range or that nests
+  functions deeper than 250 levels (refused on load); a named local of a
+  crafted chunk aliasing a running call; a to-be-closed slot a crafted
+  chunk registers twice (`'<close>' state corrupted`).
+
 ### Changed
+
+- `debug.setupvalue` no longer changes the upvalues of C functions; it
+  returns nothing for them. Library functions keep state there that they
+  rely on.
 
 - `Vm::set_p16_self_link_enabled` / `Vm::p16_self_link_enabled` are now
   `Vm::set_self_link_enabled` / `Vm::self_link_enabled`. The old names
