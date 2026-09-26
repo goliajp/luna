@@ -5653,11 +5653,10 @@ impl Vm {
             CallFrame::Cont(_) => return None,
         };
         let proto = f.closure.proto;
-        if proto.source.as_bytes().is_empty() {
+        // a stripped chunk: no source in luna's own format, no line info in
+        // PUC's (whose loader names the missing source "=?")
+        if proto.source.as_bytes().is_empty() || proto.lines.is_empty() {
             return Some(self.stripped_prefix());
-        }
-        if proto.lines.is_empty() {
-            return None;
         }
         let line = proto.lines[(f.pc as usize).saturating_sub(1).min(proto.lines.len() - 1)];
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
