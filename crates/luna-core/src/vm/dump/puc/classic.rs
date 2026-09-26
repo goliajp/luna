@@ -21,7 +21,7 @@ use crate::vm::isa::Op;
 
 /// An opcode's meaning, independent of the dialect's numbering.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(in crate::vm::dump) enum Kind {
     Move,
     LoadK,
     LoadKx,

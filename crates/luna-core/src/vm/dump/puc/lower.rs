@@ -138,7 +138,12 @@ pub(super) fn build(
     mut raw: RawProto,
     translate: &dyn Fn(&mut RawProto) -> Result<Lowered, String>,
 ) -> Result<Gc<Proto>, String> {
-    let lowered = translate(&mut raw)?;
+    let mut lowered = translate(&mut raw)?;
+    // a stripped chunk has no line info; the translated one must not
+    // invent line 0 for every instruction
+    if raw.lines.is_empty() {
+        lowered.lines.clear();
+    }
     let mut protos = Vec::with_capacity(raw.protos.len());
     for child in raw.protos.drain(..) {
         protos.push(build(heap, child, translate)?);

@@ -41,7 +41,7 @@ const DIALECT: &str = "PUC 5.1";
 
 /// Header: signature, version, format, endianness, then the sizes of
 /// `int`, `size_t`, `Instruction`, `lua_Number`, and the integral flag.
-const HEADER: &[u8] = &[0x1b, b'L', b'u', b'a', 0x51, 0, 1, 4, 8, 4, 8, 0];
+pub(in crate::vm::dump) const HEADER: &[u8] = &[0x1b, b'L', b'u', b'a', 0x51, 0, 1, 4, 8, 4, 8, 0];
 
 /// `LFIELDS_PER_FLUSH` (lopcodes.h).
 const FIELDS_PER_FLUSH: u64 = 50;
@@ -72,44 +72,44 @@ impl I51 {
 }
 
 // Opcode numbers, lopcodes.h 5.1.5.
-const OP_MOVE: u8 = 0;
-const OP_LOADK: u8 = 1;
-const OP_LOADBOOL: u8 = 2;
-const OP_LOADNIL: u8 = 3;
-const OP_GETUPVAL: u8 = 4;
-const OP_GETGLOBAL: u8 = 5;
-const OP_GETTABLE: u8 = 6;
-const OP_SETGLOBAL: u8 = 7;
-const OP_SETUPVAL: u8 = 8;
-const OP_SETTABLE: u8 = 9;
-const OP_NEWTABLE: u8 = 10;
-const OP_SELF: u8 = 11;
-const OP_ADD: u8 = 12;
-const OP_SUB: u8 = 13;
-const OP_MUL: u8 = 14;
-const OP_DIV: u8 = 15;
-const OP_MOD: u8 = 16;
-const OP_POW: u8 = 17;
-const OP_UNM: u8 = 18;
-const OP_NOT: u8 = 19;
-const OP_LEN: u8 = 20;
-const OP_CONCAT: u8 = 21;
-const OP_JMP: u8 = 22;
-const OP_EQ: u8 = 23;
-const OP_LT: u8 = 24;
-const OP_LE: u8 = 25;
-const OP_TEST: u8 = 26;
-const OP_TESTSET: u8 = 27;
-const OP_CALL: u8 = 28;
-const OP_TAILCALL: u8 = 29;
-const OP_RETURN: u8 = 30;
-const OP_FORLOOP: u8 = 31;
-const OP_FORPREP: u8 = 32;
-const OP_TFORLOOP: u8 = 33;
-const OP_SETLIST: u8 = 34;
-const OP_CLOSE: u8 = 35;
-const OP_CLOSURE: u8 = 36;
-const OP_VARARG: u8 = 37;
+pub(in crate::vm::dump) const OP_MOVE: u8 = 0;
+pub(in crate::vm::dump) const OP_LOADK: u8 = 1;
+pub(in crate::vm::dump) const OP_LOADBOOL: u8 = 2;
+pub(in crate::vm::dump) const OP_LOADNIL: u8 = 3;
+pub(in crate::vm::dump) const OP_GETUPVAL: u8 = 4;
+pub(in crate::vm::dump) const OP_GETGLOBAL: u8 = 5;
+pub(in crate::vm::dump) const OP_GETTABLE: u8 = 6;
+pub(in crate::vm::dump) const OP_SETGLOBAL: u8 = 7;
+pub(in crate::vm::dump) const OP_SETUPVAL: u8 = 8;
+pub(in crate::vm::dump) const OP_SETTABLE: u8 = 9;
+pub(in crate::vm::dump) const OP_NEWTABLE: u8 = 10;
+pub(in crate::vm::dump) const OP_SELF: u8 = 11;
+pub(in crate::vm::dump) const OP_ADD: u8 = 12;
+pub(in crate::vm::dump) const OP_SUB: u8 = 13;
+pub(in crate::vm::dump) const OP_MUL: u8 = 14;
+pub(in crate::vm::dump) const OP_DIV: u8 = 15;
+pub(in crate::vm::dump) const OP_MOD: u8 = 16;
+pub(in crate::vm::dump) const OP_POW: u8 = 17;
+pub(in crate::vm::dump) const OP_UNM: u8 = 18;
+pub(in crate::vm::dump) const OP_NOT: u8 = 19;
+pub(in crate::vm::dump) const OP_LEN: u8 = 20;
+pub(in crate::vm::dump) const OP_CONCAT: u8 = 21;
+pub(in crate::vm::dump) const OP_JMP: u8 = 22;
+pub(in crate::vm::dump) const OP_EQ: u8 = 23;
+pub(in crate::vm::dump) const OP_LT: u8 = 24;
+pub(in crate::vm::dump) const OP_LE: u8 = 25;
+pub(in crate::vm::dump) const OP_TEST: u8 = 26;
+pub(in crate::vm::dump) const OP_TESTSET: u8 = 27;
+pub(in crate::vm::dump) const OP_CALL: u8 = 28;
+pub(in crate::vm::dump) const OP_TAILCALL: u8 = 29;
+pub(in crate::vm::dump) const OP_RETURN: u8 = 30;
+pub(in crate::vm::dump) const OP_FORLOOP: u8 = 31;
+pub(in crate::vm::dump) const OP_FORPREP: u8 = 32;
+pub(in crate::vm::dump) const OP_TFORLOOP: u8 = 33;
+pub(in crate::vm::dump) const OP_SETLIST: u8 = 34;
+pub(in crate::vm::dump) const OP_CLOSE: u8 = 35;
+pub(in crate::vm::dump) const OP_CLOSURE: u8 = 36;
+pub(in crate::vm::dump) const OP_VARARG: u8 = 37;
 
 /// The `_ENV` cell every translated function carries at upvalue 0.
 const ENV_UPVAL: u32 = 0;
