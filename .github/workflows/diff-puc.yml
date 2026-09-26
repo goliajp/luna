@@ -1,4 +1,4 @@
-# v2.2 Phase 5 (DP) — differential vs PUC lua-5.5 harness.
+# Differential vs PUC harness.
 #
 # luna's official_run test is "luna alone runs PUC's chunk to
 # completion under our wrapper". This is necessary but not
@@ -8,15 +8,12 @@
 # layer is end-to-end byte-diff against PUC's own lua-5.5
 # binary executing the same source.
 #
-# v2.2 ships the harness on 5 deterministic programs (no
-# os.time / math.random / io non-determinism). v2.3+ expands
-# to fuzz-driven inputs and the full PUC official suite.
+# Fixtures are deterministic programs (no os.time /
+# math.random / io non-determinism).
 #
 # Why nightly + workflow_dispatch only: PUC builds from source
 # each run (~30s) + the lua-5.5 source tarball needs to be
 # downloaded. Acceptable for nightly; too expensive for per-PR.
-# Once v2.3 lands fuzz infrastructure that ALSO needs PUC, the
-# build step can be cached + the diff job can move to per-PR.
 
 name: diff-puc
 
@@ -43,7 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 (dialect matrix)
-        # v2.14 HD — the harness diffs every tests/diff_puc/5.x/
+        # The harness diffs every tests/diff_puc/5.x/
         # subtree against the matching interpreter. `make posix`
         # avoids the readline dependency (the harness feeds stdin);
         # each version's Makefile has the posix target.
@@ -66,7 +63,7 @@ jobs:
           echo "PUC_LUAC_54=/tmp/puc-multi/lua-5.4.9/src/luac" >> "$GITHUB_ENV"
 
       - name: Show dialect interpreter versions
-        # v3.1 W2: the 5.4 pin is exact, like 5.5's below. A patch
+        # The 5.4 pin is exact, like 5.5's below. A patch
         # release changes the ground truth, so moving it is a deliberate
         # edit here, never a side effect of the download.
         run: |
@@ -79,19 +76,14 @@ jobs:
           esac
 
       - name: Install PUC lua-5.5.1 (build from source)
-        # v2.18 P1: pinned to 5.5.1 (released 2026-07-24), superseding
-        # 5.5.0. The pin is exact and the build is always from source.
-        #
-        # The previous version tried `apt-get install lua5.5` first and
-        # only fell back to source. That made the differential basis
-        # depend on whatever the runner image happened to ship, which is
-        # the same class of problem as an unpinned reference: the
-        # comparison silently changes when the image updates. Arc
-        # charter §2.5 calls for build-from-source pinned to the vendored
-        # suite version, so the apt path is gone.
+        # Pinned to 5.5.1, matching the vendored suite version. The pin
+        # is exact and the build is always from source: an apt package
+        # would make the differential basis depend on whatever the
+        # runner image happens to ship, so the comparison would silently
+        # change when the image updates.
         #
         # The version assertion below exists so this step can FAIL. A
-        # pin nobody checks is not a pin (v2.17 gate-audit lesson).
+        # pin nobody checks is not a pin.
         run: |
           set -euo pipefail
           sudo apt-get update -qq

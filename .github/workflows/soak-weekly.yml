@@ -1,33 +1,20 @@
-# v2.4 Phase Soak — weekly long-soak sample.
+# Long-soak sample.
 #
 # Runs `luna-soak` against each workload fixture and captures the JSON
 # metrics report as a workflow artifact.
 #
-# v2.17 H6 — this job used to ask for a 24h soak (`--duration 86400`)
-# against a 350-minute `timeout-minutes`, so GitHub killed it every
-# single week: 11 runs, 11 `cancelled`, zero `success`. The artifact was
-# still produced (v2.12 made luna-soak write incrementally, and the
-# upload step is `if: always()`), so the DATA was fine — but a job whose
-# steady state is red carries no signal when something actually breaks,
-# and in practice nobody read the reports: five samples had accumulated
-# unanalysed by 2026-08.
-#
-# The soak now asks for a duration it can actually finish inside the
-# runner cap, so a healthy week ends `success` and a red run means a
-# real failure. This does not change what is measured — arc charter §1
-# #3 was closed (2026-07-03 amendment) on the "4 clean capped samples
-# ≈ 24h cumulative" form precisely because a single 24h run is
-# structurally impossible on hosted runners. These weekly samples are
-# ongoing corroboration of that closed criterion.
+# The soak asks for a duration it can actually finish inside the
+# runner cap, so a healthy run ends `success` and a red run means a
+# real failure. A job whose steady state is red (e.g. a 24h soak killed
+# by the timeout every time) carries no signal when something actually
+# breaks. A single 24h run is structurally impossible on hosted
+# runners; capped samples add up to the long-run evidence instead.
 
 name: soak-weekly
 
-# Manual only (2026-08-14). Soak is no longer on a timer: acceptance #3
-# closed on four named capped runs from v2.13, which are historical
-# facts and do not decay, so nothing is served by burning ~5.5h of
-# runner every week to re-derive them. Run it on demand — before a
-# release, after a GC or allocator change, or when investigating a
-# suspected leak.
+# Manual only: burning ~5.5h of runner on a timer re-derives settled
+# results. Run it on demand — before a release, after a GC or allocator
+# change, or when investigating a suspected leak.
 on:
   workflow_dispatch:
 
@@ -35,8 +22,8 @@ env:
   # 5h30m of actual soak. Budget against `timeout-minutes: 350`:
   #   release build ~5 min + soak 330 min + upload ~1 min ≈ 336 min,
   # leaving ~14 min of headroom. Raise both numbers together, and keep
-  # the headroom — the whole point of H6 is that the job finishes on
-  # its own rather than being killed.
+  # the headroom — the job must finish on its own rather than being
+  # killed.
   SOAK_SECONDS: "19800"
 
 jobs:

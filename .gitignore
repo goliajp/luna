@@ -4,8 +4,6 @@
 # Cargo
 **/*.rs.bk
 
-.tmp/
-
 # Editor / OS
 .DS_Store
 *.swp

@@ -9,18 +9,15 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
-  # v2.0 Track CV-infra: workspace-wide line/region coverage via
-  # `cargo llvm-cov`. Self-hosted JSON baseline at
-  # `.github/coverage-baselines/coverage-2026-06-25.json` (Phase 2
-  # audit decision — no SaaS coverage backend; baseline rolls forward
-  # on explicit commits).
+  # Workspace-wide line/region coverage via `cargo llvm-cov`.
+  # Self-hosted JSON baseline at
+  # `.github/coverage-baselines/coverage-2026-06-25.json` (no SaaS
+  # coverage backend; baseline rolls forward on explicit commits).
   #
   # Gate semantics:
   #   * fail if any first-party crate drops > 2 percentage points in
   #     line coverage vs the committed baseline (regression band),
-  #   * warn (do not fail) if a crate is below its audit budget — the
-  #     budget gates only flip to hard-fail once per-track CV-content
-  #     fills bring each crate into its budget (multi-week sprint).
+  #   * warn (do not fail) if a crate is below its coverage budget.
   #
   # Branch coverage is reported as 0/0 on stable rustc (LLVM stable
   # only emits region-level data; branch needs nightly's
@@ -45,8 +42,7 @@ jobs:
         # (`could not find native static library Polly`). The mainline
         # crates (luna-core, luna-jit, luna-jit-helpers, luna-aot,
         # luna-runtime-helpers) are the contract we maintain; the
-        # alt-backend crates are dev-only audit artefacts (v2.1
-        # Cranelift alt-backend RFC) outside the regression band.
+        # alt-backend crates are dev-only, outside the regression band.
         run: |
           cargo llvm-cov --workspace --lib --json \
             --exclude llvm-jit-probe --exclude luna-jit-llvm \

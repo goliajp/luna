@@ -1,7 +1,7 @@
 # Performance
 
-This document tracks luna's performance discipline, methodology, and
-what's measured at the current ship. It does **not** publish a
+This document records what luna's performance is measured against
+and the numbers measured so far. It does **not** publish a
 headline `vs LuaJIT 1.21×` or `vs PUC 41/42 green` ratio — both shapes
 are perf-methodology anti-patterns, for reasons the rest of this
 section spells out:
@@ -14,13 +14,8 @@ section spells out:
 - "41/42 green" cherry-picks the wins; the one outlier is the
   signal, not the noise.
 
-No public comparison matrix is published. One was planned for v2.0
-(luna_jit / luna_interp / luna_aot against LuaJIT 2.1, PUC 5.4 and
-mlua, with in-process measurement boundaries and error bars on every
-cell) and deliberately scheduled after the interpreter and JIT redesigns
-so it would not lock in a baseline around code about to change; it has
-not shipped. What guards performance release over release is the CI
-perf-gate: each push runs the `redis_lua_shape` benchmark on the same
+No public comparison matrix is published. What guards performance
+release over release is the CI perf-gate: each push runs the `redis_lua_shape` benchmark on the same
 runner for both the previous release (`PERF_REF` in `ci.yml`) and the
 pushed commit, and fails when any cell is more than 5% slower (a commit
 can waive it with `[perf-allow]` in its message). It covers that one
@@ -28,28 +23,9 @@ workload, not luna's performance in general.
 
 ---
 
-## 1. Methodology
+## 1. Baselines measured at v1.3
 
-The methodology luna's perf work follows, applied from the v2.0
-sprint onward:
-
-- **Decomposition before polish.** Any gap > 1.5× a reference impl
-  triggers a side-by-side 18-stage decomposition of the workload,
-  not surface-level polish iterations. The v2.0 Track PI audit
-  (full 26 KB body
-  preserved) walks the methodology explicitly for the interp gap
-  close work.
-- **Measure both axes.** `luna_jit vs LuaJIT_jit` and `luna_interp
-  vs LuaJIT_interp` are independent dimensions. Conflating them
-  hides the attack surface.
-- **Don't punish the workload.** If a gap exists, it's an
-  optimization opportunity, not a "workload not amenable" verdict.
-  See methodology §1 trigger-word list for the full set of
-  rationalizations that get flagged in code review.
-
-## 2. Baselines measured at v1.3
-
-### 2.1 Memory baselines
+### 1.1 Memory baselines
 
 Five workloads measured under dhat on macOS aarch64:
 
@@ -64,7 +40,7 @@ Five workloads measured under dhat on macOS aarch64:
 Use these as v1.3 regression sentinels — a > 5% steady-state
 increase on any workload signals an unintended layout change.
 
-### 2.2 Disk + binary size baselines
+### 1.2 Disk + binary size baselines
 
 Per-crate publish sizes:
 
@@ -84,10 +60,7 @@ AOT output binary sizes:
 | `fib.lua` (fib_28) | 12.4 MiB | 6.0 MiB | 4.5 MiB |
 | `production_like.lua` (~1.5k LOC) | 12.5 MiB | 6.1 MiB | 4.6 MiB |
 
-Mach-O section breakdown for `production_like.lua` release-stripped
-in the local disk baseline.
-
-### 2.3 Compile-time perf
+### 1.3 Compile-time perf
 
 luna-core (interp-only) builds in seconds on a stock laptop. The
 0-third-party-dep contract is the dominant cost driver here:
@@ -95,7 +68,7 @@ embedders pulling only `luna-core` skip ~30 transitive Cranelift
 crates, and the `cargo deny check` CI gate enforces the contract
 on every PR.
 
-### 2.4 Runtime hot-path counters
+### 1.4 Runtime hot-path counters
 
 Not headline numbers, but useful for diagnosing whether a workload
 is getting JIT speedup:
@@ -109,11 +82,10 @@ let deopts = vm.trace_deopt_count();
 
 A workload where `trace_dispatched_count` stays low while
 `trace_aborted_count` climbs is hitting a recorder limit
-(e.g. inline depth or trace length). See `crates/luna-jit/src/jit_backend/`
-for the limits and
-the methodology used to find them.
+(e.g. inline depth or trace length). The limits are in
+`crates/luna-jit/src/jit_backend/`.
 
-## 3. Tuning knobs
+## 2. Tuning knobs
 
 For workload-shape-specific tuning, see
 [`deploy.md`](deploy.md) §3. Briefly:
@@ -125,32 +97,19 @@ For workload-shape-specific tuning, see
 | `vm.set_hot_threshold(n)` | (recorder constant) | Lower for hot-immediately workloads; raise for cold-data services |
 | `vm.set_max_trace_len(n)` | (recorder constant) | Raise for long unrolled loops; lower for diverse-shape recording |
 
-## 4. v1.x → v2.0 perf evolution
+## 3. The benchmark harnesses
 
-v1.x perf headlines were historically published as "`vs.X = luna_time
-/ X_time` ≤ 0.50 on 41/42 cells" — this framing is the cherry-pick
-optics + subprocess-startup-inflation pair flagged above. v2.0
-replaces it with the BM matrix described in
-the v2.0 Track BM plan (13 workloads × 6 VMs × 3
-host targets, in-process measurement, ±err bars).
-
-The historical `cross_dialect` + `redis_lua_shape` bench harnesses
-in `crates/luna-jit/benches/` still run (`cargo bench --bench
-cross_dialect` / `cargo bench --bench redis_lua_shape`), but their
-numbers should be interpreted in light of:
+The `cross_dialect` and `redis_lua_shape` bench harnesses in
+`crates/luna-jit/benches/` run with `cargo bench --bench cross_dialect`
+and `cargo bench --bench redis_lua_shape`. Read their numbers with two
+caveats:
 
 - PUC reference times include subprocess startup; treat them as
   upper bounds, not as the actual VM cost.
-- The cells were originally chosen to surface luna's wins, not to
-  span the workload-shape space. The v2.0 BM matrix corrects this.
+- The cells were chosen to surface luna's wins, not to span the
+  workload-shape space.
 
-For the v2.0 sprint's perf attack on the interp gap specifically, see
-the interpreter-gap audit for the file:line attack
-targets (`vm/exec.rs:7739-7773` newindex double-walk / `:6706-6709`
-Move opcode / `:6705` dispatcher) and the 18-stage decomposition
-scaffold for `token_bucket_1k`.
-
-## 5. See also
+## 4. See also
 
 - [`architecture.md`](architecture.md) — steel/cement/stone
   classification + crate layout
@@ -160,6 +119,5 @@ scaffold for `token_bucket_1k`.
 
 ---
 
-*v1.0 perf table archived in git history at commit
-[`262c705`'s `docs/performance.md`](https://github.com/goliajp/luna/blob/262c705/docs/performance.md).
-Live numbers ship with v2.0 release per Track BM.*
+*The v1.0 perf table is in git history at commit
+[`262c705`'s `docs/performance.md`](https://github.com/goliajp/luna/blob/262c705/docs/performance.md).*

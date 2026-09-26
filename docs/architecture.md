@@ -116,11 +116,9 @@ Lives in: `luna-core/src/{compiler,frontend}/`,
 Discipline:
 - Integration tests cross-validate against PUC and LuaJIT reference
   behavior (`crates/luna-core/tests/official_run.rs` runs 140 PUC
-  test files
-  pins ≥80% per-file assert hit rate as the v2.0 floor)
+  test files)
 - Per-dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5 / MacroLua) regression
   tests on every change
-- Behavior changes require an audit or RFC entry
 
 ### Cement — concrete embeddings and host glue
 
@@ -292,7 +290,7 @@ x86_64-unknown-linux-musl`):
 - **C cmain**: `TargetSpec::cc_command()` picks the right cc driver
   (`cc -target ...` for Apple cross-darwin, `<triple>-gcc` for GNU
   cross-cc, `musl-gcc` for Alpine deploys).
-- **Trace mcode** (Stage 7 polish 4): `TargetSpec::cranelift_isa_builder()`
+- **Trace mcode**: `TargetSpec::cranelift_isa_builder()`
   returns the Cranelift `TargetIsa` for the deploy triple — `x86_64`,
   `aarch64`, `s390x`, `riscv64` — so the offline trace lowerer codegens
   for the deploy ABI, not the host's. The warmup Vm still runs on the
@@ -328,12 +326,11 @@ unaffected.
   instead. MSVC's link.exe is a separate driver-surface we haven't
   bridged.
 - **Trace dispatch verification on cross targets**: the
-  `stage7_aot_cross_compile_traces` test verifies non-empty
+  `aot_cross_compile_traces` test verifies non-empty
   `luna_trace_meta` in the cross-built binary (i.e. AOT mcode landed),
   but doesn't run the binary — that needs qemu / docker / Rosetta. The
-  Stage 6 Alpine docker smoke test exercises the bytecode-interp path
-  end-to-end on a different arch; folding AOT-trace dispatch into the
-  same docker run is the natural follow-up.
+  Alpine docker smoke test exercises the bytecode-interp path
+  end-to-end on a different arch.
 
 ---
 
