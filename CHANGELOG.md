@@ -56,6 +56,25 @@ optimization.
 - A generic `for` whose iterator is `pcall`, `xpcall` or `pairs` with a
   `__pairs` metamethod could corrupt the call stack inside a trace; the
   trace now leaves to the interpreter for it.
+- The trace JIT ran a recursive call inline as the traced function
+  whatever the call target was at run time, with the upvalues of the
+  closure the trace was entered with: after the recursive local was
+  reassigned, or when the target was another function or another closure
+  of the same function, it computed the wrong result. An inlined call now
+  leaves the trace unless its target is that closure.
+- When the interpreter ran a side trace for a trace's exit, it restored
+  the registers with the parent trace's summary of its exit types, which
+  could turn a function or table in a register into an integer.
+- A comparison of floats in a trace whose recorded branch was the
+  negated one (`not (a < b)` compiled as `a >= b`) took the other branch
+  when an operand was NaN.
+- With `Vm::set_self_link_enabled(true)`, a self-linked trace whose
+  recording held a loop edge or a call it does not inline (a crafted
+  chunk) panicked the compiler or skipped the call; it is now not
+  compiled.
+- `docs/compatibility.md` said the bytecode verifier checks that the key
+  of a field or global access is a string; it checks the constant index
+  only.
 - `debug.debug`: a command nested too deep for the parser (5.4+) now goes
   through the running message handler, as `load` does.
 - Panics reachable from Lua scripts or loaded chunks, now Lua errors or
