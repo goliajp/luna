@@ -112,14 +112,15 @@ fn setlist_target_replaced() {
     );
 }
 
-/// `string.dump` of `f` (whose chunk name `eval` travels in the dump),
-/// with the only instruction equal to `from` replaced by `to`.
+/// `f` in luna's own dump format, which holds luna's instruction words
+/// (the chunk name `eval` travels in the dump), with the only instruction
+/// equal to `from` replaced by `to`.
 fn patched(vm: &mut Vm, f: &str, from: Inst, to: Inst) -> Vec<u8> {
-    let v = vm.eval(&format!("return string.dump({f})")).expect("dump");
-    let Value::Str(s) = v[0] else {
-        panic!("string.dump returned {:?}", v[0]);
+    let v = vm.eval(&format!("return {f}")).expect("compile");
+    let Value::Closure(g) = v[0] else {
+        panic!("expected a function, got {:?}", v[0]);
     };
-    let mut bytes = s.as_bytes().to_vec();
+    let mut bytes = luna_core::vm::dump::dump(&g.proto, false, vm.version());
     let (old, new) = (from.0.to_le_bytes(), to.0.to_le_bytes());
     let at: Vec<usize> = (0..bytes.len() - 3)
         .filter(|&i| bytes[i..i + 4] == old)
