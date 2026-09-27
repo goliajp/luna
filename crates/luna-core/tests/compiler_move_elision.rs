@@ -419,3 +419,30 @@ fn bundle_correctness_cross_check_against_baseline_observation() {
     "#;
     assert_eq!(eval_int(src), 3 + 5 * 7);
 }
+
+/// `b = a` right after `a = a + 1`: the store takes `a`'s own register, so
+/// the instruction before it is the `Add` of the previous statement, whose
+/// destination is `a` itself; retargeting it to `b` dropped the increment.
+#[test]
+fn store_from_a_local_keeps_the_previous_assignment_to_it() {
+    assert_eq!(
+        eval_int("local b local a = 0 a = a + 1 b = a a = a + 1 return a * 10 + b"),
+        21
+    );
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let mut vm = Vm::new(v);
+        vm.open_base();
+        let src = "local b local a = 0 while a < 3 do a = a + 1 b = a end return b";
+        let r = vm.eval(src).unwrap_or_else(|e| panic!("{v:?}: {}", vm.error_text(&e)));
+        assert!(
+            matches!(r.first(), Some(Value::Int(3))) || matches!(r.first(), Some(Value::Float(f)) if *f == 3.0),
+            "{v:?}: {r:?}"
+        );
+    }
+}
