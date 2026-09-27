@@ -10,19 +10,40 @@ use super::error::Bad;
 pub(super) struct Reader<'a> {
     b: &'a [u8],
     p: usize,
+    depth: u32,
 }
+
+/// Deepest function nesting a chunk may have. The compilers stop at 200
+/// syntax levels, so no compiled chunk comes near it; the readers, the
+/// translator and the verifier all recurse once per level.
+const MAX_NESTING: u32 = 250;
 
 impl<'a> Reader<'a> {
     /// Start a reader at byte offset 0.
     #[allow(dead_code)] // not used yet
     pub(super) fn new(b: &'a [u8]) -> Self {
-        Self { b, p: 0 }
+        Self { b, p: 0, depth: 0 }
     }
 
     /// Start a reader at byte offset `p` (luna's `undump` skips the
     /// header + body-tag bytes before constructing the reader).
     pub(super) fn at(b: &'a [u8], p: usize) -> Self {
-        Self { b, p }
+        Self { b, p, depth: 0 }
+    }
+
+    /// Read a nested function with `f`, refusing one nested deeper than
+    /// `MAX_NESTING`.
+    pub(super) fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, Bad>,
+    ) -> Result<T, Bad> {
+        if self.depth >= MAX_NESTING {
+            return Err(Bad::Code("functions nested too deep".to_string()));
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
     }
 
     /// Current byte position.

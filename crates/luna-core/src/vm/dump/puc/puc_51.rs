@@ -192,7 +192,7 @@ fn read_proto(
         .collect::<Result<Vec<_>, _>>()?;
     let n = read_count(r, 1)?;
     let protos = (0..n)
-        .map(|_| read_proto(r, heap, Some(source)))
+        .map(|_| r.nested(|r| read_proto(r, heap, Some(source))))
         .collect::<Result<Vec<_>, _>>()?;
 
     let n = read_count(r, 4)?;

@@ -21,6 +21,7 @@ use crate::vm::exec::Vm;
 /// `EINVAL` / `EBADF` / `ESPIPE`: the errno values stdio reports for the
 /// failures luna detects itself rather than receiving from the OS.
 const EINVAL: i32 = 22;
+const ENOMEM: i32 = 12;
 const EBADF: i32 = 9;
 #[cfg(not(unix))]
 const ESPIPE: i32 = 29;
@@ -959,7 +960,10 @@ fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> 
     let from = match op {
         0 if offset < 0 => return Err(std::io::Error::from_raw_os_error(EINVAL)),
         0 => SeekFrom::Start(offset as u64),
-        1 => SeekFrom::Current(offset - ahead),
+        1 => match offset.checked_sub(ahead) {
+            Some(off) => SeekFrom::Current(off),
+            None => return Err(std::io::Error::from_raw_os_error(EINVAL)),
+        },
         _ => SeekFrom::End(offset),
     };
     let pos = match m.file_mut() {
@@ -1154,11 +1158,11 @@ fn read_line(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Result<Val
         }
         buf.push(c);
     }
-    Ok(if got_nl || !buf.is_empty() {
-        Value::Str(vm.heap.intern(&buf))
+    if got_nl || !buf.is_empty() {
+        read_str(vm, &buf)
     } else {
-        Value::Nil
-    })
+        Ok(Value::Nil)
+    }
 }
 
 /// ≤5.2's `read_line` reads with `fgets` and measures each chunk with
@@ -1180,11 +1184,11 @@ fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Resu
             }
         }
         if chunk.is_empty() {
-            return Ok(if out.is_empty() {
-                Value::Nil
+            return if out.is_empty() {
+                Ok(Value::Nil)
             } else {
-                Value::Str(vm.heap.intern(&out))
-            });
+                read_str(vm, &out)
+            };
         }
         // strlen: up to the first NUL, the whole chunk when there is none
         let len = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
@@ -1193,9 +1197,18 @@ fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Resu
         } else {
             let end = if keep_nl { len } else { len - 1 };
             out.extend_from_slice(&chunk[..end]);
-            return Ok(Value::Str(vm.heap.intern(&out)));
+            return read_str(vm, &out);
         }
     }
+}
+
+/// A string read from a file. One longer than a string can hold is an
+/// allocation failure, which PUC's buffer would meet first.
+fn read_str(vm: &mut Vm, bytes: &[u8]) -> std::io::Result<Value> {
+    if bytes.len() > crate::runtime::string::MAX_LEN {
+        return Err(std::io::Error::from_raw_os_error(ENOMEM));
+    }
+    Ok(Value::Str(vm.heap.intern(bytes)))
 }
 
 /// `read_all`: never fails (an empty string at end of file).
@@ -1209,7 +1222,7 @@ fn read_all(vm: &mut Vm, u: Gc<Userdata>) -> std::io::Result<Value> {
             break;
         }
     }
-    Ok(Value::Str(vm.heap.intern(&buf)))
+    read_str(vm, &buf)
 }
 
 /// Sizes no allocator grants; PUC's buffer for them fails before reading.
@@ -1251,11 +1264,11 @@ fn read_count(vm: &mut Vm, u: Gc<Userdata>, n: i64) -> Result<std::io::Result<Va
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
         unsafe { u.as_mut() }.read_pos += take;
     }
-    Ok(Ok(if buf.is_empty() {
-        Value::Nil
+    Ok(if buf.is_empty() {
+        Ok(Value::Nil)
     } else {
-        Value::Str(vm.heap.intern(&buf))
-    }))
+        read_str(vm, &buf)
+    })
 }
 
 /// `test_eof`: "" if a byte is left, nil at end of file.

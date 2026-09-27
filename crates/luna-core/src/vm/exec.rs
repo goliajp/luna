@@ -3905,10 +3905,26 @@ impl Vm {
             self.stack[(abs + 4) as usize] = self.stack[abs as usize];
             self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
             self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
-            // the interpreter raises the call's error itself
-            if !matches!(self.stack[abs as usize], Value::Native(_))
-                || self.begin_call(abs + 4, Some(2), nvars, false).is_err()
-            {
+            // the interpreter raises the call's error itself; and a native
+            // that `begin_call` hands to the interpreter loop (pcall, xpcall,
+            // pairs, an async native) pushes frames or parks a future
+            // instead of returning its results here
+            let runs_to_completion = match self.stack[abs as usize] {
+                Value::Native(nc) => {
+                    use crate::runtime::value::NativeFn;
+                    !nc.is_async
+                        && ![
+                            nat_pcall as NativeFn,
+                            nat_xpcall as NativeFn,
+                            nat_host_xpcall as NativeFn,
+                            nat_pairs as NativeFn,
+                        ]
+                        .iter()
+                        .any(|&g| std::ptr::fn_addr_eq(nc.f, g))
+                }
+                _ => false,
+            };
+            if !runs_to_completion || self.begin_call(abs + 4, Some(2), nvars, false).is_err() {
                 self.jit.counters.deopt += 1;
                 return -1;
             }
@@ -5032,7 +5048,12 @@ impl Vm {
                 .unwrap_or("(temporary)");
             return Err(self.rt_err(&format!("variable '{name}' got a non-closable value")));
         }
-        debug_assert!(self.tbc.last().is_none_or(|&s| s < slot));
+        // compiled code registers in register order and closes before it
+        // registers a slot again; only a crafted chunk (`TBC R0; TBC R0`)
+        // breaks that, which PUC's list cannot represent either
+        if self.tbc.last().is_some_and(|&s| s >= slot) {
+            return Err(self.rt_err("'<close>' state corrupted"));
+        }
         self.tbc.push(slot);
         Ok(())
     }
@@ -5404,6 +5425,15 @@ impl Vm {
     /// so `cannot resume dead coroutine` etc. must not be prefixed.
     pub(crate) fn plain_err(&mut self, msg: &str) -> LuaError {
         LuaError(Value::Str(self.heap.intern(msg.as_bytes())))
+    }
+
+    /// A string a library built from pieces of any size: one longer than a
+    /// string can hold raises, as the concatenation operator does.
+    pub(crate) fn built_str(&mut self, bytes: &[u8]) -> Result<Value, LuaError> {
+        if bytes.len() > crate::runtime::string::MAX_LEN {
+            return Err(self.rt_err("string length overflow"));
+        }
+        Ok(Value::Str(self.heap.intern(bytes)))
     }
 
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
@@ -8023,6 +8053,12 @@ impl Vm {
                 Op::SetList => {
                     let a = inst.a();
                     let abs_a = base + a;
+                    // only `debug.setlocal` or crafted bytecode can put a
+                    // non-table here; PUC crashes, luna raises
+                    let t = match self.r(base, a) {
+                        Value::Table(t) => t,
+                        v => return Err(self.type_err("index", v)),
+                    };
                     let n = if inst.b() == 0 {
                         self.top - (abs_a + 1)
                     } else {
@@ -8034,9 +8070,6 @@ impl Vm {
                         extra.ax() as i64
                     } else {
                         inst.c() as i64
-                    };
-                    let Value::Table(t) = self.r(base, a) else {
-                        unreachable!("SETLIST on non-table");
                     };
                     for i in 1..=n {
                         let v = self.r(base, a + i);
@@ -8526,7 +8559,7 @@ impl Vm {
                             }
                         }
                     }
-                    self.for_loop(inst, base);
+                    self.for_loop(inst, base)?;
                 }
                 Op::TForPrep => {
                     // the 4th control slot is the iterator's closing value
@@ -8740,6 +8773,12 @@ impl Vm {
                         None => n_varargs,
                     };
                     let count = if wanted < 0 { n } else { wanted as u32 };
+                    // a named vararg's `n` can be set to anything up to
+                    // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
+                    // stack cannot hold
+                    if abs_a + count > MAX_LUA_STACK {
+                        return Err(self.rt_err("stack overflow"));
+                    }
                     let need = (abs_a + count) as usize;
                     if self.stack.len() < need {
                         self.stack.resize(need, Value::Nil);
@@ -9544,22 +9583,20 @@ impl Vm {
     }
 
     #[inline(always)]
-    fn for_loop(&mut self, inst: Inst, base: u32) {
+    fn for_loop(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
         // PUC 5.1–5.3 `OP_FORLOOP` compares the post-step `i` to `limit`
         // directly (R[a+1] holds the limit, *not* a remaining-count) so the
         // first iteration's test fires through the same backward-jump path as
         // every later iteration. 5.4+ switched to the count-based form luna
         // already uses for `Int`; the float branch was already PUC-3.x-style.
-        let pre53 = self.version() <= LuaVersion::Lua53;
-        match self.r(base, a) {
-            Value::Int(cur) if pre53 => {
-                let Value::Int(lim) = self.r(base, a + 1) else {
-                    unreachable!()
-                };
-                let Value::Int(st) = self.r(base, a + 2) else {
-                    unreachable!()
-                };
+        let v = self.version();
+        let pre53 = v <= LuaVersion::Lua53;
+        // `for_prep` leaves the three slots all Int or all Float; anything
+        // else was written by `debug.setlocal` or by crafted bytecode. PUC
+        // reads such slots unchecked (garbage or a crash); luna raises.
+        match (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2)) {
+            (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
                 let next = cur.wrapping_add(st);
                 let cont = if st > 0 { next <= lim } else { next >= lim };
                 if cont {
@@ -9568,16 +9605,10 @@ impl Vm {
                     self.add_pc(-(inst.bx() as i32));
                 }
             }
-            Value::Int(cur) => {
-                let Value::Int(count) = self.r(base, a + 1) else {
-                    unreachable!()
-                };
-                // the count is unsigned (PUC `lua_Unsigned`): a loop over
-                // more than 2^63 values stores a "negative" one
+            // the count is unsigned (PUC `lua_Unsigned`): a loop over
+            // more than 2^63 values stores a "negative" one
+            (Value::Int(cur), Value::Int(count), Value::Int(st)) => {
                 if count != 0 {
-                    let Value::Int(st) = self.r(base, a + 2) else {
-                        unreachable!()
-                    };
                     let next = cur.wrapping_add(st);
                     self.set_r(base, a, Value::Int(next));
                     self.set_r(base, a + 1, Value::Int(count.wrapping_sub(1)));
@@ -9585,22 +9616,33 @@ impl Vm {
                     self.add_pc(-(inst.bx() as i32));
                 }
             }
-            Value::Float(cur) => {
-                let Value::Float(lim) = self.r(base, a + 1) else {
-                    unreachable!()
-                };
-                let Value::Float(st) = self.r(base, a + 2) else {
-                    unreachable!()
-                };
-                let next = cur + st;
-                let cont = if st > 0.0 { next <= lim } else { next >= lim };
-                if cont {
-                    self.set_r(base, a, Value::Float(next));
-                    self.set_r(base, a + 3, Value::Float(next));
-                    self.add_pc(-(inst.bx() as i32));
+            (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
+                self.float_for_step(inst, base, cur, lim, st);
+            }
+            // 5.1/5.2 have one number type, so a number of the other
+            // representation stored into a slot is still a valid state
+            (x, l, s) if v <= LuaVersion::Lua52 => {
+                match (as_number(x), as_number(l), as_number(s)) {
+                    (Some(cur), Some(lim), Some(st)) => {
+                        self.float_for_step(inst, base, cur.as_f64(), lim.as_f64(), st.as_f64())
+                    }
+                    _ => return Err(self.rt_err("'for' state corrupted")),
                 }
             }
-            _ => unreachable!("corrupt for-loop state"),
+            _ => return Err(self.rt_err("'for' state corrupted")),
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn float_for_step(&mut self, inst: Inst, base: u32, cur: f64, lim: f64, st: f64) {
+        let a = inst.a();
+        let next = cur + st;
+        let cont = if st > 0.0 { next <= lim } else { next >= lim };
+        if cont {
+            self.set_r(base, a, Value::Float(next));
+            self.set_r(base, a + 3, Value::Float(next));
+            self.add_pc(-(inst.bx() as i32));
         }
     }
 
