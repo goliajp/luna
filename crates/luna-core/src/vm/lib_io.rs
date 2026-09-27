@@ -171,6 +171,50 @@ fn put_native(vm: &mut Vm, t: Gc<Table>, k: &str, f: crate::runtime::value::Nati
 
 // ---- errors in the shape of luaL_fileresult / luaL_execresult ----
 
+/// An errno luna reports itself. std reads a raw code as a Win32 error on
+/// Windows, where 22 is "The device does not recognize the command."; the C
+/// runtime's `strerror`, which PUC prints, says "Invalid argument".
+fn posix_error(code: i32) -> std::io::Error {
+    #[cfg(windows)]
+    {
+        std::io::Error::other(PosixErrno(code))
+    }
+    #[cfg(not(windows))]
+    {
+        std::io::Error::from_raw_os_error(code)
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct PosixErrno(i32);
+
+#[cfg(windows)]
+impl std::fmt::Display for PosixErrno {
+    // the MSVC C runtime's strerror texts for the codes luna raises
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            EBADF => "Bad file descriptor",
+            ENOMEM => "Not enough space",
+            EINVAL => "Invalid argument",
+            ESPIPE => "Invalid seek",
+            _ => "Unknown error",
+        })
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for PosixErrno {}
+
+/// The errno of an error, as `luaL_fileresult` returns it.
+fn errno(e: &std::io::Error) -> Option<i32> {
+    #[cfg(windows)]
+    if let Some(p) = e.get_ref().and_then(|r| r.downcast_ref::<PosixErrno>()) {
+        return Some(p.0);
+    }
+    e.raw_os_error()
+}
+
 /// C `strerror` text of an OS error (std appends " (os error N)").
 pub(crate) fn strerror(e: &std::io::Error) -> String {
     let s = e.to_string();
@@ -196,7 +240,7 @@ fn file_fail_values(vm: &mut Vm, fname: Option<&[u8]>, e: &std::io::Error) -> [V
         msg.extend_from_slice(b": ");
     }
     msg.extend_from_slice(strerror(e).as_bytes());
-    let code = e.raw_os_error().map_or(0, i64::from);
+    let code = errno(e).map_or(0, i64::from);
     let m = Value::Str(vm.heap.intern(&msg));
     [Value::Nil, m, Value::Int(code)]
 }
@@ -499,8 +543,7 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
 }
 
 fn open_file(name: &[u8], mode: &[u8]) -> std::io::Result<(std::fs::File, bool)> {
-    let (o, writable) =
-        fopen_options(c_str(mode)).ok_or_else(|| std::io::Error::from_raw_os_error(EINVAL))?;
+    let (o, writable) = fopen_options(c_str(mode)).ok_or_else(|| posix_error(EINVAL))?;
     Ok((o.open(os_path(name))?, writable))
 }
 
@@ -564,7 +607,7 @@ fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         b"w" => false,
         _ if vm.version() >= LuaVersion::Lua53 => return Err(arg_error(vm, 2, "invalid mode")),
         _ => {
-            let e = std::io::Error::from_raw_os_error(EINVAL);
+            let e = posix_error(EINVAL);
             return Ok(file_fail(vm, fs, Some(&prog), &e));
         }
     };
@@ -727,7 +770,7 @@ fn fill(u: Gc<Userdata>) -> std::io::Result<bool> {
         FileHandle::Stdin => std::io::stdin().read(&mut chunk)?,
         // stdout/stderr are write-only streams
         FileHandle::Stdout | FileHandle::Stderr => {
-            return Err(std::io::Error::from_raw_os_error(EBADF));
+            return Err(posix_error(EBADF));
         }
         FileHandle::Closed => unreachable!("reads check the stream is open"),
     };
@@ -791,7 +834,7 @@ fn write_to(u: Gc<Userdata>, bytes: &[u8]) -> std::io::Result<()> {
         FileHandle::File(f) => f.write_all(bytes),
         FileHandle::Stdout => std::io::stdout().write_all(bytes),
         FileHandle::Stderr => std::io::stderr().write_all(bytes),
-        FileHandle::Stdin => Err(std::io::Error::from_raw_os_error(EBADF)),
+        FileHandle::Stdin => Err(posix_error(EBADF)),
         FileHandle::Closed => unreachable!("writes check the stream is open"),
     }
 }
@@ -958,11 +1001,11 @@ fn seek_stream(u: Gc<Userdata>, op: usize, offset: i64) -> std::io::Result<u64> 
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
     let m = unsafe { u.as_mut() };
     let from = match op {
-        0 if offset < 0 => return Err(std::io::Error::from_raw_os_error(EINVAL)),
+        0 if offset < 0 => return Err(posix_error(EINVAL)),
         0 => SeekFrom::Start(offset as u64),
         1 => match offset.checked_sub(ahead) {
             Some(off) => SeekFrom::Current(off),
-            None => return Err(std::io::Error::from_raw_os_error(EINVAL)),
+            None => return Err(posix_error(EINVAL)),
         },
         _ => SeekFrom::End(offset),
     };
@@ -991,7 +1034,7 @@ fn seek_std(fh: &FileHandle, from: SeekFrom) -> std::io::Result<u64> {
 
 #[cfg(not(unix))]
 fn seek_std(_fh: &FileHandle, _from: SeekFrom) -> std::io::Result<u64> {
-    Err(std::io::Error::from_raw_os_error(ESPIPE))
+    Err(posix_error(ESPIPE))
 }
 
 fn f_setvbuf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -1206,7 +1249,7 @@ fn read_line_fgets(vm: &mut Vm, u: Gc<Userdata>, keep_nl: bool) -> std::io::Resu
 /// allocation failure, which PUC's buffer would meet first.
 fn read_str(vm: &mut Vm, bytes: &[u8]) -> std::io::Result<Value> {
     if bytes.len() > crate::runtime::string::MAX_LEN {
-        return Err(std::io::Error::from_raw_os_error(ENOMEM));
+        return Err(posix_error(ENOMEM));
     }
     Ok(Value::Str(vm.heap.intern(bytes)))
 }
