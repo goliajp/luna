@@ -5739,15 +5739,15 @@ pub fn lower_trace_into_named<M: Module>(
 
     let body_loop = bcx.create_block();
     bcx.ins().jump(precheck.unwrap_or(body_loop), &[]);
-    bcx.switch_to_block(body_loop);
-    // Intentionally NOT sealed: the tail's clean-close back-edge
-    // adds a second predecessor below.
+    // `body_loop` is entered after the precheck block is emitted (below):
+    // reading a register there first would leave it half-built while
+    // another block is emitted, which the builder rejects.
 
     // What reg_state holds for each register at the loop head: on entry
     // the values the prelude loaded (caller window) or the zeroes the
     // dispatcher filled it with (inline frames); on the back-edge what
-    // `sync_reg_state` wrote before the jump.
-    let mut stored: Vec<Option<Value>> = regs_full.iter().map(|&v| Some(bcx.use_var(v))).collect();
+    // `sync_reg_state` wrote before the jump. Read at the loop head below.
+    let mut stored: Vec<Option<Value>> = Vec::new();
 
     // Per-reg current kind. Initialise from the recorder's
     // entry-tag snapshot; writers below refine. Unset slots fall
@@ -6062,8 +6062,11 @@ pub fn lower_trace_into_named<M: Module>(
             bcx.seal_block(ok_blk);
         }
         bcx.ins().jump(body_loop, &[]);
-        bcx.switch_to_block(body_loop);
     }
+    bcx.switch_to_block(body_loop);
+    // Intentionally NOT sealed: the tail's clean-close back-edge
+    // adds a second predecessor below.
+    stored.extend(regs_full.iter().map(|&v| Some(bcx.use_var(v))));
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.

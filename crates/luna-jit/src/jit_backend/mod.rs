@@ -106,6 +106,9 @@ pub use luna_jit_helpers::*;
 // it through the opaque `JitStorage` trait only.
 pub(crate) mod storage;
 
+#[cfg(test)]
+mod trace_build_tests;
+
 // inline `#[cfg(test)] mod xx { ... }` blocks
 // throughout this file call `crate::jit_backend::test_vm_new(version)` / `crate::jit_backend::test_vm_new_minimal(version)`
 // and expect the Cranelift backend to be installed. luna-core's
