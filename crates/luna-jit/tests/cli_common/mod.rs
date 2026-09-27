@@ -95,9 +95,11 @@ pub fn run(
     cmd.envs(env.iter().copied());
     let mut child = cmd.spawn().expect("spawn luna");
     let mut input = child.stdin.take().expect("piped stdin");
-    input
-        .write_all(stdin.unwrap_or_default().as_bytes())
-        .expect("write stdin");
+    // a run that never reads stdin may exit before the write lands
+    match input.write_all(stdin.unwrap_or_default().as_bytes()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        r => r.expect("write stdin"),
+    }
     drop(input);
     let out = child.wait_with_output().expect("wait for luna");
     let progname = bin.to_str().expect("UTF-8 binary path");
