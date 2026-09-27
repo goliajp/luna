@@ -332,8 +332,7 @@ messages. What still differs does so on purpose:
   from 5.2 on). PUC raises them while parsing, with the lexer's current
   token at hand; luna allocates registers and resolves upvalues after the
   whole chunk is parsed, so the message stops before the `near` part.
-- **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
-  compiler merging `0` and `-0` constants; `debug.getinfo(level, ">…")`
+- **Not reproduced: PUC bugs and C undefined behaviour.** `debug.getinfo(level, ">…")`
   before 5.4 treating the option string as the function (5.1 crashes;
   luna rejects the option, as 5.4 does); 5.1 `io.lines(nil)` raising
   through a stack-index bug; out-of-range float-to-integer conversions
