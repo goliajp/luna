@@ -1670,7 +1670,8 @@ fn const_fold_int_key(
 ///   Closure / etc.): unbind A.
 ///
 /// Terminator handling (the op at `effective_end`, if any):
-/// - `TraceEnd::Call`: terminator's args + fn slot escape live bindings.
+/// - `TraceEnd::Call`: every live binding escapes (the interpreter
+///   resumes at the call with the whole frame live).
 /// - `TraceEnd::ForLoop`: nothing escapes; the loop exit resumes
 ///   outside the body, where its locals are dead.
 /// - `TraceEnd::InlineAbort` / `SelfLink` / `DownRec`: every live
@@ -2105,25 +2106,11 @@ fn escape_analyze(
         let op = term.inst.op();
         let in_range = (depth as usize) < max_depth && (a as usize) < max_stack;
         match end {
-            TraceEnd::Call => {
-                if in_range {
-                    let b = term.inst.b();
-                    if b > 0 {
-                        for off in 1..b {
-                            let src = a.wrapping_add(off);
-                            if (src as usize) < max_stack
-                                && let Some(src_sid) = lookup(&bindings, depth, src)
-                            {
-                                mark_escape(&mut sites, src_sid);
-                            }
-                        }
-                    }
-                    if let Some(fn_sid) = lookup(&bindings, depth, a) {
-                        mark_escape(&mut sites, fn_sid);
-                    }
-                }
-            }
-            TraceEnd::InlineAbort => {
+            // The interpreter resumes at the call with the whole frame
+            // live: a table still under construction (`{f()}`, whose
+            // SetList follows the call) or any other sunk table read
+            // after it must be a real one.
+            TraceEnd::Call | TraceEnd::InlineAbort => {
                 escape_all_live(&bindings, &mut sites);
             }
             TraceEnd::ForLoop => {
