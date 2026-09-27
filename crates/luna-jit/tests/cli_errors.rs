@@ -946,6 +946,7 @@ fn debug_debug_deep_command() {
         )],
         args: &["dd.lua"],
         stdin: Some(Box::leak(stdin.into_boxed_str())),
+        env: &[],
     };
     case.expect(&[
         Expect {
