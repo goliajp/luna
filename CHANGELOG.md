@@ -39,6 +39,10 @@ their old names as deprecated aliases.
 
 ### Fixed
 
+- On Windows, the error text of an `io` failure luna detects itself
+  (`EINVAL`, `EBADF`, `ESPIPE`, `ENOMEM`) is the C runtime's, as PUC
+  prints it (`Invalid argument`), instead of the unrelated Windows message
+  for the same number.
 - 5.1: a zero constant takes the sign of the first zero its function
   loaded, as PUC 5.1's constant table (keyed by value, where `0 == -0`)
   makes it, so `print(0, -1 * 0)` prints `0 0`. Constant folding also
