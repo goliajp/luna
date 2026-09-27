@@ -1017,6 +1017,84 @@ pub(crate) fn verify_depth_invariant(items: &[(u8, bool)]) -> bool {
     true
 }
 
+/// Where the plain terminator scan ends a trace: the first depth-0
+/// `Call` that is not self-recursive, `ForLoop` / `TForLoop`, depth-0
+/// return, or an op the inline path cannot hold (`InlineAbort`).
+/// Self-recursive calls are walked past; the callee's ops follow at
+/// depth + 1. `None` when the whole record is body.
+fn plain_trace_end(
+    record: &TraceRecord,
+    folded_ops: &[bool],
+    head_proto: Gc<Proto>,
+) -> Option<(usize, TraceEnd)> {
+    let mut found: Option<(usize, TraceEnd)> = None;
+    for (i, r) in record.ops.iter().enumerate() {
+        if folded_ops[i] {
+            continue;
+        }
+        let depth = r.inline_depth as usize;
+        if depth > MAX_INLINE_DEPTH as usize || !std::ptr::eq(r.proto.as_ptr(), head_proto.as_ptr())
+        {
+            found = Some((i, TraceEnd::InlineAbort));
+            break;
+        }
+        match r.inst.op() {
+            Op::Call => {
+                let nxt = record.ops.get(i + 1);
+                let is_self_recursive = nxt
+                    .map(|n_op| {
+                        n_op.inline_depth as usize == depth + 1
+                            && depth < MAX_INLINE_DEPTH as usize
+                            && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
+                    })
+                    .unwrap_or(false);
+                if is_self_recursive {
+                    // Continue walking — Op::Call emits nothing in
+                    // the inline path and op_offsets handles the
+                    // window shift for the callee's subsequent ops.
+                    continue;
+                }
+                if depth == 0 {
+                    found = Some((i, TraceEnd::Call));
+                } else {
+                    found = Some((i, TraceEnd::InlineAbort));
+                }
+                break;
+            }
+            Op::ForLoop => {
+                if depth == 0 {
+                    found = Some((i, TraceEnd::ForLoop));
+                } else {
+                    found = Some((i, TraceEnd::InlineAbort));
+                }
+                break;
+            }
+            // generic-for back-edge. Same tail
+            // emit slot as Op::ForLoop (TraceEnd::ForLoop); the
+            // tail emit branches on `record.ops[idx].inst.op()`
+            // to pick the right side-exit predicate (count>0 vs
+            // R[A+4] tag check).
+            Op::TForLoop => {
+                if depth == 0 {
+                    found = Some((i, TraceEnd::ForLoop));
+                } else {
+                    found = Some((i, TraceEnd::InlineAbort));
+                }
+                break;
+            }
+            Op::Return0 | Op::Return1 if depth == 0 => {
+                found = Some((i, TraceEnd::Return));
+                break;
+            }
+            // depth>0 Returns are inline-path unwinds; the
+            // body emit loop handles them (Return0 no-op,
+            // Return1 copy-back). Don't terminate.
+            _ => {}
+        }
+    }
+    found
+}
+
 fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
     let n = record.ops.len();
     let mut offsets = Vec::with_capacity(n);
@@ -4119,6 +4197,7 @@ pub fn lower_trace_into_named<M: Module>(
     // DownRec tail arm can fire. The scan mirrors TraceEnd::Return /
     // Call's picker shape and falls back to `record.ops.len()` only
     // when no natural terminator is present.
+    let plain_end = plain_trace_end(record, &folded_ops, head_proto);
     let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
         let mut natural_end = record.ops.len();
         for (i, r) in record.ops.iter().enumerate() {
@@ -4136,6 +4215,10 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 _ => {}
             }
+        }
+        if plain_end.is_some_and(|(i, _)| i < natural_end) {
+            checkpoint("bail:downrec-body-terminator");
+            return None;
         }
         Some((
             natural_end,
@@ -4156,75 +4239,20 @@ pub fn lower_trace_into_named<M: Module>(
         // happen to sit at the end (e.g., a depth>0 Return in fib's
         // post-recursion add path that the recorder never actually
         // reaches in the cycle catch — but we guard against it anyway).
-        Some((record.ops.len(), TraceEnd::SelfLink(kind)))
-    } else {
-        let mut found: Option<(usize, TraceEnd)> = None;
-        for (i, r) in record.ops.iter().enumerate() {
-            if folded_ops[i] {
-                continue;
-            }
-            let depth = r.inline_depth as usize;
-            if depth > MAX_INLINE_DEPTH as usize
-                || !std::ptr::eq(r.proto.as_ptr(), head_proto.as_ptr())
-            {
-                found = Some((i, TraceEnd::InlineAbort));
-                break;
-            }
-            match r.inst.op() {
-                Op::Call => {
-                    let nxt = record.ops.get(i + 1);
-                    let is_self_recursive = nxt
-                        .map(|n_op| {
-                            n_op.inline_depth as usize == depth + 1
-                                && depth < MAX_INLINE_DEPTH as usize
-                                && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
-                        })
-                        .unwrap_or(false);
-                    if is_self_recursive {
-                        // Continue walking — Op::Call emits nothing in
-                        // the inline path and op_offsets handles the
-                        // window shift for the callee's subsequent ops.
-                        continue;
-                    }
-                    if depth == 0 {
-                        found = Some((i, TraceEnd::Call));
-                    } else {
-                        found = Some((i, TraceEnd::InlineAbort));
-                    }
-                    break;
-                }
-                Op::ForLoop => {
-                    if depth == 0 {
-                        found = Some((i, TraceEnd::ForLoop));
-                    } else {
-                        found = Some((i, TraceEnd::InlineAbort));
-                    }
-                    break;
-                }
-                // generic-for back-edge. Same tail
-                // emit slot as Op::ForLoop (TraceEnd::ForLoop); the
-                // tail emit branches on `record.ops[idx].inst.op()`
-                // to pick the right side-exit predicate (count>0 vs
-                // R[A+4] tag check).
-                Op::TForLoop => {
-                    if depth == 0 {
-                        found = Some((i, TraceEnd::ForLoop));
-                    } else {
-                        found = Some((i, TraceEnd::InlineAbort));
-                    }
-                    break;
-                }
-                Op::Return0 | Op::Return1 if depth == 0 => {
-                    found = Some((i, TraceEnd::Return));
-                    break;
-                }
-                // depth>0 Returns are inline-path unwinds; the
-                // body emit loop handles them (Return0 no-op,
-                // Return1 copy-back). Don't terminate.
-                _ => {}
+        // Every op before the trailing Call must be one the plain scan
+        // walks past: the body emit has no lowering for a loop edge, a
+        // non-inlined call or a return in the middle of a trace.
+        match plain_end {
+            None => {}
+            Some((i, _)) if i + 1 == n && matches!(record.ops[i].inst.op(), Op::Call) => {}
+            Some(_) => {
+                checkpoint("bail:self-link-body-terminator");
+                return None;
             }
         }
-        found
+        Some((n, TraceEnd::SelfLink(kind)))
+    } else {
+        plain_end
     };
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
