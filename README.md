@@ -16,12 +16,14 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
-**v3.1.0** shipped 2026-09-24: a parity release with no breaking change.
-luna was compared against stock PUC 5.1–5.5 function by function, every
-difference found was fixed or is listed as deliberate in
-[`docs/compatibility.md`](docs/compatibility.md), and the differential
-corpus grew to 805 fixtures. **v3.0.0** (2026-08-14) closed the v2.x
-maturity arc. See [`CHANGELOG.md`](CHANGELOG.md).
+**v3.2.0** shipped 2026-09-27: `string.dump` writes bytecode that each
+dialect's stock PUC interpreter loads, the `luna` CLI runs `LUA_INIT`,
+`-E` and the REPL as `lua.c` does, and a script or loaded chunk can no
+longer panic the VM. **v3.1.0** (2026-09-25) was a parity release against
+stock PUC 5.1–5.5; every difference found was fixed or is listed as
+deliberate in [`docs/compatibility.md`](docs/compatibility.md). The
+differential corpus is 807 fixtures. **v3.0.0** (2026-08-14) closed the
+v2.x maturity arc. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install
 
@@ -104,7 +106,7 @@ what is explicitly *not* contained:
 
 Compatibility here is a measurement, not a claim.
 
-- **805 differential fixtures** run against stock PUC interpreters built
+- **807 differential fixtures** run against stock PUC interpreters built
   from source — 5.1.5, 5.2.4, 5.3.6, 5.4.9, 5.5.1 — and must match
   byte for byte on stdout, stderr and exit code, with zero skips, before
   a commit is green; each also runs as PUC bytecode compiled by that
