@@ -6944,18 +6944,22 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     let lhs = use_var_f64(&mut bcx, regs, ins.a());
                     let rhs = use_var_f64(&mut bcx, regs, ins.b());
-                    // the negations hold for NaN too: `not (a < b)` is
-                    // true when either side is NaN, `a >= b` is not
-                    let float_cc = match (op, k_effective) {
-                        (Op::Lt, true) => FloatCC::LessThan,
-                        (Op::Lt, false) => FloatCC::UnorderedOrGreaterThanOrEqual,
-                        (Op::Le, true) => FloatCC::LessThanOrEqual,
-                        (Op::Le, false) => FloatCC::UnorderedOrGreaterThan,
-                        (Op::Eq, true) => FloatCC::Equal,
-                        (Op::Eq, false) => FloatCC::NotEqual,
+                    let float_cc = match op {
+                        Op::Lt => FloatCC::LessThan,
+                        Op::Le => FloatCC::LessThanOrEqual,
+                        Op::Eq => FloatCC::Equal,
                         _ => unreachable!("whitelist gated above"),
                     };
-                    bcx.ins().fcmp(float_cc, lhs, rhs)
+                    let c = bcx.ins().fcmp(float_cc, lhs, rhs);
+                    // negate the ordered compare rather than flip the
+                    // condition: `not (a < b)` holds for NaN, `a >= b`
+                    // does not, and the aarch64 backend lowers no
+                    // unordered-or conditions
+                    if k_effective {
+                        c
+                    } else {
+                        bcx.ins().icmp_imm(IntCC::Equal, c, 0)
+                    }
                 } else {
                     let lhs = bcx.use_var(regs[ins.a() as usize]);
                     let rhs = bcx.use_var(regs[ins.b() as usize]);
