@@ -6916,11 +6916,13 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     let lhs = use_var_f64(&mut bcx, regs, ins.a());
                     let rhs = use_var_f64(&mut bcx, regs, ins.b());
+                    // the negations hold for NaN too: `not (a < b)` is
+                    // true when either side is NaN, `a >= b` is not
                     let float_cc = match (op, k_effective) {
                         (Op::Lt, true) => FloatCC::LessThan,
-                        (Op::Lt, false) => FloatCC::GreaterThanOrEqual,
+                        (Op::Lt, false) => FloatCC::UnorderedOrGreaterThanOrEqual,
                         (Op::Le, true) => FloatCC::LessThanOrEqual,
-                        (Op::Le, false) => FloatCC::GreaterThan,
+                        (Op::Le, false) => FloatCC::UnorderedOrGreaterThan,
                         (Op::Eq, true) => FloatCC::Equal,
                         (Op::Eq, false) => FloatCC::NotEqual,
                         _ => unreachable!("whitelist gated above"),
