@@ -827,6 +827,15 @@ pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
     }
 }
 
+/// The closure the running trace was entered with, as its raw payload
+/// bits. A trace inlines a call only while the callee is this closure:
+/// the inlined body reads its upvalues through `JIT_CL`.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_head_closure() -> i64 {
+    JIT_CL.with(|c| c.get()) as i64
+}
+
 /// A trace side exit that resumes at the trace's own head: the op there
 /// has not run, so the dispatcher must let the interpreter run it before
 /// admitting the trace again, or the two would hand the same pc back and
