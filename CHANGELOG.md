@@ -62,6 +62,12 @@ optimization.
 
 ### Fixed
 
+- 5.1: a zero constant takes the sign of the first zero its function
+  loaded, as PUC 5.1's constant table (keyed by value, where `0 == -0`)
+  makes it, so `print(0, -1 * 0)` prints `0 0`. Constant folding also
+  follows 5.1 and 5.2 more closely: parenthesized and negated operands fold,
+  `%` and `^` fold in 5.1 and 5.2, and a division or modulo by zero is left
+  to run time in every dialect.
 - A stripped PUC chunk loaded into luna reported line 0 for every
   instruction instead of having no line information (`currentline` is now
   -1, and errors are placed at `?`, as in PUC).
