@@ -8649,23 +8649,27 @@ pub fn lower_trace_into_named<M: Module>(
                 let count_new = bcx.ins().isub(count, one);
                 bcx.def_var(regs_full[a + 1], count_new);
                 bcx.def_var(regs_full[a + 3], next);
-                if do_internal_loop {
+                // ForLoop's continue branch jumps to the loop's
+                // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
+                // backward jump encoding), not record.head_pc.
+                // For trace shapes whose head_pc == body_start
+                // (the usual back-edge trace), they're equal.
+                // For side traces whose head_pc lands on the
+                // ForLoop op itself (head_pc=rop.pc) instead of
+                // the back-edge target — e.g. an outer ForLoop
+                // that got recorded as a side trace from an inner
+                // loop exit — returning record.head_pc would
+                // re-enter the ForLoop op and double-advance the
+                // counter. A trace headed at an inner loop (a
+                // `while` inside the for body) that closes at the
+                // outer ForLoop must not loop back to its own head
+                // either: that skips the body code before the inner
+                // loop. Compute the body start explicitly.
+                let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
+                if do_internal_loop && body_pc == record.head_pc {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
-                    // ForLoop's continue branch jumps to the loop's
-                    // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
-                    // backward jump encoding), not record.head_pc.
-                    // For trace shapes whose head_pc == body_start
-                    // (the usual back-edge trace), they're equal.
-                    // For side traces whose head_pc lands on the
-                    // ForLoop op itself (head_pc=rop.pc) instead of
-                    // the back-edge target — e.g. an outer ForLoop
-                    // that got recorded as a side trace from an inner
-                    // loop exit — returning record.head_pc would
-                    // re-enter the ForLoop op and double-advance the
-                    // counter. Compute the body start explicitly.
-                    let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         caller_regs,
@@ -8790,7 +8794,10 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.seal_block(continue_blk);
                 let ctrl = bcx.use_var(regs_full[a + 4]);
                 bcx.def_var(regs_full[a + 2], ctrl);
-                if do_internal_loop {
+                // as for ForLoop: continue at the loop body, which is
+                // the trace head only when the trace was recorded from it
+                let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
+                if do_internal_loop && body_pc == record.head_pc {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
@@ -8799,7 +8806,7 @@ pub fn lower_trace_into_named<M: Module>(
                         caller_regs,
                         &stored,
                         reg_state,
-                        record.head_pc,
+                        body_pc,
                         flush_ctx.as_ref(),
                         0i64,
                         trace_fn_sig_ref,
