@@ -7455,6 +7455,7 @@ impl Vm {
                             decode_exit_tags,
                             decode_hit_counts,
                             decode_body,
+                            child_ran,
                         ) = if from_side_trace {
                             let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
                             let body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
@@ -7489,6 +7490,7 @@ impl Vm {
                                     child.exit_tags.clone(),
                                     child.exit_hit_counts.clone(),
                                     body,
+                                    true,
                                 )
                             } else {
                                 if crate::jit::trace::v2c_probe_enabled() {
@@ -7511,6 +7513,7 @@ impl Vm {
                                     exit_tags.clone(),
                                     exit_hit_counts.clone(),
                                     body,
+                                    true,
                                 )
                             }
                         } else {
@@ -7567,7 +7570,7 @@ impl Vm {
                                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
                                         unsafe { cent(reg_state.as_mut_ptr()) }
                                     };
-                                    (cpi, cpt, cet, chc, child_raw_ret as u64)
+                                    (cpi, cpt, cet, chc, child_raw_ret as u64, true)
                                 } else {
                                     (
                                         per_exit_inline.clone(),
@@ -7575,6 +7578,7 @@ impl Vm {
                                         exit_tags.clone(),
                                         exit_hit_counts.clone(),
                                         raw_ret,
+                                        false,
                                     )
                                 }
                             }
@@ -7589,12 +7593,13 @@ impl Vm {
                         let cont_pc = decoded.cont_pc;
                         let exit_hit_idx = decoded.exit_hit_idx;
                         let exit_tags_for_pc = decoded.exit_tags_for_pc;
-                        // For side-trace returns
-                        // force using_global_exit_tags=false so the
-                        // restore loop always takes the per-tag slow
-                        // path (the child's global_tag_res_kind
-                        // classification isn't plumbed through).
-                        let using_global_exit_tags = if from_side_trace {
+                        // When a side trace ran (tail-called by the
+                        // parent's code or invoked here), force
+                        // using_global_exit_tags=false so the restore
+                        // loop takes the per-tag slow path:
+                        // `global_tag_res_kind` classifies the parent's
+                        // exit tags, not the child's.
+                        let using_global_exit_tags = if child_ran {
                             false
                         } else {
                             decoded.using_global_exit_tags
