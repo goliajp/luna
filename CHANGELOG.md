@@ -34,6 +34,9 @@ optimization.
 
 ### Fixed
 
+- A stripped PUC chunk loaded into luna reported line 0 for every
+  instruction instead of having no line information (`currentline` is now
+  -1, and errors are placed at `?`, as in PUC).
 - A numeric `for` loop whose hidden state was changed by `debug.setlocal`
   or by a crafted binary chunk panicked the host; it now raises
   `'for' state corrupted`. On 5.1/5.2 a number of the other
@@ -103,11 +106,6 @@ optimization.
 - The published `luna-aot` description matches what it does: the trace
   JIT's machine code is part of the produced binary.
 
-### Fixed
-
-- A stripped PUC chunk loaded into luna reported line 0 for every
-  instruction instead of having no line information (`currentline` is now
-  -1, and errors are placed at `?`, as in PUC).
 
 ## [3.1.0] — 2026-09-25
 
