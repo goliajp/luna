@@ -10,7 +10,7 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
-  # v2.0 Track CV-infra: PR-gate fuzz smoke. 5 min per target,
+  # PR-gate fuzz smoke. 5 min per target,
   # non-blocking (any crash uploads as artifact, gate doesn't fail
   # the PR). The point at PR time is to catch regressions that an
   # incoming change immediately reproduces from scratch; deeper
@@ -31,6 +31,7 @@ jobs:
           - fuzz_aot_meta
           - fuzz_gc
           - fuzz_diff_puc
+          - fuzz_dump_puc
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,8 +41,8 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
-      - name: install PUC lua5.5 (fuzz_diff_puc only)
-        if: matrix.target == 'fuzz_diff_puc'
+      - name: install PUC lua5.5 (PUC differential targets)
+        if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
         run: |
           if apt-cache show lua5.5 >/dev/null 2>&1; then
             sudo apt-get update -qq
@@ -79,8 +80,8 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # Weekly 60-min deeper campaign. Non-blocking. Any crashes upload
-  # for triage; a per-track CV-content sprint converts them to
-  # regression tests in `crates/<x>/tests/regressions/`.
+  # for triage and get converted to regression tests in
+  # `crates/<x>/tests/regressions/`.
   # ─────────────────────────────────────────────────────────────────
   fuzz-weekly:
     name: fuzz 60-min weekly (cron)
@@ -97,6 +98,7 @@ jobs:
           - fuzz_aot_meta
           - fuzz_gc
           - fuzz_diff_puc
+          - fuzz_dump_puc
     steps:
       - uses: actions/checkout@v7
         with:
@@ -106,8 +108,8 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
-      - name: install PUC lua5.5 (fuzz_diff_puc only)
-        if: matrix.target == 'fuzz_diff_puc'
+      - name: install PUC lua5.5 (PUC differential targets)
+        if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
         run: |
           if apt-cache show lua5.5 >/dev/null 2>&1; then
             sudo apt-get update -qq
@@ -144,14 +146,14 @@ jobs:
           retention-days: 365
 
   # ─────────────────────────────────────────────────────────────────
-  # v2.20 D5 — make "no unhandled crash class" a check that can FAIL.
+  # Make "no unhandled crash class" a check that can FAIL.
   #
   # Both fuzz jobs above are `continue-on-error: true`, which is right
   # for the fuzzing itself: a crash needs human triage, not a blocked
   # branch. But the side effect is that this workflow reports `success`
   # even when a target crashed, so its conclusion proves only that the
-  # run happened — not that nothing was found. v3.0 acceptance #10 wants
-  # the second claim, and until now nothing asserted it.
+  # run happened — not that nothing was found. This job asserts the
+  # second claim.
   #
   # The fuzz jobs upload an artifact only on crash (`if: failure()`), so
   # "this run produced an artifact" is exactly "a target crashed". This
@@ -177,13 +179,13 @@ jobs:
           if [ "$N" -ne 0 ]; then
             gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
               --jq '.artifacts[] | select(.name | startswith("fuzz-crash")) | "  \(.name)"'
-            echo "::error::A fuzz target crashed. Triage the artifact and convert it to a regression test before this goes green again (v3.0 acceptance #10)."
+            echo "::error::A fuzz target crashed. Triage the artifact and convert it to a regression test before this goes green again."
             exit 1
           fi
           # A second signal that does not share the upload's failure
-          # modes: the weekly fuzz jobs' own conclusions. Until 2026-09 the
-          # upload path was wrong, nothing was ever uploaded, and this gate
-          # stayed green for weeks while three targets failed each run.
+          # modes: the weekly fuzz jobs' own conclusions. A wrong upload
+          # path uploads nothing, and the artifact check alone would then
+          # stay green while targets fail.
           F=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
                 --jq '[.jobs[] | select(.name | startswith("fuzz 60-min")) | select(.conclusion == "failure")] | length')
           echo "failed fuzz jobs in this run: $F"
@@ -191,7 +193,7 @@ jobs:
           if [ "$F" -ne 0 ]; then
             gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
               --jq '.jobs[] | select(.name | startswith("fuzz 60-min")) | select(.conclusion == "failure") | "  \(.name)"'
-            echo "::error::A fuzz job failed without leaving an artifact. Find out why before this goes green again (v3.0 acceptance #10)."
+            echo "::error::A fuzz job failed without leaving an artifact. Find out why before this goes green again."
             exit 1
           fi
           echo "no crashes — #10's 'no unhandled crash class' holds for this run"

@@ -1,5 +1,5 @@
 //! 16-byte tagged value (PUC TValue equivalent). Chosen over 8-byte
-//! NaN-boxing on bench evidence — see benches/value_repr.rs and the P02 plan:
+//! NaN-boxing on bench evidence — see benches/value_repr.rs:
 //! Lua 5.5's native i64 forces NaN-boxed integers into 47-bit smis plus
 //! range checks, losing 24% on the arithmetic dispatch path.
 
@@ -26,22 +26,22 @@ pub type NativeFn =
 
 use crate::runtime::function::NativeClosure;
 
-/// P17-D v2 Direction E (E1) — `#[repr(C, u8)]` makes the discriminant a
+/// `#[repr(C, u8)]` makes the discriminant a
 /// 1-byte tag at offset 0, with the variant payload starting at offset 8
 /// (after 7 bytes of alignment padding). The total size stays 16 bytes
-/// (same as the prior plain Rust enum representation), preserving P02's
+/// (same as a plain Rust enum representation), preserving the
 /// arithmetic-fast-path 24% win over NaN-boxing.
 ///
 /// The PUC-equivalent layout this gives us means LJ_FR2-style frame
 /// metadata reads (`stack[base-2]` for closure, `stack[base-1]` for the
 /// packed frame marker) can use a single 1-byte tag load + payload
-/// branch — see [`Value::tag_byte`] and friends. The previous enum
-/// repr left discriminant position unspecified, so byte-level reads of
-/// Value layout would have been unportable.
+/// branch — see [`Value::tag_byte`] and friends. A plain enum repr
+/// leaves discriminant position unspecified, so byte-level reads of
+/// Value layout would be unportable.
 ///
 /// Variant order MUST stay stable: rustc assigns discriminants
 /// 0..11 in declaration order (Nil=0, Bool=1, ..., LightUserdata=10),
-/// and Phase 3+ hot paths read those discriminants via `tag_byte()`.
+/// and hot paths read those discriminants via `tag_byte()`.
 /// New variants must be appended; reordering changes the wire layout.
 #[derive(Clone, Copy, Debug)]
 #[repr(C, u8)]
@@ -137,7 +137,7 @@ impl Value {
         !matches!(self, Value::Nil | Value::Bool(false))
     }
 
-    /// P17-D v2 Direction E (E1) — read the variant's discriminant byte
+    /// Read the variant's discriminant byte
     /// directly. The `#[repr(C, u8)]` on the enum makes this a single
     /// 1-byte load from `&self`, regardless of variant.
     ///
@@ -169,7 +169,7 @@ impl Value {
     ///
     /// SAFETY: the value's discriminant MUST be Closure. UB otherwise.
     ///
-    /// `#[doc(hidden)]` (Track A4): JIT hot-path use; embedders should
+    /// `#[doc(hidden)]`: JIT hot-path use; embedders should
     /// use the safe `match value { Value::Closure(c) => ..., _ => ... }`
     /// instead.
     #[doc(hidden)]
@@ -192,7 +192,7 @@ impl Value {
     ///
     /// SAFETY: the value's discriminant MUST be Int. UB otherwise.
     ///
-    /// `#[doc(hidden)]` (Track A4): JIT hot-path use; embedders should
+    /// `#[doc(hidden)]`: JIT hot-path use; embedders should
     /// use the safe `match value { Value::Int(i) => ..., _ => ... }`
     /// instead.
     #[doc(hidden)]
@@ -205,7 +205,7 @@ impl Value {
         }
     }
 
-    /// Borrow the Lua string's bytes as a UTF-8 `&str` (B7 — Phase 2).
+    /// Borrow the Lua string's bytes as a UTF-8 `&str` .
     /// Returns `None` if this value is not a `Value::Str`, or if the
     /// string's bytes are not valid UTF-8.
     ///
@@ -218,7 +218,7 @@ impl Value {
         }
     }
 
-    /// Borrow the raw bytes of a `Value::Str` (B7 — Phase 2). Returns
+    /// Borrow the raw bytes of a `Value::Str` . Returns
     /// `None` for non-string variants. Always safe — Lua strings are
     /// byte sequences and may carry non-UTF-8 content.
     pub fn as_bytes(&self) -> Option<&[u8]> {
@@ -271,7 +271,7 @@ pub fn f2i_exact(f: f64) -> Option<i64> {
     }
 }
 
-/// P17-D v2 Direction E (E1) — discriminant byte constants for
+/// Discriminant byte constants for
 /// [`Value::tag_byte`]. These match the `#[repr(C, u8)]` enum's
 /// declaration order; reordering Value variants requires updating
 /// these constants in lock-step.
@@ -281,7 +281,7 @@ pub fn f2i_exact(f: f64) -> Option<i64> {
 /// `Bool(false)` vs `Bool(true)` into FALSE/TRUE tags, encodes
 /// `Userdata`/`LightUserdata` together, etc.). `tag::*` is the actual
 /// `Value` enum discriminant — one tag per variant — used by
-/// LJ_FR2-style frame-metadata reads in Phase 3+.
+/// LJ_FR2-style frame-metadata reads.
 pub mod tag {
     /// Tag for `Value::Nil`.
     pub const NIL: u8 = 0;
@@ -406,11 +406,11 @@ mod tests {
     }
 
     #[test]
-    fn p17d_e1_tag_byte_matches_declaration_order() {
+    fn tag_byte_matches_declaration_order() {
         // The `#[repr(C, u8)]` enum puts discriminant byte at offset 0.
         // Variant declaration order in `pub enum Value` is the source of
         // truth for tag::* constants. If you reorder variants without
-        // updating tag::*, this test catches it before Phase 3 fast-path
+        // updating tag::*, this test catches it before fast-path
         // helpers misread the tag.
         let mut heap = Heap::new();
         assert_eq!(Value::Nil.tag_byte(), tag::NIL);
@@ -428,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn p17d_e1_int_unchecked_roundtrip() {
+    fn int_unchecked_roundtrip() {
         for v in [0i64, 1, -1, i64::MAX, i64::MIN, 0x1234_5678_9abc_def0] {
             let val = Value::Int(v);
             // SAFETY: we constructed it as Int.
@@ -438,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn p17d_e1_closure_unchecked_roundtrip() {
+    fn closure_unchecked_roundtrip() {
         // Constructing a real LuaClosure requires a Proto + Heap; the
         // round-trip is exercised end-to-end via existing
         // call_value/dispatch tests. Here we just sanity-check that
@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn p17d_e1_is_callable() {
+    fn is_callable() {
         let mut heap = Heap::new();
         let s = heap.intern(b"x");
         assert!(!Value::Nil.is_callable());

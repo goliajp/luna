@@ -1,0 +1,111 @@
+//! Recorder close-detection.
+//!
+//! Both trigger flavours close on a `cur_depth == 0` re-entry of
+//! head_pc. The `MAX_INLINE_DEPTH` cap and the returned-past-head
+//! condition (`frames.len() <= recording_frame_base`) are **clean
+//! closes**, not aborts — whatever was recorded up to that point is
+//! the trace body, eligible to compile (and emit via the
+//! `TraceEnd::InlineAbort` path). The recorder therefore produces
+//! traces with depth>0 ops on real Lua code (fib, deep recursion),
+//! feeding the inline emit.
+
+use luna_jit::version::LuaVersion;
+
+/// fib(28) recorder produces a trace containing depth>0 ops (max
+/// depth tracker at least 1). Result still correct.
+#[test]
+fn fib_28_recorder_now_walks_into_callee() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+
+    let r = vm
+        .eval(
+            "local function f(n)
+                 if n < 2 then return n end
+                 return f(n-1) + f(n-2)
+             end
+             return f(28)",
+        )
+        .unwrap();
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(317811)));
+
+    assert!(
+        vm.trace_max_depth_seen() >= 1,
+        "the recorder must walk into the self-recursive callee; \
+         got max_depth_seen={}",
+        vm.trace_max_depth_seen(),
+    );
+    assert!(
+        vm.trace_closed_count() >= 1,
+        "fib's trace must close at least once; got closed={}",
+        vm.trace_closed_count(),
+    );
+}
+
+/// `frames.len() <= recording_frame_base` no longer aborts — it
+/// cleanly closes. Combined with the depth-cap close, the deep-r(6)
+/// hot loop should leave `trace_aborted_count == 0` (every recording
+/// attempt either compiles or closes via a non-abort path).
+#[test]
+fn deep_recursion_no_longer_aborts_traces() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+
+    let r = vm
+        .eval(
+            "local function r(n) if n == 0 then return 1 end return 1 + r(n-1) end
+             local s = 0
+             for i = 1, 200 do s = s + r(6) end
+             return s",
+        )
+        .unwrap();
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(1400)));
+
+    // Both the depth-cap and returned-past-head paths are clean
+    // closes. The one other abort source for this workload is a
+    // recording that reaches a trace the dispatcher runs natively (the
+    // recording cannot see its ops), so only those may be counted.
+    let reached = vm
+        .trace_close_cause_counts()
+        .get("reached-compiled-trace")
+        .copied()
+        .unwrap_or(0);
+    assert_eq!(
+        vm.trace_aborted_count(),
+        reached,
+        "MAX_INLINE_DEPTH + returned-past-head must be \
+         clean closes, not aborts; got aborted={}",
+        vm.trace_aborted_count(),
+    );
+    assert!(
+        vm.trace_closed_count() >= 1,
+        "at least one r trace must close; got closed={}",
+        vm.trace_closed_count(),
+    );
+}
+
+/// Plain back-edge loop closure unchanged — back-edge head_pc
+/// re-entry at depth=0 still closes, dispatcher still runs the
+/// numeric-for trace.
+#[test]
+fn numeric_loop_close_path_unchanged() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+
+    let r = vm
+        .eval(
+            "local s = 0
+             for i = 1, 1000 do s = s + i end
+             return s",
+        )
+        .unwrap();
+    assert!(matches!(r[0], luna_jit::runtime::Value::Int(500500)));
+    assert!(
+        vm.trace_dispatched_count() >= 1,
+        "numeric for trace must still dispatch; got dispatched={}",
+        vm.trace_dispatched_count(),
+    );
+}

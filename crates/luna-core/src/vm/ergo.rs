@@ -1,4 +1,4 @@
-//! Embedder ergonomics (B2, B7 — Phase 2 P2-A).
+//! Embedder ergonomics.
 //!
 //! `vm.eval` / `vm.eval_chunk` collapse the
 //! `load(src.as_bytes(), name.as_bytes())? → call_value(Value::Closure(cl), &[])`
@@ -28,7 +28,7 @@ impl Vm {
         let cl = match self.load(src.as_bytes(), name.as_bytes()) {
             Ok(c) => c,
             Err(syntax) => {
-                // B6: classify + record source position.
+                // Classify + record source position.
                 self.set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
                 self.set_error_source(name.to_string(), syntax.line);
                 // Surface SyntaxError as a LuaError carrying the
@@ -51,26 +51,17 @@ impl Vm {
         self.heap.intern(s.as_bytes())
     }
 
-    // ─── B12 host-root pool — moved to `crate::vm::host_roots` ───
+    // ─── Host-root pool ─────────────────────────────────────────
     //
-    // v1.3 Phase SR migrated the append-only `Vec<Value>` to a
-    // slot-recycling pool keyed by `HostRootTicket { idx, generation }`.
-    // The new API surface (`pin_host` / `read_host` / `write_host` /
-    // `unpin` / `unpin_all` / `host_root_count`) lives in
-    // [`crate::vm::host_roots`]; the type re-exports are in
-    // [`crate::vm`] (`HostRootTicket`, `HostRootStale`).
-    //
-    // Breaking change vs v1.2 / v1.1: `pin_host` returns
-    // `HostRootTicket` (was `usize`); `host_root_at` / `host_root_set`
-    // are removed in favor of `read_host` / `write_host` which
-    // validate the ticket's generation. See CHANGELOG `[1.3.0]`
-    // Phase SR section for the migration recipe.
+    // The slot-recycling pool keyed by `HostRootTicket { idx, generation }`
+    // (`pin_host` / `read_host` / `write_host` / `unpin` / `unpin_all` /
+    // `host_root_count`) lives in [`crate::vm::host_roots`]; the type
+    // re-exports are in [`crate::vm`] (`HostRootTicket`, `HostRootStale`).
 
-    // ─── B6 LuaError classification ──────────────────────────────
+    // ─── LuaError classification ─────────────────────────────────
     //
-    // The error value itself (`LuaError(pub Value)`) stays `Copy` so
-    // the 379 existing references / 34 construction sites compile
-    // unchanged. Richer context lives on the Vm; embedders read it
+    // The error value itself (`LuaError(pub Value)`) stays `Copy`.
+    // Richer context lives on the Vm; embedders read it
     // via these accessors after observing a `Result::Err(LuaError)`.
 
     /// Classification of the most recently raised error on this Vm.
@@ -112,21 +103,16 @@ impl Vm {
         self.last_error_source = None;
     }
 
-    // ─── B8 LuaUserdata host payloads ────────────────────────────
+    // ─── LuaUserdata host payloads ───────────────────────────────
     //
     // The closed-world userdata GC infrastructure (`Gc<Userdata>` +
-    // metatable + `__gc`) is already in place; B8 just unlocks the
+    // metatable + `__gc`) carries a
     // `Host { type_id, data: Box<dyn Any> }` payload variant for
-    // embedders to stash arbitrary `T: 'static` Rust values.
+    // embedders to stash arbitrary Rust values.
     //
-    // v1.1 restricts host types to `'static` (typically heap-only
-    // `Box<...>` or `Rc<...>` to non-Gc objects). Trace-bearing host
-    // payloads land in Phase 4+ alongside the userdata Trace ripple.
-    //
-    // v1.2 Track B: bounds tightened from `T: Any + 'static` to
-    // `T: LuaUserdata` so the metatable produced by `T::add_methods`
-    // is auto-installed at `create_userdata` time. Source-compatible
-    // for B8 users via a one-line `impl LuaUserdata for T {}`.
+    // Bounds are `T: LuaUserdata` so the metatable produced by
+    // `T::add_methods` is auto-installed at `create_userdata` time. A
+    // plain type needs only a one-line `impl LuaUserdata for T {}`.
 
     /// Allocate a host userdata wrapping `value`. Returns the
     /// `Value::Userdata` you can `set_global` / pin / pass to scripts.
@@ -166,7 +152,7 @@ impl Vm {
     /// }
     /// ```
     pub fn create_userdata<T: crate::vm::LuaUserdata>(&mut self, value: T) -> Value {
-        // Phase TB (v1.3): capture a monomorphic trace adapter for `T`.
+        // Capture a monomorphic trace adapter for `T`.
         // The fn item `trace_fn_for::<T>` is a distinct code address
         // per `T` (LLVM monomorphization); the downcast cannot fail
         // because `register_userdata::<T>` pairs the adapter with
@@ -187,7 +173,7 @@ impl Vm {
             trace_fn: Some(trace_fn_for::<T>),
         };
         let g = self.heap.new_userdata(payload, /* writable */ true);
-        // v1.2 Track B — install the trait-derived metatable (or
+        // Install the trait-derived metatable (or
         // fetch the cached one). Build only fails if the metatable's
         // table set overflows MAX_ASIZE, which is impossible with
         // <100 entries; expect-on-fail is appropriate here.
@@ -237,7 +223,7 @@ impl Vm {
         }
     }
 
-    // ─── B9 Rust-side coroutine drive ────────────────────────────
+    // ─── Rust-side coroutine drive ───────────────────────────────
 
     /// Create a new coroutine carrying `body` (a Lua function or
     /// any callable Value). Returns the `Value::Coro` handle ready
@@ -267,7 +253,7 @@ impl Vm {
         self.resume_coro(coro, args)
     }
 
-    // ─── B11 Rust-side debug hook ────────────────────────────────
+    // ─── Rust-side debug hook ────────────────────────────────────
 
     /// Install a Rust-side debug hook (see [`crate::vm::exec::RustDebugHook`]). The
     /// `mask` is a bitwise OR of `HOOK_MASK_CALL` / `HOOK_MASK_RETURN`

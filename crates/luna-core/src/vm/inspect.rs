@@ -1,4 +1,4 @@
-//! v2.0 Track TL — pure-read inspection accessors over a live `Vm`.
+//! Pure-read inspection accessors over a live `Vm`.
 //!
 //! Consumed by the `luna-tools` CLIs (`luna-heap-dump`,
 //! `luna-trace-inspect`, `luna-profile`). Every accessor here is:

@@ -1,4 +1,4 @@
-//! v2.1 Phase 1K.G.5 — E2E integration test for the LLVM trace JIT MVP.
+//! E2E integration test for the LLVM trace JIT MVP.
 //!
 //! Builds a synthetic `TraceRecord` containing only MVP-whitelist ops
 //! (`LoadI`, `Add`, `Jmp`), calls `LlvmBackend::try_compile_trace`, and
@@ -36,7 +36,7 @@ fn recorded(
     }
 }
 
-/// v2.1 Phase 1K.G.5 — MVP trace compiles and runs (clean tail).
+/// MVP trace compiles and runs (clean tail).
 ///
 /// Trace shape (3 ops at head_pc=0, window_size = proto.max_stack):
 ///   [0] LoadI  R0, 42       — R0 = 42
@@ -117,7 +117,7 @@ fn mvp_trace_compiles_and_runs_clean_tail() {
     assert_eq!(reg_state[1], 84, "R1 should be 84 after Add(R0, R0)");
 }
 
-/// v2.1 Phase 1K.G.5 — out-of-whitelist trace returns None.
+/// Out-of-whitelist trace returns None.
 ///
 /// Injects an `Op::GetUpval` op (outside the MVP set) at depth=0.
 /// `try_compile_trace` must return `None` without panicking.
@@ -149,7 +149,7 @@ fn out_of_whitelist_trace_returns_none() {
     );
 }
 
-/// v2.1 Phase 1K.G.5 — unclosed trace (closed=false) returns None.
+/// Unclosed trace (closed=false) returns None.
 #[test]
 fn unclosed_trace_returns_none() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);

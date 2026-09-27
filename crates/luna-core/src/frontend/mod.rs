@@ -1,5 +1,5 @@
-//! Source → AST frontend (P01). Syntax only: scope resolution, constant
-//! folding and code generation live in later phases.
+//! Source → AST frontend. Syntax only: scope resolution, constant
+//! folding and code generation live in later stages.
 
 pub mod ast;
 pub mod error;

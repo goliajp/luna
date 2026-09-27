@@ -1,14 +1,12 @@
-# v2.6 Track C — differential vs LuaJIT fuzz target nightly.
+# Differential vs LuaJIT fuzz target nightly.
 #
 # Why mirror diff-puc.yml: LuaJIT is the de-facto Lua engine
 # in Redis-replica / kevy embedder ecosystems. luna currently
 # tunes for PUC 5.4/5.5 byte-parity; LuaJIT compat is best-
 # effort but undocumented. This job surfaces unintentional
-# divergences as nightly issues (NOT ship-blocking until v3.0
-# per arc charter).
+# divergences as nightly issues (NOT ship-blocking).
 #
-# Acceptance per v2.6 charter §2.3: 100 fuzz iterations green
-# per nightly. Divergences open issues; flaky ones (single-
+# 100 fuzz iterations green per nightly. Divergences open issues; flaky ones (single-
 # fixture re-deflakes) tune grammar in fuzz_diff_luajit.
 
 name: diff-luajit
@@ -40,17 +38,15 @@ jobs:
           sudo apt-get install -y -qq luajit
           echo "LUAJIT=/usr/bin/luajit" >> "$GITHUB_ENV"
 
-      # v2.20 D4 — record the reference version, and fail if it moves.
+      # Record the reference version, and fail if it moves.
       #
       # This comes from apt, so it tracks the runner image rather than a
       # pin of ours: an image refresh can change the differential
-      # reference with nothing in our history to show it. That is the
-      # same class of problem as diff-puc's old apt-first path (fixed in
-      # v2.18 by building 5.5.1 from source).
+      # reference with nothing in our history to show it.
       #
       # LuaJIT is not built from source here because this comparison is
-      # best-effort fuzz, not a #2 acceptance gate — 5.1 compatibility
-      # only, per arc charter §2.6. So instead of pinning the build, we
+      # best-effort fuzz, not a release gate — 5.1 compatibility
+      # only. So instead of pinning the build, we
       # pin the *expectation*: the version is asserted, and the job goes
       # red when the image moves under us. Then it is a deliberate
       # decision to update EXPECTED_LUAJIT, with the change recorded,
@@ -81,16 +77,15 @@ jobs:
           esac
 
       - name: Install cargo-fuzz
-        # Unpinned to match fuzz.yml — the `--version 0.12.0
-        # --locked` pin broke ~2026-07-06 when a rustix transitive
-        # dep started using unstable rustc_* attrs that current
-        # nightly rejects. fuzz.yml's unpinned install path stays
-        # green because it picks the latest cargo-fuzz that works
-        # with current nightly (rolls with the toolchain).
+        # Unpinned to match fuzz.yml: a pinned `--locked` cargo-fuzz
+        # breaks when a transitive dep uses unstable rustc_* attrs that
+        # current nightly rejects. The unpinned install picks the
+        # latest cargo-fuzz that works with current nightly (rolls with
+        # the toolchain).
         run: cargo install cargo-fuzz
 
       - name: cargo +nightly fuzz run fuzz_diff_luajit (100 iter)
-        # 100 fuzz iterations per nightly per v2.6 charter §2.3.
+        # 100 fuzz iterations per nightly.
         # `-runs=100` caps iteration count; `-max_total_time=300`
         # 5min wall-clock cap matches diff-puc.yml's timeout shape.
         # Failures panic with full source + both outputs for

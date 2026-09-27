@@ -1,6 +1,6 @@
 //! `luna-bin-inspect` — section walker for AOT-produced binaries.
 //!
-//! v2.0 Track TL Phase 1 ship. Reads an ELF / Mach-O / PE binary
+//! Reads an ELF / Mach-O / PE binary
 //! produced by `luna-aot`, walks its `.luna.bytecode` /
 //! `luna_trace_meta` / `luna_inline_chnx` sections, and reports:
 //!
@@ -15,12 +15,11 @@
 //!   chains section
 //! - Embedded bytecode length
 //!
-//! # Scope-split with Track AO
+//! # Relation to `luna-aot`
 //!
-//! shows up as a `luna-aot inspect` sub-command. Today it ships as
-//! a stand-alone binary so the `luna-tools` infrastructure (clap
-//! parsing, JSON schema, smoke tests) is in place; the Track AO
-//! sub-command can call into the [`luna_tools::schema::BinInspect`]
+//! This ships as a stand-alone binary so the `luna-tools`
+//! infrastructure (clap parsing, JSON schema, smoke tests) is in
+//! place; a future `luna-aot inspect` sub-command can call into the [`luna_tools::schema::BinInspect`]
 //! formatter once that re-export lands.
 //!
 //! # Decoding
@@ -102,7 +101,7 @@ fn run(cli: &Cli) -> Result<(), String> {
     // emits one-per-exit. Match the section sizing against
     // `luna_aot::embed::PER_EXIT_INLINE_ENTRY_SIZE` once that's pub;
     // until then we report raw section size and leave the per-entry
-    // count for Phase 2 once the size constant is reachable.
+    // count for when the size constant is reachable.
     const AOT_INDEX_ENTRY_SIZE: u64 = 48;
     const AOT_INLINE_ENTRY_SIZE: u64 = 24; // pinned by lowerer; verified at runtime via assert
 

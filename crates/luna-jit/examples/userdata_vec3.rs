@@ -1,4 +1,4 @@
-//! v1.2 Track B — `LuaUserdata` trait sugar with arithmetic metamethods.
+//! `LuaUserdata` trait sugar with arithmetic metamethods.
 //!
 //! Demonstrates a value-style Vec3 host type whose `+` / `-` / `tostring`
 //! all work from Lua via the trait builder's `add_meta_method`. The

@@ -141,7 +141,7 @@ pub enum Token {
         /// Source text of the identifier.
         Box<str>,
     ),
-    /// MacroLua `@` sigil (v1.3 Phase ML). Lexed only when
+    /// MacroLua `@` sigil. Lexed only when
     /// `version.is_macro_lua()`; PUC 5.1-5.5 sources continue to
     /// error `unexpected symbol near '@'`.
     At,

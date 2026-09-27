@@ -1,8 +1,7 @@
-//! v2.13 Track WUC Prong A — poison-on-free allocator stress for
-//! UAF-C (Windows gc.lua weak-table STATUS_ACCESS_VIOLATION).
+//! Poison-on-free allocator stress for the Windows gc.lua weak-table
+//! STATUS_ACCESS_VIOLATION (a use-after-free).
 //!
-//! Hypothesis (v2.8):
-//! the UAF exists on all platforms; the Windows Heap Manager's
+//! Hypothesis: the UAF exists on all platforms; the Windows Heap Manager's
 //! freed-memory fill pattern makes the weak-table sweep's stale
 //! read *visible* as an AV, while glibc/jemalloc/Apple-malloc leave
 //! freed bits looking benign. luna's GC frees every collected
@@ -17,7 +16,7 @@
 //!     LUNA_POISON_STRESS_N=25 cargo test ... (default 5 iterations)
 //!
 //! A SIGSEGV / garbage panic / wrong assert inside this test =
-//! UAF-C reproduced locally → debug under ASAN from here.
+//! the use-after-free reproduced locally → debug under ASAN from here.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::Path;
@@ -70,12 +69,12 @@ fn run_one(file: &str) -> Result<(), String> {
         })
         .map_err(|e| format!("spawn {label}: {e}"))?
         .join()
-        .map_err(|_| format!("{file}: worker thread panicked (UAF-C candidate!)"))?;
+        .map_err(|_| format!("{file}: worker thread panicked (possible use-after-free)"))?;
     rx.recv().map_err(|e| format!("recv: {e}"))?
 }
 
 #[test]
-#[ignore = "UAF-C diagnostic stress (slow); run with --ignored"]
+#[ignore = "use-after-free diagnostic stress (slow); run with --ignored"]
 fn gc_lua_family_under_poison_allocator() {
     let n: usize = std::env::var("LUNA_POISON_STRESS_N")
         .ok()

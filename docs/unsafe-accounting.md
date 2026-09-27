@@ -18,7 +18,7 @@ For the **embedder-surface contract** (0 `unsafe` required to use
 
 ---
 
-## 1. Current snapshot (v1.3.0 ship + v2.0 dev sprint)
+## 1. Snapshot (v1.3.0)
 
 | Metric | Count | Notes |
 |---|---:|---|
@@ -52,12 +52,12 @@ crates/luna-core/src/                    267  (was ~285 at v1.1 — net drop fro
   vm/lib_os_io.rs             ~10
   vm/lib_strpack.rs            ~5
   vm/typed_native.rs           ~5
-  vm/inspect.rs                ~2         (v2.0 TL pure-read accessors)
+  vm/inspect.rs                ~2         (pure-read accessors)
 
 crates/luna-jit/src/                     152  (was ~185 at v1.1 — net drop from
   jit_backend/mod.rs         ~75         JIT_CACHE TLS scope tightening)
-  jit_backend/trace.rs       ~70         (PU Wave 1 helpers + Stage 7 polish 6
-                                          chain reloc paths)
+  jit_backend/trace.rs       ~70         (JIT helpers + AOT chain reloc
+                                          paths)
   send_vm.rs                  ~3         (v1.3 SendVm newtype Send/Sync impls)
   capi.rs                    ~30
 
@@ -102,10 +102,8 @@ dispatch entry; the helpers read it back as
 holds the Vm pointer for the duration of a JIT slice; SAFETY
 annotations cite the guard's lifetime as the validity proof.
 
-The v2.0 Track J audit
-plans to move this off `thread_local!` onto a `Vm.VmJitStorage`
-field for cross-thread JIT — gated on Cranelift's
-`JITModule: Send` confirmation.
+Moving this off `thread_local!` onto a `Vm` field, for cross-thread
+JIT, depends on Cranelift's `JITModule` being `Send`.
 
 ### 3.3 `unsafe extern "C" fn` helpers (~30 of 490)
 
@@ -116,7 +114,7 @@ exposes the symbol; SAFETY rationale at each helper cites the
 codegen contract Cranelift establishes (specific register state,
 stack layout).
 
-The AOT pipeline (v1.3 Stage 7 polish 1) verified all 27 helpers
+The AOT pipeline verified all 27 helpers
 are correctly linker-dead-stripped in produced binaries.
 
 ### 3.4 `Box::into_raw` / `Box::from_raw` pairs (~20 of 490)
@@ -170,7 +168,7 @@ discover them.
 | `runtime/function.rs:419-420` | `LuaClosure: Send + Sync` | `LuaClosure` itself is `Send`-compatible (no `Rc`/`RefCell`); `Gc<LuaClosure>` is `!Send` separately. |
 | `runtime/table.rs:120-121` | `Table: Send + Sync` | Same shape — Table itself is `Send`-compatible, `Gc<Table>` is `!Send`. |
 | `jit_backend/trace.rs:1892` | `TraceHandle: Send` | Required by `thread_local!`'s `RefCell<Vec<TraceHandle>>` bound. TLS context guarantees single-thread access. |
-| `jit_backend/trace.rs` (chain-inline) | `InlineChainSlot: Send + Sync` | v1.3 AOT Stage 7 polish 6 chain reloc slot type. SAFETY: AOT binary slots are populated once at link time. |
+| `jit_backend/trace.rs` (chain-inline) | `InlineChainSlot: Send + Sync` | AOT chain reloc slot type. SAFETY: AOT binary slots are populated once at link time. |
 | `send_vm.rs` | `SendVm: Send + Sync` | v1.3 SendVm newtype. SAFETY: RwLock enforces single-mutator; interior `Vm` single-threaded under each lock. |
 
 Tracked for the SendVm rationale and the trace-bearing userdata
@@ -242,8 +240,7 @@ grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
 
 ---
 
-*Last refreshed 2026-06-25 for the v1.3.0 ship + v2.0 dev sprint
-state. Numbers measured via the §5 grep recipe on develop tip
+*Last refreshed 2026-06-25 for the v1.3.0 release. Numbers measured via the §5 grep recipe on develop tip
 `6f939bc`. The CI ceiling (`ci.yml::unsafe-drift`) is the
 load-bearing version of this snapshot; this page exists to
 explain `why` rather than `what`.*

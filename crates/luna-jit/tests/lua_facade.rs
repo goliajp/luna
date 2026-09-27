@@ -1,4 +1,4 @@
-//! P2-D B12 smoke tests: Lua newtype + LuaFunction + LuaTable + LuaRoot.
+//! Smoke tests: Lua newtype + LuaFunction + LuaTable + LuaRoot.
 
 use luna_core::runtime::Value;
 use luna_jit::version::LuaVersion;

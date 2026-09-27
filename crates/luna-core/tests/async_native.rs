@@ -1,4 +1,4 @@
-//! v1.1 B10 Stage 2 — async native function integration tests.
+//! Async native function integration tests.
 //!
 //! These exercise `Vm::set_async_native` end-to-end:
 //! - async native that returns Ready immediately
@@ -8,8 +8,8 @@
 //! - async native returning multiple values surfaces all of them
 //!
 //! No `tokio` dep — a hand-rolled `block_on` + `YieldOnce` helper future
-//! cover the suspend/resume flow. luna-core charter requires zero
-//! third-party deps (F1).
+//! cover the suspend/resume flow. luna-core has zero third-party
+//! deps.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

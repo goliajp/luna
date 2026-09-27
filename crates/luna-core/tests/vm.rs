@@ -1,4 +1,4 @@
-//! P03 VM semantic corpus, slice 2: expressions, locals, assignments,
+//! VM semantic corpus: expressions, locals, assignments,
 //! control flow, numeric for, tables, globals. Assertions go through chunk
 //! return values (no stdlib yet).
 
@@ -332,7 +332,7 @@ fn error_positions() {
     assert!(msg.starts_with("eval:3:"), "position missing: {msg}");
 }
 
-// ---- slice 3: functions, closures, varargs, generic for, pcall ----
+// ---- functions, closures, varargs, generic for, pcall ----
 
 #[test]
 fn functions_and_calls() {
@@ -633,7 +633,7 @@ fn closures_survive_gc() {
     assert!(v[0].raw_eq(Value::Int(3)));
 }
 
-// ---- slice 4: metamethods ----
+// ---- metamethods ----
 
 #[test]
 fn mm_index_and_newindex() {
@@ -708,7 +708,7 @@ fn mm_arithmetic_and_string_coercion() {
     );
     // 5.4+ (the default Vm dialect is 5.5) reports string-involved
     // arithmetic faults with lstrlib's per-op wording; dialect fixtures
-    // 5.3/541 + 5.4/551 + 5.5/252 pin the full matrix (v2.14 HC.4).
+    // 5.3/541 + 5.4/551 + 5.5/252 pin the full matrix.
     check_error(
         "return 'abc' + 1",
         "attempt to add a 'string' with a 'number'",
@@ -793,7 +793,7 @@ fn runtime_stack_overflow_is_caught() {
     );
 }
 
-// ---- slice 5: goto, <close>, 5.5 global declarations, attribs ----
+// ---- goto, <close>, 5.5 global declarations, attribs ----
 
 fn check_compile_error(src: &str, contains: &str) {
     let mut vm = Vm::new(LuaVersion::Lua55);
@@ -1004,7 +1004,7 @@ fn global_declarations_55() {
     check_int("global <const> * _ENV.bypass = 9 return _ENV.bypass", 9);
 }
 
-// ---- P04 slice 1: math, table, base additions ----
+// ---- math, table, base additions ----
 
 #[test]
 fn math_library() {
@@ -1029,7 +1029,7 @@ fn math_library() {
     check_error("return math.fmod(1, 0)", "zero");
     check_bool("return math.ult(-1, 1)", false); // -1 is huge unsigned
     check_float("return math.log(8, 2)", 3.0);
-    // v2.12 KNOWN-DIV: math.modf integer part returns Integer subtype
+    // math.modf integer part returns Integer subtype
     // when it fits i64 (matches PUC 5.4/5.5 pushnumint fast path).
     let v = eval("local ip, fp = math.modf(3.7) return ip");
     assert!(matches!(v[0], Value::Int(3)));
@@ -1175,7 +1175,7 @@ fn base_additions() {
     check_bool("return pairs({}) == next", true);
 }
 
-// ---- P04 slices 2+3: string library and patterns ----
+// ---- string library and patterns ----
 
 #[test]
 fn string_core() {
@@ -1318,7 +1318,7 @@ fn pattern_classes_balanced_frontier() {
     check_str("return string.match('[x]', '%[(%a)%]')", b"x");
 }
 
-// ---- P04 slice 4: string.format ----
+// ---- string.format ----
 
 #[test]
 fn string_format() {
@@ -1632,23 +1632,16 @@ fn debug_line_table_precision() {
 
 #[test]
 fn debug_upvalue_order_and_id() {
-    // v2.0 CB2: this test was once listed as a flake that would not
-    // reproduce locally but tripped on some CI allocator state. A
-    // data-structure audit found every
-    // code path the assertions ride is deterministic under single-threaded
-    // exec — compiler upvalue indexing is a `Vec::position` + `Vec::push`
-    // walk, the open-upvalue chain is a slot-sorted `Vec` with
+    // Every code path the assertions ride is deterministic under
+    // single-threaded exec — compiler upvalue indexing is a `Vec::position`
+    // + `Vec::push` walk, the open-upvalue chain is a slot-sorted `Vec` with
     // `binary_search_by_key` dedup, and `debug.upvalueid` returns the GC
     // cell's raw address (which is dedup-determined, not allocator-determined,
-    // for the shared-upvalue assertion). The flake — if it ever fired —
-    // most plausibly belonged to the StringTable UAF (`f8afd64`) /
-    // line-hook predicate (`e5db587`) / compiler short-circuit AND (`fae0f9c`)
-    // family closed in the v1.3 sprint and is now collateral-fixed.
+    // for the shared-upvalue assertion).
     //
-    // Rather than ship a no-op, repeat each sub-check 50× in a single test
-    // process. This collapses the "1000× CI runs to archive the flake" cost
-    // `cargo test` invocation and gives a fail-fast tripwire if any future
-    // allocator / GC tuning ever breaks shared-upvalue identity.
+    // Each sub-check repeats 50× in a single test process as a fail-fast
+    // tripwire if any allocator / GC tuning ever breaks shared-upvalue
+    // identity.
     for _ in 0..50 {
         // upvalue indices follow PUC's restassign ordering: a name first seen on an
         // assignment's left captures its index before one first seen on the right.
@@ -2276,7 +2269,7 @@ fn coroutine_basics() {
     // running() reports the main thread
     check_bool("local _, m = coroutine.running() return m", true);
 
-    // yield across a transparent native frame (P08 Stage 1): a chunk run by the
+    // yield across a transparent native frame: a chunk run by the
     // native `dofile` yields, then resume re-enters and continues the suspended
     // chunk frame to completion, its final return flowing back through dofile to
     // the resumer. Exercises call_value not truncating the suspended stack +
@@ -2335,7 +2328,7 @@ fn coroutine_basics() {
         b"false,boom",
     );
 
-    // yield across `pcall` (P08 Stage 2): a Lua function protected by pcall
+    // yield across `pcall`: a Lua function protected by pcall
     // yields, then resumes to completion; pcall wraps the final return as
     // (true, ...). Exercises the continuation frame surviving a yield.
     check_str(
@@ -3014,7 +3007,7 @@ fn io_popen_read_write_and_close_status() {
 
 #[test]
 fn embedding_instr_budget_interrupts_infinite_loop() {
-    // P09: a small budget catches a runaway loop. pcall captures the
+    // A small budget catches a runaway loop. pcall captures the
     // raised "instruction budget exceeded" so the embedder gets control
     // back instead of the whole VM call propagating the error out.
     let mut vm = Vm::new(LuaVersion::Lua55);
@@ -3061,7 +3054,7 @@ fn embedding_instr_budget_unset_runs_normally() {
 
 #[test]
 fn embedding_new_minimal_has_no_globals() {
-    // P09 sandbox: `new_minimal` leaves the globals table empty so the
+    // Sandbox: `new_minimal` leaves the globals table empty so the
     // embedder can choose exactly which libraries to expose. Probing for
     // `print` should raise "attempt to call a nil value".
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
@@ -3080,7 +3073,7 @@ fn embedding_new_minimal_has_no_globals() {
 
 #[test]
 fn embedding_selective_open_base_enables_print() {
-    // P09: after `new_minimal`, `open_base` is enough to make `print`
+    // After `new_minimal`, `open_base` is enough to make `print`
     // and friends resolve. The host can keep math/io/debug/os out.
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
     vm.open_base();
@@ -3106,23 +3099,19 @@ fn embedding_selective_open_base_enables_print() {
 
 #[test]
 fn embedding_memory_cap_catches_runaway_alloc() {
-    // P09 soft cap: build a tight loop that allocates tables; the run loop
+    // Soft cap: build a tight loop that allocates tables; the run loop
     // detects bytes > cap between dispatch turns, runs a collect, and
     // (still over) raises a catchable error. The cap path runs a full
     // collect before deciding to fire, so short-lived intermediates do
     // not trip — the inner loop must hold enough live state to push past
     // the post-collect threshold.
     //
-    // v1.1 A1 Session C — luna-core's `Vm::new` defaults to
-    // `NullJitBackend`; the interp loop ticks slow enough that GC has
-    // breathing room between alloc bursts, masking the cap trip. To
-    // exercise the same code path under interp-only, the inner loop
-    // holds **all** allocated tables in a live array — no intermediate
-    // gets reclaimed, so the cap fires on net live bytes rather than
-    // on burst-vs-GC timing. Originally the test relied on Cranelift
-    // packing allocations tight enough to outpace GC; the new shape
-    // exercises the same `vm.bytes() > cap` predicate without that
-    // timing dependency.
+    // luna-core's `Vm::new` defaults to `NullJitBackend`; the interp
+    // loop ticks slow enough that GC has breathing room between alloc
+    // bursts, which would mask the cap trip. So the inner loop holds
+    // **all** allocated tables in a live array — no intermediate gets
+    // reclaimed, and the cap fires on net live bytes rather than on
+    // burst-vs-GC timing.
     let mut vm = Vm::new(LuaVersion::Lua55);
     let baseline = vm.memory_used();
     vm.set_memory_cap(Some(baseline + 64 * 1024)); // small headroom
@@ -3154,7 +3143,7 @@ fn embedding_memory_cap_catches_runaway_alloc() {
 
 #[test]
 fn embedding_kevy_shape_short_script_per_request() {
-    // P09 script-host shape: a Redis-style server gets many short scripts from
+    // Script-host shape: a Redis-style server gets many short scripts from
     // clients. Each call re-arms the budget, evaluates, harvests the
     // result, and the same Vm continues for the next request — possibly
     // after the previous one tripped its budget. Pin the round-trip.
@@ -3233,7 +3222,7 @@ fn panic_static_str_native(
 
 #[test]
 fn embedding_native_panic_caught_as_lua_error() {
-    // P09: a Rust panic inside a registered native must not unwind through
+    // A Rust panic inside a registered native must not unwind through
     // the dispatch loop. The catch_unwind in begin_call's native arm folds
     // it into a "native panic: <msg>" Lua error that pcall can catch.
     let mut vm = Vm::new(LuaVersion::Lua55);
@@ -4159,7 +4148,7 @@ fn return_stat_caps_at_254_results() {
     );
 }
 
-// ─── P09 api.lua-equivalent harness ───────────────────────────────────────
+// ─── api.lua-equivalent harness ───────────────────────────────────────────
 // PUC `api.lua` exercises the C-API contract (stack ops, call boundary,
 // error propagation, metatable plumbing). luna's analogue is its Rust
 // public surface; these tests pin the same semantic invariants there.

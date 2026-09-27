@@ -1,5 +1,5 @@
-//! v2.1 Phase 1K.E.1 — probe Lua-source → bytecode for the chunks the
-//! op-by-op port will need. Not a real assertion test; runs only when
+//! Probe Lua-source → bytecode for the chunks the LLVM backend
+//! lowers. Not a real assertion test; runs only when
 //! `LUNA_LLVM_PROBE_CHUNKS=1` so it doesn't slow normal `cargo test`.
 
 use luna_jit::LuaVersion;
@@ -33,7 +33,7 @@ fn probe_chunks() {
             "local n = 5\nlocal r = 0\nif n < 10 then r = n * 2 else r = n - 1 end\nreturn r",
             "fib_shape_branchy",
         ),
-        // 1K.F probe — self-recursive function for Op::Call + GetUpval
+        // Self-recursive function for Op::Call + GetUpval
         // + parametric-chunk emit. Outer chunk has `rec` as local;
         // inner proto has `rec` as upval[0] (5.5/5.4/5.3/5.2) or
         // upval[1] (5.1).

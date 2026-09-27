@@ -1,4 +1,4 @@
-//! v1.2 Track B — `LuaUserdata` trait sugar smoke tests.
+//! `LuaUserdata` trait sugar smoke tests.
 //!
 //! Covers add_method / add_method_mut / add_function / add_meta_method
 //! / add_field_method_get plus wrong-self error reporting, type_name
@@ -168,7 +168,7 @@ fn type_name_in_metatable_name_field() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 5. add_field_method_get sugar (call-syntax in v1.2)
+// 5. add_field_method_get sugar
 // ─────────────────────────────────────────────────────────────────────
 
 struct Box2 {
@@ -187,10 +187,9 @@ impl LuaUserdata for Box2 {
 
 #[test]
 fn add_field_method_get_call_syntax() {
-    // v1.3 UD2 semantic update: `add_field_method_get` now dispatches
-    // through a function-`__index` trampoline that calls the getter
-    // and returns its value. The v1.2 `b:width()` shape no longer
-    // resolves to the field value (calling a getter via `:` would
+    // `add_field_method_get` dispatches through a function-`__index`
+    // trampoline that calls the getter and returns its value. The
+    // `b:width()` shape does not resolve to the field value (calling a getter via `:` would
     // evaluate to `Int(16)(b)`, which errors). The new shape is the
     // natural `b.width`. Embedders who need `b:width()` should
     // register an explicit `add_method("width", ...)` instead.
@@ -303,15 +302,15 @@ fn metatable_cached_per_typeid() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 9. v1.3 UD2 — true field-style `obj.x` (no parens)
+// 9. True field-style `obj.x` (no parens)
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
 fn field_style_no_parens() {
-    // Same Box2 type with getters for width/height — v1.3 unlocks
-    // `obj.width` syntax via the `__index` trampoline. v1.2's
-    // `obj:width()` call-syntax test (above) continues to pass via
-    // the dual-registration into the methods bucket.
+    // Same Box2 type with getters for width/height — `obj.width`
+    // syntax works via the `__index` trampoline. The `obj:width()`
+    // call-syntax test (above) continues to pass via the
+    // dual-registration into the methods bucket.
     let mut vm = vm();
     vm.set_userdata(
         "b",
@@ -331,7 +330,7 @@ fn field_style_no_parens() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 10. v1.3 UD1 — add_field_method_set `obj.x = v`
+// 10. add_field_method_set `obj.x = v`
 // ─────────────────────────────────────────────────────────────────────
 
 struct Box2Mut {
@@ -384,7 +383,7 @@ fn field_style_set() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 11. v1.3 UD2 — methods win over fields on name collision
+// 11. Methods win over fields on name collision
 // ─────────────────────────────────────────────────────────────────────
 
 struct CollisionType {
@@ -404,7 +403,7 @@ impl LuaUserdata for CollisionType {
 
 #[test]
 fn methods_win_on_collision() {
-    // v1.3 UD2 precedence: in the `__index` trampoline, the methods
+    // Precedence: in the `__index` trampoline, the methods
     // bucket is consulted first; only when the name is absent there
     // does the trampoline call the field-getter. Same-name collisions
     // therefore go to the method side.

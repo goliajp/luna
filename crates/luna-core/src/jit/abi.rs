@@ -9,11 +9,6 @@
 //! - `CraneliftBackend` (in the `luna` crate, `luna::jit_backend`) —
 //!   delegates to Cranelift. Installed by `luna::install_default_jit`
 //!   and `luna::Vm::new_minimal_with_jit`.
-//!
-//! v1.1 A1 Session C moved this file from `src/jit/abi.rs` (single
-//! crate) to `crates/luna-core/src/jit/abi.rs` (workspace). The trait
-//! surface itself is unchanged from Session A.
-//!
 
 use crate::jit::JitVmGuard;
 use crate::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
@@ -97,7 +92,7 @@ pub trait IntChunkCompiler {
     /// a whitelist hit or [`CompileResult::Skipped`] when the body is
     /// outside the JIT's supported shape.
     ///
-    /// v2.0 Track J sub-step J-B — `storage` is the per-`Vm` JIT cache
+    /// `storage` is the per-`Vm` JIT cache
     /// + handle holder. The Cranelift backend downcasts it to its
     /// concrete `CraneliftJitStorage`; the no-op [`NullJitBackend`]
     /// ignores it (returns `Skipped` without touching storage).
@@ -128,7 +123,7 @@ pub trait TraceCompiler {
     /// Attempt to lower `record` into native code under `opts`. Returns
     /// `None` if the lowerer bailed at any checkpoint.
     ///
-    /// v2.0 Track J sub-step J-B — `storage` is the per-`Vm` JIT cache
+    /// `storage` is the per-`Vm` JIT cache
     /// + handle holder; the Cranelift backend uses it to park each
     /// compiled trace's `JITModule`. [`NullJitBackend`] ignores it.
     fn try_compile_trace(

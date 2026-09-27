@@ -1,6 +1,6 @@
 //! Host userdata demo — exposing arbitrary `T: 'static` Rust
 //! types to Lua via [`Vm::create_userdata`] / [`Vm::set_userdata`],
-//! with **v1.2 Track B** `LuaUserdata` trait sugar layered on top so
+//! with `LuaUserdata` trait sugar layered on top so
 //! the userdata becomes *callable from Lua* (methods + metamethods).
 //!
 //! Run: `cargo run --example userdata_demo -p luna-jit`
@@ -66,7 +66,7 @@ fn main() {
     assert_eq!(kind, "userdata");
     println!("1. type(counter) = {kind:?}");
 
-    // 3. **NEW in v1.2** — call methods from Lua:
+    // 3. Call methods from Lua:
     let v: i64 = lua.eval("return counter:get()").unwrap();
     assert_eq!(v, 100);
     println!("2. counter:get() = {v}");
@@ -81,7 +81,7 @@ fn main() {
     assert_eq!(s, "Counter(150)");
     println!("4. tostring(counter) = {s:?}");
 
-    // 5. Host-side reads still work — back-compat with v1.1 B8.
+    // 5. Host-side reads still work.
     {
         let c: &Counter = lua.vm().userdata_borrow("counter").unwrap();
         assert_eq!(c.value, 150);

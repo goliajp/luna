@@ -110,6 +110,13 @@ fn check_header(p: &Proto, parent: Option<&Proto>) -> Result<(), String> {
             p.code.len()
         ));
     }
+    // the debug library reads and writes a named local at its register
+    if let Some(v) = p.locvars.iter().find(|v| v.reg >= u32::from(p.max_stack)) {
+        return Err(format!(
+            "local '{}' in register {} out of range (stack size {})",
+            v.name, v.reg, p.max_stack
+        ));
+    }
     let Some(parent) = parent else {
         return Ok(());
     };

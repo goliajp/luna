@@ -1,7 +1,8 @@
 //! The bytecode verifier: a binary chunk that breaks an invariant the VM
 //! relies on is refused at load time with `bad binary format (...)`.
 //!
-//! Each case compiles a small function, dumps it with `string.dump`, edits
+//! Each case compiles a small function, dumps it in luna's own format
+//! (`vm::dump::dump`; `string.dump` writes PUC bytecode), edits
 //! one field of the dumped prototype and loads the result. The edits use a
 //! test-side decoder for luna's own body format (see `vm/dump/luna.rs`);
 //! chunks from the PUC translators reach the same check after lowering.
@@ -9,6 +10,7 @@
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
+use luna_core::vm::dump;
 use luna_core::vm::isa::{Inst, Op};
 
 /// PUC 5.5 header (40 bytes) + luna body tag (8 bytes).
@@ -133,15 +135,15 @@ fn write(p: &P, out: &mut Vec<u8>) {
     out.extend_from_slice(&p.locvars);
 }
 
-/// `string.dump` of the function `src` returns, split into header + body.
+/// luna's dump of the function `src` returns, split into header + body.
 fn dumped(src: &str) -> (Vec<u8>, P) {
     let mut vm = Vm::new(LuaVersion::Lua55);
-    let code = format!("return string.dump((function() {src} end)())");
-    let v = vm.eval(&code).expect("dump");
-    let Value::Str(s) = v[0] else {
-        panic!("string.dump returned {:?}", v[0]);
+    let code = format!("return (function() {src} end)()");
+    let v = vm.eval(&code).expect("compile");
+    let Value::Closure(f) = v[0] else {
+        panic!("expected a function, got {:?}", v[0]);
     };
-    let bytes = s.as_bytes().to_vec();
+    let bytes = dump::dump(&f.proto, false, LuaVersion::Lua55);
     let mut rd = Rd(&bytes, BODY_AT);
     let p = rd.proto();
     assert_eq!(
@@ -461,6 +463,69 @@ fn nested_function_is_checked() {
     );
 }
 
+#[test]
+fn functions_nested_too_deep() {
+    refused(
+        "return function() local function g() end end",
+        |p| {
+            let mut chain = p.protos[0].clone();
+            for _ in 0..300 {
+                let mut outer = p.clone();
+                outer.protos = vec![chain];
+                chain = outer;
+            }
+            *p = chain;
+        },
+        "functions nested too deep",
+    );
+}
+
+/// Point local `idx` of `p` at register `reg`.
+fn set_local_reg(p: &mut P, idx: usize, reg: u32) {
+    let mut rd = Rd(&p.locvars, 4);
+    for _ in 0..idx {
+        rd.bytes();
+        rd.take(12);
+    }
+    rd.bytes();
+    let at = rd.1;
+    p.locvars[at..at + 4].copy_from_slice(&reg.to_le_bytes());
+}
+
+#[test]
+fn local_register_out_of_range() {
+    refused(
+        "return function(x) local y = x return y end",
+        |p| set_local_reg(p, 1, 200),
+        "local 'y' in register 200 out of range",
+    );
+}
+
+/// A local renamed onto the register of the call in progress: the debug
+/// library must not reach `pcall`'s own slot through it (a later
+/// traceback would find a number where the function was).
+#[test]
+fn local_aliasing_a_running_call() {
+    let (header, mut p) = dumped(
+        "return function()
+           local a = 1
+           local ok, r = pcall(function()
+             local n = debug.setlocal(3, 1, 42)
+             return tostring(n) .. ' ' .. type(debug.traceback())
+           end)
+           return r
+         end",
+    );
+    set_local_reg(&mut p, 0, 1);
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    let f = vm.load(&chunk(&header, &p), b"=crafted").expect("loads");
+    let r = vm.call_value(Value::Closure(f), &[]).expect("runs");
+    let Value::Str(s) = r[0] else {
+        panic!("expected a string, got {:?}", r[0]);
+    };
+    assert_eq!(s.as_bytes(), b"nil string");
+}
+
 /// Load-time cost over the corpus: every diff_puc 5.5 fixture and 5.5
 /// official test file, dumped by luna and (when `PUC_LUAC_55` is set)
 /// compiled by PUC's `luac`, loaded `ROUNDS` times per sample. Run the same
@@ -487,17 +552,12 @@ fn load_overhead() {
     }
     let mut luna_chunks = Vec::new();
     let mut vm = Vm::new(LuaVersion::Lua55);
-    let dump = vm.eval("return string.dump").unwrap()[0];
     for path in &sources {
         // a file luna refuses to compile as 5.5 is left out
         let Ok(f) = vm.load(&std::fs::read(path).unwrap(), b"=bench") else {
             continue;
         };
-        let v = vm.call_value(dump, &[Value::Closure(f)]).unwrap();
-        let Value::Str(s) = v[0] else {
-            panic!("string.dump returned {:?}", v[0]);
-        };
-        luna_chunks.push(s.as_bytes().to_vec());
+        luna_chunks.push(dump::dump(&f.proto, false, LuaVersion::Lua55));
     }
     let mut puc_chunks = Vec::new();
     if let Ok(luac) = std::env::var("PUC_LUAC_55") {

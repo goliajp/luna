@@ -143,10 +143,7 @@ useful for diagnosing why a workload isn't getting JIT speedup.
 
 ### 4.3 Memory baseline
 
-The dhat-based mem baseline lives at
-`.dev/baselines/mem-2026-06-25/` (gitignored). Reproduce with the
-recipe in [`contributing-mem.md`](contributing-mem.md); expected
-peaks at v1.3 ship for the 5 measured workloads:
+Peaks measured with dhat at v1.3 for five workloads:
 
 | Workload | Peak | Steady |
 |---|---:|---:|
@@ -172,7 +169,7 @@ drop(vm);  // runs all pending __gc finalizers via Heap::drop
 
 `__gc` finalizers always run on `Vm::drop`. If a finalizer panics,
 the next finalizer still runs (PUC semantics; see
-`cb_edge_gc_finalizer.rs::gc_finalizer_error_does_not_abort_program`).
+`gc_finalizer_edges.rs::gc_finalizer_error_does_not_abort_program`).
 
 ### 5.2 Async embedder
 
@@ -194,10 +191,8 @@ tokio::time::timeout(Duration::from_secs(5), vm.eval_async(script)).await
 ```
 
 On timeout, the future is dropped; the in-progress coroutine
-gets `__close` cleanup. **Note**: per the v2.0 charter Track AT
-(async tokio first-class), the cancellation invariant for TBC
-inside `EvalFuture::Drop` is being audited — pin the behavior
-in your own integration tests against the luna version you ship.
+gets `__close` cleanup. Pin that cancellation behavior in your own
+integration tests against the luna version you ship.
 
 ---
 
@@ -208,10 +203,9 @@ in your own integration tests against the luna version you ship.
 v1.3. See [`threading.md`](threading.md) for the tokio JoinSet
 pattern + per-request `Vm` pool sizing recipe.
 
-JIT-aware cross-thread (Track J in v2.0) is **not yet ship**;
-interp-only SendVm has zero overhead measured (-1.8% to -0.3% on
-M4 Max under SS-A bench) but trace mcode does not currently move
-across threads.
+The JIT does not cross threads: trace machine code does not move
+between threads. The interpreter-only `SendVm` measured no overhead
+(-1.8% to -0.3% on an M4 Max).
 
 ---
 
@@ -242,7 +236,5 @@ When upgrading across major versions (`1.x` → `2.0`):
 - [`security.md`](security.md) — threat model + sandbox boundaries
 - [`binary-size.md`](binary-size.md) — per-crate + AOT-output budgets
 - [`compatibility.md`](compatibility.md) — per-dialect feature matrix
-- [`contributing-mem.md`](contributing-mem.md) — memory baseline
-  reproduction
 - [`migration-v1-to-v2.md`](migration-v1-to-v2.md) — major-version
   upgrade checklist

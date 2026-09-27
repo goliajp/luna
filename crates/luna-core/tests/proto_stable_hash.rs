@@ -1,4 +1,4 @@
-//! v1.3 Phase AOT Stage 7 sub-piece 4 — `Proto::stable_hash` tests.
+//! `Proto::stable_hash` tests.
 //!
 //! See `crates/luna-core/src/runtime/function.rs` (the
 //! `Proto::stable_hash` docstring) for the algorithm + identity

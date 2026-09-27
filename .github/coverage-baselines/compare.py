@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v2.0 Track CV-infra — coverage baseline diff.
+"""Coverage baseline diff.
 
 Usage:
     compare.py <baseline.json> <current.json>
@@ -8,9 +8,7 @@ Exit codes:
     0  — no first-party crate dropped > 2pp in line coverage.
     1  — at least one regression > 2pp; details printed to stdout.
 
-Warns (does not fail) when a crate sits below its audit budget. The
-budget gates flip to hard-fail in a later phase once per-track CV
-content fills bring each crate into budget.
+Warns (does not fail) when a crate sits below its coverage budget.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ import json
 import sys
 from collections import defaultdict
 
-# v2.0 Phase 0 Track CV audit budgets (per crate, line coverage):
+# Coverage budgets (per crate, line coverage):
 BUDGETS = {
     "luna-core": 95.0,
     "luna-jit": 90.0,

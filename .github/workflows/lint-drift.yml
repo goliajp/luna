@@ -1,10 +1,9 @@
-# v2.20 D2 — catch toolchain lint drift before it turns develop red.
+# Catch toolchain lint drift before it turns develop red.
 #
 # Rust ships every six weeks and each release can add or sharpen lints.
 # ci.yml runs clippy with `-D warnings` on *stable*, so a new lint lands
 # as a hard failure the day that stable is released — with no warning
-# beforehand. That is exactly how v2.17 happened: `collapsible_if`
-# became active and develop was red for 34 days.
+# beforehand.
 #
 # This job runs the same clippy invocations against **beta** and
 # **nightly**, i.e. the compilers that stable will become in 6 and 12
@@ -12,9 +11,7 @@
 # still time to clear it as ordinary work.
 #
 # Design note — this job FAILS when it finds something, deliberately.
-# The v2.17 audit's lesson was that a workflow whose steady state is red
-# carries no signal (soak-weekly had been red 11 weeks running while
-# producing perfectly good data, and nobody read it). So the contract
+# A workflow whose steady state is red carries no signal. So the contract
 # here is: green means the next two toolchains are clean, red means
 # clear the lints now, and red is never the normal state. Nightly is
 # split into its own job and allowed to fail without failing the
@@ -49,8 +46,7 @@ jobs:
       # in the log. Those come from the vendored wasmtime tree, which
       # cargo lint-caps as a dependency, so they do not fail the step and
       # are not ours to fix. Only findings in luna's own crates can turn
-      # this job red. (Checked on 1.98.0-beta.7, 2026-08-14: five such
-      # warnings, exit code 0.)
+      # this job red.
       - name: cargo +beta clippy --workspace --all-targets -- -D warnings
         run: |
           cargo +beta clippy --workspace --all-targets \

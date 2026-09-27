@@ -1,4 +1,4 @@
-//! v1.3 Phase SR — `host_roots` slot-recycling pool + ABA-safe
+//! `host_roots` slot-recycling pool + ABA-safe
 //! `HostRootTicket` tests.
 //!
 //! Covers: basic recycle, stale-ticket detection on read/write/unpin,

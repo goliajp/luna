@@ -1,8 +1,8 @@
 //! `luna-repl-polish` — REPL polish (multi-line, completion,
 //! `~/.luna_history` smarter handling).
 //!
-//! v2.0 Track TL Phase 2 stub. The impl pins `rustyline = "=14.x"`
-//! mid-sprint hazard); the dep + impl land together in Phase 2.
+//! Stub. The impl will pin an exact `rustyline` version; the dep +
+//! impl land together.
 //!
 //! The current REPL surface lives in `luna` (the `luna-jit` bin
 //! target). This polish binary is intentionally additive — once
@@ -17,7 +17,7 @@ use clap::Parser;
 #[command(
     name = "luna-repl-polish",
     version,
-    about = "Polished luna REPL (Phase 2 — stub)."
+    about = "Polished luna REPL (stub)."
 )]
 struct Cli {
     /// Path to a history file (defaults to `~/.luna_history`).

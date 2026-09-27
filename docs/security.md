@@ -187,7 +187,7 @@ to bound what the `open_os_io()` opt-in could reach.
 
 ## 5. Zero `unsafe` at the embedder surface
 
-A4 (v1.1 charter): every type and function that `cargo doc` shows
+Every type and function that `cargo doc` shows
 to a downstream crate is safe Rust. The four remaining
 `pub unsafe fn` (`Gc::<T>::as_mut`, `Value::as_closure_unchecked`,
 `Value::as_int_unchecked`, `Value::pack`) are `#[doc(hidden)]` —

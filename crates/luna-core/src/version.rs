@@ -6,7 +6,7 @@
 
 /// Lua dialect the VM emulates. Drives lexer, parser, and runtime feature
 /// gating. `Lua55` is the primary; the others are compat modes; `MacroLua`
-/// (v1.3 Phase ML) is an additive dialect built on top of the 5.4 base.
+/// is an additive dialect built on top of the 5.4 base.
 ///
 /// **Enum ordering note**: `MacroLua` is placed **between `Lua54` and
 /// `Lua55`** on purpose. The capability predicates below use `>=` / `<=`
@@ -23,7 +23,7 @@ pub enum LuaVersion {
     Lua53,
     /// Lua 5.4 — adds `<const>` / `<close>` attributes and integer-for spec.
     Lua54,
-    /// MacroLua (v1.3 Phase ML) — 5.4 base + compile-time macros
+    /// MacroLua — 5.4 base + compile-time macros
     /// (`@name(args)`, `@quote{...}`, `@if`, `@gensym`). Opt-in via
     /// `Vm::new(LuaVersion::MacroLua)`; PUC 5.1-5.5 lexer/parser
     /// behavior is **not** affected. See `docs/compatibility.md`
@@ -107,7 +107,7 @@ impl LuaVersion {
     }
 
     /// MacroLua dialect — compile-time macros enabled in lexer/parser.
-    /// Base semantics = Lua 5.4 (audit-locked, v1.3 Phase ML).
+    /// Base semantics = Lua 5.4.
     pub fn is_macro_lua(self) -> bool {
         self == LuaVersion::MacroLua
     }

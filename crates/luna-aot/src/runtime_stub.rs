@@ -1,16 +1,16 @@
 //! The Rust runtime stub that the AOT-produced binary calls at
 //! process start. This module is **library code** today: the
 //! scaffold's linked binary uses a tiny C `main` (see
-//! [`crate::embed`]) that prints the bytecode length. The follow-up
-//! session swaps that C entry out for this Rust stub so the binary
-//! actually runs the embedded bytecode through a `Vm`.
+//! [`crate::embed`]) that prints the bytecode length. Swapping that C
+//! entry out for this Rust stub makes the binary run the embedded
+//! bytecode through a `Vm`.
 //!
-//! # Wiring (follow-up)
+//! # Wiring
 //!
 //! Two paths to get this module's [`aot_main`] called from the
 //! produced binary:
 //!
-//! 1. **Cargo bootstrap** (audit § Stage 6 Option A) — the embedder's
+//! 1. **Cargo bootstrap** — the embedder's
 //!    AOT pipeline generates a tiny crate in a tempdir whose `main.rs`
 //!    is:
 //!    ```ignore
@@ -23,7 +23,7 @@
 //!    bytecode object file emitted by [`crate::embed`] is linked in
 //!    via a `build.rs` that calls `println!("cargo:rustc-link-arg=...")`.
 //!
-//! 2. **Pre-built staticlib** (audit § Stage 6 Option B, v1.4) — ship
+//! 2. **Pre-built staticlib** — ship
 //!    `libluna_core.a` per supported triple, link directly via `cc`,
 //!    let this stub serve as the entry point through `#[no_mangle] pub
 //!    extern "C" fn aot_main`.
@@ -93,14 +93,14 @@ pub fn aot_main() -> i32 {
     // The dialect baked into the produced binary defaults to 5.5.
     // The AOT pipeline always dumps with the dialect that compiled the
     // source, so a `Vm::new(Lua55)` matched against a 5.4 dump would
-    // be a dialect mismatch — Phase ML's `MacroLua` falls back to the
+    // be a dialect mismatch — `MacroLua` falls back to the
     // 5.4 header, and `dump::undump` rejects mismatches with a clear
     // "header mismatch" message.
     //
-    // Follow-up: the AOT pipeline emits a small `__luna_version` byte
-    // alongside the bytecode bracket symbols so the stub picks the
-    // matching dialect automatically. v1.3 scaffold pins 5.5 — the
-    // CLI default — and rejects loads that don't match.
+    // The stub pins 5.5 — the CLI default — and rejects loads that
+    // don't match. Emitting a `__luna_version` byte alongside the
+    // bytecode bracket symbols would let it pick the dialect
+    // automatically.
     let mut vm = Vm::new(LuaVersion::Lua55);
 
     // Enable bytecode loading explicitly. `Vm::new` defaults to

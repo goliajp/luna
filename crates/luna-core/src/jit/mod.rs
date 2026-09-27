@@ -3,8 +3,7 @@
 //! The interpreter dispatcher in [`crate::vm::exec`] routes JIT calls
 //! through [`IntChunkCompiler`] / [`TraceCompiler`] trait objects;
 //! luna-core ships only the no-op [`NullJitBackend`], which makes the
-//! whole crate Cranelift-free (and therefore zero-three-party-dep,
-//! per v1.1 F1).
+//! whole crate Cranelift-free (and therefore zero-three-party-dep).
 //!
 //! The Cranelift-backed implementations (`CraneliftBackend`, the 26
 //! `luna_jit_*` extern "C" helpers, the `JIT_CACHE` thread-local,
@@ -14,36 +13,31 @@
 //! `luna::Vm::new_minimal_with_jit(version)` instead of
 //! `luna_core::vm::Vm::new_minimal(version)`.
 
-// v1.1 A1 Session B — pure data types + small cranelift-free helpers
-// for the trace JIT live here. Session C moves the file under
-// luna-core unchanged.
+// Pure data types + small cranelift-free helpers for the trace JIT.
 pub mod trace_types;
 pub use trace_types::*;
 
-// v1.3 Phase AOT Stage 7 sub-piece 4 — wire format for AOT trace
+// Wire format for AOT trace
 // metadata (header + index entry + encode/decode). Pure data; both
 // `luna-aot` (compile-time encode) and `luna-runtime-helpers`
 // (deploy-time decode) depend on this single module so the on-disk
 // shape stays in lock-step.
 pub mod aot_meta;
 
-// v1.1 A1 Session A — backend trait surface introduced in-place.
-// Session C moves it to luna-core (this file) and extracts the
-// Cranelift-bound CraneliftBackend struct out into luna's
-// jit_backend module.
+// Backend trait surface. The Cranelift-bound CraneliftBackend lives in
+// luna's jit_backend module.
 mod abi;
 pub use abi::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, MAX_JIT_ARITY,
     NullJitBackend, TraceCompiler,
 };
 
-// v2.0 Track J sub-step J-B — per-Vm JIT storage trait. Holds the
-// (formerly thread-local) JIT cache + handle collections so a Vm
-// carries its own JIT state across thread moves (Send-prep for J-D).
+// Per-Vm JIT storage trait. Holds the JIT cache + handle collections
+// so a Vm carries its own JIT state across thread moves.
 mod storage;
 pub use storage::{JitStorage, NullJitStorage};
 
-// v2.1 Track J-C — cfg-gated Send-friendly aliases & wrappers for
+// cfg-gated Send-friendly aliases & wrappers for
 // the trace IR interior-mutability types. Default-feature path is
 // 0-cost (`Rc` / `Cell` / `RefCell`); `feature = "send"` flips to
 // `Arc` / `AtomicU32` / `AtomicBool` / `AtomicPtr<u8>` / `RwLock` so
@@ -52,9 +46,8 @@ pub mod send_compat;
 pub use send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 
 // Compatibility re-export so external `use luna::jit::trace::*` paths
-// (and the historical `crate::jit::trace::*` accesses inside this
-// crate) keep resolving even after Session C's physical split. In
-// luna-core `trace` is just a namespace alias for `trace_types`; in
+// (and `crate::jit::trace::*` accesses inside this crate) keep
+// resolving. In luna-core `trace` is just a namespace alias for `trace_types`; in
 // luna it's enriched with codegen-bearing items via a different
 // re-export.
 /// Trace-JIT types namespace. In `luna-core` this is a thin re-export of
@@ -76,34 +69,22 @@ pub fn noop_jit_guard() -> JitVmGuard {
     JitVmGuard { restore: None }
 }
 
-/// P11-S5c — RAII guard pinning the active `Vm` (and optional closure)
+/// RAII guard pinning the active `Vm` (and optional closure)
 /// pointer for JIT-emitted Rust helper calls.
 ///
-/// # v2.0 Track J sub-step J-D — real RAII rebind
+/// # Real RAII rebind
 ///
-/// Prior to J-D, this guard's drop was a deliberate no-op: the
-/// dispatcher always re-installed `JIT_VM` / `JIT_CL` on every
-/// `enter_jit` call, so the previous-dispatch values would simply be
-/// overwritten on the next entry. That trick saved 2 TLS writes per
-/// dispatch (~5-10 cycles each on arm64) — measurable on fib_28's
-/// 434k dispatches (~1.5 ms aggregate).
-///
-/// Track J Option B targets cross-thread Vm move under
-/// `feature = "send"` (J-E flip). Once a Vm parks on thread A, moves
-/// to thread B, and dispatches there, the per-thread `JIT_VM` slot on
-/// thread B is null/stale at entry — `enter_jit` installs it fine on
-/// the way in, but on the way out the no-op drop left stale Vm
-/// pointers behind for any **nested** JIT entry (Lua-from-Rust-from-
-/// JIT call chains, e.g. metamethod dispatch under a JIT'd op). With
-/// nested entries restoring an outer Vm pointer becomes load-bearing.
-///
-/// J-D therefore turns the guard into a real RAII: `enter_jit`
-/// captures the prior `(JIT_VM, JIT_CL)` values into the guard, and
-/// `Drop` restores them. The cost is the 2 TLS writes we previously
-/// elided per dispatch. The single-thread-no-nesting case is
-/// semantically equivalent: prior values restored on exit are the
-/// same null/stale ones the next `enter_jit` would overwrite anyway;
-/// no observable behavior change for existing call sites.
+/// `enter_jit` captures the prior `(JIT_VM, JIT_CL)` values into the
+/// guard, and `Drop` restores them. A drop that skipped the restore
+/// would save 2 TLS writes per dispatch, but under `feature = "send"`
+/// a Vm can park on thread A, move to thread B, and dispatch there:
+/// the per-thread `JIT_VM` slot on thread B is null/stale at entry,
+/// and a no-op drop would leave stale Vm pointers behind for any
+/// **nested** JIT entry (Lua-from-Rust-from-JIT call chains, e.g.
+/// metamethod dispatch under a JIT'd op). With nested entries,
+/// restoring the outer Vm pointer is load-bearing. In the
+/// single-thread-no-nesting case the values restored on exit are the
+/// same null/stale ones the next `enter_jit` would overwrite anyway.
 ///
 /// `NullJitBackend::enter` keeps the no-op shape via
 /// [`noop_jit_guard`] — its guard has `restore = None`.

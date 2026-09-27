@@ -139,9 +139,9 @@ impl<T> Gc<T> {
     /// SAFETY: caller must ensure no other live reference to the object and
     /// no collect() while the borrow is held (single-threaded runtime).
     ///
-    /// `#[doc(hidden)]` (Track A4 — pub-surface 0 unsafe): embedders should
-    /// not see this in rustdoc. The safe path for mutating freshly-allocated
-    /// tables is the `TableBuilder` / `vm.table_of(...)` API (Track B3).
+    /// `#[doc(hidden)]` so the documented public surface needs no `unsafe`:
+    /// embedders should not see this in rustdoc. The safe path for mutating
+    /// freshly-allocated tables is the `TableBuilder` / `vm.table_of(...)` API.
     /// Cross-crate access from `luna` (e.g. `jit_backend`, `capi`) keeps
     /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
     #[doc(hidden)]
@@ -251,7 +251,7 @@ pub struct Heap {
     /// gc.lua :544 asserts collected after one `collectgarbage()`). 5.1/5.2
     /// don't exercise this path. Set by the VM at construction.
     pub(crate) defer_thread_cycle_finalize: bool,
-    /// P17-D v2 layer-15 attack: pool of freed Table allocations.
+    /// Pool of freed Table allocations.
     /// btrees-style workloads create + free ~32k tables per iter;
     /// jemalloc's malloc/free roundtrip costs ~30ns per table = ~960µs
     /// total per iter. Pool recycle: free_obj pushes the raw Table
@@ -259,13 +259,13 @@ pub struct Heap {
     /// Cap at 4096 entries to avoid unbounded growth (worst-case: 4096
     /// × sizeof(Table) ≈ 460 KB resident memory in idle pool).
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
-    /// v2.13 WUC `gc-verify` — headers freed since the last collect
+    /// `gc-verify` — headers freed since the last collect
     /// began. O(1) read-time dangling probes (`Vm::op_index`) test
     /// membership here; cleared when the next mark starts. Only exact
     /// under ASAN-style quarantining allocators (no immediate reuse).
     #[cfg(feature = "gc-verify")]
     pub(crate) recently_freed: std::collections::HashSet<usize>,
-    /// P09 embedding memory cap. When `Some(n)`, the VM's run loop watches
+    /// Embedding memory cap. When `Some(n)`, the VM's run loop watches
     /// `bytes` between dispatch turns and, on overshoot, runs a full collect
     /// and (still overshooting) raises a catchable "memory cap exceeded"
     /// Lua error. A soft cap, not a hard alloc-time refusal: a single
@@ -341,7 +341,7 @@ impl Heap {
 
     /// Allocate and adopt a fresh empty [`Table`].
     pub fn new_table(&mut self) -> Gc<Table> {
-        // P17-D v2 layer-15 attack — table_pool fast path. When btrees-
+        // table_pool fast path. When btrees-
         // style alloc bursts have left freed Tables in the pool, pop a
         // recycled one and reset its fields instead of mallocing fresh.
         // Saves ~30ns per alloc (malloc roundtrip elided).
@@ -376,7 +376,7 @@ impl Heap {
         self.link(p as *mut GcHeader);
         self.bytes += std::mem::size_of::<Table>();
         let g = Gc::from_ptr(p);
-        // P11-S5d.I — the Table is now at its final heap address; wire
+        // the Table is now at its final heap address; wire
         // `array_ptr` to point at the inline storage that lives inside
         // the boxed Table.
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -384,7 +384,7 @@ impl Heap {
         g
     }
 
-    /// P11-S5c.B — adopt an empty table and pre-allocate `asize`
+    /// Adopt an empty table and pre-allocate `asize`
     /// NIL slots in the array part. Equivalent to `new_table()`
     /// followed by `set_int(N, Nil)` worth of `rehash`es, except
     /// the array reaches its final size in one allocation rather
@@ -413,7 +413,7 @@ impl Heap {
         self.adopt(Box::new(proto))
     }
 
-    /// P11-S5d.M — back-compat constructor for callers that already
+    /// Back-compat constructor for callers that already
     /// built a `Box<[Gc<Upvalue>]>`. Internally re-routes through
     /// `new_closure_inline` so small-upval cases also pick the
     /// inline path (the input Box is freed after the copy).
@@ -433,7 +433,7 @@ impl Heap {
         }
     }
 
-    /// P11-S5d.M — hot-path constructor for the `Op::Closure` handler.
+    /// Hot-path constructor for the `Op::Closure` handler.
     /// Takes a slice (typically backed by a stack array) so the caller
     /// doesn't allocate a Vec/Box just to hand it over. Upvals are
     /// copied into `inline_storage` for small closures, or into a
@@ -502,7 +502,7 @@ impl Heap {
         }))
     }
 
-    /// v1.1 B10 Stage 2 — like [`Heap::new_native`] but tags the
+    /// Like [`Heap::new_native`] but tags the
     /// closure with `is_async = true`. The dispatcher's native-call
     /// path then transmutes `f` to `AsyncNativeFn` and routes through
     /// the cooperative-yield path. The caller is responsible for
@@ -621,7 +621,7 @@ impl Heap {
         self.bytes
     }
 
-    /// v2.0 Track TL — pure-read walk over the intrusive `all`
+    /// Pure-read walk over the intrusive `all`
     /// objects list, invoking `visit(tag)` once per live (or
     /// not-yet-swept) GC-managed object. Used by `luna-tools`'s
     /// `luna-heap-dump` to build a per-type histogram; embedders
@@ -912,7 +912,7 @@ impl Heap {
         // sweep tests for). Born-during-sweep allocations stamp the new
         // current-white via `Heap::link`, so they survive this cycle.
         self.current_white ^= WHITE_BITS;
-        // v2.13 WUC `gc-verify` — tricolor invariant check at the one
+        // `gc-verify` — tricolor invariant check at the one
         // moment it is exact: marking is complete, nothing is freed yet.
         // A BLACK (surviving) table holding a dead-white child means a
         // write barrier was missed; the child will be freed by the
@@ -923,7 +923,7 @@ impl Heap {
         self.verify_tricolor("atomic_tail");
     }
 
-    /// v2.13 WUC `gc-verify` — the set of every live object header
+    /// `gc-verify` — the set of every live object header
     /// (all + sweep_cur + finalizer queues), for callers that need to
     /// audit their own containers (e.g. the VM auditing its register
     /// stack after a collect).
@@ -1415,7 +1415,7 @@ impl Heap {
         }
         // Verify after EVERY step, not just cycle completion: the
         // mutator runs between steps, so a reference dangling mid-cycle
-        // is already a live bug (this is exactly UAF-C's window).
+        // is already a live bug.
         #[cfg(feature = "gc-verify")]
         self.verify_no_dangling("sweep_step");
         if self.sweep_cur.is_null() {
@@ -1426,7 +1426,7 @@ impl Heap {
         }
     }
 
-    /// v2.13 WUC `gc-verify` — post-sweep dangling-reference check
+    /// `gc-verify` — post-sweep dangling-reference check
     /// (PUC `lua_checkmemory` analogue). Builds the live set from the
     /// `all` list + finalizer queues, then walks every live table's
     /// collectable refs via [`Table::verify_refs`]. Panics with table
@@ -1524,7 +1524,7 @@ impl Heap {
                     self.bytes = self
                         .bytes
                         .saturating_sub(std::mem::size_of::<Table>() + internal);
-                    // P17-D v2 layer-15 attack — pool recycle. Drop the
+                    // pool recycle. Drop the
                     // Box-owned interior (slab, nodes, metatable) so the
                     // Table struct itself can be re-handed-out by a
                     // future `new_table` without re-mallocing. Cap pool
@@ -1536,9 +1536,8 @@ impl Heap {
                         // slice, so reassigning is just a pointer move.
                         (*t).slab = Box::new([]);
                         (*t).nodes = Box::new([]);
-                        // C3 — drop SoA Robin Hood parallel arrays too.
-                        // These are Box::new([]) dangling stubs until
-                        // Phase D cuts over (Phase B initial state).
+                        // drop the SoA Robin Hood parallel arrays too
+                        // (usually Box::new([]) dangling stubs).
                         (*t).keys = Box::new([]);
                         (*t).vals = Box::new([]);
                         (*t).meta = Box::new([]);
@@ -1607,7 +1606,7 @@ impl Drop for Heap {
                     cur = next;
                 }
             }
-            // P17-D v2 layer-15 attack — release the table_pool's
+            // release the table_pool's
             // dangling Box<Table> ptrs. Each was Box::into_raw'd into
             // the pool (via free_obj recycle path); without this, the
             // Tables would leak. The pool's Tables had their interior
@@ -1865,7 +1864,7 @@ mod tests {
         // driven growth, and full collection of an empty root set, both
         // `heap.bytes` and `heap.live_objects` must return to 0. Catches any
         // alloc / free asymmetry in the Table internal-Box delta tracking
-        // (4bab3c5) or the live counter (link/sweep symmetry).
+        // or the live counter (link/sweep symmetry).
         let mut heap = Heap::new();
         assert_eq!(heap.bytes(), 0);
         assert_eq!(heap.live_objects(), 0);
@@ -1921,7 +1920,7 @@ mod tests {
     /// short string after the atomic flip; a re-`intern` of the same bytes
     /// hands back that pointer; the budget-paced sweep then frees it and
     /// the next bucket walk dereferences libc-recycled garbage (the
-    /// `0x800002a80000002d` misaligned pointer seen in the audit).
+    /// `0x800002a80000002d` misaligned pointer, for example).
     #[test]
     fn intern_resurrects_dead_white_short_string() {
         let mut heap = Heap::new();

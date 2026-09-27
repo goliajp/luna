@@ -1,0 +1,80 @@
+//! Smoke tests — verify the trace recording skeleton wires up
+//! correctly when `Vm::set_trace_jit_enabled(true)` is called.
+
+use luna_jit::runtime::Value;
+use luna_jit::version::LuaVersion;
+
+#[test]
+fn trace_recording_inactive_when_disabled() {
+    // trace_enabled defaults to `true`. This test asserts the
+    // *disabled* path still works — explicitly turn off, then verify
+    // a loop runs to completion and a fresh eval still returns the
+    // correct value (the gate is genuinely closed, no stale trace
+    // state interferes).
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(false);
+    assert!(!vm.trace_jit_enabled());
+    vm.eval("local s = 0 for i = 1, 1000 do s = s + i end return s")
+        .unwrap();
+    let r = vm.eval("return 1 + 2").unwrap();
+    assert!(matches!(r.first(), Some(Value::Int(3))));
+}
+
+#[test]
+fn trace_recording_starts_at_hot_back_edge() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(true);
+    assert!(vm.trace_jit_enabled());
+    // 1000 iterations × one back-edge per iter = 1000 hits, well past
+    // TRACE_HOT_THRESHOLD (64). Recording should start once and abort
+    // (hits MAX_TRACE_LEN = 256 of dispatched ops including the loop
+    // body's many instructions) or close cleanly; either way the
+    // bench code must still return the right value.
+    let r = vm
+        .eval("local s = 0 for i = 1, 1000 do s = s + i end return s")
+        .unwrap();
+    assert_eq!(r.len(), 1);
+    let v = r[0];
+    let ok = matches!(v, Value::Int(500_500))
+        || matches!(v, Value::Float(f) if (f - 500_500.0).abs() < 1.0);
+    assert!(ok, "expected 500500 (sum of 1..1000), got {v:?}");
+}
+
+#[test]
+fn trace_recording_closes_on_simple_loop() {
+    // A `for i = 1, N do s = s + i end` body has 2 ops (Add + ForLoop).
+    // After 64 back-edge crossings the recorder starts at the loop head;
+    // the very next iteration loops back to the head — trace closes.
+    // Compile is not checked here, but `trace_closed_count` must increment.
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    // Disable method JIT so the loop's back-edges actually dispatch
+    // through the interpreter — method JIT compiles `for i=1,N` whole
+    // and trace recording never sees Op::Jmp / ForLoop ticks.
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+    // Use `while`/`repeat` (compile to Op::Jmp back-edges) rather than
+    // numeric `for` (which uses the dedicated ForLoop opcode).
+    let _ = vm
+        .eval("local i, s = 0, 0; while i < 1000 do i = i + 1; s = s + i end; return s")
+        .unwrap();
+    assert!(
+        vm.trace_closed_count() >= 1,
+        "expected ≥1 trace close on a 1000-iter loop, got closed={} aborted={}",
+        vm.trace_closed_count(),
+        vm.trace_aborted_count()
+    );
+}
+
+#[test]
+fn trace_jit_toggle_round_trip() {
+    // The default is `true`; explicitly toggle through false →
+    // true → false so the test exercises every transition regardless
+    // of the ship default.
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
+    vm.set_trace_jit_enabled(false);
+    assert!(!vm.trace_jit_enabled());
+    vm.set_trace_jit_enabled(true);
+    assert!(vm.trace_jit_enabled());
+    vm.set_trace_jit_enabled(false);
+    assert!(!vm.trace_jit_enabled());
+}

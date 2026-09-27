@@ -1,4 +1,4 @@
-//! v1.3 Phase ML — MacroLua dialect end-to-end tests.
+//! MacroLua dialect end-to-end tests.
 //!
 //! Covers:
 //! - PUC 5.1-5.5 reject `@` token (regression guard for the dialect gate)
@@ -8,8 +8,8 @@
 //! - Nested expansion (`@double(@gensym)`) — inside-out hygiene model
 //! - Error reporting for unknown macros
 //!
-//! Hygiene chosen for v1.3: **gensym-only**. Implicit quote-body scope
-//! rewrite is deferred (see `docs/compatibility.md` MacroLua section).
+//! Hygiene is **gensym-only**. Implicit quote-body scope rewrite is not
+//! implemented (see `docs/compatibility.md` MacroLua section).
 
 use luna_core::frontend::error::SyntaxError;
 use luna_core::frontend::lexer::Lexer;

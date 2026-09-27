@@ -2,9 +2,8 @@
 
 The consolidated guide for embedders moving off any v1.x release.
 
-**There was never a v2.0.** The v2.0 charter's fourteen tracks shipped
-as one release, and that release was **2.1.0** (2026-06-28, 235 commits
-after 1.3.0). No `v2.0.0` tag or crates.io version exists. If you are
+**There was never a v2.0.** The first 2.x release was **2.1.0**
+(2026-06-28, 235 commits after 1.3.0). No `v2.0.0` tag or crates.io version exists. If you are
 looking for "what broke in 2.0", the answer is: what broke in 2.1.0,
 listed below.
 

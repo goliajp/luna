@@ -112,18 +112,22 @@ fn a_count_larger_than_the_chunk_is_a_truncation() {
         ),
     ] {
         let mut vm = Vm::new(version);
-        // the instruction count follows the chunk's source name
+        // luna's own format (`string.dump` writes PUC's), where the
+        // instruction count follows the chunk's source name
+        let f = vm.load(b"return 1", b"=srcmark").expect("compiles");
+        let luna_chunk = luna_core::vm::dump::dump(&f.proto, false, version);
+        let literal: String = luna_chunk.iter().map(|b| format!("\\{b}")).collect();
         let r = vm
-            .eval(
+            .eval(&format!(
                 r#"
                 local ld = loadstring or load
-                local d = string.dump(ld("return 1", "=srcmark"))
+                local d = "{literal}"
                 local at = select(2, d:find("=srcmark", 1, true))
                 local bad = d:sub(1, at) .. "\255\255\255\255" .. d:sub(at + 5)
                 local f, e = ld(bad, "=bad")
                 return tostring(f) .. " " .. tostring(e)
-                "#,
-            )
+                "#
+            ))
             .expect("chunk runs");
         let Some(Value::Str(s)) = r.first() else {
             panic!("expected a string")

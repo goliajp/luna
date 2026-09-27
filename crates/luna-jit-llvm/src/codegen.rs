@@ -1,8 +1,8 @@
-//! v2.1 Phase 1K.D / 1K.E — LLVM int-chunk codegen.
+//! LLVM int-chunk codegen.
 //!
 //! Two recognised paths land here:
 //!
-//! 1. **Dead-locals path** (Phase 1K.D.6 / 1K.D.7) —
+//! 1. **Dead-locals path** —
 //!    `[(LoadNil | LoadK | Move)*, Return0, ...]` chunks whose locals
 //!    are unobservable at the `Return0` boundary. Emit shrinks to
 //!    `extern "C" fn() -> i64 { ret 0 }` because no JIT-entry caller
@@ -11,32 +11,28 @@
 //!    LoadK of *string* / *bool* / *nil* constants whose value the
 //!    interpreter would compute but the JIT entry can elide.
 //!
-//! 2. **Compute path** (Phase 1K.E.2+) — chunks that reach an
+//! 2. **Compute path** — chunks that reach an
 //!    observable `Return1 R[A]`. The lowerer builds an `[N x i64]`
 //!    register file on entry, emits one LLVM IR instruction per
 //!    recognised op, and tails into either `ret i64 0` (Return0) or
-//!    `ret <reg>` (Return1). The op whitelist grows incrementally —
-//!    Phase 1K.E.2 covers `LoadI` + `Return0` + `Return1`; later
-//!    sub-phases add `Move` / `LoadK_int` / `Add` / arith family /
-//!    `Lt|Le|Eq` / `Jmp` / `LoadFalse|LoadTrue|LoadNil`.
+//!    `ret <reg>` (Return1).
 //!
 //! ## Why two paths instead of one
 //!
-//! The 1K.D dead-locals path can lower **chunks containing LoadK of
+//! The dead-locals path can lower **chunks containing LoadK of
 //! non-int constants** (string / bool / nil) because the values are
-//! never observed. The 1K.E compute path can only lower ops whose
+//! never observed. The compute path can only lower ops whose
 //! semantics it actually emits — so it bails on string / bool / nil
-//! LoadK. Keeping both paths preserves the 1K.D.7 smoke coverage and
-//! lets Phase 1K.E grow the whitelist op-by-op without breaking
-//! previously-passing chunk shapes.
+//! LoadK. Keeping both paths lets the compute whitelist grow op-by-op
+//! without breaking chunk shapes the dead-locals path already covers.
 //!
 //! ## Cache key
 //!
 //! Both paths share the FNV-1a-64-over-bytecode-words key (see
 //! `proto_cache_key`). Constants are *not* fed in yet — the recognised
 //! shapes either don't touch consts (LoadI/Move/arith on regs) or
-//! treat them as unobservable (dead-locals LoadK). Phase 1K.E that
-//! lights up `Add R, K` (constant operand) will widen the key.
+//! treat them as unobservable (dead-locals LoadK). Any op that reads
+//! a constant operand (e.g. `Add R, K`) must widen the key.
 //!
 //! ## Lifetime path
 //!
@@ -58,7 +54,7 @@ use luna_core::vm::isa::{Inst, Op};
 use std::collections::HashMap;
 use std::hash::Hasher;
 
-/// v2.1 Phase 1K.F.2 — `luna_jit_*` helper registry. Each tuple is
+/// `luna_jit_*` helper registry. Each tuple is
 /// `(symbol_name, fn_ptr_as_usize, n_args, returns_i64)`. The full
 /// 27-entry set from `luna-jit-helpers` lives here so future ops can
 /// reach for any helper without re-touching the registration path;
@@ -254,13 +250,13 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
     ]
 }
 
-/// v2.1 Phase 1K.F.2 — declare every `luna_jit_*` helper in `module`
+/// Declare every `luna_jit_*` helper in `module`
 /// as an external function. The returned map lets emit sites grab the
 /// `FunctionValue` for `build_call` without re-looking-up via
 /// `Module::get_function` per call. Pairs with [`bind_helper_symbols`]
 /// which fires after `create_jit_execution_engine` to wire the IR
 /// declarations to their actual Rust function addresses.
-/// v2.1 Phase 1K.G — also used by the trace JIT (`trace.rs`).
+/// Also used by the trace JIT (`trace.rs`).
 pub(crate) fn declare_jit_helpers<'ctx>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
@@ -282,7 +278,7 @@ pub(crate) fn declare_jit_helpers<'ctx>(
     map
 }
 
-/// v2.1 Phase 1K.F.2 — bind every declared `luna_jit_*` helper to its
+/// Bind every declared `luna_jit_*` helper to its
 /// Rust function address via `ExecutionEngine::add_global_mapping`.
 /// Without this step the JIT'd mcode would call undefined external
 /// symbols at run time (LLVM's default resolver tries `dlsym` first,
@@ -290,7 +286,7 @@ pub(crate) fn declare_jit_helpers<'ctx>(
 /// so they ARE dlsym-able when luna is loaded as a `dylib`/`cdylib`
 /// — but the rlib link path strips them, exactly mirroring Cranelift's
 /// `JITBuilder::symbol` rationale in `build_jit_module_with_helpers`).
-/// v2.1 Phase 1K.G — also used by the trace JIT (`trace.rs`).
+/// Also used by the trace JIT (`trace.rs`).
 pub(crate) fn bind_helper_symbols<'ctx>(
     engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
     helpers: &HashMap<&'static str, FunctionValue<'ctx>>,
@@ -302,15 +298,15 @@ pub(crate) fn bind_helper_symbols<'ctx>(
     }
 }
 
-/// v2.1 Phase 1K.D.7 / 1K.E.2 — try to lower `proto` to native code
+/// Try to lower `proto` to native code
 /// via LLVM. Returns `None` when the body falls outside the recognised
 /// shape (caller turns into `CompileResult::Skipped`).
 ///
 /// Recognised shapes:
-/// - **Dead locals** (Phase 1K.D): a (possibly empty) prefix of
+/// - **Dead locals**: a (possibly empty) prefix of
 ///   `LoadNil | LoadK | Move` followed by `Return0`. Lowers to
 ///   `extern "C" fn() -> i64 { ret 0 }`.
-/// - **Compute** (Phase 1K.E.2): a (possibly empty) prefix of
+/// - **Compute**: a (possibly empty) prefix of
 ///   `LoadI | LoadNil | LoadK(Int) | Move` followed by either
 ///   `Return1` or `Return0`. Lowers to a per-op reg-array entry.
 ///
@@ -322,7 +318,7 @@ pub(crate) fn try_compile_int_chunk(
     proto: Gc<Proto>,
     pre53: bool,
 ) -> Option<CompileResult> {
-    // Path 1: dead-locals fast path (Phase 1K.D.7). Restricted to
+    // Path 1: dead-locals fast path. Restricted to
     // zero-param chunks because its `extern "C" fn() -> i64` emit
     // signature doesn't accept positional args.
     if proto.num_params == 0 && is_dead_locals_then_return0(&proto.code) {
@@ -331,10 +327,9 @@ pub(crate) fn try_compile_int_chunk(
         }));
     }
 
-    // Path 2: compute path (Phase 1K.E.2+). Scans for the cumulative
-    // whitelist + the chunk's effective return shape, then lowers
-    // op-by-op into a reg-array entry. Phase 1K.F lifted the
-    // `num_params == 0` gate; parametric chunks land as
+    // Path 2: compute path. Scans for the cumulative whitelist + the
+    // chunk's effective return shape, then lowers op-by-op into a
+    // reg-array entry. Parametric chunks land as
     // `extern "C" fn(i64, …, i64) -> i64` with arg-load shims in the
     // entry BB.
     if let Some(plan) = ChunkPlan::from_proto(&proto) {
@@ -390,7 +385,7 @@ fn via_cache(
     cached.to_compile_result()
 }
 
-/// Phase 1K.D.7 / 1K.E.7 — accept
+/// Accept
 /// `[(LoadNil | LoadK | Move | LoadFalse | LoadTrue)*, Return0, ...]`.
 ///
 /// The dead-locals path eats every load op whose effect is invisible
@@ -405,9 +400,8 @@ fn via_cache(
 /// **only**; the compute path needs a dispatcher widening
 /// (`ret_is_bool` bit) before `return true` / `return false` can
 /// flow through the JIT-entry → caller contract without misreading
-/// the i64 as an integer. That widening is part of a future
-/// sub-phase (paired with `LoadF` / float-return support); until
-/// then a chunk like `return true` falls through to the interpreter.
+/// the i64 as an integer; until then a chunk like `return true`
+/// falls through to the interpreter.
 fn is_dead_locals_then_return0(code: &[Inst]) -> bool {
     let Some(first_ret_pc) = code
         .iter()
@@ -426,14 +420,14 @@ fn is_dead_locals_then_return0(code: &[Inst]) -> bool {
     })
 }
 
-/// Phase 1K.E.2+ — whitelisted op set + control-flow plan that the
+/// Whitelisted op set + control-flow plan that the
 /// compute lowerer understands. Built by [`ChunkPlan::from_proto`];
 /// `None` when the proto falls outside the supported whitelist.
 ///
 /// The plan is the full reach-analysed bytecode + a per-PC vector of
 /// basic-block start markers (every entry PC, every jump target, every
 /// PC immediately following a terminator). With branching ops in scope
-/// (Phase 1K.E.5+6) "reachable" is no longer "sequential prefix"; we
+/// "reachable" is not a "sequential prefix"; we
 /// trace edges from PC 0 and mark every visited PC for emit.
 struct ChunkPlan<'a> {
     /// Full chunk code (not truncated). The reach map (`reachable`)
@@ -442,8 +436,8 @@ struct ChunkPlan<'a> {
     code: &'a [Inst],
     /// Number of i64 register slots to alloca on entry.
     num_regs: u32,
-    /// v2.1 Phase 1K.F.6 — number of positional i64 args the JIT entry
-    /// accepts. `0` keeps the historical `extern "C" fn() -> i64`
+    /// Number of positional i64 args the JIT entry
+    /// accepts. `0` keeps the plain `extern "C" fn() -> i64`
     /// signature; `> 0` widens to `fn(i64, …, i64) -> i64` and the
     /// entry BB loads each `function.get_nth_param(i)` into `regs[i]`
     /// so the lowerer sees param 0..N-1 as live register sources.
@@ -467,18 +461,18 @@ struct ChunkPlan<'a> {
     /// after every reachable path has already returned) are skipped
     /// during emit so LLVM doesn't see dead BBs without predecessors.
     reachable: Vec<bool>,
-    /// v2.1 Phase 1K.F.3 — `true` at every `Op::Call` PC the scanner
+    /// `true` at every `Op::Call` PC the scanner
     /// classified as a self-recursive call (R[A] tagged as a
     /// self-upval-loaded closure via a prior `Op::GetUpval` in the
     /// SelfMarker role). The Call lowerer emits a direct `build_call`
     /// to the current entry `FunctionValue` for these PCs.
     self_call_pcs: Vec<bool>,
-    /// v2.1 Phase 1K.G — `true` at every `Op::TailCall` PC the scanner
+    /// `true` at every `Op::TailCall` PC the scanner
     /// classified as a self-recursive tail call. Emit: `build_call
     /// (function, args) → ret result` (Op::Call + Op::Return1 fused).
     /// Treated as a terminator: no BB successor, implies returns_one.
     tail_call_pcs: Vec<bool>,
-    /// v2.1 Phase 1K.F.4 — `true` at every `Op::GetUpval` PC whose
+    /// `true` at every `Op::GetUpval` PC whose
     /// destination register is consumed as a runtime value (i.e. NOT
     /// used as the function slot of a subsequent `Op::Call`). Emitter
     /// lowers these as `luna_jit_upval_get(b as i64) -> i64`.
@@ -507,7 +501,7 @@ impl<'a> ChunkPlan<'a> {
         // `Lt|Le|Eq` must be followed by a `Jmp`; mark the Jmp as
         // consumed by the condbr.
         //
-        // 1K.F additions: `Op::GetUpval` (both SelfMarker + ValueRead
+        // `Op::GetUpval` (both SelfMarker + ValueRead
         // roles, classified in a subsequent pass) and `Op::Call`
         // restricted to self-recursive shapes (validated in the
         // self_upval tracking pass below).
@@ -536,8 +530,8 @@ impl<'a> ChunkPlan<'a> {
                 Op::Call => {
                     // The structural gate enforced here mirrors
                     // Cranelift's `Op::Call` admission: nargs / nresults
-                    // bounds. The "self-recursive" classification
-                    // (mandatory in 1K.F) needs the SelfMarker upval
+                    // bounds. The (mandatory) "self-recursive"
+                    // classification needs the SelfMarker upval
                     // tracking; done in the dedicated pass below.
                     let nargs = ins.b().checked_sub(1)?;
                     let nresults = ins.c().checked_sub(1)?;
@@ -546,7 +540,7 @@ impl<'a> ChunkPlan<'a> {
                     }
                 }
                 Op::TailCall => {
-                    // 1K.G — TailCall has B-1 args, no explicit nresults
+                    // TailCall has B-1 args, no explicit nresults
                     // (it returns whatever the called fn returns to OUR
                     // caller). Same nargs bound as Op::Call.
                     let nargs = ins.b().checked_sub(1)?;
@@ -629,7 +623,7 @@ impl<'a> ChunkPlan<'a> {
                     if self_upval.get(a).copied().unwrap_or(false) {
                         self_call_pcs[pc] = true;
                     } else {
-                        // 1K.F restricts Op::Call to self-recursive
+                        // Op::Call is restricted to self-recursive
                         // shapes; non-self calls would need a general
                         // ABI marshalling shim (Cranelift bails the
                         // same way at this layer).
@@ -642,7 +636,7 @@ impl<'a> ChunkPlan<'a> {
                     }
                 }
                 Op::TailCall => {
-                    // 1K.G — same self-recursion gate as Op::Call.
+                    // Same self-recursion gate as Op::Call.
                     // TailCall R[A] is the function slot; it must be
                     // tagged as the self-upval closure for our direct
                     // `build_call` to be sound (otherwise we'd need a
@@ -833,7 +827,7 @@ impl<'a> ChunkPlan<'a> {
     }
 }
 
-/// v2.1 Phase 1K.F.4 — classify every `Op::GetUpval` in `code` as
+/// Classify every `Op::GetUpval` in `code` as
 /// either a SelfMarker (its destination register is consumed only as
 /// the function slot of a subsequent `Op::Call`) or a ValueRead (the
 /// register is consumed as a real value — arith, comparison, return,
@@ -957,32 +951,29 @@ fn jmp_target(pc: usize, ins: Inst) -> usize {
     (pc as i64 + 1 + ins.sj() as i64) as usize
 }
 
-// Compute-path whitelist roadmap (consumption itself happens inside
+// Compute-path whitelist notes (consumption itself happens inside
 // `ChunkPlan::from_proto`):
 //
-// - 1K.E.2: `LoadI` + `LoadNil` + `Move`. Cache key over bytecode
+// - `LoadI` / `LoadNil` / `Move` / arith: the cache key over bytecode
 //   words is sufficient — the recognised ops don't touch
 //   `proto.consts`.
-// - 1K.E.3: `Add`. Still no consts; key stays as-is.
-// - 1K.E.4: `Sub` / `Mul` / `Mod` (Lua semantics — floor mod, sign
-//   matches divisor — not C's truncating srem). `Op::Div` is
-//   intentionally **excluded** because Lua 5.4 `/` always returns a
-//   float regardless of operand types; emitting it as int sdiv would
-//   silently mis-compile `2 / 3` (Lua → 0.666…, the int chunk would
-//   return 0). Div lands paired with float-reg support
-//   (`ret_is_float=true` + `f64::from_bits` reinterpret).
-// - 1K.E.5+6: `Lt` / `Le` / `Eq` + `Jmp`. Comparison-then-jmp becomes
-//   a single LLVM `condbr`; bare `Jmp` becomes `br`. Multiple
-//   reachable returns are tolerated (must agree on
-//   `Return0`-vs-`Return1` shape).
-// - 1K.E.7: `LoadFalse` / `LoadTrue` + `LoadK(Int)` (the `LoadK(Int)`
-//   add widens the cache key to include the constant table).
-// - 1K.E.7+: float support — `LoadF` / `Op::Div` / float-only chunks
-//   (`ret_is_float=true`).
+// - `Mod` uses Lua semantics (floor mod, sign matches divisor), not
+//   C's truncating srem. `Op::Div` is intentionally **excluded**
+//   because Lua 5.4 `/` always returns a float regardless of operand
+//   types; emitting it as int sdiv would silently mis-compile `2 / 3`
+//   (Lua → 0.666…, the int chunk would return 0). Div needs
+//   float-reg support (`ret_is_float=true` + `f64::from_bits`
+//   reinterpret).
+// - `Lt` / `Le` / `Eq` + `Jmp`: comparison-then-jmp becomes a single
+//   LLVM `condbr`; bare `Jmp` becomes `br`. Multiple reachable
+//   returns are tolerated (must agree on `Return0`-vs-`Return1`
+//   shape).
+// - Whitelisting `LoadK(Int)` must widen the cache key to include the
+//   constant table.
 
-/// Phase 1K.D.8 / 1K.E.2 — stable cache key for a Proto. FNV-1a-64
-/// over the bytecode words + the dialect bit. Constants are not fed
-/// in yet (Phase 1K.E that lights up `Add R, K` will widen the key).
+/// Stable cache key for a Proto. FNV-1a-64 over the bytecode words
+/// + the dialect bit. Constants are not fed in (an op that reads a
+/// constant operand, e.g. `Add R, K`, must widen the key).
 fn proto_cache_key(proto: &Proto, pre53: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for inst in proto.code.iter() {
@@ -994,8 +985,8 @@ fn proto_cache_key(proto: &Proto, pre53: bool) -> u64 {
 
 /// Build the dead-locals JIT entry: `extern "C" fn() -> i64 { ret 0 }`.
 /// Returns the entry pointer + owning `(Context, ExecutionEngine)`
-/// pair so the caller can park it on storage. Used by the Phase 1K.D
-/// fast path; the Phase 1K.E compute path uses [`compile_compute_chunk`].
+/// pair so the caller can park it on storage. Used by the dead-locals
+/// fast path; the compute path uses [`compile_compute_chunk`].
 fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
     // SAFETY: see `compile_compute_chunk` below for the full lifetime
@@ -1017,9 +1008,9 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
     finalize_module(ctx_box, module, None)
 }
 
-/// v2.1 Phase 1K.E.2+ — lower a compute-path chunk into a JIT entry.
+/// Lower a compute-path chunk into a JIT entry.
 ///
-/// Emit shape (Phase 1K.E.5+6 with control flow):
+/// Emit shape (with control flow):
 /// ```text
 /// extern "C" fn luna_jit_llvm_entry() -> i64 {
 ///     bb_0:                              ; entry — alloca + sequential IR
@@ -1060,7 +1051,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
 
     let i64_type = ctx_static.i64_type();
     let regs_ty = i64_type.array_type(plan.num_regs);
-    // v2.1 Phase 1K.F.6 — parametric chunks. The fn signature widens
+    // Parametric chunks. The fn signature widens
     // from `fn() -> i64` to `fn(i64, …, i64) -> i64` with one i64 per
     // declared positional param, then the entry BB stores each
     // function arg into the matching `regs[i]` slot so the lowerer
@@ -1070,7 +1061,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     let fn_type = i64_type.fn_type(&param_types, false);
     let function = module.add_function("luna_jit_llvm_entry", fn_type, None);
 
-    // v2.1 Phase 1K.F.2 — declare every `luna_jit_*` helper as an
+    // Declare every `luna_jit_*` helper as an
     // external IR function. Used by Op::GetUpval / Op::Call emit
     // below; the dead-locals path skips this step.
     let helpers = declare_jit_helpers(ctx_static, &module);
@@ -1090,11 +1081,10 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     // Allocate the chunk's register file in the entry BB. All other
     // BBs read/write via the same alloca pointer; LLVM mem2reg /
     // SROA will promote scalar slots out of memory at higher opt
-    // levels (currently OptimizationLevel::None — promotion lands
-    // when 1K.E benches start measuring).
+    // levels (currently OptimizationLevel::None).
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
-    // v2.1 Phase 1K.F.6 — populate `regs[0..num_params]` from the fn
+    // Populate `regs[0..num_params]` from the fn
     // arg list. After this prologue the lowerer sees param 0..N-1 as
     // ordinary live register sources, identical to a chunk that
     // bound them with `LoadI` / `Move`.
@@ -1214,7 +1204,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
             Op::GetUpval => {
                 let dst = ins.a();
                 if plan.is_upval_value_read[pc] {
-                    // 1K.F.4 ValueRead — call luna_jit_upval_get(b);
+                    // ValueRead — call luna_jit_upval_get(b);
                     // store result into regs[A].
                     let helper = emitter.helpers.get("luna_jit_upval_get").copied()?;
                     let idx_arg = i64_type.const_int(ins.b() as u64, false);
@@ -1228,7 +1218,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                     let slot = emitter.reg_slot_ptr(dst, "upv_dst")?;
                     builder.build_store(slot, v).ok()?;
                 } else {
-                    // 1K.F.4 SelfMarker — destination register is never
+                    // SelfMarker — destination register is never
                     // read as a value (its only consumer is a
                     // subsequent Op::Call which lowers as a direct
                     // self-call). Store a placeholder 0 so the alloca
@@ -1240,7 +1230,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 }
             }
             Op::Call => {
-                // 1K.F.3 — only the self-recursive shape lands here
+                // Only the self-recursive shape lands here
                 // (whitelist + tracker gated). Emit a direct
                 // `build_call` against the current entry function and
                 // store the i64 result into regs[A].
@@ -1267,7 +1257,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 builder.build_store(slot, v).ok()?;
             }
             Op::TailCall => {
-                // 1K.G — self-recursive tail call (tracker gated).
+                // Self-recursive tail call (tracker gated).
                 // Semantics: call function(R[A+1..A+nargs]) and return
                 // its result directly to our caller. Emits as
                 // build_call + ret, equivalent to Op::Call + Return1.
@@ -1324,7 +1314,7 @@ struct ComputeEmitter<'ctx, 'a> {
     #[allow(dead_code)] // Held for future per-op IR (intrinsics / strings).
     ctx: &'ctx Context,
     builder: &'a inkwell::builder::Builder<'ctx>,
-    /// v2.1 Phase 1K.F.3 — held so the Op::Call lowerer can emit a
+    /// Held so the Op::Call lowerer can emit a
     /// `build_call` against the current entry `FunctionValue` for
     /// self-recursive shapes. Mirrors Cranelift's
     /// `module.declare_func_in_func(fn_id, bcx.func)` pattern.
@@ -1332,7 +1322,7 @@ struct ComputeEmitter<'ctx, 'a> {
     i64_type: inkwell::types::IntType<'ctx>,
     regs_ty: inkwell::types::ArrayType<'ctx>,
     regs: PointerValue<'ctx>,
-    /// v2.1 Phase 1K.F.4 — `luna_jit_*` helper declarations.
+    /// `luna_jit_*` helper declarations.
     /// Op::GetUpval (ValueRead role) reaches for
     /// `helpers["luna_jit_upval_get"]`; future ops widen the call sites
     /// without per-op registration boilerplate.
@@ -1370,7 +1360,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(v.into_int_value())
     }
 
-    /// Phase 1K.E.3 / 1K.E.4 — shared emit for `R[A] = R[B] <op> R[C]`
+    /// Shared emit for `R[A] = R[B] <op> R[C]`
     /// where `<op>` is a single-instruction LLVM int binop (Add / Sub
     /// / Mul / ...). Loads `b`/`c`, applies `op_fn`, stores into `a`.
     fn emit_int_binop<F>(&self, ins: Inst, label: &str, op_fn: F) -> Option<()>
@@ -1406,8 +1396,8 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 // the i64 bit-pattern 0; that's a sound choice for
                 // chunks that return ints (Return1 reads i64 directly)
                 // because no recognised op observes nil as a distinct
-                // tag. When 1K.E later adds bool/value-tagged ops this
-                // will need to switch to tagged bit patterns.
+                // tag. Adding bool/value-tagged ops requires switching
+                // this to tagged bit patterns.
                 let a = ins.a();
                 let b = ins.b();
                 for off in 0..=b {
@@ -1424,7 +1414,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 Some(())
             }
             Op::Add => {
-                // Phase 1K.E.3 — int add `R[A] = R[B] + R[C]`. Pure
+                // Int add `R[A] = R[B] + R[C]`. Pure
                 // signed-i64 add; no overflow check (the int-chunk
                 // ABI silently wraps, matching Lua 5.4's integer
                 // arithmetic semantics for the `+` operator on two
@@ -1433,24 +1423,24 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 // No type-tag inspection: the compute whitelist
                 // currently has no op that produces a non-int value
                 // into a reg (LoadNil → 0, LoadI/Move → ints, this
-                // Add → int). When 1K.E.7 adds LoadFalse/LoadTrue
-                // (which produce bool bit patterns) or LoadK(Float)
-                // is whitelisted, this arm will need to refuse
-                // (or wrap with) cross-type operands.
+                // Add → int). If LoadFalse/LoadTrue (which produce
+                // bool bit patterns) or LoadK(Float) is whitelisted,
+                // this arm will need to refuse (or wrap with)
+                // cross-type operands.
                 self.emit_int_binop(ins, "add", |b, l, r, n| b.build_int_add(l, r, n).ok())
             }
             Op::Sub => {
-                // Phase 1K.E.4 — int sub `R[A] = R[B] - R[C]`. Same
+                // Int sub `R[A] = R[B] - R[C]`. Same
                 // wrapping i64 semantics as Add.
                 self.emit_int_binop(ins, "sub", |b, l, r, n| b.build_int_sub(l, r, n).ok())
             }
             Op::Mul => {
-                // Phase 1K.E.4 — int mul `R[A] = R[B] * R[C]`. Same
+                // Int mul `R[A] = R[B] * R[C]`. Same
                 // wrapping i64 semantics as Add.
                 self.emit_int_binop(ins, "mul", |b, l, r, n| b.build_int_mul(l, r, n).ok())
             }
             Op::Mod => {
-                // Phase 1K.E.4 — Lua-semantic int mod.
+                // Lua-semantic int mod.
                 //
                 // Lua 5.4 / 5.5 `%` for two ints:
                 //     R[A] = R[B] - floor(R[B] / R[C]) * R[C]
@@ -1529,11 +1519,11 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
 /// both into an [`EnginePair`] for storage.
 ///
 /// `helpers` is `Some(map)` for paths that may invoke `luna_jit_*`
-/// helpers (the Phase 1K.F compute path) — every entry gets bound to
-/// its real Rust function address via `add_global_mapping`. The
-/// Phase 1K.D dead-locals path passes `None` because its IR makes no
+/// helpers (the compute path) — every entry gets bound to its real
+/// Rust function address via `add_global_mapping`. The dead-locals
+/// path passes `None` because its IR makes no
 /// helper calls and skipping the map keeps that fast-path tight.
-/// v2.1 Phase 1K.G — also used by the trace JIT (`trace.rs`).
+/// Also used by the trace JIT (`trace.rs`).
 pub(crate) fn finalize_module<'ctx>(
     ctx_box: Box<Context>,
     module: Module<'ctx>,

@@ -1,6 +1,5 @@
 //! Byte-stream reader shared by `super::luna` (luna's own body format) and
-//! the per-dialect PUC translators landing in Phase LB Wave 2
-//! (`super::puc::puc_5{1,2,3,4,5}`).
+//! the per-dialect PUC translators (`super::puc::puc_5{1,2,3,4,5}`).
 //!
 //! Stays stdlib-only — the luna-core 0-dep contract forbids pulling in
 //! `byteorder`, `nom`, or a ULEB128 crate.
@@ -11,19 +10,40 @@ use super::error::Bad;
 pub(super) struct Reader<'a> {
     b: &'a [u8],
     p: usize,
+    depth: u32,
 }
+
+/// Deepest function nesting a chunk may have. The compilers stop at 200
+/// syntax levels, so no compiled chunk comes near it; the readers, the
+/// translator and the verifier all recurse once per level.
+const MAX_NESTING: u32 = 250;
 
 impl<'a> Reader<'a> {
     /// Start a reader at byte offset 0.
-    #[allow(dead_code)] // not yet used; Phase LB Wave 2 will via puc::undump_puc
+    #[allow(dead_code)] // not used yet
     pub(super) fn new(b: &'a [u8]) -> Self {
-        Self { b, p: 0 }
+        Self { b, p: 0, depth: 0 }
     }
 
     /// Start a reader at byte offset `p` (luna's `undump` skips the
     /// header + body-tag bytes before constructing the reader).
     pub(super) fn at(b: &'a [u8], p: usize) -> Self {
-        Self { b, p }
+        Self { b, p, depth: 0 }
+    }
+
+    /// Read a nested function with `f`, refusing one nested deeper than
+    /// `MAX_NESTING`.
+    pub(super) fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, Bad>,
+    ) -> Result<T, Bad> {
+        if self.depth >= MAX_NESTING {
+            return Err(Bad::Code("functions nested too deep".to_string()));
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
     }
 
     /// Current byte position.
@@ -98,13 +118,12 @@ impl<'a> Reader<'a> {
 /// > `acc = (acc << 7) | (b & 0x7f)`.
 ///
 /// (Note: this is the MIRROR of LEB128 / DWARF "continuation = high bit
-/// set, LSB-first". Wave 1's stub doc-comment had it backwards; corrected
-/// here from a direct read of `lua-5.5.1/src/ldump.c::dumpVarint` and
+/// set, LSB-first"; see `lua-5.5.1/src/ldump.c::dumpVarint` and
 /// `lua-5.5.1/src/lundump.c::loadVarint`.)
 ///
 /// Hand-rolled to keep the luna-core 0-dep contract (no `leb128` crate).
 /// Caps at 10 payload bytes (u64 saturation); rejects overflow.
-#[allow(dead_code)] // Phase LB Wave 2 (5.4 / 5.5 translators) call this
+#[allow(dead_code)] // only the PUC translators call this
 pub(super) fn read_puc_varint(r: &mut Reader) -> Result<u64, Bad> {
     let mut acc: u64 = 0;
     for _ in 0..10 {

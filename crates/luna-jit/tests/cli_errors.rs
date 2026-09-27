@@ -23,125 +23,10 @@
 //! recordings). The 5.2 expectations use the short spelling, and luna's 5.2
 //! output is folded the same way before comparing.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
+mod cli_common;
+
+use cli_common::{Case, DIALECTS, Expect, luna, workdir};
 use std::process::{Command, Stdio};
-
-const DIALECTS: [&str; 5] = ["5.1", "5.2", "5.3", "5.4", "5.5"];
-
-struct Case {
-    /// Scripts written into the working directory: (name, contents).
-    files: &'static [(&'static str, &'static str)],
-    /// Arguments after the program name (and luna's `--lua=`).
-    args: &'static [&'static str],
-    stdin: Option<&'static str>,
-}
-
-/// What PUC printed for some dialects.
-struct Expect {
-    dialects: &'static [&'static str],
-    stdout: &'static str,
-    stderr: &'static str,
-    status: i32,
-}
-
-struct Output {
-    stdout: String,
-    stderr: String,
-    status: i32,
-}
-
-fn luna() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_luna"))
-}
-
-/// A fresh working directory holding `files`.
-fn workdir(files: &[(&str, &str)]) -> PathBuf {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "luna-cli-errors-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).expect("remove a stale work dir");
-    }
-    std::fs::create_dir_all(&dir).expect("create the work dir");
-    for (name, body) in files {
-        // written byte for byte: no line-ending conversion on any platform
-        std::fs::write(dir.join(name), body.as_bytes()).expect("write a script");
-    }
-    dir
-}
-
-fn run(dialect: &str, dir: &Path, args: &[&str], stdin: Option<&str>) -> Output {
-    let bin = luna();
-    let mut cmd = Command::new(&bin);
-    cmd.arg(format!("--lua={dialect}"))
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // what lua.c would read from the environment (LUA_PATH, LUA_INIT, ...)
-    for (k, _) in std::env::vars_os() {
-        if k.to_string_lossy().starts_with("LUA_") {
-            cmd.env_remove(k);
-        }
-    }
-    let mut child = cmd.spawn().expect("spawn luna");
-    let mut input = child.stdin.take().expect("piped stdin");
-    input
-        .write_all(stdin.unwrap_or_default().as_bytes())
-        .expect("write stdin");
-    drop(input);
-    let out = child.wait_with_output().expect("wait for luna");
-    let progname = bin.to_str().expect("UTF-8 binary path");
-    let mut stderr = String::from_utf8_lossy(&out.stderr).replace(progname, "lua");
-    if dialect == "5.2" {
-        stderr = stderr.replace("'_G.", "'");
-    }
-    Output {
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr,
-        status: out.status.code().expect("luna exited, not killed"),
-    }
-}
-
-impl Case {
-    fn run(&self, dialect: &str) -> Output {
-        let dir = workdir(self.files);
-        let out = run(dialect, &dir, self.args, self.stdin);
-        std::fs::remove_dir_all(&dir).expect("remove the work dir");
-        out
-    }
-
-    /// Compare every dialect, each named once in `expects`.
-    fn expect(&self, expects: &[Expect]) {
-        let covered: Vec<&str> = expects
-            .iter()
-            .flat_map(|e| e.dialects.iter().copied())
-            .collect();
-        assert_eq!(covered.len(), DIALECTS.len(), "every dialect once");
-        for d in DIALECTS {
-            assert!(covered.contains(&d), "no expectation for {d}");
-        }
-        self.expect_dialects(expects);
-    }
-
-    /// Compare the dialects `expects` names.
-    fn expect_dialects(&self, expects: &[Expect]) {
-        for e in expects {
-            for d in e.dialects {
-                let out = self.run(d);
-                assert_eq!(out.stderr, e.stderr, "stderr, --lua={d}");
-                assert_eq!(out.stdout, e.stdout, "stdout, --lua={d}");
-                assert_eq!(out.status, e.status, "exit status, --lua={d}");
-            }
-        }
-    }
-}
 
 /// argv[0] is the program name as given, not the file's name: lua.c's
 /// `progname`.
@@ -180,6 +65,7 @@ fn missing_script() {
             files: &[],
             args: &["missing.lua"],
             stdin: None,
+            env: &[],
         }
         .run(d);
         // every PUC version: `lua: cannot open missing.lua: No such file or
@@ -203,6 +89,7 @@ fn error_in_nested_functions() {
         )],
         args: &["err.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -238,6 +125,7 @@ fn runtime_error() {
         files: &[("rt.lua", "local t = nil\nprint(t.x)\n")],
         args: &["rt.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -267,6 +155,7 @@ fn error_level_0() {
         files: &[("lvl0.lua", "error(\"plain\", 0)\n")],
         args: &["lvl0.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -296,6 +185,7 @@ fn error_number() {
         files: &[("num.lua", "error(42)\n")],
         args: &["num.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -331,6 +221,7 @@ fn error_table() {
         files: &[("tbl.lua", "error({})\n")],
         args: &["tbl.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -366,6 +257,7 @@ fn error_nil() {
         files: &[("nilerr.lua", "error()\n")],
         args: &["nilerr.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -398,6 +290,7 @@ fn error_tostring() {
         )],
         args: &["ts.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -424,6 +317,7 @@ fn error_tostring_not_string() {
         )],
         args: &["tsnum.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -463,6 +357,7 @@ fn error_tostring_raises() {
         )],
         args: &["tserr.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect_dialects(&[Expect {
         dialects: &["5.1"],
@@ -485,6 +380,7 @@ fn error_tostring_raises_in_handler() {
         )],
         args: &["tserr.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect_dialects(&[
         Expect {
@@ -508,6 +404,7 @@ fn syntax_error() {
         files: &[("syn.lua", "local x = = 1\n")],
         args: &["syn.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[Expect {
         dialects: &["5.1", "5.2", "5.3", "5.4", "5.5"],
@@ -523,6 +420,7 @@ fn inline_error() {
         files: &[],
         args: &["-e", "error(\"x\")"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -552,6 +450,7 @@ fn inline_syntax_error() {
         files: &[],
         args: &["-e", "x = = 1"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[Expect {
         dialects: &["5.1", "5.2", "5.3", "5.4", "5.5"],
@@ -567,6 +466,7 @@ fn inline_then_script() {
         files: &[("ok.lua", "print(\"script\", ...)\n")],
         args: &["-e", "print(\"inline\")", "ok.lua", "a", "b"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[Expect {
         dialects: &["5.1", "5.2", "5.3", "5.4", "5.5"],
@@ -582,6 +482,7 @@ fn stdin_dash_error() {
         files: &[],
         args: &["-"],
         stdin: Some("error(\"s\")\n"),
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -611,6 +512,7 @@ fn stdin_implicit_error() {
         files: &[],
         args: &[],
         stdin: Some("error(\"s\")\n"),
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -640,6 +542,7 @@ fn stdout_then_error() {
         files: &[("out.lua", "io.write(\"before\\n\")\nerror(\"after\")\n")],
         args: &["out.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -669,6 +572,7 @@ fn os_exit_code() {
         files: &[("exit3.lua", "io.write(\"out\\n\")\nos.exit(3)\n")],
         args: &["exit3.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[Expect {
         dialects: &["5.1", "5.2", "5.3", "5.4", "5.5"],
@@ -684,6 +588,7 @@ fn os_exit_false() {
         files: &[("exitf.lua", "os.exit(false)\n")],
         args: &["exitf.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -707,6 +612,7 @@ fn os_exit_true() {
         files: &[("exitt.lua", "os.exit(true)\n")],
         args: &["exitt.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -730,6 +636,7 @@ fn os_exit_bad_arg() {
         files: &[("exitbad.lua", "os.exit(\"x\")\n")],
         args: &["exitbad.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -765,6 +672,7 @@ fn bad_option() {
         files: &[],
         args: &["-x"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -800,6 +708,7 @@ fn option_needs_argument() {
         files: &[],
         args: &["-e"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -835,6 +744,7 @@ fn bad_long_option() {
         files: &[],
         args: &["--foo"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -870,6 +780,7 @@ fn library_error() {
         files: &[("errmod.lua", "error(\"in module\")\n")],
         args: &["-l", "errmod"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -899,6 +810,7 @@ fn library_not_callable() {
         files: &[],
         args: &["-e", "require = nil", "-l", "foo"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -922,6 +834,7 @@ fn no_debug_library() {
         files: &[("nodebug.lua", "debug = nil\nerror(\"bare\")\n")],
         args: &["nodebug.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -951,6 +864,7 @@ fn warnings_off_by_default() {
         files: &[("warn.lua", "warn(\"hi\")\nprint(\"done\")\n")],
         args: &["warn.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -986,6 +900,7 @@ fn warnings_on_with_w_option() {
         files: &[("warn.lua", "warn(\"hi\")\nprint(\"done\")\n")],
         args: &["-W", "warn.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -1015,6 +930,52 @@ fn warnings_on_with_w_option() {
     ]);
 }
 
+/// A `debug.debug` command nested too deep for the parser: 5.4+ raise the
+/// parser's "C stack overflow" through the running message handler, as
+/// `load` does (lua.c's handler adds a traceback, an xpcall handler
+/// rewrites it, pcall has none); a command that runs and fails has no
+/// handler.
+#[test]
+fn debug_debug_deep_command() {
+    let deep = format!("x={}", "(".repeat(240));
+    let stdin = format!("{deep}\ncont\n{deep}\ncont\n{deep}\ncont\n");
+    let case = Case {
+        files: &[(
+            "dd.lua",
+            "debug.debug()\nprint(pcall(debug.debug))\nprint(xpcall(debug.debug, function(m) return \"H:\" .. m end))\n",
+        )],
+        args: &["dd.lua"],
+        stdin: Some(Box::leak(stdin.into_boxed_str())),
+        env: &[],
+    };
+    case.expect(&[
+        Expect {
+            dialects: &["5.1"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> (debug command):1: chunk has too many syntax levels\nlua_debug> lua_debug> (debug command):1: chunk has too many syntax levels\nlua_debug> lua_debug> (debug command):1: chunk has too many syntax levels\nlua_debug> ",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.2", "5.3"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> (debug command):1: too many C levels (limit is 200) in main function near '('\nlua_debug> lua_debug> (debug command):1: too many C levels (limit is 200) in main function near '('\nlua_debug> lua_debug> (debug command):1: too many C levels (limit is 200) in main function near '('\nlua_debug> ",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.4"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> C stack overflow\nstack traceback:\n\t[C]: in function 'debug.debug'\n\tdd.lua:1: in main chunk\n\t[C]: in ?\nlua_debug> lua_debug> C stack overflow\nlua_debug> lua_debug> H:C stack overflow\nlua_debug> ",
+            status: 0,
+        },
+        Expect {
+            dialects: &["5.5"],
+            stdout: "true\ntrue\n",
+            stderr: "lua_debug> C stack overflow\nstack traceback:\n\t[C]: in field 'debug'\n\tdd.lua:1: in main chunk\n\t[C]: in ?\nlua_debug> lua_debug> C stack overflow\nlua_debug> lua_debug> H:C stack overflow\nlua_debug> ",
+            status: 0,
+        },
+    ]);
+}
+
 #[test]
 fn error_in_arg_order() {
     let case = Case {
@@ -1024,6 +985,7 @@ fn error_in_arg_order() {
         )],
         args: &["args.lua", "boom"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {
@@ -1046,6 +1008,7 @@ fn error_in_arg_order() {
         },
     ]);
 }
+
 /// 5.4 on: the parser's "C stack overflow" is a runtime error raised
 /// inside `load`'s protected parser, which keeps the running message
 /// handler, so lua.c's handler (or an enclosing xpcall's) turns the
@@ -1060,6 +1023,7 @@ fn deep_load() {
         )],
         args: &["deep.lua"],
         stdin: None,
+        env: &[],
     };
     case.expect(&[
         Expect {

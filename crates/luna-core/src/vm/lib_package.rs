@@ -26,7 +26,7 @@ const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installatio
 pub(crate) fn open_package(vm: &mut Vm) {
     let v = vm.version();
     let pkg = vm.heap.new_table();
-    let loaded = registry_table(vm, "_LOADED");
+    let loaded = registry_table(vm, "_LOADED").expect("stdlib registration");
     for name in [
         "_G",
         "package",
@@ -57,7 +57,7 @@ pub(crate) fn open_package(vm: &mut Vm) {
     let preload = if v == LuaVersion::Lua51 {
         vm.heap.new_table()
     } else {
-        registry_table(vm, "_PRELOAD")
+        registry_table(vm, "_PRELOAD").expect("stdlib registration")
     };
     raw_set(vm, pkg, "preload", Value::Table(preload));
 
@@ -86,10 +86,12 @@ pub(crate) fn open_package(vm: &mut Vm) {
         _ => raw_set(vm, pkg, "searchers", Value::Table(searchers)),
     }
 
-    let path = env_path(v, "LUA_PATH", LUA_PATH_DEFAULT);
+    // 5.2 on: `-E` (the registry's LUA_NOENV) keeps the defaults
+    let noenv = vm.ignore_env && v >= LuaVersion::Lua52;
+    let path = env_path(v, noenv, "LUA_PATH", LUA_PATH_DEFAULT);
     let path = Value::Str(vm.heap.intern(&path));
     raw_set(vm, pkg, "path", path);
-    let cpath = env_path(v, "LUA_CPATH", LUA_CPATH_DEFAULT);
+    let cpath = env_path(v, noenv, "LUA_CPATH", LUA_CPATH_DEFAULT);
     let cpath = Value::Str(vm.heap.intern(&cpath));
     raw_set(vm, pkg, "cpath", cpath);
     // dir separator, path separator, template mark, executable-dir mark,
@@ -127,6 +129,17 @@ pub(crate) fn open_package(vm: &mut Vm) {
     vm.barrier_back_table(loaded);
 }
 
+impl Vm {
+    /// lua.c's `-E`: the package library opened after this takes its
+    /// default `path` and `cpath` instead of reading `LUA_PATH` /
+    /// `LUA_CPATH` (5.2 on; 5.1 has no such switch), and a registry the
+    /// debug library makes after it holds `LUA_NOENV = true`, as lua.c sets
+    /// it for the libraries.
+    pub fn set_ignore_env(&mut self, ignore: bool) {
+        self.ignore_env = ignore;
+    }
+}
+
 fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
     let k = Value::Str(vm.heap.intern(k.as_bytes()));
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
@@ -135,27 +148,41 @@ fn raw_set(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) {
         .expect("valid key");
 }
 
+/// A raw store into a table a script can reach and fill: a full hash
+/// part raises "table overflow" as any other store does.
+fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
+    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+    if unsafe { t.as_mut() }.set(&mut vm.heap, k, v).is_err() {
+        return Err(vm.rt_err("table overflow"));
+    }
+    vm.barrier_back_table(t);
+    Ok(())
+}
+
 /// `luaL_getsubtable(L, LUA_REGISTRYINDEX, name)`: the registry's table
 /// `name`, created on first use. Without a registry (the debug library
 /// makes it) the table is simply not reachable from there.
-fn registry_table(vm: &mut Vm, name: &str) -> Gc<Table> {
+fn registry_table(vm: &mut Vm, name: &str) -> Result<Gc<Table>, LuaError> {
     let Some(reg) = vm.registry else {
-        return vm.heap.new_table();
+        return Ok(vm.heap.new_table());
     };
     let k = Value::Str(vm.heap.intern(name.as_bytes()));
     if let Value::Table(t) = reg.get(k) {
-        return t;
+        return Ok(t);
     }
     let t = vm.heap.new_table();
-    raw_set(vm, reg, name, Value::Table(t));
-    vm.barrier_back_table(reg);
-    t
+    raw_set_checked(vm, reg, k, Value::Table(t))?;
+    Ok(t)
 }
 
-/// `setpath`: the environment's path (5.2+ try `NAME_5_x` first) with
-/// ";;" replaced by the default, else the default. 5.1–5.3 replace every
-/// ";;"; 5.4 replaces the first and drops a separator left dangling.
-fn env_path(v: LuaVersion, var: &str, dft: &[u8]) -> Vec<u8> {
+/// `setpath`: unless `noenv`, the environment's path (5.2+ try `NAME_5_x`
+/// first) with ";;" replaced by the default, else the default. 5.1–5.3
+/// replace every ";;"; 5.4 replaces the first and drops a separator left
+/// dangling.
+fn env_path(v: LuaVersion, noenv: bool, var: &str, dft: &[u8]) -> Vec<u8> {
+    if noenv {
+        return dft.to_vec();
+    }
     let suffix = match v {
         LuaVersion::Lua52 => "_5_2",
         LuaVersion::Lua53 => "_5_3",
@@ -366,7 +393,7 @@ fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             _ => return Err(raise_str(vm, "'package.preload' must be a table")),
         }
     } else {
-        registry_table(vm, "_PRELOAD")
+        registry_table(vm, "_PRELOAD")?
     };
     let loader = vm.index_value(Value::Table(preload), Value::Str(name))?;
     if loader.is_nil() {
@@ -564,7 +591,7 @@ fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 /// `luaL_findtable` on the globals: walk (raw) the dotted `name`, creating
 /// missing tables; `None` when a part is a non-table value.
-fn find_table(vm: &mut Vm, name: &[u8]) -> Option<Gc<Table>> {
+fn find_table(vm: &mut Vm, name: &[u8]) -> Result<Option<Gc<Table>>, LuaError> {
     let mut t = vm.globals();
     for part in name.split(|&b| b == b'.') {
         let k = Value::Str(vm.heap.intern(part));
@@ -572,17 +599,13 @@ fn find_table(vm: &mut Vm, name: &[u8]) -> Option<Gc<Table>> {
             Value::Table(next) => next,
             Value::Nil => {
                 let next = vm.heap.new_table();
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { t.as_mut() }
-                    .set(&mut vm.heap, k, Value::Table(next))
-                    .expect("valid key");
-                vm.barrier_back_table(t);
+                raw_set_checked(vm, t, k, Value::Table(next))?;
                 next
             }
-            _ => return None,
+            _ => return Ok(None),
         };
     }
-    Some(t)
+    Ok(Some(t))
 }
 
 fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -594,18 +617,14 @@ fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let module = match loaded.get(Value::Str(name_s)) {
         Value::Table(t) => t,
         _ => {
-            let Some(t) = find_table(vm, &name) else {
+            let Some(t) = find_table(vm, &name)? else {
                 let text = format!(
                     "name conflict for module '{}'",
                     String::from_utf8_lossy(&name)
                 );
                 return Err(raise_str(vm, &text));
             };
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { loaded.as_mut() }
-                .set(&mut vm.heap, Value::Str(name_s), Value::Table(t))
-                .expect("valid key");
-            vm.barrier_back_table(loaded);
+            raw_set_checked(vm, loaded, Value::Str(name_s), Value::Table(t))?;
             t
         }
     };
@@ -673,7 +692,7 @@ fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
     };
     let g = Value::Table(vm.globals());
-    raw_set(vm, mt, "__index", g);
-    vm.barrier_back_table(mt);
+    let k = Value::Str(vm.heap.intern(b"__index"));
+    raw_set_checked(vm, mt, k, g)?;
     Ok(vm.nat_return(fs, &[]))
 }

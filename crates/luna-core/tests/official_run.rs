@@ -11,14 +11,13 @@
 //! single `#[test]` rather than as separate test functions racing for the
 //! current directory.
 //!
-//! # Assert-coverage instrumentation (v2.0 Track CB-or)
+//! # Assert-coverage instrumentation
 //!
 //! Every PUC chunk is prepended with a single-line Lua snippet that wraps
 //! `_G.assert` to bump two integer counters (`__luna_assert_total`,
 //! `__luna_assert_hit`). After the chunk completes (or errors) the
 //! counters are read back from the Vm globals and accumulated into a
-//! per-file report written under the workspace's local `.dev/`
-//! directory, which is developer scratch space and is not published.
+//! per-file report written to the workspace's `target/` directory.
 //! The report exposes which `_port` / `_soft` / `_noposix` gates are
 //! silently skipping large blocks of `assert(...)` calls so future scope
 //! decisions are evidence-based. The wrapper sits at file scope and
@@ -71,20 +70,20 @@ struct FileCoverage {
 ///   so does Lua's built-in `error`)
 const ASSERT_COUNTER_PREAMBLE: &[u8] = b"do _G.__luna_assert_total=0 _G.__luna_assert_hit=0 _G.assert=function(v,msg,...) _G.__luna_assert_total=_G.__luna_assert_total+1 if v then _G.__luna_assert_hit=_G.__luna_assert_hit+1 return v,msg,... end if msg==nil then msg='assertion failed!' end error(msg,2) end end ";
 
-/// v2.16 P3.4.1 — byte-diff stdout capture preamble. Opt-in via
-/// `LUNA_OFFICIAL_BYTE_DIFF=1` env var (charter §2.4 gated rollout).
+/// Byte-diff stdout capture preamble. Opt-in via
+/// `LUNA_OFFICIAL_BYTE_DIFF=1` env var.
 /// Redirects `_G.print` and `_G.io.write` to append to a global
 /// buffer `_G.__luna_official_stdout` which the harness reads back
 /// after the chunk runs. Mirrors `crates/luna-core/tests/diff_puc.rs`
 /// pattern.
 ///
 /// Only applied when the env var is set — default path is
-/// unchanged so existing CB-or coverage semantics are preserved.
-/// v2.16 P3.4.3+ steps add PUC binary spawn per file + byte-diff
-/// comparison + `[STDOUT-DIVERGE]` report tagging.
+/// unchanged so existing assert-coverage semantics are preserved.
+/// When enabled, the harness also spawns PUC per file, byte-diffs the
+/// two buffers and tags divergences `[STDOUT-DIVERGE]`.
 const BYTE_DIFF_PREAMBLE: &[u8] = b"do _G.__luna_official_stdout='' _G.print=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t,'\\t')..'\\n' end _G.io.write=function(...) local t={} local n=select('#',...) for i=1,n do t[i]=tostring(select(i,...)) end _G.__luna_official_stdout=_G.__luna_official_stdout..table.concat(t) end end ";
 
-/// v2.16 P3.4.4 — postamble that emits the captured buffer to
+/// Postamble that emits the captured buffer to
 /// real stdout bracketed by sentinel markers. `io.stdout:write`
 /// bypasses the shadowed `_G.io.write` function because file-
 /// handle methods use the C write directly (not the redefined
@@ -97,12 +96,12 @@ const BYTE_DIFF_PREAMBLE: &[u8] = b"do _G.__luna_official_stdout='' _G.print=fun
 /// (unused).
 const BYTE_DIFF_POSTAMBLE: &[u8] = b" io.stdout:write('\\n===LUNA_BYTE_DIFF_START===\\n') io.stdout:write(_G.__luna_official_stdout or '') io.stdout:write('\\n===LUNA_BYTE_DIFF_END===\\n')";
 
-/// v2.16 P3.4.4 — sentinel markers used by `BYTE_DIFF_POSTAMBLE`
+/// Sentinel markers used by `BYTE_DIFF_POSTAMBLE`
 /// to bracket the captured buffer in PUC's subprocess stdout.
 const BYTE_DIFF_START_MARKER: &[u8] = b"===LUNA_BYTE_DIFF_START===\n";
 const BYTE_DIFF_END_MARKER: &[u8] = b"\n===LUNA_BYTE_DIFF_END===\n";
 
-/// v2.16 P3.4.6 — allowlist of files where the byte-diff preamble
+/// Allowlist of files where the byte-diff preamble
 /// interferes with the file's own tests (introspects `print` /
 /// `io.write` C-function status via `debug.upvaluejoin(print, ...)`
 /// which must fail on a C function; our wrapper is a Lua function).
@@ -151,7 +150,7 @@ const BYTE_DIFF_ALLOWLIST: &[(LuaVersion, &str)] = &[
     (LuaVersion::Lua51, "files.lua"),
 ];
 
-/// v2.16 P3.4.6 — returns `true` when the given (version, file)
+/// Returns `true` when the given (version, file)
 /// pair is on `BYTE_DIFF_ALLOWLIST`. Byte-diff preamble skipped
 /// for allowlisted files.
 #[allow(dead_code)]
@@ -347,14 +346,10 @@ const SUITES: &[Suite] = &[
 ];
 
 fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
-    // v2.13 Track WUC: the v2.4-v2.12 Windows gc.lua/gengc.lua/
-    // tracegc.lua CI gate is GONE. UAF-C was root-caused to two
-    // platform-independent GC bugs (stale gc_top on native-call
-    // collects + weak-table tombstone keys escaping clearkey),
-    // fixed in `42f3b76`, and validated by 25x ASAN+gc-verify
-    // Linux stress plus 5 consecutive 50-iteration Windows
-    // stress runs (uafc-windows-stress.yml) on both native-heap
-    // and 0xDD-poison lanes.
+    // gc.lua/gengc.lua/tracegc.lua run on Windows too: the Windows
+    // weak-table crash came from two platform-independent GC
+    // bugs (stale gc_top on native-call collects + weak-table tombstone
+    // keys escaping clearkey), both fixed.
     //
     // cwd is the suite dir (set by the caller) so require's ./?.lua finds siblings.
     let raw = match std::fs::read(name) {
@@ -387,7 +382,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     } else {
         stripped.to_vec()
     };
-    // CB-or: prepend the assert-counter preamble. Single line, so source
+    // Prepend the assert-counter preamble. Single line, so source
     // line numbers in the body remain correct. Lives at file scope so its
     // wrapper outlives every assert call in the body.
     //
@@ -405,13 +400,13 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     //
     // For these files the report records `total = 0, note = "skipped"`.
     let skip_wrapper = matches!(name, "errors.lua" | "db.lua");
-    // v2.16 P3.4.1 — opt-in byte-diff stdout capture. Prepended
+    // Opt-in byte-diff stdout capture. Prepended
     // before the assert-counter wrapper so the two wrappers are
     // independent (byte-diff redefines _G.print/_G.io.write;
     // assert-counter redefines _G.assert). Default path is
     // unchanged when the env var is absent.
     //
-    // v2.16 P3.4.6 — allowlisted (version, file) pairs skip the
+    // Allowlisted (version, file) pairs skip the
     // byte-diff preamble even when the env is set. See
     // `BYTE_DIFF_ALLOWLIST` for the reason per file.
     let byte_diff_enabled = std::env::var_os("LUNA_OFFICIAL_BYTE_DIFF").is_some()
@@ -419,7 +414,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     let src = if skip_wrapper {
         body
     } else if byte_diff_enabled {
-        // v2.16 P3.4.7 — byte-diff path wraps body in a local
+        // The byte-diff path wraps body in a local
         // function so the body's own `return X` doesn't terminate
         // the chunk before postamble runs. `assert`-counter
         // wrapper stays outside the function since it must be
@@ -477,7 +472,7 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
             // 1 GiB (verybig has `_soft=true` set below, memerr early-returns
             // when `T` is nil, sort's working set is ~50k Values ≈ 1.2 MB) —
             // but pinning it here is defense-in-depth against future
-            // additions to the same stress family. Tracked under
+            // additions to the same stress family.
             if matches!(
                 label.as_str(),
                 "heavy.lua" | "verybig.lua" | "memerr.lua" | "sort.lua"
@@ -549,16 +544,15 @@ fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
                 }
                 Err(e) => Err(format!("compile: {e}")),
             };
-            // CB-or: read counters back from globals. If the chunk error'd
+            // Read counters back from globals. If the chunk error'd
             // before the preamble ran (e.g. compile failure) both stay at
             // 0, which is the truthful reading. Read via raw Table::get
             // so no __index metamethod can perturb the value.
             let (total, hit) = read_assert_counters(&mut vm);
-            // v2.16 P3.4.4 remainder — byte-diff comparison. Fires
-            // when env-set AND file not allowlisted AND both luna
-            // + PUC actually captured a buffer. Divergences are
-            // eprintln'd for triage rather than failing the file
-            // (opt-in surface per charter §2.4 rollout).
+            // Byte-diff comparison. Fires when env-set AND file not
+            // allowlisted AND both luna + PUC actually captured a
+            // buffer. Divergences are eprintln'd for triage rather
+            // than failing the file (opt-in surface).
             if byte_diff_enabled && r.is_ok()
                 && let Some(luna_bytes) = read_byte_diff_stdout(&mut vm)
                     && let Some(bin) = puc_bin_for_version(version) {
@@ -656,15 +650,11 @@ fn read_assert_counters(vm: &mut Vm) -> (i64, i64) {
     )
 }
 
-/// v2.16 P3.4.2 — read the byte-diff stdout capture buffer set by
+/// Read the byte-diff stdout capture buffer set by
 /// `BYTE_DIFF_PREAMBLE`. Returns `None` when the global is absent
 /// (the env var was off, or the chunk errored before the preamble
 /// installed the buffer). Bytes come out of the Lua string
 /// unchanged — no re-encoding.
-///
-/// Not yet wired into the run loop — that lands in P3.4.4 alongside
-/// the PUC binary spawn (P3.4.3). Allow the dead-code warning until
-/// then; CI's `-D warnings` would otherwise trip.
 #[allow(dead_code)]
 fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
     let k = Value::Str(vm.heap.intern(b"__luna_official_stdout"));
@@ -675,7 +665,7 @@ fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
     }
 }
 
-/// v2.16 P3.4.3 — resolve the per-dialect PUC interpreter path.
+/// Resolve the per-dialect PUC interpreter path.
 /// Mirrors `crates/luna-core/tests/diff_puc.rs::puc_bin_for`.
 /// Returns `None` when the env var is unset for a non-5.5 dialect;
 /// 5.5 falls back to `PUC_LUA` env then bare `lua5.5` in PATH.
@@ -700,7 +690,7 @@ fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
     None
 }
 
-/// v2.16 P3.4.5 — canonicalize the byte-diff buffer to strip
+/// Canonicalize the byte-diff buffer to strip
 /// impl-defined output that PUC and luna print differently for
 /// legitimate reasons:
 ///
@@ -719,7 +709,7 @@ fn puc_bin_for_version(version: LuaVersion) -> Option<String> {
 /// keep the harness in the tests dir without adding a dev-dep to
 /// luna-core.
 ///
-/// P3.4.6 (allowlist) handles files where even canonicalization
+/// `BYTE_DIFF_ALLOWLIST` handles files where even canonicalization
 /// leaves legitimate divergence (gc.lua memory counts, sort.lua
 /// randomseed pointers when seeded differently, etc.).
 #[allow(dead_code)]
@@ -766,7 +756,7 @@ fn canonicalize_byte_diff(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// v2.16 P3.4.4 — extract the byte-diff buffer content from PUC's
+/// Extract the byte-diff buffer content from PUC's
 /// subprocess stdout, using the sentinel markers emitted by
 /// `BYTE_DIFF_POSTAMBLE`. Returns `None` when either marker is
 /// missing (postamble was skipped, e.g. early `os.exit(0)` or
@@ -785,7 +775,7 @@ fn extract_byte_diff_from_puc_stdout(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(rest[..e].to_vec())
 }
 
-/// v2.16 P3.4.3 — spawn PUC on the given source file and capture
+/// Spawn PUC on the given source file and capture
 /// stdout as raw bytes. `source` is passed via stdin (matching
 /// diff_puc.rs's `-` invocation). Returns `None` when the binary is
 /// missing (dev-machine friendliness). PUC-side errors (non-zero
@@ -795,7 +785,8 @@ fn extract_byte_diff_from_puc_stdout(bytes: &[u8]) -> Option<Vec<u8>> {
 /// write `libs/P1/`).
 ///
 /// Bytes come back unchanged — canonicalization (source-path
-/// normalization, hex-address scrub) is a separate pass in P3.4.5.
+/// normalization, hex-address scrub) is a separate pass in
+/// `canonicalize_byte_diff`.
 #[allow(dead_code)]
 fn run_official_on_puc(bin: &str, source: &[u8]) -> Option<Result<Vec<u8>, String>> {
     use std::io::Write;
@@ -868,10 +859,10 @@ fn official_suites_expected_pass() {
         total += suite.expected_pass.len();
         failures.extend(run_suite(suite, &mut coverage));
     }
-    // CB-or: write the per-file assert-coverage report regardless of pass
+    // Write the per-file assert-coverage report regardless of pass
     // / fail so the data is always fresh on the next inspection.
     if let Err(e) = write_coverage_report(&coverage) {
-        eprintln!("CB-or: coverage report write failed: {e}");
+        eprintln!("coverage report write failed: {e}");
     }
     assert!(
         failures.is_empty(),
@@ -881,8 +872,8 @@ fn official_suites_expected_pass() {
     );
 }
 
-/// Write the coverage report into the workspace's local `.dev/rfcs/`
-/// directory, resolved against the luna-core manifest dir.
+/// Write the coverage report into the workspace's `target/` directory,
+/// resolved against the luna-core manifest dir.
 ///
 /// Emits one Markdown table with one row per file (sorted by hit-rate
 /// ascending so low-coverage files surface at the top) plus aggregate
@@ -891,16 +882,16 @@ fn official_suites_expected_pass() {
 /// likely skipping body.
 fn write_coverage_report(coverage: &[FileCoverage]) -> std::io::Result<()> {
     // CARGO_MANIFEST_DIR for luna-core is `<workspace>/crates/luna-core`,
-    // so the report lands in the workspace's `.dev/rfcs/` regardless of
+    // so the report lands in the workspace's `target/` regardless of
     // whether we run from the main checkout or a worktree.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
         .and_then(|p| p.parent())
         .expect("CARGO_MANIFEST_DIR has at least 2 ancestors");
-    let dest_dir = workspace_root.join(".dev").join("rfcs");
+    let dest_dir = workspace_root.join("target");
     std::fs::create_dir_all(&dest_dir)?;
-    let dest = dest_dir.join("v2.0-cb-or-coverage-report.md");
+    let dest = dest_dir.join("official-assert-coverage.md");
 
     // Aggregate. `wrapper_skipped` files are counted separately so the
     // ge80/lt80 buckets reflect only files where the wrapper actually
@@ -950,7 +941,7 @@ fn write_coverage_report(coverage: &[FileCoverage]) -> std::io::Result<()> {
     });
 
     let mut out = String::new();
-    out.push_str("# v2.0 CB-or — assert-coverage report\n\n");
+    out.push_str("# official suite assert-coverage report\n\n");
     out.push_str("Auto-generated by `crates/luna-core/tests/official_run.rs`.\n");
     out.push_str("Re-generate with `cargo test -p luna-core --test official_run`.\n\n");
     out.push_str("## Methodology\n\n");

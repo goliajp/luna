@@ -1,4 +1,4 @@
-//! P01 gate: every .lua file of the vendored official test suites must
+//! Every .lua file of the vendored official test suites must
 //! lex + parse under its suite's version mode.
 
 use luna_core::frontend::lexer::Lexer;

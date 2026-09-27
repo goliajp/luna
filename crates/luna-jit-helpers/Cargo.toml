@@ -14,14 +14,14 @@ readme = "../../README.md"
 workspace = true
 
 [dependencies]
-# v2.1 Phase 1K.D.1 — helpers reach into Vm.heap, Vm.jit, Table, Gc,
+# Helpers reach into Vm.heap, Vm.jit, Table, Gc,
 # LuaClosure, Value, etc. luna-core owns those types; helpers only
 # `pub use` them. The 0-third-party-dep contract on luna-core is
 # unaffected because luna-jit-helpers is downstream of luna-core, not
 # upstream.
 #
-# `version = "= 3.1.0"` pin matches the workspace version so the
+# `version = "= 3.2.0"` pin matches the workspace version so the
 # crates.io resolver picks the exact matching luna-core release when
 # embedders bypass the `path` fallback (i.e. when this crate is pulled
 # transitively from a published luna-jit).
-luna-core = { path = "../luna-core", version = "= 3.1.0" }
+luna-core = { path = "../luna-core", version = "= 3.2.0" }

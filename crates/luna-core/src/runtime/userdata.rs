@@ -11,11 +11,11 @@ use crate::runtime::value::Value;
 /// Type of the per-host trace adapter stored in [`UserdataPayload::Host`].
 /// Captured at `create_userdata::<T>` time as a monomorphic
 /// `trace_fn_for::<T>` whose body calls `T::trace` on the downcast
-/// payload. Phase TB (v1.3).
+/// payload.
 ///
 /// `fn` items are inherently `Send + Sync` and `Copy`, so this type
-/// imposes no auto-trait constraints on `Userdata`. Phase SS (`feature =
-/// "send"`) layers atop without changing the signature.
+/// imposes no auto-trait constraints on `Userdata`; `feature = "send"`
+/// layers atop without changing the signature.
 pub(crate) type HostTraceFn =
     fn(&(dyn std::any::Any + 'static), &mut crate::vm::UserdataMarker<'_>);
 
@@ -68,16 +68,16 @@ pub struct Userdata {
 ///
 /// - `Empty` — PUC 5.1 `newproxy()` carries only identity + an optional
 ///   metatable hook for `__index` / `__newindex` / `__gc`.
-/// - `Host` — embedder-supplied Rust value (v1.1 B8). The host owns the
-///   value; luna treats it as opaque Any. v1.1 restricts host types to
-///   `'static` non-GC-bearing types; Trace-bearing host payloads land
-///   in Phase 4+ alongside the userdata GC ripple.
+/// - `Host` — embedder-supplied Rust value. The host owns the value;
+///   luna treats it as opaque Any. Host types must be `'static`; GC
+///   references inside the payload are reached through the captured
+///   trace adapter.
 pub enum UserdataPayload {
     /// an io stream/file handle
     File(FileHandle),
     /// a PUC 5.1 `newproxy` userdata — no host payload, only identity
     Empty,
-    /// B8 — embedder-supplied Rust value. `type_id` keys the downcast;
+    /// Embedder-supplied Rust value. `type_id` keys the downcast;
     /// `data` is the boxed payload.
     Host {
         /// `TypeId` of the host value, used as the downcast key.
@@ -91,13 +91,11 @@ pub enum UserdataPayload {
         /// payload to `&T` and calls [`crate::vm::LuaUserdata::trace`].
         ///
         /// `None` means "no trace adapter wired" — only possible for
-        /// payloads constructed via the v1.1 [`crate::runtime::heap::Heap::new_userdata`]
+        /// payloads constructed via the [`crate::runtime::heap::Heap::new_userdata`]
         /// path that bypasses the trait sugar (none exist in luna today,
         /// but the `Option` preserves source-compat for any external
-        /// crate that built a `UserdataPayload::Host` literal under the
-        /// v1.2 shape).
-        ///
-        /// Phase TB (v1.3).
+        /// crate that built a `UserdataPayload::Host` literal without a
+        /// trace adapter).
         trace_fn: Option<HostTraceFn>,
     },
 }
@@ -166,7 +164,7 @@ impl Userdata {
             m.header(mt.as_ptr() as *mut GcHeader);
         }
         m.value(self.user_value);
-        // Phase TB (v1.3): recurse into the host payload via the
+        // recurse into the host payload via the
         // captured monomorphic trace adapter. The adapter's body
         // downcasts to the concrete `T` (paired with `type_id` at
         // `create_userdata::<T>` time) and calls `T::trace`.
@@ -210,7 +208,7 @@ impl Userdata {
         matches!(self.payload, UserdataPayload::Empty)
     }
 
-    /// True for B8 host userdata (embedder-supplied `T: 'static`).
+    /// True for host userdata (embedder-supplied `T: 'static`).
     pub fn is_host(&self) -> bool {
         matches!(self.payload, UserdataPayload::Host { .. })
     }

@@ -1,4 +1,4 @@
-//! Phase LB Wave 2 — PUC Lua 5.2 binary chunk loading.
+//! PUC Lua 5.2 binary chunk loading.
 //!
 //! Smoke tests for the `dump::puc::puc_52` translator: load real
 //! `luac5.2`-emitted bytecode and run it through luna's interpreter.

@@ -1,6 +1,6 @@
 //! `luna-profile` — sampling profiler for luna `Vm` runs.
 //!
-//! v2.0 Track TL Phase 2 ship. Drives the script under a Count debug
+//! Drives the script under a Count debug
 //! hook that fires every N instructions; each fire walks the current
 //! Lua call stack via [`luna_jit::inspect::frames_for_profile`] and
 //! folds the resulting stack trace into an in-memory histogram. At
@@ -14,13 +14,13 @@
 //!   reads on stdin. Pipe through `inferno-flamegraph` to render
 //!   the SVG; we don't bundle that step because `inferno`'s
 //!   ~30-crate transitive closure is a `--features flame-graph`
-//!   opt-in per audit R2.
-//! - `pprof` — reserved; gated on `--features flame-graph` per audit
-//!   R2 (`pprof` crate has a `prost`-shaped closure). Currently
-//!   exits non-zero with a tracking pointer.
+//!   opt-in.
+//! - `pprof` — reserved; gated on `--features flame-graph`
+//!   (`pprof` crate has a `prost`-shaped closure). Currently
+//!   exits non-zero.
 //!
 //! No `unsafe` introduced at the embedder surface — the sampler is
-//! a fn pointer through luna_core's existing B11 Rust-side debug
+//! a fn pointer through luna_core's existing Rust-side debug
 //! hook (`set_rust_debug_hook`).
 
 use std::collections::HashMap;
@@ -68,7 +68,7 @@ enum OutMode {
     /// `frame_a;frame_b;frame_c N` lines for `inferno-flamegraph`.
     Folded,
     /// pprof protobuf — gated on `--features flame-graph`. Currently
-    /// exits non-zero with a tracking pointer per audit R2.
+    /// exits non-zero.
     Pprof,
 }
 

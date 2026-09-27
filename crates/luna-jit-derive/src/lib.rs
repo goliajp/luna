@@ -1,4 +1,4 @@
-//! Procedural macros for the luna-jit Lua runtime (v1.3 Phase UD3).
+//! Procedural macros for the luna-jit Lua runtime.
 //!
 //! This crate ships two macros that, together, let an embedder turn a
 //! plain Rust `struct` + `impl` block into a Lua-callable userdata
@@ -35,7 +35,7 @@
 //!
 //! ## ZST constraint
 //!
-//! The v1.2 trampoline accepts only ZST / fn-pointer-sized closures
+//! The trampoline accepts only ZST / fn-pointer-sized closures
 //! (`luna_core::vm::userdata_trait::pack_zst_or_fnptr`). The derive
 //! therefore emits **non-capturing** forwarding closures of the form
 //! `|__vm, __this, __args| Self::name(__this, __vm, __args)` — these
@@ -89,7 +89,7 @@ pub fn derive_lua_userdata(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     // Reject derive on enum/union — userdata payloads are struct-shaped
-    // by convention (the v1.2 `UserdataPayload::Host(Box<dyn Any>)`
+    // by convention (the `UserdataPayload::Host(Box<dyn Any>)`
     // can hold any type, but `add_methods` is implementation-defined
     // and we want a clear error rather than runtime confusion).
     match &input.data {
@@ -266,7 +266,7 @@ impl Registration {
         let lua_name = &self.name;
         let builder = format_ident!("{}", self.builder_method);
 
-        // Non-capturing forwarding closure — required by the v1.2
+        // Non-capturing forwarding closure — required by the
         // `pack_zst_or_fnptr` ZST/fn-pointer-only constraint. The
         // closure references `Self::ident` (a fn item, which IS a
         // ZST), so the closure itself stays ZST.
@@ -454,8 +454,8 @@ fn strip_helper_attrs(attrs: &mut Vec<Attribute>) {
 fn _reserved(_: Item) {}
 
 // ─────────────────────────────────────────────────────────────────────
-// v2.0 Phase 5 Track CV gap fill — direct unit tests for the helper
-// fns that the proc-macro entry points call into.
+// Direct unit tests for the helper fns that the proc-macro entry
+// points call into.
 //
 // Proc-macro crates can't be `use`d from integration tests (rustc
 // loads them at compile time, not as runtime libraries), so the
