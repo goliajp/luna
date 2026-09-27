@@ -106,7 +106,6 @@ optimization.
 - The published `luna-aot` description matches what it does: the trace
   JIT's machine code is part of the produced binary.
 
-
 ## [3.1.0] — 2026-09-25
 
 A parity release. **No breaking change**: code written against 3.0 builds
