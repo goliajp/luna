@@ -337,6 +337,10 @@ struct Level {
     /// called from every code path that turns some `pc` into a jump landing
     /// point.
     last_target: Option<usize>,
+    /// 5.1: the first zero this function loaded as a constant. PUC 5.1 keys
+    /// its constant table by number value, where `0 == -0`, so every later
+    /// zero, of either sign, loads that one.
+    zero_51: Option<f64>,
 }
 
 impl Level {
@@ -360,6 +364,7 @@ impl Level {
             has_compat_vararg_arg: false,
             line_defined,
             last_target: None,
+            zero_51: None,
         }
     }
 
@@ -1894,7 +1899,10 @@ impl<'a> Compiler<'a> {
                     self.load_const(reg, c);
                 }
             }
-            Exp::Float(f) => {
+            Exp::Float(mut f) => {
+                if f == 0.0 && self.version == LuaVersion::Lua51 {
+                    f = *self.l().zero_51.get_or_insert(f);
+                }
                 let as_int = f as i32;
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
@@ -1966,6 +1974,14 @@ impl<'a> Compiler<'a> {
         Ok(self.emit_jump())
     }
 
+    /// 5.1: zeros of a condition the parser folded away still entered the
+    /// constant table (see `Level::zero_51`).
+    fn note_zeros(&mut self, zeros: &[f64]) {
+        if let Some(&z) = zeros.first() {
+            self.l().zero_51.get_or_insert(z);
+        }
+    }
+
     fn unop(&mut self, op: UnOp, operand: ExprId, line: u32) -> Result<Exp, SyntaxError> {
         self.last_line = line;
         let e = self.expr(operand)?;
@@ -2016,12 +2032,36 @@ impl<'a> Compiler<'a> {
         // before parsing the rhs (which discharges at its own last-token
         // line, matching PUC).
         let saved_force = self.force_line.replace(line);
-        let le = self.expr(lhs)?;
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version) {
+        // a 5.1 left operand whose logic folds away (see `numeral`)
+        let mut zeros = Vec::new();
+        let le = match numeral(self.ast, lhs, self.version, &mut zeros) {
+            Some(n) if self.version == LuaVersion::Lua51 && is_logical(self.ast, lhs) => {
+                self.note_zeros(&zeros);
+                match n {
+                    Num::Int(i) => Exp::Int(i),
+                    Num::Float(f) => Exp::Float(f),
+                }
+            }
+            _ => self.expr(lhs)?,
+        };
+        zeros.clear();
+        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
+            self.note_zeros(&zeros);
             self.force_line = saved_force;
             return Ok(folded);
         }
-        let l = self.exp_to_anyreg(le)?;
+        // PUC 5.1 puts a numeral left operand in the constant table only
+        // after the right operand (`luaK_infix` leaves numerals be, and
+        // `codearith` takes the right one first). For a zero that order
+        // decides which sign the function's zeros share (see `zero_51`).
+        let deferred = match le {
+            Exp::Float(f) if f == 0.0 && self.version == LuaVersion::Lua51 => Some(f),
+            _ => None,
+        };
+        let l = match deferred {
+            Some(_) => self.reserve(1)?,
+            None => self.exp_to_anyreg(le)?,
+        };
         self.force_line = saved_force;
         // Protect the left operand's register if it is a fresh temporary at the
         // top of the stack (e.g. a CONCAT result): evaluating the right operand
@@ -2042,6 +2082,11 @@ impl<'a> Compiler<'a> {
         };
         let re = self.expr(rhs)?;
         let r = self.exp_to_anyreg(re)?;
+        if let Some(f) = deferred {
+            let saved_line = self.force_line.replace(line);
+            self.exp_to_reg(Exp::Float(f), l)?;
+            self.force_line = saved_line;
+        }
         self.set_freereg(saved);
         // PUC attributes the arith op itself to the operator's line, but
         // leaves `lastline` at the rhs's last token (so a following SETTABUP
@@ -3653,20 +3698,180 @@ impl<'a> Compiler<'a> {
 }
 
 /// Constant-fold arithmetic over two numeric literals where Lua semantics
-/// are total (no division-by-zero style runtime errors).
-fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId, version: LuaVersion) -> Option<Exp> {
+/// are total (no division-by-zero style runtime errors). `zeros` gets the
+/// zero literals of any 5.1 condition skipped on the way (see `numeral`).
+fn fold_arith(
+    op: BinOp,
+    le: &Exp,
+    ast: &Chunk,
+    rhs: ExprId,
+    version: LuaVersion,
+    zeros: &mut Vec<f64>,
+) -> Option<Exp> {
     let l = match le {
         Exp::Int(i) => Num::Int(*i),
         Exp::Float(f) => Num::Float(*f),
         _ => return None,
     };
-    let r = match ast.expr(rhs) {
-        Expr::Int(i) => Num::Int(*i),
-        Expr::Float(f) => Num::Float(*f),
+    let r = numeral(ast, rhs, version, zeros)?;
+    Some(match fold_nums(op, l, r, version)? {
+        Num::Int(i) => Exp::Int(i),
+        Num::Float(f) => Exp::Float(f),
+    })
+}
+
+/// The value of `id` when PUC's parser would have folded it to a numeral:
+/// a literal, possibly parenthesized, negated, or combined with another by
+/// a folding operator. (The left operand arrives compiled; this reads the
+/// right one, which has not been compiled yet.)
+///
+/// 5.1's parser also drops the jumps of a logical operation whose outcome
+/// is fixed, so `C and nil or 2` and `true and 2` are the numeral 2; only a
+/// zero's sign makes that observable (`zero_51`). `C` is taken only when it
+/// is a literal or an equality test of two, which has nothing to run; the
+/// zeros such a test puts in the constant table are pushed on `zeros`.
+fn numeral(ast: &Chunk, id: ExprId, version: LuaVersion, zeros: &mut Vec<f64>) -> Option<Num> {
+    let v51 = version == LuaVersion::Lua51;
+    match ast.expr(id) {
+        Expr::Int(i) => Some(Num::Int(*i)),
+        Expr::Float(f) => Some(Num::Float(*f)),
+        Expr::Paren(inner) => numeral(ast, *inner, version, zeros),
+        Expr::UnOp {
+            op: UnOp::Neg,
+            operand,
+            ..
+        } => match numeral(ast, *operand, version, zeros)? {
+            Num::Int(i) => Some(Num::Int(i.wrapping_neg())),
+            Num::Float(f) => Some(Num::Float(-f)),
+        },
+        Expr::BinOp {
+            op: BinOp::Or,
+            lhs,
+            rhs,
+            ..
+        } if v51 => {
+            let mut z = Vec::new();
+            if !always_falsy(ast, *lhs, &mut z) {
+                return None;
+            }
+            let n = numeral(ast, *rhs, version, &mut z)?;
+            zeros.extend(z);
+            Some(n)
+        }
+        Expr::BinOp {
+            op: BinOp::And,
+            lhs,
+            rhs,
+            ..
+        } if v51 => {
+            if !matches!(literal(ast, *lhs), Some(Lit::Truthy(_))) {
+                return None;
+            }
+            numeral(ast, *rhs, version, zeros)
+        }
+        Expr::BinOp { op, lhs, rhs, .. } => {
+            let mut z = Vec::new();
+            let l = numeral(ast, *lhs, version, &mut z)?;
+            let r = numeral(ast, *rhs, version, &mut z)?;
+            let v = fold_nums(*op, l, r, version)?;
+            zeros.extend(z);
+            Some(v)
+        }
+        _ => None,
+    }
+}
+
+fn is_logical(ast: &Chunk, id: ExprId) -> bool {
+    match ast.expr(id) {
+        Expr::Paren(inner) => is_logical(ast, *inner),
+        Expr::BinOp { op, .. } => matches!(op, BinOp::And | BinOp::Or),
+        _ => false,
+    }
+}
+
+/// A literal operand as 5.1's parser sees it (a negated numeral folds).
+enum Lit {
+    Falsy,
+    /// its number when it is one
+    Truthy(Option<f64>),
+}
+
+fn literal(ast: &Chunk, id: ExprId) -> Option<Lit> {
+    Some(match ast.expr(id) {
+        Expr::Nil | Expr::False => Lit::Falsy,
+        Expr::True | Expr::Str(_) => Lit::Truthy(None),
+        Expr::Int(i) => Lit::Truthy(Some(*i as f64)),
+        Expr::Float(f) => Lit::Truthy(Some(*f)),
+        Expr::Paren(inner) => return literal(ast, *inner),
+        Expr::UnOp {
+            op: UnOp::Neg,
+            operand,
+            ..
+        } => match literal(ast, *operand)? {
+            Lit::Truthy(Some(f)) => Lit::Truthy(Some(-f)),
+            _ => return None,
+        },
         _ => return None,
-    };
+    })
+}
+
+/// `nil`, `false`, or `C and` one of them where `C` is a literal or an
+/// equality test of two literals.
+fn always_falsy(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+    match ast.expr(id) {
+        Expr::Paren(inner) => always_falsy(ast, *inner, zeros),
+        Expr::BinOp {
+            op: BinOp::And,
+            lhs,
+            rhs,
+            ..
+        } => fixed_condition(ast, *lhs, zeros) && always_falsy(ast, *rhs, zeros),
+        _ => matches!(literal(ast, id), Some(Lit::Falsy)),
+    }
+}
+
+/// A literal, or an equality test of two whose zeros (left first) go on
+/// `zeros`: PUC compiles the test's operands as constants.
+fn fixed_condition(ast: &Chunk, id: ExprId, zeros: &mut Vec<f64>) -> bool {
+    match ast.expr(id) {
+        Expr::Paren(inner) => fixed_condition(ast, *inner, zeros),
+        Expr::BinOp {
+            op: BinOp::Eq | BinOp::Ne,
+            lhs,
+            rhs,
+            ..
+        } => {
+            let (Some(l), Some(r)) = (literal(ast, *lhs), literal(ast, *rhs)) else {
+                return false;
+            };
+            for lit in [l, r] {
+                if let Lit::Truthy(Some(f)) = lit
+                    && f == 0.0
+                {
+                    zeros.push(f);
+                }
+            }
+            true
+        }
+        _ => literal(ast, id).is_some(),
+    }
+}
+
+fn fold_nums(op: BinOp, l: Num, r: Num, version: LuaVersion) -> Option<Num> {
     use Num::*;
+    // PUC leaves a division or modulo by zero to run time
+    if matches!(op, BinOp::Div | BinOp::Mod) && r.as_f64() == 0.0 {
+        return None;
+    }
+    let one_type = version <= LuaVersion::Lua52;
     let v = match (op, l, r) {
+        // 5.1/5.2 fold `%` and `^` as well (luai_nummod, luai_numpow); where
+        // a zero's sign is kept in the constant table, that is observable
+        (BinOp::Mod, a, b) if one_type => {
+            let (a, b) = (a.as_f64(), b.as_f64());
+            Float(a - (a / b).floor() * b)
+        }
+        (BinOp::Pow, a, b) if one_type => Float(a.as_f64().powf(b.as_f64())),
         (BinOp::Add, Int(a), Int(b)) => Int(a.wrapping_add(b)),
         (BinOp::Sub, Int(a), Int(b)) => Int(a.wrapping_sub(b)),
         (BinOp::Mul, Int(a), Int(b)) => Int(a.wrapping_mul(b)),
@@ -3684,10 +3889,7 @@ fn fold_arith(op: BinOp, le: &Exp, ast: &Chunk, rhs: ExprId, version: LuaVersion
     {
         return None;
     }
-    Some(match v {
-        Int(i) => Exp::Int(i),
-        Float(f) => Exp::Float(f),
-    })
+    Some(v)
 }
 
 /// Closed set of opcodes whose A field is a pure destination produced by an
