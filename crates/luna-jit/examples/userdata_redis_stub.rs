@@ -1,11 +1,10 @@
-//! v1.2 Track B — dogfood §4.1 redis-stub-shape rewrite.
+//! Redis-stub-shaped dispatch table via `LuaUserdata`.
 //!
-//! The kevy v1.0 dogfood report flagged
-//! the "3 steps + 1 unsafe block per table entry" pattern of installing
-//! a populated dispatch table:
+//! Without the trait, installing a populated dispatch table takes
+//! 3 steps + 1 unsafe block per table entry:
 //!
 //! ```ignore
-//! // v1.1 — what the dogfood actually wrote:
+//! // raw table API:
 //! let t = vm.heap.new_table();
 //! let key = Value::Str(vm.heap.intern(b"call"));
 //! let func = vm.native(redis_call);
@@ -16,13 +15,13 @@
 //! vm.set_global("redis", Value::Table(t));
 //! ```
 //!
-//! Plus the dispatch fn itself had to use the raw
+//! Plus the dispatch fn itself has to use the raw
 //! `fn(vm, fs, nargs) -> Result<u32, LuaError>` shape, with
 //! `nat_arg(fs, nargs, i)` for each positional arg and an external
 //! `thread_local!` to hold mutable state (because `vm.native` only
-//! accepted ZST `Copy` closures, no captures).
+//! accepts ZST `Copy` closures, no captures).
 //!
-//! This example shows the v1.2 LuaUserdata trait equivalent: the
+//! This example shows the LuaUserdata trait equivalent: the
 //! state IS the userdata payload, methods receive `&mut Self`, args
 //! arrive as a typed `Vec<Value>`, and the install is one line.
 //!
@@ -123,7 +122,7 @@ fn main() {
     let mut lua = Lua::new();
     lua.open_base();
 
-    // 1-line install (v1.1 was ~10 LOC + 1 unsafe block per entry).
+    // 1-line install (the raw API is ~10 LOC + 1 unsafe block per entry).
     lua.vm()
         .set_userdata("redis", FakeRedis::default())
         .unwrap();

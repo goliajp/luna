@@ -1,20 +1,19 @@
 //! Regression tests for the `Table::clear_existing_slot` tombstone
 //! discipline shared between `set_norm` and `try_set_existing`.
 //!
-//! Backstory: `try_set_existing` (introduced by A3 — newindex
-//! single-walk collapse, commit `be77811`) and `set_norm` are parallel
-//! write entry points into `Table`. They must agree on the
-//! "live with val=Nil is illegal" state. On the C3 Session 2 SoA
-//! cutover branch (since reverted), `try_set_existing` left a
+//! `try_set_existing` (the newindex single-walk fast path) and
+//! `set_norm` are parallel write entry points into `Table`. They must
+//! agree on the "live with val=Nil is illegal" state. Under an
+//! earlier SoA table layout, `try_set_existing` left a
 //! `(key, Nil)` zombie node behind while `set_norm` already routed
 //! Nil-writes through `soa_delete` — `next()` (which had switched its
 //! filter to `meta_bits::is_live`) surfaced the zombie as a stray
 //! `(key, nil)` pair in `pairs()` iteration.
 //!
-//! On the current chain-world develop tip, `next()`'s filters
+//! With the current chained layout, `next()`'s filters
 //! (`tag != raw::NIL` for array, `!val.is_nil()` for nodes) mask the
-//! immediate symptom. But the semantic divergence is a latent
-//! ship-blocker for the next data-layout cutover, so these tests pin
+//! immediate symptom. But the semantic divergence is a latent bug
+//! for any future data-layout change, so these tests pin
 //! the desired behaviour:
 //!
 //!   - SetField fast path (`Vm::newindex_step` → `try_set_existing`)
@@ -22,8 +21,8 @@
 //!     `pairs()` iteration.
 //!   - The behaviour must hold for array keys, hash-string keys, and
 //!     hash-int keys promoted out of the array.
-//!   - The full delete-then-iterate-empty loop from `6b5d16f`'s
-//!     repro snippet must work end-to-end.
+//!   - The full delete-then-iterate-empty loop must work
+//!     end-to-end.
 //!   - Re-inserting the same key after the Nil-write must restore
 //!     the slot (covering the chain-world "soft tombstone is still
 //!     `find_node`-reachable" contract).
@@ -60,7 +59,7 @@ fn eval_bool(src: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// Reproducer from 6b5d16f (post-revert, see commit msg) — array keys.
+// Reproducer — array keys.
 // SetField fast path writes Nil; `next(t)` must report empty.
 // ---------------------------------------------------------------------
 
@@ -174,8 +173,8 @@ fn nil_write_then_reinsert_round_trip_array() {
 // __newindex semantics on a slot just cleared by a SetField Nil-write.
 // After `t.k = nil`, the slot is observably absent — a subsequent
 // `t.k = v` with a `__newindex` metatable must fire `__newindex`.
-// This pins the (slot_nil ⇔ fire_newindex) invariant from the A3
-// audit across the tombstoned state.
+// This pins the (slot_nil ⇔ fire_newindex) invariant across the
+// tombstoned state.
 // ---------------------------------------------------------------------
 
 #[test]

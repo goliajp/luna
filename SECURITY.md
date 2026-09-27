@@ -20,10 +20,6 @@ version bump away. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Reporting a vulnerability
 
-luna is single-maintainer + does not accept external contributions.
-The repository is public for transparency + dogfood; security
-disclosure remains private.
-
 **Do not open a public GitHub issue for security vulnerabilities.**
 
 Email `admin@golia.jp` with:

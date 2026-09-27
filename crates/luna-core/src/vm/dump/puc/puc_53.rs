@@ -22,7 +22,7 @@ const DIALECT: &str = "PUC 5.3";
 /// Header: signature, version, format, `LUAC_DATA`, the sizes of `int`,
 /// `size_t`, `Instruction`, `lua_Integer` and `lua_Number`, then
 /// `LUAC_INT` (0x5678) and `LUAC_NUM` (370.5), both little-endian.
-const HEADER: &[u8] = &[
+pub(in crate::vm::dump) const HEADER: &[u8] = &[
     0x1b, b'L', b'u', b'a', 0x53, 0, // signature, version, format
     0x19, 0x93, b'\r', b'\n', 0x1a, b'\n', // LUAC_DATA
     4, 8, 4, 8, 8, // int, size_t, Instruction, lua_Integer, lua_Number
@@ -31,7 +31,7 @@ const HEADER: &[u8] = &[
 ];
 
 /// Opcode numbers, lopcodes.h 5.3.6.
-const OPS: &[Kind] = &[
+pub(in crate::vm::dump) const OPS: &[Kind] = &[
     Kind::Move,
     Kind::LoadK,
     Kind::LoadKx,
@@ -178,7 +178,7 @@ fn read_proto(
     }
     let n = read_count(r, 1)?;
     let protos = (0..n)
-        .map(|_| read_proto(r, heap, Some(source)))
+        .map(|_| r.nested(|r| read_proto(r, heap, Some(source))))
         .collect::<Result<Vec<_>, _>>()?;
 
     let n = read_count(r, 4)?;

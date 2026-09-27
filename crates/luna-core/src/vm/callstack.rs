@@ -586,9 +586,22 @@ impl Vm {
                     return Some((name, LocalSlot::Stack(slot)));
                 }
                 if let Some((name, reg)) = self.named_local(f, n) {
-                    let at = reg.map_or(LocalSlot::Held(Value::Nil), |r| {
-                        LocalSlot::Stack((f.base + r) as usize)
-                    });
+                    let at = match reg {
+                        None => LocalSlot::Held(Value::Nil),
+                        Some(r) => {
+                            let slot = f.base + r;
+                            // a loaded chunk may name any register; as in
+                            // PUC, a level's locals end below the function
+                            // it is calling
+                            if i > 0
+                                && let Some(limit) = ts.func_slot(i - 1)
+                                && slot >= limit
+                            {
+                                return None;
+                            }
+                            LocalSlot::Stack(slot as usize)
+                        }
+                    };
                     return Some((name, at));
                 }
                 // 5.5's `(vararg table)` has a register in PUC, not in luna

@@ -15,16 +15,15 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
 # quick-xml 0.26 (via luna-tools optional `flame-graph` feature →
 # inferno 0.11) hits two XML-parsing DoS advisories patched only in
-# quick-xml >= 0.41.0. Re-checked 2026-08-14: inferno's latest is now
-# 0.12.8 and it still pins quick-xml ^0.39, so there is still no
-# upgrade path. Exposure is nil for luna: quick-xml only parses
+# quick-xml >= 0.41.0. inferno 0.12.8 still pins quick-xml ^0.39, so
+# there is no upgrade path. Exposure is nil for luna: quick-xml only parses
 # inferno's own locally-generated flamegraph SVG/collapsed stacks in a
 # dev-only CLI tool — no untrusted XML reaches it. Drop these ignores
 # once inferno releases with quick-xml >= 0.41.
 #
 # These entries only bite when cargo-deny can actually reach the crate:
 # it must run with `--all-features`, since `flame-graph` is opt-in. See
-# cargo-deny.yml (v2.17 H7) — without that flag these two lines report
+# cargo-deny.yml — without that flag these two lines report
 # `advisory-not-detected` and the whole optional-feature dep tree goes
 # unscanned.
 ignore = [
@@ -57,8 +56,8 @@ confidence-threshold = 0.93
 
 # Per-crate license exceptions — surgical opt-in for copyleft licenses
 # that only enter the workspace through documented opt-in features.
-# CDDL stays out of the global allow list above (project charter:
-# "permissive only, no copyleft contamination"); users who enable the
+# CDDL stays out of the global allow list above (permissive only, no
+# copyleft contamination); users who enable the
 # `flame-graph` feature on luna-tools accept the copyleft license
 # explicitly when they do so.
 exceptions = [
@@ -84,7 +83,7 @@ exceptions = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# v2.1 Phase 1K.D.2 — `luna-jit-llvm` has a `[dev-dependencies]
+# `luna-jit-llvm` has a `[dev-dependencies]
 # luna-jit = { path = "../luna-jit" }` to drive integration tests that
 # need luna-jit's parser. cargo-deny classifies path-only deps as
 # wildcards (`version = "*"`), but the lockfile-pinned workspace path
@@ -99,11 +98,11 @@ external-default-features = "allow"
 
 allow = []
 deny = []
-# v2.1 Path D Phase 1A — vendored cranelift / wasmtime fork pulls
-# `wasmtime-internal-jit-icache-coherence v37.0.3` (Cargo.lock new
-# entry) which transitively depends on `windows-sys 0.60.2` →
+# The vendored cranelift / wasmtime fork pulls
+# `wasmtime-internal-jit-icache-coherence v37.0.3`, which
+# transitively depends on `windows-sys 0.60.2` →
 # `windows-targets 0.53.5` → `windows_x86_64_msvc 0.53.1` and the
-# matching per-arch sibling crates. The pre-existing `region 3.0.2`
+# matching per-arch sibling crates. The `region 3.0.2`
 # chain (under cranelift-jit) still resolves the older `windows-sys
 # 0.52.0` → `windows-targets 0.52.6` set. This is a transitional
 # duplication that goes away once cranelift / wasmtime themselves
@@ -127,8 +126,7 @@ skip = [
     # downstream object-write surface luna pins) and at v0.37 via
     # backtrace → dhat (luna-core dev-dep) and via cranelift-codegen
     # → wasmtime-internal-jit-icache-coherence. backtrace's bump
-    # tracks upstream; luna's direct dep stays on 0.36 for the v2.1
-    # ship surface.
+    # tracks upstream; luna's direct dep stays on 0.36.
     "object",
     # `bitflags` and `hashbrown` are both pulled in two versions by
     # the cranelift / wasmtime split (older inside region/windows-sys,

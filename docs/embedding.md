@@ -41,9 +41,8 @@ The CLI binary lives in `luna`:
 cargo install luna-jit  # installs the `luna` REPL + script runner
 ```
 
-The default install keeps the `luna` binary minimal: stdin REPL with
-multi-line continuation + `~/.luna_history`, no extra deps beyond
-Cranelift. For an interactive editor with **tab completion against
+The default install keeps the `luna` binary minimal: `lua.c`'s REPL
+reading plain lines from stdin, no extra deps beyond Cranelift. For an interactive editor with **tab completion against
 your `Vm` globals** and **Lua syntax highlighting**, opt into the
 `repl-line-editor` feature (pulls `rustyline` and friends; luna-core
 stays 0-dep regardless):
@@ -698,7 +697,7 @@ and survive across calls. They wrap an opaque
 `luna_core::vm::HostRootTicket` (8 bytes) that the underlying
 slot-recycling pool issues at `pin_host` time.
 
-**v1.3 Phase SR — slot recycling**: long-running embedders
+**Slot recycling** (since v1.3): long-running embedders
 (request-per-script loops, edge workers) release individual handles
 via `lua.unpin(handle)`; the slot is recycled for the next pin so
 the pool size stays bounded. The whole batch can still be released
@@ -756,13 +755,12 @@ The constraint is type-system-enforced; a compile_fail doctest on
 
 ---
 
-## 13. Stable API contract (v3.0 acceptance #7)
+## 13. Stable API contract
 
 Starting at v2.7.0 (2026-07-01) luna's public API is
 partitioned into a **stable** surface (SemVer-major to break)
 and an **unstable / internal** surface (may break in minor
-releases). Source-of-truth for the classification is the
-v2.7 API audit (private dev material). The public contract:
+releases). The public contract:
 
 ### Stable — SemVer-major to break
 
@@ -795,10 +793,6 @@ please file an issue — that's the signal we need to
 promote the symbol into the stable set for future
 compatibility.
 
-The 6-month stability clock (v3.0 acceptance #7) starts at
-v2.7.0 = 2026-07-01. Any stable-surface break resets the
-clock. v3.0 ship target ≥ 2027-01-01 at earliest.
-
 ---
 
 ## 14. Known limitations
@@ -826,8 +820,4 @@ platform.
   matrix (Lua 5.1 / 5.2 / 5.3 / 5.4 / 5.5)
 - [`performance.md`](performance.md) — cross-dialect + Redis-Lua
   bench numbers
-- [`embedder-recruitment.md`](embedder-recruitment.md) — luna is
-  actively looking for its second production embedder to close v3.0
-  acceptance #8; a short overview of what luna offers, what it
-  doesn't, and how to try it
 - `cargo doc --open` — full API reference for every public type

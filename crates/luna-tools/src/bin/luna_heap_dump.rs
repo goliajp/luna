@@ -1,13 +1,13 @@
 //! `luna-heap-dump` — run a Lua script and emit a snapshot of the
 //! resulting heap state.
 //!
-//! v2.0 Track TL Phase 1 ship. Uses the pure-read inspection
+//! Uses the pure-read inspection
 //! accessors in [`luna_jit::inspect`] — no private fields touched,
 //! no allocations on the hot path of the running script.
 //!
 //! Note: heap-dump shares its snapshot schema ([`luna_tools::schema::
-//! HeapSnapshot`]) with the future `luna-heap-diff` tool that Track
-//! MM will land — both sides parse the same JSON.
+//! HeapSnapshot`]) with the future `luna-heap-diff` tool — both
+//! sides parse the same JSON.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

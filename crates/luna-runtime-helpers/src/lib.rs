@@ -2,16 +2,16 @@
 //! luna-runtime-helpers — the static-link runtime entry for the
 //! binaries that `luna-aot` produces.
 //!
-//! # Role in the v1.3 Phase AOT pipeline
+//! # Role in the AOT pipeline
 //!
 //! `luna-aot compile foo.lua --out foo` walks:
 //!
-//! 1. Parse + compile `foo.lua` to a luna bytecode dump (Stages 1-2).
-//! 2. Emit a `.luna.bytecode` data section in a fresh `.o` (Stage 5).
+//! 1. Parse + compile `foo.lua` to a luna bytecode dump.
+//! 2. Emit a `.luna.bytecode` data section in a fresh `.o`.
 //! 3. **Build this crate as a `staticlib`** — `libluna_runtime_helpers.a`
 //!    bundles the rust stdlib + luna-core + this thin C-ABI entry.
 //! 4. Emit a tiny C `main` that calls into [`luna_aot_run`] passing
-//!    the bracket-symbol bounds of the bytecode section (Stage 6).
+//!    the bracket-symbol bounds of the bytecode section.
 //! 5. `cc` links `bytecode.o` + `main.o` + `libluna_runtime_helpers.a`
 //!    + `-lpthread -ldl -lm` into the final executable.
 //!
@@ -49,7 +49,7 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
-// v1.3 Phase AOT Stage 7 polish 3 — Windows PE/COFF section walker.
+// Windows PE/COFF section walker.
 // Used by `aot_strkey_resolver` and `aot_trace_registry` to enumerate
 // the deploy-side `lt_meta` / `lt_skix` sections on Windows, where
 // the Unix-style `__start_/__stop_` bracket symbol convention isn't
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
         return 1;
     }
 
-    // v1.3 Stage 7 follow-on — pin the `luna_jit_*` helper symbols
+    // Pin the `luna_jit_*` helper symbols
     // into the staticlib's link graph by way of a runtime call edge
     // from this entry. Without a call edge, fat-LTO observes that
     // `force_link_jit_helpers` is unreferenced from the staticlib's
@@ -114,40 +114,6 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
         let n = jit_helpers_pin::force_link_jit_helpers();
         std::hint::black_box(n);
     }
-
-    // v1.3 Phase AOT Stage 7 sub-piece 3 (PENDING) — interned-string
-    // slot resolver.
-    //
-    // Sub-piece 2 (commits adding `CompileOptions { aot: true }`)
-    // changed the trace lowerer to emit data symbols of the form
-    // `__luna_aot_strkey_slot_<hex>` (writable, 8-byte) and
-    // `__luna_aot_strkey_bytes_<hex>` (read-only, `[u64 len ||
-    // utf8...]`). The IR loads through the slot to get a
-    // `Gc<LuaStr>::as_ptr()`. Slots are zero-initialised at link
-    // time; reading through one without a resolver write would
-    // dereference NULL on the first trace dispatch.
-    //
-    // Sub-piece 3 must, BEFORE `run_inner` reaches any AOT trace
-    // dispatch:
-    //
-    // 1. Walk every `__luna_aot_strkey_bytes_*` symbol present in
-    //    the link image. Two options for enumeration:
-    //    a) Bracket the bytes section with linker-provided start/end
-    //       symbols (`__start___luna_aot_strkey_bytes` /
-    //       `__stop___luna_aot_strkey_bytes`, available on
-    //       gnu-ld / lld / Mach-O via `__section$start$...`).
-    //    b) Use cranelift's `Module::declare_data` to ALSO emit a
-    //       small registry section listing `(slot_id, bytes_id)`
-    //       pairs and walk that — strip-friendly across all targets.
-    // 2. For each entry: read len from `[0..8]`, bytes from `[8..]`,
-    //    call `vm.heap.intern(bytes)`, write the resulting
-    //    `Gc<LuaStr>::as_ptr()` (as `i64`) into the matching slot.
-    // 3. The resolver runs once, idempotent. Slots staying NULL
-    //    after resolve = bug (most likely missing `_bytes_*` for a
-    //    given `_slot_*`).
-    //
-    // Effort: 1-2 dev-days. Blocker: sub-piece 4 (trace registry +
-    // dispatch install).
 
     // SAFETY: caller contract — `bytecode` points at `len` valid bytes
     // for the duration of this call. In the AOT-binary deploy shape
@@ -174,11 +140,10 @@ pub unsafe extern "C" fn luna_aot_run(bytecode: *const u8, len: usize) -> i32 {
 /// a clear, self-contained body.
 fn run_inner(bytecode: &[u8]) -> i32 {
     // The dialect picked here governs which header bytes `Vm::load`
-    // accepts. v1.3 floor pins this to 5.5 — the `luna-aot` CLI
-    // default. A `--dialect 5.4` invocation would compile against
-    // 5.4's header; the v1.3 floor relies on the embedder running the
-    // AOT pipeline with a matching dialect on both sides. Stage 5+
-    // can embed a `__luna_version` byte and dispatch dynamically.
+    // accepts. It is pinned to 5.5 — the `luna-aot` CLI default. A
+    // `--dialect 5.4` invocation would compile against 5.4's header;
+    // this relies on the embedder running the AOT pipeline with a
+    // matching dialect on both sides.
     let mut vm = Vm::new(LuaVersion::Lua55);
 
     // `Vm::new` defaults to `bytecode_loading = true` (see luna-core
@@ -187,7 +152,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
     // and survives any default change.
     vm.set_bytecode_loading(true);
 
-    // v1.3 Phase AOT Stage 7 trace-coverage follow-up — install the
+    // Install the
     // real Cranelift JIT backend (= `enter_jit` that pins `JIT_VM` /
     // `JIT_CL` TLS) BEFORE any AOT-emitted trace mcode dispatches.
     //
@@ -216,7 +181,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
             luna_jit::jit_backend::CraneliftBackend,
             luna_jit::jit_backend::CraneliftBackend,
         );
-        // NOTE: `trace_enabled = true` (the TA3 ship default) is
+        // NOTE: `trace_enabled = true` (the default) is
         // load-bearing for AOT dispatch too — `Vm::run`'s trace
         // lookup gate is `if self.jit.trace_enabled`, used for BOTH
         // runtime-compiled traces AND AOT-installed traces.
@@ -225,8 +190,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         // didn't cover is fine — same pattern interp + JIT uses.
     }
 
-    // v1.3 Phase AOT Stage 7 sub-piece 3 — interned-string slot
-    // resolver. Runs BEFORE `vm.load` so the resulting closure's
+    // Interned-string slot resolver. Runs BEFORE `vm.load` so the resulting closure's
     // first dispatch into AOT mcode sees populated slots. Idempotent
     // and tolerates the empty-section case (binary linked zero AOT
     // traces): both bracket symbols collapse to the same address, the
@@ -244,8 +208,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         if std::env::var_os("LUNA_AOT_PROBE").is_some() {
             eprintln!("luna-runtime-helpers: aot_strkey_resolved = {resolved}");
         }
-        // v1.3 Phase AOT Stage 7 polish 6 — inline chain slot
-        // population. Must run BEFORE `aot_trace_registry::install_all`
+        // Inline chain slot population. Must run BEFORE `aot_trace_registry::install_all`
         // so the dispatcher's first AOT-mcode dispatch finds populated
         // chain slots (the IR's `luna_jit_trace_materialize_frames(n,
         // ptr)` call would otherwise deref NULL). No Vm interaction
@@ -268,7 +231,7 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         }
     };
 
-    // v1.3 Phase AOT Stage 7 sub-piece 4 — install AOT-emitted traces
+    // Install AOT-emitted traces
     // against the loaded chunk's proto tree. Runs after `vm.load`
     // (the resolver needs the closure's proto as the BFS root) and
     // BEFORE `vm.call_value` (so the dispatcher's first back-edge
@@ -301,11 +264,10 @@ fn run_inner(bytecode: &[u8]) -> i32 {
         }
     };
 
-    // v2.0 Phase 5 Track AO sub-track AO-PF — post-run probe for the
-    // Stage 7 polish 6 inline-chain reloc fire path. Counts every
-    // entry to `luna_jit_trace_materialize_frames` from trace mcode
-    // (JIT-baked OR AOT polish-6 slot-loaded). In an AOT-only binary
-    // any non-zero value is direct evidence that the polish-6 chain
+    // Post-run probe for the inline-chain reloc fire path. Counts
+    // every entry to `luna_jit_trace_materialize_frames` from trace
+    // mcode (JIT-baked OR AOT slot-loaded). In an AOT-only binary
+    // any non-zero value is direct evidence that the chain
     // reloc path actually fires at runtime — the resolver-side probe
     // (`aot_inline_chains_resolved`) only confirms the slot got
     // populated, not that any AOT mcode dispatch ever loaded it.
@@ -341,7 +303,7 @@ pub fn run_bytecode(bytecode: &[u8]) -> i32 {
     run_inner(bytecode)
 }
 
-// v1.3 Stage 7 follow-on — re-export of the 39 `luna_jit_*` Cranelift
+// Re-export of the 40 `luna_jit_*` Cranelift
 // trace-mcode helpers from `luna-jit::jit_backend`. AOT binaries whose
 // embedded `.o` calls these helpers (any trace that does table get/set,
 // upvalue read, concat, etc.) needs them resolvable as strong externs
@@ -364,7 +326,7 @@ pub fn run_bytecode(bytecode: &[u8]) -> i32 {
 //
 // Verified post-build:
 //   `nm target/release/libluna_runtime_helpers.a | grep " T _luna_jit_" | wc -l`
-//   reports 39 (one per helper).
+//   reports 40 (one per helper).
 // Re-export the helpers at the crate root. This pulls them into our
 // `pub` surface so rustc treats them as kept symbols. The
 // `extern "C"` + `#[no_mangle]` on the upstream definitions means
@@ -375,11 +337,11 @@ pub fn run_bytecode(bytecode: &[u8]) -> i32 {
 // bundling step is forced to pull in the defining cgus.
 #[cfg(feature = "jit-helpers")]
 pub use luna_jit::jit_backend::{
-    luna_jit_materialize_sunk_table, luna_jit_math_fn_is_library, luna_jit_new_table,
-    luna_jit_new_table_sized, luna_jit_op_close, luna_jit_op_closure, luna_jit_op_concat,
-    luna_jit_op_get_tab_up, luna_jit_op_get_tab_up_checked, luna_jit_op_tforcall,
-    luna_jit_park_deopt, luna_jit_self_upval_check, luna_jit_spill_to_stack, luna_jit_stack_load,
-    luna_jit_stack_tag, luna_jit_stack_update_raw, luna_jit_str_buf_acquire,
+    luna_jit_head_closure, luna_jit_materialize_sunk_table, luna_jit_math_fn_is_library,
+    luna_jit_new_table, luna_jit_new_table_sized, luna_jit_op_close, luna_jit_op_closure,
+    luna_jit_op_concat, luna_jit_op_get_tab_up, luna_jit_op_get_tab_up_checked,
+    luna_jit_op_tforcall, luna_jit_park_deopt, luna_jit_self_upval_check, luna_jit_spill_to_stack,
+    luna_jit_stack_load, luna_jit_stack_tag, luna_jit_stack_update_raw, luna_jit_str_buf_acquire,
     luna_jit_str_buf_extend, luna_jit_str_buf_intern, luna_jit_str_buf_release,
     luna_jit_suppress_trace_admit, luna_jit_table_get_field, luna_jit_table_get_field_checked,
     luna_jit_table_get_float, luna_jit_table_get_int, luna_jit_table_get_int_checked,
@@ -413,15 +375,15 @@ mod jit_helpers_pin {
     /// static alive in the final object — which transitively pins each
     /// `luna_jit_*` symbol the static references.
     ///
-    /// The number of entries (39) must match the number of
+    /// The number of entries (40) must match the number of
     /// `pub unsafe extern "C" fn luna_jit_*` in
-    /// `crates/luna-jit/src/jit_backend/mod.rs`. If a future luna-jit
-    /// commit adds a 40th helper, this array must grow in lock-step
+    /// `crates/luna-jit/src/jit_backend/mod.rs`. If luna-jit ever
+    /// adds a 41st helper, this array must grow in lock-step
     /// or AOT trace `.o`s referencing the new symbol will fail to
     /// link with `undefined reference to luna_jit_<new>`.
     #[used]
     #[unsafe(no_mangle)]
-    static LUNA_AOT_HELPER_PIN: [PinnedFn; 39] = [
+    static LUNA_AOT_HELPER_PIN: [PinnedFn; 40] = [
         PinnedFn(jb::luna_jit_new_table as AnyFn),
         PinnedFn(jb::luna_jit_new_table_sized as AnyFn),
         PinnedFn(jb::luna_jit_materialize_sunk_table as AnyFn),
@@ -461,6 +423,7 @@ mod jit_helpers_pin {
         PinnedFn(jb::luna_jit_table_set_int_checked as AnyFn),
         PinnedFn(jb::luna_jit_table_set_field_checked as AnyFn),
         PinnedFn(jb::luna_jit_table_len_checked as AnyFn),
+        PinnedFn(jb::luna_jit_head_closure as AnyFn),
     ];
 
     /// Pulls the link-anchor static into the public API surface so
@@ -578,6 +541,7 @@ mod jit_helpers_pin {
                 let _ = jb::luna_jit_table_set_int_checked(0, 0, 0, 0);
                 let _ = jb::luna_jit_table_set_field_checked(0, 0, 0, 0);
                 let _ = jb::luna_jit_table_len_checked(0);
+                let _ = jb::luna_jit_head_closure();
             }
         }
 
@@ -586,7 +550,7 @@ mod jit_helpers_pin {
     }
 }
 
-/// v1.3 Stage 7 follow-on — pull all 39 `luna_jit_*` Cranelift
+/// Pull all 40 `luna_jit_*` Cranelift
 /// trace-mcode helper symbols into the deploy-side staticlib's
 /// linkmap. Called by the AOT-generated C `main` stub or by the
 /// integration tests to make sure the helper symbols are still
@@ -597,9 +561,9 @@ mod jit_helpers_pin {
 /// `luna-jit` from its dep graph and this function from its API
 /// surface — interp-only AOT binaries pay zero cranelift cost.
 ///
-/// Returns the number of helper symbols pinned (always 39 with the
+/// Returns the number of helper symbols pinned (always 40 with the
 /// current `luna-jit` shape; will need to be bumped in lock-step
-/// any time `crates/luna-jit/src/jit_backend/mod.rs` adds a 40th
+/// any time `crates/luna-jit/src/jit_backend/mod.rs` adds a 41st
 /// `pub unsafe extern "C" fn luna_jit_*`).
 ///
 /// # Implementation note
@@ -629,8 +593,7 @@ pub const fn force_link_aot_entry() -> unsafe extern "C" fn(*const u8, usize) ->
     luna_aot_run
 }
 
-/// v1.3 Phase AOT Stage 7 sub-piece 3 — deploy-side interned-string
-/// slot resolver.
+/// Deploy-side interned-string slot resolver.
 ///
 /// AOT trace mcode emitted by [`luna_jit::jit_backend::trace::
 /// lower_trace_into`] with `CompileOptions { aot: true }` reads
@@ -694,8 +657,8 @@ pub mod aot_strkey_resolver {
     // declare per-platform externs and the dead-strip pass discards
     // whichever doesn't match.
     //
-    // Windows / COFF has no bracket-symbol convention (Stage 7 polish
-    // 3): `link.exe` / `lld-link` don't synthesize `__start_` / `__stop_`
+    // Windows / COFF has no bracket-symbol convention:
+    // `link.exe` / `lld-link` don't synthesize `__start_` / `__stop_`
     // externs. Instead the deploy walker calls into the parent crate's
     // [`crate::windows_section::find_section`] which does a runtime
     // PE-header parse via `GetModuleHandleW(NULL)`. The Windows path
@@ -823,7 +786,7 @@ pub mod aot_strkey_resolver {
     }
 }
 
-// v1.3 Phase AOT Stage 7 polish 6 — deploy-side inline-chain resolver.
+// Deploy-side inline-chain resolver.
 //
 // Mirrors `aot_strkey_resolver`'s shape. The trace lowerer's
 // `emit_chain_ptr_arg` (`crates/luna-jit/src/jit_backend/trace.rs`)
@@ -860,8 +823,7 @@ pub mod aot_strkey_resolver {
 //     neither side compares pointers, only reads through them.
 #[cfg(feature = "jit-helpers")]
 pub mod aot_inline_chain_resolver {
-    //! v1.3 Phase AOT Stage 7 polish 6 — `FrameMaterializeInfo` chain
-    //! pointer reloc resolver. See parent-module preamble for the full
+    //! `FrameMaterializeInfo` chain pointer reloc resolver. See parent-module preamble for the full
     //! design rationale; this module owns the deploy-side walk +
     //! per-chain Rc materialization + slot write.
     use luna_core::jit::trace_types::FrameMaterializeInfo;
@@ -1057,14 +1019,13 @@ pub mod aot_inline_chain_resolver {
     }
 }
 
-// v1.3 Phase AOT Stage 7 sub-piece 4 — trace dispatch registry.
+// Trace dispatch registry.
 // See module-level docs inside the block for the deploy-side walker
 // shape; the AOT-compile-side recorder + emitter lives in
 // `crates/luna-aot/src/embed.rs::harvest_and_emit_aot_traces`.
 #[cfg(feature = "jit-helpers")]
 pub mod aot_trace_registry {
-    //! v1.3 Phase AOT Stage 7 sub-piece 4 — deploy-side trace-meta
-    //! walker.
+    //! Deploy-side trace-meta walker.
     //!
     //! `luna-aot::embed::harvest_and_emit_aot_traces` emits a 48-byte
     //! [`luna_core::jit::aot_meta::AotTraceIndexEntry`] per AOT-installable
@@ -1088,12 +1049,12 @@ pub mod aot_trace_registry {
     use luna_core::jit::trace_types::{CompiledTrace, ExitTag, TraceFn};
     use luna_core::vm::Vm;
 
-    // Bracket symbols — same pattern as sub-piece 3's strkey_idx
+    // Bracket symbols — same pattern as the strkey_idx
     // walker. ELF / lld auto-create `__start_<name>` / `__stop_<name>`
     // for sections whose name is a valid C identifier; Mach-O uses
     // `section$start$<seg>$<sect>` / `section$end$<seg>$<sect>`.
     //
-    // Windows COFF has no bracket-symbol convention (Stage 7 polish 3):
+    // Windows COFF has no bracket-symbol convention:
     // the Windows path uses a runtime PE-header walk via
     // [`crate::windows_section::find_section`] for the short-name
     // section `.lt_meta` instead. See `windows_section` module docs.
@@ -1134,7 +1095,7 @@ pub mod aot_trace_registry {
         // Locate the trace-meta section + length, dispatching on
         // target platform. Unix/Mach-O: linker-synthesised bracket
         // symbols. Windows: runtime PE-header walk via
-        // [`crate::windows_section::find_section`] (Stage 7 polish 3)
+        // [`crate::windows_section::find_section`]
         // for the short name `.lt_meta`. Either path can produce a
         // zero-length section (binary linked no AOT traces) —
         // `walk_meta_section` short-circuits.
@@ -1323,8 +1284,7 @@ pub mod aot_trace_registry {
                     }
                     continue;
                 }
-                // v1.3 Phase AOT Stage 7 polish 6 — v3 per_exit_inline
-                // decode is NOW load-bearing. Each wire entry's
+                // The per_exit_inline decode is load-bearing. Each wire entry's
                 // `chain_bytes` rebuilds into a fresh
                 // `Vec<FrameMaterializeInfo>` → `Rc<[...]>` for the
                 // dispatcher's `per_exit_inline[i].chain` field; the

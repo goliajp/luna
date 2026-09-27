@@ -1,9 +1,9 @@
-//! Phase TB (v1.3) — trace-bearing host userdata payloads.
+//! Trace-bearing host userdata payloads.
 //!
 //! Verifies that `T: LuaUserdata` may hold `Gc<...>` fields safely when
 //! the embedder overrides `LuaUserdata::trace` to mark them, and that
 //! the back-compat case (`impl LuaUserdata for T {}` with no Gc state,
-//! default no-op trace) is unchanged from v1.2.
+//! default no-op trace) is unchanged.
 
 use luna_core::runtime::{Gc, Table, Value};
 use luna_core::version::LuaVersion;

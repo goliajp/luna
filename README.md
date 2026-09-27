@@ -16,12 +16,14 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
-**v3.1.0** shipped 2026-09-24: a parity release with no breaking change.
-luna was compared against stock PUC 5.1–5.5 function by function, every
-difference found was fixed or is listed as deliberate in
-[`docs/compatibility.md`](docs/compatibility.md), and the differential
-corpus grew to 805 fixtures. **v3.0.0** (2026-08-14) closed the v2.x
-maturity arc. See [`CHANGELOG.md`](CHANGELOG.md).
+**v3.2.0** shipped 2026-09-27: `string.dump` writes bytecode that each
+dialect's stock PUC interpreter loads, the `luna` CLI runs `LUA_INIT`,
+`-E` and the REPL as `lua.c` does, and a script or loaded chunk can no
+longer panic the VM. **v3.1.0** (2026-09-25) was a parity release against
+stock PUC 5.1–5.5; every difference found was fixed or is listed as
+deliberate in [`docs/compatibility.md`](docs/compatibility.md). The
+differential corpus is 807 fixtures. **v3.0.0** (2026-08-14) closed the
+v2.x maturity arc. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install
 
@@ -100,16 +102,11 @@ Cookbook: [`docs/embedding.md`](docs/embedding.md). Threat model and
 what is explicitly *not* contained:
 [`docs/security.md`](docs/security.md).
 
-> **Looking for embedders.** luna wants production users and the
-> feedback that comes with them. See
-> [`docs/embedder-recruitment.md`](docs/embedder-recruitment.md) for
-> what it offers, what it does not, and how to try it.
-
 ## Correctness
 
 Compatibility here is a measurement, not a claim.
 
-- **805 differential fixtures** run against stock PUC interpreters built
+- **807 differential fixtures** run against stock PUC interpreters built
   from source — 5.1.5, 5.2.4, 5.3.6, 5.4.9, 5.5.1 — and must match
   byte for byte on stdout, stderr and exit code, with zero skips, before
   a commit is green; each also runs as PUC bytecode compiled by that
@@ -160,11 +157,12 @@ luna --budget=1000000 s.lua   # cap dispatched instructions
 luna --no-jit script.lua      # interpreter only
 luna --profile script.lua     # print trace-JIT counters on exit
 luna -l mod -e "f()" s.lua a  # lua.c's options: -e -l -i -v -E -W -- -
+luna -i script.lua            # run the script, then the REPL
 luna                          # interactive REPL (Ctrl-D exits)
 ```
 
-Options, the `arg` table, error reports and exit status follow the
-selected dialect's `lua.c`; see
+Options, `LUA_INIT`, the `arg` table, the REPL, error reports and exit
+status follow the selected dialect's `lua.c`; see
 [`docs/compatibility.md`](docs/compatibility.md#cli).
 
 ## Linking from C
@@ -220,7 +218,6 @@ on a backend and removing one does not touch the core API.
 | [`docs/binary-size.md`](docs/binary-size.md) | what the binary costs |
 | [`docs/unsafe-accounting.md`](docs/unsafe-accounting.md) | every `unsafe` site, justified |
 | [`docs/migration-v1-to-v2.md`](docs/migration-v1-to-v2.md) | v1.x → v2.x migration |
-| [`docs/release-checklist.md`](docs/release-checklist.md) | how a release is cut |
 | [`CHANGELOG.md`](CHANGELOG.md) | release notes |
 
 Rendered API reference: [docs.rs/luna-jit](https://docs.rs/luna-jit) and

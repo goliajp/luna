@@ -1,4 +1,4 @@
-//! coroutine library (P05): create / resume / yield / wrap / status / running /
+//! coroutine library: create / resume / yield / wrap / status / running /
 //! isyieldable / close. The heavy lifting (context swapping, the yield signal)
 //! lives on `Vm` in exec.rs; these are the thin library wrappers, shaped per
 //! dialect after 5.1's lbaselib and 5.2–5.5's lcorolib.
@@ -128,17 +128,23 @@ fn upval_table(vm: &Vm, fs: u32, i: usize) -> Gc<Table> {
 
 /// Mark or unmark the running thread as waiting in a wrapped call (only
 /// 5.2/5.3 read the mark).
-fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) {
+fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) -> Result<(), LuaError> {
     if !matches!(vm.version(), LuaVersion::Lua52 | LuaVersion::Lua53) {
-        return;
+        return Ok(());
     }
     let me = vm.running_thread().0;
     let v = if on { Value::Bool(true) } else { Value::Nil };
+    // the table is reachable through `debug.getupvalue`, so a script can
+    // fill it; only adding a key can fail
     // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { in_wrap.as_mut() }
+    if unsafe { in_wrap.as_mut() }
         .set(&mut vm.heap, me, v)
-        .expect("a thread is a valid key");
+        .is_err()
+    {
+        return Err(vm.rt_err("table overflow"));
+    }
     vm.barrier_back_table(in_wrap);
+    Ok(())
 }
 
 fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -237,9 +243,9 @@ fn co_wrapped(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Some(msg) => Value::Str(vm.heap.intern(msg.as_bytes())),
         None => {
             let args = collect_args(vm, fs, nargs);
-            mark_in_wrap(vm, in_wrap, true);
+            mark_in_wrap(vm, in_wrap, true)?;
             let r = vm.resume_coro(co, args);
-            mark_in_wrap(vm, in_wrap, false);
+            mark_in_wrap(vm, in_wrap, false)?;
             match r {
                 Ok(vals) => return Ok(vm.nat_return(fs, &vals)),
                 // 5.4+ close a coroutine that died by error before

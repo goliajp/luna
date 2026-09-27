@@ -3,51 +3,49 @@ resolver = "2"
 members = [
     "crates/luna-core",
     "crates/luna-jit",
-    # v1.3 UD3 — `#[derive(LuaUserdata)]` proc-macro. Lives as a
+    # `#[derive(LuaUserdata)]` proc-macro. Lives as a
     # separate crate because Rust requires `proc-macro = true` to
     # be crate-level, AND because the luna-core 0-dep contract
     # forbids pulling in `syn`/`quote`/`proc-macro2` upstream of
     # luna-core. The derive emits fully-qualified `::luna_core::vm::*`
     # paths so it's reachable from pure-luna-core embedders too.
     "crates/luna-jit-derive",
-    # v1.3 Phase AOT — `luna-aot` native-binary compile crate.
+    # `luna-aot` native-binary compile crate.
     # Sibling of luna-core + luna-jit. Pulls third-party deps
     # (`object`, `clap`) but **not into luna-core's tree** — the
     # 0-third-party-dep contract on luna-core is unaffected.
     "crates/luna-aot",
-    # v1.3 Phase AOT Stage 4 — `luna-runtime-helpers` staticlib that
+    # `luna-runtime-helpers` staticlib that
     # `luna-aot`-produced binaries statically link against. Exposes
     # a single C-ABI entry `luna_aot_run(bytecode_ptr, len) -> i32`
     # driving a `luna-core` `Vm`. Depends only on `luna-core`; the
     # 0-third-party-dep contract on `luna-core` is unaffected.
     "crates/luna-runtime-helpers",
-    # v2.0 Track TL Phase 1 — `luna-tools` developer-facing CLIs
-    # (`luna-bin-inspect`, `luna-heap-dump`, + 3 Phase-2 stub
+    # `luna-tools` developer-facing CLIs
+    # (`luna-bin-inspect`, `luna-heap-dump`, + 3 stub
     # binaries: `luna-profile`, `luna-trace-inspect`,
     # `luna-repl-polish`). Depends on `luna-jit` (which depends on
     # `luna-core`); pulls `clap` + `serde` + `object` for its own
     # surface but NOT into `luna-core`'s tree. The 0-third-party-dep
     # contract on `luna-core` is unaffected.
     "crates/luna-tools",
-    # v2.1 Phase 1K.B — `llvm-jit-probe` standalone validation crate
-    # for the LLVM 18 + inkwell 0.9.0 toolchain selected by Phase 1K.A
-    #. Crate is
+    # `llvm-jit-probe` standalone validation crate for the LLVM 18 +
+    # inkwell 0.9.0 toolchain. Crate is
     # `publish = false` and never enters the luna-core / luna-jit /
     # luna-aot dep graph — its sole purpose is to prove that the LLVM
-    # JIT toolchain links + runs on the dev host before Phase 1K.C+
-    # touches any production luna code. The 0-third-party-dep contract
-    # on luna-core is unaffected.
+    # JIT toolchain links + runs on the host. The 0-third-party-dep
+    # contract on luna-core is unaffected.
     "crates/llvm-jit-probe",
-    # v2.1 Phase 1K.D.1 — `luna-jit-helpers` shared `luna_jit_*`
+    # `luna-jit-helpers` shared `luna_jit_*`
     # extern-C runtime helpers + `JIT_VM` / `JIT_CL` per-thread TLS
     # slots + `enter_jit` RAII rebind, extracted from
     # `luna-jit/src/jit_backend/mod.rs`. Both `luna-jit` (Cranelift)
-    # and `luna-jit-llvm` (v2.1 alt backend, Phase 1K.D.2+) depend on
+    # and `luna-jit-llvm` (alt backend) depend on
     # this crate so the helper symbol table + TLS discipline stay
     # single-source-of-truth. Only depends on luna-core; the
     # 0-third-party-dep contract on luna-core is unaffected.
     "crates/luna-jit-helpers",
-    # v2.1 Phase 1K.D.2 — `luna-jit-llvm` LLVM 18 + inkwell 0.9 alt
+    # `luna-jit-llvm` LLVM 18 + inkwell 0.9 alt
     # backend. Sibling of `luna-jit` (Cranelift); both implement the
     # `luna_core::jit` trait surface. `publish = false` — embedders
     # opt in via `luna-jit`'s `llvm-jit` cargo feature (default OFF).
@@ -56,7 +54,7 @@ members = [
     # this crate is downstream of `luna-core`.
     "crates/luna-jit-llvm",
 ]
-# v2.0 Track CV — `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
+# `luna-fuzz` is a workspace-EXCLUDED sibling. It pulls
 # `libfuzzer-sys` and requires nightly rustc; excluding it from the
 # default member set keeps `cargo build --workspace` on stable and
 # keeps the `zero-dep` luna-core gate trivially satisfied (libfuzzer
@@ -64,7 +62,7 @@ members = [
 # harnesses: `cd crates/luna-fuzz && cargo +nightly fuzz run <target>`.
 exclude = [
     "crates/luna-fuzz",
-    # v2.1 Path D Phase 1A — vendored fork of bytecodealliance/wasmtime
+    # Vendored fork of bytecodealliance/wasmtime
     # pinned at tag v37.0.3 (cranelift-codegen 0.124.3, exact match for
     # the registry version luna's Cargo.lock pins). The wasmtime tree
     # has its own [workspace] Cargo.toml; excluding it here keeps luna's
@@ -74,37 +72,28 @@ exclude = [
     # through the [patch.crates-io] block at the bottom of this file,
     # which redirects luna-jit / luna-aot's `cranelift-*` deps at the
     # path inside this submodule.
-    #
-    # pipeline setup rationale and Phase 1B handoff.
     "crates/vendored/wasmtime",
 ]
 
 [workspace.package]
-version = "3.1.0"
+version = "3.2.0"
 edition = "2024"
-# MSRV: deliberately NOT declared (decision v2.17, 2026-08-14).
+# MSRV: deliberately NOT declared.
 #
-# luna declared `rust-version = "1.86"` from v1.1.0 through v2.16.0 and
-# it was false the whole time — the tree has used edition-2024
-# let-chains since `2bbda24`, and those need 1.88. Nobody caught it
-# because msrv.yml triggered on a `main` branch this repo does not
-# have, so it never ran once. Eleven releases shipped a compatibility
-# promise the code did not keep.
-#
-# Rather than re-pin and carry the upkeep, luna makes no MSRV promise.
+# luna makes no MSRV promise.
 # A pin only means something if something verifies it every push, and
 # an unverified pin is worse than none: it misleads. What luna is
 # willing to guarantee today is "builds on current stable", and that is
 # what the CI matrix actually tests.
 #
 # Informationally (NOT a contract, may move without a version bump):
-# as of v3.0.0 the tree needs **rustc 1.88+** — 1.87 fails with E0658
+# the tree needs **rustc 1.88+** — 1.87 fails with E0658
 # on the let-chains. Building on an older toolchain surfaces as a
 # compiler error rather than a cargo manifest error, since there is no
 # declared floor for cargo to check against.
 #
-# If a future release wants an MSRV promise back, it needs a workflow
-# that runs and can fail — not just the manifest key.
+# An MSRV promise needs a workflow that runs and can fail — not just
+# the manifest key.
 authors = ["GOLIA K.K. <lihao@golia.jp>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goliajp/luna"
@@ -124,7 +113,7 @@ categories = ["compilers", "no-std"]
 lto = true
 codegen-units = 16
 
-# v1.3 Stage 7 follow-on — dedicated profile for the
+# Dedicated profile for the
 # `luna-runtime-helpers` staticlib build that the AOT pipeline
 # (`luna-aot::embed::compile_and_link`) consumes. LTO must be OFF
 # for this build because the staticlib's whole purpose is to expose
@@ -160,7 +149,7 @@ strip = false
 lto = false
 codegen-units = 16
 
-# v1.2 L4-L6: workspace-wide lint policy. CI `cargo clippy -- -D warnings`
+# Workspace-wide lint policy. CI `cargo clippy -- -D warnings`
 # fails on anything that isn't allowed here. Style nits are filtered out
 # selectively; correctness / suspicious / complexity / unused / perf stay
 # strict.
@@ -192,33 +181,27 @@ missing_safety_doc = "allow"
 doc_lazy_continuation = "allow"
 doc_overindented_list_items = "allow"
 # These trip on hot-path codegen patterns where idiomatic refactor would
-# pessimize (per `perf-decomposition` methodology). Re-enable when the
+# pessimize. Re-enable when the
 # specific site is reviewed.
 too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
-# Moot since v2.17: with no `rust-version` declared (see the MSRV note
+# Moot: with no `rust-version` declared (see the MSRV note
 # in [workspace.package]), clippy has no floor to compare against and
 # this lint cannot fire. Kept as an explicit `allow` so that re-adding
 # an MSRV declaration later does not silently turn it on across the
 # whole tree in the same commit.
 incompatible_msrv = "allow"
 
-# v2.1 Path D Phase 1A — vendored cranelift fork.
+# Vendored cranelift fork.
 #
-# Goal: redirect every `cranelift-*` crate in luna's dep graph at the
+# Redirects every `cranelift-*` crate in luna's dep graph at the
 # locally vendored copy under `crates/vendored/wasmtime/cranelift/`,
-# so subsequent Path D phases (1B audit, 1C custom ISLE rewrite rule
-# for intra-EBB `trusted + same-address + no-intervening-load` store-
-# DCE, 1D-1F roll-out + perf validation) can patch cranelift source
-# in-tree without forking crates.io publishing flow.
+# so cranelift source can be patched in-tree without forking the
+# crates.io publishing flow.
 #
-# Pin: wasmtime v37.0.3 (commit fb88a749bb), which ships exactly the
+# Pin: wasmtime v37.0.3, which ships exactly the
 # `cranelift-* = "0.124.3"` registry versions luna's Cargo.lock pins.
-# No semver bump in Phase 1A — this is plumbing only, no behaviour
-# change expected. Phase 1A "passes" iff `cargo build --workspace`
-# and `cargo test --workspace --lib` produce identical artefacts to
-# the un-patched build.
 #
 # Crate-by-crate enumeration: all 17 cranelift crates that appear in
 # luna's Cargo.lock are listed here, NOT just the 7 luna-jit / luna-aot
@@ -230,7 +213,7 @@ incompatible_msrv = "allow"
 # resolves them via internal `path = "./shared"`-style references.
 # Enumerating all 17 makes the patch hermetic.
 #
-# Upstream-source path map (Phase 1B audit will start from here):
+# Upstream-source path map:
 #   cranelift                   → cranelift/umbrella
 #   cranelift-assembler-x64     → cranelift/assembler-x64
 #   cranelift-assembler-x64-meta→ cranelift/assembler-x64/meta
@@ -248,9 +231,6 @@ incompatible_msrv = "allow"
 #   cranelift-native            → cranelift/native
 #   cranelift-object            → cranelift/object
 #   cranelift-srcgen            → cranelift/srcgen
-#
-# trail (vendor strategy rationale, fork pipeline reproducibility,
-# Phase 1B internal-file handoff list).
 [patch.crates-io]
 cranelift = { path = "crates/vendored/wasmtime/cranelift/umbrella" }
 cranelift-assembler-x64 = { path = "crates/vendored/wasmtime/cranelift/assembler-x64" }
@@ -272,8 +252,6 @@ cranelift-srcgen = { path = "crates/vendored/wasmtime/cranelift/srcgen" }
 
 [profile.dev]
 # debug=1 (line tables) instead of the default 2 (full DWARF). Backtraces keep
-# file and line; what is lost is variable inspection in a debugger, which this
-# project's workflow does not use. Measured 2026-08-28: target/debug/deps is
-# the largest single thing on these machines — 104 GB in smix alone — and the
-# debug info is most of it.
+# file and line; what is lost is variable inspection in a debugger. Full debug
+# info makes up most of target/debug/deps.
 debug = 1

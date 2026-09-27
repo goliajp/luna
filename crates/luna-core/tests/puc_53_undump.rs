@@ -324,7 +324,7 @@ fn end_to_end_returns_float() {
     }
 }
 
-/// Build a PUC 5.3 chunk whose body exercises the Phase 4 PU Wave 3
+/// Build a PUC 5.3 chunk whose body exercises the
 /// **LOADBOOL true+skip** lowering. The body:
 ///
 ///   pc 0: LOADBOOL R0 1 1   (R0 = true, skip next)
@@ -389,7 +389,7 @@ fn build_return_true_via_loadbool_skip_chunk() -> Vec<u8> {
 /// `LoadTrue; Jmp <skip>` pair lands wrong (Jmp delta off, skipped inst
 /// reached) the function returns `false` instead of `true` and the
 /// assertion catches it. Pinned alongside `end_to_end_returns_42` so
-/// any future regression on the Phase 4 PU Wave 3 punt-lowering surface
+/// any future regression on the punt-lowering surface
 /// trips a clear test failure.
 #[test]
 fn end_to_end_loadbool_true_skip_returns_true() {

@@ -1,15 +1,8 @@
-//! v2.1 Phase 1K.D — LLVM 18 + inkwell 0.9 alternative JIT backend
-//! for luna.
+//! LLVM 18 + inkwell 0.9 alternative JIT backend for luna.
 //!
-//! ## Status
-//!
-//! Phase 1K.D.5 stub: `LlvmBackend` ZST implements
-//! `IntChunkCompiler` + `TraceCompiler` with every method returning
-//! `Skipped` / `None` (same shape as `luna_core::jit::NullJitBackend`)
-//! so the dispatcher falls through to the interpreter without
-//! changing behaviour. `LlvmJitStorage` is a marker-only struct.
-//! Phase 1K.D.6+ replaces the trait stubs with actual LLVM codegen
-//! one op at a time.
+//! `LlvmBackend` implements `IntChunkCompiler` + `TraceCompiler`.
+//! Shapes the LLVM codegen does not handle return `Skipped` / `None`
+//! so the dispatcher falls through to the interpreter.
 //!
 //! ## How luna selects this backend
 //!
@@ -45,11 +38,9 @@ mod trace;
 
 pub use storage::LlvmJitStorage;
 
-/// v2.1 Phase 1K.D.2 — LLVM-backed JIT backend zero-sized type.
-/// Implements `IntChunkCompiler` + `TraceCompiler`; trait method
-/// bodies live as stubs through Phase 1K.D.5 (everything returns
-/// `Skipped` / `None`) and grow real LLVM codegen op-by-op starting
-/// at Phase 1K.D.6.
+/// LLVM-backed JIT backend zero-sized type. Implements
+/// `IntChunkCompiler` + `TraceCompiler`; shapes the codegen does not
+/// handle return `Skipped` / `None`.
 #[derive(Default, Clone, Copy)]
 pub struct LlvmBackend;
 
@@ -61,8 +52,8 @@ impl IntChunkCompiler for LlvmBackend {
         pre53: bool,
         _float_only: bool,
     ) -> CompileResult {
-        // v2.1 Phase 1K.D.6 — Op::LoadNil smoke. Other shapes still
-        // bail through `CompileResult::Skipped`; see `codegen` module.
+        // Unsupported shapes bail through `CompileResult::Skipped`;
+        // see the `codegen` module.
         match codegen::try_compile_int_chunk(storage, proto, pre53) {
             Some(c) => c,
             None => CompileResult::Skipped,
@@ -92,7 +83,7 @@ impl TraceCompiler for LlvmBackend {
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        // v2.1 Phase 1K.G — delegate to the LLVM trace lowerer.
+        // Delegate to the LLVM trace lowerer.
         // Down-cast `dyn JitStorage` to the concrete `LlvmJitStorage` so
         // `trace::try_compile_trace` can park the engine pair.
         let llvm_storage = storage.as_any_mut().downcast_mut::<LlvmJitStorage>()?;

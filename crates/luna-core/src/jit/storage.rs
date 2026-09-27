@@ -1,4 +1,4 @@
-//! v2.0 Track J sub-step J-B — per-`Vm` JIT storage trait + null impl.
+//! Per-`Vm` JIT storage trait + null impl.
 //!
 //! The Cranelift JIT keeps three thread-local collections that own
 //! mmap'd code pages for compiled chunk fns and compiled traces:
@@ -9,17 +9,12 @@
 //! - `TRACE_JIT_HANDLES` — `Vec<TraceHandle>` holding each compiled
 //!   trace's `JITModule`
 //!
-//! J-B moves these three from `thread_local!` to per-`Vm` field
-//! storage. The Cranelift types (`JITModule`, `CacheEntry`,
+//! These live in per-`Vm` field storage rather than `thread_local!`.
+//! The Cranelift types (`JITModule`, `CacheEntry`,
 //! `JitHandle`, `TraceHandle`) live in luna-jit, so luna-core only
 //! sees an opaque [`JitStorage`] trait + a no-op
 //! [`NullJitStorage`] default; the concrete `CraneliftJitStorage`
 //! impl lives in `luna_jit::jit_backend::storage`.
-//!
-//! (integration pattern, soundness preservation, phase plan).
-//!
-//! Single-thread semantics are preserved by this sub-step; cross-
-//! thread Send transfer is J-D / J-E's lift.
 
 /// Per-`Vm` JIT storage. Held as `Box<dyn JitStorage>` on
 /// [`crate::vm::jit_state::JitState::storage`]. The concrete impl is

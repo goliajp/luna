@@ -197,7 +197,7 @@ fn trace_audit_nested_loops() {
 }
 
 /// Hot loop with string concat — engages buffered concat path
-/// (S14-B accumulator shape).
+/// (accumulator shape).
 #[test]
 fn trace_audit_string_concat_loop() {
     for (_v, label) in POST53_DIALECTS {

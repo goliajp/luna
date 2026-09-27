@@ -1,7 +1,7 @@
 //! Runtime errors: a Lua error is an arbitrary Lua value (usually a
 //! string). Propagated as `Result<_, LuaError>` through the interpreter;
-//! `pcall` catches it at the native boundary. Traceback capture lands with
-//! the debug interfaces (P05).
+//! `pcall` catches it at the native boundary. Traceback capture lives with
+//! the debug interfaces.
 
 use crate::runtime::Value;
 use crate::runtime::table::TableError;

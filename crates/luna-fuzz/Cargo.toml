@@ -1,5 +1,5 @@
 [package]
-# v2.0 Track CV — fuzz harness crate. Lives as a workspace-EXCLUDED
+# Fuzz harness crate. Lives as a workspace-EXCLUDED
 # sibling crate (see root `Cargo.toml`'s `[workspace] exclude`) so the
 # default `cargo build --workspace` does NOT pull `libfuzzer-sys` or
 # the nightly-only `-Z instrument-coverage` infrastructure into normal
@@ -8,9 +8,8 @@
 #     cd crates/luna-fuzz
 #     cargo +nightly fuzz run fuzz_parser
 #
-# The four harnesses cover the Phase 2 audit's bytecode/parser/dispatcher/
-# AOT-meta attack surface. Per-track content fills in implementation
-# phase add corpora + crash regression inputs.
+# The harnesses cover the bytecode/parser/dispatcher/AOT-meta attack
+# surface.
 name = "luna-fuzz"
 version = "0.0.0"
 edition = "2024"
@@ -19,7 +18,7 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
-# v2.0 Track CV-infra — empty [workspace] table makes this crate a
+# An empty [workspace] table makes this crate a
 # standalone package so cargo doesn't walk up to the luna workspace
 # manifest. Necessary because (a) cargo-fuzz expects standalone crate
 # layout, and (b) the workspace [workspace.exclude] entry only matters
@@ -39,7 +38,7 @@ luna-core = { path = "../luna-core" }
 # fuzz crate. luna-core's 0-third-party-dep contract is unaffected
 # because luna-fuzz is workspace-excluded.
 libfuzzer-sys = "0.4"
-# v2.4 Phase Fuzz-C / Fuzz-D — constrained-grammar input shaping
+# Constrained-grammar input shaping
 # via the `Arbitrary` derive. Same workspace-excluded scope; does
 # not propagate into luna-core's cargo tree.
 arbitrary = { version = "1", features = ["derive"] }
@@ -72,9 +71,9 @@ test = false
 doc = false
 bench = false
 
-# v2.4 Phase Fuzz-C — GC stress fuzz target. Random ops drive
-# alloc / weak-table / finalizer / collectgarbage paths. The
-# v2.1 → v2.3 UAFs all lived in this surface.
+# GC stress fuzz target. Random ops drive alloc / weak-table /
+# finalizer / collectgarbage paths, where use-after-free bugs have
+# historically lived.
 [[bin]]
 name = "fuzz_gc"
 path = "fuzz_targets/fuzz_gc.rs"
@@ -82,7 +81,7 @@ test = false
 doc = false
 bench = false
 
-# v2.4 Phase Fuzz-D — differential vs PUC fuzz target. Random
+# Differential vs PUC fuzz target. Random
 # side-effect-free programs run on both luna + PUC's reference
 # lua5.5 binary; any stdout divergence is a luna bug.
 [[bin]]
@@ -92,7 +91,16 @@ test = false
 doc = false
 bench = false
 
-# v2.6 Track C — differential vs LuaJIT fuzz target. Same
+# PUC-format string.dump: luna dumps a generated program, PUC runs the
+# dump, and the output must match PUC running the source.
+[[bin]]
+name = "fuzz_dump_puc"
+path = "fuzz_targets/fuzz_dump_puc.rs"
+test = false
+doc = false
+bench = false
+
+# Differential vs LuaJIT fuzz target. Same
 # shape as fuzz_diff_puc but runs against `$LUAJIT` reference
 # binary and uses LuaVersion::Lua51 (LuaJIT's base dialect).
 [[bin]]
@@ -102,7 +110,7 @@ test = false
 doc = false
 bench = false
 
-# v3.1 — load arbitrary bytes as a binary chunk (through the bytecode
+# Load arbitrary bytes as a binary chunk (through the bytecode
 # verifier) and run what loads. A verified chunk must not crash the VM.
 [[bin]]
 name = "fuzz_dump_exec"

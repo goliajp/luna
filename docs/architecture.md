@@ -1,7 +1,7 @@
 # Architecture
 
-Architecture overview for embedders and contributors. Snapshot at
-v1.3 (shipped 2026-06-25) with v2.0 sprint annotations. For perf
+Architecture overview for embedders. Snapshot at v1.3 (shipped
+2026-06-25). For perf
 methodology see [`performance.md`](performance.md); for dialect
 support see [`compatibility.md`](compatibility.md); for the deploy-
 side decision tree see [`deploy.md`](deploy.md).
@@ -20,8 +20,8 @@ plus two dev-only members:
 | `luna-jit` | ✅ | `luna-core` + `luna-jit-derive` + Cranelift × 6 + rustyline (opt) | Cranelift JIT backend, capi (`lua_*` C ABI), `luna` CLI (REPL + script runner), JIT-aware embed |
 | `luna-runtime-helpers` | ✅ | `luna-jit` (behind `jit-helpers` feature) | Static-link runtime entry for AOT-produced binaries. Exposes `luna_aot_run` C-ABI symbol |
 | `luna-aot` | ✅ | `luna-core` + `luna-jit` + Cranelift × 6 + `object` + `clap` | Build-time AOT compiler. Lua source → standalone native binary. Not a runtime dep of the produced binary |
-| `luna-fuzz` | ❌ workspace-excluded | `libfuzzer-sys` + `luna-core` | Fuzz harnesses (4: parser / dump / vm / aot_meta). Nightly toolchain. v2.0 Track CV |
-| `luna-tools` | ❌ in-flight | `clap` + `serde` + `object` + opt `pprof` / `capstone` / `inferno` | Dev tools: `luna-bin-inspect` / `luna-heap-dump` / `luna-profile` / `luna-trace-inspect` / REPL polish. v2.0 Track TL |
+| `luna-fuzz` | ❌ workspace-excluded | `libfuzzer-sys` + `luna-core` | Fuzz harnesses (parser, binary chunks, VM, AOT metadata, differential against PUC). Nightly toolchain |
+| `luna-tools` | ❌ not published | `clap` + `serde` + `object` + opt `pprof` / `capstone` / `inferno` | Dev tools: `luna-bin-inspect` / `luna-heap-dump` / `luna-profile` / `luna-trace-inspect` / REPL polish |
 
 The split lets embedders pick the dependency surface:
 
@@ -46,8 +46,8 @@ luna-jit = { version = "1.3", features = ["send"] }
 
 `cargo install luna-jit` installs the `luna` CLI binary (REPL +
 script runner). `cargo install luna-aot` installs the `luna-aot`
-build-time tool. `cargo install luna-tools` (in flight per v2.0
-charter Track TL) installs the dev-tools binaries.
+build-time tool. The dev tools in `luna-tools` are not published;
+build them from the repository with `cargo build -p luna-tools`.
 
 The 0-dep `luna-core` is a hard contract enforced by `cargo deny check` in CI:
 `cargo tree -p luna-core --prefix none | grep -cE " v[0-9]"` must equal `1`
@@ -116,11 +116,9 @@ Lives in: `luna-core/src/{compiler,frontend}/`,
 Discipline:
 - Integration tests cross-validate against PUC and LuaJIT reference
   behavior (`crates/luna-core/tests/official_run.rs` runs 140 PUC
-  test files
-  pins ≥80% per-file assert hit rate as the v2.0 floor)
+  test files)
 - Per-dialect (5.1 / 5.2 / 5.3 / 5.4 / 5.5 / MacroLua) regression
   tests on every change
-- Behavior changes require an audit or RFC entry
 
 ### Cement — concrete embeddings and host glue
 
@@ -129,7 +127,7 @@ a specific workflow or host integration.
 
 Lives in: `luna-core/src/vm/lib_*.rs` (per-stdlib bindings),
 `luna-jit/src/{capi,bin}/` (C ABI + `luna` CLI), `luna-jit-derive/`,
-`luna-runtime-helpers/`, `luna-aot/`, `luna-tools/` (v2.0 Track TL),
+`luna-runtime-helpers/`, `luna-aot/`, `luna-tools/`,
 benches, examples.
 
 Discipline:
@@ -140,10 +138,6 @@ Discipline:
   same sense as the steel/stone tier (the `pub` surface still
   follows semver; this just means breaking changes here cost less)
 - Bug fixes don't require touching steel
-- v2.0 Track SQ refactor
-  consolidates the cement layer's directory layout per this
-  classification — sequenced LAST so R/PI/AO refactors don't
-  invalidate the layout decisions
 
 The crate boundary roughly tracks this classification:
 
@@ -296,7 +290,7 @@ x86_64-unknown-linux-musl`):
 - **C cmain**: `TargetSpec::cc_command()` picks the right cc driver
   (`cc -target ...` for Apple cross-darwin, `<triple>-gcc` for GNU
   cross-cc, `musl-gcc` for Alpine deploys).
-- **Trace mcode** (Stage 7 polish 4): `TargetSpec::cranelift_isa_builder()`
+- **Trace mcode**: `TargetSpec::cranelift_isa_builder()`
   returns the Cranelift `TargetIsa` for the deploy triple — `x86_64`,
   `aarch64`, `s390x`, `riscv64` — so the offline trace lowerer codegens
   for the deploy ABI, not the host's. The warmup Vm still runs on the
@@ -332,12 +326,11 @@ unaffected.
   instead. MSVC's link.exe is a separate driver-surface we haven't
   bridged.
 - **Trace dispatch verification on cross targets**: the
-  `stage7_aot_cross_compile_traces` test verifies non-empty
+  `aot_cross_compile_traces` test verifies non-empty
   `luna_trace_meta` in the cross-built binary (i.e. AOT mcode landed),
   but doesn't run the binary — that needs qemu / docker / Rosetta. The
-  Stage 6 Alpine docker smoke test exercises the bytecode-interp path
-  end-to-end on a different arch; folding AOT-trace dispatch into the
-  same docker run is the natural follow-up.
+  Alpine docker smoke test exercises the bytecode-interp path
+  end-to-end on a different arch.
 
 ---
 
@@ -354,10 +347,10 @@ single-thread Tokio worker) and exchange data through channels. Async
 embedders use `tokio::main(flavor = "current_thread")` or wrap the `Vm`
 in a `LocalSet` under a multi-thread runtime.
 
-A future `feature = "send"` on `luna-core` is on the v1.x post-sprint
-roadmap — it would flip `Gc<T> → Arc<RwLock<T>>` behind a hard ≤8%
-regression budget. See [`threading.md`](threading.md) for the
-detailed plan.
+Since v1.3 an opt-in `send` feature on `luna-core` and `luna-jit`
+adds `SendVm`, a wrapper that is `Send` and can move between threads
+and tokio tasks; the plain `Vm` stays `!Send`. See
+[`threading.md`](threading.md#feature--send--sendvm-v13).
 
 For canonical embedding patterns and code samples, see
 [`threading.md`](threading.md).

@@ -1,4 +1,4 @@
-//! v1.1 B10 Stage 1 — cooperative-yield core integration tests.
+//! Cooperative-yield core integration tests.
 //!
 //! These exercise `Vm::eval_async` end-to-end:
 //! - pure-Lua chunk completes in one slice
@@ -12,8 +12,8 @@
 //!   (no leftover `async_mode` / `host_yield_pending` state)
 //!
 //! No `tokio` dep — the harness uses a 20-line hand-rolled `block_on`
-//! plus a poll counter for the long-loop test. luna-core charter
-//! requires zero third-party dependencies (F1).
+//! plus a poll counter for the long-loop test. luna-core has zero
+//! third-party dependencies.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

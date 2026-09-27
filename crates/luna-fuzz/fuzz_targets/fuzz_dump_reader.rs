@@ -1,4 +1,4 @@
-//! v2.0 Track CV fuzz harness — bytecode dump reader (luna + PUC 5.1-5.5).
+//! Fuzz harness — bytecode dump reader (luna + PUC 5.1-5.5).
 //!
 //! Feeds arbitrary bytes into `luna_core::vm::dump::undump`. The reader
 //! is the largest unsafe-deserialisation surface in luna-core (5 PUC

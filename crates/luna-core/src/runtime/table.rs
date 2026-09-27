@@ -31,7 +31,7 @@ pub enum TableError {
 /// effective ceiling). Beyond this `rehash` returns `TableError::Overflow`.
 pub(crate) const MAX_ASIZE: usize = 1 << 27;
 
-/// v2.1 Phase 1I.B — JIT layout constants for table-field IC.
+/// JIT layout constants for table-field IC.
 ///
 /// luna-jit's trace lowerer needs to emit direct loads against
 /// `Table.nodes` (the hash part) without paying the helper-call ABI
@@ -45,7 +45,7 @@ pub(crate) const MAX_ASIZE: usize = 1 << 27;
 ///   targets (16 bytes total). The data pointer occupies the low 8
 ///   bytes, length the high 8. This is the de-facto Rust ABI for
 ///   `Box<[T]>` / `&[T]` but isn't formally guaranteed; the unit
-///   test `phase_1i_b_node_layout_pinned` and the const assertion
+///   test `node_layout_pinned` and the const assertion
 ///   on `size_of::<Box<[Node]>>()` catch drift.
 /// - `Value` is `#[repr(C, u8)]` so the discriminant byte sits at
 ///   offset 0 and the payload starts at offset 8 (after 7 bytes of
@@ -122,7 +122,7 @@ impl Node {
     };
 }
 
-/// C3 — SoA Robin Hood meta-word layout (Variant A, see
+/// SoA Robin Hood meta-word layout.
 ///
 /// Each `meta[idx]` slot encodes the open-addressing slot state in a
 /// single u16:
@@ -134,12 +134,11 @@ impl Node {
 /// max-PSL at load ≤ 0.75 (expected max ~20 on 1024 slots; even the
 /// long-tail outliers seen empirically with luna's existing hash
 /// distributions stay under 200). 2 bytes/slot is still 20× smaller
-/// than the 40-byte Node — the SoA bandwidth gain (§3.5 of the RFC)
-/// is preserved.
+/// than the 40-byte Node, so the SoA bandwidth gain is preserved.
 ///
-/// Earlier draft used 1 byte with a 6-bit PSL cap of 63; bench under
-/// load 0.676 on cap=1024 produced a long-tail PSL of 64+ with the
-/// LuaStr+mix64 hash distribution, forcing the widening.
+/// A 1-byte meta with a 6-bit PSL cap of 63 is too narrow: under load
+/// 0.676 on cap=1024 the LuaStr+mix64 hash distribution produces a
+/// long-tail PSL of 64+.
 ///
 /// Tombstones do NOT free the slot for `find` (probe continues past), but
 /// DO free it for `insert` (write the new entry, clear the tomb bit). They
@@ -182,7 +181,7 @@ pub(crate) mod meta_bits {
     }
 }
 
-/// P11-S5d.I — inline storage threshold. Tables whose array part has
+/// Inline storage threshold. Tables whose array part has
 /// `asize <= INLINE_ASIZE` keep their atags+avals inside the Table
 /// struct itself (`inline_storage`), skipping the slab Box entirely
 /// — binary_trees's `{nil, nil}` and `{...}` 2-element leaves live
@@ -200,7 +199,7 @@ pub struct Table {
     /// read through raw casts by the GC, not by field access
     #[allow(dead_code)]
     pub(crate) hdr: GcHeader,
-    /// P11-S5d.I — single backing pointer for the array part. Points
+    /// Single backing pointer for the array part. Points
     /// to `inline_storage` (asize <= INLINE_ASIZE) or `slab.as_ptr()`
     /// (asize > INLINE_ASIZE). The JIT inline aset reads this with one
     /// `load i64`, no branch — the choice between inline and slab is
@@ -209,7 +208,7 @@ pub struct Table {
     /// `&mut self.inline_storage` is the stable heap pointer, not a
     /// stack-local one). Updated by `Table::resize`.
     pub array_ptr: *mut u8,
-    /// P11-S5d.H — external backing for the array part when
+    /// External backing for the array part when
     /// `asize > INLINE_ASIZE`. Layout: `[avals: asize × 8 bytes][atags:
     /// asize bytes]`. Empty box (dangling, no alloc) when the inline
     /// path is in use.
@@ -217,7 +216,7 @@ pub struct Table {
     /// Length of the array part in slots. u64 (rather than `usize` or
     /// `u32`) so the JIT can load it with a single `load i64`.
     pub asize: u64,
-    /// P11-S5d.I — inline backing used when `asize <= INLINE_ASIZE`.
+    /// Inline backing used when `asize <= INLINE_ASIZE`.
     /// Same layout as the slab: avals at low addresses (`asize * 8`
     /// bytes from offset 0), atags at the trailing `asize` bytes.
     ///
@@ -225,8 +224,8 @@ pub struct Table {
     /// pointer into this field. Under Stacked Borrows, every
     /// `&mut self` method call's function-entry retag re-tags the
     /// whole `*self` byte range Unique and would pop the cached
-    /// pointer's tag — subsequent `array_ptr` accesses were UB (Miri:
-    /// "retag ... tag does not exist in the borrow stack", v2.13).
+    /// pointer's tag — subsequent `array_ptr` accesses would be UB (Miri:
+    /// "retag ... tag does not exist in the borrow stack").
     /// An `UnsafeCell` region instead receives SharedReadWrite on
     /// retag, which coexists with the pointer derived from
     /// `UnsafeCell::get`. All reads/writes of the inline bytes MUST
@@ -240,24 +239,23 @@ pub struct Table {
     /// free-slot search position, counts down (PUC lastfree).
     /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
     pub(crate) lastfree: u32,
-    /// C3 — SoA Robin Hood hash part (Variant A, parallel to `nodes`
-    /// during Phase B+C transition). After Phase 4 cutover these
-    /// replace `nodes` entirely. Each of `keys` / `vals` / `meta`
-    /// is the same length as `nodes` and is sized in lockstep by
-    /// `resize`. `meta` byte layout per the `meta_bits` module above.
-    /// Empty `Box::new([])` until Phase D cuts over.
+    /// SoA Robin Hood hash part, kept parallel to `nodes`. It is not
+    /// on the public get/set/next path yet: the chain `nodes` stay
+    /// authoritative and only the `soa_*` methods touch these arrays.
+    /// `meta` layout per the `meta_bits` module above. Empty
+    /// `Box::new([])` until a `soa_insert` grows it.
     pub(crate) keys: Box<[Value]>,
     pub(crate) vals: Box<[Value]>,
     pub(crate) meta: Box<[u16]>,
     /// Count of tombstoned-occupied meta slots; rehash trigger.
     pub(crate) tombstones: u32,
-    /// C3 — iterator-guard counter (R-A3 mitigation). Incremented on
-    /// each `pairs`/`next` entry, decremented on exit. While > 0,
-    /// the SoA path MUST defer rehash (which would rebase slot
-    /// indices and break PUC `nextvar.lua:520-521` invariant).
-    /// Phase F wires this; Phase B initialises to 0.
+    /// Iterator-guard counter. Meant to count in-flight `pairs`/`next`
+    /// traversals; while > 0 the SoA path MUST defer rehash (which
+    /// would rebase slot indices and break the PUC
+    /// `nextvar.lua:520-521` invariant). Nothing increments it yet, so
+    /// it stays 0.
     pub(crate) iter_depth: u32,
-    /// P11-S5d.K — visibility lifted to `pub(crate)` so the JIT can
+    /// Visible outside the module so the JIT can
     /// take its field offset at compile time and emit an inline
     /// "metatable.is_none()" guard before the inline aget fast path.
     /// `Option<Gc<Table>>` is 8 bytes via the NonNull-pointer-opt: 0
@@ -282,7 +280,7 @@ impl Table {
     pub(crate) fn new(hdr: GcHeader) -> Table {
         Table {
             hdr,
-            // P11-S5d.I — `array_ptr` is fixed up in
+            // `array_ptr` is fixed up in
             // `Heap::new_table` after the Table reaches its final heap
             // address (so that `&inline_storage` is the heap address,
             // not a stack-local one). Null sentinel here so a
@@ -303,7 +301,7 @@ impl Table {
         }
     }
 
-    /// P11-S5d.I — set `array_ptr` to the inline storage's stable heap
+    /// Set `array_ptr` to the inline storage's stable heap
     /// address. Called by `Heap::new_table` once the Table is at its
     /// final location.
     #[inline]
@@ -317,7 +315,7 @@ impl Table {
     /// cached across `&mut self` boundaries is invalidated by every
     /// function-entry retag under Stacked Borrows — `&mut` retags
     /// ignore `UnsafeCell` (only `&` retags respect it), so the
-    /// cached tag dies on the next method call (v2.13 Miri finding,
+    /// cached tag dies on the next method call (Miri:
     /// `retag ... tag does not exist in the borrow stack`). Deriving
     /// through `UnsafeCell::get()` at each use gives a fresh
     /// SharedReadWrite tag valid for reads AND writes even from
@@ -335,7 +333,7 @@ impl Table {
         }
     }
 
-    /// P11-S5d.H/I — read view onto the array-part tag bytes. Trails
+    /// Read view onto the array-part tag bytes. Trails
     /// the avals portion in the active backing (inline or slab).
     #[inline(always)]
     pub(crate) fn atags(&self) -> &[u8] {
@@ -367,7 +365,7 @@ impl Table {
         }
     }
 
-    /// P11-S5d.H/I — read view onto the array-part payload slots. Sits
+    /// Read view onto the array-part payload slots. Sits
     /// at the start of the active backing (u64-aligned, identical size
     /// and layout to `RawVal`).
     #[inline(always)]
@@ -422,7 +420,7 @@ impl Table {
     /// allocator query. `Heap::free_obj` subtracts this on the way out
     /// so the credit applied via `set`/`rehash`/`ensure_*` is symmetric.
     ///
-    /// P11-S5d.I — inline storage doesn't count toward this (it's part
+    /// Inline storage doesn't count toward this (it's part
     /// of the Table struct itself, accounted for by `size_of::<Table>()`
     /// at adoption time). When the array part lives inline, the slab
     /// is empty and contributes nothing here.
@@ -498,14 +496,13 @@ impl Table {
         self.get_hash(Value::Int(i))
     }
 
-    /// String-keyed variant of [`Self::get`] for v1.2 D4 A1 GetField fast
+    /// String-keyed variant of [`Self::get`] for the GetField fast
     /// path: the GetField interp arm always has a `Gc<LuaStr>` key from
     /// `Proto.consts`. Skips the outer `Value` match (which would only
     /// take the `_ => self.get_hash(k)` arm anyway) so the dispatcher
     /// pays one less branch per call. ~5 GetField/iter × 1000 iters/cell
     /// on the Redis-Lua-shape workload — every shaved nanosecond shows
-    /// up at the bench level. Counter-validated via
-    /// `examples/diag_opcode_breakdown.rs`.
+    /// up at the bench level.
     #[inline]
     pub fn get_str(&self, key: crate::runtime::Gc<crate::runtime::string::LuaStr>) -> Value {
         self.get_hash(Value::Str(key))
@@ -518,7 +515,7 @@ impl Table {
         }
     }
 
-    /// v2.1 Phase 1I.B — same logic as [`find_node`] but exposed
+    /// Same logic as [`find_node`] but exposed
     /// to luna-core's recorder so it can capture the slot index for
     /// the table-field IC snapshot. luna-jit reads neither the
     /// `nodes` field nor `Node` directly; only the slot index
@@ -528,7 +525,7 @@ impl Table {
         self.find_node(k)
     }
 
-    /// v2.1 Phase 1I.B — accessor for the recorder's
+    /// Accessor for the recorder's
     /// `FieldIcSnapshot` capture: read the slot's value's tag byte
     /// for the cached_val_tag field. The recorder needs this to
     /// match the runtime guard the IC emits. Returns None when
@@ -538,7 +535,7 @@ impl Table {
         self.nodes.get(idx).map(|n| n.val)
     }
 
-    /// v2.1 Phase 1I.B — accessor for `nodes.len()` so the recorder
+    /// Accessor for `nodes.len()` so the recorder
     /// can capture the shape-guard's `nodes_len` field without
     /// reaching into the private `nodes` member.
     #[allow(dead_code)]
@@ -548,7 +545,7 @@ impl Table {
 
     /// Walk the chain rooted at the key's main position.
     fn find_node(&self, k: Value) -> Option<usize> {
-        // v2.13 WUC read-time probe (gc-verify): both the query key and
+        // read-time probe (gc-verify): both the query key and
         // every node key compared below must be live. This is the
         // convergence point of ALL hash lookups, so a dangling string
         // is named at its dereference site with role attribution.
@@ -653,8 +650,8 @@ impl Table {
             if tag != raw::NIL {
                 // Nil-val on a live slot must follow the same tombstone
                 // discipline as `set_norm` — routed through
-                // `clear_existing_slot` so chain-world / future
-                // data-layout cutovers (Phase E SoA) stay aligned.
+                // `clear_existing_slot` so the chain layout and any
+                // future data-layout cutover (SoA) stay aligned.
                 if val.is_nil() {
                     self.clear_existing_slot(k);
                 } else {
@@ -692,12 +689,10 @@ impl Table {
     ///     still routes a future re-insert into the same slot without
     ///     a rehash.
     ///
-    /// Centralising the discipline here lets a future Phase E SoA
-    /// cutover (Variant B linear probe, or any non-Robin-Hood layout
-    /// attack that switches `next()`'s filter to `meta_bits::is_live`)
-    /// migrate both entry points in lockstep — exactly the divergence
-    /// that surfaced as `(key, nil)` zombies in `pairs()` on the C3
-    /// Session 2 cutover branch.
+    /// Centralising the discipline here lets a future SoA cutover
+    /// (linear probe, or any layout that switches `next()`'s filter to
+    /// `meta_bits::is_live`) migrate both entry points in lockstep; if
+    /// they diverge, `pairs()` yields `(key, nil)` zombies.
     fn clear_existing_slot(&mut self, k: Value) {
         if let Value::Int(i) = k
             && i >= 1
@@ -900,12 +895,12 @@ impl Table {
     /// Box growth is debited/credited to `heap.bytes` so `free_obj`
     /// can subtract the symmetric amount.
     ///
-    /// P11-S5c.B — `Heap::new_table_sized` calls this on a freshly
+    /// `Heap::new_table_sized` calls this on a freshly
     /// adopted empty table to pre-allocate the array part, sparing
     /// the table-fill loop from O(log N) intermediate `rehash`es.
     pub(crate) fn resize(&mut self, heap: &mut Heap, new_asize: usize, hash_entries: usize) {
         let before = self.internal_bytes();
-        // P11-S5d.H/I — snapshot the old array entries before we
+        // snapshot the old array entries before we
         // re-install the backing. The active buffer can be inline OR
         // slab; `array_ptr` already points to whichever it is, so
         // walking via raw offsets works the same for either case.
@@ -1130,7 +1125,7 @@ impl Table {
         false
     }
 
-    /// v2.13 WUC `gc-verify`: after a completed sweep, every collectable
+    /// `gc-verify`: after a completed sweep, every collectable
     /// reference this table still holds (array values, node keys/values,
     /// metatable) must point at a live heap object. Nodes flagged
     /// `dead_key` are the sanctioned exception — their key pointer is
@@ -1265,8 +1260,7 @@ impl Table {
                 // chain links) is otherwise invisible to this sweep AND
                 // unmarked by the weak-key trace, so its string key gets
                 // freed while `find_node` still raw_eq's it walking the
-                // chain — UAF-C's Linux/ASAN-confirmed read site
-                // (v2.13 Track WUC).
+                // chain (a use-after-free ASAN reports on Linux).
                 if !n.dead_key
                     && matches!(
                         n.key,
@@ -1321,13 +1315,13 @@ impl Table {
 }
 
 // =====================================================================
-// C3 — SoA + Robin Hood open-addressing hash part (Variant A).
+// SoA + Robin Hood open-addressing hash part.
 //
-// Parallel to the chain-walk path during Phase B+C+D transition: the
-// chain `nodes` / `lastfree` is the authoritative read path until
-// Phase E migrates `next()` and Phase 4 cuts over. These methods
-// operate only on the `keys` / `vals` / `meta` / `tombstones` SoA
-// arrays — chain state is never touched.
+// Parallel to the chain-walk path: the chain `nodes` / `lastfree` is
+// the authoritative read path, and nothing outside this block and its
+// tests calls into it yet. These methods operate only on the `keys` /
+// `vals` / `meta` / `tombstones` SoA arrays — chain state is never
+// touched.
 //
 // Layout invariants the methods below maintain:
 //   - `keys.len() == vals.len() == meta.len()`, all power-of-two
@@ -1336,45 +1330,41 @@ impl Table {
 //   - tombstoned slots are scanned past by find but reused by insert
 //   - `tombstones` counts the meta slots with TOMBSTONE_BIT set
 //   - load factor (live + tombstone) / cap is kept ≤ 0.75 via
-//     `soa_grow_if_needed` (R-A1 mitigation — PSL bound 63)
-//   - rehash is REFUSED when `iter_depth > 0` (R-A3 mitigation —
-//     wired in Phase F; for Phase C the counter is always 0 so the
-//     refusal path is unreachable)
-//
-// §6.2 Phase 1-3 (impl plan).
+//     `soa_grow_if_needed`, which bounds PSL
+//   - rehash is REFUSED when `iter_depth > 0` (nothing increments the
+//     counter yet, so the refusal path is unreachable today)
 // =====================================================================
 
-/// C3 — initial SoA capacity when growing from empty. Power of two.
+/// Initial SoA capacity when growing from empty. Power of two.
 /// Picked at 4 so a 3-element table doesn't trigger an immediate
 /// regrowth.
-#[allow(dead_code)] // wired by Phase D/E/F integration
+#[allow(dead_code)] // not yet wired into the public table paths
 pub(crate) const SOA_INITIAL_CAP: usize = 4;
 
-/// C3 — high load-factor threshold (3/4). SoA grow trigger; matches
-/// the RFC §5.1 recommendation. PSL_MAX is the u16 14-bit value so
+/// High load-factor threshold (3/4). SoA grow trigger. PSL_MAX is the u16 14-bit value so
 /// long-tail PSL overruns are recoverable via grow-retry.
 #[allow(dead_code)]
 const SOA_LOAD_NUM: usize = 3;
 #[allow(dead_code)]
 const SOA_LOAD_DEN: usize = 4;
 
-/// C3 — tombstone density threshold (1/4). When tombstones/cap ≥ 25%
+/// Tombstone density threshold (1/4). When tombstones/cap ≥ 25%
 /// the next non-resize-triggering rehash compacts them.
 #[allow(dead_code)]
 const SOA_TOMB_NUM: usize = 1;
 #[allow(dead_code)]
 const SOA_TOMB_DEN: usize = 4;
 
-#[allow(dead_code)] // wired by Phase D/E/F integration into public set/get/next
+#[allow(dead_code)] // not yet wired into public set/get/next
 impl Table {
-    /// C3 — current SoA hash-part capacity in slots (0 = empty stub).
+    /// Current SoA hash-part capacity in slots (0 = empty stub).
     #[inline]
     pub(crate) fn soa_cap(&self) -> usize {
         self.meta.len()
     }
 
-    /// C3 — count of live (occupied & not tombstone) SoA slots.
-    /// O(n) — only used by the Phase G equivalence test path; the
+    /// Count of live (occupied & not tombstone) SoA slots.
+    /// O(n) — only used by the equivalence tests; the
     /// hot rehash trigger uses `live_estimate = cap*3/4 - tombstones`
     /// implicitly via `soa_grow_if_needed`.
     #[cfg(test)]
@@ -1382,25 +1372,23 @@ impl Table {
         self.meta.iter().filter(|&&m| meta_bits::is_live(m)).count()
     }
 
-    /// C3 — count of occupied (live OR tombstoned) SoA slots; this is
+    /// Count of occupied (live OR tombstoned) SoA slots; this is
     /// the value the load factor compares against `cap * 3/4`.
     #[inline]
     fn soa_occupied_count(&self) -> usize {
-        // O(n) sweep — Phase C inserts the count on each call so the
-        // worst case is bounded by per-insert amortised cost. A future
-        // polish could maintain a counter incrementally; left as a
-        // Phase H mini-bench-driven follow-up if PI sample shows it
-        // contributes > 1 µs/cell.
+        // O(n) sweep on each insert, so the worst case is bounded by
+        // per-insert amortised cost. A counter maintained incrementally
+        // would avoid the sweep if it ever shows up in profiles.
         self.meta
             .iter()
             .filter(|&&m| meta_bits::is_occupied(m))
             .count()
     }
 
-    /// C3 — Robin Hood lookup. Returns the slot index of a *live*
+    /// Robin Hood lookup. Returns the slot index of a *live*
     /// matching key, or None if absent. Walks past tombstones (they
     /// preserve probe chains). Returns None if the SoA cap is zero
-    /// (Phase B stub state). Bound by `cap` probes; in practice
+    /// (empty-stub state). Bound by `cap` probes; in practice
     /// expected ≤ 8 at load 0.75.
     pub(crate) fn soa_find_slot(&self, k: Value) -> Option<usize> {
         let cap = self.meta.len();
@@ -1426,15 +1414,14 @@ impl Table {
         None
     }
 
-    /// C3 — Allocate fresh SoA arrays at `new_cap` (power of two) and
+    /// Allocate fresh SoA arrays at `new_cap` (power of two) and
     /// re-insert every live entry from the old SoA arrays. Tombstones
     /// are dropped (count resets to 0). Used by `soa_grow_if_needed`
-    /// (new_cap = max(SOA_INITIAL_CAP, 2*cap)) and by Phase D
-    /// tombstone compaction (new_cap = cap).
+    /// (new_cap = max(SOA_INITIAL_CAP, 2*cap)) and by tombstone
+    /// compaction (new_cap = cap).
     ///
-    /// IMPORTANT: rehash MUST NOT fire while `iter_depth > 0`
-    /// (R-A3) — wired in Phase F. Phase C callers all enter from
-    /// non-iteration paths.
+    /// IMPORTANT: rehash MUST NOT fire while `iter_depth > 0`. All
+    /// current callers enter from non-iteration paths.
     fn soa_rehash_to(&mut self, heap: &mut Heap, new_cap: usize) -> Result<(), TableError> {
         debug_assert!(new_cap.is_power_of_two() && new_cap > 0);
         let before = self.internal_bytes();
@@ -1480,16 +1467,14 @@ impl Table {
         Ok(())
     }
 
-    /// C3 — Raw rob-from-rich placement for a key known to be absent
+    /// Raw rob-from-rich placement for a key known to be absent
     /// from the SoA arrays. Used by `soa_rehash_to` (re-insert pass)
     /// and by `soa_insert` (new-key path after the explicit
     /// soa_find_slot check). This routine does NOT auto-grow on a
-    /// load-factor trigger (caller's responsibility), but DOES signal
-    /// back to the caller via `Err(())` when the PSL bound of 63 is
-    /// hit before finding an empty slot — Robin Hood's long-tail
-    /// max-PSL exceeds the 6-bit storage budget at unfavourable hash
-    /// distributions even under the nominal 0.75 load gate (RFC §6.3
-    /// R-A1). The caller (`soa_insert`) handles by growing & retrying.
+    /// load-factor trigger (caller's responsibility), but hands the
+    /// pending pair back as `Err((k, v))` when the probe sequence
+    /// passes `meta_bits::PSL_MAX` before an empty slot turns up. The
+    /// caller (`soa_insert`) grows and retries.
     ///
     /// On success returns the slot index where the new key landed
     /// (after any rob-from-rich shuffle, the original `k` value is at
@@ -1544,11 +1529,11 @@ impl Table {
         Err((cur_key, cur_val))
     }
 
-    /// C3 — Grow SoA capacity if the load factor is at or above the
+    /// Grow SoA capacity if the load factor is at or above the
     /// 0.75 trigger. Doubles cap; from empty grows to SOA_INITIAL_CAP.
     fn soa_grow_if_needed(&mut self, heap: &mut Heap) -> Result<(), TableError> {
-        // Defer rehash when an iterator is in flight (R-A3). Wired
-        // in Phase F; in Phase C iter_depth is always 0.
+        // defer rehash when an iterator is in flight (iter_depth is
+        // never incremented yet, so this does not fire today)
         if self.iter_depth > 0 {
             return Ok(());
         }
@@ -1568,16 +1553,15 @@ impl Table {
         Ok(())
     }
 
-    /// C3 — Insert (or update) `(k, v)` in the SoA hash part. Routes
+    /// Insert (or update) `(k, v)` in the SoA hash part. Routes
     /// through `soa_find_slot` first so an existing key updates its
     /// val in place; otherwise rob-from-rich places a new entry.
     /// Auto-rehashes if the load factor would exceed 0.75 OR if the
     /// place chain runs into a PSL overflow on a pathological hash
     /// distribution.
     ///
-    /// Phase C: this method is callable from outside via the
-    /// equivalence-test entrypoint (Phase G); not yet hooked into
-    /// public `set` / `set_norm`.
+    /// Only the equivalence tests call this; it is not yet hooked
+    /// into public `set` / `set_norm`.
     pub(crate) fn soa_insert(
         &mut self,
         heap: &mut Heap,
@@ -1606,7 +1590,7 @@ impl Table {
         }
     }
 
-    /// C3 — Rehash to `new_cap` while merging in an extra (k, v) pair
+    /// Rehash to `new_cap` while merging in an extra (k, v) pair
     /// not currently in the SoA arrays. Used by `soa_insert` to
     /// recover from PSL overflow: the homeless evictee from the failed
     /// place chain gets appended to the survivor list before the
@@ -1658,9 +1642,9 @@ impl Table {
         Ok(())
     }
 
-    /// C3 — Read SoA hash part. Mirrors `get_hash` but reads from
-    /// keys/vals/meta rather than nodes. Used by the Phase G
-    /// equivalence test; not yet hooked into public `get` / `get_hash`.
+    /// Read SoA hash part. Mirrors `get_hash` but reads from
+    /// keys/vals/meta rather than nodes. Used by the equivalence
+    /// tests; not yet hooked into public `get` / `get_hash`.
     pub(crate) fn soa_get(&self, k: Value) -> Value {
         match self.soa_find_slot(k) {
             Some(idx) => self.vals[idx],
@@ -1668,13 +1652,13 @@ impl Table {
         }
     }
 
-    /// C3 — Tombstone deletion. Marks the live slot for `k` as
+    /// Tombstone deletion. Marks the live slot for `k` as
     /// tombstoned, preserving the slot index (no backward shift).
     /// Slot-index stability is the PUC `next()` iteration invariant
     /// — `nextvar.lua:520-521` requires that deleting prior keys
     /// during a `pairs` traversal does NOT move unvisited keys.
     /// Backward-shift deletion would violate this; tombstones are
-    /// the standard Robin Hood resolution (see RFC §4.5 + §5.1).
+    /// the standard Robin Hood resolution.
     ///
     /// keys[idx] / vals[idx] are reset to Nil so the GC marker is
     /// not held to the previous entries — only the tombstone bit
@@ -1682,8 +1666,8 @@ impl Table {
     ///
     /// Returns true if the key was found and deleted, false if absent.
     ///
-    /// Phase D: not yet hooked into public `set(k, Nil)` — wired in
-    /// Phase E alongside the `next()` migration.
+    /// Not yet hooked into public `set(k, Nil)`; that has to move
+    /// together with `next()`.
     pub(crate) fn soa_delete(&mut self, k: Value) -> bool {
         if let Some(idx) = self.soa_find_slot(k) {
             let psl = meta_bits::psl(self.meta[idx]);
@@ -1785,7 +1769,7 @@ mod tests {
         }
     }
 
-    /// v2.1 Phase 1I.B — pin `Box<[Node]>` fat-ptr layout at runtime.
+    /// Pin `Box<[Node]>` fat-ptr layout at runtime.
     /// The luna-jit table-field IC reads `(ptr, len)` directly out of
     /// the `nodes` field assuming the data pointer occupies the low 8
     /// bytes and the length the high 8 bytes (de-facto Rust ABI on
@@ -1795,7 +1779,7 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     #[cfg(target_pointer_width = "64")]
-    fn phase_1i_b_node_layout_pinned() {
+    fn node_layout_pinned() {
         use jit_layout::*;
         assert_eq!(std::mem::size_of::<Box<[Node]>>(), 16);
         assert_eq!(NODE_KEY_OFFSET, 0);
@@ -1995,15 +1979,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // C3 SoA Robin Hood equivalence tests (Phase G).
+    // SoA Robin Hood equivalence tests.
     //
     // Cross-check the new SoA + RH path against the existing chain-walk
     // path: replay the same insert/lookup sequence on a table via
     // `set` (chain) and another via `soa_insert` (SoA), then assert
     // `get == soa_get` for every key.
-    //
-    // Phase B+C scope: insert + read only. Tombstone delete equivalence
-    // arrives with Phase D.
     // -----------------------------------------------------------------
 
     fn replay_chain(heap: &mut Heap, ops: &[(Value, Value)]) -> *mut Table {
@@ -2096,7 +2077,7 @@ mod tests {
 
     #[test]
     fn c3_soa_equivalence_delete_then_read() {
-        // Phase D: tombstone delete + read on both paths, verify
+        // tombstone delete + read on both paths, verify
         // matching nil-for-deleted, original-val-for-live.
         let mut heap = Heap::new();
         let mut ops_insert = Vec::new();

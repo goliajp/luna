@@ -1,14 +1,13 @@
-# v2.2 Phase 4 (CA) — cross-allocator matrix.
+# Cross-allocator matrix.
 #
-# The v2.1 → v2.2 UAFs were both Linux-glibc-only — macOS
-# (Apple-malloc) and Linux + jemalloc passed the same Lua test.
-# Different allocators expose different UAF shapes because their
+# Some UAFs only reproduce under Linux glibc — macOS (Apple-malloc)
+# and Linux + jemalloc pass the same Lua test. Different allocators expose different UAF shapes because their
 # free-list / quarantine / coalescing behavior decides whether a
 # freed object's bytes get reused for an adjacent-sized
 # allocation vs sit quarantined.
 #
 # Approach: LD_PRELOAD-swap the global allocator under each
-# matrix entry, run the full official_run + the v2.2 sprint's
+# matrix entry, run the full official_run + the UAF
 # regression tests. No code change in luna-* crates: keeps the
 # 0-third-party-dep luna-core contract intact. Each allocator is
 # system-installed via apt-get; the LD_PRELOAD wire-up replaces
@@ -43,7 +42,7 @@ jobs:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
       CI: 1  # Match the CI byte-strip sort.lua AA gate in
-             # official_run.rs (Phase 1.B residual).
+             # official_run.rs.
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,17 +82,14 @@ jobs:
       - name: cargo build --workspace
         # Exclude LLVM-backed alt-backend crates that need system
         # LLVM 18 + Polly which hosted ubuntu-latest doesn't ship
-        # (matches ci.yml's `native` job exclusions; per v2.0 CI
-        # blocker fix commit 5ef6cb4). Without these excludes, the
-        # cross-allocator matrix has been failing on `error: could
-        # not find native static library `Polly`` since ~2026-07-03.
+        # (matches ci.yml's `native` job exclusions). Without these
+        # excludes the build fails with `error: could not find native
+        # static library `Polly``.
         run: cargo build --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm
 
       - name: cargo test --workspace --release (official_run + regressions)
         # Cap the scope to luna-core for the matrix (where the UAFs
-        # surfaced); other crates can move into a follow-up matrix
-        # entry once the per-allocator baseline is established. The
-        # official_run integration test exercises the full PUC
+        # surfaced). The official_run integration test exercises the full PUC
         # suite per dialect, which is the broadest end-to-end
         # signal we have.
         run: |
@@ -101,6 +97,6 @@ jobs:
             --test official_run \
             --test toomanyidx_memory_cap \
             --test sort_gc_during_compare \
-            --test cb_edge_gc_finalizer \
+            --test gc_finalizer_edges \
             --test host_roots_slot_recycling \
             -- --nocapture

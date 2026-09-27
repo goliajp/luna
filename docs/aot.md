@@ -102,8 +102,7 @@ Tier-1 verified on macOS aarch64 host: `aarch64-apple-darwin`,
 `x86_64-pc-windows-msvc`.
 
 Tier-2 (build-succeeds but actual-run not CI-verified on every
-release): `aarch64-unknown-linux-musl`, RISC-V, s390x — see Track
-AO-CC in the v2.0 charter for the in-flight verification matrix.
+release): `aarch64-unknown-linux-musl`, RISC-V, s390x.
 
 For musl/Alpine deployment specifically, install `musl-cross` via
 `brew install musl-cross` on the build host before invoking
@@ -116,9 +115,7 @@ For musl/Alpine deployment specifically, install `musl-cross` via
 
 A `production_like.lua` chunk (~1.5k LOC) compiled with default
 release profile + `strip` produces ~4.5 MiB on macOS aarch64
-(measured 2026-06-25; see
-[`contributing-disk.md`](contributing-disk.md) for the reproduction
-recipe).
+(measured 2026-06-25).
 
 Section breakdown (`size -m`, release-stripped):
 
@@ -152,9 +149,7 @@ byte of `.luna.bytecode` per Lua opcode plus constants).
 - **Inline-side-exit chain reloc** (`per_exit_inline`) is wired
   in the AOT format but its trigger pattern is recorder-heuristic
   dependent — some self-recursive shapes don't currently emit
-  inline-chain dispatches in the warmup pass. See AO-PF in the
-  v2.0 charter for the in-flight runtime-counter instrumentation
-  that disambiguates dead-code vs unfired-but-live.
+  inline-chain dispatches in the warmup pass.
 - **No runtime code patching**. The produced binary cannot install
   new traces post-deploy. For workloads that change shape over
   weeks, prefer `luna-jit` + a long-running `Vm`.
@@ -189,10 +184,8 @@ holds the AOT trace metadata, `.lt_skix` the string-key index. The
 linker walks these at runtime to install the trace mcode against
 the embedded Vm.
 
-A dedicated `luna-aot inspect <binary>` sub-command (Track TL +
-AO-CLI in the v2.0 charter) is planned but not yet shipped; until
-then, the standard tools above plus `size -m` cover most
-deployment-time inspection needs.
+The standard tools above plus `size -m` cover most deployment-time
+inspection needs.
 
 ---
 

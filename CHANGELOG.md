@@ -19,6 +19,127 @@ optimization.
 
 ---
 
+## [3.2.0] — 2026-09-27
+
+`string.dump` writes bytecode the stock PUC interpreter of each dialect
+loads, the `luna` CLI follows `lua.c`, and a script or a loaded chunk can
+no longer panic the VM. No breaking change: two renamed `Vm` methods keep
+their old names as deprecated aliases.
+
+### Added
+
+- The `luna` CLI runs `LUA_INIT` as each dialect's `lua.c` does: a chunk
+  named after the variable, or `@file`; from 5.2 on `LUA_INIT_5_x` is
+  taken first and `-E` skips it; 5.1 runs it before reading the options.
+- `-E` (5.2 on) now also makes the package library ignore `LUA_PATH` /
+  `LUA_CPATH`, and sets the registry's `LUA_NOENV`, as in `lua.c`.
+- `Vm::set_ignore_env` (`lua.c`'s `-E` for the libraries opened after
+  it), `Vm::read_stdin_line` (`fgets` on stdin, through the io library's
+  buffer) and `Vm::tostring_value` (`luaL_tolstring`) are public.
+
+### Fixed
+
+- On Windows, the error text of an `io` failure luna detects itself
+  (`EINVAL`, `EBADF`, `ESPIPE`, `ENOMEM`) is the C runtime's, as PUC
+  prints it (`Invalid argument`), instead of the unrelated Windows message
+  for the same number.
+- 5.1: a zero constant takes the sign of the first zero its function
+  loaded, as PUC 5.1's constant table (keyed by value, where `0 == -0`)
+  makes it, so `print(0, -1 * 0)` prints `0 0`. Constant folding also
+  follows 5.1 and 5.2 more closely: parenthesized and negated operands fold,
+  `%` and `^` fold in 5.1 and 5.2, and a division or modulo by zero is left
+  to run time in every dialect.
+- A stripped PUC chunk loaded into luna reported line 0 for every
+  instruction instead of having no line information (`currentline` is now
+  -1, and errors are placed at `?`, as in PUC).
+- A numeric `for` loop whose hidden state was changed by `debug.setlocal`
+  or by a crafted binary chunk panicked the host; it now raises
+  `'for' state corrupted`. On 5.1/5.2 a number of the other
+  representation is accepted there and the loop continues, as in PUC.
+- A table constructor whose table was replaced the same way panicked; it
+  now raises `attempt to index a <type> value`.
+- The method JIT wrote the elements of a table constructor into the
+  table's array part without checking its size; a smaller array part now
+  takes the checked path. It also no longer compiles a constructor with a
+  large start index, and no longer panics while compiling a function
+  whose arithmetic result lands in a register that held a table, a math
+  call on a table, or a `math.mininteger` loop step.
+- The trace JIT passed a value that was not a table (a string's length,
+  a field read through the string metatable, an index of a number with a
+  metatable) to its table helpers, which read it as a table and could
+  crash the process. Those operations are left to the interpreter.
+- A generic `for` whose iterator is `pcall`, `xpcall` or `pairs` with a
+  `__pairs` metamethod could corrupt the call stack inside a trace; the
+  trace now leaves to the interpreter for it.
+- The trace JIT ran a recursive call inline as the traced function
+  whatever the call target was at run time, with the upvalues of the
+  closure the trace was entered with: after the recursive local was
+  reassigned, or when the target was another function or another closure
+  of the same function, it computed the wrong result. An inlined call now
+  leaves the trace unless its target is that closure.
+- When the interpreter ran a side trace for a trace's exit, it restored
+  the registers with the parent trace's summary of its exit types, which
+  could turn a function or table in a register into an integer.
+- A comparison of floats in a trace whose recorded branch was the
+  negated one (`not (a < b)` compiled as `a >= b`) took the other branch
+  when an operand was NaN.
+- With `Vm::set_self_link_enabled(true)`, a self-linked trace whose
+  recording held a loop edge or a call it does not inline (a crafted
+  chunk) panicked the compiler or skipped the call; it is now not
+  compiled.
+- `docs/compatibility.md` said the bytecode verifier checks that the key
+  of a field or global access is a string; it checks the constant index
+  only.
+- `debug.debug`: a command nested too deep for the parser (5.4+) now goes
+  through the running message handler, as `load` does.
+- Panics reachable from Lua scripts or loaded chunks, now Lua errors or
+  the PUC result: `debug.getupvalue` / `debug.setupvalue` on a function
+  loaded without upvalues; `debug.setupvalue` on a standard-library
+  function (see Changed); `string.format` with a width past the machine
+  word; `file:seek("cur", math.mininteger)` after a read; `bit32` shifts
+  by `math.mininteger`; 5.1/5.2 `table.sort` on a range ending at
+  `2^31-1`; `table.sort` with a huge `__len`; a 5.5 named vararg table
+  whose `n` exceeds the stack (`stack overflow`); 5.1
+  `debug.traceback` with a level past a C `int`; stores into a full
+  table by `require`, `module`, `package.seeall`, `coroutine.wrap` and
+  5.1/5.2 `table.insert` (`table overflow`); library-built strings
+  longer than a string can hold (`string length overflow`); a binary
+  chunk whose local names a register out of range or that nests
+  functions deeper than 250 levels (refused on load); a named local of a
+  crafted chunk aliasing a running call; a to-be-closed slot a crafted
+  chunk registers twice (`'<close>' state corrupted`).
+
+### Changed
+
+- The `luna` REPL (`-i`, or no script with stdin a terminal) is each
+  dialect's `lua.c` REPL: `_PROMPT` / `_PROMPT2` on stdout, a line tried
+  as `return <line>;` first from 5.3 on and `=expr` through 5.4, results
+  through the global `print`, errors with their traceback and without the
+  program name, the version line first when stdin is a terminal, and a
+  newline at the end of input. It used to print its own banner and
+  prompts on stderr, render the results itself and report an error as
+  `error: <message>`. Without the `repl-line-editor` feature it no longer
+  writes `~/.luna_history`, as `lua.c` without readline keeps no history;
+  the line editor still does.
+- `string.dump` writes PUC bytecode of the running dialect (5.1, 5.2, 5.3,
+  5.4 or 5.5), which that version's stock `lua` loads and runs;
+  `string.dump(f, true)` strips debug information as PUC does. A function
+  the dialect's instruction set cannot express raises `unable to dump given
+  function`. `luna_core::vm::dump::dump` still writes luna's own format,
+  and MacroLua's `string.dump` keeps it too (MacroLua has no PUC format).
+- A binary chunk in the running dialect's own PUC format, which is what
+  `string.dump` now produces, loads under the same switch as luna's own
+  chunks (`Vm::set_bytecode_loading`, on by default); chunks of the other
+  PUC versions still need `Vm::set_puc_bytecode_loading(true)`.
+- `debug.setupvalue` no longer changes the upvalues of C functions; it
+  returns nothing for them. Library functions keep state there that they
+  rely on.
+- `Vm::set_p16_self_link_enabled` / `Vm::p16_self_link_enabled` are now
+  `Vm::set_self_link_enabled` / `Vm::self_link_enabled`. The old names
+  still work and are deprecated.
+- The published `luna-aot` description matches what it does: the trace
+  JIT's machine code is part of the produced binary.
+
 ## [3.1.0] — 2026-09-25
 
 A parity release. **No breaking change**: code written against 3.0 builds

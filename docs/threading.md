@@ -255,10 +255,10 @@ substitute `#[tokio::main(flavor = "current_thread")]` or a
   pending-async state but leaves Lua call frames in `vm.frames`.
   Drop the entire Vm when an async eval is cancelled mid-flight.
 
-### Async natives + debug hooks (v1.3 Phase AS)
+### Async natives + debug hooks (v1.3+)
 
-The v1.1 `[B11]` Rust-side debug hook (`vm.set_rust_debug_hook(...)`)
-composes with async natives as of v1.3 Phase AS — embedders see the
+The Rust-side debug hook (`vm.set_rust_debug_hook(...)`) composes
+with async natives since v1.3 — embedders see the
 same `Call` / `Return` event pair for an async native as for a sync
 native or a Lua function. The dispatcher's `Count` and `Line` hook
 sites are opcode-driven and have always worked under `async_mode = true`;
@@ -452,7 +452,7 @@ The wrapper mirrors the common embedder ops on [`Vm`]:
 - `get_global(name) -> Value` (new — present only on SendVm)
 - `intern_str(s) -> Gc<LuaStr>`
 - `set_userdata<T: LuaUserdata>(name, value) -> Result<(), LuaError>`
-- `pin_host / read_host / unpin` (Phase SR host roots)
+- `pin_host / read_host / unpin` (host roots)
 - `Clone` (cheap, shares the underlying Vm via Arc)
 
 Not on `SendVm` (intentionally — these would require additional
@@ -462,32 +462,8 @@ non-`Send` closures, `install_jit_backend` (interp-only), the
 which *is* `Send` but the surface isn't mirrored in v1.3 — open
 the wrapped Vm via the bare API for now).
 
-For a full design + the soundness story, see
-the `send` feature's design.
-
 [`vm::Vm`]: ../crates/luna-core/src/vm/exec.rs
 [`vm::SendVm`]: ../crates/luna-core/src/vm/send_vm.rs
-
----
-
-## Forward-looking — v1.4+ post-ship polish
-
-`SendVm` has two follow-up axes in the pipeline:
-
-1. **JIT-aware `SendVm`** — lift the interp-only restriction. Cost
-   sketch;
-   needs `Proto::traces` `Rc → Arc` migration and a JIT TLS
-   redesign. Audit projects ~6 % additional JIT-engaged cost
-   beyond the current ~2 % interp-only.
-2. **Per-field `SendGc<T>` fork** — replace the wrapper-with-lock
-   with a parallel `SendVm` type whose `Gc<T>` is `Arc<UnsafeCell<T>>`
-   per-field. Eliminates the per-call lock acquire. Audit §3.2
-   B2 estimates ~3 % ARM; SS-B already lands at ~2 % via the
-   wrapper, so this is only worth doing if a real embedder hits
-   the lock-contention ceiling.
-
-Both are post-v1.3 polish items, not defers — the v1.3 charter is
-explicit that the wrapper-shape SendVm is the v1.3 deliverable.
 
 ---
 

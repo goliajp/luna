@@ -1,4 +1,4 @@
-//! `Vm::native_typed` + supporting traits (B5, Phase 2 P2-C).
+//! `Vm::native_typed` + supporting traits.
 //!
 //! Embedders write typed Rust functions that look like Lua callables.
 //! The framework decodes Lua arguments via [`FromLuaArgs`] (built on
@@ -29,8 +29,8 @@
 //! `F` must be `Fn(...) -> Out + Copy + 'static`. Both fn pointers
 //! and **non-capturing closures** qualify (the latter are ZST so we
 //! reconstruct them in the trampoline). Capturing closures are not
-//! supported in P2-C; embedders use `vm.native_with(...)` directly
-//! with explicit upvals, or wait for B8 LuaUserdata (Phase 3).
+//! supported; embedders use `vm.native_with(...)` directly with
+//! explicit upvals, or a `LuaUserdata` type.
 
 use crate::runtime::value::{NativeFn, Value};
 use crate::vm::error::LuaError;
@@ -129,14 +129,14 @@ impl<T: FromLuaValue> FromLuaValue for Option<T> {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Decode a tuple of typed Rust values from the VM's stack arguments
-/// (B5 — typed Rust native function trampoline).
+/// (typed Rust native function trampoline).
 pub trait FromLuaArgs: Sized {
     /// Decode `nargs` consecutive arguments starting at index `0` into `Self`.
     fn from_lua_args(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError>;
 
     /// Decode `nargs - 1` arguments starting at index `1` — i.e. the
     /// `obj:method(args)` shape where slot `0` is the receiver and
-    /// `args` start at slot `1`. v1.2 Track B `LuaUserdata` method
+    /// `args` start at slot `1`. `LuaUserdata` method
     /// trampolines call this; regular [`Vm::native_typed`] callers use
     /// [`from_lua_args`](Self::from_lua_args).
     fn from_lua_args_skip_self(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError>;
@@ -193,7 +193,7 @@ impl_from_lua_args_tuple! {
 /// Variadic decoder: collect **all** positional args into a
 /// `Vec<Value>`. Useful for variadic natives (`redis.call(cmd, ...)`,
 /// dispatch tables, etc.) where fixed-arity tuples would force an
-/// artificial cap. v1.2 Track B side-task.
+/// artificial cap.
 impl FromLuaArgs for Vec<Value> {
     #[inline]
     fn from_lua_args(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Self, LuaError> {
@@ -221,7 +221,7 @@ impl FromLuaArgs for Vec<Value> {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Push a typed Rust value (or tuple of values) onto the VM's stack as a
-/// native function's return values (B5).
+/// native function's return values.
 pub trait IntoLuaReturn {
     /// Push the encoded values starting at `fs` and return the result count.
     fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError>;

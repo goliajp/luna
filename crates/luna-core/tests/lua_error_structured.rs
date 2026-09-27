@@ -1,4 +1,4 @@
-//! P3 B6 smoke tests: LuaError Display/Error impls + Vm::error_kind tracking.
+//! Smoke tests: LuaError Display/Error impls + Vm::error_kind tracking.
 
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, LuaErrorKind, Vm};
@@ -61,7 +61,7 @@ fn error_kind_clears_on_successful_eval() {
     let _ = vm.eval("not lua").unwrap_err();
     assert_eq!(vm.error_kind(), LuaErrorKind::Syntax);
     let _ = vm.eval("return 1").unwrap();
-    // clear_error_metadata fires on eval entry (B6 contract).
+    // clear_error_metadata fires on eval entry.
     assert_eq!(vm.error_kind(), LuaErrorKind::Runtime);
 }
 

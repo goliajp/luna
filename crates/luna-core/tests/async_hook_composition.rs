@@ -1,6 +1,6 @@
-//! v1.3 Phase AS — async natives compose with Rust-side B11 debug hooks.
+//! Async natives compose with Rust-side debug hooks.
 //!
-//! dispatcher hot loop already fires Count / Line / Lua-Call /
+//! The dispatcher hot loop already fires Count / Line / Lua-Call /
 //! Lua-Return under `async_mode = true` (those sites are opcode-driven,
 //! not async-mode-aware); the gap was the async-native call boundary
 //! itself, which now fires:
@@ -14,7 +14,7 @@
 //! (function pointers are unconditionally `Send + Sync`).
 //!
 //! No tokio dep — same hand-rolled `block_on` + `YieldOnce` pattern as
-//! `tests/async_native.rs`. luna-core's 0-third-party-dep contract (F1)
+//! `tests/async_native.rs`. luna-core's zero-third-party-dep contract
 //! forbids adding tokio; the tokio integration smoke example, if
 //! wanted, lives in luna-jit (which already has dev-deps like
 //! criterion).
@@ -189,8 +189,8 @@ fn call_and_return_bracket_async_native_yield_path() {
     let evts = snapshot_events();
     // The async native fires its Call BEFORE the YieldOnce suspends and
     // its Return AFTER the suspended future resolves. There is no
-    // intermediate "yield" hook event in luna's B11 model (audit Q2 —
-    // hook events fire only on completed semantic boundaries, never on
+    // intermediate "yield" hook event in luna's hook model (hook
+    // events fire only on completed semantic boundaries, never on
     // cooperative yield unwinds), so the Call/Return pair should
     // straddle the suspend cleanly. We assert the *order*: the index
     // of the last Return event must be after the index of some Call
@@ -212,7 +212,7 @@ fn call_and_return_bracket_async_native_yield_path() {
 #[test]
 fn count_hook_carries_across_async_slice_boundaries() {
     // The dispatcher already carries `hook.count_left` across
-    // `Poll::Pending` returns to the executor (audit §A.3 / Q1) — this
+    // `Poll::Pending` returns to the executor — this
     // test pins that behavior. We force several slice boundaries by
     // setting an aggressive `async_slice_size` and confirm the count
     // hook fires a sensible number of times: roughly `total_ops /
@@ -244,7 +244,7 @@ fn count_hook_carries_across_async_slice_boundaries() {
 
 #[test]
 fn line_hook_dedupes_across_async_slice_boundaries() {
-    // The line hook uses `hook_lastline` to dedupe (audit §A.3) — also
+    // The line hook uses `hook_lastline` to dedupe — also
     // a Vm field that persists across `Poll::Pending`. With an
     // aggressive slice size we force a re-poll mid-line; the line
     // event for that line must not double-fire.
@@ -285,7 +285,7 @@ fn rust_debug_hook_is_send_at_type_level() {
     // pointer so it is unconditionally `Send + Sync` (function
     // pointers are `Send` regardless of feature flags). This is
     // load-bearing for `feature = "send"` (SendVm) composition with
-    // async hooks per audit §"Coordination with Phase SS".
+    // async hooks.
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
     assert_send::<RustDebugHook>();
@@ -299,7 +299,7 @@ fn rust_debug_hook_is_send_at_type_level() {
 fn hook_call_returning_err_aborts_async_native() {
     // If the user's hook errored from inside the `Call` event for an
     // async native, the future is never built and the error
-    // propagates as a normal LuaError. Audit §A.1 edge case.
+    // propagates as a normal LuaError.
     fn err_on_call(vm: &mut Vm, evt: RustHookEvent) {
         if matches!(evt, RustHookEvent::Call) {
             // Walk through the public API: there's no
@@ -308,9 +308,9 @@ fn hook_call_returning_err_aborts_async_native() {
             let _ = vm.set_global("hook_saw_call", Value::Bool(true));
         }
     }
-    // Note: B11's hook callback signature `fn(&mut Vm,
+    // Note: the Rust hook callback signature `fn(&mut Vm,
     // RustHookEvent)` has no Result return — the hook can't directly
-    // abort the call. The audit's "hook returns Err" scenario applies
+    // abort the call. The "hook returns Err" scenario applies
     // to the Lua-side hook (which can `error()` from inside). For the
     // Rust hook, the behaviour is "hook side effect always runs to
     // completion; the eval result is unaffected by the hook". This

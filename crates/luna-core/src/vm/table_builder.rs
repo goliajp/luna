@@ -1,5 +1,5 @@
-//! `TableBuilder` + `vm.table_of` (B3, Phase 2 P2-B) — replace the
-//! dogfood §4.1 `unsafe { t.as_mut() }.set(...)` dance with a safe
+//! `TableBuilder` + `vm.table_of` — replace the
+//! `unsafe { t.as_mut() }.set(...)` dance with a safe
 //! one-line builder.
 //!
 //! ```

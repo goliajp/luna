@@ -20,12 +20,12 @@ const DIALECT: &str = "PUC 5.2";
 /// Header: signature, version, format, endianness, the sizes of `int`,
 /// `size_t`, `Instruction` and `lua_Number`, the integral flag, then
 /// `LUAC_TAIL`.
-const HEADER: &[u8] = &[
+pub(in crate::vm::dump) const HEADER: &[u8] = &[
     0x1b, b'L', b'u', b'a', 0x52, 0, 1, 4, 8, 4, 8, 0, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
 ];
 
 /// Opcode numbers, lopcodes.h 5.2.4.
-const OPS: &[Kind] = &[
+pub(in crate::vm::dump) const OPS: &[Kind] = &[
     Kind::Move,
     Kind::LoadK,
     Kind::LoadKx,
@@ -137,7 +137,7 @@ fn read_proto(r: &mut Reader, heap: &mut Heap) -> Result<RawProto, Bad> {
         .collect::<Result<Vec<_>, _>>()?;
     let n = read_count(r, 1)?;
     let protos = (0..n)
-        .map(|_| read_proto(r, heap))
+        .map(|_| r.nested(|r| read_proto(r, heap)))
         .collect::<Result<Vec<_>, _>>()?;
     let n = read_count(r, 2)?;
     let mut upvals = Vec::with_capacity(n);

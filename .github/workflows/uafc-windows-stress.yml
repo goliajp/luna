@@ -1,13 +1,11 @@
-# v2.13 Track WUC Prong B — UAF-C repro-rate measurement + stack
-# capture.
+# UAF-C repro-rate measurement + stack capture.
 #
 # gc.lua / gengc.lua / tracegc.lua loop on windows-latest via the
 # gc_stress_plain harness (native Windows Heap Manager — the
 # environment where STATUS_ACCESS_VIOLATION historically fires),
 # plus a poison-allocator lane reproducing the MSVC debug-heap
-# 0xDD fill. Run 28601903484 confirmed repro: plain AVs at
-# iter 4, poison at iter 1. WER LocalDumps captured nothing
-# (WER disabled on GHA runners), so the test binary runs under
+# 0xDD fill. WER LocalDumps capture nothing (WER is disabled on
+# GHA runners), so the test binary runs under
 # Sysinternals procdump (-e: unhandled-exception dump) and the
 # dump is stack-walked with cdb. Dispatch-only diagnostic.
 

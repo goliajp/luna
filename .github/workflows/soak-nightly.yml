@@ -1,19 +1,15 @@
-# v2.4 Phase Soak — 1h smoke nightly.
+# 1h soak smoke.
 #
 # Runs `luna-soak` against each workload fixture for 1h, uploads
-# the JSON metrics report as a workflow artifact. Initial v2.4
-# ship: assertions are soft (always pass) — once we have ≥7
-# baseline samples we tighten the steady-state RSS drift gate
-# in v2.5+.
+# the JSON metrics report as a workflow artifact. Assertions are
+# soft (always pass).
 #
 # Weekly 24h soak lives in `soak-weekly.yml`.
 
 name: soak-nightly
 
-# Manual only (2026-08-14) — see soak-weekly.yml for the reasoning.
-# Acceptance #3 is closed on historical evidence; a nightly hour of soak
-# was re-proving a settled point. Dispatch it when a change could
-# plausibly affect steady-state memory.
+# Manual only — see soak-weekly.yml for the reasoning. Dispatch it when
+# a change could plausibly affect steady-state memory.
 on:
   workflow_dispatch:
 

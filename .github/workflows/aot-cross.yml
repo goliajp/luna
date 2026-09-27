@@ -1,9 +1,9 @@
 name: aot-cross
 
-# v2.0 Track AO sub-track AO-CC (cross-compile matrix expansion).
-# v1.3 ship verified macOS aarch64 + Linux x86_64 + Linux musl +
-# Windows MinGW + Windows MSVC native-host build + Mach-O cross.
-# This workflow expands tier-2 coverage:
+# Cross-compile matrix expansion. Tier-1 targets (macOS aarch64,
+# Linux x86_64, Linux musl, Windows MinGW, Windows MSVC native-host
+# build, Mach-O cross) are covered elsewhere. This workflow adds
+# tier-2 coverage:
 #
 # - RISC-V 64-bit (build-only — no actual run on real hardware)
 # - s390x (build-only — same)
@@ -84,21 +84,13 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # Wine MinGW PE actual-run: build a Windows .exe via MinGW
-  # cross-toolchain on a Linux host, then run it under Wine. This
-  # closes the audit AO R3 niche follow-up (Wine MinGW PE actual-run
-  # verification) that v1.3 only verified at the product-structure
-  # level.
+  # cross-toolchain on a Linux host, then run it under Wine.
   # ─────────────────────────────────────────────────────────────────
   wine-mingw-pe-run:
     name: Wine MinGW PE actual-run
     runs-on: ubuntu-latest
-    # v2.20 D5: soft-fail removed. This job had never once completed —
-    # five stacked problems (no git in image, standalone luna-aot cannot
-    # cross-compile, an assertion that could not fail, wrong wine binary
-    # name, wine64 package gone on noble), each invisible until the one
-    # before it was fixed, all of them masked by continue-on-error.
-    # Observed green on run 31796441342: PE compiled, ran under wine-9.0,
-    # output matched.
+    # No continue-on-error: a soft-fail here masks each breakage behind
+    # the previous one, so this job must be able to fail.
     steps:
       - uses: actions/checkout@v7
         with:
@@ -110,11 +102,10 @@ jobs:
         run: |
           set -u
           sudo apt-get update -qq
-          # v2.20 D5: `wine64` is gone on Ubuntu 24.04 (noble) — apt
-          # reported success while installing nothing usable, and the run
-          # step then died on "wine: command not found". Try the
-          # candidates in order and report what the archive actually has
-          # if none of them yields a binary.
+          # `wine64` is gone on Ubuntu 24.04 (noble) — apt reports
+          # success while installing nothing usable. Try the candidates
+          # in order and report what the archive actually has if none of
+          # them yields a binary.
           for pkg in wine wine64 wine-stable; do
             if apt-cache show "$pkg" >/dev/null 2>&1; then
               echo "installing $pkg"
@@ -138,7 +129,7 @@ jobs:
         # Kept so a compile error surfaces as its own step; the compile
         # below goes through `cargo run` for the reason explained there.
 
-      # v2.20 D5: cross-compiling needs luna-aot to run *inside* the
+      # Cross-compiling needs luna-aot to run *inside* the
       # workspace, not as a standalone binary.
       #
       # `LUNA_AOT_RUNTIME_HELPERS_STATICLIB` is honoured only for host
@@ -178,10 +169,7 @@ jobs:
         run: |
           set -u
           # Exit-code propagation through wine varies by version, so the
-          # assertion is on the program's OUTPUT, not its status. The old
-          # form (`wine ... || (echo ... && true)`) could not fail at all,
-          # which is how this job stayed "meaningful" while the compile
-          # step above had been broken the whole time.
+          # assertion is on the program's OUTPUT, not its status.
           OUT=$("$WINE_BIN" /tmp/hello.exe 2>&1) || true
           echo "$OUT"
           case "$OUT" in
@@ -192,34 +180,25 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   # Alpine musl native E2E: in a real Alpine container (rather than
   # the GH runner's glibc), build + run a luna-aot binary against
-  # musl directly. Closes the v1.3 niche follow-up "Alpine musl
-  # native E2E (needs brew install musl-cross)" — on CI we use
-  # docker not brew, so it's the right environment for the test.
+  # musl directly.
   # ─────────────────────────────────────────────────────────────────
   alpine-musl-e2e:
     name: Alpine musl native E2E
     runs-on: ubuntu-latest
-    # v2.20 D5: soft-fail removed. This job had been failing silently for
-    # an unknown stretch behind `continue-on-error`; after the git,
-    # image and staticlib fixes it has been observed green twice (runs
-    # 31793374064 and 31794199111). Per the arc rule adopted in v2.17, a
-    # gate counts once it can fail — so now it can.
+    # No continue-on-error: a gate only counts if it can fail.
     container:
-      # v2.20 D5: was `rust:1.86-alpine`. luna needs 1.88+ (edition-2024
-      # let-chains), and since v2.17 declares no MSRV the promise is
-      # "builds on current stable" — so track stable rather than pin a
-      # version that cannot build the tree.
+      # luna declares no MSRV; the promise is "builds on current
+      # stable" — so track stable rather than pin a version that may
+      # not build the tree.
       image: rust:alpine
     steps:
-      # v2.20 D5: the alpine image ships without git, so actions/checkout
-      # fell back to the REST API download path, which does not support
-      # `submodules` — the job failed at checkout before compiling
-      # anything:
+      # The alpine image ships without git, so actions/checkout would
+      # fall back to the REST API download path, which does not support
+      # `submodules`:
       #   Input 'submodules' not supported when falling back to download
       #   using the GitHub REST API
-      # It had been failing that way silently, masked by
-      # continue-on-error. Install git first so checkout takes the real
-      # git path and the vendored cranelift submodule lands.
+      # Install git first so checkout takes the real git path and the
+      # vendored cranelift submodule lands.
       - name: install git (the alpine image ships without it)
         run: apk add --no-cache git
       - uses: actions/checkout@v7
@@ -230,10 +209,10 @@ jobs:
       - name: cargo build -p luna-aot
         run: cargo build -p luna-aot --release --target x86_64-unknown-linux-musl
 
-      # v2.20 D5: `luna-aot` normally locates the workspace via
+      # `luna-aot` normally locates the workspace via
       # CARGO_MANIFEST_DIR and builds the runtime-helpers staticlib on
       # demand. That variable is a *compile-time* cargo thing and is
-      # absent when the binary runs standalone, so the link step failed:
+      # absent when the binary runs standalone, so the link step fails:
       #   luna-aot: linker failed: CARGO_MANIFEST_DIR not set — cannot
       #   locate workspace to build luna-runtime-helpers.
       # The error names its own escape hatch. Build the staticlib for the

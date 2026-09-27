@@ -1,4 +1,4 @@
-//! v2.0 Track CV fuzz harness — AOT trace meta blob decoder.
+//! Fuzz harness — AOT trace meta blob decoder.
 //!
 //! Feeds arbitrary bytes into `luna_core::jit::aot_meta::decode_meta_blob`.
 //! The decoder reads bytes from `.luna_trace_meta` section in AOT-built

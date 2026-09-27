@@ -1,4 +1,4 @@
-//! P09 — embedding-API tests for the script-host sandbox pattern.
+//! Embedding-API tests for the script-host sandbox pattern.
 //!
 //! These are the Rust-API analogue of `capi.rs` (which covers the C
 //! ABI shim). The use case is a Redis-style script host:

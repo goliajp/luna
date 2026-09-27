@@ -1,22 +1,19 @@
-//! v1.1 B10 Stage 1 — cooperative-yield core for `Vm::eval_async`.
+//! Cooperative-yield core for `Vm::eval_async`.
 //!
-//! §D8) for the full design. This module implements the Stage 1 slice:
+//! This module implements:
 //!
 //! - `DispatchOutcome` — terminal / cooperative-yield enum.
 //! - `Vm::drive_one` — runs the dispatcher until completion / error /
 //!   `BudgetExhausted`. Layers on `Vm::call_value` for the bootstrap
 //!   poll and on `Vm::exec_with_async` for resume polls.
 //! - [`EvalFuture`] — `!Send` `std::future::Future` that owns the
-//!   `&mut Vm` borrow and surfaces the poll loop of RFC §D4.
+//!   `&mut Vm` borrow and surfaces the poll loop.
 //! - [`Vm::eval_async`] / [`Vm::eval_async_chunk`] — public entry
 //!   points; convenience for embedders wanting `tokio` / `async-std`
 //!   integration.
 //!
-//! Stage 1 deliberately does NOT touch the JIT layer: async mode
-//! auto-disables JIT for the future's lifetime (RFC "Risks") and
-//! restores the prior setting on terminal poll. Async natives, the
-//! `Lua` facade `eval_async`, and `examples/async_host.rs` land in
-//! Stage 2/3/4.
+//! Async mode auto-disables JIT for the future's lifetime and
+//! restores the prior setting on terminal poll.
 //!
 //! ```
 //! use luna_core::vm::Vm;
@@ -56,7 +53,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-/// v1.1 B10 Stage 2 — async-native function ABI. Returns a
+/// Async-native function ABI. Returns a
 /// `Pin<Box<dyn Future>>` that resolves to the return-value count
 /// (same convention as sync [`crate::runtime::value::NativeFn`]: write
 /// results into the caller's slot via the borrowed `Vm`, then yield
@@ -103,8 +100,8 @@ use std::task::{Context, Poll};
 pub type AsyncNativeFn =
     fn(*mut Vm, func_slot: u32, nargs: u32) -> Pin<Box<dyn Future<Output = Result<u32, LuaError>>>>;
 
-/// v1.1 B10 Stage 1 — outcome of a single dispatcher slice driven by
-/// [`Vm::drive_one`]. Stage 2 adds the `AsyncNativeAwaiting` variant
+/// Outcome of a single dispatcher slice driven by
+/// [`Vm::drive_one`]. The `AsyncNativeAwaiting` variant is
 /// for async natives: the dispatcher suspends in-place, hands the
 /// returned future to [`EvalFuture::poll`], and resumes the same call
 /// site once the future resolves.
@@ -117,7 +114,7 @@ pub(crate) enum DispatchOutcome {
     /// call frames are intact; the next [`Vm::drive_one`] call (after
     /// the host pumps the executor) resumes from the same point.
     BudgetExhausted,
-    /// v1.1 B10 Stage 2 — the dispatcher invoked an async-marked
+    /// The dispatcher invoked an async-marked
     /// native; the returned future is now under host drive. The Vm
     /// preserves the in-flight call's `(func_slot, nargs, nresults)`
     /// context in `pending_async_native_ctx` so that
@@ -127,7 +124,7 @@ pub(crate) enum DispatchOutcome {
 }
 
 impl Vm {
-    /// v1.1 B10 Stage 2 — allocate a `Value::Native` whose closure is
+    /// Allocate a `Value::Native` whose closure is
     /// tagged as async (`NativeClosure.is_async = true`). The
     /// underlying `NativeFn` pointer slot stores `f` transmuted from
     /// [`AsyncNativeFn`] — same pointer width, no provenance loss —
@@ -151,7 +148,7 @@ impl Vm {
         Value::Native(self.heap.new_async_native(raw_fn, Box::new([])))
     }
 
-    /// v1.1 B10 Stage 2 — convenience: install an async native under
+    /// Convenience: install an async native under
     /// `name` as a Lua global. Equivalent to
     /// `vm.set_global(name, vm.create_async_native(f))`.
     pub fn set_async_native(&mut self, name: &str, f: AsyncNativeFn) -> Result<(), LuaError> {
@@ -159,7 +156,7 @@ impl Vm {
         self.set_global(name, v)
     }
 
-    /// v1.1 B10 Stage 1 — convenience entry: compile + run `src` as an
+    /// Convenience entry: compile + run `src` as an
     /// anonymous chunk via the cooperative-yield dispatcher. The
     /// returned `EvalFuture` borrows `&mut self` for its full lifetime,
     /// which (by `Vm: !Send`) keeps it pinned to a single OS thread.
@@ -175,7 +172,7 @@ impl Vm {
         self.eval_async_chunk(src, "=eval")
     }
 
-    /// v1.1 B10 Stage 1 — like [`Vm::eval_async`] but with a
+    /// Like [`Vm::eval_async`] but with a
     /// user-supplied chunk name (appears in tracebacks).
     pub fn eval_async_chunk<'vm>(&'vm mut self, src: &str, name: &str) -> EvalFuture<'vm> {
         EvalFuture {
@@ -189,7 +186,7 @@ impl Vm {
         }
     }
 
-    /// v1.1 B10 Stage 1 — set the per-poll opcode quota loaded into
+    /// Set the per-poll opcode quota loaded into
     /// `instr_budget` at the start of each [`EvalFuture`] poll slice.
     /// Default 10_000 opcodes. Smaller = finer-grained cooperative
     /// yield (lower per-task latency, more task-switch overhead);
@@ -201,13 +198,13 @@ impl Vm {
         self.async_slice_size = n.max(1);
     }
 
-    /// v1.1 B10 Stage 1 — current per-poll async slice size (default
+    /// Current per-poll async slice size (default
     /// 10_000).
     pub fn async_slice(&self) -> i64 {
         self.async_slice_size
     }
 
-    /// v1.1 B10 Stage 1 — drive the dispatcher one slice. Used
+    /// Drive the dispatcher one slice. Used
     /// internally by [`EvalFuture::poll`]. The `bootstrap` flag tells
     /// the helper whether this is the first slice of a fresh chunk
     /// (in which case `call_value` sets up the call frame) or a
@@ -250,7 +247,7 @@ impl Vm {
         match raw {
             Ok(values) => DispatchOutcome::Complete(values),
             Err(e) => {
-                // v1.1 B10 Stage 2 — async-native suspension takes
+                // Async-native suspension takes
                 // precedence: the future is the active work item, the
                 // sentinel Err is just transport. Check before
                 // `host_yield_pending` because both flags can in
@@ -272,11 +269,10 @@ impl Vm {
         }
     }
 
-    /// v1.1 B10 Stage 2 — land an async native's resolved return
+    /// Land an async native's resolved return
     /// count back into the calling frame's expected result slots.
-    /// Mirrors the sync-native tail of `call_at` (sans hooks +
-    /// `running_natives` bookkeeping, which Stage 2 deliberately skips
-    /// — see RFC §"Risks"). Consumes
+    /// Mirrors the sync-native tail of `call_at` (sans the
+    /// `running_natives` bookkeeping). Consumes
     /// `Vm.pending_async_native_ctx`; subsequent `drive_one` calls
     /// resume the dispatcher above this call site.
     ///
@@ -288,7 +284,7 @@ impl Vm {
             .take()
             .expect("commit_async_native_result without a pending ctx");
         self.finish_results(ctx.func_slot, nret, ctx.nresults);
-        // v1.3 Phase AS — fire the matching "return" hook for the
+        // Fire the matching "return" hook for the
         // async native, after results land in the call window and
         // before the post-call GC checkpoint. Mirrors the sync
         // native's `hook_return(true, nargs + 1, nret)` placement in
@@ -310,32 +306,29 @@ impl Vm {
     }
 }
 
-/// v1.1 B10 Stage 1 — host-driven cooperative-yield future. Borrows
+/// Host-driven cooperative-yield future. Borrows
 /// `&mut Vm` for its full lifetime; the borrow + `Vm: !Send` together
 /// make the future `!Send` (suits tokio `current_thread` /
 /// `LocalSet`, NOT multi-thread runtimes).
 ///
-/// See module docs for the RFC reference and a hand-rolled `block_on`
-/// usage example.
+/// See module docs for a hand-rolled `block_on` usage example.
 pub struct EvalFuture<'vm> {
     vm: &'vm mut Vm,
     state: EvalState,
     /// Saved `jit.enabled` snapshot from the first poll. JIT-compiled
-    /// traces don't honor `instr_budget` at every opcode (per
-    /// `v1.1-audit-async.md` §"JIT trace yield"), so a runaway trace
-    /// in async mode could starve other tokio tasks. The future
+    /// traces don't honor `instr_budget` at every opcode, so a runaway
+    /// trace in async mode could starve other tokio tasks. The future
     /// disables JIT for its duration and restores on terminal poll
     /// (or on Drop).
     saved_jit_enabled: Option<bool>,
-    /// Saved `async_slice_size` is unused in Stage 1 (we don't mutate
-    /// it from inside the future), but the field is here so Stage 2's
-    /// async-native path can install per-future slice tweaks without
-    /// leaking them into sibling futures.
+    /// Saved `async_slice_size`. The future doesn't mutate it; the
+    /// field lets an async-native path install per-future slice tweaks
+    /// without leaking them into sibling futures.
     #[allow(dead_code)]
     saved_async_slice: Option<i64>,
 }
 
-/// v1.1 B10 Stage 1 — three-state machine driving an `EvalFuture`.
+/// State machine driving an `EvalFuture`.
 ///
 /// - `Initial` — pre-compile. The source string is owned so the
 ///   future can outlive the caller's `&str`.
@@ -359,7 +352,7 @@ enum EvalState {
         /// once, the value is `None`.
         closure: Option<Value>,
     },
-    /// v1.1 B10 Stage 2 — an async native is mid-await. The future is
+    /// An async native is mid-await. The future is
     /// owned here (rather than on the `Vm`) so an explicit `Drop` of
     /// `EvalFuture` cancels the in-flight future cleanly. On the next
     /// poll: if the future resolves to `Ok(nret)`, the EvalFuture
@@ -385,10 +378,9 @@ impl<'vm> Future for EvalFuture<'vm> {
         loop {
             // ---- State transition: Initial → Running ----
             if let EvalState::Initial { src, name } = &this.state {
-                // Stash JIT setting + disable for the duration (RFC
-                // §"Risks": JIT traces don't honor instr_budget per
-                // opcode, so async mode + JIT could starve the
-                // executor).
+                // Stash JIT setting + disable for the duration (JIT
+                // traces don't honor instr_budget per opcode, so async
+                // mode + JIT could starve the executor).
                 if this.saved_jit_enabled.is_none() {
                     this.saved_jit_enabled = Some(this.vm.jit_enabled());
                     this.vm.set_jit_enabled(false);
@@ -400,7 +392,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                     Ok(c) => c,
                     Err(syntax) => {
                         // Match `eval_chunk`'s syntax-error shaping
-                        // (B6 classification + source position).
+                        // (error classification + source position).
                         this.vm
                             .set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
                         this.vm.set_error_source(name.clone(), syntax.line);
@@ -440,11 +432,9 @@ impl<'vm> Future for EvalFuture<'vm> {
                     first_slice,
                     closure,
                 } => {
-                    // Register the waker for Stage 2's wakeup
-                    // mechanism (Stage 1 always re-wakes the host
-                    // immediately on BudgetExhausted via
-                    // `cx.waker().wake_by_ref()`, so this is
-                    // forward-looking).
+                    // Register the waker so an in-flight async native can
+                    // wake the host. A budget exhaustion re-wakes the host
+                    // immediately via `cx.waker().wake_by_ref()`.
                     this.vm.async_waker = Some(cx.waker().clone());
 
                     let (bootstrap_arg, ed) = if *first_slice {
@@ -478,12 +468,9 @@ impl<'vm> Future for EvalFuture<'vm> {
                             return Poll::Ready(Err(e));
                         }
                         DispatchOutcome::BudgetExhausted => {
-                            // Stage 1: re-wake immediately so the
-                            // host's executor polls us again. Stage 2
-                            // can wait for an async native's waker
-                            // before re-polling. The `wake_by_ref`
-                            // call models "we still have work to do
-                            // but want to let other tasks run".
+                            // Re-wake immediately so the host's executor polls
+                            // us again. The `wake_by_ref` call models "we still
+                            // have work to do but want to let other tasks run".
                             cx.waker().wake_by_ref();
                             return Poll::Pending;
                         }
@@ -511,7 +498,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                     match fut.as_mut().poll(cx) {
                         Poll::Ready(Ok(nret)) => {
                             let ed = *entry_depth;
-                            // v1.3 Phase AS — commit may fire the
+                            // Commit may fire the
                             // async-native "return" hook, which can
                             // error (hook propagates `LuaError`). On
                             // error, run the same cleanup the
@@ -561,9 +548,8 @@ impl<'vm> Drop for EvalFuture<'vm> {
         // usable again. Note: stale call frames from an in-flight
         // chunk remain in `vm.frames`; a full cleanup pass (closing
         // `__close` handlers etc.) would mirror `close_coro` and is
-        // out of scope for Stage 1 — the RFC defers
-        // `Vm::cancel_async` to a follow-up. Embedders relying on
-        // cancellation should construct a fresh Vm per request.
+        // not done here; there is no `Vm::cancel_async`. Embedders
+        // relying on cancellation should construct a fresh Vm per request.
         if let Some(prev) = self.saved_jit_enabled.take() {
             self.vm.set_jit_enabled(prev);
         }
@@ -572,7 +558,7 @@ impl<'vm> Drop for EvalFuture<'vm> {
         self.vm.async_mode = false;
         self.vm.async_waker = None;
         self.vm.host_yield_pending = false;
-        // v1.1 B10 Stage 2 — async-native bookkeeping. The future is
+        // Async-native bookkeeping. The future is
         // owned by `EvalFuture` (not by the Vm) once `drive_one`
         // surfaces it, so cancelling here only needs to clear the
         // post-call ctx; the dropped EvalFuture takes the Pin<Box<...>>

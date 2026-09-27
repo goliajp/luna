@@ -8,7 +8,7 @@ and measured baselines see [`performance.md`](performance.md).
 
 ## How compatibility is established
 
-Not by inspection. A private corpus of **805 fixtures** runs against
+Not by inspection. A private corpus of **807 fixtures** runs against
 stock PUC interpreters built from source — **5.1.5, 5.2.4, 5.3.6,
 5.4.9, 5.5.1** — and every one must match byte for byte on stdout,
 stderr and exit code, with zero skips, before a commit is green. CI
@@ -31,8 +31,9 @@ single binary. The dialect is chosen per-`Vm` at construction
 different dialects concurrently without interference.
 
 PUC-compiled `.luac` files of any dialect load through the per-dialect
-translators (see [below](#loading-puc-luac-files)); luna's own
-`string.dump` uses a luna-specific body format, not PUC's.
+translators (see [below](#loading-puc-luac-files)), and `string.dump`
+writes the running dialect's PUC bytecode, which the stock interpreter of
+that version runs (see [`string.dump`](#stringdump-writes-puc-bytecode)).
 
 ### Per-dialect feature matrix
 
@@ -162,25 +163,47 @@ richer than the C one — see [`embedding.md`](embedding.md).
 
 ## Bytecode
 
+### `string.dump` writes PUC bytecode
+
+`string.dump(f)` returns a chunk in the running dialect's PUC format:
+stock PUC 5.1.5, 5.2.4, 5.3.6, 5.4.9 or 5.5.1 loads it with `load` or
+runs it as `lua file`. `string.dump(f, true)` (5.3 and later, where the
+argument exists) drops debug information as PUC's `strip` does. luna
+re-encodes each function into that version's instruction set; where the
+dialect cannot express something luna's compiler produced, `string.dump`
+raises `unable to dump given function` instead of writing a chunk that
+would behave differently, for example a 5.1 function that uses its
+environment table as a value (5.1 reaches globals only through
+`GETGLOBAL`/`SETGLOBAL`). No diff_puc fixture hits a refusal.
+
+Every diff_puc fixture is compiled by luna, dumped, and run by the stock
+interpreter of its dialect, matching PUC running the source byte for byte
+in stdout (and in the error text for `_err` fixtures); the stripped dump
+matches PUC running the same program compiled by `luac -s`; and the dump
+loads back into luna to the same result (`tests/puc_dump.rs`).
+
+`load` accepts a chunk of the running dialect's own PUC version under the
+same switch as luna's own format (below), since it is what `string.dump`
+produces. MacroLua has no PUC format; its `string.dump` writes luna's own.
+
 ### luna's own dumps
 
-`string.dump` and `Vm::dump` emit luna's own binary format: the running
-dialect's PUC header, then a `"\x00LunaV1\x00"` sentinel and a body in
-luna's 65-op instruction set. It is **not** PUC's body format — a luna
-dump loads back into luna, not into PUC, and a PUC `.luac` is read by the
-translators below, not by this loader. luna does not emit PUC-format
-bytecode; a `string.dump` that PUC could load is a separate feature the
-owner has not committed to.
+`luna_core::vm::dump::dump` (used by `luna-aot`) writes luna's own binary
+format: the running dialect's PUC header, then a `"\x00LunaV1\x00"`
+sentinel and a body in luna's 65-op instruction set. It loads back into
+luna, not into PUC.
 
-Loading a luna dump is gated by `Vm::set_bytecode_loading(false)` (on by
-default; the `sandbox` builder turns it off). Every loaded chunk, in
-either format, is verified before it runs; see "Verification on load"
-below. The verifier checks structure, not everything a crafted chunk can
-reach, so a host taking untrusted input should still close the gate.
+Loading a luna dump, or a chunk of the running dialect's PUC version, is
+gated by `Vm::set_bytecode_loading(false)` (on by default; the `sandbox`
+builder turns it off). Every loaded chunk, in either format, is verified
+before it runs; see "Verification on load" below. The verifier checks
+structure, not everything a crafted chunk can reach, so a host taking
+untrusted input should still close the gate.
 
 ### Loading PUC `.luac` files
 
-Opt in with `Vm::set_puc_bytecode_loading(true)`, **off by default**. The
+A chunk of another dialect's PUC version needs
+`Vm::set_puc_bytecode_loading(true)`, **off by default**. The
 translator decodes a PUC chunk of any of the five dialects and re-encodes
 its body into luna's 65-op set; the resulting Proto then runs on luna's
 interpreter and JIT like any other. This is a strictly larger trust
@@ -240,8 +263,9 @@ It checks, for every function and nested function:
 - every register an instruction touches (including the runs implied by
   calls, returns, `LoadNil`, `Concat`, `SetList`, varargs and loops)
   against the function's stack size, and the parameter count too;
-- constant, upvalue and nested-function indices; the constant key of
-  field and global accesses is a string;
+- constant, upvalue and nested-function indices are in range (not the
+  constant's type: a field or global access whose constant key is not a
+  string indexes with that value, as `t[k]` does);
 - that every jump, loop edge and skipped instruction lands inside the
   code, and that control cannot run off its end;
 - instruction pairing: `LoadKx`/`SetList` and their extra argument (which
@@ -250,12 +274,16 @@ It checks, for every function and nested function:
 - that instructions reading a variable number of values from the stack
   top directly follow the instruction that set it;
 - line info (empty, or one entry per instruction) and each nested
-  function's upvalue descriptors against its parent.
+  function's upvalue descriptors against its parent;
+- the register of every named local against the stack size;
+- function nesting, at most 250 levels deep (the compilers stop at 200).
 
-The verifier does not check register *values* at run time. The debug
-library can change those from plain source too, for example
-`debug.setlocal` on a `for` loop's hidden state. Keep the bytecode gates
-shut for input you do not trust.
+The verifier does not check register *values*. The debug library can
+change those from plain source too, for example `debug.setlocal` on a
+`for` loop's hidden state. The instructions that rely on a value's type
+check it when they run and raise a Lua error (see "Deliberate
+differences"); keep the bytecode gates shut for input you do not trust
+all the same.
 
 Per-dialect translators: `crates/luna-core/src/vm/dump/puc/puc_5{1..5}.rs`,
 sharing `lower.rs` (5.1) with `classic.rs` (5.2/5.3) and `modern.rs`
@@ -309,8 +337,7 @@ messages. What still differs does so on purpose:
   from 5.2 on). PUC raises them while parsing, with the lexer's current
   token at hand; luna allocates registers and resolves upvalues after the
   whole chunk is parsed, so the message stops before the `near` part.
-- **Not reproduced: PUC bugs and C undefined behaviour.** PUC 5.1's
-  compiler merging `0` and `-0` constants; `debug.getinfo(level, ">…")`
+- **Not reproduced: PUC bugs and C undefined behaviour.** `debug.getinfo(level, ">…")`
   before 5.4 treating the option string as the function (5.1 crashes;
   luna rejects the option, as 5.4 does); 5.1 `io.lines(nil)` raising
   through a stack-index bug; out-of-range float-to-integer conversions
@@ -320,6 +347,23 @@ messages. What still differs does so on purpose:
   was built (fused multiply-subtract in 5.1/5.2 `%` on arm64, `%a`
   rounding in the macOS C library, 5.2's `%a` existing only when built
   with `LUA_USE_AFORMAT`).
+- **State the compiler never produces raises an error.** PUC reads the
+  hidden state of a numeric `for` loop, the target of a table
+  constructor and its list of to-be-closed variables without checking
+  them, so `debug.setlocal` or a crafted binary chunk that changes them
+  makes it print garbage, loop or crash. luna raises instead:
+  `'for' state corrupted` for a loop whose hidden slots no longer hold
+  numbers of the loop's kind (on 5.1/5.2, which have one number type, an
+  integer or a float is still a number and the loop goes on, as in PUC),
+  `attempt to index a <type> value` for a constructor whose table was
+  replaced, and `'<close>' state corrupted` for a to-be-closed slot
+  registered out of order (reachable only from crafted bytecode).
+- **`debug.setupvalue` does not change a C function's upvalues** (5.2+
+  let it). The standard library and embedder functions keep state there
+  that they rely on (a `gmatch` iterator's position, a wrapped
+  coroutine, a function pointer); `debug.setupvalue` on a C function
+  returns nothing, as it does for an index out of range.
+  `debug.getupvalue` still reads them.
 - **Unavailable without a C library:** two-way `io.popen` modes on
   5.1/5.2, `os.clock` as CPU time (it measures time since the `Vm`
   started), locales other than C/POSIX, and loading C modules
@@ -339,10 +383,30 @@ luna's own options:
 | `-h`, `--help` | Print the help |
 
 They may appear anywhere before the script. Everything else follows the
-selected dialect's standalone interpreter, `lua.c`: the options `-e`,
-`-l`, `-i`, `-v`, `-E` (5.2 on), `-W` (5.4 on), `--` and `-`; the `arg`
-table and the script's `...`; and running stdin as a program when there
-is no script and stdin is not a terminal (the REPL starts when it is).
+selected dialect's standalone interpreter, `lua.c`:
+
+| Option | Behaviour |
+|---|---|
+| `-e stat` | Run `stat` (a chunk named `(command line)`) |
+| `-l mod` | `require` the module into the global `mod` (5.1 only requires it). 5.4 on: `-l g=mod` stores it in `g`, and a `-suffix` of `mod` is left out of the global's name |
+| `-i` | Enter the REPL after the script; implies `-v` |
+| `-v` | Print the version line (5.1: on stderr) before anything runs; stdin is then not run as a program |
+| `-E` | 5.2 on: skip `LUA_INIT`, and let the package library ignore `LUA_PATH` / `LUA_CPATH` (the registry's `LUA_NOENV` is true) |
+| `-W` | 5.4 on: turn warnings on |
+| `--` | Stop handling options; what follows is the script |
+| `-` | Stop handling options and run stdin as the script |
+
+The options each dialect's `lua.c` does not know, and the ones that must
+stand alone given with more letters (`-vx`; `-Ex` from 5.3 on), print that
+dialect's usage message. The `arg` table and the script's `...` are laid
+out as `lua.c` lays them out. With no script and none of `-e`, `-i` and
+`-v`, stdin is run as a program, or, when it is a terminal, the version
+line is printed and the REPL starts.
+
+`LUA_INIT` runs before the options' chunks (in 5.1 before the options are
+even read, so it runs ahead of a usage message): its value is a chunk
+named after the variable, or `@file` to run a file. From 5.2 on
+`LUA_INIT_5_x` is taken first, and `-E` skips both.
 
 Errors are reported as `lua.c` reports them. An uncaught error prints
 `<argv[0]>: <message>` on stderr followed by the traceback of `lua.c`'s
@@ -357,17 +421,34 @@ an error in a program read from stdin without `-` is reported but leaves
 the exit status 0. `crates/luna-jit/tests/cli_errors.rs` pins each case
 to the text the PUC interpreters print.
 
-Two things differ from `lua.c`: `-v` prints luna's version line, and the
-values a script or `-e` chunk returns are printed after it (`=> value`).
-`LUA_INIT` is not read.
+The REPL is `lua.c`'s as it runs when built without readline. It
+prompts with `_PROMPT` / `_PROMPT2` (`> ` / `>> ` when unset) on stdout
+and reads stdin a line at a time, sharing stdin with `io.read`; a line
+longer than `lua.c`'s 512-byte buffer is read in pieces. It reads more
+lines while a statement is incomplete. From 5.3 on a line is first tried
+as `return <line>;`; through 5.4 a first line `=expr` means
+`return expr`; 5.5 warns about a line starting with `local`. The results
+go through the global `print` and an error is reported with its
+traceback, without the program name. End of input ends it with a
+newline. The cases `crates/luna-jit/tests/cli_repl.rs` and
+`cli_repl_edges.rs` pin include the dialects' quirks, such as 5.3
+reporting its `_PROMPT2` value when the input ends inside a statement.
 
-The REPL evaluates each line first as an expression (prefixed with
-`return`), then retries it as a statement on syntax error, so both
-expressions and assignments work. It has multi-line continuation and
-history at `~/.luna_history`, honours `--lua=X`, and exits on Ctrl-D.
-Tab completion and syntax highlighting are behind the
-`repl-line-editor` feature. It reports errors in its own format
-(`error: <message>`, no traceback), unlike `lua.c`'s REPL.
+Things that differ from `lua.c`:
+
+- `-v` and the start of the REPL print luna's version line, not PUC's
+  copyright line.
+- The values a script or `-e` chunk returns are printed after it
+  (`=> value`).
+- `package.path` and `package.cpath` default to `./?.lua;./?/init.lua`
+  and the empty string, as luna has no install prefix and loads no C
+  modules.
+- With the `repl-line-editor` feature and stdin a terminal, the REPL
+  reads lines through a line editor in place of readline: tab completion
+  against the globals, syntax highlighting, and history in
+  `~/.luna_history`; Ctrl-C drops the statement being typed. 5.5's
+  `lua.c` loads readline at run time and, when that fails, warns (seen
+  with `-W`); luna loads no library and does not warn.
 
 ## Quick verification
 

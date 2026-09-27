@@ -1,4 +1,4 @@
-//! Coroutine (thread) objects (P05). A coroutine owns a full execution context
+//! Coroutine (thread) objects. A coroutine owns a full execution context
 //! — value stack, call frames, open upvalues, to-be-closed slots and stack top
 //! — that is swapped into the running `Vm` while it is active and saved back
 //! here while it is suspended.

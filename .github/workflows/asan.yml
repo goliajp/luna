@@ -1,21 +1,16 @@
-# v2.2 Phase 2 (AS) — AddressSanitizer nightly CI.
+# AddressSanitizer nightly CI.
 #
 # Catches heap-use-after-free + heap-buffer-overflow + double-free
 # at write/read time instead of at the downstream symptom that
-# `cargo test --release` exposes (the v2.1 sort.lua AA + v2.2
-# toomanyidx_memory_cap UAFs both showed this pattern: a real UAF
-# in the GC root path surfaced as an unrelated panic in a later
-# bytecode handler).
+# `cargo test --release` exposes (a real UAF in the GC root path
+# can surface as an unrelated panic in a later bytecode handler).
 #
 # Why nightly schedule + manual trigger:
 # - Build-std with sanitizer = full rebuild of the standard library
 #   per job, ~30-40 min before tests even run.
 # - Per-PR is too slow; nightly cron catches drift quickly enough.
 # - workflow_dispatch lets us trigger on-demand when investigating
-#   a specific UAF (the v2.1 → v2.2 investigation used the
-#
-# Required-status promotion: after 30 consecutive nightly greens
-# post-Phase-1-close, this job moves to a required PR check (see
+#   a specific UAF.
 
 name: asan
 
@@ -35,7 +30,7 @@ jobs:
       # detect_leaks=0: leak detection on `-Zbuild-std` builds is
       # noisy under emulated linux/amd64 (OrbStack on darwin/arm64)
       # and the same suppressions apply on real linux runners.
-      # Miri (the sibling miri.yml in Phase 3) covers the leak
+      # Miri (the sibling miri.yml) covers the leak
       # class with stricter UB detection anyway.
       ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1
       RUST_BACKTRACE: full
@@ -80,11 +75,9 @@ jobs:
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
-      # Integration tests added one-by-one per AS-A.4 in the
-      # plan-state. Start narrow (the regressions that found the
-      # v2.1 → v2.2 UAFs); v2.2.1 expands once the workflow's
-      # stable timing is established. Each test runs in its own
-      # invocation so a single hang doesn't masks subsequent runs.
+      # Integration tests run one per step, starting with the UAF
+      # regression tests. Each test runs in its own invocation so a
+      # single hang doesn't mask subsequent runs.
       - name: ASAN — sort_gc_during_compare regression
         run: |
           cargo +nightly test \
@@ -107,11 +100,11 @@ jobs:
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
-      - name: ASAN — cb_edge_gc_finalizer regression
+      - name: ASAN — gc_finalizer_edges regression
         run: |
           cargo +nightly test \
             -p luna-core \
-            --test cb_edge_gc_finalizer \
+            --test gc_finalizer_edges \
             -Z build-std \
             --target x86_64-unknown-linux-gnu \
             -- --nocapture --test-threads=1
@@ -140,10 +133,10 @@ jobs:
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
-      # v2.13 Track WUC — UAF-C regression sentinel. Before the fix
-      # (42f3b76: stale gc_top on native collects + weak-table
-      # tombstone clearkey) this loop AV'd at iteration 1-4 under
-      # ASAN, so 5 iterations is a reliable detector. gc-verify
+      # UAF-C regression sentinel (stale gc_top on native collects +
+      # weak-table tombstone clearkey). Without the fix this loop AVs
+      # at iteration 1-4 under ASAN, so 5 iterations is a reliable
+      # detector. gc-verify
       # layers the tricolor/root-liveness invariant checkers on top
       # of ASAN, catching a regression at the collect that creates
       # the dangling pointer rather than at the later dereference.
@@ -160,12 +153,10 @@ jobs:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
           LUNA_GC_STRESS_N: "5"
 
-      # v2.15 P3.2 — full official_run under ASAN across all 5
-      # dialects. Local docker linux/amd64 measurement (P3.1) put
-      # this at ~5m 34s test-time; GHA ubuntu-latest native x86_64
-      # extrapolates to ~2-3 min. Well within the default job
-      # timeout. Charter P3.5 counter starts here: 30 consecutive
-      # nightly greens → flip asan job to required PR check
+      # Full official_run under ASAN across all 5 dialects. Local
+      # docker linux/amd64 measured ~5m 34s test-time; GHA
+      # ubuntu-latest native x86_64 extrapolates to ~2-3 min. Well
+      # within the default job timeout.
       - name: ASAN — official_run (all 5 dialects, curated PUC suite)
         run: |
           cargo +nightly test \

@@ -1,20 +1,19 @@
-//! v2.1 Track J-C — cfg-gated Send-friendly aliases & wrappers for
+//! cfg-gated Send-friendly aliases & wrappers for
 //! trace IR interior-mutability types.
 //!
 //! Two cfg modes:
 //! - `#[cfg(not(feature = "send"))]` — the default. All aliases
 //!   resolve to `Rc` / `Cell` / `RefCell`; identical layout, identical
-//!   behavior, identical perf as pre-J-C. **Bare `Vm` stays 0-cost**.
+//!   behavior, identical perf as plain `std` types. **Bare `Vm` stays 0-cost**.
 //! - `#[cfg(feature = "send")]` — Send build. Aliases switch to
 //!   `Arc` / `AtomicU32` / `AtomicBool` / `AtomicPtr<u8>` / `RwLock`
 //!   so `CompiledTrace` + `Proto.traces` become structurally `Send +
-//!   Sync` (combined with the J-A/J-B/J-D/J-E sleeves). No `unsafe
-//!   impl Send` lifted in J-C — the lifts happen because the inner
-//!   types are already Send.
+//!   Sync`. No `unsafe impl Send` here — the lifts happen because the
+//!   inner types are already Send.
 //!
 //! Wrapper newtypes (`TCellU32`, `TCellBool`, `TCellPtr`, `TRefLock`)
 //! expose Cell/RefCell-shaped methods (`.get()`/`.set()`/`.borrow()`/
-//! `.borrow_mut()`) so call sites stay path-identical to the pre-J-C
+//! `.borrow_mut()`) so call sites stay path-identical to the
 //! `std::cell::*` shape — the cfg switch happens inside the wrapper.
 //!
 //! `TArc<T>` is a pure type alias to `Rc<T>` or `Arc<T>`. Both
@@ -27,22 +26,20 @@
 //! `#[repr(transparent)]` over their inner `Cell` / `RefCell`. The
 //! generated code is identical to direct Cell/RefCell access (the
 //! wrapper methods inline trivially). Size assertions in
-//! `tests/j_c_zero_cost_default.rs` pin this.
-//!
-//! list + cfg-gating pattern shape.
+//! `tests/send_compat_zero_cost.rs` pin this.
 
 // ============================================================
 // TArc<T> — `Rc<T>` (default) or `Arc<T>` (send).
 // ============================================================
 
-/// J-C cfg-gated reference count. `Rc<T>` under the default feature
+/// cfg-gated reference count. `Rc<T>` under the default feature
 /// set, `Arc<T>` under `feature = "send"`. Construction and method
 /// shapes match between the two (`new`, `from`, `clone`, `as_ptr`,
 /// `strong_count`), so most call sites swap `Rc` → `TArc` without
 /// further changes.
 #[cfg(not(feature = "send"))]
 pub type TArc<T> = std::rc::Rc<T>;
-/// J-C cfg-gated reference count (send build). See `feature = "send"`-off
+/// cfg-gated reference count (send build). See `feature = "send"`-off
 /// alias above.
 #[cfg(feature = "send")]
 pub type TArc<T> = std::sync::Arc<T>;
@@ -51,7 +48,7 @@ pub type TArc<T> = std::sync::Arc<T>;
 // TCellU32 — Cell<u32> (default) or AtomicU32 (send).
 // ============================================================
 
-/// J-C cfg-gated `u32` cell. Same API surface as `std::cell::Cell<u32>`
+/// cfg-gated `u32` cell. Same API surface as `std::cell::Cell<u32>`
 /// (`new`, `get`, `set`); the send build swaps in `AtomicU32` with
 /// `Relaxed` ordering — the SendVm RwLock supplies the cross-thread
 /// happens-before, so per-op atomic ordering can be relaxed.
@@ -125,7 +122,7 @@ impl Default for TCellU32 {
 // TCellBool — Cell<bool> (default) or AtomicBool (send).
 // ============================================================
 
-/// J-C cfg-gated `bool` cell. Same API as `std::cell::Cell<bool>`
+/// cfg-gated `bool` cell. Same API as `std::cell::Cell<bool>`
 /// (`new`, `get`, `set`).
 #[repr(transparent)]
 #[derive(Debug)]
@@ -185,7 +182,7 @@ impl TCellBool {
 // TCellPtr — Cell<*const u8> (default) or AtomicPtr<u8> (send).
 // ============================================================
 
-/// J-C cfg-gated raw-pointer cell. Same API as `std::cell::Cell<*const u8>`
+/// cfg-gated raw-pointer cell. Same API as `std::cell::Cell<*const u8>`
 /// (`new`, `get`, `set`).
 ///
 /// **IR layout invariant** (preserved): both `Cell<*const u8>` and
@@ -195,7 +192,7 @@ impl TCellBool {
 /// `feature = "send"` the same load reads the AtomicPtr's bits with
 /// equivalent semantics — `AtomicPtr::load(Relaxed)` lowers to a plain
 /// pointer-sized load on the targets luna supports (arm64, x86_64),
-/// matching the pre-J-C `Cell::get` codegen byte-for-byte.
+/// matching the `Cell::get` codegen byte-for-byte.
 #[repr(transparent)]
 pub struct TCellPtr {
     #[cfg(not(feature = "send"))]
@@ -287,7 +284,7 @@ impl TCellPtr {
 /// the same pointer bits. Callers that rely on heap-address stability
 /// (Cranelift IR loads of side-trace ptr cells) must NOT clone the
 /// containing `Box<TCellPtr>` once the IR has baked the original's
-/// address — same invariant as pre-J-C `Box<Cell<*const u8>>`.
+/// address — same invariant as `Box<Cell<*const u8>>`.
 impl Clone for TCellPtr {
     fn clone(&self) -> Self {
         Self::new(self.get())
@@ -298,10 +295,10 @@ impl Clone for TCellPtr {
 // TRefLock<T> — RefCell<T> (default) or RwLock<T> (send).
 // ============================================================
 
-/// J-C cfg-gated interior-mutable lock. Exposes `RefCell`-shaped
+/// cfg-gated interior-mutable lock. Exposes `RefCell`-shaped
 /// `.borrow()` / `.borrow_mut()` whose returned guards `Deref<Target =
 /// T>`. Under the default feature set this is a thin newtype around
-/// `RefCell<T>` (zero overhead vs. the pre-J-C `RefCell` field);
+/// `RefCell<T>` (zero overhead vs. a plain `RefCell` field);
 /// under `feature = "send"` it wraps `RwLock<T>` and the guards
 /// become `RwLockReadGuard` / `RwLockWriteGuard`.
 ///

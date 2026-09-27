@@ -1,12 +1,10 @@
-//! Type definitions and small helpers extracted from `trace.rs` for
-//! the luna-core / luna split boundary. See
+//! Trace-JIT type definitions and small helpers shared across the
+//! luna-core / luna split boundary.
 //!
-//! Everything here is cranelift-free by construction — the items
-//! ultimately home to `luna-core` in Session C, while `trace.rs`
-//! (the codegen pipeline) homes to `luna`. For now both files
-//! live next to each other under `src/jit/` and re-export via
-//! `mod.rs` + a `pub use super::trace_types::*;` in `trace.rs`
-//! so `crate::jit::trace::*` paths remain compatible.
+//! Everything here is cranelift-free by construction — these items
+//! live in `luna-core`, while `trace.rs` (the codegen pipeline) lives
+//! in `luna`. `jit::trace` re-exports this module so
+//! `crate::jit::trace::*` paths remain compatible.
 
 use crate::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 use crate::runtime::Gc;
@@ -19,7 +17,7 @@ use crate::vm::isa::Inst;
 /// pay back compile cost; too high and we never trace at all.
 pub const TRACE_HOT_THRESHOLD: u32 = 64;
 
-/// P12-S4 — call visit count after which a Proto is promoted to a
+/// Call visit count after which a Proto is promoted to a
 /// trace head at `pc=0` and recording begins. Separate from
 /// [`TRACE_HOT_THRESHOLD`] so we can tune them independently — a
 /// self-recursive function reaches its threshold via call counter
@@ -36,7 +34,7 @@ pub const MAX_TRACE_LEN: usize = 256;
 /// Beyond this, the trace emits a real cranelift `call` to itself.
 pub const MAX_INLINE_DEPTH: u8 = 16;
 
-/// P16-A — recunroll threshold (mirrors LuaJIT `lj_jit.h:123` default
+/// Recunroll threshold (mirrors LuaJIT `lj_jit.h:123` default
 /// `recunroll=2`). The recorder counts how many ancestor frames share
 /// the trace head's proto; when the count EXCEEDS this threshold AND
 /// we're about to execute the head_pc on the head_proto, close the
@@ -45,7 +43,7 @@ pub const MAX_INLINE_DEPTH: u8 = 16;
 /// after the lowerer's bump-base + branch-to-self tail).
 pub const RECUNROLL_THRESHOLD: usize = 2;
 
-/// P16-A — distinguishes the two self-link close shapes. UpRec
+/// Distinguishes the two self-link close shapes. UpRec
 /// corresponds to LJ's `LJ_TRLINK_UPREC` (fib's case — recursion is
 /// non-tail, framedepth > 0 at close). TailRec corresponds to
 /// `LJ_TRLINK_TAILREC` (factorial's tail-recursive form, depth == 0
@@ -59,29 +57,27 @@ pub enum SelfRecKind {
     UpRec,
 }
 
-/// v2.0 Track-R R1 — a recorded return-from-inlined-frame event,
+/// A recorded return-from-inlined-frame event,
 /// captured by the recorder when a depth>0 `Op::Return0` /
 /// `Op::Return1` fires during active recording with
-/// `p16_self_link_enabled = true`. Mirrors LuaJIT's `IR_RETF`
+/// `self_link_enabled = true`. Mirrors LuaJIT's `IR_RETF`
 /// (`lj_ir.h`) — the IR-level marker that the inlined call frame at
 /// `from_depth` returned to `to_depth` with `results` values.
 ///
-/// R1 only collects these records (a side-channel parallel to
-/// [`TraceRecord::ops`]) — the lowerer doesn't consume them yet.
-/// R3's down-rec stitch
-/// reads them to verify that a side-trace's inlined-frame topology
-/// matches the recorded shape before stitching.
+/// The records form a side-channel parallel to [`TraceRecord::ops`].
+/// The down-rec stitch reads them to verify that a side-trace's
+/// inlined-frame topology matches the recorded shape before stitching.
 ///
 /// `caller_pc` is the PC the inlined frame returns TO in its caller
-/// (`enclosing_call.pc + 1`), captured at record-time so the R3
+/// (`enclosing_call.pc + 1`), captured at record-time so the
 /// stitch can guard equality against the runtime caller PC.
 ///
-/// v2.0 Track-R R3a — extended with `proto: Gc<Proto>`, the proto
+/// `proto: Gc<Proto>` is the proto
 /// the inlined frame is returning *to* (the caller's proto). Mirrors
 /// LuaJIT `IR_RETF.op1 = ir_kgc(IR(ptref))` which carries the target
 /// proto pointer (see `lj_record.c:897 check_downrec_unroll` chain
 /// filter `op1 == ptref`). For luna's fib(28) self-recursion this
-/// equals `TraceRecord.head_proto`, but R3 keeps the field explicit
+/// equals `TraceRecord.head_proto`, but the field stays explicit
 /// so future mutual-recursion (`fib_even` ↔ `fib_odd`) closes through
 /// the same code path without a head_proto identity assumption.
 /// GC: `RetfRecord.proto` follows the same transitive-reachability
@@ -89,10 +85,8 @@ pub enum SelfRecKind {
 /// `Vm::gc_roots()` because the captured proto is, at record time,
 /// reachable via a running `CallFrame`'s closure.
 ///
-/// R3a drops the prior `PartialEq, Eq` derives because `Gc<T>`
-/// intentionally doesn't impl those traits (use `Gc::ptr_eq` for
-/// pointer-identity equality). No call site compared `RetfRecord`
-/// values directly pre-R3a.
+/// No `PartialEq, Eq` derives because `Gc<T>` intentionally doesn't
+/// impl those traits (use `Gc::ptr_eq` for pointer-identity equality).
 #[derive(Clone, Copy, Debug)]
 pub struct RetfRecord {
     /// Depth this return originated from (>0; the frame about to be
@@ -105,12 +99,12 @@ pub struct RetfRecord {
     /// depth>0 today.
     pub results: u8,
     /// PC the caller resumes at after the inlined frame pops
-    /// (`enclosing_call.pc + 1`). Used by R3 to guard return-target
+    /// (`enclosing_call.pc + 1`). Used by the stitch to guard return-target
     /// equality at runtime.
     pub caller_pc: u32,
-    /// v2.0 Track-R R3a — the caller's proto (target of the return).
-    /// LuaJIT `IR_RETF.op1` equivalent. R3b's lowerer reads this to
-    /// emit a proto-identity assertion at the stitch guard; R3c's
+    /// The caller's proto (target of the return).
+    /// LuaJIT `IR_RETF.op1` equivalent. The lowerer reads this to
+    /// emit a proto-identity assertion at the stitch guard; the
     /// dispatcher consults it when materialising CallFrames for
     /// stitched re-entry. For fib(28) self-recursion it equals
     /// `TraceRecord.head_proto`; kept explicit for forward-compat
@@ -118,7 +112,7 @@ pub struct RetfRecord {
     pub proto: Gc<Proto>,
 }
 
-/// v2.0 Track-R R3a — recorder-side close marker for the down-rec
+/// Recorder-side close marker for the down-rec
 /// stitched-side-trace shape. Set by the recorder when a depth>0
 /// `Op::Return` fires inside an active recording AND the prior
 /// `rec.retfs` chain shows the trace is bouncing in-and-out of a
@@ -126,31 +120,27 @@ pub struct RetfRecord {
 /// `lj_record.c:912 lj_trace_err(LJ_TRERR_DOWNREC)` trigger
 /// condition). The lowerer's `end_idx` picker reads this BEFORE the
 /// `self_link_kind` arm and routes through the new
-/// `TraceEnd::DownRec` close.
-///
-/// R3a only populates the close marker and adds the variant; the
-/// lowerer reads it but still pins R1's safe `dispatchable=false`
-/// path. R3b lifts that to a real native back-edge by reading
-/// `DownRecClose.target_proto` + `return_pc` and emitting the
-/// `asm_retf`-equivalent guard sequence. R3c wires the dispatcher
-/// to follow the stitch.
+/// `TraceEnd::DownRec` close. The lowerer reads
+/// `DownRecClose.target_proto` + `return_pc` and emits the
+/// `asm_retf`-equivalent guard sequence; the dispatcher follows the
+/// stitch.
 #[derive(Clone, Copy, Debug)]
 pub struct DownRecClose {
-    /// PC the inlined-frame `Return` is unwinding to. Used by R3b's
+    /// PC the inlined-frame `Return` is unwinding to. Used by the
     /// lowerer to bake the guard-target into the stitch IR and by
-    /// R3c's dispatcher to resume interp at the correct caller PC
+    /// the dispatcher to resume interp at the correct caller PC
     /// on stitch-miss.
     pub return_pc: u32,
     /// Caller proto the down-rec is unwinding to — mirrors LuaJIT
     /// `LJ_TRLINK_DOWNREC` parent-proto association. For fib(28)
     /// self-recursion this equals `TraceRecord.head_proto`; the
     /// field is kept explicit so the close marker matches the
-    /// shape R3b's guard predicate consumes.
+    /// shape the guard predicate consumes.
     pub target_proto: Gc<Proto>,
     /// Depth delta the close marker observed — `from_depth - to_depth`
     /// at the moment the recorder tripped the catch. Always `1` for
     /// today's down-rec catch (depth>0 → depth-1 Return); kept as a
-    /// u8 so R3d's diag rows can surface non-`1` values when future
+    /// u8 so diag rows can surface non-`1` values when future
     /// multi-level unrolls are wired up.
     pub depth_delta: u8,
 }
@@ -169,9 +159,9 @@ pub struct RecordedOp {
     /// already immutable post-compile).
     pub inst: Inst,
     /// Depth of inlined recursion above the trace head. 0 = the
-    /// outer trace; positive values come from S4 inlining.
+    /// outer trace; positive values come from inlining.
     pub inline_depth: u8,
-    /// P12-S9-A — recorder snapshot of the runtime variable count
+    /// Recorder snapshot of the runtime variable count
     /// for ops whose B / C field is `0` (meaning "use stack top").
     /// - `Op::Call` with `C == 0`: snapshot of `top - A` AFTER the
     ///   call returns — i.e. the actual number of values the
@@ -179,12 +169,12 @@ pub struct RecordedOp {
     /// - `Op::SetList` with `B == 0`: snapshot of `top - A` at the
     ///   op — i.e. the number of source slots `[A+1..top]`.
     /// - All other ops: `None`.
-    /// S9-A only captures + tests; emit (S9-B/C) consumes this as
-    /// a compile-time constant guarded by a runtime equality check.
+    /// Emit consumes this as a compile-time constant guarded by a
+    /// runtime equality check.
     pub var_count: Option<u32>,
 }
 
-/// v2.1 Phase 1I.B — `LUNA_JIT_FIELD_IC` env gate.
+/// `LUNA_JIT_FIELD_IC` env gate.
 ///
 /// Default OFF (env unset or set to anything other than `1` / `true`).
 /// When ON, the trace recorder captures a [`FieldIcSnapshot`] at the
@@ -217,7 +207,7 @@ pub fn field_ic_enabled() -> bool {
     enabled
 }
 
-/// v2.1 Phase 1I.B — table-field IC snapshot captured by the recorder
+/// Table-field IC snapshot captured by the recorder
 /// at the **first** eligible `Op::GetField` site in the trace, when
 /// `LUNA_JIT_FIELD_IC=1` is set.
 ///
@@ -228,8 +218,7 @@ pub fn field_ic_enabled() -> bool {
 /// cached `(nodes_len, slot_idx, key_ptr_bits, val_tag)` tuple here so
 /// the lowerer can emit guards against the table's live layout.
 ///
-/// Phase 1I.B scaffold ships SINGLE-snapshot support (the first
-/// eligible site only). Phase 1I.C expands to 5+3 sites.
+/// Only a single snapshot is supported (the first eligible site).
 #[derive(Clone, Copy, Debug)]
 pub struct FieldIcSnapshot {
     /// Index into `TraceRecord.ops` of the `Op::GetField` this
@@ -282,7 +271,7 @@ pub struct TraceRecord {
     /// cleanly). `false` for fallthrough exits — those can still
     /// compile but never inline-loop.
     pub closed: bool,
-    /// P12-S4-step2 — `true` if the recording was fired by a
+    /// `true` if the recording was fired by a
     /// trace-on-call trigger (`begin_call`'s Lua callee arm), as
     /// opposed to a back-edge trigger (`Op::Jmp` neg / `Op::ForLoop`).
     /// Affects the dispatcher's close detection: call-triggered
@@ -291,7 +280,7 @@ pub struct TraceRecord {
     /// traces require `cur_depth == 0` so a nested call to the
     /// containing loop's function doesn't prematurely close.
     pub is_call_triggered: bool,
-    /// P12-S12-B-v5 — generic-for iter fn pointer snapshot.
+    /// Generic-for iter fn pointer snapshot.
     /// Populated by `Op::TForLoop`'s recorder trigger when
     /// `R[A]` is `Value::Native`. Lets the lowerer specialise
     /// `Op::TForCall` emit on `ipairs_iter` (inline Table aget
@@ -300,26 +289,26 @@ pub struct TraceRecord {
     /// for non-generic-for traces or when the recorder fires
     /// for a non-Native iter.
     pub tfor_iter_ptr: Option<usize>,
-    /// P12-S12-C v3 — snapshot of `R[A+5]` (the iter's value
-    /// slot) tag at recorder fire. v5 ipairs inline aget emits a
+    /// Snapshot of `R[A+5]` (the iter's value
+    /// slot) tag at recorder fire. The ipairs inline aget emits a
     /// runtime guard `val_tag == expected_tag` (or Nil for the
     /// loop-end branch); a mismatch deopts to interp. Without the
     /// guard, mixed-tag arrays (e.g. `{'a', 1, 'c'}`) would let
-    /// v2's Str-specialised spill pack non-Str raw bits as a Str
+    /// the Str-specialised spill pack non-Str raw bits as a Str
     /// pointer → garbage. `None` for non-generic-for traces or
     /// when the snapshot slot isn't reachable.
     pub tfor_val_tag: Option<u8>,
-    /// P15-A v1 — if set, this trace is a SIDE TRACE: it was
+    /// If set, this trace is a SIDE TRACE: it was
     /// triggered by a parent trace's hot side-exit, NOT by the
     /// usual back-edge / call-trigger paths. The tuple is
     /// `(parent_head_proto, parent_head_pc, parent_exit_idx)`,
     /// uniquely identifying the parent's `CompiledTrace` and the
     /// `exit_hit_counts` slot that crossed [`HOTEXIT_THRESHOLD`].
-    /// `None` for primary traces. v1 only records the metadata; v2
-    /// reads it to wire the parent's exit-branch indirection
-    /// pointer to the side trace's entry once it compiles.
+    /// `None` for primary traces. Read to wire the parent's
+    /// exit-branch indirection pointer to the side trace's entry
+    /// once it compiles.
     pub side_trace_parent: Option<(Gc<Proto>, u32, usize)>,
-    /// P16-A — set by the recorder cycle catch when a same-proto
+    /// Set by the recorder cycle catch when a same-proto
     /// ancestor count exceeds [`RECUNROLL_THRESHOLD`] at head_pc on
     /// head_proto. Drives the lowerer's `TraceEnd::SelfLink` close
     /// shape (snapshot-restore + bump-base + branch-to-self), and
@@ -327,22 +316,21 @@ pub struct TraceRecord {
     /// body has depth>0 ops. `None` for all non-self-link closes
     /// (Call truncation, ForLoop, Return, InlineAbort).
     pub self_link_kind: Option<SelfRecKind>,
-    /// v2.0 Track-R R1 — side-channel of [`RetfRecord`]s captured
+    /// Side-channel of [`RetfRecord`]s captured
     /// when a depth>0 `Op::Return0` / `Op::Return1` fires during
-    /// recording with `p16_self_link_enabled = true`. Empty on the
-    /// ship-default path (p16 off). Lowerer doesn't consume this in
-    /// R1 — the records are infrastructure for R3's down-rec stitch
+    /// recording with `self_link_enabled = true`. Empty on the
+    /// default path (p16 off). The records feed the down-rec stitch.
     pub retfs: Vec<RetfRecord>,
-    /// v2.0 Track-R R3a — close marker set by the recorder when a
+    /// Close marker set by the recorder when a
     /// depth>0 `Op::Return` re-trips the down-rec catch (i.e., the
     /// `rec.retfs` chain shows the current Return targets the same
     /// proto as a prior Retf AND the count of prior Retfs targeting
     /// that proto exceeds [`RECUNROLL_THRESHOLD`]). The lowerer's
     /// `end_idx` picker reads this BEFORE the `self_link_kind` arm
     /// and routes through `TraceEnd::DownRec`. `None` on the
-    /// ship-default path (p16 off) and on all non-down-rec closes.
+    /// default path (p16 off) and on all non-down-rec closes.
     pub downrec_close: Option<DownRecClose>,
-    /// v2.1 Phase 1I.B — table-field IC snapshot for the first
+    /// Table-field IC snapshot for the first
     /// eligible `Op::GetField` site in the trace. Populated by the
     /// recorder under `LUNA_JIT_FIELD_IC=1`; `None` on the
     /// env-default path and on traces where no eligible site fires.
@@ -354,8 +342,8 @@ impl TraceRecord {
     /// `entry_tags` snapshot pins the per-slot `Value` tag at the
     /// moment recording fires; pass an empty vec for test
     /// harnesses that don't have a live stack to snapshot.
-    /// `is_call_triggered = true` only when fired by a trace-on-call
-    /// (S4-step0); back-edge triggers pass `false`.
+    /// `is_call_triggered = true` only when fired by a trace-on-call;
+    /// back-edge triggers pass `false`.
     pub fn start(
         proto: Gc<Proto>,
         head_pc: u32,
@@ -379,17 +367,16 @@ impl TraceRecord {
         }
     }
 
-    /// P15-A v1 — start a SIDE trace recording at a hot side-exit's
+    /// Start a SIDE trace recording at a hot side-exit's
     /// `cont_pc`. The trace's head_proto is the proto interp resumed
     /// in after the side-exit fired (today: same as the parent's
     /// head_proto, since trace JIT only inlines self-recursive
-    /// calls — see `docs/rfcs/20260621-side-trace-tree/design.md`).
-    /// `parent_*` identifies the parent `CompiledTrace`'s
-    /// `exit_hit_counts` slot so v2 can wire the back-pointer.
+    /// calls). `parent_*` identifies the parent `CompiledTrace`'s
+    /// `exit_hit_counts` slot so the back-pointer can be wired.
     ///
     /// `is_call_triggered = false` for side traces — the close
     /// detection runs like a back-edge trigger (cur_depth==0 +
-    /// pc==head_pc), and per S13-H the discard heuristic for short
+    /// pc==head_pc), and the discard heuristic for short
     /// call-triggered partials doesn't apply.
     pub fn start_side_trace(
         proto: Gc<Proto>,
@@ -433,7 +420,7 @@ pub enum RecordOutcome {
     /// Recording is still in progress; keep dispatching as normal
     /// and continue recording the next op.
     InProgress,
-    /// Recording closed cleanly; the trace is ready to compile in S2.
+    /// Recording closed cleanly; the trace is ready to compile.
     /// `Vm::run` should commit the record and continue interpreting.
     Closed,
     /// Recording exceeded `MAX_TRACE_LEN` or hit an un-recordable op.
@@ -443,7 +430,7 @@ pub enum RecordOutcome {
 
 /// Native entry point for a compiled trace.
 ///
-/// **S2.B step 2 ABI** (this commit):
+/// **ABI**:
 ///
 /// ```text
 /// fn(reg_state: *mut i64) -> i64
@@ -453,17 +440,12 @@ pub enum RecordOutcome {
 ///   `head_proto.max_stack` `i64` slots. The trace reads its live
 ///   inputs from this buffer at entry and writes back any modified
 ///   regs before returning. Each slot holds the raw 8-byte payload
-///   of a Lua `Value` — type tags are out of scope until step 3 adds
-///   side-exit guards (the dispatcher is expected to bias values so
-///   that the trace's recorded type assumptions hold).
+///   of a Lua `Value`; the type tags live in [`CompiledTrace`]'s
+///   tag arrays.
 /// - Return value = continuation PC. A clean loop close (control
-///   returns to the trace's `head_pc`) returns `head_pc as i64`.
-///   Step 3 will add side-exit returns for failing guards
-///   (`failing_pc as i64`).
-///
-/// Step 1's `() -> i64` sig has been retired — only the lowerer
-/// itself has been refined; the rest of the recording pipeline
-/// (`Vm.active_trace`) is untouched.
+///   returns to the trace's `head_pc`) returns `head_pc as i64`;
+///   side exits return the failing guard's PC (see
+///   [`decode_exit_shape`] for the upper-bit encoding).
 // SAFETY: `TraceFn` is the ABI of native code emitted by the Cranelift lowerer (see `jit_backend::trace`); callers guarantee the `*mut i64` points to a reg_state buffer of size `window_size` and survive the trace call.
 pub type TraceFn = unsafe extern "C" fn(*mut i64) -> i64;
 
@@ -484,20 +466,20 @@ pub enum ExitTag {
     Float,
     /// Trace writes a `Table` ptr to this slot (NewTable result).
     Table,
-    /// P12-S4-step2c — trace writes a `Closure` ptr to this slot.
+    /// Trace writes a `Closure` ptr to this slot.
     /// Today the only producer is `Op::GetUpval` whose result is
     /// inferred (via `infer_upval_exit`) to feed an `Op::Call` as
     /// the call target — the upval *must* be a closure for that
     /// dispatch to be sound.
     Closure,
-    /// P12-S6-A1 — trace actively writes Nil to this slot (the only
+    /// Trace actively writes Nil to this slot (the only
     /// producer today is `Op::LoadNil`; raw payload is 0). The
     /// dispatcher restores `Value::Nil` regardless of the slot's
     /// entry tag. Split out from `Untouched` so a LoadNil writer
     /// over an Int/Float/Table entry slot doesn't get mis-packed
     /// back as the entry type.
     Nil,
-    /// P12-S12-C v2 — trace writes a `Str` ptr to this slot (LoadK
+    /// Trace writes a `Str` ptr to this slot (LoadK
     /// of a Str constant, Move from a Str slot, or Concat result).
     /// Dispatcher repacks as `Value::Str(Gc::from_ptr(raw))`.
     Str,
@@ -505,10 +487,10 @@ pub enum ExitTag {
 
 /// Derive an [`ExitTag`] vector from a per-slot `RegKind` snapshot.
 /// `Unset` slots restore via the dispatcher's entry tags (trace
-/// didn't touch them); writers (including `Nil`, see P12-S6-A1)
+/// didn't touch them); writers (including `Nil`)
 /// translate one-to-one to a tag the dispatcher packs without
 /// consulting the entry tag.
-/// P13-S13-E — fast-path classification of an `exit_tags`
+/// Fast-path classification of an `exit_tags`
 /// vector. Lets the dispatcher's restore loop skip per-slot
 /// match-arm dispatch when the entire vector resolves to a
 /// single trivial pattern.
@@ -540,7 +522,7 @@ pub fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
     TagResKind::Mixed
 }
 
-/// A trace compiled by S2's lowerer and ready to be dispatched into
+/// A trace compiled by the lowerer and ready to be dispatched into
 /// at its head PC. Owned by `Proto.traces`; the underlying mmap is
 /// kept alive by the `Vm.jit_handles` Vec for the Vm's lifetime,
 /// just like the method JIT's compiled functions.
@@ -562,10 +544,10 @@ pub struct CompiledTrace {
     /// a future dispatcher with richer marshalling can pick them
     /// up — they just don't run today.
     pub dispatchable: bool,
-    /// P12-S4-step3a — size of the reg_state buffer the dispatcher
+    /// Size of the reg_state buffer the dispatcher
     /// must allocate when calling `entry`. Today always equals
     /// `head_proto.max_stack` (the trace covers only the head
-    /// frame). S4-step3b's inline emit pushes this past `max_stack`
+    /// frame). Inline emit pushes this past `max_stack`
     /// to fit additional inlined frames whose register windows sit
     /// at `offsets[i]..offsets[i] + max_stack` within the buffer.
     /// The dispatcher's marshal-in still only writes [0..max_stack)
@@ -581,7 +563,7 @@ pub struct CompiledTrace {
     /// refcount bump, not a Vec heap clone (fib_28 dispatches 1M×
     /// — clone cost dominates without this).
     pub exit_tags: TArc<[ExitTag]>,
-    /// P13-S13-E — classification of the global `exit_tags` for
+    /// Classification of the global `exit_tags` for
     /// the dispatcher's restore-loop fast path. The dispatcher
     /// dispatches on this when `site_id == 0` AND
     /// `per_exit_tags.find(cont_pc)` misses (the common
@@ -593,7 +575,7 @@ pub struct CompiledTrace {
     ///   per slot, no per-iter match
     /// - `Mixed`        → original match-arm loop
     pub global_tag_res_kind: TagResKind,
-    /// P12-S12-C v3 — compile-time snapshot of `entry_tags` from the
+    /// Compile-time snapshot of `entry_tags` from the
     /// `TraceRecord`. The trace's IR + `current_kinds` propagation
     /// are specialised to these tags; if the runtime entry tags
     /// differ, the dispatcher must skip dispatch (fall back to
@@ -601,7 +583,7 @@ pub struct CompiledTrace {
     /// slot as Int and produce garbage. `Rc<[]>` to match the
     /// other tag arrays' cheap-clone idiom.
     pub entry_tags: TArc<[u8]>,
-    /// P12-S4-step2c — per side-exit `exit_tags`. Each entry is
+    /// Per side-exit `exit_tags`. Each entry is
     /// `(continuation_pc, exit_tags)`; when the trace returns a PC
     /// matching an entry, the dispatcher uses that vector instead of
     /// the clean-tail `exit_tags`. This makes side-exits that fire
@@ -611,7 +593,7 @@ pub struct CompiledTrace {
     /// Empty when no side-exit needs a different vector than the
     /// clean tail (e.g. plain numeric loops with no GetUpval).
     pub per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]>,
-    /// P12-S4-step4b-C-2 — per inline side-exit metadata, indexed by
+    /// Per inline side-exit metadata, indexed by
     /// `site_idx`. Each entry carries the side-exit's `cont_pc`,
     /// the per-slot `exit_tags` snapshot (sized to `window_size` so
     /// every materialised frame's window is restored), and the
@@ -619,7 +601,7 @@ pub struct CompiledTrace {
     ///
     /// fib has SIBLING self-recursive Calls (pc7, pc11) and EVERY
     /// depth's cmp lands at the same `cont_pc` — keying the lookup
-    /// by `cont_pc` alone (the v2 attempt) collapsed all those
+    /// by `cont_pc` alone would collapse all those
     /// distinct chains onto one entry. The trace IR encodes the
     /// firing site's `(site_idx + 1)` in the upper 32 bits of the
     /// returned i64 so the dispatcher disambiguates O(1).
@@ -629,7 +611,7 @@ pub struct CompiledTrace {
     /// the `Rc` clones in this field keep the slice alive for the
     /// trace's mmap lifetime (Proto.traces owns the CompiledTrace).
     pub per_exit_inline: TArc<[InlineSideExit]>,
-    /// P15-prep — per-exit hit counter (LuaJIT-study foundation for
+    /// Per-exit hit counter (LuaJIT-study foundation for
     /// future side trace work). Length and layout:
     /// - `[0..per_exit_inline.len())`: parallel to per_exit_inline
     ///   (indexed by `site_id - 1` in the dispatcher).
@@ -642,15 +624,13 @@ pub struct CompiledTrace {
     /// mutable borrow on the CompiledTrace. Vm's
     /// `trace_exit_hit_distribution()` aggregates this for probe use.
     pub exit_hit_counts: TArc<[TCellU32]>,
-    /// P15-A v2-A — per-exit raw side-trace function pointer. Same
+    /// Per-exit raw side-trace function pointer. Same
     /// length / layout as [`Self::exit_hit_counts`]. `null` means
     /// "no side trace compiled for this exit yet"; non-null means a
-    /// child side trace's entry fn lives at this pointer and v2-B/C
-    /// will wire the parent's IR at each exit site to read this Cell
-    /// and indirect-call when non-null.
+    /// child side trace's entry fn lives at this pointer.
     ///
     /// `Cell<*const u8>` (not Atomic) since the Vm is single-
-    /// threaded — see RFC Q2. The pointer's stability is owned by
+    /// threaded. The pointer's stability is owned by
     /// the child side trace's `TraceHandle` in `TRACE_JIT_HANDLES`
     /// (thread-local Vec), which persists for the thread lifetime.
     ///
@@ -659,14 +639,14 @@ pub struct CompiledTrace {
     /// `Proto.traces: RefCell<Vec<CompiledTrace>>` on the runtime
     /// path). Adding this field doesn't tighten that.
     pub exit_side_trace_ptrs: TArc<[TCellPtr]>,
-    /// P15-A v2-C-A2 — per-`per_exit_tags`-entry side-trace cell.
+    /// Per-`per_exit_tags`-entry side-trace cell.
     /// Same length as `per_exit_tags`; the IR at the corresponding
     /// `emit_store_back_and_return_pc` callsite (immediately after
     /// `per_exit_kinds.push`) bakes this cell's heap address. Same
     /// semantics as [`InlineSideExit::side_trace_ptr`] but with
     /// `kind = SIDE_SENT_KIND_TAG` and `local = tag_idx`.
     pub tags_side_trace_ptrs: TArc<[Box<TCellPtr>]>,
-    /// P15-A v2-C-A2 — singleton cell shared by every GLOBAL-kind
+    /// Singleton cell shared by every GLOBAL-kind
     /// callsite (clean-tail return, Call truncation, ForLoop /
     /// TForLoop exits, generic err deopts, etc.). All such sites'
     /// IR bakes the same heap address; the close handler writes
@@ -674,12 +654,12 @@ pub struct CompiledTrace {
     /// per_exit_inline.len() + per_exit_tags.len()` (the
     /// `exit_hit_counts` layout's last slot).
     pub global_side_trace_ptr: Box<TCellPtr>,
-    /// P15-A v2-C-A1 — when a child side trace compiles for any
+    /// When a child side trace compiles for any
     /// of this trace's hot exits, the close handler inserts
-    /// `(child.head_pc, child_traces_idx)` here. v2-C-A3's
+    /// `(child.head_pc, child_traces_idx)` here. The
     /// dispatcher uses this for an O(1) lookup of the side trace's
     /// own [`CompiledTrace`] when the sentinel bit on `raw_ret`
-    /// (introduced by v2-C-A2) flags a side-trace return — so
+    /// flags a side-trace return — so
     /// [`decode_exit_shape`] can be called with the SIDE TRACE's
     /// `per_exit_inline` / `per_exit_tags` / `exit_tags` instead
     /// of the parent's.
@@ -697,11 +677,11 @@ pub struct CompiledTrace {
     /// holds only `&CompiledTrace` (the parent's traces borrow is
     /// immutable while we're walking it to find the parent_ct).
     pub side_trace_cache: TRefLock<std::collections::HashMap<u32, u32>>,
-    /// P15-A v2-D-A8 — fast-path short-circuit hint for the
+    /// Fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when ANY of this trace's
     /// `exit_side_trace_ptrs` cells gets wired (i.e., the first
-    /// time a child side trace compiles + the A5-C shape gate
+    /// time a child side trace compiles + the shape gate
     /// passes). Stays `true` for the trace's lifetime — once any
     /// side trace exists, the dispatcher must perform the per-
     /// exit check on every dispatch.
@@ -716,136 +696,123 @@ pub struct CompiledTrace {
     /// only an `&CompiledTrace` borrow (the parent's `traces`
     /// borrow is immutable while the close handler walks).
     pub has_any_side_wired: TCellBool,
-    /// P13-S13-G v2 — `true` iff this trace closes at a
+    /// `true` iff this trace closes at a
     /// `TraceEnd::InlineAbort` (depth>0 op the lowerer can't
     /// continue past: depth past `MAX_INLINE_DEPTH`, non-self
     /// Call@d>0, ForLoop@d>0, TForLoop@d>0, or proto mismatch).
     /// Such traces compile but pin `dispatchable=false` —
     /// dispatching them would resume interp at a depth>0 PC
     /// without the matching CallFrames the trace inlined past
-    /// (S4-step4b's frame mat helper can synthesise these but
-    /// isn't wired up for InlineAbort exits yet — that's the
-    /// S13-G v2 follow-up). Vm's `trace_inline_abort_count`
+    /// (the frame mat helper can synthesise these but isn't wired
+    /// up for InlineAbort exits). Vm's `trace_inline_abort_count`
     /// tallies these so future-tuning sees what bench cells
     /// would benefit from the frame-mat unlock.
     pub is_inline_abort_close: bool,
-    /// P13-S13-G v2.5 — if `dispatchable == false`, the static
+    /// If `dispatchable == false`, the static
     /// label of the emit-pass site that flipped it. Lets a probe
     /// distinguish among the six places trace.rs pins dispatch
     /// off (GetI / GetTable / GetUpval inference fail, TForCall
     /// slow-path, length gate, InlineAbort gate). `None` if the
     /// trace IS dispatchable, the first label otherwise.
     pub dispatch_off_reason: Option<&'static str>,
-    /// P12-S5-A — number of NewTable sites in this trace whose
+    /// Number of NewTable sites in this trace whose
     /// final `EscapeState` is `EscapeState::Sinkable` after
-    /// S5-B's pre-emit demotion pass. Vm's
+    /// the pre-emit demotion pass. Vm's
     /// `trace_sinkable_seen_count` tallies these for telemetry.
     pub sinkable_sites_seen: u32,
-    /// P14-S14-B v1 — number of `AccumSite`s with `BufferState::Bufferable`
-    /// detected by `detect_accumulators`. v1 only counts; v2+ will use
-    /// the sites for buffered emit. Vm's `trace_accum_bufferable_seen_count`
+    /// Number of `AccumSite`s with `BufferState::Bufferable`
+    /// detected by `detect_accumulators`. Count only; the sites are
+    /// not yet used for buffered emit. Vm's `trace_accum_bufferable_seen_count`
     /// tallies these for probe visibility.
     pub accum_bufferable_seen: u32,
-    /// P12-S5-B — number of Sinkable sites this trace's emit
+    /// Number of Sinkable sites this trace's emit
     /// actually allocated virt slot Variables for (i.e., took the
     /// no-heap-alloc path). Always `<= sinkable_sites_seen`. Bumps
     /// `Vm::trace_sunk_alloc_count` on compile success.
     pub sunk_alloc_seen: u32,
-    /// P12-S5-C — number of (site × cmp side-exit) pairs in this
+    /// Number of (site × cmp side-exit) pairs in this
     /// trace's IR that emit the materialise helper. Each pair is
     /// "this cmp's side-exit reconstructs site X's heap Table".
     /// Static count; the runtime number of helper calls depends
     /// on dispatch shape (which side-exits actually fire).
     pub materialize_emit_count: u32,
-    /// P12-S7-A — number of `Op::Closure` ops this trace's emit
+    /// Number of `Op::Closure` ops this trace's emit
     /// lowered to a `luna_jit_op_closure` helper call. Each
     /// closure-creating op replaces a `Heap::new_closure_inline`
     /// allocation, which dwarfs the dispatcher's marshal overhead;
     /// the length-gate skip below treats `closure_seen > 0` the
     /// same as `sunk_alloc_seen > 0` (don't gate short traces).
     pub closure_seen: u32,
-    /// P15-A v2-E — sorted unique list of slot indices that ANY
+    /// Sorted unique list of slot indices that ANY
     /// op in this trace's body WRITES (post `inline_depth` offset).
     /// Computed at compile via `compute_body_writes`; consumed
-    /// by the v2-E smart side-trace gate at child compile to
+    /// by the smart side-trace gate at child compile to
     /// detect read-before-write live-in registers that would
     /// re-read the parent's stale exit value across the child's
-    /// internal-loop iters (see s12_step_b bug analysis).
+    /// internal-loop iters.
     pub body_writes: Box<[u32]>,
-    /// v2.0 Track-R R3b — down-recursion stitch link populated by
+    /// Down-recursion stitch link populated by
     /// the lowerer's `downrec_idx_opt` arm
     /// (`crates/luna-jit/src/jit_backend/trace.rs:7129+`) when a
     /// trace closes via `TraceEnd::DownRec`. Layout:
-    /// `Some((trace_id_placeholder, target_head_pc))`. R3b emits a
-    /// caller-pc guard at the close site that, on guard hit, returns
-    /// the [`SIDE_SENT_DOWNREC_CODE`] sentinel — and on guard miss,
-    /// falls back to R1's safe deopt-tail (store back caller window +
-    /// return `head_pc` via GLOBAL sentinel, [`Self::dispatchable`]
-    /// pinned to `false`). R3b deliberately keeps
-    /// `dispatchable = false` even when this field is `Some(_)`;
-    /// R3d will lift `dispatchable = true` after R3c wires the
-    /// dispatcher consumer.
+    /// `Some((trace_id_placeholder, target_head_pc))`. The lowerer
+    /// emits a caller-pc guard at the close site that, on guard hit,
+    /// returns the [`SIDE_SENT_DOWNREC_CODE`] sentinel — and on guard
+    /// miss, falls back to the safe deopt-tail (store back caller
+    /// window + return `head_pc` via GLOBAL sentinel).
     ///
-    /// Field semantics agreed for R3b -> R3c handoff:
+    /// Field semantics:
     /// - `.0` = placeholder trace id. At compile time the trace
     ///   doesn't know its own index in `head_proto.traces` yet
     ///   (the index is assigned at the close handler's `traces.push`
-    ///   site after this function returns). R3b writes `0` here as
-    ///   a "this trace, self-stitch" sentinel; R3c interprets a
-    ///   non-`None` value with `.0 == 0` as "stitch target = the
-    ///   trace currently dispatching" and uses [`Self::head_pc`]
-    ///   for resolution. A future R3.2 may carry an explicit
-    ///   `head_proto.traces`-index when mutual-recursion stitch
-    ///   lands.
+    ///   site after this function returns). The lowerer writes `0`
+    ///   here as a "this trace, self-stitch" sentinel; the dispatcher
+    ///   interprets a non-`None` value with `.0 == 0` as "stitch
+    ///   target = the trace currently dispatching" and uses
+    ///   [`Self::head_pc`] for resolution. Mutual-recursion stitch
+    ///   would need an explicit `head_proto.traces` index here.
     /// - `.1` = `target_head_pc`, copied from `record.head_pc` at
-    ///   compile time. R3c's stitch dispatcher tail-calls into the
+    ///   compile time. The stitch dispatcher tail-calls into the
     ///   target trace at this PC (which today = self, the trace
     ///   currently dispatching).
     ///
     /// `None` for every trace that doesn't close via `TraceEnd::
-    /// DownRec`. Tested via R3b's `r3b_lowerer_stitch_sentinel.rs`
-    /// regression: at least 1 trace recorded on a fib(3) hot-loop
-    /// has `downrec_link == Some(_)` after the R3a recorder pushes
-    /// the threshold-tripping retfs.
+    /// DownRec`.
     pub downrec_link: Option<(u32, u32)>,
-    // v2.0 Track-R R3d — GC trace mcode lifetime invariant for the
-    // multi-way stitch path. The lowerer's R3d arm bakes
+    // GC trace mcode lifetime invariant for the
+    // multi-way stitch path. The lowerer's multi-way arm bakes
     // `dr_return_pc` + each retf's `caller_pc` into the IR as plain
     // `iconst(I64, _)` constants — none of these reach the runtime as
     // a pointer dereference. The stitch HIT path returns the DOWNREC
     // sentinel (a constant `u64`) and the deopt path stores back the
     // caller window + returns via the GLOBAL sentinel; neither path
-    // dereferences any external trace's mcode. R3d's `downrec_link =
+    // dereferences any external trace's mcode. `downrec_link =
     // Some((0, head_pc))` is a `(u32, u32)` pair, `Copy`. No
     // `Box<Cell<*const u8>>` (the InlineSideExit / TAG / GLOBAL slot
-    // shape that R3.2+'s tail-call-into-target work will introduce)
-    // is added here.
+    // shape) is involved.
     //
     // Consequence: this trace's mcode lifetime is governed solely by
     // its own `Rc<CompiledTrace>` strong-count (held by `proto.traces`
-    // for as long as the proto lives). R3d introduces no cross-trace
-    // mcode dependency, so R3 prep §7.3 ("Child trace fn-ptr stale
-    // after parent recompile") doesn't apply to the R3d shape — the
-    // hazard surfaces only when the R3.2+ tail-call-into-target work
-    // wires `Rc<CompiledTrace>` / `Weak<CompiledTrace>` into
-    // `parent_ct.side_trace_cache` for the stitch target.
-    /// v2.0 Track-R R3d — number of distinct caller_pc candidates the
+    // for as long as the proto lives). There is no cross-trace mcode
+    // dependency, so the "child trace fn-ptr stale after parent
+    // recompile" hazard doesn't apply — it would surface only if a
+    // tail-call-into-target stitch wired `Rc<CompiledTrace>` /
+    // `Weak<CompiledTrace>` into `parent_ct.side_trace_cache`.
+    /// Number of distinct caller_pc candidates the
     /// lowerer baked into the multi-way guard at the
     /// `TraceEnd::DownRec` close. `0` for every trace that doesn't
-    /// close via DownRec; `1` for R3c-shape single-CMP guards (the
+    /// close via DownRec; `1` for single-CMP guards (the
     /// `dr_return_pc` alone, no additional retfs matched the close
-    /// marker's `target_proto`); `>= 2` for R3d-shape multi-way
+    /// marker's `target_proto`); `>= 2` for multi-way
     /// guards that triggered the `dispatchable = true` lift.
     /// Capped at [`DOWNREC_MULTI_WAY_GUARD_MAX`].
     ///
     /// Read by the close handler in `crates/luna-core/src/vm/exec.rs`
-    /// to bump `JitCounters.multi_way_guard_emitted` (the probe
-    /// surface for R3d's regression test
-    /// `r3d_multi_way_guard_dispatch.rs`).
+    /// to bump `JitCounters.multi_way_guard_emitted`.
     pub downrec_multi_way_count: u8,
 }
 
-/// P12-S4-step4b-C-2 — per inline cmp@d>0 side-exit record. See
+/// Per inline cmp@d>0 side-exit record. See
 /// [`CompiledTrace::per_exit_inline`] for the shape rationale.
 #[derive(Clone, Debug)]
 pub struct InlineSideExit {
@@ -870,7 +837,7 @@ pub struct InlineSideExit {
     /// is overwritten to the side-exit PC at compile time so the
     /// helper stays PC-agnostic.
     pub chain: TArc<[FrameMaterializeInfo]>,
-    /// P15-A v2-C-A2 — raw `*const u8` (entry fn pointer of a child
+    /// Raw `*const u8` (entry fn pointer of a child
     /// side trace) for THIS inline cmp@d>0 side-exit. The IR at the
     /// `emit_store_back_and_return_site` call site loads this cell
     /// BEFORE the encoded-return path: non-null → store-back +
@@ -885,16 +852,16 @@ pub struct InlineSideExit {
     pub side_trace_ptr: Box<TCellPtr>,
 }
 
-/// P15-A v0 — hot side-exit detection threshold. Exits whose hit
+/// Hot side-exit detection threshold. Exits whose hit
 /// count crosses this value are reported by `Vm::hot_exit_iter` as
 /// side-trace candidates. LuaJIT 2.1's default is 10, but short
 /// workloads (binary_trees_d4_x200 = 200 outer iters, each calling
 /// make/itemcheck a small handful of times) don't reach 10 hot
-/// hits before the run ends. v2-G drops to 3 so short workloads
-/// also get a chance to wire side traces.
+/// hits before the run ends, so the threshold is kept low to give
+/// short workloads a chance to wire side traces.
 pub const HOTEXIT_THRESHOLD: u32 = 2;
 
-/// P15-A v2-C-A2 — sentinel kind tags for side-trace returns.
+/// Sentinel kind tags for side-trace returns.
 /// When a parent trace's IR detects a wired child side-trace cell
 /// non-null at a side-exit and tail-calls into the child, it OR's
 /// a 7-bit sentinel into the upper bits of the child's return value
@@ -909,22 +876,18 @@ pub const SIDE_SENT_KIND_INLINE: u8 = 1;
 pub const SIDE_SENT_KIND_TAG: u8 = 2;
 /// Sentinel kind for global-cell side-traces (env-table exits).
 pub const SIDE_SENT_KIND_GLOBAL: u8 = 3;
-/// v2.0 Track-R R3b — sentinel kind for down-recursion stitch
+/// Sentinel kind for down-recursion stitch
 /// returns. Emitted at the `TraceEnd::DownRec` close arm in
 /// `crates/luna-jit/src/jit_backend/trace.rs` `downrec_idx_opt`
 /// branch when the caller-pc guard hits (saved `[base-8]` matches
 /// the recorded `target_proto`'s expected return PC) so the
-/// dispatcher (R3c) knows to walk the parent trace's RetfRecord
+/// dispatcher knows to walk the parent trace's RetfRecord
 /// chain to materialise the inlined frames and tail-call into the
 /// stitched child trace rather than falling back to interp at
-/// `head_pc`. R3b only emits the sentinel + populates
-/// `CompiledTrace.downrec_link`; the dispatcher consumer arrives
-/// in R3c. Until R3c lands, the sentinel falls into the existing
-/// dispatcher's "cache miss" fallback path (interp resumes at
-/// `head_pc`) so the trace stays correct.
+/// `head_pc`.
 pub const SIDE_SENT_KIND_DOWNREC: u8 = 4;
 
-/// v2.0 Track-R R3b — encoded sentinel value reserved for
+/// Encoded sentinel value reserved for
 /// [`SIDE_SENT_KIND_DOWNREC`]. Picked as `0x10` (= 16) which sits
 /// in the (kind=0, local=0..=31) slice unused by existing kinds
 /// 1..=3 (those occupy encoded ranges 32..=127). DOWNREC has no
@@ -935,25 +898,24 @@ pub const SIDE_SENT_KIND_DOWNREC: u8 = 4;
 /// without widening the kind bits.
 pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
 
-/// v2.0 Track-R R3d — upper bound on the multi-way caller-pc guard
+/// Upper bound on the multi-way caller-pc guard
 /// chain emitted at the `TraceEnd::DownRec` close in the lowerer
 /// (`crates/luna-jit/src/jit_backend/trace.rs` `downrec_idx_opt` arm).
 /// The lowerer dedupes `record.retfs` by `caller_pc` (filtered to
 /// retfs whose `proto` matches the close marker's `target_proto`) and
 /// emits up to this many `icmp(Equal, saved_pc, iconst(candidate_pc))
 /// + brif(stitch_blk, next_blk)` chain entries before falling through
-/// to `deopt_blk`. R3c shipped with 1 (single-CMP) and measured a 90%
+/// to `deopt_blk`. A single CMP measured a 90%
 /// miss-rate on fib(3) hot-loop; the typical fib body shape captures
 /// 2 distinct caller_pcs (one per call site `pc+1`), so a cap of 4
 /// covers the fib pattern with headroom for slightly deeper closes
 /// without growing IR proportional to retfs.len(). When the candidate
-/// set reaches >= 2 entries, the lowerer also lifts `dispatchable =
-/// true` (was R3c's `false`-pin) so the primary dispatcher arm hits
-/// the trace without going through R3c's `downrec_link.is_some()`
-/// fallback admit clause.
+/// set reaches >= 2 entries, the lowerer also sets `dispatchable =
+/// true` so the primary dispatcher arm hits the trace without going
+/// through the `downrec_link.is_some()` fallback admit clause.
 pub const DOWNREC_MULTI_WAY_GUARD_MAX: usize = 4;
 
-/// P15-A v2-C-A2 — encode a `(kind, local)` pair into a 7-bit
+/// Encode a `(kind, local)` pair into a 7-bit
 /// sentinel code that fits in `raw_ret`'s bits 56..=62. Layout for
 /// kinds 1..=3: upper 2 bits = kind, lower 5 bits = local index.
 /// A local index `>= 32` is truncated; the close handler caps
@@ -961,7 +923,7 @@ pub const DOWNREC_MULTI_WAY_GUARD_MAX: usize = 4;
 /// dispatcher uses the full 7-bit value as the key into the
 /// parent's `side_trace_cache`.
 ///
-/// v2.0 Track-R R3b adds kind 4 ([`SIDE_SENT_KIND_DOWNREC`]) which
+/// Kind 4 ([`SIDE_SENT_KIND_DOWNREC`])
 /// is encoded out-of-band as [`SIDE_SENT_DOWNREC_CODE`] (= 0x10).
 /// DOWNREC has only one slot per trace (the stitch target lives on
 /// `CompiledTrace.downrec_link`, not in the side_trace_cache), so
@@ -981,20 +943,19 @@ pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
     ((kind as u32 & 0x3) << 5) | (local & 0x1F)
 }
 
-/// v2.0 Track-R R3b — true iff the dispatcher's decoded
+/// True iff the dispatcher's decoded
 /// `sentinel_code` (`(raw_ret >> 56) & 0x7F` at
-/// `crates/luna-core/src/vm/exec.rs:6355`) marks a down-recursion
-/// stitch return. The dispatcher arm that consumes this is R3c's
-/// job; R3b adds the predicate so the lowerer and any diagnostic
-/// probe share one definition.
+/// the dispatcher) marks a down-recursion stitch return. Shared so
+/// the lowerer, the dispatcher and any diagnostic probe use one
+/// definition.
 #[inline]
 pub fn is_downrec_sentinel(sentinel_code: u32) -> bool {
     sentinel_code == SIDE_SENT_DOWNREC_CODE
 }
 
-/// P15-A v2-C-A6 — env-gated probe switch. `LUNA_V2C_PROBE=1` (any
+/// Env-gated probe switch. `LUNA_V2C_PROBE=1` (any
 /// non-empty value) turns on the side-trace dispatch probes (IR
-/// side-entry, dispatcher A3 decode, frame.pc set). Off by default
+/// side-entry, dispatcher decode, frame.pc set). Off by default
 /// so production runs pay no overhead — even the IR-emitted probe
 /// call is conditional on the probe helper itself short-circuiting
 /// when the OnceLock resolves to `false`.
@@ -1011,7 +972,7 @@ pub fn v2c_probe_enabled() -> bool {
     })
 }
 
-/// P15-A v0 — one hot side-exit candidate surfaced by
+/// One hot side-exit candidate surfaced by
 /// `Vm::hot_exit_iter`. The walker fills this from one
 /// [`CompiledTrace`]'s `exit_hit_counts` slot whose value passed
 /// [`HOTEXIT_THRESHOLD`].
@@ -1054,7 +1015,7 @@ pub struct HotExitInfo {
     pub exit_tags: TArc<[ExitTag]>,
 }
 
-/// P12-S4-step4b — one Lua frame to push when a depth>0 side-exit
+/// One Lua frame to push when a depth>0 side-exit
 /// fires. Constructed at trace compile time from the recorded
 /// `Op::Call` chain's `A` field (caller's `R[A]` = function slot) and
 /// the inlined callee's `c` field (`nresults`). `pc` is the address
@@ -1077,11 +1038,11 @@ pub struct FrameMaterializeInfo {
     /// interp resumes after the Call instruction. For the innermost
     /// frame (the one the side-exit fires inside) the dispatcher
     /// overrides this with the actual side-exit PC — keeps the
-    /// helper PC-agnostic per the RFC's "helper doesn't know which
-    /// frame is innermost" rule.
+    /// helper PC-agnostic (the helper doesn't know which frame is
+    /// innermost).
     pub pc: u32,
     /// PUC `nresults`: how many return values the caller expects
-    /// from this call (encoded as `Op::Call`'s C - 1). step4b-C's
+    /// from this call (encoded as `Op::Call`'s C - 1). The
     /// pre-emit pass bails if any inlined Call has nresults != 1
     /// (Op::Return1 copy-back assumes one value).
     pub nresults: i32,
@@ -1100,10 +1061,9 @@ impl std::fmt::Debug for CompiledTrace {
 }
 
 impl CompiledTrace {
-    /// v1.3 Phase AOT Stage 7 sub-piece 4 — minimal AOT install
-    /// constructor; Stage 7 follow-up — extended to accept
-    /// `per_exit_tags` (typed-register side-exits) so GetUpval-heavy
-    /// traces install correctly.
+    /// AOT install constructor. Accepts `per_exit_tags`
+    /// (typed-register side-exits) so GetUpval-heavy traces install
+    /// correctly.
     ///
     /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
     /// carries plus a deploy-resolved trace fn pointer.
@@ -1142,7 +1102,7 @@ impl CompiledTrace {
         per_exit_tags: Vec<(u32, TArc<[ExitTag]>)>,
         per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
-        // v1.3 Phase AOT Stage 7 polish 6 — `inline_n` non-zero when
+        // `inline_n` non-zero when
         // the AOT trace ships depth>0 inlined cmp side-exits. The
         // chain pointers baked into the trace mcode are populated by
         // the deploy-side `aot_inline_chain_resolver`; the
@@ -1202,12 +1162,12 @@ impl CompiledTrace {
             materialize_emit_count: 0,
             closure_seen: 0,
             body_writes: Box::new([]),
-            // v2.0 Track-R R3b — AOT-install path never triggers a
-            // down-recursion stitch (no R3a recorder fires on the
+            // AOT-install path never triggers a
+            // down-recursion stitch (no recorder fires on the
             // deploy-side install). Always `None`.
             downrec_link: None,
-            // v2.0 Track-R R3d — AOT-install path doesn't emit a
-            // DownRec close (no R3a recorder fires on the deploy-side
+            // AOT-install path doesn't emit a
+            // DownRec close (no recorder fires on the deploy-side
             // install), so the candidate count is always `0`.
             downrec_multi_way_count: 0,
         }
@@ -1220,9 +1180,9 @@ impl CompiledTrace {
 /// threshold rolls over again.
 #[derive(Debug)]
 pub enum CompileOutcome {
-    /// Trace compiled; the cached entry is ready for dispatch in S3.
+    /// Trace compiled; the cached entry is ready for dispatch.
     Compiled,
-    /// Some op in the trace falls outside S2's whitelist (e.g. a
+    /// Some op in the trace falls outside the lowerer's whitelist (e.g. a
     /// metamethod-bearing operand, or a yet-unsupported opcode).
     /// The record is dropped; the head PC remembers the rejection.
     UnsupportedOp,
@@ -1231,11 +1191,11 @@ pub enum CompileOutcome {
     BackendError,
 }
 
-/// P15-A v2-C-A5-C — return `true` iff `child_entry_tags` is
+/// Return `true` iff `child_entry_tags` is
 /// compatible with `parent_exit_tags` (the parent's per-exit tag
 /// snapshot at the slot the side trace was wired to). Used by
 /// the close handler to gate the side-trace ptr write: only write
-/// when shapes match so the future `call_indirect` (v2-C-A2 redo)
+/// when shapes match so the `call_indirect` into the child
 /// is guaranteed to feed the child reg_state values whose tags
 /// agree with the child's `compile_entry_tags`.
 ///
@@ -1292,7 +1252,7 @@ pub const EXIT_KEEP_TFOR_VARS: u64 = 1 << 55;
 /// `per_exit_tags` index under [`EXIT_TAGS_INDEX_BIT`].
 const EXIT_SITE_MASK: u64 = (1 << 22) - 1;
 
-/// P15-A v2-C-A0 — decoded exit shape. Returned by
+/// Decoded exit shape. Returned by
 /// [`decode_exit_shape`]. Carries the per-exit metadata the
 /// dispatcher's restore loop needs: the resume PC, the
 /// `exit_hit_counts` slot index for the side-trace trigger
@@ -1319,17 +1279,14 @@ pub struct DecodedExit<'a> {
     pub using_global_exit_tags: bool,
 }
 
-/// P15-A v2-C-A0 — decode a trace's i64 return value into the
+/// Decode a trace's i64 return value into the
 /// per-exit shape the dispatcher needs to restore vm.stack +
 /// bump the hit counter.
 ///
 /// Pure function over the input slices — the dispatcher passes
-/// the parent's `per_exit_inline` / `per_exit_tags` / `exit_tags`;
-/// v2-C-A3 will call it again with the side trace's same fields
-/// when bit 63 of `raw_ret` is set (the sentinel introduced by
-/// v2-C-A2). Factored out of the inlined dispatcher block in
-/// `Vm::run` for that future reuse — no behavior change vs the
-/// inlined form.
+/// the parent's `per_exit_inline` / `per_exit_tags` / `exit_tags`,
+/// or the side trace's same fields when bit 63 of `raw_ret` is set
+/// (the side-trace sentinel).
 ///
 /// A depth-0 side exit returns `EXIT_TAGS_INDEX_BIT | (i << 32) | cont_pc`
 /// and restores through `per_exit_tags[i]`: several exits can resume at
@@ -1434,11 +1391,11 @@ pub struct CompileOptions {
     /// Lua dialect — `true` for 5.1 / 5.2 / 5.3, `false` for
     /// 5.4 / 5.5. The numeric `for` op (`Op::ForLoop`) has a
     /// different layout pre-5.3 (the slot at `R[A+1]` is the raw
-    /// `limit` Value, not a remaining-iteration count). Step-6
-    /// only lowers the 5.4+ Int count form; pre-5.3 traces bail
+    /// `limit` Value, not a remaining-iteration count). Only the
+    /// 5.4+ Int count form is lowered; pre-5.3 traces bail
     /// and stay on the interp side.
     pub pre53: bool,
-    /// v1.3 Phase AOT Stage 7 sub-piece 2 — emit AOT-relocatable IR.
+    /// Emit AOT-relocatable IR.
     ///
     /// When `false` (the JIT default), interned-string-key arguments
     /// to `luna_jit_*_field` helpers are baked as
@@ -1457,8 +1414,5 @@ pub struct CompileOptions {
     /// `Gc<LuaStr>::as_ptr()` into the matching `_slot_<hex>` before
     /// any AOT trace dispatches. JIT path is unaffected — same
     /// `iconst` it always emitted.
-    ///
-    /// scheme; sub-piece 2 (this flag) lands the codegen half — the
-    /// deploy-side resolver is sub-piece 3.
     pub aot: bool,
 }

@@ -251,7 +251,14 @@ fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             _ => return Err(raise_str(vm, "unable to dump given function")),
         }
     };
-    let bytes = crate::vm::dump::dump(&cl.proto, strip, v);
+    // PUC bytecode of the running dialect; MacroLua, which has none, keeps
+    // luna's own format
+    let bytes = if v.is_macro_lua() {
+        crate::vm::dump::dump(&cl.proto, strip, v)
+    } else {
+        crate::vm::dump::dump_puc(&cl.proto, strip, v)
+            .map_err(|_| raise_str(vm, "unable to dump given function"))?
+    };
     let r = Value::Str(vm.heap.intern(&bytes));
     Ok(vm.nat_return(fs, &[r]))
 }
@@ -503,7 +510,7 @@ fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Str(s)
     } else {
         out.extend_from_slice(&src[pos..]);
-        Value::Str(vm.heap.intern(&out))
+        vm.built_str(&out)?
     };
     Ok(vm.nat_return(fs, &[res, Value::Int(n as i64)]))
 }

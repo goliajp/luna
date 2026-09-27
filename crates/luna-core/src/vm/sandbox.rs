@@ -1,4 +1,4 @@
-//! Sandbox builder (B1, Phase 2 P2-A) — replaces the 5-line manual
+//! Sandbox builder — replaces the 5-line manual
 //! setter sequence with a fluent builder.
 //!
 //! Conservative defaults:

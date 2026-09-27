@@ -33,7 +33,7 @@ use super::lower::{Jump, Lowered, Lowering, RawProto, Window, enc_abc, enc_abx, 
 use crate::vm::isa::{self, Op};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(in crate::vm::dump) enum Kind {
     Move,
     LoadI,
     LoadF,
