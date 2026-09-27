@@ -3251,13 +3251,13 @@ impl Vm {
     }
 
     #[doc(hidden)]
-    #[deprecated(since = "3.1.1", note = "renamed to `set_self_link_enabled`")]
+    #[deprecated(since = "3.2.0", note = "renamed to `set_self_link_enabled`")]
     pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {
         self.set_self_link_enabled(enabled);
     }
 
     #[doc(hidden)]
-    #[deprecated(since = "3.1.1", note = "renamed to `self_link_enabled`")]
+    #[deprecated(since = "3.2.0", note = "renamed to `self_link_enabled`")]
     pub fn p16_self_link_enabled(&self) -> bool {
         self.self_link_enabled()
     }
