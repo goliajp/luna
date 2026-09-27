@@ -1017,6 +1017,84 @@ pub(crate) fn verify_depth_invariant(items: &[(u8, bool)]) -> bool {
     true
 }
 
+/// Where the plain terminator scan ends a trace: the first depth-0
+/// `Call` that is not self-recursive, `ForLoop` / `TForLoop`, depth-0
+/// return, or an op the inline path cannot hold (`InlineAbort`).
+/// Self-recursive calls are walked past; the callee's ops follow at
+/// depth + 1. `None` when the whole record is body.
+fn plain_trace_end(
+    record: &TraceRecord,
+    folded_ops: &[bool],
+    head_proto: Gc<Proto>,
+) -> Option<(usize, TraceEnd)> {
+    let mut found: Option<(usize, TraceEnd)> = None;
+    for (i, r) in record.ops.iter().enumerate() {
+        if folded_ops[i] {
+            continue;
+        }
+        let depth = r.inline_depth as usize;
+        if depth > MAX_INLINE_DEPTH as usize || !std::ptr::eq(r.proto.as_ptr(), head_proto.as_ptr())
+        {
+            found = Some((i, TraceEnd::InlineAbort));
+            break;
+        }
+        match r.inst.op() {
+            Op::Call => {
+                let nxt = record.ops.get(i + 1);
+                let is_self_recursive = nxt
+                    .map(|n_op| {
+                        n_op.inline_depth as usize == depth + 1
+                            && depth < MAX_INLINE_DEPTH as usize
+                            && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
+                    })
+                    .unwrap_or(false);
+                if is_self_recursive {
+                    // Continue walking — Op::Call emits nothing in
+                    // the inline path and op_offsets handles the
+                    // window shift for the callee's subsequent ops.
+                    continue;
+                }
+                if depth == 0 {
+                    found = Some((i, TraceEnd::Call));
+                } else {
+                    found = Some((i, TraceEnd::InlineAbort));
+                }
+                break;
+            }
+            Op::ForLoop => {
+                if depth == 0 {
+                    found = Some((i, TraceEnd::ForLoop));
+                } else {
+                    found = Some((i, TraceEnd::InlineAbort));
+                }
+                break;
+            }
+            // generic-for back-edge. Same tail
+            // emit slot as Op::ForLoop (TraceEnd::ForLoop); the
+            // tail emit branches on `record.ops[idx].inst.op()`
+            // to pick the right side-exit predicate (count>0 vs
+            // R[A+4] tag check).
+            Op::TForLoop => {
+                if depth == 0 {
+                    found = Some((i, TraceEnd::ForLoop));
+                } else {
+                    found = Some((i, TraceEnd::InlineAbort));
+                }
+                break;
+            }
+            Op::Return0 | Op::Return1 if depth == 0 => {
+                found = Some((i, TraceEnd::Return));
+                break;
+            }
+            // depth>0 Returns are inline-path unwinds; the
+            // body emit loop handles them (Return0 no-op,
+            // Return1 copy-back). Don't terminate.
+            _ => {}
+        }
+    }
+    found
+}
+
 fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
     let n = record.ops.len();
     let mut offsets = Vec::with_capacity(n);
@@ -3587,6 +3665,10 @@ fn build_trace_jit_module() -> Option<JITModule> {
     // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
     // the closure at runtime.
     builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
+    builder.symbol(
+        "luna_jit_head_closure",
+        super::luna_jit_head_closure as *const u8,
+    );
     // frame materialization helper, called from the cmp@d>0
     // side-exit path. Register the
     // symbol unconditionally so the lowerer can declare the import
@@ -4115,6 +4197,7 @@ pub fn lower_trace_into_named<M: Module>(
     // DownRec tail arm can fire. The scan mirrors TraceEnd::Return /
     // Call's picker shape and falls back to `record.ops.len()` only
     // when no natural terminator is present.
+    let plain_end = plain_trace_end(record, &folded_ops, head_proto);
     let end_idx_opt: Option<(usize, TraceEnd)> = if let Some(dr) = record.downrec_close {
         let mut natural_end = record.ops.len();
         for (i, r) in record.ops.iter().enumerate() {
@@ -4132,6 +4215,10 @@ pub fn lower_trace_into_named<M: Module>(
                 }
                 _ => {}
             }
+        }
+        if plain_end.is_some_and(|(i, _)| i < natural_end) {
+            checkpoint("bail:downrec-body-terminator");
+            return None;
         }
         Some((
             natural_end,
@@ -4152,75 +4239,20 @@ pub fn lower_trace_into_named<M: Module>(
         // happen to sit at the end (e.g., a depth>0 Return in fib's
         // post-recursion add path that the recorder never actually
         // reaches in the cycle catch — but we guard against it anyway).
-        Some((record.ops.len(), TraceEnd::SelfLink(kind)))
-    } else {
-        let mut found: Option<(usize, TraceEnd)> = None;
-        for (i, r) in record.ops.iter().enumerate() {
-            if folded_ops[i] {
-                continue;
-            }
-            let depth = r.inline_depth as usize;
-            if depth > MAX_INLINE_DEPTH as usize
-                || !std::ptr::eq(r.proto.as_ptr(), head_proto.as_ptr())
-            {
-                found = Some((i, TraceEnd::InlineAbort));
-                break;
-            }
-            match r.inst.op() {
-                Op::Call => {
-                    let nxt = record.ops.get(i + 1);
-                    let is_self_recursive = nxt
-                        .map(|n_op| {
-                            n_op.inline_depth as usize == depth + 1
-                                && depth < MAX_INLINE_DEPTH as usize
-                                && std::ptr::eq(n_op.proto.as_ptr(), head_proto.as_ptr())
-                        })
-                        .unwrap_or(false);
-                    if is_self_recursive {
-                        // Continue walking — Op::Call emits nothing in
-                        // the inline path and op_offsets handles the
-                        // window shift for the callee's subsequent ops.
-                        continue;
-                    }
-                    if depth == 0 {
-                        found = Some((i, TraceEnd::Call));
-                    } else {
-                        found = Some((i, TraceEnd::InlineAbort));
-                    }
-                    break;
-                }
-                Op::ForLoop => {
-                    if depth == 0 {
-                        found = Some((i, TraceEnd::ForLoop));
-                    } else {
-                        found = Some((i, TraceEnd::InlineAbort));
-                    }
-                    break;
-                }
-                // generic-for back-edge. Same tail
-                // emit slot as Op::ForLoop (TraceEnd::ForLoop); the
-                // tail emit branches on `record.ops[idx].inst.op()`
-                // to pick the right side-exit predicate (count>0 vs
-                // R[A+4] tag check).
-                Op::TForLoop => {
-                    if depth == 0 {
-                        found = Some((i, TraceEnd::ForLoop));
-                    } else {
-                        found = Some((i, TraceEnd::InlineAbort));
-                    }
-                    break;
-                }
-                Op::Return0 | Op::Return1 if depth == 0 => {
-                    found = Some((i, TraceEnd::Return));
-                    break;
-                }
-                // depth>0 Returns are inline-path unwinds; the
-                // body emit loop handles them (Return0 no-op,
-                // Return1 copy-back). Don't terminate.
-                _ => {}
+        // Every op before the trailing Call must be one the plain scan
+        // walks past: the body emit has no lowering for a loop edge, a
+        // non-inlined call or a return in the middle of a trace.
+        match plain_end {
+            None => {}
+            Some((i, _)) if i + 1 == n && matches!(record.ops[i].inst.op(), Op::Call) => {}
+            Some(_) => {
+                checkpoint("bail:self-link-body-terminator");
+                return None;
             }
         }
-        found
+        Some((n, TraceEnd::SelfLink(kind)))
+    } else {
+        plain_end
     };
     let effective_end = end_idx_opt.map(|(i, _)| i).unwrap_or(n);
     // escape analysis over the recorded body +
@@ -5353,6 +5385,11 @@ pub fn lower_trace_into_named<M: Module>(
     let upval_get_id = module
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
+    let mut head_closure_sig = module.make_signature();
+    head_closure_sig.returns.push(AbiParam::new(types::I64));
+    let head_closure_id = module
+        .declare_function("luna_jit_head_closure", Linkage::Import, &head_closure_sig)
+        .ok()?;
 
     // `fn luna_jit_trace_materialize_frames(n: u64,
     // metas: *const FrameMaterializeInfo) -> i64`. Called by the
@@ -5815,6 +5852,9 @@ pub fn lower_trace_into_named<M: Module>(
     //   the cache is never populated and reuse never happens — correct.
     let mut upval_cache: std::collections::HashMap<u32, Variable> =
         std::collections::HashMap::new();
+    // the entry closure, fetched at the first inlined call; the trace
+    // is linear, so that fetch dominates every later call
+    let mut head_closure_var: Option<Variable> = None;
     // No iconst memoization: the arm64 backend folds
     // `iconst+isub`/`iconst+icmp` into immediate-form instructions
     // at codegen, so it would add little.
@@ -6904,11 +6944,13 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     let lhs = use_var_f64(&mut bcx, regs, ins.a());
                     let rhs = use_var_f64(&mut bcx, regs, ins.b());
+                    // the negations hold for NaN too: `not (a < b)` is
+                    // true when either side is NaN, `a >= b` is not
                     let float_cc = match (op, k_effective) {
                         (Op::Lt, true) => FloatCC::LessThan,
-                        (Op::Lt, false) => FloatCC::GreaterThanOrEqual,
+                        (Op::Lt, false) => FloatCC::UnorderedOrGreaterThanOrEqual,
                         (Op::Le, true) => FloatCC::LessThanOrEqual,
-                        (Op::Le, false) => FloatCC::GreaterThan,
+                        (Op::Le, false) => FloatCC::UnorderedOrGreaterThan,
                         (Op::Eq, true) => FloatCC::Equal,
                         (Op::Eq, false) => FloatCC::NotEqual,
                         _ => unreachable!("whitelist gated above"),
@@ -7836,6 +7878,31 @@ pub fn lower_trace_into_named<M: Module>(
             // innermost frame's pc is overwritten with the side-exit PC
             // at snapshot time.
             Op::Call => {
+                // The inlined body is the head proto's code run with the
+                // entry closure's upvalues, which is right only when the
+                // callee is that very closure. Anything else (another
+                // closure of the proto, a reassigned upvalue, another
+                // function) leaves here and the interpreter makes the call.
+                let callee_reg = ins.a() as usize;
+                if !matches!(current_kinds[off + callee_reg], RegKind::Closure) {
+                    checkpoint("bail:inline-callee-not-closure");
+                    return None;
+                }
+                let head_cl = match head_closure_var {
+                    Some(var) => bcx.use_var(var),
+                    None => {
+                        let func_ref = module.declare_func_in_func(head_closure_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[]);
+                        let v = bcx.inst_results(call)[0];
+                        let var = bcx.declare_var(types::I64);
+                        bcx.def_var(var, v);
+                        head_closure_var = Some(var);
+                        v
+                    }
+                };
+                let callee = bcx.use_var(regs[callee_reg]);
+                let same = bcx.ins().icmp(IntCC::Equal, callee, head_cl);
+                guard!(same, i, rop.pc);
                 // SelfLink close: the LAST recorded op is the
                 // Op::Call whose "next" op (the tripping deepest-depth
                 // entry) was never captured. Skip the call_chain push
@@ -10620,16 +10687,15 @@ mod s4_step3b_inline_emit {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg, "fixture must be non-vararg");
-        let mut rec = TraceRecord::start(
-            p,
-            0,
-            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
-            false,
-        );
+        // R[0] holds the function itself: an inlined call needs its
+        // target to be the entry closure
+        let mut tags = vec![luna_core::runtime::value::raw::INT; p.max_stack as usize];
+        tags[0] = luna_core::runtime::value::raw::CLOSURE;
+        let mut rec = TraceRecord::start(p, 0, tags, false);
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
-            inst: Inst::iabc(Op::Add, 0, 1, 2, false),
+            inst: Inst::iabc(Op::Add, 2, 1, 2, false),
             inline_depth: 0,
             var_count: None,
         });
@@ -10857,17 +10923,16 @@ mod s4_step4b_skeleton {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg);
-        let mut rec = TraceRecord::start(
-            p,
-            0,
-            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
-            false,
-        );
+        // R[0] holds the function itself: an inlined call needs its
+        // target to be the entry closure
+        let mut tags = vec![luna_core::runtime::value::raw::INT; p.max_stack as usize];
+        tags[0] = luna_core::runtime::value::raw::CLOSURE;
+        let mut rec = TraceRecord::start(p, 0, tags, false);
         // depth 0: an Add, then a self-recursive Call.
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
-            inst: Inst::iabc(Op::Add, 0, 1, 2, false),
+            inst: Inst::iabc(Op::Add, 2, 1, 2, false),
             inline_depth: 0,
             var_count: None,
         });

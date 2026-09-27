@@ -68,12 +68,13 @@ fn method_jit_setlist_without_presize() {
     for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
         let mut vm = luna_jit::new_with_jit(v);
         let r = vm
-            .eval("return string.dump(function() return {10, 20, 30} end)")
-            .expect("dump");
-        let Value::Str(s) = r[0] else {
-            panic!("string.dump returned {:?}", r[0]);
+            .eval("return function() return {10, 20, 30} end")
+            .expect("compile");
+        let Value::Closure(g) = r[0] else {
+            panic!("expected a function, got {:?}", r[0]);
         };
-        let mut bytes = s.as_bytes().to_vec();
+        // luna's own format holds luna's instruction words
+        let mut bytes = luna_jit::vm::dump::dump(&g.proto, false, v);
         let old = Inst::iabc(Op::NewTable, 0, 3, 0, false).0.to_le_bytes();
         let new = Inst::iabc(Op::NewTable, 0, 0, 0, false).0.to_le_bytes();
         let at: Vec<usize> = (0..bytes.len() - 3)
