@@ -93,6 +93,10 @@ pub(crate) fn lua_hash(bytes: &[u8], seed: u32) -> u32 {
     h
 }
 
+/// Longest string a `LuaStr` can describe (its length is a `u32`). Code
+/// that builds a string from script-controlled pieces checks against it.
+pub(crate) const MAX_LEN: usize = u32::MAX as usize;
+
 fn layout(len: usize) -> Layout {
     Layout::new::<LuaStr>()
         .extend(Layout::array::<u8>(len).expect("string size overflows layout"))

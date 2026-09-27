@@ -137,7 +137,7 @@ fn read_proto(r: &mut Reader, heap: &mut Heap) -> Result<RawProto, Bad> {
         .collect::<Result<Vec<_>, _>>()?;
     let n = read_count(r, 1)?;
     let protos = (0..n)
-        .map(|_| read_proto(r, heap))
+        .map(|_| r.nested(|r| read_proto(r, heap)))
         .collect::<Result<Vec<_>, _>>()?;
     let n = read_count(r, 2)?;
     let mut upvals = Vec::with_capacity(n);

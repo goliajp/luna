@@ -130,7 +130,7 @@ fn b_not(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// 32 or more clears everything.
 fn shift(r: u64, i: i64) -> u64 {
     if i < 0 {
-        let i = i.wrapping_neg();
+        let i = i.unsigned_abs();
         if i >= 32 { 0 } else { (r & ALLONES) >> i }
     } else if i >= 32 {
         0

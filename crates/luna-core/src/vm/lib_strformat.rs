@@ -49,7 +49,7 @@ pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
             item51(vm, a, arg, fmt, i, &mut out)?
         };
     }
-    let s = Value::Str(vm.heap.intern(&out));
+    let s = vm.built_str(&out)?;
     Ok(vm.nat_return(fs, &[s]))
 }
 
