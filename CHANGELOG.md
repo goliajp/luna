@@ -19,7 +19,12 @@ optimization.
 
 ---
 
-## [Unreleased]
+## [3.2.0] — 2026-09-27
+
+`string.dump` writes bytecode the stock PUC interpreter of each dialect
+loads, the `luna` CLI follows `lua.c`, and a script or a loaded chunk can
+no longer panic the VM. No breaking change: two renamed `Vm` methods keep
+their old names as deprecated aliases.
 
 ### Added
 
