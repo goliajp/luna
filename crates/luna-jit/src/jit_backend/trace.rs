@@ -3587,6 +3587,10 @@ fn build_trace_jit_module() -> Option<JITModule> {
     // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
     // the closure at runtime.
     builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
+    builder.symbol(
+        "luna_jit_head_closure",
+        super::luna_jit_head_closure as *const u8,
+    );
     // frame materialization helper, called from the cmp@d>0
     // side-exit path. Register the
     // symbol unconditionally so the lowerer can declare the import
@@ -5353,6 +5357,11 @@ pub fn lower_trace_into_named<M: Module>(
     let upval_get_id = module
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
+    let mut head_closure_sig = module.make_signature();
+    head_closure_sig.returns.push(AbiParam::new(types::I64));
+    let head_closure_id = module
+        .declare_function("luna_jit_head_closure", Linkage::Import, &head_closure_sig)
+        .ok()?;
 
     // `fn luna_jit_trace_materialize_frames(n: u64,
     // metas: *const FrameMaterializeInfo) -> i64`. Called by the
@@ -5815,6 +5824,9 @@ pub fn lower_trace_into_named<M: Module>(
     //   the cache is never populated and reuse never happens — correct.
     let mut upval_cache: std::collections::HashMap<u32, Variable> =
         std::collections::HashMap::new();
+    // the entry closure, fetched at the first inlined call; the trace
+    // is linear, so that fetch dominates every later call
+    let mut head_closure_var: Option<Variable> = None;
     // No iconst memoization: the arm64 backend folds
     // `iconst+isub`/`iconst+icmp` into immediate-form instructions
     // at codegen, so it would add little.
@@ -7836,6 +7848,31 @@ pub fn lower_trace_into_named<M: Module>(
             // innermost frame's pc is overwritten with the side-exit PC
             // at snapshot time.
             Op::Call => {
+                // The inlined body is the head proto's code run with the
+                // entry closure's upvalues, which is right only when the
+                // callee is that very closure. Anything else (another
+                // closure of the proto, a reassigned upvalue, another
+                // function) leaves here and the interpreter makes the call.
+                let callee_reg = ins.a() as usize;
+                if !matches!(current_kinds[off + callee_reg], RegKind::Closure) {
+                    checkpoint("bail:inline-callee-not-closure");
+                    return None;
+                }
+                let head_cl = match head_closure_var {
+                    Some(var) => bcx.use_var(var),
+                    None => {
+                        let func_ref = module.declare_func_in_func(head_closure_id, bcx.func);
+                        let call = bcx.ins().call(func_ref, &[]);
+                        let v = bcx.inst_results(call)[0];
+                        let var = bcx.declare_var(types::I64);
+                        bcx.def_var(var, v);
+                        head_closure_var = Some(var);
+                        v
+                    }
+                };
+                let callee = bcx.use_var(regs[callee_reg]);
+                let same = bcx.ins().icmp(IntCC::Equal, callee, head_cl);
+                guard!(same, i, rop.pc);
                 // SelfLink close: the LAST recorded op is the
                 // Op::Call whose "next" op (the tripping deepest-depth
                 // entry) was never captured. Skip the call_chain push
@@ -10620,16 +10657,15 @@ mod s4_step3b_inline_emit {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg, "fixture must be non-vararg");
-        let mut rec = TraceRecord::start(
-            p,
-            0,
-            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
-            false,
-        );
+        // R[0] holds the function itself: an inlined call needs its
+        // target to be the entry closure
+        let mut tags = vec![luna_core::runtime::value::raw::INT; p.max_stack as usize];
+        tags[0] = luna_core::runtime::value::raw::CLOSURE;
+        let mut rec = TraceRecord::start(p, 0, tags, false);
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
-            inst: Inst::iabc(Op::Add, 0, 1, 2, false),
+            inst: Inst::iabc(Op::Add, 2, 1, 2, false),
             inline_depth: 0,
             var_count: None,
         });
@@ -10857,17 +10893,16 @@ mod s4_step4b_skeleton {
             .expect("compile");
         let p = cl.proto.protos[0];
         assert!(!p.is_vararg);
-        let mut rec = TraceRecord::start(
-            p,
-            0,
-            vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
-            false,
-        );
+        // R[0] holds the function itself: an inlined call needs its
+        // target to be the entry closure
+        let mut tags = vec![luna_core::runtime::value::raw::INT; p.max_stack as usize];
+        tags[0] = luna_core::runtime::value::raw::CLOSURE;
+        let mut rec = TraceRecord::start(p, 0, tags, false);
         // depth 0: an Add, then a self-recursive Call.
         rec.push(RecordedOp {
             proto: p,
             pc: 0,
-            inst: Inst::iabc(Op::Add, 0, 1, 2, false),
+            inst: Inst::iabc(Op::Add, 2, 1, 2, false),
             inline_depth: 0,
             var_count: None,
         });
