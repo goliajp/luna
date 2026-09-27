@@ -263,8 +263,9 @@ It checks, for every function and nested function:
 - every register an instruction touches (including the runs implied by
   calls, returns, `LoadNil`, `Concat`, `SetList`, varargs and loops)
   against the function's stack size, and the parameter count too;
-- constant, upvalue and nested-function indices; the constant key of
-  field and global accesses is a string;
+- constant, upvalue and nested-function indices are in range (not the
+  constant's type: a field or global access whose constant key is not a
+  string indexes with that value, as `t[k]` does);
 - that every jump, loop edge and skipped instruction lands inside the
   code, and that control cannot run off its end;
 - instruction pairing: `LoadKx`/`SetList` and their extra argument (which
