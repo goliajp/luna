@@ -47,6 +47,9 @@ and the new Cranelift raises the minimum Rust version.
   `luna_aot::embed::TargetSpec` have the `object` types
   `BinaryFormat`, `Architecture` and `Endianness`, so code that builds or
   reads a `TargetSpec` field by field needs `object` 0.40 too.
+- `syn` 2 → 3 in luna-jit-derive. The derive macros accept and generate
+  the same code; a build that also has proc-macros on `syn` 2 (clap,
+  serde, thiserror) now compiles both.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.

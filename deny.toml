@@ -116,6 +116,9 @@ skip = [
     "gimli",
     # bitflags 1.x via pprof → nix 0.26, 2.x everywhere else.
     "bitflags",
+    # syn 3 for luna-jit-derive, 2 via the proc-macros of clap, serde,
+    # thiserror, zerocopy and cranelift's pulley.
+    "syn",
 ]
 skip-tree = []
 
