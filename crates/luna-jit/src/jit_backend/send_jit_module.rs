@@ -1,28 +1,13 @@
-//! `Send` wrapper newtype for `cranelift_jit::JITModule`.
+//! Owner of a per-`Vm` `cranelift_jit::JITModule`.
 //!
-//! ## Why this exists
-//!
-//! A per-Vm JIT cache on a cross-thread-sendable Vm requires
-//! `JITModule` to be `Send`. As of cranelift_jit 0.124.3 the
-//! type is **not** auto-`Send` because its
-//! `memory: Box<dyn JITMemoryProvider>` field is a trait object with
-//! no `+ Send` bound. Every module luna builds uses
-//! [`super::code_memory::CodeMemory`], which is `Send` (it holds a
-//! `SystemMemoryProvider`, `Send` via
-//! `cranelift-jit-0.124.3/src/memory/system.rs` `unsafe impl Send for
-//! Memory`, and plain integers), so wrapping `JITModule` in a newtype +
-//! `unsafe impl Send` is sound for luna's actual usage pattern.
-//!
-//! Precedent: `unsafe impl Send for TraceHandle` in `trace.rs`.
+//! `JITModule` is `Send` on its own; the newtype is the one type that
+//! owns published code and frees it.
 
 use cranelift_jit::JITModule;
 use std::ops::{Deref, DerefMut};
 
-/// `Send`-asserting newtype around [`cranelift_jit::JITModule`].
-///
-/// Wraps the module so it can live in a `Send` container (a per-`Vm`
-/// field) without an inner trait-object Send bound from upstream
-/// Cranelift.
+/// Newtype around [`cranelift_jit::JITModule`] that owns a `Vm`'s
+/// published code.
 ///
 /// **Not a stable embedder API.** The type is `pub` only so the
 /// integration test (`tests/it/send_jit_module_wrapper.rs`) can
@@ -36,26 +21,8 @@ use std::ops::{Deref, DerefMut};
 #[doc(hidden)]
 pub struct SendJitModule(JITModule);
 
-const _: fn() = || {
-    fn assert_send<T: Send>() {}
-    assert_send::<super::code_memory::CodeMemory>();
-};
-
-// SAFETY: on cranelift_jit 0.124.3 the only `!Send` field is
-// `memory: Box<dyn JITMemoryProvider>` (the trait object has no `+ Send`
-// bound). luna installs `CodeMemory` in every `JITModule` it builds
-// (`build_jit_module_with_helpers`, `build_trace_jit_module`), and
-// `CodeMemory` is `Send`: the assertion above fails to compile otherwise.
-//
-// Caveat: future cranelift bumps must re-check this; the
-// static assertion in `tests/it/send_jit_module_wrapper.rs` is the
-// canary.
-unsafe impl Send for SendJitModule {}
-
 impl SendJitModule {
-    /// Wraps a freshly-built `JITModule`. Caller MUST have built it with
-    /// a `Send` memory provider (luna uses `CodeMemory`); see SAFETY
-    /// note above.
+    /// Wraps a freshly-built `JITModule`.
     #[inline]
     #[allow(dead_code)]
     pub fn new(module: JITModule) -> Self {
@@ -76,9 +43,7 @@ impl SendJitModule {
         &mut self.0
     }
 
-    /// Unwraps the inner module. Loses the `Send` marker once
-    /// extracted; caller becomes responsible for re-wrapping if it
-    /// must cross threads again.
+    /// Unwraps the inner module.
     #[allow(dead_code)] // leave for ergonomics
     #[inline]
     pub fn into_inner(self) -> JITModule {
