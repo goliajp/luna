@@ -12,6 +12,7 @@
 //! the cumulative whitelist; out-of-whitelist returns `None` and the
 //! interpreter handles the chunk unchanged.
 
+use cranelift::prelude::MemFlagsData as MemFlags;
 use cranelift::prelude::*;
 use cranelift_codegen::ir::{BlockArg, UserFuncName};
 use cranelift_frontend::FunctionBuilderContext;
@@ -899,7 +900,7 @@ fn emit_checked_get<M: Module>(
     let want_v = bcx.ins().iconst(types::I64, want);
     let call = bcx.ins().call(f, &[t, key, want_v, out]);
     let ok = bcx.inst_results(call)[0];
-    let slow_bits = bcx.ins().stack_load(types::I64, slot, 0);
+    let slow_bits = bcx.ins().stack_load(types::I64, types::I64, slot, 0);
     bcx.ins()
         .brif(ok, merge_blk, &[BlockArg::Value(slow_bits)], deopt_blk, &[]);
 
@@ -4142,7 +4143,7 @@ pub fn lower_int_chunk_into<M: Module>(
         bcx.ins().return_(&[zero]);
     }
     bcx.seal_all_blocks();
-    bcx.finalize();
+    bcx.finalize(module.target_config());
 
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
@@ -4282,7 +4283,7 @@ fn define_checked_entry<M: Module>(
     bcx.ins().return_(&[zero]);
 
     bcx.seal_all_blocks();
-    bcx.finalize();
+    bcx.finalize(module.target_config());
     module.define_function(entry_id, ctx).ok()?;
     module.clear_context(ctx);
     Some(entry_id)
@@ -4653,7 +4654,7 @@ mod smoke {
         let sum = bcx.ins().iadd(r1, r2);
         bcx.ins().return_(&[sum]);
 
-        bcx.finalize();
+        bcx.finalize(module.target_config());
         module.define_function(fib_id, &mut ctx).expect("define");
         module.clear_context(&mut ctx);
         module.finalize_definitions().expect("finalize");
