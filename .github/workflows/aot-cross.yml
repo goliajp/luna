@@ -56,8 +56,6 @@ jobs:
           - aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -100,8 +98,6 @@ jobs:
     # the previous one, so this job must be able to fail.
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
@@ -194,23 +190,10 @@ jobs:
     runs-on: ubuntu-latest
     # No continue-on-error: a gate only counts if it can fail.
     container:
-      # luna declares no MSRV; the promise is "builds on current
-      # stable" — so track stable rather than pin a version that may
-      # not build the tree.
+      # current stable, which is above the declared rust-version
       image: rust:alpine
     steps:
-      # The alpine image ships without git, so actions/checkout would
-      # fall back to the REST API download path, which does not support
-      # `submodules`:
-      #   Input 'submodules' not supported when falling back to download
-      #   using the GitHub REST API
-      # Install git first so checkout takes the real git path and the
-      # vendored cranelift submodule lands.
-      - name: install git (the alpine image ships without it)
-        run: apk add --no-cache git
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - name: install build deps
         run: apk add --no-cache musl-dev gcc make
       - name: cargo build -p luna-aot

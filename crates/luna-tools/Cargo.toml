@@ -3,6 +3,7 @@ name = "luna-tools"
 description = "Developer CLIs for the luna Lua runtime: an AOT binary section walker (`luna-bin-inspect`), heap snapshots (`luna-heap-dump`), a JIT state dump (`luna-trace-inspect`) and a sampling profiler (`luna-profile`)."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -53,7 +54,7 @@ workspace = true
 # on luna-jit (not luna-core directly) lets one Vm constructor
 # (`luna_jit::new_with_jit`) cover both the "with-JIT" and
 # "interp-only" embedding modes the inspection tools need.
-luna-jit = { path = "../luna-jit", version = "= 3.2.2" }
+luna-jit = { path = "../luna-jit", version = "= 4.0.0" }
 
 # Common CLI plumbing across all 5 binaries.
 clap = { version = "4", features = ["derive"] }

@@ -30,8 +30,6 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo test --workspace --release
         run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
