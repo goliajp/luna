@@ -1095,6 +1095,8 @@ impl TargetSpec {
     /// builder()` (rather than the per-triple path) so we inherit the
     /// CPU-feature autodetection (`SSE4.1`, `AVX2`, …). Host warmup +
     /// host deploy ⇒ identical mcode.
+    // cranelift types in the signature: internal to luna crates, not covered by semver
+    #[doc(hidden)]
     pub fn cranelift_isa_builder(&self) -> Result<cranelift_codegen::isa::Builder, AotError> {
         use std::str::FromStr;
         if self.is_host {
