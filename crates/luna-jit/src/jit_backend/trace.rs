@@ -3597,6 +3597,7 @@ fn build_trace_jit_module() -> Option<JITModule> {
         .finish(settings::Flags::new(flag_builder))
         .ok()?;
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    builder.memory_provider(Box::new(super::code_memory::CodeMemory::new()));
     // The lowerer emits `Op::NewTable / SetI / GetI / Len` as calls to
     // the method JIT's `luna_jit_*` helpers — register the symbols
     // so cranelift's `Linkage::Import` resolver finds them at
@@ -3785,9 +3786,8 @@ pub fn try_compile_trace_with_options(
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     cs.trace_handles.push(TraceHandle {
         // Wrap in `SendJitModule`
-        // sleeve. SAFETY: `build_trace_jit_module` uses the
-        // default `SystemMemoryProvider` path (no
-        // `JITBuilder::memory_provider` call).
+        // sleeve. SAFETY: `build_trace_jit_module` installs
+        // `CodeMemory`, which is `Send`.
         _module: module.publish(),
         _entry_raw: ptr,
     });
