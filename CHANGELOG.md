@@ -19,6 +19,44 @@ optimization.
 
 ---
 
+## [Unreleased]
+
+This is a major version because of the Cranelift upgrade: luna-jit and
+luna-aot expose a few functions whose signatures use Cranelift types, so
+moving Cranelift to a new major version is a breaking change for them,
+and the new Cranelift raises the minimum Rust version.
+
+### Changed
+
+- Cranelift 0.124 → 0.136 (the `cranelift*` dependencies of luna-jit and
+  luna-aot). The JIT and AOT code generator now also includes upstream
+  fixes and optimizations from the last year, among them the aarch64
+  addressing-mode fix for CVE-2026-34971.
+- Minimum supported Rust version is now declared: `rust-version = "1.96"`
+  on every crate, the version Cranelift 0.136 requires.
+- The public functions whose signatures carry Cranelift types are now
+  `#[doc(hidden)]`. They are internal between luna crates and not
+  covered by semver:
+  - `luna_jit::jit_backend::lower_int_chunk_into`
+  - `luna_jit::jit_backend::trace::lower_trace_into`
+  - `luna_jit::jit_backend::trace::lower_trace_into_named`
+  - `luna_aot::embed::TargetSpec::cranelift_isa_builder`
+- AOT trace data sections are named by the target's object format
+  rather than the host's, so a trace object built for Windows on another
+  host gets the short COFF section names the deploy side looks for.
+- The JIT uses Cranelift's own memory provider again: Cranelift 0.136
+  maps fresh pages for code and invalidates the instruction cache
+  itself, which is what the 3.2.2 fix added.
+
+### Removed
+
+- The patched Cranelift fork luna's own builds used (a git submodule
+  redirected through `[patch.crates-io]`). Published crates never used
+  it; luna's tests now build against the same crates.io Cranelift that
+  users get.
+
+---
+
 ## [3.2.2] — 2026-09-29
 
 ### Fixed
