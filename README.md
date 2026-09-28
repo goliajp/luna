@@ -16,7 +16,9 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
-**v3.2.1** (2026-09-28) fixes a compiler bug that dropped an
+**v3.2.2** (2026-09-29) fixes JIT code on aarch64 that could run a
+freed function's instructions after a `Vm` was dropped. **v3.2.1**
+(2026-09-28) fixes a compiler bug that dropped an
 assignment, three trace JIT bugs, and frees JIT code when a `Vm` drops.
 **v3.2.0** shipped 2026-09-27: `string.dump` writes bytecode that each
 dialect's stock PUC interpreter loads, the `luna` CLI runs `LUA_INIT`,

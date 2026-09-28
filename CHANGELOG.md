@@ -19,7 +19,7 @@ optimization.
 
 ---
 
-## [Unreleased]
+## [3.2.2] — 2026-09-29
 
 ### Fixed
 
@@ -31,6 +31,8 @@ optimization.
   seen to return `Int(4636666922610458624)`, the bits of a 5.2 build's
   `99.0`. The JIT now invalidates the instruction cache for every range
   of code it writes.
+
+---
 
 ## [3.2.1] — 2026-09-28
 
