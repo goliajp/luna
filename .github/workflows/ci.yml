@@ -243,7 +243,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   # feature="send" matrix coverage. SendVm is the
   # cross-thread embedding path; its tests live in
-  # `crates/luna-core/tests/send_vm.rs` and are gated behind
+  # `crates/luna-core/tests/it/send_vm.rs` and are gated behind
   # `#[cfg(feature = "send")]`. Without an explicit CI job, the
   # default `cargo test` invocation never exercises the feature,
   # so SendVm bit-rot would only surface at a release-time smoke.
@@ -265,8 +265,8 @@ jobs:
         run: cargo build -p luna-core --features send
       - name: cargo clippy -p luna-core --features send --tests -- -D warnings
         run: cargo clippy -p luna-core --features send --tests -- -D warnings
-      - name: cargo test -p luna-core --features send --test send_vm
-        run: cargo test -p luna-core --features send --test send_vm
+      - name: 'cargo test -p luna-core --features send --test it -- send_vm::'
+        run: 'cargo test -p luna-core --features send --test it -- send_vm::'
 
   # ─────────────────────────────────────────────────────────────────
   # unsafe-usage drift detection.

@@ -2097,7 +2097,7 @@ pub fn lower_int_chunk_into<M: Module>(
         // uninitialized 5.1 local would silently consume the cranelift
         // Variable's default 0 instead of raising "arithmetic on nil".
         // See docs/known-bugs/fixed/jit-uninitialized-local-arith.md
-        // (filed 2026-06-22 by tests/e2e_programs.rs::err_arith_on_nil).
+        // (filed 2026-06-22 by luna-core/tests/it/e2e_programs.rs::err_arith_on_nil).
         is_nil_writer = vec![false; max_stack];
         for r in num_params..max_stack {
             is_nil_writer[r] = true;
@@ -2599,7 +2599,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // — it includes 5.3 which has the integer subtype.
                     // Use `float_only` (= version ≤ 5.2) to gate the
                     // Float default. See the 5.3 test
-                    // `tests/jit_dialect_audit.rs::audit_gettable_computed_key`.
+                    // `tests/it/jit_dialect_audit.rs::audit_gettable_computed_key`.
                     let default_kind = if float_only {
                         RegKind::Float
                     } else {
@@ -4526,7 +4526,7 @@ impl JitHandle {
     /// `#[doc(hidden)]` accessor returning
     /// the parked `_module` borrowed at the `SendJitModule` newtype.
     /// Lets the regression test
-    /// (`tests/jit_vm_scoped_rebind.rs`) statically assert the
+    /// (`tests/it/jit_vm_scoped_rebind.rs`) statically assert the
     /// field type is the `Send` sleeve. The borrow checker enforces the
     /// type match at this fn's signature — if `_module` ever degrades
     /// to bare `JITModule` again, this signature stops compiling.

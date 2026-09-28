@@ -2690,7 +2690,7 @@ impl TraceHandle {
     /// `#[doc(hidden)]` accessor returning
     /// the parked `_module` borrowed at the `SendJitModule` newtype.
     /// Mirror of `JitHandle::__send_module`; lets
-    /// `tests/jit_vm_scoped_rebind.rs` statically assert the
+    /// `tests/it/jit_vm_scoped_rebind.rs` statically assert the
     /// field type.
     #[doc(hidden)]
     #[inline]

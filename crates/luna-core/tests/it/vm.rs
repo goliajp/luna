@@ -3648,7 +3648,7 @@ fn syntax_error_source_uses_chunkid() {
     // `load` with a bad source (here: parse-time error) returns `(nil, msg)`;
     // the chunk's `return` surfaces both values.
     let msg = r.into_iter().nth(1).expect("(nil, msg)");
-    if let crate::Value::Str(s) = msg {
+    if let Value::Str(s) = msg {
         let bytes = s.as_bytes();
         assert!(
             bytes.starts_with(b"..."),

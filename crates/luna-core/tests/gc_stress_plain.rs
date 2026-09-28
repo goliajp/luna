@@ -1,3 +1,5 @@
+// own binary: it changes the process cwd, and the asan and windows stress workflows run it by name
+
 //! Plain (native-heap) gc.lua stress.
 //!
 //! Same loop as `gc_stress_poison.rs` but WITHOUT the allocator

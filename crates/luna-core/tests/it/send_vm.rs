@@ -1,7 +1,7 @@
 //! `SendVm` smoke tests.
 //!
 //! Gated behind `feature = "send"`. Run via
-//! `cargo test -p luna-core --features send --test send_vm`.
+//! `cargo test -p luna-core --features send --test it -- send_vm::`.
 //!
 //! Coverage:
 //! - Compile-time `Send` assertion on the type itself.

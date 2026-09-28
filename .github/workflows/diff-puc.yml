@@ -125,7 +125,7 @@ jobs:
         # need system LLVM 18 + Polly, absent on hosted runners.
         run: cargo build --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm
 
-      - name: cargo test --release -p luna-core --test diff_puc
+      - name: 'cargo test --release -p luna-core --test it -- diff_puc::'
         # The diff_puc integration test reads each fixture from
         # tests/diff_puc/*.lua, runs it on $PUC_LUA, runs it
         # via luna's Vm::eval, normalizes both outputs, and
@@ -139,11 +139,11 @@ jobs:
         # this job would pass a check that never ran.
         env:
           LUNA_DIFF_PUC_REQUIRE_ALL: "1"
-        run: cargo test --release -p luna-core --test diff_puc -- --nocapture
+        run: 'cargo test --release -p luna-core --test it -- --nocapture diff_puc::'
 
-      - name: cargo test --release -p luna-jit --test puc_bytecode_jit
+      - name: 'cargo test --release -p luna-jit --test it -- puc_bytecode_jit::'
         # The same bytecode corpus on a JIT-equipped Vm, compared with
         # luna's interpreter on the same chunks.
         env:
           LUNA_DIFF_PUC_REQUIRE_ALL: "1"
-        run: cargo test --release -p luna-jit --test puc_bytecode_jit -- --nocapture
+        run: 'cargo test --release -p luna-jit --test it -- --nocapture puc_bytecode_jit::'

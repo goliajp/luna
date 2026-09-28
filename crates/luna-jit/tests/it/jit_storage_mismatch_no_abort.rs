@@ -15,7 +15,7 @@
 //! panic crossed an `extern "C"` boundary and the runtime aborted
 //! with SIGABRT (`fatal runtime error: failed to initiate panic`).
 //!
-//! The `capi_zero_result_callback` test in `tests/capi.rs` was the
+//! The `capi_zero_result_callback` test in `tests/it/capi.rs` was the
 //! original reproduction — `luaL_newstate` called
 //! `install_jit_backend(Cranelift, Cranelift)` without the storage
 //! install, so its first JIT compile inside `lua_pcall` aborted the

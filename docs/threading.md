@@ -309,7 +309,7 @@ type `RustDebugHook = fn(&mut Vm, RustHookEvent)` is a bare function
 pointer, so it is unconditionally `Send + Sync` and composes with
 SendVm forks (see the `SendVm` section below) without extra trait
 bounds. A compile-time `assert_send::<RustDebugHook>()` test pins
-this in `crates/luna-core/tests/async_hook_composition.rs`.
+this in `crates/luna-core/tests/it/async_hook_composition.rs`.
 
 ## `feature = "send"` — `SendVm` (v1.3+)
 

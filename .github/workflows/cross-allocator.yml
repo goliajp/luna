@@ -92,11 +92,11 @@ jobs:
         # surfaced). The official_run integration test exercises the full PUC
         # suite per dialect, which is the broadest end-to-end
         # signal we have.
+        # two invocations: libtest name filters would also apply to official_run
         run: |
-          cargo test --release -p luna-core \
-            --test official_run \
-            --test toomanyidx_memory_cap \
-            --test sort_gc_during_compare \
-            --test gc_finalizer_edges \
-            --test host_roots_slot_recycling \
-            -- --nocapture
+          cargo test --release -p luna-core --test official_run -- --nocapture
+          cargo test --release -p luna-core --test it -- --nocapture \
+            toomanyidx_memory_cap:: \
+            sort_gc_during_compare:: \
+            gc_finalizer_edges:: \
+            host_roots_slot_recycling::
