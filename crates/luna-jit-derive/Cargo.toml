@@ -21,10 +21,10 @@ proc-macro = true
 workspace = true
 
 [dependencies]
-# Standard derive trio. syn = "2" pinned for stable proc-macro2 ABI;
+# Standard derive trio. syn = "3" pinned for stable proc-macro2 ABI;
 # `full` enables item-level parsing (we need `impl` blocks, not just
 # fields). `extra-traits` deliberately omitted — we don't need Debug
 # printing for AST nodes, and dropping it trims ~50KB compile artifact.
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"

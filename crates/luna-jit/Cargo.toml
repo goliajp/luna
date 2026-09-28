@@ -45,7 +45,7 @@ luna-jit-derive = { path = "../luna-jit-derive", version = "= 4.0.0" }
 # bypass the `path` fallback.
 luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.0" }
 
-# LLVM 18 + inkwell 0.9 alternative JIT backend
+# LLVM 18 + inkwell 0.10 alternative JIT backend
 # crate. Optional behind the `llvm-jit` cargo feature (default OFF)
 # so the standard install path keeps Cranelift as the only JIT
 # backend and the LLVM toolchain (~1 GB system deps) is not pulled
@@ -77,7 +77,7 @@ target-lexicon = "0.13"
 # REPL reading plain lines from stdin stays the baseline so the shipped binary stays small and the supply-chain
 # surface unchanged. luna-core remains 0-third-party-dep regardless;
 # this dep lives in luna-jit only.
-rustyline = { version = "14", optional = true }
+rustyline = { version = "18", optional = true }
 
 [features]
 # opt-in REPL polish. See the `rustyline` dep comment above.
@@ -111,7 +111,7 @@ send = ["luna-core/send"]
 # bench harness. macOS local variance gate: 2.5% (M-series with no
 # public CPU pin API); Linux CI variance gate: ~1-2% via `taskset -c 1`.
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "lua_microbench"

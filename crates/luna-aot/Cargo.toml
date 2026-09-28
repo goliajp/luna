@@ -32,7 +32,7 @@ luna-core = { path = "../luna-core", version = "= 4.0.0" }
 # Object-file emission for the embedded bytecode section.
 # `default-features = false` + the selected formats keeps the crate
 # closure small; we don't need read support here.
-object = { version = "0.36", default-features = false, features = ["write_std", "elf", "macho", "pe"] }
+object = { version = "0.40", default-features = false, features = ["write_std", "elf", "macho", "pe"] }
 
 # CLI plumbing. `clap` derive over hand-rolled parsing — luna-aot's
 # CLI surface is larger than `luna` runner's so the maintenance
@@ -72,4 +72,4 @@ tempfile = "3"
 #   PE section table to verify `.lt_meta` / `.lt_skix` landed correctly
 # Production code only writes; keeping `read` out of the runtime deps
 # trims luna-aot's downstream surface.
-object = { version = "0.36", features = ["read", "pe"] }
+object = { version = "0.40", features = ["read", "pe"] }

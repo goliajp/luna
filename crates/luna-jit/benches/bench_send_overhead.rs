@@ -69,9 +69,10 @@ use std::cell::UnsafeCell;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use luna_jit::Vm;
 use luna_jit::version::LuaVersion;
+use std::hint::black_box;
 
 // ── NoOpSendWrapper ────────────────────────────────────────────────────
 //
