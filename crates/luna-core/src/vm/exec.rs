@@ -7650,7 +7650,14 @@ impl Vm {
                             if v < u32::MAX {
                                 c.set(v + 1);
                             }
+                            // After a side trace ran, `exit_hit_idx` is an
+                            // exit of that child, but a side trace is
+                            // recorded and wired as one of `head_pc_val`'s
+                            // exits: it would replace the side trace on the
+                            // parent's exit of that number, which resumes
+                            // elsewhere.
                             if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
+                                && !child_ran
                                 && self.jit.active_trace.is_none()
                                 && self.jit.trace_enabled
                             {

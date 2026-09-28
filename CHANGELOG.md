@@ -38,6 +38,11 @@ JIT on and off and compares the output.
   closed at the outer loop's back edge, went back to its own start instead
   of the outer loop's body, skipping the code before the inner loop (a
   `while` inside a `for` stopped running and the `for` ended early).
+- A side trace recorded where a side trace left was wired to the parent
+  trace's exit with the same number, which resumes elsewhere, replacing
+  the side trace there. With a `while` loop inside a `for` in a function
+  called often, leaving the `while` then returned from the function, so
+  the rest of the `for` loop did not run.
 - Compiling a trace with a `math` call that is checked once before the
   loop hit a debug assertion of the code generator, so debug builds
   panicked on such loops.
