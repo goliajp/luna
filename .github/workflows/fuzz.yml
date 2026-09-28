@@ -69,10 +69,6 @@ jobs:
         run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
       - name: run fuzz target 5 min
         working-directory: crates/luna-fuzz
-        # the JIT's compiled code is not freed when a Vm is dropped, which
-        # LeakSanitizer reports on every input of the JIT target
-        env:
-          ASAN_OPTIONS: ${{ matrix.target == 'fuzz_jit_diff' && 'detect_leaks=0' || '' }}
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300
       - name: upload artifacts on crash
         if: failure()
@@ -141,10 +137,6 @@ jobs:
         run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
       - name: run fuzz target 60 min
         working-directory: crates/luna-fuzz
-        # the JIT's compiled code is not freed when a Vm is dropped, which
-        # LeakSanitizer reports on every input of the JIT target
-        env:
-          ASAN_OPTIONS: ${{ matrix.target == 'fuzz_jit_diff' && 'detect_leaks=0' || '' }}
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=3600
       - name: upload artifacts on crash
         if: failure()

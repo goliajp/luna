@@ -2677,6 +2677,16 @@ pub struct TraceHandle {
 unsafe impl Send for TraceHandle {}
 
 impl TraceHandle {
+    /// Frees the compiled trace.
+    ///
+    /// # Safety
+    ///
+    /// The trace is not running and will not be entered again.
+    pub(crate) unsafe fn free(self) {
+        // SAFETY: forwarded from the caller
+        unsafe { self._module.free() }
+    }
+
     /// `#[doc(hidden)]` accessor returning
     /// the parked `_module` borrowed at the `SendJitModule` newtype.
     /// Mirror of `JitHandle::__send_module`; lets
@@ -3756,8 +3766,8 @@ pub fn try_compile_trace_with_options(
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
-    let mut module = build_trace_jit_module()?;
-    let (fn_id, mut compiled) = lower_trace_into(&mut module, record, opts)?;
+    let mut module = super::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
+    let (fn_id, mut compiled) = lower_trace_into(&mut *module, record, opts)?;
     module.finalize_definitions().ok()?;
     let ptr = module.get_finalized_function(fn_id);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
@@ -3778,7 +3788,7 @@ pub fn try_compile_trace_with_options(
         // sleeve. SAFETY: `build_trace_jit_module` uses the
         // default `SystemMemoryProvider` path (no
         // `JITBuilder::memory_provider` call).
-        _module: super::SendJitModule::new(module),
+        _module: module.publish(),
         _entry_raw: ptr,
     });
     Some(compiled)
@@ -10420,7 +10430,7 @@ mod s2b_call_truncation {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let prog = [
-            Inst::iabc(Op::Add, 0, 0, 3, false),     // R[0] += R[3]
+            Inst::iabc(Op::Add, 0, 0, 3, false), // R[0] += R[3]
             // ForLoop on R[1..R[1+3]], jumping back to the Add (the head)
             Inst::iabx(Op::ForLoop, 1, 2),
         ];

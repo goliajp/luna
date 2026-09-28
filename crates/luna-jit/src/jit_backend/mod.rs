@@ -419,12 +419,9 @@ pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
 pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
     let storage = vm.jit.storage.as_mut().as_any_mut();
     if let Some(cs) = storage.downcast_mut::<storage::CraneliftJitStorage>() {
+        // the handles stay: functions already compiled keep calling
+        // their code until the Vm drops
         cs.cache.clear();
-        // also drop the cached
-        // handles. Dropping each `JitHandle`'s `JITModule` releases
-        // its mmap; tests that call `cache_clear` then re-eval can
-        // observe the fresh compile.
-        cs.cache_handles.clear();
     }
 }
 
@@ -767,8 +764,8 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
 /// finalizes the compiled fn into RWX memory, and wraps the entry ptr
 /// in a [`JitHandle`] that owns the module for the entry's lifetime.
 pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) -> Option<JitHandle> {
-    let mut module = build_jit_module_with_helpers()?;
-    let (fn_id, meta) = lower_int_chunk_into(&mut module, proto, pre53, float_only)?;
+    let mut module = send_jit_module::UnpublishedModule::new(build_jit_module_with_helpers()?);
+    let (fn_id, meta) = lower_int_chunk_into(&mut *module, proto, pre53, float_only)?;
     module.finalize_definitions().ok()?;
 
     // `LUNA_JIT_TRACE=1` prints one line per
@@ -805,7 +802,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
         // sleeve. SAFETY criterion (default `SystemMemoryProvider`) is
         // satisfied by `build_jit_module_with_helpers` which never
         // calls `JITBuilder::memory_provider`; see send_jit_module.rs.
-        _module: SendJitModule::new(module),
+        _module: module.publish(),
         entry_raw: ptr,
         num_args: meta.num_args,
         returns_one: meta.returns_one,
@@ -4471,6 +4468,16 @@ pub struct JitHandle {
 unsafe impl Send for JitHandle {}
 
 impl JitHandle {
+    /// Frees the compiled code.
+    ///
+    /// # Safety
+    ///
+    /// The entry point is not running and will not be called again.
+    pub(crate) unsafe fn free(self) {
+        // SAFETY: forwarded from the caller
+        unsafe { self._module.free() }
+    }
+
     /// Invoke the entry with zero args. Panics in debug if the
     /// compiled Proto had `num_args > 0`.
     #[inline]
