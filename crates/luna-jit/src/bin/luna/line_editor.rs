@@ -40,7 +40,7 @@ impl LineEditor {
     /// `readline(prompt)`.
     pub(crate) fn read(&mut self, vm: &mut Vm, prompt: &[u8]) -> Line {
         refresh_globals_snapshot(vm, &self.globals);
-        match self.rl.readline(&String::from_utf8_lossy(prompt)) {
+        match self.rl.readline(&*String::from_utf8_lossy(prompt)) {
             Ok(l) => Line::Text(l.into_bytes()),
             // Ctrl-C drops the statement being typed
             Err(ReadlineError::Interrupted) => Line::Cancel,
@@ -130,7 +130,12 @@ impl rustyline::highlight::Highlighter for LuaHelper {
     ) -> std::borrow::Cow<'b, str> {
         std::borrow::Cow::Owned(format!("\x1b[2m{prompt}\x1b[0m"))
     }
-    fn highlight_char(&self, _line: &str, _pos: usize, _forced: bool) -> bool {
+    fn highlight_char(
+        &self,
+        _line: &str,
+        _pos: usize,
+        _kind: rustyline::highlight::CmdKind,
+    ) -> bool {
         // Re-render every keystroke — tokenizer is cheap and partial
         // highlights look broken mid-string / mid-comment.
         true

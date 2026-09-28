@@ -41,6 +41,22 @@ and the new Cranelift raises the minimum Rust version.
   - `luna_jit::jit_backend::trace::lower_trace_into`
   - `luna_jit::jit_backend::trace::lower_trace_into_named`
   - `luna_aot::embed::TargetSpec::cranelift_isa_builder`
+- `object` 0.36 → 0.40 in luna-aot and luna-tools, the version
+  cranelift-object already uses, so a build now carries one copy of it.
+  The public fields `format`, `arch` and `endian` of
+  `luna_aot::embed::TargetSpec` have the `object` types
+  `BinaryFormat`, `Architecture` and `Endianness`, so code that builds or
+  reads a `TargetSpec` field by field needs `object` 0.40 too.
+- `syn` 2 → 3 in luna-jit-derive. The derive macros accept and generate
+  the same code; a build that also has proc-macros on `syn` 2 (clap,
+  serde, thiserror) now compiles both.
+- `rustyline` 14 → 18 for the `luna` binary's `repl-line-editor`
+  feature. The line editor now shows no colours when `NO_COLOR` is set.
+- `inferno` 0.11 → 0.12 behind luna-tools' opt-in `flame-graph`
+  feature. It brings quick-xml 0.41, which fixes RUSTSEC-2026-0194 and
+  RUSTSEC-2026-0195.
+- `inkwell` 0.9 → 0.10 in luna-jit-llvm (luna-jit's `llvm-jit`
+  feature), still on LLVM 18.1 through the `llvm18-1` feature.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.
