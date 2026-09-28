@@ -78,7 +78,7 @@ pub fn enter_jit(
 
 /// Test-only inspector of the active `(JIT_VM, JIT_CL)` TLS
 /// pointers. Used by the scoped-rebind regression test
-/// (`tests/jit_vm_scoped_rebind.rs`) to assert RAII install +
+/// (`luna-jit/tests/it/jit_vm_scoped_rebind.rs`) to assert RAII install +
 /// restore semantics across nested [`enter_jit`] calls. Not part of
 /// the embedder API.
 #[doc(hidden)]

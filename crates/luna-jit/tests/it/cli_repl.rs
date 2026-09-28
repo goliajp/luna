@@ -7,9 +7,7 @@
 //! Linux x86_64 — run as `lua <args>` from a directory holding the case's
 //! files; `cli_common` says how luna's output is compared.
 
-mod cli_common;
-
-use cli_common::{Case, Expect};
+use crate::cli_common::{Case, Expect};
 
 /// A session: expressions (5.3 on), `=expr` (through 5.4), continuation
 /// lines, errors with their traceback, 5.5's warning about `local`, and an

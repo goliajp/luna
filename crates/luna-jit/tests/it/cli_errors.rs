@@ -23,9 +23,7 @@
 //! recordings). The 5.2 expectations use the short spelling, and luna's 5.2
 //! output is folded the same way before comparing.
 
-mod cli_common;
-
-use cli_common::{Case, DIALECTS, Expect, luna, workdir};
+use crate::cli_common::{Case, DIALECTS, Expect, luna, workdir};
 use std::process::{Command, Stdio};
 
 /// argv[0] is the program name as given, not the file's name: lua.c's

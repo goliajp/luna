@@ -1,3 +1,5 @@
+// own binary: it installs the global allocator for the whole process
+
 //! Poison-on-free allocator stress for the Windows gc.lua weak-table
 //! STATUS_ACCESS_VIOLATION (a use-after-free).
 //!

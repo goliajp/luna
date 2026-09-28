@@ -14,7 +14,7 @@
 //! (function pointers are unconditionally `Send + Sync`).
 //!
 //! No tokio dep — same hand-rolled `block_on` + `YieldOnce` pattern as
-//! `tests/async_native.rs`. luna-core's zero-third-party-dep contract
+//! `tests/it/async_native.rs`. luna-core's zero-third-party-dep contract
 //! forbids adding tokio; the tokio integration smoke example, if
 //! wanted, lives in luna-jit (which already has dev-deps like
 //! criterion).

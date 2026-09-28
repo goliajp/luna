@@ -26,7 +26,7 @@
 //! `#[repr(transparent)]` over their inner `Cell` / `RefCell`. The
 //! generated code is identical to direct Cell/RefCell access (the
 //! wrapper methods inline trivially). Size assertions in
-//! `tests/send_compat_zero_cost.rs` pin this.
+//! `tests/it/send_compat_zero_cost.rs` pin this.
 
 // ============================================================
 // TArc<T> — `Rc<T>` (default) or `Arc<T>` (send).

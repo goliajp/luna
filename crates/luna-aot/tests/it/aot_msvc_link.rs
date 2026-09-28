@@ -214,7 +214,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
 //      $ brew install llvm
 //      $ rustup target add x86_64-pc-windows-msvc
 //      $ export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-//      $ cargo test -p luna-aot --test aot_msvc_link
+//      $ cargo test -p luna-aot --test it -- aot_msvc_link::
 //    Expected: test runs (no skip), passes.
 //    Note: lld-link on Unix needs `/LIBPATH:` flags pointing at the
 //    Windows SDK + UCRT lib directories. Without those it'll fail
@@ -224,7 +224,7 @@ fn cross_compile_windows_msvc_emits_lt_meta_and_lt_skix_sections() {
 //
 // 2. On a Windows host (Developer Command Prompt for VS 2022):
 //      > rustup target add x86_64-pc-windows-msvc
-//      > cargo test -p luna-aot --test aot_msvc_link
+//      > cargo test -p luna-aot --test it -- aot_msvc_link::
 //    Expected: test runs, passes, exe present in tempdir during
 //    test lifetime.
 //
