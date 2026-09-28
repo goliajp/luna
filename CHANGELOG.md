@@ -19,6 +19,28 @@ optimization.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- An assignment `b = a` right after a statement that assigned `a` (for
+  example `a = a + 1`) dropped that assignment: the compiler wrote the
+  result straight into `b`, so `a` kept its old value and a loop counting
+  with it never ended. Every dialect was affected, with or without the JIT.
+- The trace JIT left a table built by a trace unallocated when the trace
+  ended at a call that runs before the table is used, as in
+  `s[#s + 1] = {f()}`; the interpreter then filled a register that held
+  no table, and the process could crash.
+- A trace recorded from a loop nested in a numeric or generic `for`, and
+  closed at the outer loop's back edge, went back to its own start instead
+  of the outer loop's body, skipping the code before the inner loop (a
+  `while` inside a `for` stopped running and the `for` ended early).
+- Compiling a trace with a `math` call that is checked once before the
+  loop hit a debug assertion of the code generator, so debug builds
+  panicked on such loops.
+
+---
+
 ## [3.2.0] — 2026-09-27
 
 `string.dump` writes bytecode the stock PUC interpreter of each dialect
