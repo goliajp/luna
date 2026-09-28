@@ -52,6 +52,9 @@ and the new Cranelift raises the minimum Rust version.
   serde, thiserror) now compiles both.
 - `rustyline` 14 → 18 for the `luna` binary's `repl-line-editor`
   feature. The line editor now shows no colours when `NO_COLOR` is set.
+- `inferno` 0.11 → 0.12 behind luna-tools' opt-in `flame-graph`
+  feature. It brings quick-xml 0.41, which fixes RUSTSEC-2026-0194 and
+  RUSTSEC-2026-0195.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.

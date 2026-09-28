@@ -38,9 +38,9 @@ jobs:
           #
           # Without it, cargo-deny resolves only the default feature set
           # and never sees the crates behind luna-tools' opt-in
-          # `flame-graph` / `mcode-disasm` features: the quick-xml
-          # ignores report `advisory-not-detected` and yanked crates
-          # behind `pprof` go unnoticed. Current cargo-deny does not
+          # `flame-graph` / `mcode-disasm` features: advisories against
+          # inferno's quick-xml and yanked crates behind `pprof` go
+          # unnoticed. Current cargo-deny does not
           # walk the whole lockfile regardless of feature gating.
           arguments: --all-features
           # `--hide-inclusion-graph` is a `check` sub-command option,
