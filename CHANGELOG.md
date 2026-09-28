@@ -50,6 +50,8 @@ and the new Cranelift raises the minimum Rust version.
 - `syn` 2 → 3 in luna-jit-derive. The derive macros accept and generate
   the same code; a build that also has proc-macros on `syn` 2 (clap,
   serde, thiserror) now compiles both.
+- `rustyline` 14 → 18 for the `luna` binary's `repl-line-editor`
+  feature. The line editor now shows no colours when `NO_COLOR` is set.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.
