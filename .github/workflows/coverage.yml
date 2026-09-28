@@ -3,9 +3,16 @@ name: coverage
 on:
   push:
     branches: [master, develop]
+    paths-ignore: ['**/*.md', 'docs/**', 'web/**']
   pull_request:
     branches: [master, develop]
+    paths-ignore: ['**/*.md', 'docs/**', 'web/**']
   workflow_dispatch:
+
+# a newer push supersedes a running check; master and tag runs are release runs and always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
