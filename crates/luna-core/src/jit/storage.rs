@@ -39,6 +39,7 @@ pub trait JitStorage: std::any::Any {
     /// Called by the `Vm` identified by `vm` before it asks its compilers
     /// for code through this storage. Code a storage holds can be
     /// released only if every compile through it came from one `Vm`.
+    #[doc(hidden)]
     fn claim(&mut self, vm: u64) {
         let _ = vm;
     }
@@ -50,6 +51,7 @@ pub trait JitStorage: std::any::Any {
     ///
     /// `vm` is going away: none of its code is running and none will be
     /// entered again. The `Vm` calls this from its `Drop`.
+    #[doc(hidden)]
     unsafe fn release_code(&mut self, vm: u64) {
         let _ = vm;
     }
