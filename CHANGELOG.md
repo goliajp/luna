@@ -44,9 +44,6 @@ and the new Cranelift raises the minimum Rust version.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.
-- The JIT uses Cranelift's own memory provider again: Cranelift 0.136
-  maps fresh pages for code and invalidates the instruction cache
-  itself, which is what the 3.2.2 fix added.
 
 ### Removed
 
