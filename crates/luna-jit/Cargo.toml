@@ -111,7 +111,7 @@ send = ["luna-core/send"]
 # bench harness. macOS local variance gate: 2.5% (M-series with no
 # public CPU pin API); Linux CI variance gate: ~1-2% via `taskset -c 1`.
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "lua_microbench"
