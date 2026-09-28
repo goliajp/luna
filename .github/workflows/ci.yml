@@ -28,12 +28,11 @@ jobs:
         # arm64 is covered by macos-latest (macos-14) and
         # ubuntu-24.04-arm.
         #
-        # windows-11-arm is left out: the vendored cranelift
-        # PE/COFF backend lacks `Aarch64AdrGotPage21` relocation
-        # support (`not implemented: Aarch64AdrGotPage21 is not
-        # supported for this file format` in crates/vendored/
-        # wasmtime/cranelift/object/src/backend.rs:813).
-        # Requires upstream wasmtime/cranelift work.
+        # windows-11-arm is left out: cranelift-object's PE/COFF
+        # backend lacks `Aarch64AdrGotPage21` relocation support
+        # (`not implemented: Aarch64AdrGotPage21 is not supported for
+        # this file format`, cranelift-object 0.136.1
+        # src/backend.rs:988). Requires upstream cranelift work.
         os:
           - ubuntu-latest
           - ubuntu-24.04-arm
