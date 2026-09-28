@@ -21,6 +21,12 @@ optimization.
 
 ## [Unreleased]
 
+### Added
+
+- `JitStorage::claim` and `JitStorage::release_code`, provided methods
+  (no-ops by default) through which a `Vm` tells its JIT storage who
+  compiles through it and when that code can be freed.
+
 ### Fixed
 
 - An assignment `b = a` right after a statement that assigned `a` (for
@@ -38,6 +44,14 @@ optimization.
 - Compiling a trace with a `math` call that is checked once before the
   loop hit a debug assertion of the code generator, so debug builds
   panicked on such loops.
+- The machine code the JIT compiled for a `Vm` was never freed, so a host
+  that creates a `Vm` per request grew by the code of every one of them.
+  It is now freed when the `Vm` drops, and a trace or function that fails
+  to compile frees its partial code at once. `Vm::install_jit_storage`
+  keeps the storage it replaces until the `Vm` drops, and
+  `luna_jit::jit::cache_clear` no longer drops code that compiled
+  functions still call. On Windows Cranelift does not return the pages
+  yet, so the code there is still kept.
 
 ---
 
