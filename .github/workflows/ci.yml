@@ -41,8 +41,6 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       # Exclude LLVM-backed alt-backend crates.
       # `llvm-jit-probe` + `luna-jit-llvm` unconditionally link inkwell
@@ -79,8 +77,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -105,8 +101,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
@@ -124,8 +118,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo doc --workspace --no-deps
         # See the `native` job comment for the LLVM exclusion rationale.
@@ -142,8 +134,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -178,15 +168,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - name: Bench pinned reference on this runner
         run: |
           git worktree add /tmp/perfref "$PERF_REF"
           cd /tmp/perfref
-          # the worktree shares the main .git, so submodule objects are
-          # already local — this just materializes the checkouts
+          # references before 4.0.0 still build against the cranelift
+          # submodule; this is a no-op for later ones
           git submodule update --init --recursive
           taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
           python3 "$GITHUB_WORKSPACE/scripts/criterion-extract.py" \
@@ -212,8 +201,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo tree -p luna-core
         run: |
@@ -241,8 +228,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -267,8 +252,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -298,8 +281,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - name: count first-party unsafe sites
         run: |
           count=$(grep -rE 'unsafe (\{|fn |impl |trait |extern )' \
