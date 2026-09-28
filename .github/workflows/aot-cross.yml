@@ -190,9 +190,7 @@ jobs:
     runs-on: ubuntu-latest
     # No continue-on-error: a gate only counts if it can fail.
     container:
-      # luna declares no MSRV; the promise is "builds on current
-      # stable" — so track stable rather than pin a version that may
-      # not build the tree.
+      # current stable, which is above the declared rust-version
       image: rust:alpine
     steps:
       - uses: actions/checkout@v7
