@@ -1,4 +1,4 @@
-//! A dropped `Vm` frees its JIT code and the next compile gets the same
+//! A dropped `Vm` frees its JIT code and the next compile can get the same
 //! memory back. On aarch64 the new code has to be synced into the
 //! instruction cache before it runs, or a core that ran the old function
 //! at that address can run it again.
