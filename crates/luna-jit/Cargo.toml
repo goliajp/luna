@@ -45,7 +45,7 @@ luna-jit-derive = { path = "../luna-jit-derive", version = "= 4.0.0" }
 # bypass the `path` fallback.
 luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.0" }
 
-# LLVM 18 + inkwell 0.9 alternative JIT backend
+# LLVM 18 + inkwell 0.10 alternative JIT backend
 # crate. Optional behind the `llvm-jit` cargo feature (default OFF)
 # so the standard install path keeps Cranelift as the only JIT
 # backend and the LLVM toolchain (~1 GB system deps) is not pulled
