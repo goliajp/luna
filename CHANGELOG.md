@@ -19,12 +19,14 @@ optimization.
 
 ---
 
-## [Unreleased]
+## [4.0.0] — 2026-09-29
 
-This is a major version because of the Cranelift upgrade: luna-jit and
-luna-aot expose a few functions whose signatures use Cranelift types, so
-moving Cranelift to a new major version is a breaking change for them,
-and the new Cranelift raises the minimum Rust version.
+A major version for three reasons: luna-jit and luna-aot expose a few
+functions whose signatures use Cranelift types, so moving Cranelift to a
+new major version breaks them; `luna_aot::embed::TargetSpec` has public
+fields of `object` types, which move from 0.36 to 0.40; and the new
+Cranelift raises the minimum Rust version to 1.96. The Lua-facing
+behaviour and the `luna-core` embedder API are unchanged.
 
 ### Changed
 
