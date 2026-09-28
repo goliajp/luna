@@ -103,7 +103,7 @@ deny = []
 # `multiple-versions = "warn"` keeps new duplication visible without
 # failing CI; this list documents the set we accept.
 skip = [
-    # windows-sys 0.52 via rustyline → fd-lock, 0.61 via clap → anstream.
+    # windows-sys 0.52 via cranelift-jit → region, 0.61 everywhere else.
     "windows-sys",
     # `object` 0.40 is shared by luna-aot / luna-tools and
     # cranelift-object; 0.37 comes via backtrace → dhat (luna-core
