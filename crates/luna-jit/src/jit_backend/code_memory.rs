@@ -1,16 +1,16 @@
 //! JIT memory provider that makes newly written code visible to the
 //! instruction fetch path before it runs.
 //!
-//! Cranelift's `SystemMemoryProvider` takes code pages from the global
-//! allocator and does no instruction cache maintenance on aarch64: it
-//! relies on the `mprotect` to read+execute to do it. That holds for pages
-//! that were never executable, but a `Vm` frees its code when it drops,
-//! the allocator hands the same pages to the next compile, and neither
-//! Linux nor macOS invalidates the instruction cache when such a page is
-//! made executable again. A core that ran the old function can then run
-//! its stale instructions in place of the new ones.
+//! Cranelift's `SystemMemoryProvider` invalidates the instruction cache
+//! on aarch64 with a fixed 64-byte line and without cleaning the data
+//! cache first. On cores that report CTR_EL0.IDC == 0 the architecture
+//! requires that clean, so the flush is only correct there because the
+//! pages happen to be freshly mapped and the kernel syncs them on their
+//! first executable mapping. A `Vm` frees its code when it drops and the
+//! next compile writes new code, so luna does not rely on that: it syncs
+//! every code range itself, with line sizes read from CTR_EL0.
 
-use cranelift_jit::{BranchProtection, JITMemoryProvider, SystemMemoryProvider};
+use cranelift_jit::{BranchProtection, JITMemoryKind, JITMemoryProvider, SystemMemoryProvider};
 use cranelift_module::ModuleResult;
 use std::io;
 
@@ -30,18 +30,13 @@ impl CodeMemory {
 }
 
 impl JITMemoryProvider for CodeMemory {
-    fn allocate_readexec(&mut self, size: usize, align: u64) -> io::Result<*mut u8> {
-        let ptr = self.inner.allocate_readexec(size, align)?;
-        self.unsynced.push((ptr as usize, size));
+    fn allocate(&mut self, size: usize, align: u64, kind: JITMemoryKind) -> io::Result<*mut u8> {
+        let exec = matches!(kind, JITMemoryKind::Executable);
+        let ptr = self.inner.allocate(size, align, kind)?;
+        if exec {
+            self.unsynced.push((ptr as usize, size));
+        }
         Ok(ptr)
-    }
-
-    fn allocate_readwrite(&mut self, size: usize, align: u64) -> io::Result<*mut u8> {
-        self.inner.allocate_readwrite(size, align)
-    }
-
-    fn allocate_readonly(&mut self, size: usize, align: u64) -> io::Result<*mut u8> {
-        self.inner.allocate_readonly(size, align)
     }
 
     unsafe fn free_memory(&mut self) {
@@ -55,7 +50,7 @@ impl JITMemoryProvider for CodeMemory {
         // memory, so the code bytes are final here. the inner finalize then
         // flushes every core's pipeline
         for (start, len) in self.unsynced.drain(..) {
-            // SAFETY: the range was handed out by `allocate_readexec` and is
+            // SAFETY: the range was handed out by `allocate` for executable memory and is
             // still allocated and readable
             unsafe { sync_icache(start, len) };
         }

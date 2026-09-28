@@ -35,8 +35,6 @@ jobs:
           - fuzz_jit_diff
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
@@ -103,8 +101,6 @@ jobs:
           - fuzz_jit_diff
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src

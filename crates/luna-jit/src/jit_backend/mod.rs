@@ -86,8 +86,8 @@ impl RegKind {
 // who depend on luna-core alone never link Cranelift.
 pub mod trace;
 
-// `Send` wrapper newtype for `cranelift_jit::JITModule`, used by the
-// per-`Vm` JIT storage. Scoped `pub(crate)` — no embedder surface.
+// Owner newtype for `cranelift_jit::JITModule`, used by the per-`Vm`
+// JIT storage. Scoped `pub(crate)` — no embedder surface.
 pub(crate) mod code_memory;
 mod send_jit_module;
 #[allow(unused_imports)]
@@ -800,10 +800,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
 
     let ptr = module.get_finalized_function(fn_id);
     Some(JitHandle {
-        // wrap with the `SendJitModule`
-        // sleeve. SAFETY criterion (a `Send` memory provider) is
-        // satisfied by `build_jit_module_with_helpers`, which installs
-        // `code_memory::CodeMemory`; see send_jit_module.rs.
+        // wrap with the `SendJitModule` sleeve
         _module: module.publish(),
         entry_raw: ptr,
         num_args: meta.num_args,
@@ -854,26 +851,28 @@ fn emit_checked_get<M: Module>(
     bcx.seal_block(fast_blk);
     let avals_ptr = bcx.ins().load(
         types::I64,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
         t,
         TABLE_ARRAY_PTR_OFFSET as i32,
     );
     let asize = bcx.ins().load(
         types::I64,
-        MemFlags::trusted(),
+        MemFlagsData::trusted(),
         t,
         TABLE_ASIZE_OFFSET as i32,
     );
-    let avals_bytes = bcx.ins().ishl_imm(asize, 3);
+    let avals_bytes = bcx.ins().ishl_imm_u(asize, 3);
     let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
     let tag_addr = bcx.ins().iadd(atags_ptr, key_minus_1);
     let tag = bcx
         .ins()
-        .uload8(types::I64, MemFlags::trusted(), tag_addr, 0);
-    let tag_ok = bcx.ins().icmp_imm(IntCC::Equal, tag, want);
-    let val_off = bcx.ins().ishl_imm(key_minus_1, 3);
+        .uload8(types::I64, MemFlagsData::trusted(), tag_addr, 0);
+    let tag_ok = bcx.ins().icmp_imm_u(IntCC::Equal, tag, want);
+    let val_off = bcx.ins().ishl_imm_u(key_minus_1, 3);
     let val_addr = bcx.ins().iadd(avals_ptr, val_off);
-    let fast_bits = bcx.ins().load(types::I64, MemFlags::trusted(), val_addr, 0);
+    let fast_bits = bcx
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), val_addr, 0);
     bcx.ins().brif(
         tag_ok,
         merge_blk,
@@ -899,7 +898,7 @@ fn emit_checked_get<M: Module>(
     let want_v = bcx.ins().iconst(types::I64, want);
     let call = bcx.ins().call(f, &[t, key, want_v, out]);
     let ok = bcx.inst_results(call)[0];
-    let slow_bits = bcx.ins().stack_load(types::I64, slot, 0);
+    let slow_bits = bcx.ins().stack_load(types::I64, types::I64, slot, 0);
     bcx.ins()
         .brif(ok, merge_blk, &[BlockArg::Value(slow_bits)], deopt_blk, &[]);
 
@@ -931,6 +930,8 @@ fn emit_checked_get<M: Module>(
 /// alongside ABI metadata; the caller drives backend-specific
 /// finalization (`JITModule::finalize_definitions` /
 /// `ObjectModule::finish`).
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
 pub fn lower_int_chunk_into<M: Module>(
     module: &mut M,
     proto: Gc<Proto>,
@@ -3034,7 +3035,7 @@ pub fn lower_int_chunk_into<M: Module>(
         let init = if i < num_params {
             let raw = entry_block_params[i];
             if cl_ty == types::F64 {
-                bcx.ins().bitcast(types::F64, MemFlags::new(), raw)
+                bcx.ins().bitcast(types::F64, MemFlagsData::new(), raw)
             } else {
                 raw
             }
@@ -3201,7 +3202,7 @@ pub fn lower_int_chunk_into<M: Module>(
             Op::Return1 => {
                 let v = bcx.use_var(regs[ins.a() as usize]);
                 let out = if matches!(a_kind(&reg_kinds, ins.a()), RegKind::Float) {
-                    bcx.ins().bitcast(types::I64, MemFlags::new(), v)
+                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), v)
                 } else {
                     v
                 };
@@ -3372,7 +3373,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // (all i64). Bitcast Float args back to i64 at
                     // the call boundary.
                     let v_i64 = if matches!(a_kind(&reg_kinds, slot_idx as u32), RegKind::Float) {
-                        bcx.ins().bitcast(types::I64, MemFlags::new(), v)
+                        bcx.ins().bitcast(types::I64, MemFlagsData::new(), v)
                     } else {
                         v
                     };
@@ -3385,7 +3386,8 @@ pub fn lower_int_chunk_into<M: Module>(
                 // F64 if Float. Pre-write `current_kinds[a]` would
                 // be stale here.
                 let result = if matches!(ret_kind, RegKind::Float) {
-                    bcx.ins().bitcast(types::F64, MemFlags::new(), result_i64)
+                    bcx.ins()
+                        .bitcast(types::F64, MemFlagsData::new(), result_i64)
                 } else {
                     result_i64
                 };
@@ -3742,7 +3744,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     reg_kinds.get(a).copied().unwrap_or(RegKind::Int),
                     RegKind::Float
                 ) {
-                    bcx.ins().bitcast(types::I64, MemFlags::new(), t_raw)
+                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), t_raw)
                 } else {
                     t_raw
                 };
@@ -3758,7 +3760,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     // offset 0; atags trail at byte offset `asize * 8`.
                     let asize = bcx.ins().load(
                         types::I64,
-                        MemFlags::trusted(),
+                        MemFlagsData::trusted(),
                         t,
                         TABLE_ASIZE_OFFSET as i32,
                     );
@@ -3778,7 +3780,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     bcx.seal_block(fast_blk);
                     let avals_ptr = bcx.ins().load(
                         types::I64,
-                        MemFlags::trusted(),
+                        MemFlagsData::trusted(),
                         t,
                         TABLE_ARRAY_PTR_OFFSET as i32,
                     );
@@ -3788,10 +3790,11 @@ pub fn lower_int_chunk_into<M: Module>(
                     let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
                     let tag_dst = bcx.ins().iadd(atags_ptr, key_minus_1);
                     let tag_byte = bcx.ins().iconst(types::I8, RAW_TAG_INT);
-                    bcx.ins().store(MemFlags::trusted(), tag_byte, tag_dst, 0);
+                    bcx.ins()
+                        .store(MemFlagsData::trusted(), tag_byte, tag_dst, 0);
                     let val_off = bcx.ins().ishl(key_minus_1, three); // *8
                     let val_dst = bcx.ins().iadd(avals_ptr, val_off);
-                    bcx.ins().store(MemFlags::trusted(), val, val_dst, 0);
+                    bcx.ins().store(MemFlagsData::trusted(), val, val_dst, 0);
                     bcx.ins().jump(merge_blk, &[]);
 
                     bcx.switch_to_block(slow_blk);
@@ -3816,8 +3819,8 @@ pub fn lower_int_chunk_into<M: Module>(
                     // semantics demand `t[1.0] = 1.0` lands in the
                     // Int(1) array slot, not in a Float-tagged hash
                     // entry); `Table::set` does the normalisation.
-                    let key_i = bcx.ins().bitcast(types::I64, MemFlags::new(), key);
-                    let val_i = bcx.ins().bitcast(types::I64, MemFlags::new(), val);
+                    let key_i = bcx.ins().bitcast(types::I64, MemFlagsData::new(), key);
+                    let val_i = bcx.ins().bitcast(types::I64, MemFlagsData::new(), val);
                     let mut sig = module.make_signature();
                     sig.params.push(AbiParam::new(types::I64));
                     sig.params.push(AbiParam::new(types::I64));
@@ -3862,7 +3865,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     reg_kinds.get(a).copied().unwrap_or(RegKind::Int),
                     RegKind::Float
                 ) {
-                    bcx.ins().bitcast(types::I64, MemFlags::new(), t_raw)
+                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), t_raw)
                 } else {
                     t_raw
                 };
@@ -3895,7 +3898,7 @@ pub fn lower_int_chunk_into<M: Module>(
                             reg_kinds.get(src).copied().unwrap_or(RegKind::Int),
                             RegKind::Float
                         ) {
-                            bcx.ins().bitcast(types::I64, MemFlags::new(), v)
+                            bcx.ins().bitcast(types::I64, MemFlagsData::new(), v)
                         } else {
                             v
                         };
@@ -3910,7 +3913,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 let asize = bcx.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    MemFlagsData::trusted(),
                     t,
                     TABLE_ASIZE_OFFSET as i32,
                 );
@@ -3929,7 +3932,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 // whole literal
                 let avals_ptr = bcx.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    MemFlagsData::trusted(),
                     t,
                     TABLE_ARRAY_PTR_OFFSET as i32,
                 );
@@ -3940,10 +3943,11 @@ pub fn lower_int_chunk_into<M: Module>(
                     let idx_const = bcx.ins().iconst(types::I64, i as i64);
                     let tag_dst = bcx.ins().iadd(atags_ptr, idx_const);
                     let tag_byte = bcx.ins().iconst(types::I8, tag);
-                    bcx.ins().store(MemFlags::trusted(), tag_byte, tag_dst, 0);
+                    bcx.ins()
+                        .store(MemFlagsData::trusted(), tag_byte, tag_dst, 0);
                     let val_off = bcx.ins().iconst(types::I64, (i as i64) * 8);
                     let val_dst = bcx.ins().iadd(avals_ptr, val_off);
-                    bcx.ins().store(MemFlags::trusted(), bits, val_dst, 0);
+                    bcx.ins().store(MemFlagsData::trusted(), bits, val_dst, 0);
                 }
                 bcx.ins().jump(merge_blk, &[]);
 
@@ -3989,7 +3993,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     reg_kinds.get(b).copied().unwrap_or(RegKind::Int),
                     RegKind::Float
                 ) {
-                    bcx.ins().bitcast(types::I64, MemFlags::new(), t_raw)
+                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), t_raw)
                 } else {
                     t_raw
                 };
@@ -3997,7 +4001,7 @@ pub fn lower_int_chunk_into<M: Module>(
 
                 let asize = bcx.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    MemFlagsData::trusted(),
                     t,
                     TABLE_ASIZE_OFFSET as i32,
                 );
@@ -4005,7 +4009,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
                 let metatable = bcx.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    MemFlagsData::trusted(),
                     t,
                     TABLE_METATABLE_OFFSET as i32,
                 );
@@ -4046,7 +4050,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     reg_kinds.get(b).copied().unwrap_or(RegKind::Int),
                     RegKind::Float
                 ) {
-                    bcx.ins().bitcast(types::I64, MemFlags::new(), t_raw)
+                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), t_raw)
                 } else {
                     t_raw
                 };
@@ -4076,7 +4080,7 @@ pub fn lower_int_chunk_into<M: Module>(
 
                 let asize = bcx.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    MemFlagsData::trusted(),
                     t,
                     TABLE_ASIZE_OFFSET as i32,
                 );
@@ -4085,7 +4089,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_minus_1, asize);
                 let metatable = bcx.ins().load(
                     types::I64,
-                    MemFlags::trusted(),
+                    MemFlagsData::trusted(),
                     t,
                     TABLE_METATABLE_OFFSET as i32,
                 );
@@ -4095,7 +4099,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let fast_ok = bcx.ins().band(bounds_ok, key_ok);
 
                 let slow = if is_float_key {
-                    let key_bits = bcx.ins().bitcast(types::I64, MemFlags::new(), key_raw);
+                    let key_bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), key_raw);
                     ("luna_jit_table_get_float_checked", key_bits)
                 } else {
                     ("luna_jit_table_get_int_checked", key_raw)
@@ -4117,7 +4121,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     reg_kinds.get(b).copied().unwrap_or(RegKind::Int),
                     RegKind::Float
                 ) {
-                    bcx.ins().bitcast(types::I64, MemFlags::new(), t_raw)
+                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), t_raw)
                 } else {
                     t_raw
                 };
@@ -4142,7 +4146,7 @@ pub fn lower_int_chunk_into<M: Module>(
         bcx.ins().return_(&[zero]);
     }
     bcx.seal_all_blocks();
-    bcx.finalize();
+    bcx.finalize(module.target_config());
 
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
@@ -4282,7 +4286,7 @@ fn define_checked_entry<M: Module>(
     bcx.ins().return_(&[zero]);
 
     bcx.seal_all_blocks();
-    bcx.finalize();
+    bcx.finalize(module.target_config());
     module.define_function(entry_id, ctx).ok()?;
     module.clear_context(ctx);
     Some(entry_id)
@@ -4311,7 +4315,7 @@ fn aligned_def(
     let aligned = if got == want {
         value
     } else {
-        bcx.ins().bitcast(want, MemFlags::new(), value)
+        bcx.ins().bitcast(want, MemFlagsData::new(), value)
     };
     bcx.def_var(regs[idx], aligned);
 }
@@ -4653,7 +4657,7 @@ mod smoke {
         let sum = bcx.ins().iadd(r1, r2);
         bcx.ins().return_(&[sum]);
 
-        bcx.finalize();
+        bcx.finalize(module.target_config());
         module.define_function(fib_id, &mut ctx).expect("define");
         module.clear_context(&mut ctx);
         module.finalize_definitions().expect("finalize");

@@ -98,41 +98,26 @@ external-default-features = "allow"
 
 allow = []
 deny = []
-# The vendored cranelift / wasmtime fork pulls
-# `wasmtime-internal-jit-icache-coherence v37.0.3`, which
-# transitively depends on `windows-sys 0.60.2` →
-# `windows-targets 0.53.5` → `windows_x86_64_msvc 0.53.1` and the
-# matching per-arch sibling crates. The `region 3.0.2`
-# chain (under cranelift-jit) still resolves the older `windows-sys
-# 0.52.0` → `windows-targets 0.52.6` set. This is a transitional
-# duplication that goes away once cranelift / wasmtime themselves
-# bump `region` (upstream issue, not actionable from luna).
-# `multiple-versions = "warn"` keeps the duplication visible without
-# failing CI; the explicit skip list documents the known set we accept.
+# Known duplicate versions, accepted rather than fixed: each pair comes
+# from two upstreams that have not moved to the same release yet.
+# `multiple-versions = "warn"` keeps new duplication visible without
+# failing CI; this list documents the set we accept.
 skip = [
-    # Windows per-architecture stub crates pulled in two versions
-    # via the region / wasmtime split above.
-    "windows_x86_64_msvc",
-    "windows_x86_64_gnu",
-    "windows_x86_64_gnullvm",
-    "windows_i686_msvc",
-    "windows_i686_gnu",
-    "windows_i686_gnullvm",
-    "windows_aarch64_msvc",
-    "windows_aarch64_gnullvm",
+    # windows-sys 0.52 via rustyline → fd-lock, 0.61 via clap → anstream.
     "windows-sys",
-    "windows-targets",
-    # `object` is pulled at v0.36 by luna-aot / luna-tools (the
-    # downstream object-write surface luna pins) and at v0.37 via
-    # backtrace → dhat (luna-core dev-dep) and via cranelift-codegen
-    # → wasmtime-internal-jit-icache-coherence. backtrace's bump
-    # tracks upstream; luna's direct dep stays on 0.36.
+    # `object` 0.36 is luna-aot / luna-tools' own object writer, 0.37
+    # comes via backtrace → dhat (luna-core dev-dep), 0.40 via
+    # cranelift-object. luna's direct dep stays on 0.36.
     "object",
-    # `bitflags` and `hashbrown` are both pulled in two versions by
-    # the cranelift / wasmtime split (older inside region/windows-sys,
-    # newer inside the vendored wasmtime tree).
-    "bitflags",
+    # hashbrown 0.14 via inferno → dashmap, 0.15 via object 0.36, 0.16
+    # via gimli 0.33, 0.17 via cranelift-codegen. foldhash 0.1 / 0.2
+    # follow hashbrown 0.15 / 0.17.
     "hashbrown",
+    "foldhash",
+    # gimli 0.32 via backtrace → addr2line, 0.33 via cranelift-codegen.
+    "gimli",
+    # bitflags 1.x via pprof → nix 0.26, 2.x everywhere else.
+    "bitflags",
 ]
 skip-tree = []
 

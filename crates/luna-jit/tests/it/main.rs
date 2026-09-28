@@ -31,7 +31,6 @@ mod math_fold_semantics;
 mod method_jit_float_keys;
 mod method_jit_kind_edges;
 mod method_jit_upvalues;
-mod path_d_isle_dse_integration;
 mod per_vm_jit_storage;
 mod puc_bytecode_jit;
 mod sandbox;
