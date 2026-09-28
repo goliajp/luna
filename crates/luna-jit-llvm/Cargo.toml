@@ -1,6 +1,6 @@
 [package]
 name = "luna-jit-llvm"
-description = "LLVM 18 + inkwell 0.9 alternative JIT backend for the goliajp/luna Lua runtime. Lives alongside `luna-jit` (Cranelift); backend selection at runtime via the `LUNA_JIT_BACKEND=llvm` env var. Internal alt-backend crate — embedders should depend on `luna-jit` and enable the `llvm-jit` feature, not depend on this crate directly. Requires `LLVM_SYS_181_PREFIX` pointing at an LLVM 18.1.x install at build time."
+description = "LLVM 18 + inkwell 0.10 alternative JIT backend for the goliajp/luna Lua runtime. Lives alongside `luna-jit` (Cranelift); backend selection at runtime via the `LUNA_JIT_BACKEND=llvm` env var. Internal alt-backend crate — embedders should depend on `luna-jit` and enable the `llvm-jit` feature, not depend on this crate directly. Requires `LLVM_SYS_181_PREFIX` pointing at an LLVM 18.1.x install at build time."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -29,11 +29,11 @@ luna-core = { path = "../luna-core", version = "= 4.0.0" }
 # same symbol table with their respective JIT execution engines.
 luna-jit-helpers = { path = "../luna-jit-helpers", version = "= 4.0.0" }
 
-# LLVM 18.1.x via inkwell 0.9.0. Same feature flag as `llvm-jit-probe`
+# LLVM 18.1.x via inkwell 0.10. Same feature flag as `llvm-jit-probe`
 # (`llvm18-1`); requires `LLVM_SYS_181_PREFIX` env var pointing at an
 # LLVM 18.1.x install (e.g. `brew install llvm@18` →
 # `/opt/homebrew/opt/llvm@18`).
-inkwell = { version = "0.9", features = ["llvm18-1"] }
+inkwell = { version = "0.10", features = ["llvm18-1"] }
 
 [dev-dependencies]
 # Integration tests need luna-jit's parser (to materialise real

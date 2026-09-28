@@ -1,4 +1,4 @@
-//! LLVM 18 + inkwell 0.9 alternative JIT backend for luna.
+//! LLVM 18 + inkwell 0.10 alternative JIT backend for luna.
 //!
 //! `LlvmBackend` implements `IntChunkCompiler` + `TraceCompiler`.
 //! Shapes the LLVM codegen does not handle return `Skipped` / `None`
