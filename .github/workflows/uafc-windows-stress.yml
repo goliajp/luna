@@ -38,8 +38,6 @@ jobs:
       LUNA_POISON_STRESS_N: ${{ inputs.iterations }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install procdump

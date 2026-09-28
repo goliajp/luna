@@ -62,17 +62,6 @@ members = [
 # harnesses: `cd crates/luna-fuzz && cargo +nightly fuzz run <target>`.
 exclude = [
     "crates/luna-fuzz",
-    # Vendored fork of bytecodealliance/wasmtime
-    # pinned at tag v37.0.3 (cranelift-codegen 0.124.3, exact match for
-    # the registry version luna's Cargo.lock pins). The wasmtime tree
-    # has its own [workspace] Cargo.toml; excluding it here keeps luna's
-    # workspace-member resolution clean and prevents cargo from trying
-    # to build wasmtime's many unrelated crates (wasmtime-runtime,
-    # wasmtime-cli, etc.). The cranelift sub-crates are reachable only
-    # through the [patch.crates-io] block at the bottom of this file,
-    # which redirects luna-jit / luna-aot's `cranelift-*` deps at the
-    # path inside this submodule.
-    "crates/vendored/wasmtime",
 ]
 
 [workspace.package]
@@ -192,63 +181,6 @@ needless_range_loop = "allow"
 # an MSRV declaration later does not silently turn it on across the
 # whole tree in the same commit.
 incompatible_msrv = "allow"
-
-# Vendored cranelift fork.
-#
-# Redirects every `cranelift-*` crate in luna's dep graph at the
-# locally vendored copy under `crates/vendored/wasmtime/cranelift/`,
-# so cranelift source can be patched in-tree without forking the
-# crates.io publishing flow.
-#
-# Pin: wasmtime v37.0.3, which ships exactly the
-# `cranelift-* = "0.124.3"` registry versions luna's Cargo.lock pins.
-#
-# Crate-by-crate enumeration: all 17 cranelift crates that appear in
-# luna's Cargo.lock are listed here, NOT just the 7 luna-jit / luna-aot
-# directly depend on. Reason: cargo's lockfile pins every transitive
-# `cranelift-*` against crates.io; patch entries only for the direct
-# deps would leave the inner crates (cranelift-codegen-shared,
-# cranelift-codegen-meta, cranelift-bforest, cranelift-entity, etc.)
-# pulled from crates.io even though the patched cranelift-codegen
-# resolves them via internal `path = "./shared"`-style references.
-# Enumerating all 17 makes the patch hermetic.
-#
-# Upstream-source path map:
-#   cranelift                   → cranelift/umbrella
-#   cranelift-assembler-x64     → cranelift/assembler-x64
-#   cranelift-assembler-x64-meta→ cranelift/assembler-x64/meta
-#   cranelift-bforest           → cranelift/bforest
-#   cranelift-bitset            → cranelift/bitset
-#   cranelift-codegen           → cranelift/codegen
-#   cranelift-codegen-meta      → cranelift/codegen/meta
-#   cranelift-codegen-shared    → cranelift/codegen/shared
-#   cranelift-control           → cranelift/control
-#   cranelift-entity            → cranelift/entity
-#   cranelift-frontend          → cranelift/frontend
-#   cranelift-isle              → cranelift/isle/isle
-#   cranelift-jit               → cranelift/jit
-#   cranelift-module            → cranelift/module
-#   cranelift-native            → cranelift/native
-#   cranelift-object            → cranelift/object
-#   cranelift-srcgen            → cranelift/srcgen
-[patch.crates-io]
-cranelift = { path = "crates/vendored/wasmtime/cranelift/umbrella" }
-cranelift-assembler-x64 = { path = "crates/vendored/wasmtime/cranelift/assembler-x64" }
-cranelift-assembler-x64-meta = { path = "crates/vendored/wasmtime/cranelift/assembler-x64/meta" }
-cranelift-bforest = { path = "crates/vendored/wasmtime/cranelift/bforest" }
-cranelift-bitset = { path = "crates/vendored/wasmtime/cranelift/bitset" }
-cranelift-codegen = { path = "crates/vendored/wasmtime/cranelift/codegen" }
-cranelift-codegen-meta = { path = "crates/vendored/wasmtime/cranelift/codegen/meta" }
-cranelift-codegen-shared = { path = "crates/vendored/wasmtime/cranelift/codegen/shared" }
-cranelift-control = { path = "crates/vendored/wasmtime/cranelift/control" }
-cranelift-entity = { path = "crates/vendored/wasmtime/cranelift/entity" }
-cranelift-frontend = { path = "crates/vendored/wasmtime/cranelift/frontend" }
-cranelift-isle = { path = "crates/vendored/wasmtime/cranelift/isle/isle" }
-cranelift-jit = { path = "crates/vendored/wasmtime/cranelift/jit" }
-cranelift-module = { path = "crates/vendored/wasmtime/cranelift/module" }
-cranelift-native = { path = "crates/vendored/wasmtime/cranelift/native" }
-cranelift-object = { path = "crates/vendored/wasmtime/cranelift/object" }
-cranelift-srcgen = { path = "crates/vendored/wasmtime/cranelift/srcgen" }
 
 [profile.dev]
 # debug=1 (line tables) instead of the default 2 (full DWARF). Backtraces keep

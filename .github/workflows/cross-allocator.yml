@@ -45,8 +45,6 @@ jobs:
              # official_run.rs.
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
 
