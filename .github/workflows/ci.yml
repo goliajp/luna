@@ -109,6 +109,20 @@ jobs:
         run: cargo build -p luna-core --target wasm32-wasip1 --release
 
   # ─────────────────────────────────────────────────────────────────
+  # msrv: the workspace declares rust-version = "1.96"; build every
+  # target on exactly that toolchain so the declaration can fail.
+  # ─────────────────────────────────────────────────────────────────
+  msrv:
+    name: cargo check (rust 1.96)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.96
+      - name: cargo check --workspace --all-targets
+        # See the `native` job comment for the LLVM exclusion rationale.
+        run: cargo check --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm
+
+  # ─────────────────────────────────────────────────────────────────
   # cargo doc: catches dangling intra-doc links and undocumented
   # public items.
   # ─────────────────────────────────────────────────────────────────
