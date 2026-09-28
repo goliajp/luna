@@ -3,9 +3,16 @@ name: ci
 on:
   push:
     branches: [master, develop]
+    paths-ignore: ['**/*.md', 'docs/**', 'web/**']
   pull_request:
     branches: [master, develop]
+    paths-ignore: ['**/*.md', 'docs/**', 'web/**']
   workflow_dispatch:
+
+# a newer push supersedes a running check; master and tag runs are release runs and always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
@@ -55,6 +62,10 @@ jobs:
         # visible — without it, cargo test buffers per-test output and a
         # hard abort drops the buffer.
         run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
+        # fat LTO made every test binary a whole-program link (6x the build
+        # time) and no test depends on it; lto.yml runs the suite as shipped
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
@@ -163,7 +174,7 @@ jobs:
     name: redis_lua_shape perf-gate
     runs-on: ubuntu-latest
     env:
-      PERF_REF: b12aad7de326915a7808500e987d5fc3209488ab # v3.2.0
+      PERF_REF: a9fe5e6f55ec9a2caf2d9010edba9c53fbeb3796 # v3.2.1
     steps:
       - uses: actions/checkout@v7
         with:
@@ -243,7 +254,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   # feature="send" matrix coverage. SendVm is the
   # cross-thread embedding path; its tests live in
-  # `crates/luna-core/tests/send_vm.rs` and are gated behind
+  # `crates/luna-core/tests/it/send_vm.rs` and are gated behind
   # `#[cfg(feature = "send")]`. Without an explicit CI job, the
   # default `cargo test` invocation never exercises the feature,
   # so SendVm bit-rot would only surface at a release-time smoke.
@@ -265,8 +276,8 @@ jobs:
         run: cargo build -p luna-core --features send
       - name: cargo clippy -p luna-core --features send --tests -- -D warnings
         run: cargo clippy -p luna-core --features send --tests -- -D warnings
-      - name: cargo test -p luna-core --features send --test send_vm
-        run: cargo test -p luna-core --features send --test send_vm
+      - name: 'cargo test -p luna-core --features send --test it -- send_vm::'
+        run: 'cargo test -p luna-core --features send --test it -- send_vm::'
 
   # ─────────────────────────────────────────────────────────────────
   # unsafe-usage drift detection.

@@ -6,9 +6,7 @@
 //! Linux x86_64 — run as `lua <args>` from a directory holding the case's
 //! files; `cli_common` says how luna's output is compared.
 
-mod cli_common;
-
-use cli_common::{Case, Expect};
+use crate::cli_common::{Case, Expect};
 
 /// `LUA_INIT` runs before the options' chunks; 5.3 on have created `arg`.
 #[test]
