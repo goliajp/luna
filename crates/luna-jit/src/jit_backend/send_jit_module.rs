@@ -87,6 +87,56 @@ impl SendJitModule {
     }
 }
 
+impl SendJitModule {
+    /// Frees the module's code and data.
+    ///
+    /// # Safety
+    ///
+    /// No function of the module is running or will be called again.
+    pub(crate) unsafe fn free(self) {
+        // SAFETY: forwarded from the caller
+        unsafe { self.0.free_memory() }
+    }
+}
+
+/// A module being compiled: no pointer into its code has been handed out
+/// yet, so dropping it (a compile that bails) frees the code.
+/// [`Self::publish`] hands it over once entry points leave it.
+pub(crate) struct UnpublishedModule(Option<JITModule>);
+
+impl UnpublishedModule {
+    pub(crate) fn new(module: JITModule) -> Self {
+        Self(Some(module))
+    }
+
+    pub(crate) fn publish(mut self) -> SendJitModule {
+        SendJitModule(self.0.take().expect("published once"))
+    }
+}
+
+impl Drop for UnpublishedModule {
+    fn drop(&mut self) {
+        if let Some(module) = self.0.take() {
+            // SAFETY: nothing outside this value has seen its code
+            unsafe { module.free_memory() }
+        }
+    }
+}
+
+impl Deref for UnpublishedModule {
+    type Target = JITModule;
+
+    fn deref(&self) -> &JITModule {
+        self.0.as_ref().expect("published once")
+    }
+}
+
+impl DerefMut for UnpublishedModule {
+    fn deref_mut(&mut self) -> &mut JITModule {
+        self.0.as_mut().expect("published once")
+    }
+}
+
 impl Deref for SendJitModule {
     type Target = JITModule;
 

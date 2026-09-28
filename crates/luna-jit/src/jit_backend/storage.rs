@@ -20,14 +20,19 @@ use luna_core::jit::JitStorage;
 /// - `trace_handles`: `Vec<TraceHandle>` owning each compiled
 ///   trace's `JITModule`.
 ///
-/// Each `Vec` / `HashMap` is append-only / insert-only for the life
-/// of the `Vm`; dropping the storage releases the underlying mmap
-/// pages.
+/// The handle collections are append-only. The code is freed when the
+/// `Vm` that compiled all of it drops ([`JitStorage::release_code`]);
+/// dropping the storage alone leaves it mapped, since functions of some
+/// `Vm` may still point into it.
 #[derive(Default)]
 pub(crate) struct CraneliftJitStorage {
     pub(crate) cache: std::collections::HashMap<u64, CacheEntry>,
     pub(crate) cache_handles: Vec<JitHandle>,
     pub(crate) trace_handles: Vec<TraceHandle>,
+    /// The `Vm` that compiles through this storage.
+    owner: Option<u64>,
+    /// A second `Vm` compiled through it too: its code is never freed.
+    shared: bool,
 }
 
 impl JitStorage for CraneliftJitStorage {
@@ -37,6 +42,30 @@ impl JitStorage for CraneliftJitStorage {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn claim(&mut self, vm: u64) {
+        match self.owner {
+            None => self.owner = Some(vm),
+            Some(o) if o != vm => self.shared = true,
+            Some(_) => {}
+        }
+    }
+
+    unsafe fn release_code(&mut self, vm: u64) {
+        if self.shared || self.owner != Some(vm) {
+            return;
+        }
+        self.cache.clear();
+        for h in self.cache_handles.drain(..) {
+            // SAFETY: only `vm` compiled through this storage, and it is
+            // going away (the caller's contract)
+            unsafe { h.free() }
+        }
+        for h in self.trace_handles.drain(..) {
+            // SAFETY: as above
+            unsafe { h.free() }
+        }
     }
 }
 

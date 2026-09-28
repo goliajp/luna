@@ -412,6 +412,14 @@ pub struct Vm {
     /// consumed by [`Vm::commit_async_native_result`] after the
     /// future resolves.
     pub(crate) pending_async_native_ctx: Option<AsyncNativeCallCtx>,
+
+    /// Identifies this Vm to the JIT storages it compiles through
+    /// ([`crate::jit::JitStorage::claim`]).
+    jit_owner_id: u64,
+    /// Storages [`Vm::install_jit_storage`] replaced: code compiled into
+    /// them may still be referenced by this Vm's functions, so they live
+    /// as long as the Vm.
+    retired_jit_storage: Vec<Box<dyn crate::jit::JitStorage>>,
 }
 
 /// Call-site context an in-flight async native
@@ -729,6 +737,16 @@ impl Drop for Vm {
         // re-finalized (they go to the heap's free list directly).
         self.heap.queue_all_finalizers();
         self.run_finalizers();
+        let id = self.jit_owner_id;
+        // SAFETY: the finalizers were the last Lua code this Vm runs, and
+        // its functions (the only holders of entry points compiled for it)
+        // go away with its heap.
+        unsafe {
+            self.jit.storage.release_code(id);
+            for s in &mut self.retired_jit_storage {
+                s.release_code(id);
+            }
+        }
     }
 }
 
@@ -1023,6 +1041,11 @@ impl Vm {
             // async-marked NativeClosure is invoked under async_mode.
             pending_async_native_fut: None,
             pending_async_native_ctx: None,
+            jit_owner_id: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
+            retired_jit_storage: Vec::new(),
         }
     }
 
@@ -1078,15 +1101,14 @@ impl Vm {
     /// also install a fresh `CraneliftJitStorage`. Storage holds
     /// the per-`Vm` JIT cache + handle collections.
     ///
-    /// Idempotency: re-installing storage on a Vm that already
-    /// holds compiled-trace pointers WILL evict their owners (the
-    /// old `CraneliftJitStorage`'s `JITModule`s drop their mmap
-    /// pages). Call right after construction for a clean swap.
+    /// The storage it replaces is kept until the Vm drops: functions
+    /// compiled through it may still be called.
     pub fn install_jit_storage<S>(&mut self, storage: S)
     where
         S: crate::jit::JitStorage + 'static,
     {
-        self.jit.storage = Box::new(storage);
+        let old = std::mem::replace(&mut self.jit.storage, Box::new(storage));
+        self.retired_jit_storage.push(old);
     }
 
     /// Install the no-op JIT backend. `try_compile`
@@ -1670,6 +1692,7 @@ impl Vm {
         // trait method can take `&mut dyn JitStorage` without
         // double-borrowing self.jit.
         let jit = &mut self.jit;
+        jit.storage.claim(self.jit_owner_id);
         let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
         match jit
             .chunk_compiler
@@ -6627,6 +6650,7 @@ impl Vm {
                             // so the trait method can take `&mut dyn JitStorage`.
                             let result = {
                                 let jit = &mut self.jit;
+                                jit.storage.claim(self.jit_owner_id);
                                 let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
                                 jit.trace_compiler
                                     .try_compile_trace(storage, &closed_record, opts)
@@ -7626,7 +7650,14 @@ impl Vm {
                             if v < u32::MAX {
                                 c.set(v + 1);
                             }
+                            // After a side trace ran, `exit_hit_idx` is an
+                            // exit of that child, but a side trace is
+                            // recorded and wired as one of `head_pc_val`'s
+                            // exits: it would replace the side trace on the
+                            // parent's exit of that number, which resumes
+                            // elsewhere.
                             if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
+                                && !child_ran
                                 && self.jit.active_trace.is_none()
                                 && self.jit.trace_enabled
                             {
