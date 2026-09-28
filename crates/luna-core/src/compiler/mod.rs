@@ -572,6 +572,18 @@ impl<'a> Compiler<'a> {
         if prev.a() != vreg {
             return None;
         }
+        // The value may sit in a local's own register (`assign_stat` stores
+        // `b = a` from `a` directly): the instruction before is then the
+        // statement that last assigned `a`, and retargeting it would drop
+        // that assignment.
+        if self
+            .lr()
+            .locals
+            .iter()
+            .any(|v| v.konst.is_none() && v.reg == vreg)
+        {
+            return None;
+        }
         Some(prev_pc)
     }
 
