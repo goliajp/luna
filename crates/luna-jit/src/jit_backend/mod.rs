@@ -928,6 +928,8 @@ fn emit_checked_get<M: Module>(
 /// alongside ABI metadata; the caller drives backend-specific
 /// finalization (`JITModule::finalize_definitions` /
 /// `ObjectModule::finish`).
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
 pub fn lower_int_chunk_into<M: Module>(
     module: &mut M,
     proto: Gc<Proto>,

@@ -3817,6 +3817,8 @@ pub fn try_compile_trace_with_options(
 /// real entry pointer before dispatch (the JIT wrapper does this; the
 /// AOT pipeline resolves the symbol at link time and never invokes
 /// `entry` directly).
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
 pub fn lower_trace_into<M: Module>(
     module: &mut M,
     record: &TraceRecord,
@@ -3838,6 +3840,8 @@ pub fn lower_trace_into<M: Module>(
 /// When `Some(name)`, `name` becomes the cranelift `FuncId` symbol
 /// with `Linkage::Export`, surfacing in the produced `.o`'s symbol
 /// table for the deploy-side `dlsym`/linker to resolve.
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
 pub fn lower_trace_into_named<M: Module>(
     mut module: &mut M,
     record: &TraceRecord,
