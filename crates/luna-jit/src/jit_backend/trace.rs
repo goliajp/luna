@@ -23,7 +23,6 @@ use luna_core::vm::isa::{Inst, Op};
 // codegen entry points side-by-side.
 pub use luna_core::jit::trace_types::*;
 
-use cranelift::prelude::MemFlagsData as MemFlags;
 use cranelift::prelude::*;
 use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::settings;
@@ -200,7 +199,7 @@ fn emit_str_key_arg<M: Module>(
     let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
     let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
     bcx.ins()
-        .load(types::I64, MemFlags::trusted(), slot_addr, 0)
+        .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }
 
 /// Stable 16-hex-char label for a string key. Pure FNV-1a 64-bit so we
@@ -342,7 +341,7 @@ fn emit_chain_ptr_arg<M: Module>(
     let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
     let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
     bcx.ins()
-        .load(types::I64, MemFlags::trusted(), slot_addr, 0)
+        .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }
 
 /// Recognised single-arg libm math functions. Each entry maps the
@@ -2927,12 +2926,12 @@ fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
 /// Cast a Variable's i64 payload into f64 if its kind is Float.
 fn use_var_f64(bcx: &mut FunctionBuilder<'_>, regs: &[Variable], reg: u32) -> Value {
     let raw = bcx.use_var(regs[reg as usize]);
-    bcx.ins().bitcast(types::F64, MemFlags::new(), raw)
+    bcx.ins().bitcast(types::F64, MemFlagsData::new(), raw)
 }
 
 /// Store an f64 SSA value into a Variable as i64 bits.
 fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
-    let bits = bcx.ins().bitcast(types::I64, MemFlags::new(), val_f64);
+    let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), val_f64);
     bcx.def_var(var, bits);
 }
 
@@ -3087,7 +3086,7 @@ fn emit_side_trace_or_return(
     let cell_addr = bcx.ins().iconst(types::I64, side_trace_cell_addr);
     let fn_ptr = bcx
         .ins()
-        .load(types::I64, MemFlags::trusted(), cell_addr, 0);
+        .load(types::I64, MemFlagsData::trusted(), cell_addr, 0);
     let null = bcx.ins().iconst(types::I64, 0);
     let has_side = bcx.ins().icmp(IntCC::NotEqual, fn_ptr, null);
     let do_side_blk = bcx.create_block();
@@ -3165,7 +3164,7 @@ fn emit_store_back_and_return(
             continue;
         }
         let offset = (idx as i32) * 8;
-        bcx.ins().store(MemFlags::new(), val, reg_state, offset);
+        bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
     emit_side_trace_or_return(
         bcx,
@@ -3353,7 +3352,7 @@ fn sync_reg_state(
             continue;
         }
         bcx.ins()
-            .store(MemFlags::new(), val, reg_state, (idx as i32) * 8);
+            .store(MemFlagsData::new(), val, reg_state, (idx as i32) * 8);
         stored[idx] = Some(val);
     }
 }
@@ -3432,7 +3431,7 @@ fn emit_store_back_and_return_site(
             continue;
         }
         let offset = (idx as i32) * 8;
-        bcx.ins().store(MemFlags::new(), val, reg_state, offset);
+        bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
     let sentinel = encode_side_sentinel(SIDE_SENT_KIND_INLINE, site_idx);
     emit_side_trace_or_return(
@@ -5530,7 +5529,7 @@ pub fn lower_trace_into_named<M: Module>(
             let offset = (i as i32) * 8;
             let v0 = bcx
                 .ins()
-                .load(types::I64, MemFlags::new(), reg_state, offset);
+                .load(types::I64, MemFlagsData::new(), reg_state, offset);
             bcx.def_var(v, v0);
         } else {
             let z = bcx.ins().iconst(types::I64, 0);
@@ -5539,7 +5538,7 @@ pub fn lower_trace_into_named<M: Module>(
             // so reg_state must hold the zero too: a side trace entered
             // from its parent's exit finds the parent's values here.
             bcx.ins()
-                .store(MemFlags::new(), z, reg_state, (i as i32) * 8);
+                .store(MemFlagsData::new(), z, reg_state, (i as i32) * 8);
         }
         regs_full.push(v);
     }
@@ -6322,8 +6321,8 @@ pub fn lower_trace_into_named<M: Module>(
                                 // so running it again is harmless.
                                 let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
                                 let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
-                                let f1 = bcx.ins().bitcast(types::F64, MemFlags::new(), a1);
-                                let f2 = bcx.ins().bitcast(types::F64, MemFlags::new(), a2);
+                                let f1 = bcx.ins().bitcast(types::F64, MemFlagsData::new(), a1);
+                                let f2 = bcx.ins().bitcast(types::F64, MemFlagsData::new(), a2);
                                 // max: second wins iff a1 < a2; min: iff a2 < a1.
                                 let second_wins = match (fold.kind, k1) {
                                     (FoldKind::Max2, RegKind::Int) => {
@@ -6436,7 +6435,7 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     luna_core::runtime::Value::Float(f) => {
                         let fv = bcx.ins().f64const(f);
-                        let bits = bcx.ins().bitcast(types::I64, MemFlags::new(), fv);
+                        let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv);
                         (bits, RegKind::Float)
                     }
                     _ => unreachable!("pre-emit gates Int / Float consts"),
@@ -8414,9 +8413,12 @@ pub fn lower_trace_into_named<M: Module>(
         // (caller) frame's `pc` — the runtime analogue of LuaJIT's
         // `[base-8]` in `asm_retf` (`lj_asm_arm64.h:565`).
         let saved_pc_offset = (window_size_us as i32) * 8;
-        let saved_pc = bcx
-            .ins()
-            .load(types::I64, MemFlags::trusted(), reg_state, saved_pc_offset);
+        let saved_pc = bcx.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            reg_state,
+            saved_pc_offset,
+        );
         // Collect distinct caller_pcs from retfs whose proto matches
         // the close marker's `_target_proto_id`. Dedupe + bound to
         // `DOWNREC_MULTI_WAY_GUARD_MAX` so IR size stays predictable
