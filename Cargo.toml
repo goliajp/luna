@@ -76,7 +76,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "3.2.1"
+version = "3.2.2"
 edition = "2024"
 # MSRV: deliberately NOT declared.
 #
@@ -255,3 +255,7 @@ cranelift-srcgen = { path = "crates/vendored/wasmtime/cranelift/srcgen" }
 # file and line; what is lost is variable inspection in a debugger. Full debug
 # info makes up most of target/debug/deps.
 debug = 1
+# macOS: the default unpacked mode leaves every compile's object files in
+# target/debug/deps, and a directory that large slows the first exec of each
+# test binary
+split-debuginfo = "packed"

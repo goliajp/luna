@@ -17,7 +17,7 @@
 //!    JIT noop'd").
 //!
 //! Gated behind `feature = "send"`. Run via:
-//!     cargo test -p luna-jit --features send --test send_vm_jit_smoke
+//!     cargo test -p luna-jit --features send --test it -- send_vm_jit_smoke::
 
 #![cfg(feature = "send")]
 
@@ -43,7 +43,7 @@ const TRACE_HOT_LOOP: &str = r#"
 const EXPECTED_RESULT: i64 = 500_500;
 
 /// Compile-time assertion: `SendVm: Send`. luna-core already pins
-/// this in `crates/luna-core/tests/send_vm.rs:send_vm_is_send`, but
+/// this in `crates/luna-core/tests/it/send_vm.rs:send_vm_is_send`, but
 /// re-pinning it inside `luna-jit` makes the cross-thread JIT test
 /// suite self-contained — if SendVm's Send story ever regresses
 /// (e.g. someone adds a `!Send` field without lifting `unsafe impl

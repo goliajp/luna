@@ -1,3 +1,5 @@
+// own binary: it sets LUNA_AOT_HARVEST_PROBE for the whole process
+
 //! Runtime fire measurement for the AOT inline-chain reloc path.
 //!
 //! NOT a pass/fail test — pure measurement. Prints every relevant

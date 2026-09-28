@@ -6,13 +6,12 @@
 //! `JITModule` to be `Send`. As of cranelift_jit 0.124.3 the
 //! type is **not** auto-`Send` because its
 //! `memory: Box<dyn JITMemoryProvider>` field is a trait object with
-//! no `+ Send` bound. The default provider — `SystemMemoryProvider` —
-//! IS `Send`
-//! (`cranelift-jit-0.124.3/src/memory/system.rs:126 unsafe impl Send
-//! for Memory`), and luna never plugs in a custom provider
-//! (`grep memory_provider crates/luna-jit/src/` → 0 hits), so
-//! wrapping `JITModule` in a newtype + `unsafe impl Send` is sound
-//! for luna's actual usage pattern.
+//! no `+ Send` bound. Every module luna builds uses
+//! [`super::code_memory::CodeMemory`], which is `Send` (it holds a
+//! `SystemMemoryProvider`, `Send` via
+//! `cranelift-jit-0.124.3/src/memory/system.rs` `unsafe impl Send for
+//! Memory`, and plain integers), so wrapping `JITModule` in a newtype +
+//! `unsafe impl Send` is sound for luna's actual usage pattern.
 //!
 //! Precedent: `unsafe impl Send for TraceHandle` in `trace.rs`.
 
@@ -26,7 +25,7 @@ use std::ops::{Deref, DerefMut};
 /// Cranelift.
 ///
 /// **Not a stable embedder API.** The type is `pub` only so the
-/// integration test (`tests/send_jit_module_wrapper.rs`) can
+/// integration test (`tests/it/send_jit_module_wrapper.rs`) can
 /// import it via a `#[doc(hidden)]` re-export at the crate root —
 /// embedders should treat it as internal to luna-jit.
 ///
@@ -37,26 +36,26 @@ use std::ops::{Deref, DerefMut};
 #[doc(hidden)]
 pub struct SendJitModule(JITModule);
 
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<super::code_memory::CodeMemory>();
+};
+
 // SAFETY: on cranelift_jit 0.124.3 the only `!Send` field is
-// `memory: Box<dyn JITMemoryProvider>` (`backend.rs:175`, the trait object has no `+ Send` bound). The
-// default concrete provider `SystemMemoryProvider` IS `Send`
-// (`memory/system.rs:126 unsafe impl Send for Memory`). luna never
-// calls `JITBuilder::memory_provider` (`grep memory_provider
-// crates/luna-jit/src/` → 0 hits), so every `JITModule` luna
-// constructs holds the default `SystemMemoryProvider`. Mirrors the
-// established precedent `unsafe impl Send for TraceHandle` in
-// `trace.rs`.
+// `memory: Box<dyn JITMemoryProvider>` (the trait object has no `+ Send`
+// bound). luna installs `CodeMemory` in every `JITModule` it builds
+// (`build_jit_module_with_helpers`, `build_trace_jit_module`), and
+// `CodeMemory` is `Send`: the assertion above fails to compile otherwise.
 //
 // Caveat: future cranelift bumps must re-check this; the
-// static assertion in `tests/send_jit_module_wrapper.rs` is the
+// static assertion in `tests/it/send_jit_module_wrapper.rs` is the
 // canary.
 unsafe impl Send for SendJitModule {}
 
 impl SendJitModule {
-    /// Wraps a freshly-built `JITModule`. Caller MUST have used the
-    /// default memory provider path (`JITBuilder::new` /
-    /// `JITBuilder::with_isa` without `memory_provider(...)`); see
-    /// SAFETY note above.
+    /// Wraps a freshly-built `JITModule`. Caller MUST have built it with
+    /// a `Send` memory provider (luna uses `CodeMemory`); see SAFETY
+    /// note above.
     #[inline]
     #[allow(dead_code)]
     pub fn new(module: JITModule) -> Self {

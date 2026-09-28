@@ -19,6 +19,21 @@ optimization.
 
 ---
 
+## [3.2.2] — 2026-09-29
+
+### Fixed
+
+- On aarch64, a function compiled by the JIT could run the machine code
+  of an earlier function instead of its own. Since 3.2.1 a dropped `Vm`
+  frees its JIT code and the next compile reuses that memory, but the
+  instruction cache was not invalidated for the new code, so a core could
+  still hold the old instructions; a Lua 5.3 function returning `99` was
+  seen to return `Int(4636666922610458624)`, the bits of a 5.2 build's
+  `99.0`. The JIT now invalidates the instruction cache for every range
+  of code it writes.
+
+---
+
 ## [3.2.1] — 2026-09-28
 
 Fixes found by a new fuzz target that runs generated hot loops with the

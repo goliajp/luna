@@ -7,7 +7,7 @@
 //!
 //! For dialect-spanning correctness verification against PUC, see
 //! `tests/official_run.rs`. For real-world workload diff-testing
-//! against PUC binaries, see `tests/e2e_programs.rs`.
+//! against PUC binaries, see `tests/it/e2e_programs.rs`.
 //!
 //! **Dialect awareness**: Lua 5.1/5.2 have no integer subtype — all
 //! numbers are `double`. So integer-literal arithmetic returns Float
