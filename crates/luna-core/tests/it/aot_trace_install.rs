@@ -2,7 +2,7 @@
 //!
 //! These cover the install API surface only — the deploy-side
 //! resolver that *calls* this API lives in `luna-runtime-helpers` and
-//! is exercised by `crates/luna-aot/tests/aot_trace_fires.rs`.
+//! is exercised by `crates/luna-aot/tests/it/aot_trace_fires.rs`.
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;

@@ -1,3 +1,5 @@
+// own binary: it changes the process cwd, and ci reads its stderr trace under --nocapture
+
 //! Official PUC Lua test-suite gates for every supported dialect.
 //!
 //! For each Lua version luna implements we vendor PUC's released test tarball
@@ -74,7 +76,7 @@ const ASSERT_COUNTER_PREAMBLE: &[u8] = b"do _G.__luna_assert_total=0 _G.__luna_a
 /// `LUNA_OFFICIAL_BYTE_DIFF=1` env var.
 /// Redirects `_G.print` and `_G.io.write` to append to a global
 /// buffer `_G.__luna_official_stdout` which the harness reads back
-/// after the chunk runs. Mirrors `crates/luna-core/tests/diff_puc.rs`
+/// after the chunk runs. Mirrors `crates/luna-core/tests/it/diff_puc.rs`
 /// pattern.
 ///
 /// Only applied when the env var is set — default path is
@@ -666,7 +668,7 @@ fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
 }
 
 /// Resolve the per-dialect PUC interpreter path.
-/// Mirrors `crates/luna-core/tests/diff_puc.rs::puc_bin_for`.
+/// Mirrors `crates/luna-core/tests/it/diff_puc.rs::puc_bin_for`.
 /// Returns `None` when the env var is unset for a non-5.5 dialect;
 /// 5.5 falls back to `PUC_LUA` env then bare `lua5.5` in PATH.
 #[allow(dead_code)]

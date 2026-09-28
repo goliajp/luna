@@ -392,7 +392,7 @@ you need both shapes, register an explicit `add_method("width", ...)`
 alongside the field getter. (Call syntax did work in 1.2, when the
 getter generated a method-table entry; 1.3 changed the dispatch.) Methods win over field-getters on name collision
 (matches mlua; precedence is documented in
-`crates/luna-core/tests/userdata_trait.rs::methods_win_on_collision`).
+`crates/luna-core/tests/it/userdata_trait.rs::methods_win_on_collision`).
 
 ### 7.4a `#[derive(LuaUserdata)]` proc-macro (v1.3 UD3)
 

@@ -83,7 +83,7 @@ itself provides the quoting forms — `@name(args)`, the brace-delimited
 `@unquote(name)` to splice one back inside another expansion.
 
 Implementation: `crates/luna-core/src/frontend/macro_expander.rs`.
-Worked examples: `crates/luna-core/tests/macro_lua.rs` and
+Worked examples: `crates/luna-core/tests/it/macro_lua.rs` and
 `cargo run --example macro_lua_demo -p luna-jit`.
 
 There is no upstream canonical MacroLua spec; LuaMacro (Steve Donovan)
@@ -135,7 +135,7 @@ those headers that expand to functions luna does not export
 `lua_pushcfunction` → `lua_pushcclosure`, `lua_tointeger` →
 `lua_tointegerx`). Call the covered functions by these names directly.
 
-Covered — `crates/luna-jit/tests/capi.rs` is the conformance suite
+Covered — `crates/luna-jit/tests/it/capi.rs` is the conformance suite
 (13 tests):
 
 - `lua_State` lifecycle: `luaL_newstate`, `luaL_openlibs`, `lua_close`
@@ -180,7 +180,7 @@ Every diff_puc fixture is compiled by luna, dumped, and run by the stock
 interpreter of its dialect, matching PUC running the source byte for byte
 in stdout (and in the error text for `_err` fixtures); the stripped dump
 matches PUC running the same program compiled by `luac -s`; and the dump
-loads back into luna to the same result (`tests/puc_dump.rs`).
+loads back into luna to the same result (`tests/it/puc_dump.rs`).
 
 `load` accepts a chunk of the running dialect's own PUC version under the
 same switch as luna's own format (below), since it is what `string.dump`
@@ -418,7 +418,7 @@ that cannot be opened (`cannot open <name>: <reason>`), and a bad option
 (the dialect's usage message) are reported the same way, without a
 traceback. `os.exit` exits with the status it is given. As in `lua.c`,
 an error in a program read from stdin without `-` is reported but leaves
-the exit status 0. `crates/luna-jit/tests/cli_errors.rs` pins each case
+the exit status 0. `crates/luna-jit/tests/it/cli_errors.rs` pins each case
 to the text the PUC interpreters print.
 
 The REPL is `lua.c`'s as it runs when built without readline. It
@@ -430,7 +430,7 @@ as `return <line>;`; through 5.4 a first line `=expr` means
 `return expr`; 5.5 warns about a line starting with `local`. The results
 go through the global `print` and an error is reported with its
 traceback, without the program name. End of input ends it with a
-newline. The cases `crates/luna-jit/tests/cli_repl.rs` and
+newline. The cases `crates/luna-jit/tests/it/cli_repl.rs` and
 `cli_repl_edges.rs` pin include the dialects' quirks, such as 5.3
 reporting its `_PROMPT2` value when the input ends inside a statement.
 
@@ -461,7 +461,7 @@ cargo run --release -p luna-core --example runone -- \
   --lua=5.5 crates/luna-core/tests/official/lua-5.5.1-tests/calls.lua
 
 # Differential corpus vs stock PUC (needs the reference binaries)
-cargo test --release -p luna-core --test diff_puc
+cargo test --release -p luna-core --test it -- diff_puc::
 
 # Sandbox walkthrough
 cargo run --release --example sandbox_demo -p luna-jit

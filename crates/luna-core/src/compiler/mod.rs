@@ -82,7 +82,7 @@ pub(crate) fn compile_parsed(
 /// proto's final `last_target` value (the highest pc recorded as a jump
 /// destination — PUC `fs->lasttarget` equivalent). Used by the
 /// jump-target tracker unit tests at
-/// `crates/luna-core/tests/compiler_jump_target_tracker.rs`.
+/// `crates/luna-core/tests/it/compiler_jump_target_tracker.rs`.
 ///
 /// This entry point is intentionally separate from `compile_chunk` so
 /// production callers do not pay the destructure cost; it exists purely

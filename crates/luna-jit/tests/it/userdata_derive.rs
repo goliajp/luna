@@ -1,6 +1,6 @@
 //! v1.3 UD3 — `#[derive(LuaUserdata)]` + `#[lua_userdata_methods]`
 //! smoke tests. Mirrors the v1.2 hand-impl trait tests in
-//! `luna-core/tests/userdata_trait.rs` but uses the derive instead.
+//! `luna-core/tests/it/userdata_trait.rs` but uses the derive instead.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;

@@ -531,8 +531,8 @@ fn local_aliasing_a_running_call() {
 /// compiled by PUC's `luac`, loaded `ROUNDS` times per sample. Run the same
 /// test on a tree without the verifier to get the overhead:
 ///
-///     cargo test --release -p luna-core --test bytecode_verify \
-///         load_overhead -- --ignored --nocapture
+///     cargo test --release -p luna-core --test it \
+///         bytecode_verify::load_overhead -- --ignored --nocapture
 #[test]
 #[ignore = "measurement, not a check"]
 fn load_overhead() {
