@@ -323,7 +323,11 @@ impl Gen<'_, '_> {
         }
         const TRIPS: [u32; 9] = [1, 2, 3, 5, 9, 17, 40, 100, 300];
         // a kernel's own loop runs long enough to get hot
-        let first = if self.iters == 1 && self.user_calls { 5 } else { 0 };
+        let first = if self.iters == 1 && self.user_calls {
+            5
+        } else {
+            0
+        };
         let trips = TRIPS[(first + self.pick(9 - first)) as usize]
             .min(self.max_trips)
             .min(MAX_ITERS / self.iters)
@@ -343,7 +347,9 @@ impl Gen<'_, '_> {
             0 | 1 => self.numeric_for(id, trips),
             2 => {
                 let w = format!("w{id}");
-                self.line(&format!("do local {w} = 0 while {w} < {trips} do {w} = {w} + 1"));
+                self.line(&format!(
+                    "do local {w} = 0 while {w} < {trips} do {w} = {w} + 1"
+                ));
                 self.nums.push(w);
                 self.body(5);
                 self.line("end end");

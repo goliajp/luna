@@ -38,7 +38,10 @@ fn same(src: &str, want: &str) {
         let mut dispatched = 0;
         for hot in 1..=5 {
             let (jit, d) = run(v, src, Some(hot));
-            assert_eq!(jit, interp, "{v:?}, hot {hot}: JIT differs from the interpreter");
+            assert_eq!(
+                jit, interp,
+                "{v:?}, hot {hot}: JIT differs from the interpreter"
+            );
             dispatched += d;
         }
         assert!(dispatched > 0, "{v:?}: no trace was dispatched");
