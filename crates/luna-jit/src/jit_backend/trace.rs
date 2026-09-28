@@ -813,7 +813,7 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
 fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
     let kv = bcx.ins().iconst(types::I64, k);
     if k > 0 {
-        let s = bcx.ins().sshr_imm(a, 63);
+        let s = bcx.ins().sshr_imm_u(a, 63);
         let t = bcx.ins().bxor(a, s);
         let ut = bcx.ins().udiv(t, kv);
         let q = bcx.ins().bxor(ut, s);
@@ -828,11 +828,11 @@ fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64)
     let qk = bcx.ins().imul(q, kv);
     let r = bcx.ins().isub(a, qk);
     let wrong_sign = if k > 0 { r } else { bcx.ins().ineg(r) };
-    let mask = bcx.ins().sshr_imm(wrong_sign, 63);
+    let mask = bcx.ins().sshr_imm_u(wrong_sign, 63);
     if op == Op::IDiv {
         bcx.ins().iadd(q, mask)
     } else {
-        let adj = bcx.ins().band_imm(mask, k);
+        let adj = bcx.ins().band_imm_s(mask, k);
         bcx.ins().iadd(r, adj)
     }
 }
@@ -3298,7 +3298,7 @@ mod drop_unused_block_params_tests {
         b.ins().jump(head, &[x.into(), x.into()]);
         b.switch_to_block(head);
         let one = b.ins().iconst(types::I64, 1);
-        let again = b.ins().icmp_imm(IntCC::SignedLessThan, live, 10);
+        let again = b.ins().icmp_imm_s(IntCC::SignedLessThan, live, 10);
         let next_live = b.ins().iadd(live, one);
         b.ins()
             .brif(again, head, &[dead.into(), next_live.into()], out, &[]);
@@ -6335,7 +6335,7 @@ pub fn lower_trace_into_named<M: Module>(
                                     (FoldKind::Min2, _) => emit_lt_int_float(&mut bcx, a2, f1),
                                     (FoldKind::Libm1, _) => unreachable!(),
                                 };
-                                let first_wins = bcx.ins().bxor_imm(second_wins, 1);
+                                let first_wins = bcx.ins().bxor_imm_u(second_wins, 1);
                                 guard!(first_wins, i, record.ops[fold.start_idx].pc);
                                 bcx.def_var(regs[fold.dst_reg as usize], a1);
                                 current_kinds[off + fold.dst_reg as usize] = k1;
@@ -6560,9 +6560,9 @@ pub fn lower_trace_into_named<M: Module>(
                         if n <= -64 || n >= 64 {
                             bcx.ins().iconst(types::I64, 0)
                         } else if n >= 0 {
-                            bcx.ins().ishl_imm(lhs, n)
+                            bcx.ins().ishl_imm_u(lhs, n)
                         } else {
-                            bcx.ins().ushr_imm(lhs, -n)
+                            bcx.ins().ushr_imm_u(lhs, -n)
                         }
                     }
                     _ => match op {
@@ -6585,7 +6585,7 @@ pub fn lower_trace_into_named<M: Module>(
                         Op::BOr => bcx.ins().bor(lhs, rhs),
                         Op::BXor => bcx.ins().bxor(lhs, rhs),
                         Op::Shl | Op::Shr => {
-                            let wide = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThan, rhs, 63);
+                            let wide = bcx.ins().icmp_imm_u(IntCC::UnsignedGreaterThan, rhs, 63);
                             let cont_blk = bcx.create_block();
                             let exit_blk = bcx.create_block();
                             bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
@@ -6834,7 +6834,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let one = bcx.ins().iconst(types::I64, 1);
                     let is_truthy = bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
                     // Op::Test: test_passed_runtime = !is_truthy == k_bit
-                    let not_truthy = bcx.ins().bxor_imm(is_truthy, 1);
+                    let not_truthy = bcx.ins().bxor_imm_u(is_truthy, 1);
                     let k_bit_const = bcx.ins().iconst(types::I8, k_bit as i64);
                     let test_passed_runtime = bcx.ins().icmp(IntCC::Equal, not_truthy, k_bit_const);
                     let recorded_const = bcx.ins().iconst(types::I8, recorded_passed as i64);
@@ -6970,7 +6970,7 @@ pub fn lower_trace_into_named<M: Module>(
                     if k_effective {
                         c
                     } else {
-                        bcx.ins().icmp_imm(IntCC::Equal, c, 0)
+                        bcx.ins().icmp_imm_u(IntCC::Equal, c, 0)
                     }
                 } else {
                     let lhs = bcx.use_var(regs[ins.a() as usize]);
@@ -7420,7 +7420,7 @@ pub fn lower_trace_into_named<M: Module>(
                         super::TABLE_NODES_PTR_OFFSET as i32,
                     );
                     let node_offset = (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
-                    let node_addr = bcx.ins().iadd_imm(nodes_ptr, node_offset);
+                    let node_addr = bcx.ins().iadd_imm_u(nodes_ptr, node_offset);
 
                     let key_raw = bcx.ins().load(
                         types::I64,
@@ -7740,7 +7740,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let call = bcx.ins().call(func_ref, &[t]);
                 let v = bcx.inst_results(call)[0];
                 // -1: the table has a metatable
-                let ok = bcx.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, v, 0);
+                let ok = bcx.ins().icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
                 guard!(ok, i, rop.pc);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
@@ -7834,7 +7834,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let status = bcx.inst_results(call)[0];
                 // 1: a `__close` handler would run; the interpreter
                 // redoes the op and runs it
-                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                let ok = bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
                 guard!(ok, i, rop.pc);
             }
             Op::GetUpval => {
@@ -8074,11 +8074,11 @@ pub fn lower_trace_into_named<M: Module>(
                         // interpreter redoes the op
                         let ok =
                             bcx.ins()
-                                .icmp_imm(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
+                                .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
                         guard!(ok, i, rop.pc);
                         // key tag | value tag << 8 (Vm::jit_op_tforcall)
-                        let key_tag = bcx.ins().band_imm(status_or_tag, 0xff);
-                        let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
+                        let key_tag = bcx.ins().band_imm_u(status_or_tag, 0xff);
+                        let val_tag = bcx.ins().ushr_imm_u(status_or_tag, 8);
                         bcx.def_var(tforcall_tag_var, key_tag);
                         bcx.def_var(tforcall_val_tag_var, val_tag);
                         let ctrl_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 0);
@@ -8289,7 +8289,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let call_inst = bcx.ins().call(func_ref, &[a_arg, n_arg]);
                 let status = bcx.inst_results(call_inst)[0];
                 // -1: an error or `__concat`; the interpreter redoes the op
-                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                let ok = bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
                 guard!(ok, i, rop.pc);
                 // Reload regs[A] (= result Str) from vm.stack via
                 // luna_jit_stack_load helper. The helper deopts on the
@@ -8782,10 +8782,10 @@ pub fn lower_trace_into_named<M: Module>(
 
                 bcx.switch_to_block(not_nil_blk);
                 bcx.seal_block(not_nil_blk);
-                let mut same_kinds = bcx.ins().icmp_imm(IntCC::Equal, tag, i64::from(key_tag));
+                let mut same_kinds = bcx.ins().icmp_imm_u(IntCC::Equal, tag, i64::from(key_tag));
                 if let Some(val_tag) = val_tag {
                     let v = bcx.use_var(tforcall_val_tag_var);
-                    let same_val = bcx.ins().icmp_imm(IntCC::Equal, v, i64::from(val_tag));
+                    let same_val = bcx.ins().icmp_imm_u(IntCC::Equal, v, i64::from(val_tag));
                     same_kinds = bcx.ins().band(same_kinds, same_val);
                 }
                 let continue_blk = bcx.create_block();

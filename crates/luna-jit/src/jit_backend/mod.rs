@@ -864,14 +864,14 @@ fn emit_checked_get<M: Module>(
         t,
         TABLE_ASIZE_OFFSET as i32,
     );
-    let avals_bytes = bcx.ins().ishl_imm(asize, 3);
+    let avals_bytes = bcx.ins().ishl_imm_u(asize, 3);
     let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
     let tag_addr = bcx.ins().iadd(atags_ptr, key_minus_1);
     let tag = bcx
         .ins()
         .uload8(types::I64, MemFlagsData::trusted(), tag_addr, 0);
-    let tag_ok = bcx.ins().icmp_imm(IntCC::Equal, tag, want);
-    let val_off = bcx.ins().ishl_imm(key_minus_1, 3);
+    let tag_ok = bcx.ins().icmp_imm_u(IntCC::Equal, tag, want);
+    let val_off = bcx.ins().ishl_imm_u(key_minus_1, 3);
     let val_addr = bcx.ins().iadd(avals_ptr, val_off);
     let fast_bits = bcx
         .ins()
