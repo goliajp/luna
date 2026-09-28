@@ -110,7 +110,13 @@ impl<'a, 'b> Gen<'a, 'b> {
             "0.5", "-0.0", "(1/0)", "(-1/0)", "(0/0)", "1e308", "2^53", "3.0", "-2.5", "1e-310",
         ];
         let ints = [
-            "0", "-1", "math.maxinteger", "math.mininteger", "2147483647", "0x7fffffff", "7",
+            "0",
+            "-1",
+            "math.maxinteger",
+            "math.mininteger",
+            "2147483647",
+            "0x7fffffff",
+            "7",
         ];
         if self.ints && self.pick(2) == 0 {
             self.one(&ints).to_string()
@@ -130,7 +136,9 @@ impl<'a, 'b> Gen<'a, 'b> {
             0 => format!("{}", self.pick(12) as i32 - 2),
             1 => self.num_var(),
             2 => self.special_num(),
-            3 => self.one(&["c[1]", "#seq", "cnt", "hits", "c.n"]).to_string(),
+            3 => self
+                .one(&["c[1]", "#seq", "cnt", "hits", "c.n"])
+                .to_string(),
             4 => {
                 let op = self.one(&["+", "-", "*", "+", "-"]);
                 format!("({} {op} {})", self.num(d + 1), self.num(d + 1))
@@ -163,7 +171,12 @@ impl<'a, 'b> Gen<'a, 'b> {
             10 => format!("(tonumber({}) or 1)", self.any(d + 1)),
             11 => format!("{}[{}]", self.obj(d + 1), self.key(d + 1)),
             12 => format!("(tonumber({}[{}]) or 0)", self.obj(d + 1), self.key(d + 1)),
-            13 => format!("({} and {} or {})", self.cond(d + 1), self.num(d + 1), self.num(d + 1)),
+            13 => format!(
+                "({} and {} or {})",
+                self.cond(d + 1),
+                self.num(d + 1),
+                self.num(d + 1)
+            ),
             14 => self.user_call(d),
             15 => format!("#{}", self.str_e(d + 1)),
             16 => match self.pick(3) {
@@ -171,7 +184,9 @@ impl<'a, 'b> Gen<'a, 'b> {
                 1 => format!("({} + M)", self.num(d + 1)),
                 _ => "(-M)".to_string(),
             },
-            17 => self.one(&["\"10\"", "\"0x10\"", "\" 3 \"", "\"1e2\"", "\"-0\""]).to_string(),
+            17 => self
+                .one(&["\"10\"", "\"0x10\"", "\" 3 \"", "\"1e2\"", "\"-0\""])
+                .to_string(),
             18 => self.one(&["#M", "#arr", "#c"]).to_string(),
             19 => format!("select('#', va({}, {}))", self.num(d + 1), self.any(d + 1)),
             20 => format!("({} / {})", self.num(d + 1), self.num(d + 1)),
@@ -213,7 +228,9 @@ impl<'a, 'b> Gen<'a, 'b> {
         let n = if d >= MAX_DEPTH { 2 } else { 13 };
         match self.pick(n) {
             0 => self
-                .one(&["\"a\"", "\"\"", "\"10\"", "\"0x1F\"", "\" 7 \"", "\"1e2\"", "\"abc\""])
+                .one(&[
+                    "\"a\"", "\"\"", "\"10\"", "\"0x1F\"", "\" 7 \"", "\"1e2\"", "\"abc\"",
+                ])
                 .to_string(),
             1 => "s".to_string(),
             2 => format!("tostring({})", self.num(d + 1)),
@@ -237,7 +254,11 @@ impl<'a, 'b> Gen<'a, 'b> {
                 _ => format!("({} .. M)", self.str_e(d + 1)),
             },
             10 => format!("type({})", self.any(d + 1)),
-            11 => format!("table.concat({{{}, {}}}, \",\")", self.str_e(d + 1), self.num(d + 1)),
+            11 => format!(
+                "table.concat({{{}, {}}}, \",\")",
+                self.str_e(d + 1),
+                self.num(d + 1)
+            ),
             _ => format!("tostring({})", self.cond(d + 1)),
         }
     }
@@ -260,7 +281,12 @@ impl<'a, 'b> Gen<'a, 'b> {
             6 => self.cond(d + 1),
             7 => format!("{{va({}, {})}}", self.num(d + 1), self.any(d + 1)),
             8 => format!("function(q) return q + {} end", self.pick(5)),
-            9 => format!("({} and {} or {})", self.cond(d + 1), self.any(d + 1), self.any(d + 1)),
+            9 => format!(
+                "({} and {} or {})",
+                self.cond(d + 1),
+                self.any(d + 1),
+                self.any(d + 1)
+            ),
             _ => self.user_call(d),
         }
     }
@@ -326,7 +352,9 @@ impl<'a, 'b> Gen<'a, 'b> {
                 format!("({} {op} {})", self.str_e(d + 1), self.str_e(d + 1))
             }
             4 => format!("({} == {})", self.obj(d + 1), self.obj(d + 1)),
-            5 => self.one(&["(M < M2)", "(M <= M2)", "(M2 < M)", "(M == M2)"]).to_string(),
+            5 => self
+                .one(&["(M < M2)", "(M <= M2)", "(M2 < M)", "(M == M2)"])
+                .to_string(),
             6 => format!("(not {})", self.any(d + 1)),
             7 => {
                 let op = self.one(&["and", "or"]);

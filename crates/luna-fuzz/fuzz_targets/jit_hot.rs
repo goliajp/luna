@@ -50,7 +50,8 @@ impl Gen<'_, '_> {
     }
 
     fn hobj(&mut self) -> String {
-        self.one(&["t", "arr", "arr", "c", "M", "P", "o"]).to_string()
+        self.one(&["t", "arr", "arr", "c", "M", "P", "o"])
+            .to_string()
     }
 
     /// Keys that compile to register or integer indexing, not a field
@@ -73,7 +74,10 @@ impl Gen<'_, '_> {
             // float against float: the compiled compare must keep NaN's
             // answers (`not (x < y)` holds for NaN, `x >= y` does not)
             let op = self.one(&["<", "<=", ">", ">=", "==", "~="]);
-            let (l, r) = (self.one(&["f1", "f2"]), self.one(&["f1", "f2", "0.5", "-1.5"]));
+            let (l, r) = (
+                self.one(&["f1", "f2"]),
+                self.one(&["f1", "f2", "0.5", "-1.5"]),
+            );
             return match self.pick(2) {
                 0 => format!("({l} {op} {r})"),
                 _ => format!("(not ({l} {op} {r}))"),
@@ -118,8 +122,23 @@ impl Gen<'_, '_> {
     fn shape_change(&mut self) -> String {
         let k = self.pick(8) + 1;
         match self.pick(10) {
-            0 => format!("arr[{k}] = {}", self.one(&["\"10\"", "2.5", "M", "(0/0)", "-0.0"])),
-            1 => format!("n{} = {}", self.pick(3) + 1, self.one(&["0.5", "\"7\"", "(1/0)", "(0/0)", "-0.0", "math.maxinteger", "M"])),
+            0 => format!(
+                "arr[{k}] = {}",
+                self.one(&["\"10\"", "2.5", "M", "(0/0)", "-0.0"])
+            ),
+            1 => format!(
+                "n{} = {}",
+                self.pick(3) + 1,
+                self.one(&[
+                    "0.5",
+                    "\"7\"",
+                    "(1/0)",
+                    "(0/0)",
+                    "-0.0",
+                    "math.maxinteger",
+                    "M"
+                ])
+            ),
             2 => "setmetatable(t, TMT)".to_string(),
             3 => "setmetatable(t, TMT2)".to_string(),
             4 => format!(
@@ -127,7 +146,10 @@ impl Gen<'_, '_> {
                 self.pick(3) + 1,
                 self.one(&["M", "P", "t", "arr", "5", "\"s\"", "2.5"])
             ),
-            5 => format!("c[1] = {}", self.one(&["0.5", "\"3\"", "M", "math.mininteger"])),
+            5 => format!(
+                "c[1] = {}",
+                self.one(&["0.5", "\"3\"", "M", "math.mininteger"])
+            ),
             6 => "o = M".to_string(),
             7 => "MT.__index = Mstore".to_string(),
             8 if self.floats => format!(
@@ -195,7 +217,10 @@ impl Gen<'_, '_> {
                 // mostly the same kind of argument, now and then another
                 let v = self.one(&["n1", "n2", "n3"]);
                 let a = self.hnum(1);
-                let (c, odd) = (self.after(), self.one(&["(0/0)", "-0.0", "(1/0)", "\"5\"", "M", "2^63"]));
+                let (c, odd) = (
+                    self.after(),
+                    self.one(&["(0/0)", "-0.0", "(1/0)", "\"5\"", "M", "2^63"]),
+                );
                 self.line(&format!("{v} = hk({a}, {c} and {odd} or 0.5)"));
             }
             11 if self.in_loop => {
