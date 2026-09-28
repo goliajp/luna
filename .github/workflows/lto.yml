@@ -1,0 +1,29 @@
+name: lto
+
+# The per-push matrix in ci.yml tests with LTO off to keep it fast. This runs
+# the same suite built as shipped (`[profile.release]`, fat LTO) on every
+# platform: nightly, and by hand before a release.
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  native:
+    name: ${{ matrix.os }} release (lto)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo test --workspace --release
+        run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture

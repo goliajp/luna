@@ -62,6 +62,10 @@ jobs:
         # visible — without it, cargo test buffers per-test output and a
         # hard abort drops the buffer.
         run: cargo test --workspace --release --exclude llvm-jit-probe --exclude luna-jit-llvm -- --nocapture
+        # fat LTO made every test binary a whole-program link (6x the build
+        # time) and no test depends on it; lto.yml runs the suite as shipped
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
       - name: cargo test --doc --workspace
         run: cargo test --doc --workspace --exclude llvm-jit-probe --exclude luna-jit-llvm
 
