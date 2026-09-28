@@ -1670,7 +1670,8 @@ fn const_fold_int_key(
 ///   Closure / etc.): unbind A.
 ///
 /// Terminator handling (the op at `effective_end`, if any):
-/// - `TraceEnd::Call`: terminator's args + fn slot escape live bindings.
+/// - `TraceEnd::Call`: every live binding escapes (the interpreter
+///   resumes at the call with the whole frame live).
 /// - `TraceEnd::ForLoop`: nothing escapes; the loop exit resumes
 ///   outside the body, where its locals are dead.
 /// - `TraceEnd::InlineAbort` / `SelfLink` / `DownRec`: every live
@@ -2105,25 +2106,11 @@ fn escape_analyze(
         let op = term.inst.op();
         let in_range = (depth as usize) < max_depth && (a as usize) < max_stack;
         match end {
-            TraceEnd::Call => {
-                if in_range {
-                    let b = term.inst.b();
-                    if b > 0 {
-                        for off in 1..b {
-                            let src = a.wrapping_add(off);
-                            if (src as usize) < max_stack
-                                && let Some(src_sid) = lookup(&bindings, depth, src)
-                            {
-                                mark_escape(&mut sites, src_sid);
-                            }
-                        }
-                    }
-                    if let Some(fn_sid) = lookup(&bindings, depth, a) {
-                        mark_escape(&mut sites, fn_sid);
-                    }
-                }
-            }
-            TraceEnd::InlineAbort => {
+            // The interpreter resumes at the call with the whole frame
+            // live: a table still under construction (`{f()}`, whose
+            // SetList follows the call) or any other sunk table read
+            // after it must be a real one.
+            TraceEnd::Call | TraceEnd::InlineAbort => {
                 escape_all_live(&bindings, &mut sites);
             }
             TraceEnd::ForLoop => {
@@ -2690,6 +2677,16 @@ pub struct TraceHandle {
 unsafe impl Send for TraceHandle {}
 
 impl TraceHandle {
+    /// Frees the compiled trace.
+    ///
+    /// # Safety
+    ///
+    /// The trace is not running and will not be entered again.
+    pub(crate) unsafe fn free(self) {
+        // SAFETY: forwarded from the caller
+        unsafe { self._module.free() }
+    }
+
     /// `#[doc(hidden)]` accessor returning
     /// the parked `_module` borrowed at the `SendJitModule` newtype.
     /// Mirror of `JitHandle::__send_module`; lets
@@ -3769,8 +3766,8 @@ pub fn try_compile_trace_with_options(
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
-    let mut module = build_trace_jit_module()?;
-    let (fn_id, mut compiled) = lower_trace_into(&mut module, record, opts)?;
+    let mut module = super::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
+    let (fn_id, mut compiled) = lower_trace_into(&mut *module, record, opts)?;
     module.finalize_definitions().ok()?;
     let ptr = module.get_finalized_function(fn_id);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
@@ -3791,7 +3788,7 @@ pub fn try_compile_trace_with_options(
         // sleeve. SAFETY: `build_trace_jit_module` uses the
         // default `SystemMemoryProvider` path (no
         // `JITBuilder::memory_provider` call).
-        _module: super::SendJitModule::new(module),
+        _module: module.publish(),
         _entry_raw: ptr,
     });
     Some(compiled)
@@ -5739,15 +5736,15 @@ pub fn lower_trace_into_named<M: Module>(
 
     let body_loop = bcx.create_block();
     bcx.ins().jump(precheck.unwrap_or(body_loop), &[]);
-    bcx.switch_to_block(body_loop);
-    // Intentionally NOT sealed: the tail's clean-close back-edge
-    // adds a second predecessor below.
+    // `body_loop` is entered after the precheck block is emitted (below):
+    // reading a register there first would leave it half-built while
+    // another block is emitted, which the builder rejects.
 
     // What reg_state holds for each register at the loop head: on entry
     // the values the prelude loaded (caller window) or the zeroes the
     // dispatcher filled it with (inline frames); on the back-edge what
-    // `sync_reg_state` wrote before the jump.
-    let mut stored: Vec<Option<Value>> = regs_full.iter().map(|&v| Some(bcx.use_var(v))).collect();
+    // `sync_reg_state` wrote before the jump. Read at the loop head below.
+    let mut stored: Vec<Option<Value>> = Vec::new();
 
     // Per-reg current kind. Initialise from the recorder's
     // entry-tag snapshot; writers below refine. Unset slots fall
@@ -6062,8 +6059,11 @@ pub fn lower_trace_into_named<M: Module>(
             bcx.seal_block(ok_blk);
         }
         bcx.ins().jump(body_loop, &[]);
-        bcx.switch_to_block(body_loop);
     }
+    bcx.switch_to_block(body_loop);
+    // Intentionally NOT sealed: the tail's clean-close back-edge
+    // adds a second predecessor below.
+    stored.extend(regs_full.iter().map(|&v| Some(bcx.use_var(v))));
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.
@@ -8659,23 +8659,27 @@ pub fn lower_trace_into_named<M: Module>(
                 let count_new = bcx.ins().isub(count, one);
                 bcx.def_var(regs_full[a + 1], count_new);
                 bcx.def_var(regs_full[a + 3], next);
-                if do_internal_loop {
+                // ForLoop's continue branch jumps to the loop's
+                // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
+                // backward jump encoding), not record.head_pc.
+                // For trace shapes whose head_pc == body_start
+                // (the usual back-edge trace), they're equal.
+                // For side traces whose head_pc lands on the
+                // ForLoop op itself (head_pc=rop.pc) instead of
+                // the back-edge target — e.g. an outer ForLoop
+                // that got recorded as a side trace from an inner
+                // loop exit — returning record.head_pc would
+                // re-enter the ForLoop op and double-advance the
+                // counter. A trace headed at an inner loop (a
+                // `while` inside the for body) that closes at the
+                // outer ForLoop must not loop back to its own head
+                // either: that skips the body code before the inner
+                // loop. Compute the body start explicitly.
+                let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
+                if do_internal_loop && body_pc == record.head_pc {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
-                    // ForLoop's continue branch jumps to the loop's
-                    // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
-                    // backward jump encoding), not record.head_pc.
-                    // For trace shapes whose head_pc == body_start
-                    // (the usual back-edge trace), they're equal.
-                    // For side traces whose head_pc lands on the
-                    // ForLoop op itself (head_pc=rop.pc) instead of
-                    // the back-edge target — e.g. an outer ForLoop
-                    // that got recorded as a side trace from an inner
-                    // loop exit — returning record.head_pc would
-                    // re-enter the ForLoop op and double-advance the
-                    // counter. Compute the body start explicitly.
-                    let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         caller_regs,
@@ -8800,7 +8804,10 @@ pub fn lower_trace_into_named<M: Module>(
                 bcx.seal_block(continue_blk);
                 let ctrl = bcx.use_var(regs_full[a + 4]);
                 bcx.def_var(regs_full[a + 2], ctrl);
-                if do_internal_loop {
+                // as for ForLoop: continue at the loop body, which is
+                // the trace head only when the trace was recorded from it
+                let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
+                if do_internal_loop && body_pc == record.head_pc {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
@@ -8809,7 +8816,7 @@ pub fn lower_trace_into_named<M: Module>(
                         caller_regs,
                         &stored,
                         reg_state,
-                        record.head_pc,
+                        body_pc,
                         flush_ctx.as_ref(),
                         0i64,
                         trace_fn_sig_ref,
@@ -10423,8 +10430,9 @@ mod s2b_call_truncation {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let p = load_proto(&mut vm, WIDE_SRC);
         let prog = [
-            Inst::iabc(Op::Add, 0, 0, 3, false),     // R[0] += R[3]
-            Inst::iabc(Op::ForLoop, 1, 0, 0, false), // ForLoop on R[1..R[1+3]]
+            Inst::iabc(Op::Add, 0, 0, 3, false), // R[0] += R[3]
+            // ForLoop on R[1..R[1+3]], jumping back to the Add (the head)
+            Inst::iabx(Op::ForLoop, 1, 2),
         ];
         let rec = closed_record(p, 0, &prog);
         let opts = CompileOptions {
