@@ -86,9 +86,8 @@ impl RegKind {
 // who depend on luna-core alone never link Cranelift.
 pub mod trace;
 
-// `Send` wrapper newtype for `cranelift_jit::JITModule`, used by the
-// per-`Vm` JIT storage. Scoped `pub(crate)` — no embedder surface.
-pub(crate) mod code_memory;
+// Owner newtype for `cranelift_jit::JITModule`, used by the per-`Vm`
+// JIT storage. Scoped `pub(crate)` — no embedder surface.
 mod send_jit_module;
 #[allow(unused_imports)]
 pub use send_jit_module::SendJitModule;
@@ -696,7 +695,6 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
         .finish(settings::Flags::new(flag_builder))
         .ok()?;
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-    builder.memory_provider(Box::new(code_memory::CodeMemory::new()));
     // register Rust helper symbols so the cranelift JIT can
     // resolve them at finalize time. Without this, executables that
     // link luna as an rlib strip the `#[no_mangle]` symbols at link
@@ -800,10 +798,7 @@ pub fn try_compile_int_chunk(proto: Gc<Proto>, pre53: bool, float_only: bool) ->
 
     let ptr = module.get_finalized_function(fn_id);
     Some(JitHandle {
-        // wrap with the `SendJitModule`
-        // sleeve. SAFETY criterion (a `Send` memory provider) is
-        // satisfied by `build_jit_module_with_helpers`, which installs
-        // `code_memory::CodeMemory`; see send_jit_module.rs.
+        // wrap with the `SendJitModule` sleeve
         _module: module.publish(),
         entry_raw: ptr,
         num_args: meta.num_args,
