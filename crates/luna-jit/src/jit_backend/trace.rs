@@ -10421,7 +10421,8 @@ mod s2b_call_truncation {
         let p = load_proto(&mut vm, WIDE_SRC);
         let prog = [
             Inst::iabc(Op::Add, 0, 0, 3, false),     // R[0] += R[3]
-            Inst::iabc(Op::ForLoop, 1, 0, 0, false), // ForLoop on R[1..R[1+3]]
+            // ForLoop on R[1..R[1+3]], jumping back to the Add (the head)
+            Inst::iabx(Op::ForLoop, 1, 2),
         ];
         let rec = closed_record(p, 0, &prog);
         let opts = CompileOptions {
