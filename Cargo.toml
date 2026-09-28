@@ -67,22 +67,8 @@ exclude = [
 [workspace.package]
 version = "3.2.2"
 edition = "2024"
-# MSRV: deliberately NOT declared.
-#
-# luna makes no MSRV promise.
-# A pin only means something if something verifies it every push, and
-# an unverified pin is worse than none: it misleads. What luna is
-# willing to guarantee today is "builds on current stable", and that is
-# what the CI matrix actually tests.
-#
-# Informationally (NOT a contract, may move without a version bump):
-# the tree needs **rustc 1.88+** — 1.87 fails with E0658
-# on the let-chains. Building on an older toolchain surfaces as a
-# compiler error rather than a cargo manifest error, since there is no
-# declared floor for cargo to check against.
-#
-# An MSRV promise needs a workflow that runs and can fail — not just
-# the manifest key.
+# the floor set by the cranelift crates luna-jit and luna-aot depend on
+rust-version = "1.96"
 authors = ["GOLIA K.K. <lihao@golia.jp>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/goliajp/luna"
@@ -175,12 +161,6 @@ doc_overindented_list_items = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
-# Moot: with no `rust-version` declared (see the MSRV note
-# in [workspace.package]), clippy has no floor to compare against and
-# this lint cannot fire. Kept as an explicit `allow` so that re-adding
-# an MSRV declaration later does not silently turn it on across the
-# whole tree in the same commit.
-incompatible_msrv = "allow"
 
 [profile.dev]
 # debug=1 (line tables) instead of the default 2 (full DWARF). Backtraces keep

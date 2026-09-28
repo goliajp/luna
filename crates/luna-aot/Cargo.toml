@@ -3,6 +3,7 @@ name = "luna-aot"
 description = "Ahead-of-time compiler from Lua source to a self-contained native binary, built on luna-core's VM: the program is embedded as luna bytecode and the hot traces of a warmup run are compiled to machine code, all linked into one binary. A build-time tool, not a runtime dependency of the produced binary; embedders that want a runtime JIT use `luna-jit`, and pure interpretation `luna-core`."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
