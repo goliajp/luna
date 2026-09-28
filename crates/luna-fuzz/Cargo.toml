@@ -31,6 +31,9 @@ cargo-fuzz = true
 # luna-core: pure-Rust VM, 0 third-party deps. Coverage on the parser,
 # bytecode reader, dispatcher API is the whole point of these fuzzers.
 luna-core = { path = "../luna-core" }
+# luna-jit: the Cranelift method + trace JIT, for the JIT-vs-interpreter
+# differential target.
+luna-jit = { path = "../luna-jit" }
 # luna-aot's `aot_meta` module lives in `luna-core::jit::aot_meta` so we
 # don't pull luna-aot itself; the fuzz target exercises decode-side only.
 
@@ -115,6 +118,15 @@ bench = false
 [[bin]]
 name = "fuzz_dump_exec"
 path = "fuzz_targets/fuzz_dump_exec.rs"
+test = false
+doc = false
+bench = false
+
+# JIT vs interpreter: generated hot programs run with the method and trace
+# JIT on (low hot thresholds) and off; output and errors must match.
+[[bin]]
+name = "fuzz_jit_diff"
+path = "fuzz_targets/fuzz_jit_diff.rs"
 test = false
 doc = false
 bench = false

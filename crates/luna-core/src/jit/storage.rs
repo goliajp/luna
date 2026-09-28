@@ -35,6 +35,24 @@ pub trait JitStorage: std::any::Any {
     /// Immutable downcast hook. Symmetric with [`Self::as_any_mut`];
     /// used by read-only diagnostics.
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Called by the `Vm` identified by `vm` before it asks its compilers
+    /// for code through this storage. Code a storage holds can be
+    /// released only if every compile through it came from one `Vm`.
+    fn claim(&mut self, vm: u64) {
+        let _ = vm;
+    }
+
+    /// Frees the machine code this storage holds, provided every compile
+    /// through it was claimed by `vm`; otherwise keeps it.
+    ///
+    /// # Safety
+    ///
+    /// `vm` is going away: none of its code is running and none will be
+    /// entered again. The `Vm` calls this from its `Drop`.
+    unsafe fn release_code(&mut self, vm: u64) {
+        let _ = vm;
+    }
 }
 
 /// No-op storage installed by [`crate::vm::Vm::new_minimal`]. Holds

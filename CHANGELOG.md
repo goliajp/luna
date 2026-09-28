@@ -19,6 +19,42 @@ optimization.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `JitStorage::claim` and `JitStorage::release_code`, provided methods
+  (no-ops by default) through which a `Vm` tells its JIT storage who
+  compiles through it and when that code can be freed.
+
+### Fixed
+
+- An assignment `b = a` right after a statement that assigned `a` (for
+  example `a = a + 1`) dropped that assignment: the compiler wrote the
+  result straight into `b`, so `a` kept its old value and a loop counting
+  with it never ended. Every dialect was affected, with or without the JIT.
+- The trace JIT left a table built by a trace unallocated when the trace
+  ended at a call that runs before the table is used, as in
+  `s[#s + 1] = {f()}`; the interpreter then filled a register that held
+  no table, and the process could crash.
+- A trace recorded from a loop nested in a numeric or generic `for`, and
+  closed at the outer loop's back edge, went back to its own start instead
+  of the outer loop's body, skipping the code before the inner loop (a
+  `while` inside a `for` stopped running and the `for` ended early).
+- Compiling a trace with a `math` call that is checked once before the
+  loop hit a debug assertion of the code generator, so debug builds
+  panicked on such loops.
+- The machine code the JIT compiled for a `Vm` was never freed, so a host
+  that creates a `Vm` per request grew by the code of every one of them.
+  It is now freed when the `Vm` drops, and a trace or function that fails
+  to compile frees its partial code at once. `Vm::install_jit_storage`
+  keeps the storage it replaces until the `Vm` drops, and
+  `luna_jit::jit::cache_clear` no longer drops code that compiled
+  functions still call. On Windows Cranelift does not return the pages
+  yet, so the code there is still kept.
+
+---
+
 ## [3.2.0] — 2026-09-27
 
 `string.dump` writes bytecode the stock PUC interpreter of each dialect
