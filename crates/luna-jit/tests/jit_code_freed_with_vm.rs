@@ -1,3 +1,5 @@
+// own binary: the counting allocator must see no other test's allocations
+
 //! The machine code the method and trace JIT compile for a `Vm` is freed
 //! when that `Vm` drops. Code memory comes from the global allocator, so
 //! a counting allocator sees it: creating and dropping many `Vm`s that

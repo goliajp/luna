@@ -4,7 +4,7 @@
 -- caller: no position); 5.4+ print calls luaL_tolstring itself (its caller
 -- is Lua: positioned). Chunk names differ between harness sides, so only the
 -- presence of a position is printed. `print` itself is pinned by
--- tests/tostring_error_position.rs: this harness replaces print with a Lua
+-- tests/it/tostring_error_position.rs: this harness replaces print with a Lua
 -- function on luna's side, which changes who calls tostring.
 local bad = setmetatable({}, {__tostring = function() return nil end})
 for _, case in ipairs{

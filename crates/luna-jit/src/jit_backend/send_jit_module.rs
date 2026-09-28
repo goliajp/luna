@@ -26,7 +26,7 @@ use std::ops::{Deref, DerefMut};
 /// Cranelift.
 ///
 /// **Not a stable embedder API.** The type is `pub` only so the
-/// integration test (`tests/send_jit_module_wrapper.rs`) can
+/// integration test (`tests/it/send_jit_module_wrapper.rs`) can
 /// import it via a `#[doc(hidden)]` re-export at the crate root —
 /// embedders should treat it as internal to luna-jit.
 ///
@@ -48,7 +48,7 @@ pub struct SendJitModule(JITModule);
 // `trace.rs`.
 //
 // Caveat: future cranelift bumps must re-check this; the
-// static assertion in `tests/send_jit_module_wrapper.rs` is the
+// static assertion in `tests/it/send_jit_module_wrapper.rs` is the
 // canary.
 unsafe impl Send for SendJitModule {}
 

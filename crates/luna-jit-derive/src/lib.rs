@@ -461,7 +461,7 @@ fn _reserved(_: Item) {}
 // loads them at compile time, not as runtime libraries), so the
 // helper fns get coverage here. Integration coverage for the
 // `#[derive(LuaUserdata)]` + `#[lua_userdata_methods]` expansion
-// already lives in `crates/luna-jit/tests/userdata_derive.rs`; this
+// already lives in `crates/luna-jit/tests/it/userdata_derive.rs`; this
 // module fills the gap on the parse / classify / strip helpers.
 // ─────────────────────────────────────────────────────────────────────
 

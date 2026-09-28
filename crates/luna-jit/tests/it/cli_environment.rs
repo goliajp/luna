@@ -7,9 +7,7 @@
 //! Linux x86_64 — run as `lua <args>` from a directory holding the case's
 //! files; `cli_common` says how luna's output is compared.
 
-mod cli_common;
-
-use cli_common::{Case, Expect};
+use crate::cli_common::{Case, Expect};
 
 /// `LUA_PATH` / `LUA_CPATH` set `package.path` / `cpath`; from 5.2 on
 /// `LUA_PATH_5_x` comes first.

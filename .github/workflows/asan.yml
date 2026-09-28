@@ -82,10 +82,10 @@ jobs:
         run: |
           cargo +nightly test \
             -p luna-core \
-            --test sort_gc_during_compare \
+            --test it \
             -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            -- --nocapture --test-threads=1
+            -- --nocapture --test-threads=1 sort_gc_during_compare::
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
@@ -93,10 +93,10 @@ jobs:
         run: |
           cargo +nightly test \
             -p luna-core \
-            --test toomanyidx_memory_cap \
+            --test it \
             -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            -- --nocapture --test-threads=1
+            -- --nocapture --test-threads=1 toomanyidx_memory_cap::
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
@@ -104,10 +104,10 @@ jobs:
         run: |
           cargo +nightly test \
             -p luna-core \
-            --test gc_finalizer_edges \
+            --test it \
             -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            -- --nocapture --test-threads=1
+            -- --nocapture --test-threads=1 gc_finalizer_edges::
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
@@ -115,10 +115,10 @@ jobs:
         run: |
           cargo +nightly test \
             -p luna-core \
-            --test host_roots_slot_recycling \
+            --test it \
             -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            -- --nocapture --test-threads=1
+            -- --nocapture --test-threads=1 host_roots_slot_recycling::
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 
@@ -126,10 +126,10 @@ jobs:
         run: |
           cargo +nightly test \
             -p luna-core \
-            --test io_popen_double_close \
+            --test it \
             -Z build-std \
             --target x86_64-unknown-linux-gnu \
-            -- --nocapture --test-threads=1
+            -- --nocapture --test-threads=1 io_popen_double_close::
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
 

@@ -1,3 +1,5 @@
+// own binary: it sets LUNA_JIT_FIELD_IC, which the jit reads once into a process-wide cache
+
 //! Table-field IC scaffold opt-in fire test.
 //!
 //! Verifies the `LUNA_JIT_FIELD_IC` env gate's end-to-end wiring:

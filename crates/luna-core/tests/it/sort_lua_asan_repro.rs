@@ -3,7 +3,7 @@
 //! to capture the actual UAF site instead of the downstream
 //! Vec-metadata sentinel panic.
 //!
-//! Local:    cargo test --release -p luna-core --test sort_lua_asan_repro -- --nocapture
+//! Local:    cargo test --release -p luna-core --test it -- --nocapture sort_lua_asan_repro::
 //!
 //! The bug was allocator-dependent: Apple malloc hid it, while the
 //! Linux glibc and Windows allocators SIGSEGV'd after the sorts.
