@@ -2,11 +2,19 @@ name: lto
 
 # The per-push matrix in ci.yml tests with LTO off to keep it fast. This runs
 # the same suite built as shipped (`[profile.release]`, fat LTO) on every
-# platform: nightly, and by hand before a release.
+# platform, alongside it: nothing waits on it during development, and a
+# release needs it green.
 on:
+  push:
+    branches: [master, develop]
+    paths-ignore: ['**/*.md', 'docs/**', 'web/**']
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   native:
