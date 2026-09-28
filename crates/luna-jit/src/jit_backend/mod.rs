@@ -88,6 +88,7 @@ pub mod trace;
 
 // Owner newtype for `cranelift_jit::JITModule`, used by the per-`Vm`
 // JIT storage. Scoped `pub(crate)` — no embedder surface.
+pub(crate) mod code_memory;
 mod send_jit_module;
 #[allow(unused_imports)]
 pub use send_jit_module::SendJitModule;
@@ -695,6 +696,7 @@ fn build_jit_module_with_helpers() -> Option<JITModule> {
         .finish(settings::Flags::new(flag_builder))
         .ok()?;
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    builder.memory_provider(Box::new(code_memory::CodeMemory::new()));
     // register Rust helper symbols so the cranelift JIT can
     // resolve them at finalize time. Without this, executables that
     // link luna as an rlib strip the `#[no_mangle]` symbols at link
