@@ -23,12 +23,25 @@ use luna_core::vm::isa::{Inst, Op};
 // codegen entry points side-by-side.
 pub use luna_core::jit::trace_types::*;
 
+use cranelift::prelude::MemFlagsData as MemFlags;
 use cranelift::prelude::*;
 use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::settings;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+
+/// Custom section name for AOT data that the deploy side finds by
+/// section name. Mach-O takes `segment,section`; COFF gets the 8-byte
+/// name because the final PE keeps only short names; ELF takes the
+/// name as is.
+fn aot_data_section(triple: &target_lexicon::Triple, name: &str, coff_name: &str) -> String {
+    match triple.binary_format {
+        target_lexicon::BinaryFormat::Macho => format!("__DATA,{name}"),
+        target_lexicon::BinaryFormat::Coff => coff_name.to_owned(),
+        _ => name.to_owned(),
+    }
+}
 
 /// produce a `Value` of type
 /// `I64` whose runtime contents are the live `Gc<LuaStr>` pointer for
@@ -150,29 +163,23 @@ fn emit_str_key_arg<M: Module>(
         // is 15. ELF / COFF have no such limit but accept the same
         // short name — the deploy resolver brackets by the literal
         // section name on both platforms.
-        // Use `__DATA` segment explicitly on Mach-O so this section
-        // merges with the cmain shim's `__DATA,luna_strkey_idx`
-        // placeholder. An empty segment string lands the section in
-        // segment `""`, separate from `__DATA` — the deploy resolver's
-        // `section$start$__DATA$luna_strkey_idx` would then bracket
-        // only the placeholder, missing every real trace entry by 8
-        // bytes (verified via `otool -lv` of an AOT binary). ELF / PE
-        // ignore the segment arg (segment is Mach-O specific) so the
-        // change is a no-op there.
+        // On Mach-O the section must be in `__DATA` so it merges with
+        // the cmain shim's `__DATA,luna_strkey_idx` placeholder; in any
+        // other segment the deploy resolver's
+        // `section$start$__DATA$luna_strkey_idx` brackets only the
+        // placeholder and misses every real entry.
         //
-        // Windows COFF host: PE section
-        // headers are fixed 8 bytes, and `link.exe` / `lld-link` drop
-        // the COFF long-name string table when producing the final PE.
-        // Use the short name `.lt_skix` (8 bytes, matches the C
-        // placeholder in `luna-aot::embed::write_aot_cmain_object_for`
-        // Windows arm and the deploy-side
-        // `windows_section::find_section` needle).
-        let (idx_seg, idx_sect) = if cfg!(target_os = "windows") {
-            ("", ".lt_skix")
-        } else {
-            ("__DATA", "luna_strkey_idx")
-        };
-        desc.set_segment_section(idx_seg, idx_sect);
+        // PE section headers are fixed 8 bytes, and `link.exe` /
+        // `lld-link` drop the COFF long-name string table when
+        // producing the final PE, so COFF uses the short name
+        // `.lt_skix` (matches the C placeholder in
+        // `luna-aot::embed::write_aot_cmain_object_for` and the
+        // deploy-side `windows_section::find_section` needle).
+        desc.set_custom_section(&aot_data_section(
+            module.isa().triple(),
+            "luna_strkey_idx",
+            ".lt_skix",
+        ));
         // 8-byte alignment for the two pointer relocations at offsets
         // 0 and 8. Mach-O `ld` hard-rejects unaligned pointer slots
         // ("pointer not aligned in `___luna_aot_strkey_idx_…`+0x8"),
@@ -318,12 +325,11 @@ fn emit_chain_ptr_arg<M: Module>(
         // shape (under the cap). Windows COFF short name 8-char cap →
         // `.lt_chai`. Both names must match the deploy resolver's
         // bracket / section-walker needles.
-        let (idx_seg, idx_sect) = if cfg!(target_os = "windows") {
-            ("", ".lt_chai")
-        } else {
-            ("__DATA", "luna_inline_chnx")
-        };
-        desc.set_segment_section(idx_seg, idx_sect);
+        desc.set_custom_section(&aot_data_section(
+            module.isa().triple(),
+            "luna_inline_chnx",
+            ".lt_chai",
+        ));
         desc.set_align(8);
         let bytes_gv = module.declare_data_in_data(bytes_id, &mut desc);
         let slot_gv = module.declare_data_in_data(slot_id, &mut desc);
@@ -1453,10 +1459,11 @@ fn emit_materialize_live_sunk<M: Module>(
             ));
             for vi in 0..cap {
                 let v = bcx.use_var(vars[vi]);
-                bcx.ins().stack_store(v, raws_ss, (vi * 8) as i32);
+                bcx.ins()
+                    .stack_store(types::I64, v, raws_ss, (vi * 8) as i32);
                 let tag = kind_to_raw_tag(kinds[vi]);
                 let k = bcx.ins().iconst(types::I8, tag as i64);
-                bcx.ins().stack_store(k, kinds_ss, vi as i32);
+                bcx.ins().stack_store(types::I64, k, kinds_ss, vi as i32);
             }
             (
                 bcx.ins().stack_addr(types::I64, raws_ss, 0),
@@ -1495,10 +1502,12 @@ fn emit_materialize_live_sunk<M: Module>(
             for vi in 0..n_hash {
                 let slot = cap + vi;
                 let v = bcx.use_var(vars[slot]);
-                bcx.ins().stack_store(v, hash_raws_ss, (vi * 8) as i32);
+                bcx.ins()
+                    .stack_store(types::I64, v, hash_raws_ss, (vi * 8) as i32);
                 let tag = kind_to_raw_tag(kinds[slot]);
                 let k = bcx.ins().iconst(types::I8, tag as i64);
-                bcx.ins().stack_store(k, hash_kinds_ss, vi as i32);
+                bcx.ins()
+                    .stack_store(types::I64, k, hash_kinds_ss, vi as i32);
                 let const_idx = site.hash_keys[vi] as usize;
                 let key_str = match head_proto.consts[const_idx] {
                     luna_core::runtime::Value::Str(s) => s,
@@ -1508,7 +1517,7 @@ fn emit_materialize_live_sunk<M: Module>(
                 };
                 let key_ptr_v = emit_str_key_arg(module, bcx, key_str, aot, defined_aot_data);
                 bcx.ins()
-                    .stack_store(key_ptr_v, hash_keys_ss, (vi * 8) as i32);
+                    .stack_store(types::I64, key_ptr_v, hash_keys_ss, (vi * 8) as i32);
             }
             (
                 bcx.ins().stack_addr(types::I64, hash_keys_ss, 0),
@@ -3266,7 +3275,7 @@ fn drop_unused_block_params(func: &mut cranelift_codegen::ir::Function) {
 mod drop_unused_block_params_tests {
     use super::*;
     use cranelift_codegen::ir::{Function, Signature, UserFuncName};
-    use cranelift_codegen::isa::CallConv;
+    use cranelift_codegen::isa::{CallConv, TargetFrontendConfig};
 
     /// `loop(dead, live)`: `dead` is only passed back unchanged, as the
     /// registers a trace loop only writes were; `live` is read. The first
@@ -3297,7 +3306,11 @@ mod drop_unused_block_params_tests {
         b.switch_to_block(out);
         b.ins().return_(&[live]);
         b.seal_all_blocks();
-        b.finalize();
+        b.finalize(TargetFrontendConfig {
+            default_call_conv: CallConv::SystemV,
+            pointer_width: target_lexicon::PointerWidth::U64,
+            page_size_align_log2: 12,
+        });
 
         drop_unused_block_params(&mut func);
 
@@ -5979,7 +5992,7 @@ pub fn lower_trace_into_named<M: Module>(
             guard_exit!($pc, $i);
             bcx.switch_to_block(cont_blk);
             bcx.seal_block(cont_blk);
-            bcx.ins().stack_load(types::I64, out_ss, 0)
+            bcx.ins().stack_load(types::I64, types::I64, out_ss, 0)
         }};
     }
     // Continue in a new block when `$cond` holds, else take a
@@ -7370,7 +7383,7 @@ pub fn lower_trace_into_named<M: Module>(
                     // --- Guards 1 & 2: metatable + nodes.len() ---
                     let mt = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         super::TABLE_METATABLE_OFFSET as i32,
                     );
@@ -7378,7 +7391,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
                     let nodes_len = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         super::TABLE_NODES_LEN_OFFSET as i32,
                     );
@@ -7403,7 +7416,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.seal_block(fast_blk);
                     let nodes_ptr = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         super::TABLE_NODES_PTR_OFFSET as i32,
                     );
@@ -7412,7 +7425,7 @@ pub fn lower_trace_into_named<M: Module>(
 
                     let key_raw = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         super::NODE_KEY_RAW_OFFSET as i32,
                     );
@@ -7421,7 +7434,7 @@ pub fn lower_trace_into_named<M: Module>(
 
                     let val_tag_i8 = bcx.ins().load(
                         types::I8,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         super::NODE_VAL_TAG_OFFSET as i32,
                     );
@@ -7437,7 +7450,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.seal_block(load_blk);
                     let val_raw = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         super::NODE_VAL_RAW_OFFSET as i32,
                     );
@@ -8069,9 +8082,9 @@ pub fn lower_trace_into_named<M: Module>(
                         let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
                         bcx.def_var(tforcall_tag_var, key_tag);
                         bcx.def_var(tforcall_val_tag_var, val_tag);
-                        let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
-                        let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
-                        let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
+                        let ctrl_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 0);
+                        let key_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 8);
+                        let val_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 16);
                         bcx.def_var(regs[a_us + 2], ctrl_raw);
                         bcx.def_var(regs[a_us + 4], key_raw);
                         if (nvars as usize) >= 2 && a_us + 5 < max_stack {
@@ -8096,14 +8109,14 @@ pub fn lower_trace_into_named<M: Module>(
 
                     let asize = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         super::TABLE_ASIZE_OFFSET as i32,
                     );
                     let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, asize);
                     let metatable = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         super::TABLE_METATABLE_OFFSET as i32,
                     );
@@ -8121,7 +8134,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.seal_block(fast_blk);
                     let avals_ptr = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         super::TABLE_ARRAY_PTR_OFFSET as i32,
                     );
@@ -8130,7 +8143,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let val_addr_fast = bcx.ins().iadd(avals_ptr, val_off);
                     let val_raw_fast = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         val_addr_fast,
                         0,
                     );
@@ -8139,7 +8152,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let tag_addr = bcx.ins().iadd(tag_base, key_m1);
                     let val_tag_i8 = bcx.ins().load(
                         types::I8,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         tag_addr,
                         0,
                     );
@@ -8848,7 +8861,7 @@ pub fn lower_trace_into_named<M: Module>(
     // when internal loop is on).
     bcx.seal_block(body_loop);
 
-    bcx.finalize();
+    bcx.finalize(module.target_config());
     drop_unused_block_params(&mut ctx.func);
     // `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction

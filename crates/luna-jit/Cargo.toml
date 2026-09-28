@@ -59,12 +59,14 @@ luna-jit-llvm = { path = "../luna-jit-llvm", version = "= 3.2.2", optional = tru
 # mature regalloc + opt. luna lowers Lua bytecode → Cranelift IR →
 # mmap RWX. Pinned: the API churns enough that floating without a lock
 # breaks builds.
-cranelift = "0.124"
-cranelift-jit = "0.124"
-cranelift-module = "0.124"
-cranelift-codegen = "0.124"
-cranelift-frontend = "0.124"
-cranelift-native = "0.124"
+cranelift = "0.136"
+cranelift-jit = "0.136"
+cranelift-module = "0.136"
+cranelift-codegen = "0.136"
+cranelift-frontend = "0.136"
+cranelift-native = "0.136"
+# object format of the module being lowered into, for data section names
+target-lexicon = "0.13"
 
 # optional rustyline-powered REPL polish (tab completion
 # against Vm globals + Lua syntax highlighting + native

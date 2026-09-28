@@ -10,7 +10,7 @@
 //! made executable again. A core that ran the old function can then run
 //! its stale instructions in place of the new ones.
 
-use cranelift_jit::{BranchProtection, JITMemoryProvider, SystemMemoryProvider};
+use cranelift_jit::{BranchProtection, JITMemoryKind, JITMemoryProvider, SystemMemoryProvider};
 use cranelift_module::ModuleResult;
 use std::io;
 
@@ -30,18 +30,13 @@ impl CodeMemory {
 }
 
 impl JITMemoryProvider for CodeMemory {
-    fn allocate_readexec(&mut self, size: usize, align: u64) -> io::Result<*mut u8> {
-        let ptr = self.inner.allocate_readexec(size, align)?;
-        self.unsynced.push((ptr as usize, size));
+    fn allocate(&mut self, size: usize, align: u64, kind: JITMemoryKind) -> io::Result<*mut u8> {
+        let exec = matches!(kind, JITMemoryKind::Executable);
+        let ptr = self.inner.allocate(size, align, kind)?;
+        if exec {
+            self.unsynced.push((ptr as usize, size));
+        }
         Ok(ptr)
-    }
-
-    fn allocate_readwrite(&mut self, size: usize, align: u64) -> io::Result<*mut u8> {
-        self.inner.allocate_readwrite(size, align)
-    }
-
-    fn allocate_readonly(&mut self, size: usize, align: u64) -> io::Result<*mut u8> {
-        self.inner.allocate_readonly(size, align)
     }
 
     unsafe fn free_memory(&mut self) {
@@ -55,7 +50,7 @@ impl JITMemoryProvider for CodeMemory {
         // memory, so the code bytes are final here. the inner finalize then
         // flushes every core's pipeline
         for (start, len) in self.unsynced.drain(..) {
-            // SAFETY: the range was handed out by `allocate_readexec` and is
+            // SAFETY: the range was handed out by `allocate` for executable memory and is
             // still allocated and readable
             unsafe { sync_icache(start, len) };
         }
