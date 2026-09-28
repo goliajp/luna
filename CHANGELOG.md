@@ -19,13 +19,10 @@ optimization.
 
 ---
 
-## [Unreleased]
+## [3.2.1] — 2026-09-28
 
-### Added
-
-- `JitStorage::claim` and `JitStorage::release_code`, provided methods
-  (no-ops by default) through which a `Vm` tells its JIT storage who
-  compiles through it and when that code can be freed.
+Fixes found by a new fuzz target that runs generated hot loops with the
+JIT on and off and compares the output.
 
 ### Fixed
 
