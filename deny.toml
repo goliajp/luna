@@ -105,15 +105,13 @@ deny = []
 skip = [
     # windows-sys 0.52 via rustyline → fd-lock, 0.61 via clap → anstream.
     "windows-sys",
-    # `object` 0.36 is luna-aot / luna-tools' own object writer, 0.37
-    # comes via backtrace → dhat (luna-core dev-dep), 0.40 via
-    # cranelift-object. luna's direct dep stays on 0.36.
+    # `object` 0.40 is shared by luna-aot / luna-tools and
+    # cranelift-object; 0.37 comes via backtrace → dhat (luna-core
+    # dev-dep).
     "object",
-    # hashbrown 0.14 via inferno → dashmap, 0.15 via object 0.36, 0.16
-    # via gimli 0.33, 0.17 via cranelift-codegen. foldhash 0.1 / 0.2
-    # follow hashbrown 0.15 / 0.17.
+    # hashbrown 0.14 via inferno → dashmap, 0.16 via gimli 0.33, 0.17
+    # via cranelift-codegen.
     "hashbrown",
-    "foldhash",
     # gimli 0.32 via backtrace → addr2line, 0.33 via cranelift-codegen.
     "gimli",
     # bitflags 1.x via pprof → nix 0.26, 2.x everywhere else.

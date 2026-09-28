@@ -66,7 +66,7 @@ serde_json = "1"
 # Section-walker for `luna-bin-inspect`. Same `object` crate
 # luna-aot uses (read-side features); pinning to the same major
 # version surface keeps the supply chain de-duplicated.
-object = { version = "0.36", features = ["read", "elf", "macho", "pe"] }
+object = { version = "0.40", features = ["read", "elf", "macho", "pe"] }
 
 # Optional: flamegraph rendering for `luna-profile`. Gated so
 # embedders who only need bin-inspect / heap-dump don't pull

@@ -215,7 +215,7 @@ fn write_bytecode_object(bytecode: &[u8], out: &Path) -> Result<(), AotError> {
     let _start_offset = obj.append_section_data(section_id, bytecode, 1);
 
     // The `object` crate auto-prefixes Mach-O global symbols with `_`
-    // per `Mangling::global_prefix` (`object/src/write/mod.rs:391`).
+    // per `Mangling::global_prefix`.
     // We pass the bare name; the output `.o` ends up with the correct
     // per-format mangling.
     let _ = format; // marker for the per-format mangling discussed above

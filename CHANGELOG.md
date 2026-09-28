@@ -41,6 +41,12 @@ and the new Cranelift raises the minimum Rust version.
   - `luna_jit::jit_backend::trace::lower_trace_into`
   - `luna_jit::jit_backend::trace::lower_trace_into_named`
   - `luna_aot::embed::TargetSpec::cranelift_isa_builder`
+- `object` 0.36 → 0.40 in luna-aot and luna-tools, the version
+  cranelift-object already uses, so a build now carries one copy of it.
+  The public fields `format`, `arch` and `endian` of
+  `luna_aot::embed::TargetSpec` have the `object` types
+  `BinaryFormat`, `Architecture` and `Endianness`, so code that builds or
+  reads a `TargetSpec` field by field needs `object` 0.40 too.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.
