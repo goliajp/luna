@@ -14,24 +14,15 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────
-  # perf-gate bench job. Linux runner + taskset for ~1-2% variance
-  # band on `redis_lua_shape`. macOS local: ~2.5% via
-  # `cargo bench --bench redis_lua_shape`.
-  #
-  # The hosted ubuntu-latest is shared infra; taskset gives a soft
-  # CPU pin (one core). criterion's 100-sample / 8s measurement window
-  # absorbs the residual jitter.
-  # ─────────────────────────────────────────────────────────────────
   perf-gate:
-    # Required gate, run as a SAME-RUNNER comparison. GHA hosted
-    # runners are heterogeneous — identical code measured
-    # 0.51x-1.09x against a fixed-ns baseline across runs — so the
-    # gate benches a pinned reference commit
-    # (PERF_REF, normally the last release) on the same runner
-    # right before HEAD and diffs the two. Bypass via [perf-allow]
-    # tag in commit body for intentional regressions; bump
-    # PERF_REF at each release.
+    # Required gate, run as a same-runner comparison: hosted runners are
+    # heterogeneous (identical code measured 0.51x-1.09x against a fixed-ns
+    # baseline across runs), so the job builds the redis_lua_shape bench of
+    # a pinned reference commit (PERF_REF, normally the last release) and of
+    # HEAD, then scripts/perf-gate.sh measures them cell by cell in
+    # alternating ref/head pairs, pinned to one core, over several rounds.
+    # Bypass via [perf-allow] in the commit body for intentional
+    # regressions; bump PERF_REF at each release.
     name: redis_lua_shape perf-gate
     runs-on: ubuntu-latest
     env:
@@ -41,16 +32,17 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - name: Bench pinned reference on this runner
+      - name: Build reference bench
         run: |
           git worktree add /tmp/perfref "$PERF_REF"
           cd /tmp/perfref
-          taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
-          python3 "$GITHUB_WORKSPACE/scripts/criterion-extract.py" \
-            target/criterion/redis_lua_shape "same-runner-ref-$PERF_REF" \
-            > /tmp/ref-baseline.json
-          cat /tmp/ref-baseline.json
-      - name: cargo bench --bench redis_lua_shape (taskset -c 1)
-        run: taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
-      - name: perf-gate regression check (same-runner diff)
-        run: ./scripts/perf-gate.sh /tmp/ref-baseline.json
+          bin=$(cargo bench -p luna-jit --bench redis_lua_shape --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "redis_lua_shape") | .executable')
+          cp "$bin" /tmp/bench-ref
+      - name: Build HEAD bench
+        run: |
+          bin=$(cargo bench -p luna-jit --bench redis_lua_shape --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "redis_lua_shape") | .executable')
+          cp "$bin" /tmp/bench-head
+      - name: perf-gate (interleaved same-runner comparison)
+        run: ./scripts/perf-gate.sh /tmp/bench-ref /tmp/bench-head
