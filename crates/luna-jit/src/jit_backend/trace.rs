@@ -3559,6 +3559,7 @@ thread_local! {
     // entry block leaves the counter at its prior value.
     pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
+    static TRACE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 fn checkpoint(s: &'static str) {
@@ -3594,6 +3595,15 @@ pub fn last_op_id() -> u8 {
 /// (dispatcher / close handler / vm) never read this.
 pub fn base_var_scaffold_declared_count() -> u64 {
     BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
+}
+
+/// Traces this thread has run through Cranelift and finalized into
+/// machine code for a Vm or via [`try_compile_trace_with_options`].
+/// Diagnostic-only:
+/// it tells a trace cached with code from one cached without
+/// ([`trace_is_enterable`]).
+pub fn trace_codegen_count() -> u64 {
+    TRACE_CODEGEN.with(|c| c.get())
 }
 
 /// reset the scaffold-declared counter so
@@ -3813,9 +3823,36 @@ pub fn try_compile_trace_with_options(
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
+    compile_trace_jit(storage, record, opts, true)
+}
+
+/// [`try_compile_trace_with_options`] for a Vm's trace cache: a trace
+/// nothing can enter ([`trace_is_enterable`]) comes back without machine
+/// code. Cranelift is most of a trace's compile time, and the cache
+/// entry alone keeps the head from being recorded again. `entry` keeps
+/// the placeholder, which nothing calls.
+pub(crate) fn compile_trace_for_vm(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+) -> Option<CompiledTrace> {
+    compile_trace_jit(storage, record, opts, false)
+}
+
+fn compile_trace_jit(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    always_codegen: bool,
+) -> Option<CompiledTrace> {
     let mut module = super::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let (fn_id, mut compiled) = lower_trace_into(&mut *module, record, opts)?;
+    let (fn_id, mut compiled) =
+        lower_trace_into_inner(&mut *module, record, opts, None, always_codegen)?;
+    if !always_codegen && !trace_is_enterable(record, &compiled) {
+        return Some(compiled);
+    }
     module.finalize_definitions().ok()?;
+    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
     // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
@@ -3878,10 +3915,22 @@ pub fn lower_trace_into<M: Module>(
 // cranelift types in the signature: internal to luna crates, not covered by semver
 #[doc(hidden)]
 pub fn lower_trace_into_named<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    aot_fn_name: Option<&str>,
+) -> Option<(FuncId, CompiledTrace)> {
+    lower_trace_into_inner(module, record, opts, aot_fn_name, true)
+}
+
+/// `always_codegen = false` leaves the function undefined in `module`
+/// when [`trace_is_enterable`] says nothing will run it.
+fn lower_trace_into_inner<M: Module>(
     mut module: &mut M,
     record: &TraceRecord,
     opts: CompileOptions,
     aot_fn_name: Option<&str>,
+    always_codegen: bool,
 ) -> Option<(FuncId, CompiledTrace)> {
     checkpoint("enter");
     if !record.closed {
@@ -8994,29 +9043,6 @@ pub fn lower_trace_into_named<M: Module>(
             ctx.func.display()
         );
     }
-    // `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
-    // emit the post-regalloc machine-code disassembly (vcode) and dumps
-    // it to stderr after `define_function`. Used for the cargo-asm
-    // decomposition of the table-field IC under env-OFF vs env-ON.
-    let want_asm_dump = std::env::var("LUNA_TRACE_ASM_DUMP")
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    if want_asm_dump {
-        ctx.set_disasm(true);
-    }
-    module.define_function(fn_id, &mut ctx).ok()?;
-    if want_asm_dump
-        && let Some(cc) = ctx.compiled_code()
-        && let Some(vcode) = cc.vcode.as_ref()
-    {
-        eprintln!(
-            "=== TRACE ASM DUMP head_pc={} n_recorded_ops={} ===\n{}\n=== END ===",
-            record.head_pc,
-            record.ops.len(),
-            vcode
-        );
-    }
-    module.clear_context(&mut ctx);
     // module finalization is the JIT-specific
     // wrapper's job (see [`try_compile_trace_with_options`]). The
     // generic body emits the function definition and stops at
@@ -9280,7 +9306,43 @@ pub fn lower_trace_into_named<M: Module>(
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
     };
+    // decided only now: the dispatch gates above run after the emit pass
+    if always_codegen || trace_is_enterable(record, &compiled) {
+        // `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
+        // emit the post-regalloc machine-code disassembly (vcode) and dumps
+        // it to stderr after `define_function`. Used for the cargo-asm
+        // decomposition of the table-field IC under env-OFF vs env-ON.
+        let want_asm_dump = std::env::var("LUNA_TRACE_ASM_DUMP")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        if want_asm_dump {
+            ctx.set_disasm(true);
+        }
+        module.define_function(fn_id, &mut ctx).ok()?;
+        if want_asm_dump
+            && let Some(cc) = ctx.compiled_code()
+            && let Some(vcode) = cc.vcode.as_ref()
+        {
+            eprintln!(
+                "=== TRACE ASM DUMP head_pc={} n_recorded_ops={} ===\n{}\n=== END ===",
+                record.head_pc,
+                record.ops.len(),
+                vcode
+            );
+        }
+        module.clear_context(&mut ctx);
+    }
     Some((fn_id, compiled))
+}
+
+/// Whether anything can enter `ct` once it is cached: the dispatcher
+/// admits it at its head (dispatchable, or linked for down-recursion), or
+/// it is a side trace whose parent's exit calls it, which the Vm allows
+/// for a trace that is only too short to dispatch on its own.
+pub fn trace_is_enterable(record: &TraceRecord, ct: &CompiledTrace) -> bool {
+    ct.dispatchable
+        || ct.downrec_link.is_some()
+        || (record.side_trace_parent.is_some() && ct.dispatch_off_reason == Some("length-gate"))
 }
 
 #[cfg(test)]
