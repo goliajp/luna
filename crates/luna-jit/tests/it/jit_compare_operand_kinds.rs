@@ -173,3 +173,17 @@ fn strings_order_by_contents_in_a_while_loop() {
         return table.concat(out, " ")"#;
     assert_same(ALL, src, "0/20/0/20 0/20/0/20 0/20/0/20", false);
 }
+
+#[test]
+fn table_built_in_the_loop_compares_by_its_own_address() {
+    // `{i}` may be kept unallocated (sunk) when the loop drops it before
+    // the back edge; the compare has to see a real table, not what the
+    // register held before (the `t = 0` of the previous round)
+    let src = r#"
+        local function k(prev) local r = 0 for i = 1, 20 do local t = {i} if t == prev then r = r + 1 end t = 0 end return r end
+        local function k2(prev) local r = 0 for i = 1, 20 do local t = {i} if t ~= prev then r = r + 1 end t = 0 end return r end
+        local out = {}
+        for _ = 1, 3 do out[#out + 1] = k(0) .. "/" .. k2(0) end
+        return table.concat(out, " ")"#;
+    assert_same(MODERN, src, "0/20 0/20 0/20", true);
+}
