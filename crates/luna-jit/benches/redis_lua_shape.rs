@@ -181,7 +181,7 @@ fn bench_redis_shape(c: &mut Criterion) {
     // M-series); the criterion noise_threshold below is the regression
     // boundary, paired with `measurement_time` long enough that the
     // outlier-rejection statistics converge. Linux CI runs via taskset
-    // tighten this further (see the `perf-gate` job in ci.yml).
+    // tighten this further (see the `perf-gate` job in perf.yml).
     group.measurement_time(Duration::from_secs(8));
     group.warm_up_time(Duration::from_secs(2));
     group.sample_size(100);
