@@ -5903,6 +5903,18 @@ pub fn lower_trace_into_named<M: Module>(
     // No iconst memoization: the arm64 backend folds
     // `iconst+isub`/`iconst+icmp` into immediate-form instructions
     // at codegen, so it would add little.
+    // An exit that redoes the trace's head op in the interpreter has made
+    // no progress: without this the dispatcher enters the trace again at
+    // once and the two hand the same pc back and forth forever. The
+    // tagged exits (`emit_tagged_exit`) do the same.
+    macro_rules! suppress_at_head {
+        ($pc:expr) => {{
+            if $pc == record.head_pc {
+                let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+                bcx.ins().call(r, &[]);
+            }
+        }};
+    }
     // A guard that fails leaves the trace at `$pc` (the op being
     // guarded, re-executed by the interpreter) exactly as a cmp side
     // exit does: live sunk tables are materialised and, when the op sits
@@ -6164,6 +6176,7 @@ pub fn lower_trace_into_named<M: Module>(
                 // Deopt path: flush buffer + store back + return pc.
                 bcx.switch_to_block(deopt_blk);
                 bcx.seal_block(deopt_blk);
+                suppress_at_head!(rop.pc);
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     &regs_full[..max_stack],
@@ -6893,6 +6906,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
                     bcx.switch_to_block(deopt);
                     bcx.seal_block(deopt);
+                    suppress_at_head!(rop.pc);
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
@@ -6959,6 +6973,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
                     bcx.switch_to_block(deopt);
                     bcx.seal_block(deopt);
+                    suppress_at_head!(rop.pc);
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
@@ -8294,6 +8309,7 @@ pub fn lower_trace_into_named<M: Module>(
                         bcx.ins().brif(ok, guard_continue, &[], guard_deopt, &[]);
                         bcx.switch_to_block(guard_deopt);
                         bcx.seal_block(guard_deopt);
+                        suppress_at_head!(rop.pc);
                         emit_store_back_and_return_pc(
                             &mut bcx,
                             &regs_full[..max_stack],
