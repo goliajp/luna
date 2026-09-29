@@ -4389,16 +4389,13 @@ impl Vm {
                         // cap force-compiles a partial trace and
                         // flips this flag; subsequent calls into
                         // this Proto skip the RefCell borrow + Vec
-                        // scan entirely.
-                        if proto.trace_gave_up.get() {
-                            return Ok(true);
-                        }
-                        let call_already_cached =
-                            proto.traces.borrow().iter().any(|t| t.head_pc == 0)
-                                || trace_head_abandoned(proto, 0);
+                        // scan entirely. The threshold is compared
+                        // first so that calls below it skip them too.
                         if c >= self.jit.call_hot_threshold
                             && self.jit.active_trace.is_none()
-                            && !call_already_cached
+                            && !proto.trace_gave_up.get()
+                            && !proto.traces.borrow().iter().any(|t| t.head_pc == 0)
+                            && !trace_head_abandoned(proto, 0)
                         {
                             // The new frame is on top: index in
                             // `self.frames` is `len() - 1`.
@@ -8269,19 +8266,16 @@ impl Vm {
                         // discarded, the back-edge can still find an
                         // open slot at the next iteration.
                         let target_pc = (pc as i32 + 1 + off as i32).max(0) as u32;
-                        // Gave-up short-circuit. Skip
-                        // the RefCell borrow + scan when the
-                        // discard cap force-compiled a partial
-                        // trace on this Proto.
-                        let back_edge_already_cached = if proto.trace_gave_up.get() {
-                            true
-                        } else {
-                            proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
-                                || trace_head_abandoned(proto, target_pc)
-                        };
+                        // Threshold first, then the gave-up
+                        // short-circuit, then the RefCell borrow +
+                        // scan: cold back-edges and Protos whose
+                        // discard cap force-compiled a partial trace
+                        // skip the scan.
                         if c >= self.jit.trace_hot_threshold
                             && self.jit.active_trace.is_none()
-                            && !back_edge_already_cached
+                            && !proto.trace_gave_up.get()
+                            && !proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
+                            && !trace_head_abandoned(proto, target_pc)
                         {
                             // Back-edge target = pc after `add_pc(off)`,
                             // i.e. current `pc + 1 + off` (the dispatch
