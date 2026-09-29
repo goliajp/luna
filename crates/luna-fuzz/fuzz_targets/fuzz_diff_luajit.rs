@@ -36,7 +36,7 @@ use std::fmt::Write;
 use std::io::Write as IoWrite;
 use std::process::{Command, Stdio};
 
-#[derive(Arbitrary, Debug)]
+#[derive(Debug)]
 enum Expr {
     Int(i32),
     Float(NormalFloat),
@@ -49,6 +49,41 @@ enum Expr {
     Mul(Box<Expr>, Box<Expr>),
     Mod(Box<Expr>, Box<Expr>),
     Lt(Box<Expr>, Box<Expr>),
+}
+
+/// Deepest level `render` prints.
+const MAX_DEPTH: u32 = 4;
+
+impl<'a> Arbitrary<'a> for Expr {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        Expr::arbitrary_at(u, 0)
+    }
+}
+
+impl Expr {
+    // bounded here, not only in `render`: under ASan every distinct
+    // allocation stack of an unbounded recursion stays in the stack depot
+    fn arbitrary_at(u: &mut arbitrary::Unstructured<'_>, depth: u32) -> arbitrary::Result<Self> {
+        if depth > MAX_DEPTH {
+            return Ok(Expr::Int(0));
+        }
+        let sub = |u: &mut arbitrary::Unstructured<'_>| -> arbitrary::Result<Box<Expr>> {
+            Ok(Box::new(Expr::arbitrary_at(u, depth + 1)?))
+        };
+        Ok(match u.choose_index(11)? {
+            0 => Expr::Int(u.arbitrary()?),
+            1 => Expr::Float(u.arbitrary()?),
+            2 => Expr::Nil,
+            3 => Expr::True,
+            4 => Expr::False,
+            5 => Expr::Var(u.arbitrary()?),
+            6 => Expr::Add(sub(u)?, sub(u)?),
+            7 => Expr::Sub(sub(u)?, sub(u)?),
+            8 => Expr::Mul(sub(u)?, sub(u)?),
+            9 => Expr::Mod(sub(u)?, sub(u)?),
+            _ => Expr::Lt(sub(u)?, sub(u)?),
+        })
+    }
 }
 
 /// Floats restricted to a narrow non-pathological range — both
@@ -89,10 +124,7 @@ struct Program {
 }
 
 fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
-    if depth > 4 {
-        buf.push('0');
-        return;
-    }
+    assert!(depth <= MAX_DEPTH + 1, "generated expression deeper than render prints");
     match e {
         // LuaJIT prints ints/floats with subtly different
         // formatting than PUC; wrap in tostring(math.floor(...))
