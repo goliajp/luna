@@ -87,6 +87,12 @@ behaviour and the `luna-core` embedder API are unchanged.
   could not work out (and is therefore never to be entered) was entered
   anyway: closing it as a recursive trace marked it runnable again.
   Recursive traces are only recorded with `Vm::set_self_link_enabled`.
+- A generic `for` over `ipairs` whose values change type could hang
+  under the trace JIT: when the loop body was nothing but the iterator
+  call, the value-type check left the trace at its own first
+  instruction and the dispatcher entered the trace again at once, over
+  and over. Such an exit now lets the interpreter run that instruction
+  first. Lua 5.1 to 5.3 were affected.
 - The optional LLVM backend (`llvm-jit` feature) had the same raw-bits
   comparison: its traces and compiled functions treated nil as the
   integer 0, a compiled function returning nil returned 0, and an
