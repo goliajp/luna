@@ -17,8 +17,9 @@ section spells out:
 No public comparison matrix is published. What guards performance
 release over release is the CI perf-gate: each push runs the `redis_lua_shape` benchmark on the same
 runner for both the previous release (`PERF_REF` in `perf.yml`) and the
-pushed commit, and fails when any cell is more than 5% slower (a commit
-can waive it with `[perf-allow]` in its message). It covers that one
+pushed commit, measuring each cell as alternating release/commit pairs over
+three rounds, and fails when a cell's median is more than 5% slower in every
+round (a commit can waive it with `[perf-allow]` in its message). It covers that one
 workload, not luna's performance in general.
 
 ---
