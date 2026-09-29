@@ -80,7 +80,20 @@ behaviour and the `luna-core` embedder API are unchanged.
   strings with `<` / `<=` by address. Values of different types now
   compare unequal, two tables with a metatable or two long strings leave
   the trace so the interpreter compares them, and string ordering is no
-  longer compiled. Every dialect was affected, and so is 3.2.2.
+  longer compiled. A table the trace built in the loop and dropped before
+  the back edge was compared by what its register held before (it was
+  never allocated). Every dialect was affected, and so is 3.2.2.
+- A recursive trace whose body holds a value of a type the trace JIT
+  could not work out (and is therefore never to be entered) was entered
+  anyway: closing it as a recursive trace marked it runnable again.
+  Recursive traces are only recorded with `Vm::set_self_link_enabled`.
+- The optional LLVM backend (`llvm-jit` feature) had the same raw-bits
+  comparison: its traces and compiled functions treated nil as the
+  integer 0, a compiled function returning nil returned 0, and an
+  upvalue of another type was read as an integer. A compiled function
+  also called itself where its code called a function through an
+  upvalue that no longer held it. These cases now stay in the
+  interpreter.
 
 ### Removed
 
