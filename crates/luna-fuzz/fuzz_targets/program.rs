@@ -34,6 +34,11 @@ pub(crate) enum Expr {
 /// Deepest level `render` prints; nodes below it would never be seen.
 const MAX_DEPTH: u32 = 4;
 
+/// Upper bound on one rendered expression (about 7.2 KB: `Mod` at every
+/// level). Reserving it up front keeps buffer growth out of the recursion,
+/// where each call path would be one more allocation stack under ASan.
+const MAX_EXPR_LEN: usize = 8 * 1024;
+
 impl<'a> Arbitrary<'a> for Expr {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         Expr::arbitrary_at(u, 0)
@@ -41,34 +46,44 @@ impl<'a> Arbitrary<'a> for Expr {
 }
 
 impl Expr {
-    // The derived impl recursed as deep as the input allowed. Under ASan every
-    // distinct allocation stack is kept forever in the stack depot, and the
-    // many shapes of that recursion made the depot, and RSS, grow without
-    // bound over a long run.
+    // Under ASan every distinct allocation stack stays in the stack depot for
+    // good. The derived impl recursed as deep as the input allowed and boxed
+    // children from a different call site per variant, so long runs kept
+    // adding stacks until RSS hit the limit. Children are boxed at one site
+    // here, and only as deep as render prints.
     fn arbitrary_at(u: &mut arbitrary::Unstructured<'_>, depth: u32) -> arbitrary::Result<Self> {
         if depth > MAX_DEPTH {
             return Ok(Expr::Int(0));
         }
-        let sub = |u: &mut arbitrary::Unstructured<'_>| -> arbitrary::Result<Box<Expr>> {
-            Ok(Box::new(Expr::arbitrary_at(u, depth + 1)?))
+        let variant = u.choose_index(16)?;
+        let arity = match variant {
+            0..=5 => 0,
+            12 | 13 => 1,
+            _ => 2,
         };
-        Ok(match u.choose_index(16)? {
+        let mut kids: [Option<Box<Expr>>; 2] = [None, None];
+        for kid in kids.iter_mut().take(arity) {
+            *kid = Some(Box::new(Expr::arbitrary_at(u, depth + 1)?));
+        }
+        let [l, r] = kids;
+        let (l, r) = (|| l.unwrap(), || r.unwrap());
+        Ok(match variant {
             0 => Expr::Int(u.arbitrary()?),
             1 => Expr::Float(u.arbitrary()?),
             2 => Expr::Nil,
             3 => Expr::True,
             4 => Expr::False,
             5 => Expr::Var(u.arbitrary()?),
-            6 => Expr::Add(sub(u)?, sub(u)?),
-            7 => Expr::Sub(sub(u)?, sub(u)?),
-            8 => Expr::Mul(sub(u)?, sub(u)?),
-            9 => Expr::Mod(sub(u)?, sub(u)?),
-            10 => Expr::Lt(sub(u)?, sub(u)?),
-            11 => Expr::StringConcat(sub(u)?, sub(u)?),
-            12 => Expr::StringFormat(sub(u)?),
-            13 => Expr::TableGet(sub(u)?),
-            14 => Expr::TableSet(sub(u)?, sub(u)?),
-            _ => Expr::Pow(sub(u)?, sub(u)?),
+            6 => Expr::Add(l(), r()),
+            7 => Expr::Sub(l(), r()),
+            8 => Expr::Mul(l(), r()),
+            9 => Expr::Mod(l(), r()),
+            10 => Expr::Lt(l(), r()),
+            11 => Expr::StringConcat(l(), r()),
+            12 => Expr::StringFormat(l()),
+            13 => Expr::TableGet(l()),
+            14 => Expr::TableSet(l(), r()),
+            _ => Expr::Pow(l(), r()),
         })
     }
 }
@@ -192,7 +207,10 @@ pub(crate) fn render(p: &Program) -> String {
     let mut buf = String::from("local a, b, c = 1, 2, 3\nlocal t = {}\n");
     for e in p.prints.iter().take(16) {
         buf.push_str("print(");
+        buf.reserve(MAX_EXPR_LEN);
+        let start = buf.len();
         render_expr(&mut buf, e, 0);
+        assert!(buf.len() - start <= MAX_EXPR_LEN, "MAX_EXPR_LEN too small");
         buf.push_str(")\n");
     }
     buf
