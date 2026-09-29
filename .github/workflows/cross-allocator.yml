@@ -9,8 +9,8 @@
 # Approach: LD_PRELOAD-swap the global allocator under each
 # matrix entry, run the full official_run + the UAF
 # regression tests. No code change in luna-* crates: keeps the
-# 0-third-party-dep luna-core contract intact. Each allocator is
-# system-installed via apt-get; the LD_PRELOAD wire-up replaces
+# 0-third-party-dep luna-core contract intact. jemalloc comes from
+# apt-get, mimalloc from a pinned source build; the LD_PRELOAD wire-up replaces
 # `malloc` / `free` / etc. for the cargo-test child process.
 #
 # Why this catches things ASAN doesn't: ASAN's quarantine model
@@ -37,7 +37,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        allocator: [glibc, jemalloc, mimalloc]
+        # both mimalloc lines: v2 is upstream's stable legacy line (the rust
+        # mimalloc crate's `v2` feature), v3 its recommended release
+        allocator: [glibc, jemalloc, mimalloc-v2, mimalloc-v3]
     env:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
@@ -54,6 +56,7 @@ jobs:
 
       - name: Install allocator library
         run: |
+          set -euo pipefail
           case "${{ matrix.allocator }}" in
             glibc)
               # Default. No-op.
@@ -63,10 +66,29 @@ jobs:
               sudo apt-get install -y -qq libjemalloc2
               echo "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2" >> "$GITHUB_ENV"
               ;;
-            mimalloc)
-              sudo apt-get update -qq
-              sudo apt-get install -y -qq libmimalloc2.0
-              echo "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libmimalloc.so.2" >> "$GITHUB_ENV"
+            mimalloc-v2|mimalloc-v3)
+              # built from pinned releases: the apt package is libmimalloc2.0
+              # (2.1) on ubuntu 24.04 and libmimalloc3 (3.2) on 26.04, so it
+              # would change with the runner image
+              if [ "${{ matrix.allocator }}" = mimalloc-v2 ]; then
+                VER=2.5.2 SHA=2406cc5f3ab6d6e54fe560cdd66fa46eee775312
+              else
+                VER=3.5.3 SHA=d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45
+              fi
+              git init -q /tmp/mimalloc && cd /tmp/mimalloc
+              git fetch -q --depth 1 https://github.com/microsoft/mimalloc.git "$SHA"
+              git checkout -q FETCH_HEAD
+              cmake -S . -B out -DCMAKE_BUILD_TYPE=Release \
+                -DMI_BUILD_TESTS=OFF -DMI_BUILD_STATIC=OFF -DMI_BUILD_OBJECT=OFF
+              cmake --build out -j"$(nproc)"
+              LIB=$(readlink -f out/libmimalloc.so)
+              GOT=$(MIMALLOC_VERBOSE=1 LD_PRELOAD="$LIB" /bin/true 2>&1 | grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+, ' || true)
+              if [ "$GOT" != "v$VER, " ]; then
+                echo "::error::expected mimalloc v$VER from $LIB, got: '$GOT'"
+                exit 1
+              fi
+              echo "mimalloc pin OK: v$VER ($LIB)"
+              echo "LD_PRELOAD=$LIB" >> "$GITHUB_ENV"
               ;;
           esac
 

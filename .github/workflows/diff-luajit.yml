@@ -34,46 +34,34 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@nightly
 
-      - name: Install LuaJIT (apt)
+      # upstream LuaJIT (official repo, v2.1 branch) at a pinned commit: the
+      # distro package moves with the runner image, and ubuntu 26.04 ships the
+      # OpenResty fork, whose `-v` still starts with "LuaJIT 2.1". the last
+      # version component is the commit timestamp, so the asserted string
+      # identifies the commit; moving the pin means editing both values
+      - name: Build LuaJIT (pinned upstream commit)
+        env:
+          LUAJIT_SHA: c6ffc141a8762b41703f9287d63d93622a13dd8f
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq luajit
-          echo "LUAJIT=/usr/bin/luajit" >> "$GITHUB_ENV"
+          set -euo pipefail
+          git init -q /tmp/luajit && cd /tmp/luajit
+          git fetch -q --depth 1 https://github.com/LuaJIT/LuaJIT.git "$LUAJIT_SHA"
+          git checkout -q FETCH_HEAD
+          make -j"$(nproc)"
+          echo "LUAJIT=/tmp/luajit/src/luajit" >> "$GITHUB_ENV"
 
-      # Record the reference version, and fail if it moves.
-      #
-      # This comes from apt, so it tracks the runner image rather than a
-      # pin of ours: an image refresh can change the differential
-      # reference with nothing in our history to show it.
-      #
-      # LuaJIT is not built from source here because this comparison is
-      # best-effort fuzz, not a release gate — 5.1 compatibility
-      # only. So instead of pinning the build, we
-      # pin the *expectation*: the version is asserted, and the job goes
-      # red when the image moves under us. Then it is a deliberate
-      # decision to update EXPECTED_LUAJIT, with the change recorded,
-      # rather than a silent basis shift.
-      #
-      # The assertion is a PREFIX ("LuaJIT 2.1"), not the full string.
-      # LuaJIT 2.1 is a rolling release whose patch component is a commit
-      # timestamp (the runner currently ships 2.1.1703358377), so pinning
-      # it exactly would go red on every image refresh — turning this into
-      # another job whose red state means nothing. The prefix catches the
-      # drift that would actually change semantics (2.1 -> 2.2), while the
-      # full version is written to the step summary every run, so the exact
-      # basis stays recoverable from the job log.
       - name: Show and assert the LuaJIT version
         env:
-          EXPECTED_LUAJIT: "LuaJIT 2.1"
+          EXPECTED_LUAJIT: "LuaJIT 2.1.1788856981"
         run: |
           set -euo pipefail
           GOT=$($LUAJIT -v 2>&1 | head -1)
           echo "LuaJIT reference: $GOT"
           echo "luajit-version=$GOT" >> "$GITHUB_STEP_SUMMARY"
           case "$GOT" in
-            "$EXPECTED_LUAJIT"*) echo "matches expected prefix: $EXPECTED_LUAJIT" ;;
+            "$EXPECTED_LUAJIT "*) echo "matches expected: $EXPECTED_LUAJIT" ;;
             *)
-              echo "::error::LuaJIT reference moved. Expected prefix '$EXPECTED_LUAJIT', runner now ships '$GOT'. Update EXPECTED_LUAJIT deliberately, noting what changed."
+              echo "::error::expected '$EXPECTED_LUAJIT', built '$GOT'"
               exit 1
               ;;
           esac
