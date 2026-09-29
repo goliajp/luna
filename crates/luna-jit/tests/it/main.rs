@@ -19,6 +19,7 @@ mod downrec_lowerer_stitch;
 mod downrec_multi_way_guard;
 mod forced_jit_corpus;
 mod jit_code_reuse_icache;
+mod jit_compare_operand_kinds;
 mod jit_core_semantics;
 mod jit_dialect_audit;
 mod jit_float_compare_nan;

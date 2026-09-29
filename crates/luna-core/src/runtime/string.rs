@@ -47,6 +47,15 @@ impl LuaStr {
     }
 }
 
+/// Field offsets the JIT reads from a `LuaStr` in compiled code.
+pub mod jit_layout {
+    use super::LuaStr;
+
+    /// Byte offset of the `bool` that is true exactly for interned
+    /// (short) strings. Two distinct interned strings are unequal.
+    pub const STR_SHORT_OFFSET: usize = std::mem::offset_of!(LuaStr, short);
+}
+
 /// Inline-bytes access MUST go through a pointer carrying the provenance of
 /// the original allocation — a `&LuaStr` only covers the header, so deriving
 /// the tail from it is UB (caught by miri). `Gc` stores the allocation
