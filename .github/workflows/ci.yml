@@ -42,6 +42,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # keep what cargo built for workspace crates too: pruning them
+          # leaves fingerprints that call a removed staticlib fresh (the
+          # aot tests' nested helper build then finds no library)
+          cache-workspace-crates: "true"
       # Exclude LLVM-backed alt-backend crates.
       # `llvm-jit-probe` + `luna-jit-llvm` unconditionally link inkwell
       # → llvm-sys → system LLVM 18 + Polly; none of the hosted runners
