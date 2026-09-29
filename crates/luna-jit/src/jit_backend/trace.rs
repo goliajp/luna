@@ -679,13 +679,12 @@ fn is_rounding(fn_name: &str) -> bool {
 ///
 /// - Arithmetic / numeric cmp operand → must be Int.
 /// - Table-base operand (Get / Set / Len) → must be Table.
-/// - Anything else (`Move`, `Eq` (bitwise-ok), trace tail, literal
+/// - Anything else (`Move`, `Eq`, trace tail, literal
 ///   materialisation) → unknown; return `None`. The walker treats
 ///   `LoadI / LoadF / LoadK` as transparent and walks past them.
 ///
-/// `Op::Eq` is *not* a tag indicator: `icmp eq` of i64 payloads
-/// catches both `Int == 0` and `Table == nil` correctly, so the
-/// cmp itself doesn't pin the result's tag.
+/// `Op::Eq` is *not* a tag indicator: values of any two types can
+/// be compared, so the cmp itself doesn't pin the result's tag.
 fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
     let na = next.a();
     let nb = next.b();
@@ -734,9 +733,8 @@ fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
                 None
             }
         }
-        // `Op::Eq` does bitwise equality on i64 payloads — works
-        // for both Int and Table comparisons, so it tells us
-        // nothing about the operand's tag.
+        // `Op::Eq` compares values of any two types, so it tells
+        // us nothing about the operand's tag.
         _ => None,
     }
 }
@@ -2061,6 +2059,17 @@ fn escape_analyze(
                 // same machinery in the `per_exit_inline` arm; the
                 // site is demoted to Escaped instead (see the
                 // `has_inline_cmp` gate in pre-emit demote).
+                //
+                // A compared table is compared by address (and its
+                // metatable is read), which a sunk table does not have.
+                let operands: &[u32] = if op == Op::EqK { &[a] } else { &[a, ins.b()] };
+                for &r in operands {
+                    if (r as usize) < max_stack
+                        && let Some(sid) = lookup(&bindings, depth, r)
+                    {
+                        mark_escape(&mut sites, sid);
+                    }
+                }
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::IDiv | Op::Mod
             | Op::Pow | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr
@@ -2921,6 +2930,31 @@ fn is_whitelisted_op(op: Op) -> bool {
 /// the kind from scratch on every operand access.
 fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
     *current_kinds.get(reg as usize).unwrap_or(&RegKind::Unset)
+}
+
+/// How a trace lowers `==` of two registers of the given kinds, neither
+/// of them Float (those take the fcmp path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EqLowering {
+    /// equal exactly when the payloads are
+    Payload,
+    /// different types: never equal (nil and integer 0 share payload 0)
+    Unequal,
+    /// equal payloads mean equal; different ones need a guard
+    Identity(RegKind),
+    /// a value of unknown type: the payload compare is only a guess,
+    /// so the trace must not be dispatched
+    Unknown,
+}
+
+fn eq_lowering(a: RegKind, b: RegKind) -> EqLowering {
+    use RegKind::*;
+    match (a, b) {
+        (Unset, _) | (_, Unset) => EqLowering::Unknown,
+        (Int, Int) | (Nil, Nil) | (Closure, Closure) => EqLowering::Payload,
+        (Table, Table) | (Str, Str) => EqLowering::Identity(a),
+        _ => EqLowering::Unequal,
+    }
 }
 
 /// Cast a Variable's i64 payload into f64 if its kind is Float.
@@ -6635,8 +6669,9 @@ pub fn lower_trace_into_named<M: Module>(
             Op::EqK => {
                 // `R[A] == const[B]` — Int and Float consts both
                 // valid (pre-emit gated above). Emit icmp eq for
-                // Int + Int, fcmp eq for Float + Float; mismatched
-                // pairing on the LHS reg's current kind bails.
+                // Int + Int, fcmp eq for Float + Float; a number
+                // against the other number kind bails, against a
+                // non-number is never equal.
                 let bx = ins.b() as usize;
                 let ka = k_op(&current_kinds, off as u32 + ins.a());
                 let cond = match head_proto.consts[bx] {
@@ -6644,14 +6679,24 @@ pub fn lower_trace_into_named<M: Module>(
                         if matches!(ka, RegKind::Float) {
                             return None;
                         }
-                        let lhs = bcx.use_var(regs[ins.a() as usize]);
-                        let rhs = bcx.ins().iconst(types::I64, n);
-                        let int_cc = if ins.k() {
-                            IntCC::Equal
-                        } else {
-                            IntCC::NotEqual
-                        };
-                        bcx.ins().icmp(int_cc, lhs, rhs)
+                        match eq_lowering(ka, RegKind::Int) {
+                            EqLowering::Unequal => bcx.ins().iconst(types::I8, i64::from(!ins.k())),
+                            lowering => {
+                                if lowering == EqLowering::Unknown {
+                                    dispatchable = false;
+                                    dispatch_off_reason =
+                                        dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                                }
+                                let lhs = bcx.use_var(regs[ins.a() as usize]);
+                                let rhs = bcx.ins().iconst(types::I64, n);
+                                let int_cc = if ins.k() {
+                                    IntCC::Equal
+                                } else {
+                                    IntCC::NotEqual
+                                };
+                                bcx.ins().icmp(int_cc, lhs, rhs)
+                            }
+                        }
                     }
                     luna_core::runtime::Value::Float(f) => {
                         if !matches!(ka, RegKind::Float) {
@@ -6974,7 +7019,69 @@ pub fn lower_trace_into_named<M: Module>(
                     } else {
                         bcx.ins().icmp_imm_u(IntCC::Equal, c, 0)
                     }
+                } else if op == Op::Eq {
+                    let lhs = bcx.use_var(regs[ins.a() as usize]);
+                    let rhs = bcx.use_var(regs[ins.b() as usize]);
+                    let int_cc = if k_effective {
+                        IntCC::Equal
+                    } else {
+                        IntCC::NotEqual
+                    };
+                    match eq_lowering(ka, kb) {
+                        EqLowering::Payload => bcx.ins().icmp(int_cc, lhs, rhs),
+                        EqLowering::Unequal => bcx.ins().iconst(types::I8, i64::from(!k_effective)),
+                        EqLowering::Identity(kind) => {
+                            // two distinct objects can still be equal (`__eq`,
+                            // equal long strings); the interpreter decides those
+                            let same = bcx.ins().icmp(IntCC::Equal, lhs, rhs);
+                            let decided = if kind == RegKind::Table {
+                                let no_mt = |bcx: &mut FunctionBuilder<'_>, t| {
+                                    let mt = bcx.ins().load(
+                                        types::I64,
+                                        MemFlagsData::trusted(),
+                                        t,
+                                        super::TABLE_METATABLE_OFFSET as i32,
+                                    );
+                                    bcx.ins().icmp_imm_u(IntCC::Equal, mt, 0)
+                                };
+                                let l = no_mt(&mut bcx, lhs);
+                                let r = no_mt(&mut bcx, rhs);
+                                bcx.ins().band(l, r)
+                            } else {
+                                let short = |bcx: &mut FunctionBuilder<'_>, s| {
+                                    let b = bcx.ins().load(
+                                        types::I8,
+                                        MemFlagsData::trusted(),
+                                        s,
+                                        super::STR_SHORT_OFFSET as i32,
+                                    );
+                                    bcx.ins().icmp_imm_u(IntCC::NotEqual, b, 0)
+                                };
+                                let l = short(&mut bcx, lhs);
+                                let r = short(&mut bcx, rhs);
+                                bcx.ins().band(l, r)
+                            };
+                            let ok = bcx.ins().bor(same, decided);
+                            guard!(ok, i, rop.pc);
+                            bcx.ins().icmp(int_cc, lhs, rhs)
+                        }
+                        EqLowering::Unknown => {
+                            dispatchable = false;
+                            dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                            bcx.ins().icmp(int_cc, lhs, rhs)
+                        }
+                    }
                 } else {
+                    // only integers order by their payload
+                    match (ka, kb) {
+                        (RegKind::Int, RegKind::Int) => {}
+                        (RegKind::Unset, RegKind::Int | RegKind::Unset)
+                        | (RegKind::Int, RegKind::Unset) => {
+                            dispatchable = false;
+                            dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                        }
+                        _ => return None,
+                    }
                     let lhs = bcx.use_var(regs[ins.a() as usize]);
                     let rhs = bcx.use_var(regs[ins.b() as usize]);
                     let int_cc = match (op, k_effective) {
@@ -6982,8 +7089,6 @@ pub fn lower_trace_into_named<M: Module>(
                         (Op::Lt, false) => IntCC::SignedGreaterThanOrEqual,
                         (Op::Le, true) => IntCC::SignedLessThanOrEqual,
                         (Op::Le, false) => IntCC::SignedGreaterThan,
-                        (Op::Eq, true) => IntCC::Equal,
-                        (Op::Eq, false) => IntCC::NotEqual,
                         _ => unreachable!("whitelist gated above"),
                     };
                     bcx.ins().icmp(int_cc, lhs, rhs)
