@@ -7,7 +7,7 @@ use std::fmt::Write;
 use std::io::Write as IoWrite;
 use std::process::{Command, Output, Stdio};
 
-#[derive(Arbitrary, Debug)]
+#[derive(Debug)]
 pub(crate) enum Expr {
     Int(i32),
     Float(NormalFloat),
@@ -29,6 +29,48 @@ pub(crate) enum Expr {
     TableGet(Box<Expr>),
     TableSet(Box<Expr>, Box<Expr>),
     Pow(Box<Expr>, Box<Expr>),
+}
+
+/// Deepest level `render` prints; nodes below it would never be seen.
+const MAX_DEPTH: u32 = 4;
+
+impl<'a> Arbitrary<'a> for Expr {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        Expr::arbitrary_at(u, 0)
+    }
+}
+
+impl Expr {
+    // The derived impl recursed as deep as the input allowed. Under ASan every
+    // distinct allocation stack is kept forever in the stack depot, and the
+    // many shapes of that recursion made the depot, and RSS, grow without
+    // bound over a long run.
+    fn arbitrary_at(u: &mut arbitrary::Unstructured<'_>, depth: u32) -> arbitrary::Result<Self> {
+        if depth > MAX_DEPTH {
+            return Ok(Expr::Int(0));
+        }
+        let sub = |u: &mut arbitrary::Unstructured<'_>| -> arbitrary::Result<Box<Expr>> {
+            Ok(Box::new(Expr::arbitrary_at(u, depth + 1)?))
+        };
+        Ok(match u.choose_index(16)? {
+            0 => Expr::Int(u.arbitrary()?),
+            1 => Expr::Float(u.arbitrary()?),
+            2 => Expr::Nil,
+            3 => Expr::True,
+            4 => Expr::False,
+            5 => Expr::Var(u.arbitrary()?),
+            6 => Expr::Add(sub(u)?, sub(u)?),
+            7 => Expr::Sub(sub(u)?, sub(u)?),
+            8 => Expr::Mul(sub(u)?, sub(u)?),
+            9 => Expr::Mod(sub(u)?, sub(u)?),
+            10 => Expr::Lt(sub(u)?, sub(u)?),
+            11 => Expr::StringConcat(sub(u)?, sub(u)?),
+            12 => Expr::StringFormat(sub(u)?),
+            13 => Expr::TableGet(sub(u)?),
+            14 => Expr::TableSet(sub(u)?, sub(u)?),
+            _ => Expr::Pow(sub(u)?, sub(u)?),
+        })
+    }
 }
 
 /// Floats restricted to a narrow non-pathological range — PUC's
@@ -68,10 +110,7 @@ pub(crate) struct Program {
 }
 
 fn render_expr(buf: &mut String, e: &Expr, depth: u32) {
-    if depth > 4 {
-        buf.push('0');
-        return;
-    }
+    assert!(depth <= MAX_DEPTH + 1, "generated expression deeper than render prints");
     match e {
         Expr::Int(i) => write!(buf, "({i})").unwrap(),
         Expr::Float(NormalFloat(f)) => write!(buf, "({})", f).unwrap(),
