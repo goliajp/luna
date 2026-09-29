@@ -94,9 +94,8 @@ jobs:
           curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
           tar -xzf lua.tar.gz
           cd lua-5.5.1
-          # 5.5 dropped the 5.4-era `linux-readline` target; plain
-          # `linux` builds without readline, which the stdin-driven
-          # diff harness doesn't need anyway.
+          # plain `linux` builds without readline, which the
+          # stdin-driven diff harness doesn't need
           make linux
           sudo make install INSTALL_TOP=/usr/local
           echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
