@@ -54,6 +54,10 @@ enum Expr {
 /// Deepest level `render` prints.
 const MAX_DEPTH: u32 = 4;
 
+/// Upper bound on one rendered expression (about 3.9 KB: `Mod` at every
+/// level), reserved up front so buffer growth stays out of the recursion.
+const MAX_EXPR_LEN: usize = 4 * 1024;
+
 impl<'a> Arbitrary<'a> for Expr {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         Expr::arbitrary_at(u, 0)
@@ -61,27 +65,32 @@ impl<'a> Arbitrary<'a> for Expr {
 }
 
 impl Expr {
-    // bounded here, not only in `render`: under ASan every distinct
-    // allocation stack of an unbounded recursion stays in the stack depot
+    // bounded here and boxed at one call site: under ASan every distinct
+    // allocation stack stays in the stack depot for good
     fn arbitrary_at(u: &mut arbitrary::Unstructured<'_>, depth: u32) -> arbitrary::Result<Self> {
         if depth > MAX_DEPTH {
             return Ok(Expr::Int(0));
         }
-        let sub = |u: &mut arbitrary::Unstructured<'_>| -> arbitrary::Result<Box<Expr>> {
-            Ok(Box::new(Expr::arbitrary_at(u, depth + 1)?))
-        };
-        Ok(match u.choose_index(11)? {
+        let variant = u.choose_index(11)?;
+        let arity = if variant < 6 { 0 } else { 2 };
+        let mut kids: [Option<Box<Expr>>; 2] = [None, None];
+        for kid in kids.iter_mut().take(arity) {
+            *kid = Some(Box::new(Expr::arbitrary_at(u, depth + 1)?));
+        }
+        let [l, r] = kids;
+        let (l, r) = (|| l.unwrap(), || r.unwrap());
+        Ok(match variant {
             0 => Expr::Int(u.arbitrary()?),
             1 => Expr::Float(u.arbitrary()?),
             2 => Expr::Nil,
             3 => Expr::True,
             4 => Expr::False,
             5 => Expr::Var(u.arbitrary()?),
-            6 => Expr::Add(sub(u)?, sub(u)?),
-            7 => Expr::Sub(sub(u)?, sub(u)?),
-            8 => Expr::Mul(sub(u)?, sub(u)?),
-            9 => Expr::Mod(sub(u)?, sub(u)?),
-            _ => Expr::Lt(sub(u)?, sub(u)?),
+            6 => Expr::Add(l(), r()),
+            7 => Expr::Sub(l(), r()),
+            8 => Expr::Mul(l(), r()),
+            9 => Expr::Mod(l(), r()),
+            _ => Expr::Lt(l(), r()),
         })
     }
 }
@@ -166,7 +175,10 @@ fn render(p: &Program) -> String {
         // drift between LuaJIT and luna doesn't dominate
         // divergence noise.
         buf.push_str("print(tostring(");
+        buf.reserve(MAX_EXPR_LEN);
+        let start = buf.len();
         render_expr(&mut buf, e, 0);
+        assert!(buf.len() - start <= MAX_EXPR_LEN, "MAX_EXPR_LEN too small");
         buf.push_str("))\n");
     }
     buf
