@@ -161,3 +161,15 @@ fn integer_zero_is_not_nil_in_loaded_bytecode() {
         return table.concat(out, " ")"#;
     assert_same(MODERN, src, "0/20/0 0/20/0 0/20/0", true);
 }
+
+#[test]
+fn strings_order_by_contents_in_a_while_loop() {
+    let src = r#"
+        local function k(x, y) local r, i = 0, 0 while i < 20 do i = i + 1 if x < y then r = r + 1 end end return r end
+        local function k2(x, y) local r, i = 0, 0 while i < 20 do i = i + 1 if x <= y then r = r + 1 end end return r end
+        local a, b = "b" .. string.rep("x", 50), "a" .. string.rep("x", 50)
+        local out = {}
+        for _ = 1, 3 do out[#out + 1] = k(a, b) .. "/" .. k(b, a) .. "/" .. k2(a, b) .. "/" .. k2(b, a) end
+        return table.concat(out, " ")"#;
+    assert_same(ALL, src, "0/20/0/20 0/20/0/20 0/20/0/20", false);
+}
