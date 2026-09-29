@@ -28,6 +28,13 @@ fields of `object` types, which move from 0.36 to 0.40; and the new
 Cranelift raises the minimum Rust version to 1.96. The Lua-facing
 behaviour and the `luna-core` embedder API are unchanged.
 
+### Added
+
+- `luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET`, the offset
+  of the flag that marks an interned (short) string, next to the table
+  offsets in `runtime::table::jit_layout`. The trace JIT reads it to
+  compare two strings without calling back into the runtime.
+
 ### Changed
 
 - Cranelift 0.124 → 0.136 (the `cranelift*` dependencies of luna-jit and
@@ -62,6 +69,37 @@ behaviour and the `luna-core` embedder API are unchanged.
 - AOT trace data sections are named by the target's object format
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.
+
+### Fixed
+
+- The trace JIT compared two values by their raw bits whatever their
+  types, so a traced loop took the wrong branch of `x == nil` when `x` was
+  the integer 0 (both are stored as zero bits), and an integer equal to a
+  table's address equalled that table. The same comparison skipped `__eq`
+  for two tables, found two equal long strings unequal, and ordered
+  strings with `<` / `<=` by address. Values of different types now
+  compare unequal, two tables with a metatable or two long strings leave
+  the trace so the interpreter compares them, and string ordering is no
+  longer compiled. A table the trace built in the loop and dropped before
+  the back edge was compared by what its register held before (it was
+  never allocated). Every dialect was affected, and so is 3.2.2.
+- A recursive trace whose body holds a value of a type the trace JIT
+  could not work out (and is therefore never to be entered) was entered
+  anyway: closing it as a recursive trace marked it runnable again.
+  Recursive traces are only recorded with `Vm::set_self_link_enabled`.
+- A generic `for` over `ipairs` whose values change type could hang
+  under the trace JIT: when the loop body was nothing but the iterator
+  call, the value-type check left the trace at its own first
+  instruction and the dispatcher entered the trace again at once, over
+  and over. Such an exit now lets the interpreter run that instruction
+  first. Lua 5.1 to 5.3 were affected.
+- The optional LLVM backend (`llvm-jit` feature) had the same raw-bits
+  comparison: its traces and compiled functions treated nil as the
+  integer 0, a compiled function returning nil returned 0, and an
+  upvalue of another type was read as an integer. A compiled function
+  also called itself where its code called a function through an
+  upvalue that no longer held it. These cases now stay in the
+  interpreter.
 
 ### Removed
 
