@@ -1111,11 +1111,12 @@ impl Vm {
         self.retired_jit_storage.push(old);
     }
 
-    /// Install the no-op JIT backend. `try_compile`
-    /// reports "skipped" so every closure stays on the interpreter
-    /// path, and the trace recorder's compile attempt always returns
-    /// `None`. Intended for tests that want to verify the trait
-    /// boundary works in a JIT-free configuration.
+    /// Install the no-op JIT backend and switch the JIT off
+    /// ([`Self::set_jit_enabled`] and [`Self::set_trace_jit_enabled`]
+    /// both `false`): no hot counter ticks, no trace is recorded, and
+    /// the interpreter skips the per-instruction trace lookup.
+    /// Installing a real backend afterwards does not switch the JIT
+    /// back on; call the two setters with `true` for that.
     ///
     /// Calling this on a Vm whose closures already populated
     /// `Proto.jit: JitProtoState::Compiled` does NOT evict those
@@ -1124,6 +1125,8 @@ impl Vm {
     pub fn install_null_jit(&mut self) {
         self.jit.chunk_compiler = Box::new(crate::jit::NullJitBackend);
         self.jit.trace_compiler = Box::new(crate::jit::NullJitBackend);
+        self.jit.enabled = false;
+        self.jit.trace_enabled = false;
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.

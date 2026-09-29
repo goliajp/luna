@@ -24,6 +24,7 @@ mod jit_compare_operand_kinds;
 mod jit_core_semantics;
 mod jit_dialect_audit;
 mod jit_float_compare_nan;
+mod jit_off_switch;
 mod jit_storage_mismatch_no_abort;
 mod jit_trait_boundary;
 mod jit_vm_scoped_rebind;
