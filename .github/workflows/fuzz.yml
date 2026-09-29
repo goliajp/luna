@@ -73,6 +73,8 @@ jobs:
         run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
       - name: run fuzz target 5 min
         working-directory: crates/luna-fuzz
+        env:
+          ASAN_OPTIONS: malloc_context_size=10
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300
       - name: upload artifacts on crash
         if: failure()
@@ -145,6 +147,13 @@ jobs:
         working-directory: crates/luna-fuzz
         env:
           MINUTES: ${{ inputs.minutes || '60' }}
+          # ASan keeps every distinct allocation and free stack until the
+          # process exits. The compiler's recursion (and Cranelift, for the
+          # JIT target) keeps producing new ones over a long campaign, so
+          # with the default 30 frames the kept stacks alone grow by
+          # hundreds of MB. Ten frames still locate the allocation; replay
+          # a saved input locally for full stacks.
+          ASAN_OPTIONS: malloc_context_size=10
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=$((MINUTES * 60))
       - name: upload artifacts on crash
         if: failure()
