@@ -63,6 +63,7 @@ use luna_core::jit::trace_types::{
     CompileOptions, CompiledTrace, ExitTag, InlineSideExit, TagResKind, TraceFn, TraceRecord,
     classify_exit_tags,
 };
+use luna_core::runtime::value::raw;
 use luna_core::vm::isa::Op;
 
 /// Ops supported by the LLVM trace MVP.
@@ -108,6 +109,37 @@ pub(crate) fn try_compile_trace(
     let head_proto = record.head_proto;
     let max_stack = head_proto.max_stack as usize;
     let window_size = max_stack as u32;
+
+    // Every op here computes on integer payloads, and so does the exit
+    // restore (written slots come back as Int). A register the trace
+    // reads before writing it must enter as an integer (the dispatcher
+    // checks entry tags): nil and integer 0, or a float and its bits,
+    // are otherwise the same payload.
+    let mut set = vec![false; max_stack];
+    for rop in &record.ops {
+        let ins = rop.inst;
+        let (reads, dst) = match ins.op() {
+            Op::LoadI => ([None, None], Some(ins.a())),
+            Op::Move => ([Some(ins.b()), None], Some(ins.a())),
+            Op::Add | Op::Sub | Op::Mul | Op::Mod => {
+                ([Some(ins.b()), Some(ins.c())], Some(ins.a()))
+            }
+            Op::Lt | Op::Le | Op::Eq => ([Some(ins.a()), Some(ins.b())], None),
+            _ => ([None, None], None),
+        };
+        for r in reads.into_iter().flatten() {
+            let r = r as usize;
+            if r >= max_stack {
+                return None;
+            }
+            if !set[r] && record.entry_tags.get(r) != Some(&raw::INT) {
+                return None;
+            }
+        }
+        if let Some(a) = dst {
+            *set.get_mut(a as usize)? = true;
+        }
+    }
     let head_pc = record.head_pc;
     let n = record.ops.len();
 

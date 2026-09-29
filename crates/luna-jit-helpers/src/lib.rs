@@ -804,6 +804,37 @@ pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
     }
 }
 
+/// The LLVM method JIT's check before it reads an upvalue it computes
+/// with as an integer. Anything else (a float, nil, a table) needs the
+/// interpreter: returns 1 when the upvalue holds an integer, 0 after
+/// parking a deopt so the call is re-run there.
+// SAFETY: `no_mangle` keeps the symbol resolvable from JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_upval_is_int(idx: i64) -> i64 {
+    // SAFETY: called only from JIT-emitted code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    // SAFETY: the method-JIT dispatcher enters with `enter(vm, Some(cl))`, which pins JIT_CL to the running closure.
+    let cl = unsafe { current_jit_closure() };
+    match vm.upval_get(cl, idx as u32) {
+        luna_core::runtime::Value::Int(_) => 1,
+        _ => {
+            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: upvalue is not an integer"));
+            0
+        }
+    }
+}
+
+/// 1 while no deopt is parked. A method-JIT chunk checks it after a
+/// self-recursive call: once the callee parked one, the caller's result
+/// is thrown away and it returns at once instead of computing on.
+// SAFETY: `no_mangle` keeps the symbol resolvable from JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
+    // SAFETY: called only from JIT-emitted code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    i64::from(vm.jit.pending_err.is_none())
+}
+
 /// Method-JIT entry check for a chunk compiled with self-recursive
 /// calls: they are direct calls to the chunk's own code, which is right
 /// only while `upvals[idx]` holds the running closure. A forward-declared
