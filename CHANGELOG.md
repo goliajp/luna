@@ -63,6 +63,18 @@ behaviour and the `luna-core` embedder API are unchanged.
   rather than the host's, so a trace object built for Windows on another
   host gets the short COFF section names the deploy side looks for.
 
+### Fixed
+
+- The trace JIT compared two values by their raw bits whatever their
+  types, so a traced loop took the wrong branch of `x == nil` when `x` was
+  the integer 0 (both are stored as zero bits), and an integer equal to a
+  table's address equalled that table. The same comparison skipped `__eq`
+  for two tables, found two equal long strings unequal, and ordered
+  strings with `<` / `<=` by address. Values of different types now
+  compare unequal, two tables with a metatable or two long strings leave
+  the trace so the interpreter compares them, and string ordering is no
+  longer compiled. Every dialect was affected, and so is 3.2.2.
+
 ### Removed
 
 - The patched Cranelift fork luna's own builds used (a git submodule
