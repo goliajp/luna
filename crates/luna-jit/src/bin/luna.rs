@@ -654,11 +654,10 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
     // JIT backend; the `luna` bin always wants Cranelift, so go
     // through the wrapper. --no-jit then opts back out.
     let mut vm = if opts.sandbox {
-        // SandboxBuilder lives in luna-core and defaults to no JIT
-        // already, so --no-jit + --sandbox is automatic. If --sandbox
-        // without --no-jit, install Cranelift afterwards (so the
-        // builder's safe-stdlib whitelist still applies but the JIT
-        // is on).
+        // SandboxBuilder lives in luna-core and has no JIT backend, but
+        // its trace flags start on; --no-jit switches them off. Without
+        // --no-jit, install Cranelift afterwards (so the builder's
+        // safe-stdlib whitelist still applies but the JIT is on).
         let mut vm = luna_jit::vm::Vm::sandbox(opts.version)
             .open_base()
             .open_math()
@@ -666,7 +665,9 @@ fn new_vm(opts: &LunaOpts, ignore_env: bool) -> Vm {
             .open_table()
             .open_coroutine()
             .build();
-        if !opts.no_jit {
+        if opts.no_jit {
+            vm.install_null_jit();
+        } else {
             vm.install_default_jit();
         }
         vm
