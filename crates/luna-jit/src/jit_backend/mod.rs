@@ -6729,16 +6729,15 @@ impl IntChunkCompiler for CraneliftBackend {
 }
 
 impl TraceCompiler for CraneliftBackend {
-    // pass storage through so
-    // `try_compile_trace_with_options` parks the trace's `JITModule`
-    // on the per-`Vm` `storage.trace_handles` Vec.
+    // pass storage through so the compiled trace's `JITModule` is
+    // parked on the per-`Vm` `storage.trace_handles` Vec
     fn try_compile_trace(
         &self,
         storage: &mut dyn luna_core::jit::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        trace::try_compile_trace_with_options(storage, record, opts)
+        trace::compile_trace_for_vm(storage, record, opts)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {

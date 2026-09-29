@@ -48,6 +48,7 @@ mod trace_call_trigger;
 mod trace_callee_register_window;
 mod trace_close_predict_deopt;
 mod trace_closure_whitelist;
+mod trace_codegen_skip;
 mod trace_compile_counters;
 mod trace_concat_helper;
 mod trace_concat_str_kind;
