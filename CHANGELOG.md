@@ -28,6 +28,13 @@ fields of `object` types, which move from 0.36 to 0.40; and the new
 Cranelift raises the minimum Rust version to 1.96. The Lua-facing
 behaviour and the `luna-core` embedder API are unchanged.
 
+### Added
+
+- `luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET`, the offset
+  of the flag that marks an interned (short) string, next to the table
+  offsets in `runtime::table::jit_layout`. The trace JIT reads it to
+  compare two strings without calling back into the runtime.
+
 ### Changed
 
 - Cranelift 0.124 → 0.136 (the `cranelift*` dependencies of luna-jit and
