@@ -13,23 +13,10 @@ feature-depth = 1
 db-path = "~/.cargo/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-# quick-xml 0.26 (via luna-tools optional `flame-graph` feature →
-# inferno 0.11) hits two XML-parsing DoS advisories patched only in
-# quick-xml >= 0.41.0. inferno 0.12.8 still pins quick-xml ^0.39, so
-# there is no upgrade path. Exposure is nil for luna: quick-xml only parses
-# inferno's own locally-generated flamegraph SVG/collapsed stacks in a
-# dev-only CLI tool — no untrusted XML reaches it. Drop these ignores
-# once inferno releases with quick-xml >= 0.41.
-#
-# These entries only bite when cargo-deny can actually reach the crate:
-# it must run with `--all-features`, since `flame-graph` is opt-in. See
-# cargo-deny.yml — without that flag these two lines report
-# `advisory-not-detected` and the whole optional-feature dep tree goes
-# unscanned.
-ignore = [
-    "RUSTSEC-2026-0194", # quick-xml: quadratic runtime on duplicate attr check
-    "RUSTSEC-2026-0195", # quick-xml: unbounded NsReader namespace allocation
-]
+# The crates behind luna-tools' opt-in features (inferno, pprof,
+# capstone) are only scanned when cargo-deny runs with `--all-features`;
+# see cargo-deny.yml.
+ignore = []
 
 # ─────────────────────────────────────────────────────────────────────
 # Licenses — only permissive, no GPL contamination.
@@ -98,41 +85,27 @@ external-default-features = "allow"
 
 allow = []
 deny = []
-# The vendored cranelift / wasmtime fork pulls
-# `wasmtime-internal-jit-icache-coherence v37.0.3`, which
-# transitively depends on `windows-sys 0.60.2` →
-# `windows-targets 0.53.5` → `windows_x86_64_msvc 0.53.1` and the
-# matching per-arch sibling crates. The `region 3.0.2`
-# chain (under cranelift-jit) still resolves the older `windows-sys
-# 0.52.0` → `windows-targets 0.52.6` set. This is a transitional
-# duplication that goes away once cranelift / wasmtime themselves
-# bump `region` (upstream issue, not actionable from luna).
-# `multiple-versions = "warn"` keeps the duplication visible without
-# failing CI; the explicit skip list documents the known set we accept.
+# Known duplicate versions, accepted rather than fixed: each pair comes
+# from two upstreams that have not moved to the same release yet.
+# `multiple-versions = "warn"` keeps new duplication visible without
+# failing CI; this list documents the set we accept.
 skip = [
-    # Windows per-architecture stub crates pulled in two versions
-    # via the region / wasmtime split above.
-    "windows_x86_64_msvc",
-    "windows_x86_64_gnu",
-    "windows_x86_64_gnullvm",
-    "windows_i686_msvc",
-    "windows_i686_gnu",
-    "windows_i686_gnullvm",
-    "windows_aarch64_msvc",
-    "windows_aarch64_gnullvm",
+    # windows-sys 0.52 via cranelift-jit → region, 0.61 everywhere else.
     "windows-sys",
-    "windows-targets",
-    # `object` is pulled at v0.36 by luna-aot / luna-tools (the
-    # downstream object-write surface luna pins) and at v0.37 via
-    # backtrace → dhat (luna-core dev-dep) and via cranelift-codegen
-    # → wasmtime-internal-jit-icache-coherence. backtrace's bump
-    # tracks upstream; luna's direct dep stays on 0.36.
+    # `object` 0.40 is shared by luna-aot / luna-tools and
+    # cranelift-object; 0.37 comes via backtrace → dhat (luna-core
+    # dev-dep).
     "object",
-    # `bitflags` and `hashbrown` are both pulled in two versions by
-    # the cranelift / wasmtime split (older inside region/windows-sys,
-    # newer inside the vendored wasmtime tree).
-    "bitflags",
+    # hashbrown 0.14 via inferno → dashmap, 0.16 via gimli 0.33, 0.17
+    # via cranelift-codegen.
     "hashbrown",
+    # gimli 0.32 via backtrace → addr2line, 0.33 via cranelift-codegen.
+    "gimli",
+    # bitflags 1.x via pprof → nix 0.26, 2.x everywhere else.
+    "bitflags",
+    # syn 3 for luna-jit-derive, 2 via the proc-macros of clap, serde,
+    # thiserror, zerocopy and cranelift's pulley.
+    "syn",
 ]
 skip-tree = []
 

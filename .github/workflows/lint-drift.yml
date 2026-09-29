@@ -33,7 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
+          # scheduled runs start on the default branch (master, the last
+          # release); test the code that is about to ship instead
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
       - uses: dtolnay/rust-toolchain@beta
         with:
           components: clippy, rustfmt
@@ -41,12 +43,6 @@ jobs:
         run: rustc +beta --version && cargo +beta clippy --version
 
       # Mirrors ci.yml's lint job exactly — same exclusions, same flags.
-      #
-      # Expect to see `unused import` warnings from `cranelift-codegen`
-      # in the log. Those come from the vendored wasmtime tree, which
-      # cargo lint-caps as a dependency, so they do not fail the step and
-      # are not ours to fix. Only findings in luna's own crates can turn
-      # this job red.
       - name: cargo +beta clippy --workspace --all-targets -- -D warnings
         run: |
           cargo +beta clippy --workspace --all-targets \
@@ -71,7 +67,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
+          # scheduled runs start on the default branch (master, the last
+          # release); test the code that is about to ship instead
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: clippy

@@ -215,7 +215,7 @@ fn write_bytecode_object(bytecode: &[u8], out: &Path) -> Result<(), AotError> {
     let _start_offset = obj.append_section_data(section_id, bytecode, 1);
 
     // The `object` crate auto-prefixes Mach-O global symbols with `_`
-    // per `Mangling::global_prefix` (`object/src/write/mod.rs:391`).
+    // per `Mangling::global_prefix`.
     // We pass the bare name; the output `.o` ends up with the correct
     // per-format mangling.
     let _ = format; // marker for the per-format mangling discussed above
@@ -1095,6 +1095,8 @@ impl TargetSpec {
     /// builder()` (rather than the per-triple path) so we inherit the
     /// CPU-feature autodetection (`SSE4.1`, `AVX2`, …). Host warmup +
     /// host deploy ⇒ identical mcode.
+    // cranelift types in the signature: internal to luna crates, not covered by semver
+    #[doc(hidden)]
     pub fn cranelift_isa_builder(&self) -> Result<cranelift_codegen::isa::Builder, AotError> {
         use std::str::FromStr;
         if self.is_host {
@@ -1201,10 +1203,9 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // The placeholder uses a `static` zero-length array marked
     // `used` so the C compiler emits the section header even though
     // nothing references it. On Mach-O the `section` attribute
-    // takes a `"__SEG,__SECT"` pair; we use `__DATA,luna_strkey_idx`
-    // mirroring the lowerer's `set_segment_section("", ...)` call
-    // (cranelift's empty segment routes to `__DATA` on Mach-O). On
-    // ELF the `section` attribute takes just the section name.
+    // takes a `"__SEG,__SECT"` pair; we use `__DATA,luna_strkey_idx`,
+    // the same segment the lowerer puts its entries in. On ELF the
+    // `section` attribute takes just the section name.
     // Also guarantee the `luna_trace_meta` section exists in the
     // link image when zero trace `.o`s linked in (small / non-loopy
     // sources where the warmup recorder didn't close any traces).
@@ -1242,7 +1243,7 @@ fn write_aot_cmain_object_for(out: &Path, target: &TargetSpec) -> Result<(), Aot
     // Mach-O sectname max is 16 chars; `luna_inline_chnx` is 15
     // (matches `luna_strkey_idx` sizing). Windows COFF short name cap
     // is 8 — `.lt_chai` mirrors `.lt_skix` / `.lt_meta`. Both names
-    // must match the lowerer's `set_segment_section` choice in
+    // must match the lowerer's section choice in
     // `emit_chain_ptr_arg` and the deploy resolver's bracket /
     // section-walker needles.
     let placeholder = match target.os {
@@ -1996,19 +1997,17 @@ fn harvest_and_emit_aot_traces(
         // meta` in `__DATA` is the path of least surprise for ld /
         // strip.
         //
-        // Windows COFF host: PE section names are
-        // capped at 8 bytes in the final image; use `.lt_blob` (7 chars
-        // + leading `.`) so the post-link PE preserves the name
-        // byte-for-byte. The deploy walker doesn't bracket-look this
-        // section (it's only referenced via pointer relocations from
-        // `.lt_meta` entries), so the name choice is mostly for
-        // consistency / debuggability.
-        let (blob_seg, blob_sect) = if cfg!(target_os = "windows") {
-            ("", ".lt_blob")
-        } else {
-            ("__DATA", "luna_trace_blob")
-        };
-        desc.set_segment_section(blob_seg, blob_sect);
+        // PE section names are capped at 8 bytes in the final image;
+        // COFF uses `.lt_blob` (7 chars + leading `.`) so the post-link
+        // PE preserves the name byte-for-byte. The deploy walker
+        // doesn't bracket-look this section (it's only referenced via
+        // pointer relocations from `.lt_meta` entries), so the name
+        // choice is mostly for consistency / debuggability.
+        desc.set_custom_section(&aot_data_section(
+            module.isa().triple(),
+            "luna_trace_blob",
+            ".lt_blob",
+        ));
         module
             .define_data(blob_data_id, &desc)
             .map_err(|e| AotError::Object(format!("define_data blob: {e}")))?;
@@ -2040,29 +2039,24 @@ fn harvest_and_emit_aot_traces(
         // payload[32..40] meta_ptr — relocation
         payload[40..44].copy_from_slice(&blob_len.to_le_bytes());
         desc.define(Box::new(payload));
-        // Use `__DATA` segment explicitly on Mach-O so the section
-        // merges with the cmain shim's `__DATA,luna_trace_meta`
-        // placeholder. cranelift_object passes the segment arg
-        // through verbatim; an empty segment lands the section in
-        // segment `""`, separate from `__DATA` — and the deploy
-        // walker's `section$start$__DATA$luna_trace_meta` would only
-        // see the placeholder. ELF / PE ignore the segment arg
-        // (segment concept is Mach-O specific) so passing `__DATA`
-        // is a no-op there.
+        // On Mach-O the section must be in `__DATA` so it merges with
+        // the cmain shim's `__DATA,luna_trace_meta` placeholder; in any
+        // other segment the deploy walker's
+        // `section$start$__DATA$luna_trace_meta` sees only the
+        // placeholder.
         //
-        // Windows COFF host: short name `.lt_meta`
-        // matches the cmain shim's placeholder section, and the
-        // deploy walker's [`windows_section::find_section`] needle.
-        // PE section names are capped at 8 bytes in the final linked
-        // image — `luna_trace_meta` (15 chars) would either truncate
+        // COFF: short name `.lt_meta` matches the cmain shim's
+        // placeholder section and the deploy walker's
+        // [`windows_section::find_section`] needle. PE section names
+        // are capped at 8 bytes in the final linked image —
+        // `luna_trace_meta` (15 chars) would either truncate
         // unpredictably or land in the COFF string table that the
         // linker drops.
-        let (meta_seg, meta_sect) = if cfg!(target_os = "windows") {
-            ("", ".lt_meta")
-        } else {
-            ("__DATA", "luna_trace_meta")
-        };
-        desc.set_segment_section(meta_seg, meta_sect);
+        desc.set_custom_section(&aot_data_section(
+            module.isa().triple(),
+            "luna_trace_meta",
+            ".lt_meta",
+        ));
         // 8-byte alignment for the fn_ptr / meta_ptr relocations at
         // offsets 24 and 32. Without explicit `set_align(8)` the
         // entries can land at odd offsets in the .o, and Mach-O's
@@ -2104,4 +2098,15 @@ fn harvest_and_emit_aot_traces(
         .map_err(|e| AotError::Object(format!("ObjectProduct::emit: {e}")))?;
     fs::write(out, &bytes)?;
     Ok(HarvestedTraces::Some)
+}
+
+/// Custom section name for trace data on the target's object format.
+/// Mach-O takes `segment,section`; COFF gets the 8-byte name because
+/// the final PE keeps only short names; ELF takes the name as is.
+fn aot_data_section(triple: &target_lexicon::Triple, name: &str, coff_name: &str) -> String {
+    match triple.binary_format {
+        target_lexicon::BinaryFormat::Macho => format!("__DATA,{name}"),
+        target_lexicon::BinaryFormat::Coff => coff_name.to_owned(),
+        _ => name.to_owned(),
+    }
 }

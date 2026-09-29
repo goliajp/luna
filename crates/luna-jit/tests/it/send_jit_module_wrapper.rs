@@ -3,8 +3,7 @@
 //! Two guards:
 //!
 //! 1. **Static assertion** — `SendJitModule: Send`. If a future
-//!    cranelift bump introduces a new `!Send` field that the
-//!    `unsafe impl Send` doesn't cover, this is the canary.
+//!    cranelift bump makes `JITModule` `!Send`, this is the canary.
 //!
 //! 2. **Cross-thread smoke** — wrap a freshly-built `JITModule`
 //!    (default memory provider, which is `Send`),
@@ -35,10 +34,7 @@ fn send_jit_module_static_assert_send() {
 fn send_jit_module_crosses_thread_boundary() {
     require_send::<SendJitModule>();
 
-    // Build a `JITModule` via the default path. The wrapper's SAFETY
-    // contract gates on this — `JITBuilder::default()` /
-    // `JITBuilder::new` resolves the memory provider to
-    // `SystemMemoryProvider`, which IS `Send`.
+    // Build a `JITModule` via the default path.
     let builder = JITBuilder::new(cranelift_module::default_libcall_names())
         .expect("JITBuilder default isa available on host");
     let module = JITModule::new(builder);

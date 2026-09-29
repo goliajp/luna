@@ -16,8 +16,9 @@
 
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use luna_jit::version::LuaVersion;
+use std::hint::black_box;
 
 struct Bench {
     name: &'static str,

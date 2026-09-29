@@ -30,6 +30,18 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
+/// Custom section name for AOT data that the deploy side finds by
+/// section name. Mach-O takes `segment,section`; COFF gets the 8-byte
+/// name because the final PE keeps only short names; ELF takes the
+/// name as is.
+fn aot_data_section(triple: &target_lexicon::Triple, name: &str, coff_name: &str) -> String {
+    match triple.binary_format {
+        target_lexicon::BinaryFormat::Macho => format!("__DATA,{name}"),
+        target_lexicon::BinaryFormat::Coff => coff_name.to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
 /// produce a `Value` of type
 /// `I64` whose runtime contents are the live `Gc<LuaStr>` pointer for
 /// `key_v`. Used by the four `iconst(I64, key.as_ptr() as i64)` sites
@@ -150,29 +162,23 @@ fn emit_str_key_arg<M: Module>(
         // is 15. ELF / COFF have no such limit but accept the same
         // short name — the deploy resolver brackets by the literal
         // section name on both platforms.
-        // Use `__DATA` segment explicitly on Mach-O so this section
-        // merges with the cmain shim's `__DATA,luna_strkey_idx`
-        // placeholder. An empty segment string lands the section in
-        // segment `""`, separate from `__DATA` — the deploy resolver's
-        // `section$start$__DATA$luna_strkey_idx` would then bracket
-        // only the placeholder, missing every real trace entry by 8
-        // bytes (verified via `otool -lv` of an AOT binary). ELF / PE
-        // ignore the segment arg (segment is Mach-O specific) so the
-        // change is a no-op there.
+        // On Mach-O the section must be in `__DATA` so it merges with
+        // the cmain shim's `__DATA,luna_strkey_idx` placeholder; in any
+        // other segment the deploy resolver's
+        // `section$start$__DATA$luna_strkey_idx` brackets only the
+        // placeholder and misses every real entry.
         //
-        // Windows COFF host: PE section
-        // headers are fixed 8 bytes, and `link.exe` / `lld-link` drop
-        // the COFF long-name string table when producing the final PE.
-        // Use the short name `.lt_skix` (8 bytes, matches the C
-        // placeholder in `luna-aot::embed::write_aot_cmain_object_for`
-        // Windows arm and the deploy-side
-        // `windows_section::find_section` needle).
-        let (idx_seg, idx_sect) = if cfg!(target_os = "windows") {
-            ("", ".lt_skix")
-        } else {
-            ("__DATA", "luna_strkey_idx")
-        };
-        desc.set_segment_section(idx_seg, idx_sect);
+        // PE section headers are fixed 8 bytes, and `link.exe` /
+        // `lld-link` drop the COFF long-name string table when
+        // producing the final PE, so COFF uses the short name
+        // `.lt_skix` (matches the C placeholder in
+        // `luna-aot::embed::write_aot_cmain_object_for` and the
+        // deploy-side `windows_section::find_section` needle).
+        desc.set_custom_section(&aot_data_section(
+            module.isa().triple(),
+            "luna_strkey_idx",
+            ".lt_skix",
+        ));
         // 8-byte alignment for the two pointer relocations at offsets
         // 0 and 8. Mach-O `ld` hard-rejects unaligned pointer slots
         // ("pointer not aligned in `___luna_aot_strkey_idx_…`+0x8"),
@@ -193,7 +199,7 @@ fn emit_str_key_arg<M: Module>(
     let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
     let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
     bcx.ins()
-        .load(types::I64, MemFlags::trusted(), slot_addr, 0)
+        .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }
 
 /// Stable 16-hex-char label for a string key. Pure FNV-1a 64-bit so we
@@ -318,12 +324,11 @@ fn emit_chain_ptr_arg<M: Module>(
         // shape (under the cap). Windows COFF short name 8-char cap →
         // `.lt_chai`. Both names must match the deploy resolver's
         // bracket / section-walker needles.
-        let (idx_seg, idx_sect) = if cfg!(target_os = "windows") {
-            ("", ".lt_chai")
-        } else {
-            ("__DATA", "luna_inline_chnx")
-        };
-        desc.set_segment_section(idx_seg, idx_sect);
+        desc.set_custom_section(&aot_data_section(
+            module.isa().triple(),
+            "luna_inline_chnx",
+            ".lt_chai",
+        ));
         desc.set_align(8);
         let bytes_gv = module.declare_data_in_data(bytes_id, &mut desc);
         let slot_gv = module.declare_data_in_data(slot_id, &mut desc);
@@ -336,7 +341,7 @@ fn emit_chain_ptr_arg<M: Module>(
     let slot_gv = module.declare_data_in_func(slot_id, bcx.func);
     let slot_addr = bcx.ins().symbol_value(types::I64, slot_gv);
     bcx.ins()
-        .load(types::I64, MemFlags::trusted(), slot_addr, 0)
+        .load(types::I64, MemFlagsData::trusted(), slot_addr, 0)
 }
 
 /// Recognised single-arg libm math functions. Each entry maps the
@@ -674,13 +679,12 @@ fn is_rounding(fn_name: &str) -> bool {
 ///
 /// - Arithmetic / numeric cmp operand → must be Int.
 /// - Table-base operand (Get / Set / Len) → must be Table.
-/// - Anything else (`Move`, `Eq` (bitwise-ok), trace tail, literal
+/// - Anything else (`Move`, `Eq`, trace tail, literal
 ///   materialisation) → unknown; return `None`. The walker treats
 ///   `LoadI / LoadF / LoadK` as transparent and walks past them.
 ///
-/// `Op::Eq` is *not* a tag indicator: `icmp eq` of i64 payloads
-/// catches both `Int == 0` and `Table == nil` correctly, so the
-/// cmp itself doesn't pin the result's tag.
+/// `Op::Eq` is *not* a tag indicator: values of any two types can
+/// be compared, so the cmp itself doesn't pin the result's tag.
 fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
     let na = next.a();
     let nb = next.b();
@@ -729,9 +733,8 @@ fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
                 None
             }
         }
-        // `Op::Eq` does bitwise equality on i64 payloads — works
-        // for both Int and Table comparisons, so it tells us
-        // nothing about the operand's tag.
+        // `Op::Eq` compares values of any two types, so it tells
+        // us nothing about the operand's tag.
         _ => None,
     }
 }
@@ -808,7 +811,7 @@ fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<Ex
 fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
     let kv = bcx.ins().iconst(types::I64, k);
     if k > 0 {
-        let s = bcx.ins().sshr_imm(a, 63);
+        let s = bcx.ins().sshr_imm_u(a, 63);
         let t = bcx.ins().bxor(a, s);
         let ut = bcx.ins().udiv(t, kv);
         let q = bcx.ins().bxor(ut, s);
@@ -823,11 +826,11 @@ fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64)
     let qk = bcx.ins().imul(q, kv);
     let r = bcx.ins().isub(a, qk);
     let wrong_sign = if k > 0 { r } else { bcx.ins().ineg(r) };
-    let mask = bcx.ins().sshr_imm(wrong_sign, 63);
+    let mask = bcx.ins().sshr_imm_u(wrong_sign, 63);
     if op == Op::IDiv {
         bcx.ins().iadd(q, mask)
     } else {
-        let adj = bcx.ins().band_imm(mask, k);
+        let adj = bcx.ins().band_imm_s(mask, k);
         bcx.ins().iadd(r, adj)
     }
 }
@@ -1453,10 +1456,11 @@ fn emit_materialize_live_sunk<M: Module>(
             ));
             for vi in 0..cap {
                 let v = bcx.use_var(vars[vi]);
-                bcx.ins().stack_store(v, raws_ss, (vi * 8) as i32);
+                bcx.ins()
+                    .stack_store(types::I64, v, raws_ss, (vi * 8) as i32);
                 let tag = kind_to_raw_tag(kinds[vi]);
                 let k = bcx.ins().iconst(types::I8, tag as i64);
-                bcx.ins().stack_store(k, kinds_ss, vi as i32);
+                bcx.ins().stack_store(types::I64, k, kinds_ss, vi as i32);
             }
             (
                 bcx.ins().stack_addr(types::I64, raws_ss, 0),
@@ -1495,10 +1499,12 @@ fn emit_materialize_live_sunk<M: Module>(
             for vi in 0..n_hash {
                 let slot = cap + vi;
                 let v = bcx.use_var(vars[slot]);
-                bcx.ins().stack_store(v, hash_raws_ss, (vi * 8) as i32);
+                bcx.ins()
+                    .stack_store(types::I64, v, hash_raws_ss, (vi * 8) as i32);
                 let tag = kind_to_raw_tag(kinds[slot]);
                 let k = bcx.ins().iconst(types::I8, tag as i64);
-                bcx.ins().stack_store(k, hash_kinds_ss, vi as i32);
+                bcx.ins()
+                    .stack_store(types::I64, k, hash_kinds_ss, vi as i32);
                 let const_idx = site.hash_keys[vi] as usize;
                 let key_str = match head_proto.consts[const_idx] {
                     luna_core::runtime::Value::Str(s) => s,
@@ -1508,7 +1514,7 @@ fn emit_materialize_live_sunk<M: Module>(
                 };
                 let key_ptr_v = emit_str_key_arg(module, bcx, key_str, aot, defined_aot_data);
                 bcx.ins()
-                    .stack_store(key_ptr_v, hash_keys_ss, (vi * 8) as i32);
+                    .stack_store(types::I64, key_ptr_v, hash_keys_ss, (vi * 8) as i32);
             }
             (
                 bcx.ins().stack_addr(types::I64, hash_keys_ss, 0),
@@ -2053,6 +2059,17 @@ fn escape_analyze(
                 // same machinery in the `per_exit_inline` arm; the
                 // site is demoted to Escaped instead (see the
                 // `has_inline_cmp` gate in pre-emit demote).
+                //
+                // A compared table is compared by address (and its
+                // metatable is read), which a sunk table does not have.
+                let operands: &[u32] = if op == Op::EqK { &[a] } else { &[a, ins.b()] };
+                for &r in operands {
+                    if (r as usize) < max_stack
+                        && let Some(sid) = lookup(&bindings, depth, r)
+                    {
+                        mark_escape(&mut sites, sid);
+                    }
+                }
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::IDiv | Op::Mod
             | Op::Pow | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr
@@ -2915,15 +2932,40 @@ fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
     *current_kinds.get(reg as usize).unwrap_or(&RegKind::Unset)
 }
 
+/// How a trace lowers `==` of two registers of the given kinds, neither
+/// of them Float (those take the fcmp path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EqLowering {
+    /// equal exactly when the payloads are
+    Payload,
+    /// different types: never equal (nil and integer 0 share payload 0)
+    Unequal,
+    /// equal payloads mean equal; different ones need a guard
+    Identity(RegKind),
+    /// a value of unknown type: the payload compare is only a guess,
+    /// so the trace must not be dispatched
+    Unknown,
+}
+
+fn eq_lowering(a: RegKind, b: RegKind) -> EqLowering {
+    use RegKind::*;
+    match (a, b) {
+        (Unset, _) | (_, Unset) => EqLowering::Unknown,
+        (Int, Int) | (Nil, Nil) | (Closure, Closure) => EqLowering::Payload,
+        (Table, Table) | (Str, Str) => EqLowering::Identity(a),
+        _ => EqLowering::Unequal,
+    }
+}
+
 /// Cast a Variable's i64 payload into f64 if its kind is Float.
 fn use_var_f64(bcx: &mut FunctionBuilder<'_>, regs: &[Variable], reg: u32) -> Value {
     let raw = bcx.use_var(regs[reg as usize]);
-    bcx.ins().bitcast(types::F64, MemFlags::new(), raw)
+    bcx.ins().bitcast(types::F64, MemFlagsData::new(), raw)
 }
 
 /// Store an f64 SSA value into a Variable as i64 bits.
 fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
-    let bits = bcx.ins().bitcast(types::I64, MemFlags::new(), val_f64);
+    let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), val_f64);
     bcx.def_var(var, bits);
 }
 
@@ -3078,7 +3120,7 @@ fn emit_side_trace_or_return(
     let cell_addr = bcx.ins().iconst(types::I64, side_trace_cell_addr);
     let fn_ptr = bcx
         .ins()
-        .load(types::I64, MemFlags::trusted(), cell_addr, 0);
+        .load(types::I64, MemFlagsData::trusted(), cell_addr, 0);
     let null = bcx.ins().iconst(types::I64, 0);
     let has_side = bcx.ins().icmp(IntCC::NotEqual, fn_ptr, null);
     let do_side_blk = bcx.create_block();
@@ -3156,7 +3198,7 @@ fn emit_store_back_and_return(
             continue;
         }
         let offset = (idx as i32) * 8;
-        bcx.ins().store(MemFlags::new(), val, reg_state, offset);
+        bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
     emit_side_trace_or_return(
         bcx,
@@ -3266,7 +3308,7 @@ fn drop_unused_block_params(func: &mut cranelift_codegen::ir::Function) {
 mod drop_unused_block_params_tests {
     use super::*;
     use cranelift_codegen::ir::{Function, Signature, UserFuncName};
-    use cranelift_codegen::isa::CallConv;
+    use cranelift_codegen::isa::{CallConv, TargetFrontendConfig};
 
     /// `loop(dead, live)`: `dead` is only passed back unchanged, as the
     /// registers a trace loop only writes were; `live` is read. The first
@@ -3290,14 +3332,18 @@ mod drop_unused_block_params_tests {
         b.ins().jump(head, &[x.into(), x.into()]);
         b.switch_to_block(head);
         let one = b.ins().iconst(types::I64, 1);
-        let again = b.ins().icmp_imm(IntCC::SignedLessThan, live, 10);
+        let again = b.ins().icmp_imm_s(IntCC::SignedLessThan, live, 10);
         let next_live = b.ins().iadd(live, one);
         b.ins()
             .brif(again, head, &[dead.into(), next_live.into()], out, &[]);
         b.switch_to_block(out);
         b.ins().return_(&[live]);
         b.seal_all_blocks();
-        b.finalize();
+        b.finalize(TargetFrontendConfig {
+            default_call_conv: CallConv::SystemV,
+            pointer_width: target_lexicon::PointerWidth::U64,
+            page_size_align_log2: 12,
+        });
 
         drop_unused_block_params(&mut func);
 
@@ -3340,7 +3386,7 @@ fn sync_reg_state(
             continue;
         }
         bcx.ins()
-            .store(MemFlags::new(), val, reg_state, (idx as i32) * 8);
+            .store(MemFlagsData::new(), val, reg_state, (idx as i32) * 8);
         stored[idx] = Some(val);
     }
 }
@@ -3419,7 +3465,7 @@ fn emit_store_back_and_return_site(
             continue;
         }
         let offset = (idx as i32) * 8;
-        bcx.ins().store(MemFlags::new(), val, reg_state, offset);
+        bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
     let sentinel = encode_side_sentinel(SIDE_SENT_KIND_INLINE, site_idx);
     emit_side_trace_or_return(
@@ -3785,9 +3831,7 @@ pub fn try_compile_trace_with_options(
     // to interp dispatch. No SIGABRT across the C-ABI boundary.
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     cs.trace_handles.push(TraceHandle {
-        // Wrap in `SendJitModule`
-        // sleeve. SAFETY: `build_trace_jit_module` installs
-        // `CodeMemory`, which is `Send`.
+        // Wrap in `SendJitModule` sleeve.
         _module: module.publish(),
         _entry_raw: ptr,
     });
@@ -3808,6 +3852,8 @@ pub fn try_compile_trace_with_options(
 /// real entry pointer before dispatch (the JIT wrapper does this; the
 /// AOT pipeline resolves the symbol at link time and never invokes
 /// `entry` directly).
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
 pub fn lower_trace_into<M: Module>(
     module: &mut M,
     record: &TraceRecord,
@@ -3829,6 +3875,8 @@ pub fn lower_trace_into<M: Module>(
 /// When `Some(name)`, `name` becomes the cranelift `FuncId` symbol
 /// with `Linkage::Export`, surfacing in the produced `.o`'s symbol
 /// table for the deploy-side `dlsym`/linker to resolve.
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
 pub fn lower_trace_into_named<M: Module>(
     mut module: &mut M,
     record: &TraceRecord,
@@ -5517,7 +5565,7 @@ pub fn lower_trace_into_named<M: Module>(
             let offset = (i as i32) * 8;
             let v0 = bcx
                 .ins()
-                .load(types::I64, MemFlags::new(), reg_state, offset);
+                .load(types::I64, MemFlagsData::new(), reg_state, offset);
             bcx.def_var(v, v0);
         } else {
             let z = bcx.ins().iconst(types::I64, 0);
@@ -5526,7 +5574,7 @@ pub fn lower_trace_into_named<M: Module>(
             // so reg_state must hold the zero too: a side trace entered
             // from its parent's exit finds the parent's values here.
             bcx.ins()
-                .store(MemFlags::new(), z, reg_state, (i as i32) * 8);
+                .store(MemFlagsData::new(), z, reg_state, (i as i32) * 8);
         }
         regs_full.push(v);
     }
@@ -5855,6 +5903,18 @@ pub fn lower_trace_into_named<M: Module>(
     // No iconst memoization: the arm64 backend folds
     // `iconst+isub`/`iconst+icmp` into immediate-form instructions
     // at codegen, so it would add little.
+    // An exit that redoes the trace's head op in the interpreter has made
+    // no progress: without this the dispatcher enters the trace again at
+    // once and the two hand the same pc back and forth forever. The
+    // tagged exits (`emit_tagged_exit`) do the same.
+    macro_rules! suppress_at_head {
+        ($pc:expr) => {{
+            if $pc == record.head_pc {
+                let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+                bcx.ins().call(r, &[]);
+            }
+        }};
+    }
     // A guard that fails leaves the trace at `$pc` (the op being
     // guarded, re-executed by the interpreter) exactly as a cmp side
     // exit does: live sunk tables are materialised and, when the op sits
@@ -5979,7 +6039,7 @@ pub fn lower_trace_into_named<M: Module>(
             guard_exit!($pc, $i);
             bcx.switch_to_block(cont_blk);
             bcx.seal_block(cont_blk);
-            bcx.ins().stack_load(types::I64, out_ss, 0)
+            bcx.ins().stack_load(types::I64, types::I64, out_ss, 0)
         }};
     }
     // Continue in a new block when `$cond` holds, else take a
@@ -6116,6 +6176,7 @@ pub fn lower_trace_into_named<M: Module>(
                 // Deopt path: flush buffer + store back + return pc.
                 bcx.switch_to_block(deopt_blk);
                 bcx.seal_block(deopt_blk);
+                suppress_at_head!(rop.pc);
                 emit_store_back_and_return_pc(
                     &mut bcx,
                     &regs_full[..max_stack],
@@ -6309,8 +6370,8 @@ pub fn lower_trace_into_named<M: Module>(
                                 // so running it again is harmless.
                                 let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
                                 let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
-                                let f1 = bcx.ins().bitcast(types::F64, MemFlags::new(), a1);
-                                let f2 = bcx.ins().bitcast(types::F64, MemFlags::new(), a2);
+                                let f1 = bcx.ins().bitcast(types::F64, MemFlagsData::new(), a1);
+                                let f2 = bcx.ins().bitcast(types::F64, MemFlagsData::new(), a2);
                                 // max: second wins iff a1 < a2; min: iff a2 < a1.
                                 let second_wins = match (fold.kind, k1) {
                                     (FoldKind::Max2, RegKind::Int) => {
@@ -6323,7 +6384,7 @@ pub fn lower_trace_into_named<M: Module>(
                                     (FoldKind::Min2, _) => emit_lt_int_float(&mut bcx, a2, f1),
                                     (FoldKind::Libm1, _) => unreachable!(),
                                 };
-                                let first_wins = bcx.ins().bxor_imm(second_wins, 1);
+                                let first_wins = bcx.ins().bxor_imm_u(second_wins, 1);
                                 guard!(first_wins, i, record.ops[fold.start_idx].pc);
                                 bcx.def_var(regs[fold.dst_reg as usize], a1);
                                 current_kinds[off + fold.dst_reg as usize] = k1;
@@ -6423,7 +6484,7 @@ pub fn lower_trace_into_named<M: Module>(
                     }
                     luna_core::runtime::Value::Float(f) => {
                         let fv = bcx.ins().f64const(f);
-                        let bits = bcx.ins().bitcast(types::I64, MemFlags::new(), fv);
+                        let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv);
                         (bits, RegKind::Float)
                     }
                     _ => unreachable!("pre-emit gates Int / Float consts"),
@@ -6548,9 +6609,9 @@ pub fn lower_trace_into_named<M: Module>(
                         if n <= -64 || n >= 64 {
                             bcx.ins().iconst(types::I64, 0)
                         } else if n >= 0 {
-                            bcx.ins().ishl_imm(lhs, n)
+                            bcx.ins().ishl_imm_u(lhs, n)
                         } else {
-                            bcx.ins().ushr_imm(lhs, -n)
+                            bcx.ins().ushr_imm_u(lhs, -n)
                         }
                     }
                     _ => match op {
@@ -6573,7 +6634,7 @@ pub fn lower_trace_into_named<M: Module>(
                         Op::BOr => bcx.ins().bor(lhs, rhs),
                         Op::BXor => bcx.ins().bxor(lhs, rhs),
                         Op::Shl | Op::Shr => {
-                            let wide = bcx.ins().icmp_imm(IntCC::UnsignedGreaterThan, rhs, 63);
+                            let wide = bcx.ins().icmp_imm_u(IntCC::UnsignedGreaterThan, rhs, 63);
                             let cont_blk = bcx.create_block();
                             let exit_blk = bcx.create_block();
                             bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
@@ -6621,8 +6682,9 @@ pub fn lower_trace_into_named<M: Module>(
             Op::EqK => {
                 // `R[A] == const[B]` — Int and Float consts both
                 // valid (pre-emit gated above). Emit icmp eq for
-                // Int + Int, fcmp eq for Float + Float; mismatched
-                // pairing on the LHS reg's current kind bails.
+                // Int + Int, fcmp eq for Float + Float; a number
+                // against the other number kind bails, against a
+                // non-number is never equal.
                 let bx = ins.b() as usize;
                 let ka = k_op(&current_kinds, off as u32 + ins.a());
                 let cond = match head_proto.consts[bx] {
@@ -6630,14 +6692,24 @@ pub fn lower_trace_into_named<M: Module>(
                         if matches!(ka, RegKind::Float) {
                             return None;
                         }
-                        let lhs = bcx.use_var(regs[ins.a() as usize]);
-                        let rhs = bcx.ins().iconst(types::I64, n);
-                        let int_cc = if ins.k() {
-                            IntCC::Equal
-                        } else {
-                            IntCC::NotEqual
-                        };
-                        bcx.ins().icmp(int_cc, lhs, rhs)
+                        match eq_lowering(ka, RegKind::Int) {
+                            EqLowering::Unequal => bcx.ins().iconst(types::I8, i64::from(!ins.k())),
+                            lowering => {
+                                if lowering == EqLowering::Unknown {
+                                    dispatchable = false;
+                                    dispatch_off_reason =
+                                        dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                                }
+                                let lhs = bcx.use_var(regs[ins.a() as usize]);
+                                let rhs = bcx.ins().iconst(types::I64, n);
+                                let int_cc = if ins.k() {
+                                    IntCC::Equal
+                                } else {
+                                    IntCC::NotEqual
+                                };
+                                bcx.ins().icmp(int_cc, lhs, rhs)
+                            }
+                        }
                     }
                     luna_core::runtime::Value::Float(f) => {
                         if !matches!(ka, RegKind::Float) {
@@ -6822,7 +6894,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let one = bcx.ins().iconst(types::I64, 1);
                     let is_truthy = bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
                     // Op::Test: test_passed_runtime = !is_truthy == k_bit
-                    let not_truthy = bcx.ins().bxor_imm(is_truthy, 1);
+                    let not_truthy = bcx.ins().bxor_imm_u(is_truthy, 1);
                     let k_bit_const = bcx.ins().iconst(types::I8, k_bit as i64);
                     let test_passed_runtime = bcx.ins().icmp(IntCC::Equal, not_truthy, k_bit_const);
                     let recorded_const = bcx.ins().iconst(types::I8, recorded_passed as i64);
@@ -6834,6 +6906,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
                     bcx.switch_to_block(deopt);
                     bcx.seal_block(deopt);
+                    suppress_at_head!(rop.pc);
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
@@ -6900,6 +6973,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
                     bcx.switch_to_block(deopt);
                     bcx.seal_block(deopt);
+                    suppress_at_head!(rop.pc);
                     emit_store_back_and_return_pc(
                         &mut bcx,
                         &regs_full[..max_stack],
@@ -6958,9 +7032,71 @@ pub fn lower_trace_into_named<M: Module>(
                     if k_effective {
                         c
                     } else {
-                        bcx.ins().icmp_imm(IntCC::Equal, c, 0)
+                        bcx.ins().icmp_imm_u(IntCC::Equal, c, 0)
+                    }
+                } else if op == Op::Eq {
+                    let lhs = bcx.use_var(regs[ins.a() as usize]);
+                    let rhs = bcx.use_var(regs[ins.b() as usize]);
+                    let int_cc = if k_effective {
+                        IntCC::Equal
+                    } else {
+                        IntCC::NotEqual
+                    };
+                    match eq_lowering(ka, kb) {
+                        EqLowering::Payload => bcx.ins().icmp(int_cc, lhs, rhs),
+                        EqLowering::Unequal => bcx.ins().iconst(types::I8, i64::from(!k_effective)),
+                        EqLowering::Identity(kind) => {
+                            // two distinct objects can still be equal (`__eq`,
+                            // equal long strings); the interpreter decides those
+                            let same = bcx.ins().icmp(IntCC::Equal, lhs, rhs);
+                            let decided = if kind == RegKind::Table {
+                                let no_mt = |bcx: &mut FunctionBuilder<'_>, t| {
+                                    let mt = bcx.ins().load(
+                                        types::I64,
+                                        MemFlagsData::trusted(),
+                                        t,
+                                        super::TABLE_METATABLE_OFFSET as i32,
+                                    );
+                                    bcx.ins().icmp_imm_u(IntCC::Equal, mt, 0)
+                                };
+                                let l = no_mt(&mut bcx, lhs);
+                                let r = no_mt(&mut bcx, rhs);
+                                bcx.ins().band(l, r)
+                            } else {
+                                let short = |bcx: &mut FunctionBuilder<'_>, s| {
+                                    let b = bcx.ins().load(
+                                        types::I8,
+                                        MemFlagsData::trusted(),
+                                        s,
+                                        super::STR_SHORT_OFFSET as i32,
+                                    );
+                                    bcx.ins().icmp_imm_u(IntCC::NotEqual, b, 0)
+                                };
+                                let l = short(&mut bcx, lhs);
+                                let r = short(&mut bcx, rhs);
+                                bcx.ins().band(l, r)
+                            };
+                            let ok = bcx.ins().bor(same, decided);
+                            guard!(ok, i, rop.pc);
+                            bcx.ins().icmp(int_cc, lhs, rhs)
+                        }
+                        EqLowering::Unknown => {
+                            dispatchable = false;
+                            dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                            bcx.ins().icmp(int_cc, lhs, rhs)
+                        }
                     }
                 } else {
+                    // only integers order by their payload
+                    match (ka, kb) {
+                        (RegKind::Int, RegKind::Int) => {}
+                        (RegKind::Unset, RegKind::Int | RegKind::Unset)
+                        | (RegKind::Int, RegKind::Unset) => {
+                            dispatchable = false;
+                            dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                        }
+                        _ => return None,
+                    }
                     let lhs = bcx.use_var(regs[ins.a() as usize]);
                     let rhs = bcx.use_var(regs[ins.b() as usize]);
                     let int_cc = match (op, k_effective) {
@@ -6968,8 +7104,6 @@ pub fn lower_trace_into_named<M: Module>(
                         (Op::Lt, false) => IntCC::SignedGreaterThanOrEqual,
                         (Op::Le, true) => IntCC::SignedLessThanOrEqual,
                         (Op::Le, false) => IntCC::SignedGreaterThan,
-                        (Op::Eq, true) => IntCC::Equal,
-                        (Op::Eq, false) => IntCC::NotEqual,
                         _ => unreachable!("whitelist gated above"),
                     };
                     bcx.ins().icmp(int_cc, lhs, rhs)
@@ -7370,7 +7504,7 @@ pub fn lower_trace_into_named<M: Module>(
                     // --- Guards 1 & 2: metatable + nodes.len() ---
                     let mt = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         super::TABLE_METATABLE_OFFSET as i32,
                     );
@@ -7378,7 +7512,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
                     let nodes_len = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         super::TABLE_NODES_LEN_OFFSET as i32,
                     );
@@ -7403,16 +7537,16 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.seal_block(fast_blk);
                     let nodes_ptr = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         super::TABLE_NODES_PTR_OFFSET as i32,
                     );
                     let node_offset = (snap.slot_idx as usize * super::SIZEOF_NODE) as i64;
-                    let node_addr = bcx.ins().iadd_imm(nodes_ptr, node_offset);
+                    let node_addr = bcx.ins().iadd_imm_u(nodes_ptr, node_offset);
 
                     let key_raw = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         super::NODE_KEY_RAW_OFFSET as i32,
                     );
@@ -7421,7 +7555,7 @@ pub fn lower_trace_into_named<M: Module>(
 
                     let val_tag_i8 = bcx.ins().load(
                         types::I8,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         super::NODE_VAL_TAG_OFFSET as i32,
                     );
@@ -7437,7 +7571,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.seal_block(load_blk);
                     let val_raw = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         super::NODE_VAL_RAW_OFFSET as i32,
                     );
@@ -7728,7 +7862,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let call = bcx.ins().call(func_ref, &[t]);
                 let v = bcx.inst_results(call)[0];
                 // -1: the table has a metatable
-                let ok = bcx.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, v, 0);
+                let ok = bcx.ins().icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
                 guard!(ok, i, rop.pc);
                 bcx.def_var(regs[ins.a() as usize], v);
                 current_kinds[off + ins.a() as usize] = RegKind::Int;
@@ -7822,7 +7956,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let status = bcx.inst_results(call)[0];
                 // 1: a `__close` handler would run; the interpreter
                 // redoes the op and runs it
-                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                let ok = bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
                 guard!(ok, i, rop.pc);
             }
             Op::GetUpval => {
@@ -8062,16 +8196,16 @@ pub fn lower_trace_into_named<M: Module>(
                         // interpreter redoes the op
                         let ok =
                             bcx.ins()
-                                .icmp_imm(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
+                                .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
                         guard!(ok, i, rop.pc);
                         // key tag | value tag << 8 (Vm::jit_op_tforcall)
-                        let key_tag = bcx.ins().band_imm(status_or_tag, 0xff);
-                        let val_tag = bcx.ins().ushr_imm(status_or_tag, 8);
+                        let key_tag = bcx.ins().band_imm_u(status_or_tag, 0xff);
+                        let val_tag = bcx.ins().ushr_imm_u(status_or_tag, 8);
                         bcx.def_var(tforcall_tag_var, key_tag);
                         bcx.def_var(tforcall_val_tag_var, val_tag);
-                        let ctrl_raw = bcx.ins().stack_load(types::I64, out_ss, 0);
-                        let key_raw = bcx.ins().stack_load(types::I64, out_ss, 8);
-                        let val_raw = bcx.ins().stack_load(types::I64, out_ss, 16);
+                        let ctrl_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 0);
+                        let key_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 8);
+                        let val_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 16);
                         bcx.def_var(regs[a_us + 2], ctrl_raw);
                         bcx.def_var(regs[a_us + 4], key_raw);
                         if (nvars as usize) >= 2 && a_us + 5 < max_stack {
@@ -8096,14 +8230,14 @@ pub fn lower_trace_into_named<M: Module>(
 
                     let asize = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         super::TABLE_ASIZE_OFFSET as i32,
                     );
                     let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, asize);
                     let metatable = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         super::TABLE_METATABLE_OFFSET as i32,
                     );
@@ -8121,7 +8255,7 @@ pub fn lower_trace_into_named<M: Module>(
                     bcx.seal_block(fast_blk);
                     let avals_ptr = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         super::TABLE_ARRAY_PTR_OFFSET as i32,
                     );
@@ -8130,7 +8264,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let val_addr_fast = bcx.ins().iadd(avals_ptr, val_off);
                     let val_raw_fast = bcx.ins().load(
                         types::I64,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         val_addr_fast,
                         0,
                     );
@@ -8139,7 +8273,7 @@ pub fn lower_trace_into_named<M: Module>(
                     let tag_addr = bcx.ins().iadd(tag_base, key_m1);
                     let val_tag_i8 = bcx.ins().load(
                         types::I8,
-                        cranelift_codegen::ir::MemFlags::trusted(),
+                        cranelift_codegen::ir::MemFlagsData::trusted(),
                         tag_addr,
                         0,
                     );
@@ -8175,6 +8309,7 @@ pub fn lower_trace_into_named<M: Module>(
                         bcx.ins().brif(ok, guard_continue, &[], guard_deopt, &[]);
                         bcx.switch_to_block(guard_deopt);
                         bcx.seal_block(guard_deopt);
+                        suppress_at_head!(rop.pc);
                         emit_store_back_and_return_pc(
                             &mut bcx,
                             &regs_full[..max_stack],
@@ -8277,7 +8412,7 @@ pub fn lower_trace_into_named<M: Module>(
                 let call_inst = bcx.ins().call(func_ref, &[a_arg, n_arg]);
                 let status = bcx.inst_results(call_inst)[0];
                 // -1: an error or `__concat`; the interpreter redoes the op
-                let ok = bcx.ins().icmp_imm(IntCC::Equal, status, 0);
+                let ok = bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
                 guard!(ok, i, rop.pc);
                 // Reload regs[A] (= result Str) from vm.stack via
                 // luna_jit_stack_load helper. The helper deopts on the
@@ -8401,9 +8536,12 @@ pub fn lower_trace_into_named<M: Module>(
         // (caller) frame's `pc` — the runtime analogue of LuaJIT's
         // `[base-8]` in `asm_retf` (`lj_asm_arm64.h:565`).
         let saved_pc_offset = (window_size_us as i32) * 8;
-        let saved_pc = bcx
-            .ins()
-            .load(types::I64, MemFlags::trusted(), reg_state, saved_pc_offset);
+        let saved_pc = bcx.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            reg_state,
+            saved_pc_offset,
+        );
         // Collect distinct caller_pcs from retfs whose proto matches
         // the close marker's `_target_proto_id`. Dedupe + bound to
         // `DOWNREC_MULTI_WAY_GUARD_MAX` so IR size stays predictable
@@ -8479,35 +8617,27 @@ pub fn lower_trace_into_named<M: Module>(
         // `trace_id=0` sentinel means "self-stitch — target is the
         // trace currently dispatching"; the dispatcher interprets
         // this when resolving the stitch target.
-        downrec_link_for_compiled = Some((0, record.head_pc));
-
-        // lift `dispatchable = true` when the
-        // multi-way guard collected at least 2 distinct caller_pc
-        // candidates. The single-CMP fallback (count == 1) keeps
-        // `dispatchable = false` + `"downrec-stitch-pending"`
-        // because its ~90% miss-rate would translate to 90% extra
-        // deopt cost if the primary
-        // dispatcher arm admitted the trace unconditionally. The
-        // dispatcher's `is_downrec_entry` arm (see `crates/luna-core/
-        // src/vm/exec.rs`) keys on `ct.downrec_link.is_some()` so
-        // the saved-PC slot is populated + post-invoke classifier is
-        // routed for BOTH the lifted (dispatchable=true) and
-        // unlifted (dispatchable=false) cases — only the find
-        // predicate's admit arm differs.
         //
-        // `dispatch_off_reason` only sets in the unlifted branch
-        // because `dispatchable=true` traces have no `dispatch_off`
-        // by definition.
-        if multi_way_candidate_count >= 2 {
-            dispatchable = true;
-            // Surface the lifted shape via a dedicated counter
-            // `multi_way_guard_emitted` (bumped at the close handler
-            // in `crates/luna-core/src/vm/exec.rs` reading
-            // `downrec_multi_way_count_for_compiled` below) rather
-            // than via the close-cause taxonomy — close causes mean
-            // "trace didn't dispatch for reason X" and this branch
-            // DOES dispatch.
-        } else {
+        // The dispatcher admits a trace with a link even when it is not
+        // dispatchable, so a body already marked (a value of unknown
+        // type) gets no link: that mark only ever turns the trace off.
+        if dispatchable {
+            downrec_link_for_compiled = Some((0, record.head_pc));
+        }
+
+        // With at least 2 distinct caller_pc candidates the multi-way
+        // guard hits often enough for the primary dispatcher arm to
+        // admit the trace, so it stays dispatchable (unless its body
+        // was already marked). The single-CMP fallback (count == 1)
+        // sets `dispatchable = false` + `"downrec-stitch-pending"`
+        // because its ~90% miss-rate would translate to 90% extra
+        // deopt cost if the primary dispatcher arm admitted the trace
+        // unconditionally; the dispatcher's `is_downrec_entry` arm
+        // keys on `ct.downrec_link.is_some()`, so a linked trace is
+        // still admitted there. The multi-way count is surfaced via
+        // the `multi_way_guard_emitted` counter, bumped at the close
+        // handler from `downrec_multi_way_count_for_compiled` below.
+        if multi_way_candidate_count < 2 {
             dispatchable = false;
             dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
         }
@@ -8767,10 +8897,10 @@ pub fn lower_trace_into_named<M: Module>(
 
                 bcx.switch_to_block(not_nil_blk);
                 bcx.seal_block(not_nil_blk);
-                let mut same_kinds = bcx.ins().icmp_imm(IntCC::Equal, tag, i64::from(key_tag));
+                let mut same_kinds = bcx.ins().icmp_imm_u(IntCC::Equal, tag, i64::from(key_tag));
                 if let Some(val_tag) = val_tag {
                     let v = bcx.use_var(tforcall_val_tag_var);
-                    let same_val = bcx.ins().icmp_imm(IntCC::Equal, v, i64::from(val_tag));
+                    let same_val = bcx.ins().icmp_imm_u(IntCC::Equal, v, i64::from(val_tag));
                     same_kinds = bcx.ins().band(same_kinds, same_val);
                 }
                 let continue_blk = bcx.create_block();
@@ -8848,7 +8978,7 @@ pub fn lower_trace_into_named<M: Module>(
     // when internal loop is on).
     bcx.seal_block(body_loop);
 
-    bcx.finalize();
+    bcx.finalize(module.target_config());
     drop_unused_block_params(&mut ctx.func);
     // `LUNA_TRACE_IR_DUMP=1` dumps the cranelift IR of every
     // compiled trace fn to stderr. Categorization + density-reduction

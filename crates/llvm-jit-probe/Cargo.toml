@@ -2,6 +2,7 @@
 name = "llvm-jit-probe"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -15,7 +16,7 @@ categories.workspace = true
 publish = false
 
 [dependencies]
-# inkwell 0.9.0 only ships `llvm18-1` for LLVM 18 (there is no
+# inkwell 0.10 only ships `llvm18-1` for LLVM 18 (there is no
 # `llvm18-0` feature).
 # `llvm18-1` pulls `llvm-sys = "181.x"` underneath, which requires LLVM
 # 18.1.x. Dev host has LLVM 18.1.8 from
@@ -23,7 +24,7 @@ publish = false
 #
 # `llvm-sys`'s build script reads `LLVM_SYS_181_PREFIX` (note the
 # version-major-minor in the var name) to locate `llvm-config`.
-inkwell = { version = "0.9", features = ["llvm18-1"] }
+inkwell = { version = "0.10", features = ["llvm18-1"] }
 
 [lints]
 workspace = true
