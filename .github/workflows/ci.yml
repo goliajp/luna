@@ -158,47 +158,6 @@ jobs:
         run: cargo clippy --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────
-  # perf-gate bench job. Linux runner + taskset for ~1-2% variance
-  # band on `redis_lua_shape`. macOS local: ~2.5% via
-  # `cargo bench --bench redis_lua_shape`.
-  #
-  # The hosted ubuntu-latest is shared infra; taskset gives a soft
-  # CPU pin (one core). criterion's 100-sample / 8s measurement window
-  # absorbs the residual jitter.
-  # ─────────────────────────────────────────────────────────────────
-  perf-gate:
-    # Required gate, run as a SAME-RUNNER comparison. GHA hosted
-    # runners are heterogeneous — identical code measured
-    # 0.51x-1.09x against a fixed-ns baseline across runs — so the
-    # gate benches a pinned reference commit
-    # (PERF_REF, normally the last release) on the same runner
-    # right before HEAD and diffs the two. Bypass via [perf-allow]
-    # tag in commit body for intentional regressions; bump
-    # PERF_REF at each release.
-    name: redis_lua_shape perf-gate
-    runs-on: ubuntu-latest
-    env:
-      PERF_REF: 9b3754273629e3a6a0435cfd1d7075d7252c4c01 # v4.0.0
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Bench pinned reference on this runner
-        run: |
-          git worktree add /tmp/perfref "$PERF_REF"
-          cd /tmp/perfref
-          taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
-          python3 "$GITHUB_WORKSPACE/scripts/criterion-extract.py" \
-            target/criterion/redis_lua_shape "same-runner-ref-$PERF_REF" \
-            > /tmp/ref-baseline.json
-          cat /tmp/ref-baseline.json
-      - name: cargo bench --bench redis_lua_shape (taskset -c 1)
-        run: taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
-      - name: perf-gate regression check (same-runner diff)
-        run: ./scripts/perf-gate.sh /tmp/ref-baseline.json
-
-  # ─────────────────────────────────────────────────────────────────
   # luna-core's 0 third-party dep contract.
   # `cargo tree -p luna-core --prefix none --edges normal` lists exactly
   # one crate (luna-core itself); anything else is a prod-dep regression.

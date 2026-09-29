@@ -389,7 +389,7 @@ Per the SS-B sign-test bench (macOS M-series, 2026-06-24):
 | Token bucket 1k ops | 172.26 µs | 175.46 µs | **+1.86 %** |
 
 Audit-time projection was ~3 % on ARM; we landed at ~2 %. Linux
-x86_64 numbers will land via the `gh workflow run perf-gate`
+x86_64 numbers will land via the `perf` workflow
 matrix; audit projected ~6 % there.
 
 ### Interp-only constraint (v1.3)
