@@ -177,7 +177,7 @@ jobs:
     name: redis_lua_shape perf-gate
     runs-on: ubuntu-latest
     env:
-      PERF_REF: afeaaad5b6bb46b013c5a53d3b4e408f0841b0b8 # v3.2.2
+      PERF_REF: 9b3754273629e3a6a0435cfd1d7075d7252c4c01 # v4.0.0
     steps:
       - uses: actions/checkout@v7
         with:
@@ -187,9 +187,6 @@ jobs:
         run: |
           git worktree add /tmp/perfref "$PERF_REF"
           cd /tmp/perfref
-          # references before 4.0.0 still build against the cranelift
-          # submodule; this is a no-op for later ones
-          git submodule update --init --recursive
           taskset -c 1 cargo bench -p luna-jit --bench redis_lua_shape -- --measurement-time 8 --warm-up-time 2
           python3 "$GITHUB_WORKSPACE/scripts/criterion-extract.py" \
             target/criterion/redis_lua_shape "same-runner-ref-$PERF_REF" \
