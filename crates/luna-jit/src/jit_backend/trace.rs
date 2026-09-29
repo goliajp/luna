@@ -8601,35 +8601,27 @@ pub fn lower_trace_into_named<M: Module>(
         // `trace_id=0` sentinel means "self-stitch — target is the
         // trace currently dispatching"; the dispatcher interprets
         // this when resolving the stitch target.
-        downrec_link_for_compiled = Some((0, record.head_pc));
-
-        // lift `dispatchable = true` when the
-        // multi-way guard collected at least 2 distinct caller_pc
-        // candidates. The single-CMP fallback (count == 1) keeps
-        // `dispatchable = false` + `"downrec-stitch-pending"`
-        // because its ~90% miss-rate would translate to 90% extra
-        // deopt cost if the primary
-        // dispatcher arm admitted the trace unconditionally. The
-        // dispatcher's `is_downrec_entry` arm (see `crates/luna-core/
-        // src/vm/exec.rs`) keys on `ct.downrec_link.is_some()` so
-        // the saved-PC slot is populated + post-invoke classifier is
-        // routed for BOTH the lifted (dispatchable=true) and
-        // unlifted (dispatchable=false) cases — only the find
-        // predicate's admit arm differs.
         //
-        // `dispatch_off_reason` only sets in the unlifted branch
-        // because `dispatchable=true` traces have no `dispatch_off`
-        // by definition.
-        if multi_way_candidate_count >= 2 {
-            dispatchable = true;
-            // Surface the lifted shape via a dedicated counter
-            // `multi_way_guard_emitted` (bumped at the close handler
-            // in `crates/luna-core/src/vm/exec.rs` reading
-            // `downrec_multi_way_count_for_compiled` below) rather
-            // than via the close-cause taxonomy — close causes mean
-            // "trace didn't dispatch for reason X" and this branch
-            // DOES dispatch.
-        } else {
+        // The dispatcher admits a trace with a link even when it is not
+        // dispatchable, so a body already marked (a value of unknown
+        // type) gets no link: that mark only ever turns the trace off.
+        if dispatchable {
+            downrec_link_for_compiled = Some((0, record.head_pc));
+        }
+
+        // With at least 2 distinct caller_pc candidates the multi-way
+        // guard hits often enough for the primary dispatcher arm to
+        // admit the trace, so it stays dispatchable (unless its body
+        // was already marked). The single-CMP fallback (count == 1)
+        // sets `dispatchable = false` + `"downrec-stitch-pending"`
+        // because its ~90% miss-rate would translate to 90% extra
+        // deopt cost if the primary dispatcher arm admitted the trace
+        // unconditionally; the dispatcher's `is_downrec_entry` arm
+        // keys on `ct.downrec_link.is_some()`, so a linked trace is
+        // still admitted there. The multi-way count is surfaced via
+        // the `multi_way_guard_emitted` counter, bumped at the close
+        // handler from `downrec_multi_way_count_for_compiled` below.
+        if multi_way_candidate_count < 2 {
             dispatchable = false;
             dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
         }

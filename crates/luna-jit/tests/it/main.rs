@@ -15,6 +15,7 @@ mod close_cause_counts;
 mod corrupt_register_state_jit;
 mod downrec_close_recording;
 mod downrec_dispatcher_stitch;
+mod downrec_keeps_dispatch_off;
 mod downrec_lowerer_stitch;
 mod downrec_multi_way_guard;
 mod forced_jit_corpus;
