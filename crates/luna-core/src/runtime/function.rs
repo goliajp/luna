@@ -376,6 +376,12 @@ pub struct Proto {
     pub traces: crate::jit::send_compat::TRefLock<
         Vec<crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>>,
     >,
+    /// Whether `traces` holds one the dispatcher may enter at its head
+    /// (dispatchable, or carrying a down-recursion link). The
+    /// interpreter checks this before scanning `traces` on every
+    /// instruction. Traces are never removed, so it only goes from
+    /// `false` to `true`.
+    pub has_dispatchable_trace: std::cell::Cell<bool>,
 }
 
 /// Per-Proto JIT cache state. Copy so it fits a plain

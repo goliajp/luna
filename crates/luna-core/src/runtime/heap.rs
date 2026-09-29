@@ -1770,6 +1770,7 @@ mod tests {
             trace_gave_up: std::cell::Cell::new(false),
             trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
+            has_dispatchable_trace: std::cell::Cell::new(false),
         };
         let inner = heap.adopt_proto(inner);
         let outer = Proto {
@@ -1797,6 +1798,7 @@ mod tests {
             trace_gave_up: std::cell::Cell::new(false),
             trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
+            has_dispatchable_trace: std::cell::Cell::new(false),
         };
         let outer = heap.adopt_proto(outer);
         let captured = heap.intern(b"captured-value-string-xxxxxxxxxxxxxxxxxxxxxxxxx");

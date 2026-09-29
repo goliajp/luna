@@ -181,6 +181,7 @@ pub(super) fn build(
         trace_gave_up: std::cell::Cell::new(false),
         trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
+        has_dispatchable_trace: std::cell::Cell::new(false),
     }))
 }
 

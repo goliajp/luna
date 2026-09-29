@@ -51,6 +51,7 @@ mod trace_closure_whitelist;
 mod trace_compile_counters;
 mod trace_concat_helper;
 mod trace_concat_str_kind;
+mod trace_dispatch_gate;
 mod trace_dispatch_numeric_loops;
 mod trace_escape_analysis_sweep;
 mod trace_exit_side_effects;

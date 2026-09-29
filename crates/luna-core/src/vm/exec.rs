@@ -6888,7 +6888,7 @@ impl Vm {
                                         }
                                         drop(parent_traces);
                                     }
-                                    head_proto.traces.borrow_mut().push(TArc::new(ct));
+                                    cache_trace(head_proto, ct);
                                     self.jit.counters.compiled += 1;
                                 }
                                 None => {
@@ -7104,10 +7104,10 @@ impl Vm {
             // i64 buffer, jump into the trace, and resume the
             // interpreter at the returned continuation PC.
             //
-            // Skipped (zero overhead) when `trace_jit_enabled` is
-            // false; the lookup is a borrow + scan over
-            // `cl.proto.traces`, which is a `Vec` whose size is at
-            // most one entry per back-edge per Proto in practice.
+            // Skipped when `trace_jit_enabled` is false or the Proto
+            // holds no trace the lookup could admit
+            // (`has_dispatchable_trace`); otherwise the lookup is a
+            // borrow + scan over `cl.proto.traces`.
             //
             // Marshalling contract — only Int slots survive the
             // round-trip cleanly (the reg_state ABI is `*mut i64`
@@ -7140,6 +7140,7 @@ impl Vm {
             let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
             self.jit.suppress_downrec_admit_once = false;
             if self.jit.trace_enabled
+                && cl.proto.has_dispatchable_trace.get()
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
@@ -10429,7 +10430,7 @@ impl Vm {
         let _ = self; // resolver passes &mut Vm for symmetry with future
         // pending-install + hash-walk variants; nothing on `self` to
         // mutate today because the install target lives on the Proto.
-        proto.traces.borrow_mut().push(TArc::new(trace));
+        cache_trace(proto, trace);
     }
 
     /// Walk the proto tree
@@ -10490,6 +10491,15 @@ fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_p
         Some((_, n)) => *n = n.saturating_add(1),
         None => failures.push((head_pc, 1)),
     }
+}
+
+/// Park `ct` on `proto.traces`, keeping `has_dispatchable_trace` in step
+/// with the dispatcher's admit test.
+fn cache_trace(proto: Gc<crate::runtime::function::Proto>, ct: crate::jit::trace::CompiledTrace) {
+    if ct.dispatchable || ct.downrec_link.is_some() {
+        proto.has_dispatchable_trace.set(true);
+    }
+    proto.traces.borrow_mut().push(TArc::new(ct));
 }
 
 fn trace_head_abandoned(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) -> bool {
