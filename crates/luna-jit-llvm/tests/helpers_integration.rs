@@ -121,11 +121,21 @@ fn self_recursive_call_base_case() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
     let closure = vm
         .load(
-            b"local function rec(n) if n < 1 then return n end local r = rec(n) return r end",
+            b"local function rec(n) if n < 1 then return n end local r = rec(n) return r end return rec",
             b"=rec",
         )
         .expect("compile");
     let inner = closure.proto.protos[0];
+    // the entry checks that the upvalue it recurses through holds the
+    // running closure, so enter with `rec` itself
+    let rec = match vm
+        .call_value(Value::Closure(closure), &[])
+        .expect("runs")
+        .first()
+    {
+        Some(Value::Closure(c)) => *c,
+        other => panic!("expected rec, got {other:?}"),
+    };
     assert_eq!(inner.num_params, 1);
     assert_eq!(inner.upvals.len(), 1, "rec captures itself as upvals[0]");
 
@@ -138,10 +148,7 @@ fn self_recursive_call_base_case() {
     // WILL call `luna_jit_upval_get`). Be defensive and install the
     // guard for the base-case test too.
     //
-    // NOTE: we don't actually execute helper paths here; the
-    // base-case predicate fires before any helper call. The guard
-    // is harmless either way.
-    let _guard = backend.enter(&mut vm as *mut _, Some(closure));
+    let _guard = backend.enter(&mut vm as *mut _, Some(rec));
 
     let mut storage = LlvmJitStorage::default();
     let result = backend.try_compile(&mut storage, inner, false, false);
