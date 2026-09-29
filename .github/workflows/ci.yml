@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # arm64 is covered by macos-latest and ubuntu-24.04-arm.
+        # arm64 is covered by macos-latest and ubuntu-26.04-arm.
         #
         # xcode-27 is the only hosted label on macOS 27 (arm64); macos-latest
         # is still macOS 26
@@ -37,7 +37,7 @@ jobs:
         # src/backend.rs:988). Requires upstream cranelift work.
         os:
           - ubuntu-latest
-          - ubuntu-24.04-arm
+          - ubuntu-26.04-arm
           - macos-latest
           - xcode-27
           - windows-latest
