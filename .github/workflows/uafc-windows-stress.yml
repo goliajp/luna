@@ -7,11 +7,14 @@
 # 0xDD fill. WER LocalDumps capture nothing (WER is disabled on
 # GHA runners), so the test binary runs under
 # Sysinternals procdump (-e: unhandled-exception dump) and the
-# dump is stack-walked with cdb. Dispatch-only diagnostic.
+# dump is stack-walked with cdb. Runs nightly on develop; a release
+# checks that the latest nightly run is green instead of waiting for one.
 
 name: uafc-windows-stress
 
 on:
+  schedule:
+    - cron: '30 3 * * *'
   workflow_dispatch:
     inputs:
       iterations:
@@ -34,12 +37,14 @@ jobs:
       # Full debuginfo in the release diagnostic build so the cdb
       # stack walk resolves Rust symbols + lines from the PDB.
       CARGO_PROFILE_RELEASE_DEBUG: "true"
-      LUNA_GC_STRESS_N: ${{ inputs.iterations }}
-      LUNA_POISON_STRESS_N: ${{ inputs.iterations }}
+      LUNA_GC_STRESS_N: ${{ inputs.iterations || '50' }}
+      LUNA_POISON_STRESS_N: ${{ inputs.iterations || '50' }}
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
+          # scheduled runs start on the default branch (master, the last
+          # release); test the code that is about to ship instead
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install procdump

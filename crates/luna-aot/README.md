@@ -168,7 +168,7 @@ staticlib is known-broken on the host.
 
 | crate | direct deps added |
 |---|---|
-| `luna-aot` (new) | `luna-core` (workspace) + `object 0.36` + `clap 4` (+ `tempfile` dev-only) |
+| `luna-aot` (new) | `luna-core` (workspace) + `object 0.40` + `clap 4` (+ `tempfile` dev-only) |
 | `luna-runtime-helpers` (new) | `luna-core` (workspace) — nothing else |
 | `luna-core`      | **none** — 0-third-party-dep contract preserved |
 | `luna-jit`       | **none** |

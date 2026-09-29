@@ -19,6 +19,99 @@ optimization.
 
 ---
 
+## [4.0.0] — 2026-09-29
+
+A major version for three reasons: luna-jit and luna-aot expose a few
+functions whose signatures use Cranelift types, so moving Cranelift to a
+new major version breaks them; `luna_aot::embed::TargetSpec` has public
+fields of `object` types, which move from 0.36 to 0.40; and the new
+Cranelift raises the minimum Rust version to 1.96. The `luna-core`
+embedder API gains one constant and is otherwise unchanged. Several trace
+JIT fixes below change results that were wrong: with the JIT on, a
+program now computes what the interpreter computes.
+
+### Added
+
+- `luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET`, the offset
+  of the flag that marks an interned (short) string, next to the table
+  offsets in `runtime::table::jit_layout`. The trace JIT reads it to
+  compare two strings without calling back into the runtime.
+
+### Changed
+
+- Cranelift 0.124 → 0.136 (the `cranelift*` dependencies of luna-jit and
+  luna-aot). The JIT and AOT code generator now also includes upstream
+  fixes and optimizations from the last year, among them the aarch64
+  addressing-mode fix for CVE-2026-34971.
+- Minimum supported Rust version is now declared: `rust-version = "1.96"`
+  on every crate, the version Cranelift 0.136 requires.
+- The public functions whose signatures carry Cranelift types are now
+  `#[doc(hidden)]`. They are internal between luna crates and not
+  covered by semver:
+  - `luna_jit::jit_backend::lower_int_chunk_into`
+  - `luna_jit::jit_backend::trace::lower_trace_into`
+  - `luna_jit::jit_backend::trace::lower_trace_into_named`
+  - `luna_aot::embed::TargetSpec::cranelift_isa_builder`
+- `object` 0.36 → 0.40 in luna-aot and luna-tools, the version
+  cranelift-object already uses, so a build now carries one copy of it.
+  The public fields `format`, `arch` and `endian` of
+  `luna_aot::embed::TargetSpec` have the `object` types
+  `BinaryFormat`, `Architecture` and `Endianness`, so code that builds or
+  reads a `TargetSpec` field by field needs `object` 0.40 too.
+- `syn` 2 → 3 in luna-jit-derive. The derive macros accept and generate
+  the same code; a build that also has proc-macros on `syn` 2 (clap,
+  serde, thiserror) now compiles both.
+- `rustyline` 14 → 18 for the `luna` binary's `repl-line-editor`
+  feature. The line editor now shows no colours when `NO_COLOR` is set.
+- `inferno` 0.11 → 0.12 behind luna-tools' opt-in `flame-graph`
+  feature. It brings quick-xml 0.41, which fixes RUSTSEC-2026-0194 and
+  RUSTSEC-2026-0195.
+- `inkwell` 0.9 → 0.10 in luna-jit-llvm (luna-jit's `llvm-jit`
+  feature), still on LLVM 18.1 through the `llvm18-1` feature.
+- AOT trace data sections are named by the target's object format
+  rather than the host's, so a trace object built for Windows on another
+  host gets the short COFF section names the deploy side looks for.
+
+### Fixed
+
+- The trace JIT compared two values by their raw bits whatever their
+  types, so a traced loop took the wrong branch of `x == nil` when `x` was
+  the integer 0 (both are stored as zero bits), and an integer equal to a
+  table's address equalled that table. The same comparison skipped `__eq`
+  for two tables, found two equal long strings unequal, and ordered
+  strings with `<` / `<=` by address. Values of different types now
+  compare unequal, two tables with a metatable or two long strings leave
+  the trace so the interpreter compares them, and string ordering is no
+  longer compiled. A table the trace built in the loop and dropped before
+  the back edge was compared by what its register held before (it was
+  never allocated). Every dialect was affected, and so is 3.2.2.
+- A recursive trace whose body holds a value of a type the trace JIT
+  could not work out (and is therefore never to be entered) was entered
+  anyway: closing it as a recursive trace marked it runnable again.
+  Recursive traces are only recorded with `Vm::set_self_link_enabled`.
+- A generic `for` over `ipairs` whose values change type could hang
+  under the trace JIT: when the loop body was nothing but the iterator
+  call, the value-type check left the trace at its own first
+  instruction and the dispatcher entered the trace again at once, over
+  and over. Such an exit now lets the interpreter run that instruction
+  first. Lua 5.1 to 5.3 were affected.
+- The optional LLVM backend (`llvm-jit` feature) had the same raw-bits
+  comparison: its traces and compiled functions treated nil as the
+  integer 0, a compiled function returning nil returned 0, and an
+  upvalue of another type was read as an integer. A compiled function
+  also called itself where its code called a function through an
+  upvalue that no longer held it. These cases now stay in the
+  interpreter.
+
+### Removed
+
+- The patched Cranelift fork luna's own builds used (a git submodule
+  redirected through `[patch.crates-io]`). Published crates never used
+  it; luna's tests now build against the same crates.io Cranelift that
+  users get.
+
+---
+
 ## [3.2.2] — 2026-09-29
 
 ### Fixed

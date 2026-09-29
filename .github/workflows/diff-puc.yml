@@ -35,7 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
+          # scheduled runs start on the default branch (master, the last
+          # release); test the code that is about to ship instead
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
 

@@ -75,14 +75,15 @@ use std::hash::Hasher;
 fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
     use luna_jit_helpers::{
         luna_jit_materialize_sunk_table, luna_jit_new_table, luna_jit_new_table_sized,
-        luna_jit_op_close, luna_jit_op_closure, luna_jit_op_concat, luna_jit_op_get_tab_up,
-        luna_jit_op_tforcall, luna_jit_spill_to_stack, luna_jit_stack_load, luna_jit_stack_tag,
+        luna_jit_no_deopt_parked, luna_jit_op_close, luna_jit_op_closure, luna_jit_op_concat,
+        luna_jit_op_get_tab_up, luna_jit_op_tforcall, luna_jit_self_upval_check,
+        luna_jit_spill_to_stack, luna_jit_stack_load, luna_jit_stack_tag,
         luna_jit_stack_update_raw, luna_jit_str_buf_acquire, luna_jit_str_buf_extend,
         luna_jit_str_buf_intern, luna_jit_str_buf_release, luna_jit_table_get_field,
         luna_jit_table_get_float, luna_jit_table_get_int, luna_jit_table_len,
         luna_jit_table_set_field, luna_jit_table_set_float_float, luna_jit_table_set_int,
         luna_jit_table_set_nil, luna_jit_table_set_raw, luna_jit_trace_materialize_frames,
-        luna_jit_upval_get,
+        luna_jit_upval_get, luna_jit_upval_is_int,
     };
     vec![
         (
@@ -160,6 +161,24 @@ fn helper_registry() -> Vec<(&'static str, usize, u32, bool)> {
         (
             "luna_jit_upval_get",
             luna_jit_upval_get as *const () as usize,
+            1,
+            true,
+        ),
+        (
+            "luna_jit_upval_is_int",
+            luna_jit_upval_is_int as *const () as usize,
+            1,
+            true,
+        ),
+        (
+            "luna_jit_no_deopt_parked",
+            luna_jit_no_deopt_parked as *const () as usize,
+            0,
+            true,
+        ),
+        (
+            "luna_jit_self_upval_check",
+            luna_jit_self_upval_check as *const () as usize,
             1,
             true,
         ),
@@ -480,6 +499,8 @@ struct ChunkPlan<'a> {
     /// writes a placeholder 0 because the matching Call rewrites
     /// straight to `build_call(function, …)` without reading R[A].
     is_upval_value_read: Vec<bool>,
+    /// The upvalue the self-recursive calls go through, if any.
+    self_upval_idx: Option<u32>,
 }
 
 impl<'a> ChunkPlan<'a> {
@@ -812,6 +833,46 @@ impl<'a> ChunkPlan<'a> {
             }
         }
 
+        // nil is kept as the payload 0, which the integer ops take for the
+        // integer 0 (`x == nil` held for `x = 0`, `return x` gave 0): no
+        // reachable op may read a register a LoadNil can reach
+        let mut maybe_nil = vec![false; regs as usize];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (pc, ins) in code.iter().enumerate() {
+                if !reachable[pc] {
+                    continue;
+                }
+                let dst = match ins.op() {
+                    Op::LoadNil => ins.a()..=ins.a() + ins.b(),
+                    Op::Move if maybe_nil[ins.b() as usize] => ins.a()..=ins.a(),
+                    _ => continue,
+                };
+                for r in dst {
+                    if !maybe_nil[r as usize] {
+                        maybe_nil[r as usize] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for (pc, ins) in code.iter().enumerate() {
+            if !reachable[pc] {
+                continue;
+            }
+            let reads: Vec<u32> = match ins.op() {
+                Op::Add | Op::Sub | Op::Mul | Op::Mod => vec![ins.b(), ins.c()],
+                Op::Lt | Op::Le | Op::Eq => vec![ins.a(), ins.b()],
+                Op::Return1 => vec![ins.a()],
+                Op::Call | Op::TailCall => (1..ins.b()).map(|off| ins.a() + off).collect(),
+                _ => continue,
+            };
+            if reads.iter().any(|&r| maybe_nil[r as usize]) {
+                return None;
+            }
+        }
+
         Some(ChunkPlan {
             code,
             num_regs: regs,
@@ -823,6 +884,7 @@ impl<'a> ChunkPlan<'a> {
             self_call_pcs,
             tail_call_pcs,
             is_upval_value_read,
+            self_upval_idx,
         })
     }
 }
@@ -1112,6 +1174,14 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
         helpers: &helpers,
     };
 
+    // Self-recursive calls are direct calls to this code, right only
+    // while the upvalue they go through still holds the running closure.
+    if let Some(idx) = plan.self_upval_idx {
+        let check = helpers.get("luna_jit_self_upval_check").copied()?;
+        let idx_arg = i64_type.const_int(u64::from(idx), false);
+        emitter.return_unless(check, &[idx_arg.into()], "self")?;
+    }
+
     // Walk PCs; switch BB on bb_starts boundaries; terminators
     // (Return*/Jmp/Lt|Le|Eq) handled here; non-CF ops delegated to
     // `emitter.emit_op`.
@@ -1204,10 +1274,14 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
             Op::GetUpval => {
                 let dst = ins.a();
                 if plan.is_upval_value_read[pc] {
-                    // ValueRead — call luna_jit_upval_get(b);
-                    // store result into regs[A].
-                    let helper = emitter.helpers.get("luna_jit_upval_get").copied()?;
+                    // ValueRead — the chunk computes with integers only,
+                    // so a non-integer upvalue returns at once with a
+                    // deopt parked (the interpreter re-runs the call);
+                    // otherwise luna_jit_upval_get(b) into regs[A].
                     let idx_arg = i64_type.const_int(ins.b() as u64, false);
+                    let check = emitter.helpers.get("luna_jit_upval_is_int").copied()?;
+                    emitter.return_unless(check, &[idx_arg.into()], "upv")?;
+                    let helper = emitter.helpers.get("luna_jit_upval_get").copied()?;
                     let call_inst = builder
                         .build_call(helper, &[idx_arg.into()], "upv_val")
                         .ok()?;
@@ -1255,6 +1329,8 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 };
                 let slot = emitter.reg_slot_ptr(a, "call_dst")?;
                 builder.build_store(slot, v).ok()?;
+                let parked = emitter.helpers.get("luna_jit_no_deopt_parked").copied()?;
+                emitter.return_unless(parked, &[], "call")?;
             }
             Op::TailCall => {
                 // Self-recursive tail call (tracker gated).
@@ -1311,7 +1387,6 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
 /// Lt|Le|Eq`) are handled in [`compile_compute_chunk`] directly so
 /// the outer loop can switch BBs around the emitted terminator.
 struct ComputeEmitter<'ctx, 'a> {
-    #[allow(dead_code)] // Held for future per-op IR (intrinsics / strings).
     ctx: &'ctx Context,
     builder: &'a inkwell::builder::Builder<'ctx>,
     /// Held so the Op::Call lowerer can emit a
@@ -1330,6 +1405,42 @@ struct ComputeEmitter<'ctx, 'a> {
 }
 
 impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
+    /// Call `check(args)`; when it returns 0 (a deopt is parked) return 0
+    /// from the chunk, else go on in a fresh block.
+    fn return_unless(
+        &self,
+        check: FunctionValue<'ctx>,
+        args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> Option<()> {
+        let call = self
+            .builder
+            .build_call(check, args, &format!("{name}_check"))
+            .ok()?;
+        let ok = match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(bv) => bv.into_int_value(),
+            inkwell::values::ValueKind::Instruction(_) => return None,
+        };
+        let zero = self.i64_type.const_zero();
+        let is_ok = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, ok, zero, &format!("{name}_ok"))
+            .ok()?;
+        let ok_bb = self
+            .ctx
+            .append_basic_block(self.function, &format!("{name}_go"));
+        let deopt_bb = self
+            .ctx
+            .append_basic_block(self.function, &format!("{name}_deopt"));
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, deopt_bb)
+            .ok()?;
+        self.builder.position_at_end(deopt_bb);
+        self.builder.build_return(Some(&zero)).ok()?;
+        self.builder.position_at_end(ok_bb);
+        Some(())
+    }
+
     /// GEP the `idx`-th register slot inside the alloca.
     fn reg_slot_ptr(&self, idx: u32, name: &str) -> Option<PointerValue<'ctx>> {
         let zero = self.i64_type.const_zero();

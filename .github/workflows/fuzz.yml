@@ -4,9 +4,15 @@ on:
   pull_request:
     branches: [master, develop]
   schedule:
-    # Weekly Monday 04:00 UTC — 60 min per target deeper campaign.
-    - cron: "0 4 * * 1"
+    # nightly 60 min per target against develop
+    - cron: "0 4 * * *"
   workflow_dispatch:
+    inputs:
+      minutes:
+        # a release dispatches the short run; depth comes from the nightly one
+        description: "minutes per target"
+        default: "10"
+        required: false
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
@@ -14,7 +20,7 @@ jobs:
   # non-blocking (any crash uploads as artifact, gate doesn't fail
   # the PR). The point at PR time is to catch regressions that an
   # incoming change immediately reproduces from scratch; deeper
-  # coverage lives in the weekly cron below.
+  # coverage lives in the nightly campaign below.
   # ─────────────────────────────────────────────────────────────────
   fuzz-pr-smoke:
     name: fuzz 5-min smoke (PR)
@@ -35,8 +41,6 @@ jobs:
           - fuzz_jit_diff
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
@@ -69,6 +73,8 @@ jobs:
         run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
       - name: run fuzz target 5 min
         working-directory: crates/luna-fuzz
+        env:
+          ASAN_OPTIONS: malloc_context_size=10
         run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=300
       - name: upload artifacts on crash
         if: failure()
@@ -80,12 +86,12 @@ jobs:
           retention-days: 90
 
   # ─────────────────────────────────────────────────────────────────
-  # Weekly 60-min deeper campaign. Non-blocking. Any crashes upload
-  # for triage and get converted to regression tests in
-  # `crates/<x>/tests/regressions/`.
+  # Campaign: 60 min per target nightly on develop, or `minutes` when
+  # dispatched. Non-blocking. Any crashes upload for triage and get
+  # converted to regression tests.
   # ─────────────────────────────────────────────────────────────────
-  fuzz-weekly:
-    name: fuzz 60-min weekly (cron)
+  fuzz-campaign:
+    name: fuzz campaign
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -104,7 +110,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
+          # scheduled runs start on the default branch (master, the last
+          # release); fuzz the code that is about to ship instead
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
@@ -135,14 +143,23 @@ jobs:
         # convention so the `[workspace] exclude` only needs to skip
         # one path, not two).
         run: cargo +nightly fuzz build ${{ matrix.target }} --fuzz-dir .
-      - name: run fuzz target 60 min
+      - name: run fuzz target
         working-directory: crates/luna-fuzz
-        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=3600
+        env:
+          MINUTES: ${{ inputs.minutes || '60' }}
+          # ASan keeps every distinct allocation and free stack until the
+          # process exits. The compiler's recursion (and Cranelift, for the
+          # JIT target) keeps producing new ones over a long campaign, so
+          # with the default 30 frames the kept stacks alone grow by
+          # hundreds of MB. Ten frames still locate the allocation; replay
+          # a saved input locally for full stacks.
+          ASAN_OPTIONS: malloc_context_size=10
+        run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir . -- -max_total_time=$((MINUTES * 60))
       - name: upload artifacts on crash
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-crash-weekly-${{ matrix.target }}
+          name: fuzz-crash-campaign-${{ matrix.target }}
           # cargo fuzz --fuzz-dir . writes artifacts under the fuzz dir itself
           path: crates/luna-fuzz/artifacts/${{ matrix.target }}/
           retention-days: 365
@@ -163,7 +180,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   crash-check:
     name: no unhandled fuzz crashes
-    needs: [fuzz-weekly]
+    needs: [fuzz-campaign]
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
@@ -185,16 +202,16 @@ jobs:
             exit 1
           fi
           # A second signal that does not share the upload's failure
-          # modes: the weekly fuzz jobs' own conclusions. A wrong upload
+          # modes: the campaign jobs' own conclusions. A wrong upload
           # path uploads nothing, and the artifact check alone would then
           # stay green while targets fail.
           F=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-                --jq '[.jobs[] | select(.name | startswith("fuzz 60-min")) | select(.conclusion == "failure")] | length')
+                --jq '[.jobs[] | select(.name | startswith("fuzz campaign")) | select(.conclusion == "failure")] | length')
           echo "failed fuzz jobs in this run: $F"
           echo "fuzz-failed-jobs=$F" >> "$GITHUB_STEP_SUMMARY"
           if [ "$F" -ne 0 ]; then
             gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name | startswith("fuzz 60-min")) | select(.conclusion == "failure") | "  \(.name)"'
+              --jq '.jobs[] | select(.name | startswith("fuzz campaign")) | select(.conclusion == "failure") | "  \(.name)"'
             echo "::error::A fuzz job failed without leaving an artifact. Find out why before this goes green again."
             exit 1
           fi
