@@ -46,23 +46,26 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
-      - name: install PUC lua5.5 (PUC differential targets)
+      - name: install PUC lua 5.5.1 (PUC differential targets)
         if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
+        # always the source release: apt's lua5.5 is 5.5.0 on ubuntu 26.04,
+        # which would silently replace the differential reference
         run: |
-          if apt-cache show lua5.5 >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq lua5.5
-            echo "PUC_LUA=/usr/bin/lua5.5" >> "$GITHUB_ENV"
-          else
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq build-essential libreadline-dev curl
-            mkdir -p /tmp/puc-build && cd /tmp/puc-build
-            curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
-            tar -xzf lua.tar.gz && cd lua-5.5.1
-            make linux-readline
-            sudo make install INSTALL_TOP=/usr/local
-            echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential libreadline-dev curl
+          mkdir -p /tmp/puc-build && cd /tmp/puc-build
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua.tar.gz" | sha256sum -c -
+          tar -xzf lua.tar.gz && cd lua-5.5.1
+          make linux-readline
+          sudo make install INSTALL_TOP=/usr/local
+          GOT=$(/usr/local/bin/lua -v 2>&1)
+          case "$GOT" in
+            "Lua 5.5.1"*) echo "PUC 5.5 pin OK: $GOT" ;;
+            *) echo "::error::expected Lua 5.5.1, got: $GOT"; exit 1 ;;
+          esac
+          echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
       - name: build fuzz target
         working-directory: crates/luna-fuzz
         # `--fuzz-dir .` because `crates/luna-fuzz/` IS itself the
@@ -118,23 +121,26 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
-      - name: install PUC lua5.5 (PUC differential targets)
+      - name: install PUC lua 5.5.1 (PUC differential targets)
         if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
+        # always the source release: apt's lua5.5 is 5.5.0 on ubuntu 26.04,
+        # which would silently replace the differential reference
         run: |
-          if apt-cache show lua5.5 >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq lua5.5
-            echo "PUC_LUA=/usr/bin/lua5.5" >> "$GITHUB_ENV"
-          else
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq build-essential libreadline-dev curl
-            mkdir -p /tmp/puc-build && cd /tmp/puc-build
-            curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
-            tar -xzf lua.tar.gz && cd lua-5.5.1
-            make linux-readline
-            sudo make install INSTALL_TOP=/usr/local
-            echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential libreadline-dev curl
+          mkdir -p /tmp/puc-build && cd /tmp/puc-build
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua.tar.gz" | sha256sum -c -
+          tar -xzf lua.tar.gz && cd lua-5.5.1
+          make linux-readline
+          sudo make install INSTALL_TOP=/usr/local
+          GOT=$(/usr/local/bin/lua -v 2>&1)
+          case "$GOT" in
+            "Lua 5.5.1"*) echo "PUC 5.5 pin OK: $GOT" ;;
+            *) echo "::error::expected Lua 5.5.1, got: $GOT"; exit 1 ;;
+          esac
+          echo "PUC_LUA=/usr/local/bin/lua" >> "$GITHUB_ENV"
       - name: build fuzz target
         working-directory: crates/luna-fuzz
         # `--fuzz-dir .` because `crates/luna-fuzz/` IS itself the
