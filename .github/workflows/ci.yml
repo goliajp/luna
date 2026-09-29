@@ -41,6 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       # Exclude LLVM-backed alt-backend crates.
       # `llvm-jit-probe` + `luna-jit-llvm` unconditionally link inkwell
       # → llvm-sys → system LLVM 18 + Polly; none of the hosted runners
