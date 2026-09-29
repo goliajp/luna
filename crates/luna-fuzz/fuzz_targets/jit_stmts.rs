@@ -363,7 +363,13 @@ impl Gen<'_, '_> {
             }
             4 if saved.1 * 8 <= MAX_ITERS => {
                 self.iters = saved.1 * 8;
-                self.line(&format!("for k{id}, v{id} in ipairs(arr) do"));
+                // the body can store past the end of `arr` (a computed
+                // key, or `arr` reached through `o` / `objs`), which
+                // would keep `ipairs` going for ever: stop at its
+                // initial length
+                self.line(&format!(
+                    "for k{id}, v{id} in ipairs(arr) do if k{id} > 8 then break end"
+                ));
                 self.nums.push(format!("k{id}"));
                 self.anys.push(format!("v{id}"));
                 self.body(5);
