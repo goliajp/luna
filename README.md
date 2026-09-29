@@ -16,9 +16,9 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
-**v4.0.0** (2026-09-29) moves the JIT and AOT to Cranelift 0.136 and
-declares Rust 1.96 as the minimum; the Lua-facing behaviour and the
-`luna-core` embedder API are unchanged. **v3.2.2** (2026-09-29) fixes JIT code on aarch64 that could run a
+**v4.0.0** (2026-09-29) moves the JIT and AOT to Cranelift 0.136,
+declares Rust 1.96 as the minimum, and fixes trace JIT comparisons that
+could treat `0` as `nil` or compare tables and strings by address. **v3.2.2** (2026-09-29) fixes JIT code on aarch64 that could run a
 freed function's instructions after a `Vm` was dropped. **v3.2.1**
 (2026-09-28) fixes a compiler bug that dropped an
 assignment, three trace JIT bugs, and frees JIT code when a `Vm` drops.
