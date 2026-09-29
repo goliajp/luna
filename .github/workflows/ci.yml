@@ -25,8 +25,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # arm64 is covered by macos-latest (macos-14) and
-        # ubuntu-24.04-arm.
+        # arm64 is covered by macos-latest and ubuntu-24.04-arm.
+        #
+        # xcode-27 is the only hosted label on macOS 27 (arm64); macos-latest
+        # is still macOS 26
         #
         # windows-11-arm is left out: cranelift-object's PE/COFF
         # backend lacks `Aarch64AdrGotPage21` relocation support
@@ -37,6 +39,7 @@ jobs:
           - ubuntu-latest
           - ubuntu-24.04-arm
           - macos-latest
+          - xcode-27
           - windows-latest
     steps:
       - uses: actions/checkout@v7
