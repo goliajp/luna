@@ -3641,7 +3641,12 @@ fn build_trace_jit_module() -> Option<JITModule> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").ok()?;
     flag_builder.set("is_pic", "false").ok()?;
-    flag_builder.set("opt_level", "speed").ok()?;
+    // The egraph optimizer costs a fifth of a trace's compile time and
+    // buys nothing on the code the lowerer emits. The single-pass register
+    // allocator would halve compile time again, but its spills made a
+    // numeric loop trace run 1.9x the instructions; traces keep the
+    // backtracking one.
+    flag_builder.set("opt_level", "none").ok()?;
     // The IR verifier is a quarter of a trace's compile time (token_bucket:
     // 175 of 720 us of Cranelift passes). Release builds leave it out, as
     // wasmtime does; debug builds, which the lib tests run, keep it.
