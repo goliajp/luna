@@ -25,8 +25,10 @@ A major version for three reasons: luna-jit and luna-aot expose a few
 functions whose signatures use Cranelift types, so moving Cranelift to a
 new major version breaks them; `luna_aot::embed::TargetSpec` has public
 fields of `object` types, which move from 0.36 to 0.40; and the new
-Cranelift raises the minimum Rust version to 1.96. The Lua-facing
-behaviour and the `luna-core` embedder API are unchanged.
+Cranelift raises the minimum Rust version to 1.96. The `luna-core`
+embedder API gains one constant and is otherwise unchanged. Several trace
+JIT fixes below change results that were wrong: with the JIT on, a
+program now computes what the interpreter computes.
 
 ### Added
 
