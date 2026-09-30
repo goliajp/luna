@@ -2539,7 +2539,13 @@ impl Vm {
             if let Some(evt) = evt {
                 let was_in_hook = self.in_hook;
                 self.in_hook = true;
+                // PUC `luaD_hook` roots the whole running frame while a hook
+                // runs: a register written after the last safe point may sit
+                // above `gc_top`, and the hook may collect
+                let gc_top = self.gc_top;
+                self.gc_top = gc_top.max(self.stack.len() as u32);
                 rh(self, evt);
+                self.gc_top = gc_top;
                 self.in_hook = was_in_hook;
                 self.trap = true;
             }
