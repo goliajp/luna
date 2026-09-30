@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! The call stack as PUC's debug interface walks it.
 //!
 //! PUC keeps one `CallInfo` per running function, Lua or C, and phrases
