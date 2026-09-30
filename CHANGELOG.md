@@ -19,6 +19,34 @@ optimization.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- `Vm::install_null_jit` now also switches the JIT off
+  (`set_jit_enabled(false)` and `set_trace_jit_enabled(false)`), and so
+  does the CLI's `--no-jit`, with or without `--sandbox`: before, hot
+  loops and calls were still counted and recorded as traces that the
+  no-op backend then failed to compile. Installing a real backend
+  afterwards does not switch the JIT back on; call the two setters with
+  `true` for that.
+- The trace JIT compiles traces with Cranelift's `opt_level = "none"`,
+  which cuts a trace's compile time by about a fifth with no measured
+  change in the speed of the generated code.
+- The trace JIT caches a trace that nothing can enter (not dispatchable
+  and not reachable as a down-recursion or side trace) without
+  generating machine code for it.
+- The interpreter skips the per-instruction trace lookup on functions
+  that hold no enterable trace, and the call trigger no longer scans a
+  function's traces on every call once its entry is settled.
+
+### Added
+
+- `Proto::has_dispatchable_trace`, `Proto::trace_call_head_settled` and
+  `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
+  documentation (`#[doc(hidden)]`); they exist for luna's own tests and
+  are not part of the supported API.
+
 ## [4.0.0] — 2026-09-29
 
 A major version for three reasons: luna-jit and luna-aot expose a few
