@@ -238,8 +238,12 @@ fn a_head_reached_by_falling_through_is_entered() {
         return f
     ",
     );
-    let Value::Closure(f) = r[0] else { panic!("{r:?}") };
-    let warm = vm.call_value(Value::Closure(f), &[Value::Int(1000)]).expect("warm");
+    let Value::Closure(f) = r[0] else {
+        panic!("{r:?}")
+    };
+    let warm = vm
+        .call_value(Value::Closure(f), &[Value::Int(1000)])
+        .expect("warm");
     assert!(matches!(warm[0], Value::Int(1000)), "{warm:?}");
     let heads = f.proto.trace_heads.get();
     let admissible_heads: Vec<u32> = f
@@ -255,7 +259,9 @@ fn a_head_reached_by_falling_through_is_entered() {
     assert_eq!(heads[1], luna_jit::runtime::function::TRACE_HEADS_NONE);
     let before = vm.trace_dispatched_count();
     for _ in 0..100 {
-        let r = vm.call_value(Value::Closure(f), &[Value::Int(1)]).expect("call");
+        let r = vm
+            .call_value(Value::Closure(f), &[Value::Int(1)])
+            .expect("call");
         assert!(matches!(r[0], Value::Int(1)), "{r:?}");
     }
     assert_eq!(vm.trace_dispatched_count() - before, 100);

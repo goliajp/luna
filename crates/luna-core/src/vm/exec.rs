@@ -26,6 +26,7 @@ mod arith;
 mod cont_trap_tests;
 mod fast;
 mod index;
+mod index_fast;
 pub(crate) mod native_call;
 mod num;
 mod trace_close;
@@ -33,6 +34,7 @@ mod trace_dispatch;
 mod trace_exit;
 mod trace_exit_decode;
 mod trace_record;
+mod trace_start;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
 
@@ -5477,6 +5479,21 @@ impl Vm {
                 }
             }
             Op::Unm | Op::BNot => cands.push(instr.b()),
+            // arithmetic on a constant or an immediate: the register operand
+            Op::AddI
+            | Op::SubI
+            | Op::AddK
+            | Op::SubK
+            | Op::MulK
+            | Op::ModK
+            | Op::PowK
+            | Op::DivK
+            | Op::IDivK
+            | Op::BAndK
+            | Op::BOrK
+            | Op::BXorK
+            | Op::ShrI
+            | Op::ShlI => cands.push(instr.b()),
             // indexing an upvalue table (`_ENV` for a global): PUC
             // `getupvalname` finds the value among the closure's upvalues
             Op::GetTabUp | Op::SetTabUp => {
@@ -5505,7 +5522,7 @@ impl Vm {
         // a register first and do name it.
         let rk_operands = self.version <= LuaVersion::Lua53
             && matches!(
-                instr.op(),
+                instr.source_op(),
                 Op::Add
                     | Op::Sub
                     | Op::Mul
@@ -5612,7 +5629,8 @@ impl Vm {
         }
         let instr = p.code[pc - 1];
         let mut regs = vec![instr.b()];
-        if !instr.k() {
+        // C of a constant- or immediate-operand opcode is not a register
+        if !instr.k() && instr.arith_const_op().is_none() {
             regs.push(instr.c());
         }
         let no_int = |n: Option<Num>| matches!(n, Some(Num::Float(x)) if crate::runtime::value::f2i_exact(x).is_none());
@@ -6457,7 +6475,7 @@ impl Vm {
                 }
                 Op::Pow => {
                     let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                    self.arith_slow(inst, base, ArithOp::Pow, l, r)?
+                    self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)?
                 }
                 Op::Concat => {
                     // right-associative fold over operands at base+a .. base+a+n,

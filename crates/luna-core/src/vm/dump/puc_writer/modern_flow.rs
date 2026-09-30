@@ -27,6 +27,7 @@ impl M<'_, '_> {
                 let a = self.asm.r(l.a)?;
                 self.emit(self.abc(Kind::EqK, a, l.b, 0, l.k))?;
             }
+            Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => self.cmp_i(l)?,
             Op::Test => {
                 let a = self.asm.r(l.a)?;
                 self.emit(self.abc(Kind::Test, a, 0, 0, l.k))?;

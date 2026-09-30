@@ -137,6 +137,25 @@ impl Checker<'_> {
                 self.reg(pc, b)?;
                 self.reg(pc, c)
             }
+            Op::AddI | Op::SubI | Op::ShrI | Op::ShlI => {
+                self.reg(pc, a)?;
+                self.reg(pc, b)
+            }
+            Op::AddK
+            | Op::SubK
+            | Op::MulK
+            | Op::ModK
+            | Op::PowK
+            | Op::DivK
+            | Op::IDivK
+            | Op::BAndK
+            | Op::BOrK
+            | Op::BXorK => {
+                self.reg(pc, a)?;
+                self.reg(pc, b)?;
+                self.konst(pc, c)
+            }
+            Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => self.reg(pc, a),
             Op::Concat => {
                 if b < 2 {
                     return Err(self.err(pc, format!("concatenates {b} values")));

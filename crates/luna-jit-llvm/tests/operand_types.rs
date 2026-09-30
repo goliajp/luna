@@ -140,3 +140,274 @@ fn chunk_call_through_a_reassigned_upvalue_deopts() {
         "the call through `b` ran `a` itself (returned {r})"
     );
 }
+
+/// The compiler folds a constant operand into the instruction (`AddI`,
+/// `AddK`, `LtI`, `EqK`, …) instead of loading it into a register. The
+/// chunk JIT reads those operands from the instruction and the constant
+/// table; `src` must contain `op`, and the JIT entry must return what the
+/// interpreter returns.
+fn jit_matches_interpreter(src: &str, op: Op) -> i64 {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let cl = vm.load(src.as_bytes(), b"=chunk").expect("parse");
+    let proto = cl.proto;
+    assert!(
+        proto.code.iter().any(|i| i.op() == op),
+        "{src}: expected {op:?}, got {:?}",
+        proto.code
+    );
+    let expected = match vm
+        .call_value(Value::Closure(cl), &[])
+        .expect("runs")
+        .first()
+    {
+        Some(Value::Int(i)) => *i,
+        other => panic!("{src}: interpreter returned {other:?}"),
+    };
+    let mut storage = LlvmJitStorage::default();
+    let CompileResult::Compiled { entry, .. } =
+        LlvmBackend.try_compile(&mut storage, proto, false, false)
+    else {
+        panic!("{src}: did not compile ({:?})", proto.code)
+    };
+    let f: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(entry) };
+    let got = unsafe { f() };
+    assert_eq!(got, expected, "{src}: jit {got}, interpreter {expected}");
+    got
+}
+
+/// `src` contains `op` and the chunk JIT refuses it.
+fn refused(src: &str, op: Op) {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let proto = vm.load(src.as_bytes(), b"=chunk").expect("parse").proto;
+    assert!(
+        proto.code.iter().any(|i| i.op() == op),
+        "{src}: expected {op:?}, got {:?}",
+        proto.code
+    );
+    let r = LlvmBackend.try_compile(&mut LlvmJitStorage::default(), proto, false, false);
+    assert!(matches!(r, CompileResult::Skipped), "{src}: compiled");
+}
+
+#[test]
+fn chunk_immediate_arithmetic() {
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x + 1", Op::AddI),
+        6
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x + -127", Op::AddI),
+        -122
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x - 128", Op::SubI),
+        -123
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x - -3", Op::SubI),
+        8
+    );
+    // the constant on the left sets k; the result is the same
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return 7 + x", Op::AddI),
+        12
+    );
+}
+
+#[test]
+fn chunk_constant_arithmetic() {
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x + 100000", Op::AddK),
+        100005
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x - 100000", Op::SubK),
+        -99995
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return x * 3", Op::MulK),
+        15
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 5; return -3 * x", Op::MulK),
+        -15
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 17; return x % 5", Op::ModK),
+        2
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = -7; return x % 3", Op::ModK),
+        2
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = 7; return x % -3", Op::ModK),
+        -2
+    );
+    assert_eq!(
+        jit_matches_interpreter("local x = -7; return x % -3", Op::ModK),
+        -1
+    );
+}
+
+#[test]
+fn chunk_constant_operand_refused_when_not_an_integer() {
+    refused("local x = 5; return x % 0", Op::ModK);
+    refused("local x = 5; return x + 1.5", Op::AddK);
+    refused("local x = 5; return x * 2.5", Op::MulK);
+    refused("local x = 5; return x - 100000.5", Op::SubK);
+}
+
+#[test]
+fn chunk_constant_forms_without_a_register_form_are_refused() {
+    refused("local x = 5; return x // 2", Op::IDivK);
+    refused("local x = 5; return x / 2", Op::DivK);
+    refused("local x = 5; return x ^ 2", Op::PowK);
+    refused("local x = 5; return x & 3", Op::BAndK);
+    refused("local x = 5; return x | 3", Op::BOrK);
+    refused("local x = 5; return x ~ 3", Op::BXorK);
+    refused("local x = 5; return x >> 1", Op::ShrI);
+    refused("local x = 5; return x << 1", Op::ShlI);
+}
+
+#[test]
+fn chunk_immediate_comparisons() {
+    let cases: &[(&str, Op, i64)] = &[
+        (
+            "local x = 5; if x < 10 then return 1 else return 0 end",
+            Op::LtI,
+            1,
+        ),
+        (
+            "local x = 20; if x < 10 then return 1 else return 0 end",
+            Op::LtI,
+            0,
+        ),
+        (
+            "local x = 5; if x <= 5 then return 1 else return 0 end",
+            Op::LeI,
+            1,
+        ),
+        (
+            "local x = 6; if x <= 5 then return 1 else return 0 end",
+            Op::LeI,
+            0,
+        ),
+        (
+            "local x = 5; if x > 4 then return 1 else return 0 end",
+            Op::GtI,
+            1,
+        ),
+        (
+            "local x = 4; if x > 4 then return 1 else return 0 end",
+            Op::GtI,
+            0,
+        ),
+        (
+            "local x = 5; if x >= 6 then return 1 else return 0 end",
+            Op::GeI,
+            0,
+        ),
+        (
+            "local x = 6; if x >= 6 then return 1 else return 0 end",
+            Op::GeI,
+            1,
+        ),
+        (
+            "local x = 5; if x == 5 then return 1 else return 0 end",
+            Op::EqI,
+            1,
+        ),
+        (
+            "local x = 5; if x == 6 then return 1 else return 0 end",
+            Op::EqI,
+            0,
+        ),
+        (
+            "local x = -5; if x > -6 then return 1 else return 0 end",
+            Op::GtI,
+            1,
+        ),
+        (
+            "local x = -5; if x < -5 then return 1 else return 0 end",
+            Op::LtI,
+            0,
+        ),
+        // the constant on the left flips the comparison
+        (
+            "local x = 5; if 3 < x then return 1 else return 0 end",
+            Op::GtI,
+            1,
+        ),
+        (
+            "local x = 5; if 5 <= x then return 1 else return 0 end",
+            Op::GeI,
+            1,
+        ),
+        (
+            "local x = 5; if 5 > x then return 1 else return 0 end",
+            Op::LtI,
+            0,
+        ),
+        (
+            "local x = 5; if 4 >= x then return 1 else return 0 end",
+            Op::LeI,
+            0,
+        ),
+        (
+            "local x = 5; while x < 8 do x = x + 1 end return x",
+            Op::LtI,
+            8,
+        ),
+    ];
+    for &(src, op, want) in cases {
+        assert_eq!(jit_matches_interpreter(src, op), want, "{src}");
+    }
+}
+
+#[test]
+fn chunk_constant_comparisons() {
+    let src = "local x = 200; if x == 200 then return 1 else return 0 end";
+    assert_eq!(jit_matches_interpreter(src, Op::EqK), 1);
+    let src = "local x = 5; if x == 100000 then return 1 else return 0 end";
+    assert_eq!(jit_matches_interpreter(src, Op::EqK), 0);
+    refused(
+        "local x = 5; if x == 'a' then return 1 else return 0 end",
+        Op::EqK,
+    );
+    refused(
+        "local x = 5; if x == 1.5 then return 1 else return 0 end",
+        Op::EqK,
+    );
+    // an integer-valued float immediate is a float compare
+    refused(
+        "local x = 5; if x == 5.0 then return 1 else return 0 end",
+        Op::EqI,
+    );
+    refused(
+        "local x = 5; if x < 6.0 then return 1 else return 0 end",
+        Op::LtI,
+    );
+}
+
+#[test]
+fn chunk_cache_key_covers_the_constants() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
+    let mut storage = LlvmJitStorage::default();
+    let mut compile = |src: &[u8]| {
+        let proto = vm.load(src, b"=chunk").expect("parse").proto;
+        assert!(proto.code.iter().any(|i| i.op() == Op::AddK));
+        let CompileResult::Compiled { entry, .. } =
+            LlvmBackend.try_compile(&mut storage, proto, false, false)
+        else {
+            panic!("did not compile")
+        };
+        let f: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(entry) };
+        unsafe { f() }
+    };
+    assert_eq!(compile(b"local x = 5; return x + 100000"), 100005);
+    assert_eq!(
+        compile(b"local x = 5; return x + 200000"),
+        200005,
+        "same bytecode, different constant: served from the cache"
+    );
+}

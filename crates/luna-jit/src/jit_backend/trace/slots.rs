@@ -79,6 +79,23 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         | Op::BXor
         | Op::Shl
         | Op::Shr => (vec![b, c], vec![a]),
+        // constant and immediate operands are not registers (a recording
+        // holds these opcodes split into a load and the register form)
+        Op::AddI
+        | Op::SubI
+        | Op::AddK
+        | Op::SubK
+        | Op::MulK
+        | Op::ModK
+        | Op::PowK
+        | Op::DivK
+        | Op::IDivK
+        | Op::BAndK
+        | Op::BOrK
+        | Op::BXorK
+        | Op::ShrI
+        | Op::ShlI => (vec![b], vec![a]),
+        Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => (vec![a], vec![]),
         Op::Unm | Op::BNot | Op::Not | Op::Len => (vec![b], vec![a]),
         Op::Concat => {
             // R[A] := concat(R[A..A+B-1])
@@ -180,7 +197,13 @@ pub(super) fn op_writes_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> 
 
 fn op_reads_at_offset(rop: &RecordedOp, op_offset: u32) -> Vec<u32> {
     let (r, _w) = op_reads_writes(rop.inst);
-    r.into_iter().map(|s| op_offset + s).collect()
+    // register `max_stack` is the lowerer's virtual constant register (see
+    // `split_const_operands`), not a slot
+    let frame = rop.proto.max_stack as u32;
+    r.into_iter()
+        .filter(|&s| s < frame)
+        .map(|s| op_offset + s)
+        .collect()
 }
 
 /// compute the parent body's slot-write set. Walks

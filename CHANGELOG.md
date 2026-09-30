@@ -88,6 +88,16 @@ optimization.
   an error, a hook, a native that ran Lua code). A function holding a
   compiled trace hands an instruction to the trace dispatcher only at the
   pcs where a trace starts, no longer on every instruction.
+- The compiler emits PUC 5.4's constant- and immediate-operand forms for
+  every dialect: `x + 1`, `x - 1`, `x * 0.5`, `x % 7`, `x >> 2`, `x < 5`,
+  `5 < x`, `x == 3` and `x == "s"` no longer load the constant into a
+  register first (`AddI`, `SubI`, `AddK` … `BXorK`, `ShrI`, `ShlI`,
+  `EqI`, `LtI`, `LeI`, `GtI`, `GeI`, `EqK`). A loop like
+  `for i = 1, n do s = s + i % 7 end` runs three instructions per round
+  instead of four. `string.dump` writes them as the dialect's own opcodes
+  (5.4/5.5) or as `RK` operands (5.1–5.3). Arithmetic between an integer
+  and a float, and `/` between two integers, are computed in the
+  instruction itself instead of the general path.
 - `runtime::Frame::tm` is now `Option<runtime::function::FrameTm>` (one
   byte) instead of `Option<&'static str>`: the frame records whether it
   runs a finalizer, a `__close` handler or another metamethod, not the
