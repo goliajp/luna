@@ -65,6 +65,27 @@ unsafe fn table_set_existing_at(tb: &mut Table, pk: *const Value, v: Value) -> b
     }
 }
 
+/// Write `tb[*pk] := v` when `*pk` is an integer in the array part, as
+/// a raw set does; `false`, having done nothing, otherwise.
+///
+/// # Safety
+/// `pk` points at an initialised value.
+#[inline(always)]
+unsafe fn table_set_array_at(tb: &mut Table, pk: *const Value, v: Value) -> bool {
+    // SAFETY: the caller's contract; the payload is read after the tag
+    unsafe {
+        if raw_tag(pk) != tag::INT {
+            return false;
+        }
+        let i = raw_int(pk);
+        if i < 1 || i as u64 > tb.asize {
+            return false;
+        }
+        tb.aset(i as usize - 1, v);
+    }
+    true
+}
+
 #[cold]
 #[inline(never)]
 fn table_set_existing_cold(tb: &mut Table, key: Value, v: Value) -> bool {
@@ -131,7 +152,9 @@ impl Vm {
         unsafe {
             if raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
-                if table_set_existing_at(&mut *tb, pk, v) {
+                if table_set_existing_at(&mut *tb, pk, v)
+                    || (*tb).metatable().is_none() && table_set_array_at(&mut *tb, pk, v)
+                {
                     self.heap
                         .barrier_back(tb as *mut crate::runtime::heap::GcHeader);
                     return true;
@@ -225,6 +248,16 @@ impl Vm {
     /// `__newindex` chain without repeating that probe.
     #[inline(never)]
     pub(super) fn newindex_miss(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
+        // with no `__newindex` to call the write is a raw set (PUC
+        // `luaV_finishset`)
+        #[cfg(not(feature = "gc-verify"))]
+        if let Value::Table(tb) = t
+            && tb
+                .metatable()
+                .is_none_or(|mt| self.fast_tm(mt, Mm::NewIndex).is_nil())
+        {
+            return self.raw_set(tb, key, v);
+        }
         let probed = cfg!(not(feature = "gc-verify")) && matches!(t, Value::Table(_));
         self.op_newindex_from(t, key, v, probed)
     }
