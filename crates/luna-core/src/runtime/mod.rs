@@ -18,6 +18,7 @@ pub(crate) mod gc_verify_probe {
         FREED.with(|f| f.borrow().contains(&p))
     }
 }
+mod call_frame;
 pub mod function;
 pub mod heap;
 pub mod string;
