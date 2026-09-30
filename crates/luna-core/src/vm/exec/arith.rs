@@ -4,43 +4,18 @@
 use super::*;
 
 impl Vm {
-    #[inline(always)]
-    pub(super) fn arith_rr(&mut self, inst: Inst, base: u32, op: ArithOp) -> Result<(), LuaError> {
-        let l = self.r(base, inst.b());
-        let r = self.r(base, inst.c());
-        // hot path: Int op Int — fib_28, loop_int_1m, binary_trees all
-        // hammer these. Skipping coerce_num + the big arith_fast match
-        // shaves several conditional moves per op. A zero divisor takes the
-        // slow path for its error.
-        if let (Value::Int(a), Value::Int(b)) = (l, r) {
-            let fast = match op {
-                ArithOp::Add => Some(Value::Int(a.wrapping_add(b))),
-                ArithOp::Sub => Some(Value::Int(a.wrapping_sub(b))),
-                ArithOp::Mul => Some(Value::Int(a.wrapping_mul(b))),
-                ArithOp::Mod if b != 0 => Some(Value::Int(int_mod(a, b))),
-                ArithOp::IDiv if b != 0 => Some(Value::Int(int_idiv(a, b))),
-                _ => None,
-            };
-            if let Some(v) = fast {
-                self.set_r(base, inst.a(), v);
-                return Ok(());
-            }
-        }
-        // hot path: Float + Float for Add / Sub / Mul / Div — math_loop_100k
-        // and any numeric workload with non-integer accumulators benefits.
-        if let (Value::Float(a), Value::Float(b)) = (l, r) {
-            let fast = match op {
-                ArithOp::Add => Some(Value::Float(a + b)),
-                ArithOp::Sub => Some(Value::Float(a - b)),
-                ArithOp::Mul => Some(Value::Float(a * b)),
-                ArithOp::Div => Some(Value::Float(a / b)),
-                _ => None,
-            };
-            if let Some(v) = fast {
-                self.set_r(base, inst.a(), v);
-                return Ok(());
-            }
-        }
+    /// The arithmetic opcodes' slow path: mixed operand types, string
+    /// coercion, metamethods and errors. The opcode arms in the dispatch
+    /// loop handle Int/Int and Float/Float themselves.
+    #[inline(never)]
+    pub(super) fn arith_slow(
+        &mut self,
+        inst: Inst,
+        base: u32,
+        op: ArithOp,
+        l: Value,
+        r: Value,
+    ) -> Result<(), LuaError> {
         // An `Add` with k set is a 5.4+ `x - 0` (see `Op::Add`): the right
         // operand is the integer 0, so it adds only when the left is a number.
         let op = if inst.k() && op == ArithOp::Add && !matches!(l, Value::Int(_) | Value::Float(_))
