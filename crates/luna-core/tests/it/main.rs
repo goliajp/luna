@@ -48,6 +48,7 @@ mod send_vm;
 mod smoke;
 mod sort_gc_during_compare;
 mod sort_lua_asan_repro;
+mod stack_window_gc;
 mod string_pattern_matching;
 mod syntax;
 mod table_builder;
