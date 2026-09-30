@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! The interpreter. Dispatch is a plain match over opcodes. Lua→Lua calls
 //! share one loop and never recurse the Rust stack; only native↔Lua boundaries do (e.g. pcall).
 //!
@@ -19,6 +20,10 @@ use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
 use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
+
+mod num;
+use num::*;
+pub(crate) use num::{ArithOp, arith_num, str_to_num};
 
 /// A Lua virtual machine: one OS thread's worth of Lua state.
 ///
@@ -1111,11 +1116,12 @@ impl Vm {
         self.retired_jit_storage.push(old);
     }
 
-    /// Install the no-op JIT backend. `try_compile`
-    /// reports "skipped" so every closure stays on the interpreter
-    /// path, and the trace recorder's compile attempt always returns
-    /// `None`. Intended for tests that want to verify the trait
-    /// boundary works in a JIT-free configuration.
+    /// Install the no-op JIT backend and switch the JIT off
+    /// ([`Self::set_jit_enabled`] and [`Self::set_trace_jit_enabled`]
+    /// both `false`): no hot counter ticks, no trace is recorded, and
+    /// the interpreter skips the per-instruction trace lookup.
+    /// Installing a real backend afterwards does not switch the JIT
+    /// back on; call the two setters with `true` for that.
     ///
     /// Calling this on a Vm whose closures already populated
     /// `Proto.jit: JitProtoState::Compiled` does NOT evict those
@@ -1124,6 +1130,8 @@ impl Vm {
     pub fn install_null_jit(&mut self) {
         self.jit.chunk_compiler = Box::new(crate::jit::NullJitBackend);
         self.jit.trace_compiler = Box::new(crate::jit::NullJitBackend);
+        self.jit.enabled = false;
+        self.jit.trace_enabled = false;
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
@@ -4382,20 +4390,15 @@ impl Vm {
                         // trace every call.
                         //
                         // Additionally short-circuit on
-                        // `proto.trace_gave_up`. The per-Proto discard
-                        // cap force-compiles a partial trace and
-                        // flips this flag; subsequent calls into
-                        // this Proto skip the RefCell borrow + Vec
-                        // scan entirely.
-                        if proto.trace_gave_up.get() {
-                            return Ok(true);
-                        }
-                        let call_already_cached =
-                            proto.traces.borrow().iter().any(|t| t.head_pc == 0)
-                                || trace_head_abandoned(proto, 0);
+                        // `proto.trace_gave_up`: the per-Proto discard
+                        // cap force-compiles a partial trace and flips
+                        // it. `trace_call_head_settled` stands for
+                        // "a trace is cached at pc 0 or recording it was
+                        // abandoned", so no call scans `traces`.
                         if c >= self.jit.call_hot_threshold
                             && self.jit.active_trace.is_none()
-                            && !call_already_cached
+                            && !proto.trace_gave_up.get()
+                            && !proto.trace_call_head_settled.get()
                         {
                             // The new frame is on top: index in
                             // `self.frames` is `len() - 1`.
@@ -6885,7 +6888,7 @@ impl Vm {
                                         }
                                         drop(parent_traces);
                                     }
-                                    head_proto.traces.borrow_mut().push(TArc::new(ct));
+                                    cache_trace(head_proto, ct);
                                     self.jit.counters.compiled += 1;
                                 }
                                 None => {
@@ -7101,10 +7104,10 @@ impl Vm {
             // i64 buffer, jump into the trace, and resume the
             // interpreter at the returned continuation PC.
             //
-            // Skipped (zero overhead) when `trace_jit_enabled` is
-            // false; the lookup is a borrow + scan over
-            // `cl.proto.traces`, which is a `Vec` whose size is at
-            // most one entry per back-edge per Proto in practice.
+            // Skipped when `trace_jit_enabled` is false or the Proto
+            // holds no trace the lookup could admit
+            // (`has_dispatchable_trace`); otherwise the lookup is a
+            // borrow + scan over `cl.proto.traces`.
             //
             // Marshalling contract — only Int slots survive the
             // round-trip cleanly (the reg_state ABI is `*mut i64`
@@ -7137,6 +7140,7 @@ impl Vm {
             let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
             self.jit.suppress_downrec_admit_once = false;
             if self.jit.trace_enabled
+                && cl.proto.has_dispatchable_trace.get()
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
@@ -8265,19 +8269,16 @@ impl Vm {
                         // discarded, the back-edge can still find an
                         // open slot at the next iteration.
                         let target_pc = (pc as i32 + 1 + off as i32).max(0) as u32;
-                        // Gave-up short-circuit. Skip
-                        // the RefCell borrow + scan when the
-                        // discard cap force-compiled a partial
-                        // trace on this Proto.
-                        let back_edge_already_cached = if proto.trace_gave_up.get() {
-                            true
-                        } else {
-                            proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
-                                || trace_head_abandoned(proto, target_pc)
-                        };
+                        // Threshold first, then the gave-up
+                        // short-circuit, then the RefCell borrow +
+                        // scan: cold back-edges and Protos whose
+                        // discard cap force-compiled a partial trace
+                        // skip the scan.
                         if c >= self.jit.trace_hot_threshold
                             && self.jit.active_trace.is_none()
-                            && !back_edge_already_cached
+                            && !proto.trace_gave_up.get()
+                            && !proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
+                            && !trace_head_abandoned(proto, target_pc)
                         {
                             // Back-edge target = pc after `add_pc(off)`,
                             // i.e. current `pc + 1 + off` (the dispatch
@@ -9928,299 +9929,6 @@ impl Vm {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArithOp {
-    Add,
-    Sub,
-    Mul,
-    Mod,
-    Pow,
-    Div,
-    IDiv,
-    BAnd,
-    BOr,
-    BXor,
-    Shl,
-    Shr,
-}
-
-impl ArithOp {
-    /// PUC metamethod event name (`__add` → "add" etc.) used by
-    /// `debug.getinfo(level, "n")` inside a metamethod handler.
-    fn mm_name(self) -> &'static str {
-        match self {
-            ArithOp::Add => "add",
-            ArithOp::Sub => "sub",
-            ArithOp::Mul => "mul",
-            ArithOp::Mod => "mod",
-            ArithOp::Pow => "pow",
-            ArithOp::Div => "div",
-            ArithOp::IDiv => "idiv",
-            ArithOp::BAnd => "band",
-            ArithOp::BOr => "bor",
-            ArithOp::BXor => "bxor",
-            ArithOp::Shl => "shl",
-            ArithOp::Shr => "shr",
-        }
-    }
-}
-
-fn as_num(v: Value, version: LuaVersion) -> Option<Num> {
-    match v {
-        Value::Int(i) => Some(Num::Int(i)),
-        Value::Float(f) => Some(Num::Float(f)),
-        // PUC forprep coerces numeric strings (`for i = "10", "1", "-2"`).
-        Value::Str(s) => str_to_num(s.as_bytes(), version),
-        _ => None,
-    }
-}
-
-/// Float `%` as each dialect's `luai_nummod` defines it. 5.1/5.2 compute
-/// `a - floor(a/b)*b` (so `5 % math.huge` is nan); 5.3 fixes `fmod`'s sign
-/// when `m*b < 0`; 5.4 compares signs instead, because that product
-/// underflows to zero for tiny operands.
-fn float_mod(version: LuaVersion, a: f64, b: f64) -> f64 {
-    if version <= LuaVersion::Lua52 {
-        return a - (a / b).floor() * b;
-    }
-    let m = a % b;
-    let fix = if version == LuaVersion::Lua53 {
-        m * b < 0.0
-    } else {
-        (m > 0.0 && b < 0.0) || (m < 0.0 && b > 0.0)
-    };
-    if fix { m + b } else { m }
-}
-
-/// A concatenable operand's byte form (string, or a number coerced to its
-/// string), or `None` when only a `__concat` metamethod can handle it.
-/// `legacy_float = true` follows PUC ≤5.2's `%.14g` rendering (no `.0`
-/// suffix on integer-valued floats) — see `num_to_string_for`.
-fn concat_piece(v: Value, float_fmt: numeric::FloatFmt) -> Option<Vec<u8>> {
-    match v {
-        Value::Str(s) => Some(s.as_bytes().to_vec()),
-        Value::Int(x) => Some(numeric::num_to_string(Num::Int(x)).into_bytes()),
-        Value::Float(x) => Some(numeric::num_to_string_for(Num::Float(x), float_fmt).into_bytes()),
-        _ => None,
-    }
-}
-
-/// Index into the per-basic-type metatable table for a non-table value
-/// (None for tables, which carry their own metatable).
-fn type_mt_slot(v: Value) -> Option<usize> {
-    match v {
-        Value::Nil => Some(0),
-        Value::Bool(_) => Some(1),
-        Value::Int(_) | Value::Float(_) => Some(2),
-        Value::Str(_) => Some(3),
-        Value::Closure(_) | Value::Native(_) => Some(4),
-        // tables and full userdata carry their own metatable; threads and
-        // light userdata have none (PUC keeps a shared per-type mt slot for
-        // light, but luna doesn't expose it — no test gates on it yet).
-        Value::Table(_) | Value::Coro(_) | Value::Userdata(_) | Value::LightUserdata(_) => None,
-    }
-}
-
-/// A number operand as-is; strings stay non-numbers (5.4+ `tonumberns`).
-fn as_number(v: Value) -> Option<Num> {
-    match v {
-        Value::Int(i) => Some(Num::Int(i)),
-        Value::Float(f) => Some(Num::Float(f)),
-        _ => None,
-    }
-}
-
-/// Arithmetic (not bitwise) on two numbers, PUC `luaO_rawarith`: integer
-/// results for integer operands except `/` and `^`. The error is the
-/// message of a zero integer divisor.
-pub(crate) fn arith_num(
-    version: LuaVersion,
-    op: ArithOp,
-    ln: Num,
-    rn: Num,
-) -> Result<Value, &'static str> {
-    use ArithOp::*;
-    Ok(match (op, ln, rn) {
-        (Add, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_add(b)),
-        (Sub, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_sub(b)),
-        (Mul, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_mul(b)),
-        (IDiv, Num::Int(a), Num::Int(b)) => {
-            if b == 0 {
-                return Err("attempt to divide by zero");
-            }
-            let mut q = a.wrapping_div(b);
-            if (a ^ b) < 0 && q.wrapping_mul(b) != a {
-                q -= 1;
-            }
-            Value::Int(q)
-        }
-        (Mod, Num::Int(a), Num::Int(b)) => {
-            if b == 0 {
-                return Err("attempt to perform 'n%0'");
-            }
-            let mut m = a.wrapping_rem(b);
-            if m != 0 && (m ^ b) < 0 {
-                m += b;
-            }
-            Value::Int(m)
-        }
-        (Add, a, b) => Value::Float(a.as_f64() + b.as_f64()),
-        (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
-        (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
-        (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
-        // 5.4+ `luai_numpow` squares by multiplying, which can differ from
-        // the C library's `pow` in the last bit
-        (Pow, a, b) => {
-            let (a, b) = (a.as_f64(), b.as_f64());
-            Value::Float(if b == 2.0 && version >= LuaVersion::Lua54 {
-                a * a
-            } else {
-                a.powf(b)
-            })
-        }
-        (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
-        (Mod, a, b) => Value::Float(float_mod(version, a.as_f64(), b.as_f64())),
-        (BAnd | BOr | BXor | Shl | Shr, ..) => unreachable!("bitwise op in arith_num"),
-    })
-}
-
-/// A number's integer value, if it has one.
-fn int_of(n: Num) -> Option<i64> {
-    match n {
-        Num::Int(i) => Some(i),
-        Num::Float(f) => crate::runtime::value::f2i_exact(f),
-    }
-}
-
-/// A number, or a numeric string read as a float (5.2).
-fn coerce_num_float(v: Value) -> Option<Num> {
-    match v {
-        Value::Str(s) => numeric::str2num(s.as_bytes(), false, true),
-        v => as_number(v),
-    }
-}
-
-/// Number, or string coerced to number (5.3 string-arith coercion).
-fn coerce_num(v: Value) -> Option<Num> {
-    match v {
-        Value::Str(s) => numeric::str2num(s.as_bytes(), true, true),
-        v => as_number(v),
-    }
-}
-
-/// A number, or a numeric string read by C `strtod` (5.1 `luaO_str2d`).
-fn coerce_num_51(v: Value) -> Option<Num> {
-    match v {
-        Value::Str(s) => numeric::strtod_str(s.as_bytes()).map(Num::Float),
-        v => as_number(v),
-    }
-}
-
-/// A string's numeric value as the dialect converts it: 5.1 runs C
-/// `strtod` over it (so `inf`/`nan` count and a NUL ends it), 5.2 has its
-/// own reader but still only floats, 5.3+ `luaO_str2num` with integers.
-pub(crate) fn str_to_num(s: &[u8], version: LuaVersion) -> Option<Num> {
-    match version {
-        LuaVersion::Lua51 => numeric::strtod_str(s).map(Num::Float),
-        LuaVersion::Lua52 => numeric::str2num(s, false, true),
-        _ => numeric::str2num(s, true, true),
-    }
-}
-
-/// Lua shifts: logical on 64 bits; |shift| ≥ 64 yields 0; negative shifts
-/// reverse direction.
-fn shift_left(a: i64, b: i64) -> i64 {
-    if b < 0 {
-        if b <= -64 {
-            0
-        } else {
-            ((a as u64) >> (-b as u32)) as i64
-        }
-    } else if b >= 64 {
-        0
-    } else {
-        ((a as u64) << (b as u32)) as i64
-    }
-}
-
-/// i < f, exactly (PUC LTintfloat shape).
-fn int_lt_float(i: i64, f: f64) -> bool {
-    if f.is_nan() {
-        return false;
-    }
-    if f >= 9_223_372_036_854_775_808.0 {
-        return true;
-    }
-    if f < -9_223_372_036_854_775_808.0 {
-        return false;
-    }
-    let ff = f.floor();
-    let fi = ff as i64;
-    if f == ff { i < fi } else { i <= fi }
-}
-
-/// i <= f, exactly.
-fn int_le_float(i: i64, f: f64) -> bool {
-    if f.is_nan() {
-        return false;
-    }
-    if f >= 9_223_372_036_854_775_808.0 {
-        return true;
-    }
-    if f < -9_223_372_036_854_775_808.0 {
-        return false;
-    }
-    i <= f.floor() as i64
-}
-
-/// Clip a numeric `for` limit to the integer range (PUC forlimit). Returns
-/// (clipped limit, loop-is-empty).
-fn int_for_limit(limit: Num, init: i64, step: i64) -> (i64, bool) {
-    match limit {
-        Num::Int(l) => {
-            let empty = if step > 0 { init > l } else { init < l };
-            (l, empty)
-        }
-        Num::Float(f) => {
-            // PUC `forlimit` treats NaN like a limit below the integer
-            // range (`0 < flim` is false): no run upward, down to minint
-            // otherwise.
-            if f.is_nan() {
-                return if step > 0 {
-                    (0, true)
-                } else {
-                    (i64::MIN, false)
-                };
-            }
-            if step > 0 {
-                if f >= 9_223_372_036_854_775_808.0 {
-                    (i64::MAX, false)
-                } else {
-                    let l = f.floor();
-                    if l < -9_223_372_036_854_775_808.0 {
-                        (i64::MIN, true)
-                    } else {
-                        let li = l as i64;
-                        (li, init > li)
-                    }
-                }
-            } else if f <= -9_223_372_036_854_775_808.0 {
-                (i64::MIN, false)
-            } else {
-                let l = f.ceil();
-                if l >= 9_223_372_036_854_775_808.0 {
-                    // PUC forlimit: a positive limit beyond the integer range
-                    // is unreachable for a decreasing loop — empty.
-                    (i64::MAX, true)
-                } else {
-                    let li = l as i64;
-                    (li, init < li)
-                }
-            }
-        }
-    }
-}
-
 impl Vm {
     /// PUC's debug-API placeholder for an unnamed vararg slot returned by
     /// `debug.getlocal(_, -n)`. 5.2/5.3 spelled it `"(*vararg)"`; 5.4
@@ -10426,7 +10134,7 @@ impl Vm {
         let _ = self; // resolver passes &mut Vm for symmetry with future
         // pending-install + hash-walk variants; nothing on `self` to
         // mutate today because the install target lives on the Proto.
-        proto.traces.borrow_mut().push(TArc::new(trace));
+        cache_trace(proto, trace);
     }
 
     /// Walk the proto tree
@@ -10483,10 +10191,31 @@ const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
 
 fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
     let mut failures = proto.trace_compile_failures.borrow_mut();
-    match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
-        Some((_, n)) => *n = n.saturating_add(1),
-        None => failures.push((head_pc, 1)),
+    let n = match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
+        Some((_, n)) => {
+            *n = n.saturating_add(1);
+            *n
+        }
+        None => {
+            failures.push((head_pc, 1));
+            1
+        }
+    };
+    if head_pc == 0 && n >= MAX_TRACE_COMPILE_FAILURES {
+        proto.trace_call_head_settled.set(true);
     }
+}
+
+/// Park `ct` on `proto.traces`, keeping `has_dispatchable_trace` in step
+/// with the dispatcher's admit test.
+fn cache_trace(proto: Gc<crate::runtime::function::Proto>, ct: crate::jit::trace::CompiledTrace) {
+    if ct.dispatchable || ct.downrec_link.is_some() {
+        proto.has_dispatchable_trace.set(true);
+    }
+    if ct.head_pc == 0 {
+        proto.trace_call_head_settled.set(true);
+    }
+    proto.traces.borrow_mut().push(TArc::new(ct));
 }
 
 fn trace_head_abandoned(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) -> bool {

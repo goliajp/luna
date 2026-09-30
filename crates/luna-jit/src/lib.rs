@@ -113,8 +113,10 @@ pub fn new_with_jit(version: version::LuaVersion) -> vm::Vm {
 }
 
 /// Install the default Cranelift backend on an
-/// already-constructed Vm. Idempotent on a JIT-equipped Vm; useful
-/// for re-arming a Vm previously running under `install_null_jit`.
+/// already-constructed Vm. Idempotent on a JIT-equipped Vm. A Vm
+/// previously running under `install_null_jit` also needs
+/// `set_jit_enabled(true)` and `set_trace_jit_enabled(true)`:
+/// `install_null_jit` switches both off and this does not touch them.
 ///
 /// A free fn because the trait orphan rule prevents adding inherent methods
 /// to `luna_core::vm::Vm` from this crate. The `VmExt` extension
