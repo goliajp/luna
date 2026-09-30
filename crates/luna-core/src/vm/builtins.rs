@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Minimal base library. The full base library replaces/extends this.
 
 use std::io::Write;

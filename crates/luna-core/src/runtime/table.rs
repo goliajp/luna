@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Lua table: hybrid array + hash.
 //!
 //! Array part uses split tag/payload storage (9 bytes/slot — the Lua 5.5
