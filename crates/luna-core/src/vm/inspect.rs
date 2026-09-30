@@ -296,9 +296,9 @@ mod tests {
     fn jit_state_snapshot_default_inert() {
         let vm = Vm::new(crate::version::LuaVersion::Lua55);
         let snap = jit_state_snapshot(&vm);
-        // A bare Vm::new() has the null backend; counters start
-        // at zero, no trace in flight.
-        assert!(snap.enabled);
+        // A bare Vm::new() has the null backend, so the JIT is off;
+        // counters start at zero, no trace in flight.
+        assert!(!snap.enabled);
         assert!(snap.active_trace_head_pc.is_none());
         assert_eq!(snap.trace_closed_count, 0);
         assert_eq!(snap.trace_aborted_count, 0);
