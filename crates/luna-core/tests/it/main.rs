@@ -26,6 +26,7 @@ mod host_roots_slot_recycling;
 mod io_popen_double_close;
 mod jit_default_off;
 mod library_edge_arguments;
+mod loop_trap;
 mod lua_error_structured;
 mod macro_lua;
 mod nan_matches_host_printf;

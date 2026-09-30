@@ -239,6 +239,11 @@ pub struct Vm {
     /// true while the hook itself runs, so its own execution fires no events
     /// (PUC clears the mask for the duration)
     pub(crate) in_hook: bool,
+    /// PUC `trap`: the dispatch loop head has work beyond fetching the next
+    /// instruction — an instruction budget, a memory cap or an armed hook.
+    /// The loop head clears it when it finds none of them; whatever may
+    /// create one sets it (set spuriously, it costs one slow iteration).
+    pub(crate) trap: bool,
     /// arms the next Lua frame's `tailcalls` count (PUC `ci->u.l.tailcalls`),
     /// consumed by `push_frame`. `OP_TailCall` sets it to the caller's
     /// own tailcalls + 1 before begin_call so deeply tail-recursive chains
@@ -825,6 +830,8 @@ impl Vm {
     /// the Vec replacement to keep the shadow valid.
     #[inline(always)]
     fn frames_resync(&mut self) {
+        // a thread switch swaps in that thread's hook
+        self.trap = true;
         // Debug-only — see `frames_push_sync` comment.
         #[cfg(debug_assertions)]
         {
@@ -994,6 +1001,7 @@ impl Vm {
             ignore_env: false,
             hook: HookState::default(),
             in_hook: false,
+            trap: true,
             pending_tailcalls: 0,
             pending_ccmt: 0,
             errored_natives: Vec::new(),
@@ -2444,6 +2452,7 @@ impl Vm {
     /// not, so the wrapper line is not re-fired.
     pub(crate) fn install_hook(&mut self, hook: HookState) {
         self.hook = hook;
+        self.trap = true;
         if self.hook.line
             && let Some(f) = self.frames.last_mut().and_then(CallFrame::lua_mut)
         {
@@ -2527,6 +2536,7 @@ impl Vm {
                 self.in_hook = true;
                 rh(self, evt);
                 self.in_hook = was_in_hook;
+                self.trap = true;
             }
         }
         let Some(hook) = self.hook.func else {
@@ -2552,6 +2562,7 @@ impl Vm {
         let r = self.call_value_impl(hook, &[name, lv], from_native);
         self.pending_is_hook = false;
         self.in_hook = false;
+        self.trap = true;
         self.stack.truncate(saved_len);
         self.top = saved_top;
         r.map(|_| ())
@@ -3191,6 +3202,7 @@ impl Vm {
     /// short-script semantics.
     pub fn set_instr_budget(&mut self, budget: Option<i64>) {
         self.instr_budget = budget;
+        self.trap = true;
     }
 
     /// Remaining instruction budget (None when unbounded).
@@ -4102,6 +4114,7 @@ impl Vm {
     /// each request).
     pub fn set_memory_cap(&mut self, cap: Option<usize>) {
         self.heap.mem_cap = cap;
+        self.trap = true;
     }
 
     /// Approximate bytes the heap is currently holding. Object shells plus
@@ -6021,84 +6034,111 @@ impl Vm {
         Unwound::Propagated(LuaError(err))
     }
 
+    /// The loop head's slow path, taken while [`Vm::trap`] is set: tick the
+    /// instruction budget, enforce the memory cap, then clear `trap` unless
+    /// one of them or an armed hook still needs the next instruction.
+    #[inline]
+    fn trap_step(&mut self) -> Result<(), LuaError> {
+        if let Some(b) = self.instr_budget.as_mut() {
+            *b -= 1;
+            if *b <= 0 {
+                return Err(self.instr_budget_exhausted());
+            }
+        }
+        if let Some(cap) = self.heap.mem_cap
+            && self.heap.bytes() > cap
+        {
+            self.mem_cap_exceeded(cap)?;
+        }
+        self.trap = self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed();
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn instr_budget_exhausted(&mut self) -> LuaError {
+        self.instr_budget = None;
+        // Async-mode cooperative
+        // yield. Set a sentinel flag so `exec_with`
+        // propagates the Err without `unwind` running
+        // (mirroring the `yielding.is_some()` path),
+        // and `call_value_impl` preserves the call
+        // frames for the next `poll`. Translation back
+        // to `DispatchOutcome::BudgetExhausted` happens
+        // in `drive_one`. The Err value itself is
+        // `Value::Nil` — a pure sentinel, never seen by
+        // user code.
+        if self.async_mode {
+            self.host_yield_pending = true;
+            return LuaError(Value::Nil);
+        }
+        // Classify the trip so embedders can
+        // distinguish budget exhaustion from a
+        // generic Runtime error and retry / give up
+        // accordingly.
+        self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
+        let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
+        LuaError(s)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn mem_cap_exceeded(&mut self, cap: usize) -> Result<(), LuaError> {
+        // First try a full collect — embedders set tight caps
+        // and the overshoot may be reclaimable (closures kept
+        // by short-lived frames, intermediate strings). Only
+        // disarm + raise if the cap is still breached after
+        // collection. PUC's `LUA_GCEMERGENCY` path matches.
+        //
+        // Root up to the deepest Lua frame's
+        // `base + max_stack` window rather than the entire
+        // `self.stack.len()`
+        // (covers register operands the current opcode
+        // might reference). The cap fires during table
+        // mutation in a tight `a[i] = i` loop where `a`
+        // lives at a frame-register slot past `self.top`
+        // (OP_NEWINDEX doesn't advance top); the deepest
+        // frame's max_stack window provably covers it
+        // since `a` is a register of the executing proto.
+        //
+        // Still over-roots caller frames' dead regs
+        // (slots between caller.base and the callee
+        // func_slot are live; slots past callee
+        // func_slot in caller's frame are dead until
+        // caller resumes). For fire-once cap path this
+        // residual over-root is acceptable; there is no
+        // full per-frame walk because a strong/weak pass
+        // split is semantically impossible — the weak pass
+        // depends on strong-pass marks.
+        let cap_root_top = self
+            .frames
+            .iter()
+            .rev()
+            .find_map(CallFrame::lua)
+            .map(|f| f.base + f.closure.proto.max_stack as u32)
+            .unwrap_or(self.top);
+        self.gc_top = cap_root_top.max(self.top);
+        self.collect_garbage();
+        if self.heap.bytes() > cap {
+            self.heap.mem_cap = None;
+            let s = Value::Str(self.heap.intern(b"memory cap exceeded"));
+            return Err(LuaError(s));
+        }
+        Ok(())
+    }
+
+    /// A count or line hook fires on the next instruction.
+    #[inline]
+    fn hook_armed(&self) -> bool {
+        !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+    }
+
     fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
+        // the host may have set a budget, a cap or a hook since the last run
+        self.trap = true;
         loop {
-            // Fast-path slow-check gate: most embedders run with both
-            // `instr_budget` and `mem_cap` as None, so a single combined
-            // is_some test lets the hot loop skip both branches with one
-            // load + branch instead of two.
-            if self.instr_budget.is_some() || self.heap.mem_cap.is_some() {
-                if let Some(b) = self.instr_budget.as_mut() {
-                    *b -= 1;
-                    if *b <= 0 {
-                        self.instr_budget = None;
-                        // Async-mode cooperative
-                        // yield. Set a sentinel flag so `exec_with`
-                        // propagates the Err without `unwind` running
-                        // (mirroring the `yielding.is_some()` path),
-                        // and `call_value_impl` preserves the call
-                        // frames for the next `poll`. Translation back
-                        // to `DispatchOutcome::BudgetExhausted` happens
-                        // in `drive_one`. The Err value itself is
-                        // `Value::Nil` — a pure sentinel, never seen by
-                        // user code.
-                        if self.async_mode {
-                            self.host_yield_pending = true;
-                            return Err(LuaError(Value::Nil));
-                        }
-                        // Classify the trip so embedders can
-                        // distinguish budget exhaustion from a
-                        // generic Runtime error and retry / give up
-                        // accordingly.
-                        self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
-                        let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
-                        return Err(LuaError(s));
-                    }
-                }
-                if let Some(cap) = self.heap.mem_cap
-                    && self.heap.bytes() > cap
-                {
-                    // First try a full collect — embedders set tight caps
-                    // and the overshoot may be reclaimable (closures kept
-                    // by short-lived frames, intermediate strings). Only
-                    // disarm + raise if the cap is still breached after
-                    // collection. PUC's `LUA_GCEMERGENCY` path matches.
-                    //
-                    // Root up to the deepest Lua frame's
-                    // `base + max_stack` window rather than the entire
-                    // `self.stack.len()`
-                    // (covers register operands the current opcode
-                    // might reference). The cap fires during table
-                    // mutation in a tight `a[i] = i` loop where `a`
-                    // lives at a frame-register slot past `self.top`
-                    // (OP_NEWINDEX doesn't advance top); the deepest
-                    // frame's max_stack window provably covers it
-                    // since `a` is a register of the executing proto.
-                    //
-                    // Still over-roots caller frames' dead regs
-                    // (slots between caller.base and the callee
-                    // func_slot are live; slots past callee
-                    // func_slot in caller's frame are dead until
-                    // caller resumes). For fire-once cap path this
-                    // residual over-root is acceptable; there is no
-                    // full per-frame walk because a strong/weak pass
-                    // split is semantically impossible — the weak pass
-                    // depends on strong-pass marks.
-                    let cap_root_top = self
-                        .frames
-                        .iter()
-                        .rev()
-                        .find_map(CallFrame::lua)
-                        .map(|f| f.base + f.closure.proto.max_stack as u32)
-                        .unwrap_or(self.top);
-                    self.gc_top = cap_root_top.max(self.top);
-                    self.collect_garbage();
-                    if self.heap.bytes() > cap {
-                        self.heap.mem_cap = None;
-                        let s = Value::Str(self.heap.intern(b"memory cap exceeded"));
-                        return Err(LuaError(s));
-                    }
-                }
+            if self.trap {
+                self.trap_step()?;
             }
             // Single combined frame fetch: continuation arm OR Lua arm. Saves
             // a second `self.frames.last()` slice access vs the prior split
@@ -7091,7 +7131,9 @@ impl Vm {
             // following tick re-admits naturally (with the budget
             // also reset by the deopt site).
             let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
-            self.jit.suppress_downrec_admit_once = false;
+            if downrec_admit_blocked {
+                self.jit.suppress_downrec_admit_once = false;
+            }
             if self.jit.trace_enabled
                 && cl.proto.has_dispatchable_trace.get()
                 && let Some(ct) = {
@@ -7891,13 +7933,9 @@ impl Vm {
             }
 
             // count + line hooks (PUC traceexec): before executing the
-            // instruction. Skipped while the hook itself runs.
-            // (Parens here are load-bearing — without them `&&` binds tighter
-            // than `||` and the `!in_hook` guard only gates the rust-hook arm,
-            // letting a Lua line hook recurse into itself → stack overflow
-            // on db.lua line-hook assertions. Matches the `hook_call_with` /
-            // `hook_return` predicate shape at lines 2245 / 2279 / 2294 / 4023.)
-            if !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+            // instruction. Skipped while the hook itself runs. `trap` is set
+            // whenever a hook is armed, so the common case tests one byte.
+            if self.trap && self.hook_armed() {
                 let lines = &cl.proto.lines;
                 let cur_line = if lines.is_empty() {
                     None
