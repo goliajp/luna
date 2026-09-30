@@ -93,7 +93,39 @@ impl Vm {
 
     /// `t[key] := v` for a VM write opcode, resolving `__newindex` yieldably.
     pub(super) fn op_newindex(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
-        match self.newindex_step(t, key, v)? {
+        self.op_newindex_from(t, key, v, false)
+    }
+
+    /// `t[key] := v` for the write opcodes (PUC `luaV_fastset`): overwriting
+    /// a key that is present with a non-nil value never involves
+    /// `__newindex`; anything else runs the chain without repeating that
+    /// probe.
+    #[inline(always)]
+    pub(super) fn newindex_fast(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
+        // gc-verify builds keep every write on the probed path
+        #[cfg(not(feature = "gc-verify"))]
+        if let Value::Table(tb) = t {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            if unsafe { tb.as_mut() }.try_set_existing(key, v) {
+                self.heap
+                    .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                return Ok(());
+            }
+            return self.op_newindex_from(t, key, v, true);
+        }
+        self.op_newindex(t, key, v)
+    }
+
+    /// [`Self::op_newindex`]; `probed` = `t` is a table on which the caller's
+    /// `try_set_existing` already failed.
+    fn op_newindex_from(
+        &mut self,
+        t: Value,
+        key: Value,
+        v: Value,
+        probed: bool,
+    ) -> Result<(), LuaError> {
+        match self.newindex_step_from(t, key, v, probed)? {
             MmOut::Done(_) => {}
             MmOut::Mm { func, recv } => {
                 self.begin_meta_call(func, &[recv, key, v], MetaAction::Discard, "newindex")?;
@@ -229,6 +261,18 @@ impl Vm {
         key: Value,
         v: Value,
     ) -> Result<MmOut, LuaError> {
+        self.newindex_step_from(t, key, v, false)
+    }
+
+    /// [`Self::newindex_step`]; `probed` skips the in-place update attempt
+    /// on `t` itself.
+    fn newindex_step_from(
+        &mut self,
+        t: Value,
+        key: Value,
+        v: Value,
+        probed: bool,
+    ) -> Result<MmOut, LuaError> {
         // Read-time probe (gc-verify): a dead query key at a
         // WRITE site, attributed to the instruction that produced it.
         #[cfg(feature = "gc-verify")]
@@ -261,6 +305,7 @@ impl Vm {
             panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
         }
         let mut cur = t;
+        let mut skip = probed;
         for _ in 0..self.tag_loop_limit() {
             let mm = match cur {
                 Value::Table(tb) => {
@@ -275,7 +320,8 @@ impl Vm {
                     // heap is single-threaded and the pointer is live as
                     // long as it is reachable from active roots (see
                     // heap.rs:5-7). Mirrors the raw_set wrapper below.
-                    if unsafe { tb.as_mut() }.try_set_existing(key, v) {
+                    if !std::mem::take(&mut skip) && unsafe { tb.as_mut() }.try_set_existing(key, v)
+                    {
                         self.heap
                             .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
                         return Ok(MmOut::Done(Value::Nil));

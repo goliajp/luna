@@ -8063,24 +8063,24 @@ impl Vm {
                     let t = self.upval_get(cl, inst.a());
                     let key = cl.proto.consts[inst.b() as usize];
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, key, v)?;
+                    self.newindex_fast(t, key, v)?;
                 }
                 Op::SetTable => {
                     let t = self.r(base, inst.a());
                     let key = self.r(base, inst.b());
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, key, v)?;
+                    self.newindex_fast(t, key, v)?;
                 }
                 Op::SetI => {
                     let t = self.r(base, inst.a());
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, Value::Int(inst.b() as i64), v)?;
+                    self.newindex_fast(t, Value::Int(inst.b() as i64), v)?;
                 }
                 Op::SetField => {
                     let t = self.r(base, inst.a());
                     let key = cl.proto.consts[inst.b() as usize];
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, key, v)?;
+                    self.newindex_fast(t, key, v)?;
                 }
                 Op::NewTable => {
                     let t = self.heap.new_table();
