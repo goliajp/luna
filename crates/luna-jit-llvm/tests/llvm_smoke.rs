@@ -838,9 +838,8 @@ fn fib_shape_nested_branchy_chunk() {
     let proto = closure.proto;
 
     // Confirm the chunk really exercises the breadth of ops the test
-    // claims (the constant operands are folded into the immediate and
-    // constant forms). If the parser ever folds any of these out, the
-    // test loses coverage — surface that loudly.
+    // claims, constant operands in their immediate / constant forms.
+    // If the parser ever folds any of these out, surface that loudly.
     for op in [
         Op::LoadI,
         Op::LtI,
