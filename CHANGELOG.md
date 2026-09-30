@@ -102,6 +102,10 @@ optimization.
   byte) instead of `Option<&'static str>`: the frame records whether it
   runs a finalizer, a `__close` handler or another metamethod, not the
   event's name. `Frame` shrinks from 56 to 40 bytes.
+- A table lookup by a short string key no longer goes through the
+  general key-comparison walk, which saved and restored a dozen
+  registers on every lookup: field reads and writes such as `t.x` run
+  about 20 fewer machine instructions each.
 
 ### Fixed
 
