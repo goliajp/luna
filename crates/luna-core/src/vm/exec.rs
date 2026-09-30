@@ -6195,9 +6195,9 @@ impl Vm {
             //   take the record for compile + cache.
             // - Otherwise, capture the op. If the record overflows
             //   MAX_TRACE_LEN, abort by dropping it.
-            if self.jit.trace_enabled
-                && let Some(_rec) = self.jit.active_trace.as_mut()
-            {
+            // `active_trace` first: it is None on nearly every instruction,
+            // so one load decides with the trace JIT on or off
+            if self.jit.active_trace.is_some() && self.jit.trace_enabled {
                 // Depth tracking. The trace head's frame is
                 // at index `recording_frame_base`; every Op::Call that
                 // pushes a new frame bumps the live depth, every
@@ -7074,12 +7074,14 @@ impl Vm {
             // single dispatch tick consumes the suppression — the
             // following tick re-admits naturally (with the budget
             // also reset by the deopt site).
-            let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
-            if downrec_admit_blocked {
-                self.jit.suppress_downrec_admit_once = false;
-            }
-            if self.jit.trace_enabled
-                && cl.proto.has_dispatchable_trace.get()
+            // The proto's flag comes first: it is false on nearly every
+            // instruction, and `cl.proto` is already loaded for the fetch.
+            // The one-shot suppression only matters where a downrec trace
+            // could be admitted, which needs the flag.
+            let downrec_admit_blocked = cl.proto.has_dispatchable_trace.get()
+                && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
+            if cl.proto.has_dispatchable_trace.get()
+                && self.jit.trace_enabled
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
@@ -8501,66 +8503,35 @@ impl Vm {
                 }
                 Op::ForPrep => self.for_prep(inst, base)?,
                 Op::ForLoop => {
-                    // Trace JIT back-edge counter on the
-                    // numeric-for back-edge. ForLoop is always at
-                    // a back-edge position (when it continues);
-                    // for the trace recorder we treat it as the
-                    // close-detection equivalent of `Op::Jmp` with
-                    // negative offset. Counter only ticks when the
-                    // back-edge will actually fire (count > 0 in
-                    // the 5.4+ Int form, comparable predicates in
-                    // pre-5.3 / Float). The cheap check up front
-                    // matches the for_loop helper's branch.
-                    if self.jit.trace_enabled {
-                        let a = inst.a();
-                        let pre53 = self.version() <= LuaVersion::Lua53;
-                        let take_back_edge =
-                            match (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2)) {
-                                (Value::Int(_), Value::Int(count), Value::Int(_)) if !pre53 => {
-                                    count != 0
-                                }
-                                (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
-                                    let next = cur.wrapping_add(st);
-                                    if st > 0 { next <= lim } else { next >= lim }
-                                }
-                                (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
-                                    let next = cur + st;
-                                    if st > 0.0 { next <= lim } else { next >= lim }
-                                }
-                                _ => false,
-                            };
-                        if take_back_edge {
-                            let proto = cl.proto;
-                            let c = proto.trace_hot_count.get();
-                            if c < u32::MAX / 2 {
-                                proto.trace_hot_count.set(c + 1);
+                    // The trace JIT counts the back-edges `for_loop` takes
+                    // and starts recording at the body once the count
+                    // reaches the threshold.
+                    if self.for_loop(inst, base)? && self.jit.trace_enabled {
+                        let proto = cl.proto;
+                        let c = proto.trace_hot_count.get();
+                        if c < u32::MAX / 2 {
+                            proto.trace_hot_count.set(c + 1);
+                        }
+                        if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none() {
+                            // the back-edge target is the body's first op
+                            let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
+                            let max_stack = cl.proto.max_stack as usize;
+                            let base_us = base as usize;
+                            let mut entry_tags = Vec::with_capacity(max_stack);
+                            for i in 0..max_stack {
+                                let (tag, _) = self.stack[base_us + i].unpack();
+                                entry_tags.push(tag);
                             }
-                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
-                            {
-                                // ForLoop's back-edge target = pc
-                                // after `add_pc(-bx)` runs from the
-                                // already-bumped f.pc (= pc + 1).
-                                // So target = (pc + 1) - bx.
-                                let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                                let max_stack = cl.proto.max_stack as usize;
-                                let base_us = base as usize;
-                                let mut entry_tags = Vec::with_capacity(max_stack);
-                                for i in 0..max_stack {
-                                    let (tag, _) = self.stack[base_us + i].unpack();
-                                    entry_tags.push(tag);
-                                }
-                                self.jit.active_trace =
-                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                        cl.proto, target, entry_tags, false,
-                                    )));
-                                // Record the frame the trace
-                                // started in. The currently-running
-                                // Lua frame is at len() - 1.
-                                self.jit.recording_frame_base = self.frames.len() - 1;
-                            }
+                            self.jit.active_trace =
+                                Some(Box::new(crate::jit::trace::TraceRecord::start(
+                                    cl.proto, target, entry_tags, false,
+                                )));
+                            // Record the frame the trace
+                            // started in. The currently-running
+                            // Lua frame is at len() - 1.
+                            self.jit.recording_frame_base = self.frames.len() - 1;
                         }
                     }
-                    self.for_loop(inst, base)?;
                 }
                 Op::TForPrep => {
                     // the 4th control slot is the iterator's closing value
@@ -9208,7 +9179,8 @@ impl Vm {
     }
 
     #[inline(always)]
-    fn for_loop(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
+    /// `OP_FORLOOP`; whether it jumped back to the loop body.
+    fn for_loop(&mut self, inst: Inst, base: u32) -> Result<bool, LuaError> {
         let a = inst.a();
         // PUC 5.1–5.3 `OP_FORLOOP` compares the post-step `i` to `limit`
         // directly (R[a+1] holds the limit, *not* a remaining-count) so the
@@ -9229,6 +9201,7 @@ impl Vm {
                     self.set_r(base, a + 3, Value::Int(next));
                     self.add_pc(-(inst.bx() as i32));
                 }
+                Ok(cont)
             }
             // the count is unsigned (PUC `lua_Unsigned`): a loop over
             // more than 2^63 values stores a "negative" one
@@ -9240,27 +9213,31 @@ impl Vm {
                     self.set_r(base, a + 3, Value::Int(next));
                     self.add_pc(-(inst.bx() as i32));
                 }
+                Ok(count != 0)
             }
             (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
-                self.float_for_step(inst, base, cur, lim, st);
+                Ok(self.float_for_step(inst, base, cur, lim, st))
             }
             // 5.1/5.2 have one number type, so a number of the other
             // representation stored into a slot is still a valid state
             (x, l, s) if v <= LuaVersion::Lua52 => {
                 match (as_number(x), as_number(l), as_number(s)) {
-                    (Some(cur), Some(lim), Some(st)) => {
-                        self.float_for_step(inst, base, cur.as_f64(), lim.as_f64(), st.as_f64())
-                    }
-                    _ => return Err(self.rt_err("'for' state corrupted")),
+                    (Some(cur), Some(lim), Some(st)) => Ok(self.float_for_step(
+                        inst,
+                        base,
+                        cur.as_f64(),
+                        lim.as_f64(),
+                        st.as_f64(),
+                    )),
+                    _ => Err(self.rt_err("'for' state corrupted")),
                 }
             }
-            _ => return Err(self.rt_err("'for' state corrupted")),
+            _ => Err(self.rt_err("'for' state corrupted")),
         }
-        Ok(())
     }
 
     #[inline(always)]
-    fn float_for_step(&mut self, inst: Inst, base: u32, cur: f64, lim: f64, st: f64) {
+    fn float_for_step(&mut self, inst: Inst, base: u32, cur: f64, lim: f64, st: f64) -> bool {
         let a = inst.a();
         let next = cur + st;
         let cont = if st > 0.0 { next <= lim } else { next >= lim };
@@ -9269,6 +9246,7 @@ impl Vm {
             self.set_r(base, a + 3, Value::Float(next));
             self.add_pc(-(inst.bx() as i32));
         }
+        cont
     }
 
     // ---- native helpers (used by builtins) ----

@@ -73,6 +73,11 @@ optimization.
   already did for one whose traces keep failing to compile. Before, such
   a place was recorded again every time it turned hot: a function called
   in a loop paid for a recording on every call.
+- With the trace JIT on, the interpreter does less per instruction when
+  nothing is being recorded and the function has no enterable trace: the
+  per-instruction checks test the condition that is almost always false
+  first, and a numeric `for` counts its back-edges after stepping instead
+  of re-reading its three control slots.
 - `runtime::Frame` has a new public field, `ccmt: u8`: the number of
   `__call` metamethods resolved to reach the frame, which the Vm used to
   keep in a vector beside the frames.
