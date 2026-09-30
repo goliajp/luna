@@ -11,12 +11,8 @@ use fast_arith::{
 
 /// The running frame, as the loop head found it.
 pub(super) struct Fast {
-    pub(super) cl: Gc<LuaClosure>,
-    pub(super) base: u32,
-    pub(super) func_slot: u32,
-    pub(super) n_varargs: u32,
-    /// the frame's pc field
-    pub(super) fpc: *mut u32,
+    /// the running frame, on top of `frames`
+    pub(super) fr: *mut Frame,
     pub(super) trace_on: bool,
     pub(super) pre53: bool,
     pub(super) entry_depth: usize,
@@ -48,11 +44,7 @@ impl Vm {
         mut npc: u32,
     ) -> Result<FastExit, LuaError> {
         let Fast {
-            mut cl,
-            mut base,
-            mut func_slot,
-            mut n_varargs,
-            mut fpc,
+            mut fr,
             trace_on,
             pre53,
             entry_depth,
@@ -62,7 +54,7 @@ impl Vm {
         // From here the running frame's state lives in locals (PUC keeps
         // `pc`, `base` and `k` in registers the same way). An arm that only
         // reads and writes registers advances `npc` and stores it through
-        // `fpc`, which keeps the frame's pc current for errors and for
+        // `fr`, which keeps the frame's pc current for errors and for
         // everything that reads it. An arm that may run Lua code, move the
         // stack or change frames goes through `resume!` or `reenter!`
         // afterwards; a metamethod call always pushes a continuation, which
@@ -70,11 +62,28 @@ impl Vm {
         // The loop keeps fetching here while no instruction needs the head's
         // checks: no trap, no recording and no compiled trace this function
         // could enter.
-        let mut code = cl.proto.code.as_ptr();
-        let mut kptr = cl.proto.consts.as_ptr();
+        // `fr` points into `self.frames`: it is taken again after anything
+        // that can push a frame. The frame's other fields are read through
+        // it where an arm needs them, which keeps them out of the loop's
+        // registers.
+        macro_rules! cl {
+            () => {
+                // SAFETY: `fr` is the running frame
+                unsafe { (*fr).closure }
+            };
+        }
+        macro_rules! base {
+            () => {
+                // SAFETY: as above
+                unsafe { (*fr).base }
+            };
+        }
+        let mut code = cl!().proto.code.as_ptr();
+        let mut kptr = cl!().proto.consts.as_ptr();
         // the register window, valid while `self.stack` neither moves nor
         // is written through a reference
         // SAFETY: `push_frame` sized the stack to `base + max_stack`
+        let base = base!();
         let mut regs: *mut Value = unsafe { self.stack.as_mut_ptr().add(base as usize) };
         macro_rules! reg {
             ($i:expr) => {
@@ -101,16 +110,16 @@ impl Vm {
                 // whole loop; with a trace this function could enter, the
                 // arms stop at the pcs where one starts, for the dispatcher
                 if WATCH && (!stay || npc == heads[0] || npc == heads[1]) {
-                    // SAFETY: `fpc` points into the running frame, which no
-                    // fast arm moves
-                    unsafe { *fpc = npc };
+                    // SAFETY: `fr` is the running frame, which no fast arm
+                    // moves
+                    unsafe { (*fr).pc = npc };
                     return Ok(FastExit::Reload);
                 }
                 // SAFETY: as for the fetch at the loop head
                 inst = unsafe { *code.add(npc as usize) };
                 npc += 1;
                 // SAFETY: see above
-                unsafe { *fpc = npc };
+                unsafe { (*fr).pc = npc };
                 continue;
             }};
         }
@@ -133,12 +142,10 @@ impl Vm {
         'frames: loop {
             if switched {
                 let f = top_lua!();
-                cl = f.closure;
-                base = f.base;
-                func_slot = f.func_slot;
-                n_varargs = f.n_varargs;
+                let cl = f.closure;
                 npc = f.pc;
-                fpc = &mut f.pc;
+                let base = f.base;
+                fr = f;
                 code = cl.proto.code.as_ptr();
                 kptr = cl.proto.consts.as_ptr();
                 // stay only between frames with nothing to watch, so that
@@ -158,7 +165,7 @@ impl Vm {
                 inst = unsafe { *code.add(npc as usize) };
                 npc += 1;
                 // SAFETY: see above
-                unsafe { *fpc = npc };
+                unsafe { (*fr).pc = npc };
             }
             switched = true;
             // after a call or return: take on whatever frame is now on top
@@ -180,7 +187,8 @@ impl Vm {
                     }
                     let f = top_lua!();
                     npc = f.pc;
-                    fpc = &mut f.pc;
+                    let base = f.base;
+                    fr = f;
                     // SAFETY: as at the start
                     regs = unsafe { self.stack.as_mut_ptr().add(base as usize) };
                     next!()
@@ -199,7 +207,7 @@ impl Vm {
                     }
                     // SAFETY: as above
                     let (t, key) = unsafe { (*pt, *pk) };
-                    self.index_miss(t, key, base + inst.a())?;
+                    self.index_miss(t, key, base!() + inst.a())?;
                 }};
             }
             // `R[A][*pk] := R[C]` for a key in a register or a constant
@@ -325,20 +333,21 @@ impl Vm {
                         next!()
                     }
                     Op::GetUpval => {
-                        let v = self.upval_get(cl, inst.b());
+                        let v = self.upval_get(cl!(), inst.b());
                         set_reg!(inst.a(), v);
                         next!()
                     }
                     Op::SetUpval => {
                         let v = reg!(inst.a());
-                        self.upval_set(cl, inst.b(), v);
+                        self.upval_set(cl!(), inst.b(), v);
                         // the write may have gone through `self.stack`
+                        let base = base!();
                         // SAFETY: as at the loop head
                         regs = unsafe { self.stack.as_mut_ptr().add(base as usize) };
                         next!()
                     }
                     Op::GetTabUp => {
-                        let t = self.upval_get(cl, inst.b());
+                        let t = self.upval_get(cl!(), inst.b());
                         let pk = kptr.wrapping_add(inst.c() as usize);
                         // SAFETY: a constant of the running proto
                         if let Some(v) = unsafe { Vm::index_raw_key_at(t, pk) } {
@@ -346,14 +355,14 @@ impl Vm {
                             next!()
                         }
                         let key = konst!(inst.c());
-                        self.index_miss(t, key, base + inst.a())?;
+                        self.index_miss(t, key, base!() + inst.a())?;
                     }
                     Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize)),
                     Op::GetField => get_arm!(kptr.wrapping_add(inst.c() as usize)),
                     Op::GetI => {
                         let t = reg!(inst.b());
                         let key = Value::Int(inst.c() as i64);
-                        let dst = base + inst.a();
+                        let dst = base!() + inst.a();
                         if let Some(v) = self.index_raw(t, key) {
                             set_reg!(inst.a(), v);
                             next!()
@@ -361,7 +370,7 @@ impl Vm {
                         self.index_miss(t, key, dst)?;
                     }
                     Op::SetTabUp => {
-                        let t = self.upval_get(cl, inst.a());
+                        let t = self.upval_get(cl!(), inst.a());
                         let pk = kptr.wrapping_add(inst.b() as usize);
                         let v = reg!(inst.c());
                         // SAFETY: a constant of the running proto
@@ -407,12 +416,12 @@ impl Vm {
                         }
                         // SAFETY: as above
                         let key = unsafe { *pk };
-                        self.index_miss(o, key, base + inst.a())?;
+                        self.index_miss(o, key, base!() + inst.a())?;
                     }
                     Op::Add => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Add, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -420,7 +429,7 @@ impl Vm {
                     Op::Sub => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Sub, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -428,7 +437,7 @@ impl Vm {
                     Op::Mul => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Mul, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -437,7 +446,7 @@ impl Vm {
                     Op::Mod => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Mod, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -445,7 +454,7 @@ impl Vm {
                     Op::IDiv => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::IDiv, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -453,7 +462,7 @@ impl Vm {
                     Op::Div => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Div, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -461,7 +470,7 @@ impl Vm {
                     Op::BAnd => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::BAnd, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -469,7 +478,7 @@ impl Vm {
                     Op::BOr => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::BOr, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -477,7 +486,7 @@ impl Vm {
                     Op::BXor => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::BXor, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -485,7 +494,7 @@ impl Vm {
                     Op::Shl => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Shl, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -493,7 +502,7 @@ impl Vm {
                     Op::Shr => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Shr, l, r, inst.k()))
+                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, inst.k()))
                         {
                             next!()
                         }
@@ -503,7 +512,7 @@ impl Vm {
                             int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
                             slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Add, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, false)
                         }) {
                             next!()
                         }
@@ -513,7 +522,7 @@ impl Vm {
                             int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
                             slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Sub, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, false)
                         }) {
                             next!()
                         }
@@ -523,7 +532,7 @@ impl Vm {
                         int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Add, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, false)
                         }) {
                             next!()
                         }
@@ -533,7 +542,7 @@ impl Vm {
                         int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Sub, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, false)
                         }) {
                             next!()
                         }
@@ -543,7 +552,7 @@ impl Vm {
                         int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Mul, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, false)
                         }) {
                             next!()
                         }
@@ -554,7 +563,7 @@ impl Vm {
                         int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Mod, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, false)
                         }) {
                             next!()
                         }
@@ -564,7 +573,7 @@ impl Vm {
                         int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::IDiv, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, false)
                         }) {
                             next!()
                         }
@@ -574,7 +583,7 @@ impl Vm {
                         int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Div, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, false)
                         }) {
                             next!()
                         }
@@ -584,7 +593,7 @@ impl Vm {
                         int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))),
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Pow, l, r, false)
                         }) {
                             next!()
                         }
@@ -594,7 +603,7 @@ impl Vm {
                         int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::BAnd, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, false)
                         }) {
                             next!()
                         }
@@ -604,7 +613,7 @@ impl Vm {
                         int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::BOr, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, false)
                         }) {
                             next!()
                         }
@@ -614,7 +623,7 @@ impl Vm {
                         int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::BXor, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, false)
                         }) {
                             next!()
                         }
@@ -624,7 +633,7 @@ impl Vm {
                             int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
                             slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Shr, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, false)
                         }) {
                             next!()
                         }
@@ -634,7 +643,7 @@ impl Vm {
                             int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
                             slow(x, c) => {
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base, ArithOp::Shl, l, r, false)
+                            self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, false)
                         }) {
                             next!()
                         }
@@ -655,7 +664,7 @@ impl Vm {
                                 if mm.is_nil() {
                                     return Err(self.type_err("perform arithmetic on", v));
                                 }
-                                let dst = base + inst.a();
+                                let dst = base!() + inst.a();
                                 self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst })?;
                             }
                         }
@@ -675,7 +684,7 @@ impl Vm {
                                 if mm.is_nil() {
                                     return Err(self.type_err("perform bitwise operation on", v));
                                 }
-                                let dst = base + inst.a();
+                                let dst = base!() + inst.a();
                                 self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst })?;
                             }
                         }
@@ -702,9 +711,9 @@ impl Vm {
                             _ => {}
                         }
                         match self.len_step(v)? {
-                            MmOut::Done(r) => self.set_r(base, inst.a(), r),
+                            MmOut::Done(r) => self.set_r(base!(), inst.a(), r),
                             MmOut::Mm { func, recv } => {
-                                let dst = base + inst.a();
+                                let dst = base!() + inst.a();
                                 self.begin_meta_call(
                                     func,
                                     &[recv, recv],
@@ -723,19 +732,19 @@ impl Vm {
                         // counts them, and from the threshold on looks whether
                         // to record from the target
                         if trace_on && off < 0 {
-                            let proto = cl.proto;
+                            let proto = cl!().proto;
                             let c = proto.trace_hot_count.get();
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
                             }
                             let target = (pc as i32 + 1 + off).max(0) as u32;
                             if c >= self.jit.trace_hot_threshold
-                                && self.trace_start_at_jmp(cl, base, target)
+                                && self.trace_start_at_jmp(cl!(), base!(), target)
                             {
                                 // the recording sees the next instruction from
                                 // the loop head
                                 // SAFETY: see `next!`
-                                unsafe { *fpc = npc };
+                                unsafe { (*fr).pc = npc };
                                 return Ok(FastExit::Reload);
                             }
                         }
@@ -878,7 +887,7 @@ impl Vm {
                             // `for_loop` is the reference: 5.1–5.3 step and
                             // compare with the limit, 5.4+ count down; anything
                             // else it raises on
-                            self.for_loop(inst, base)?;
+                            self.for_loop(inst, base!())?;
                             npc = self.top_frame().pc;
                             slow = true;
                         }
@@ -886,7 +895,7 @@ impl Vm {
                         // recording at the body once the count reaches the
                         // threshold.
                         if trace_on && npc != pc + 1 {
-                            let proto = cl.proto;
+                            let proto = cl!().proto;
                             let c = proto.trace_hot_count.get();
                             if c < u32::MAX / 2 {
                                 proto.trace_hot_count.set(c + 1);
@@ -895,13 +904,13 @@ impl Vm {
                             {
                                 // the back-edge target is the body's first op
                                 let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                                self.trace_start_at_loop(cl, base, target, None);
+                                self.trace_start_at_loop(cl!(), base!(), target, None);
                                 slow = true;
                             }
                         }
                         if slow {
                             // SAFETY: see `next!`
-                            unsafe { *fpc = npc };
+                            unsafe { (*fr).pc = npc };
                             return Ok(FastExit::Reload);
                         }
                         next!()
@@ -914,7 +923,7 @@ impl Vm {
                             // numeric one; an iterator that returned nothing
                             // takes no back-edge
                             if trace_on {
-                                let proto = cl.proto;
+                                let proto = cl!().proto;
                                 let c = proto.trace_hot_count.get();
                                 if c < u32::MAX / 2 {
                                     proto.trace_hot_count.set(c + 1);
@@ -924,7 +933,7 @@ impl Vm {
                                 {
                                     // the body's first op, right after TForPrep
                                     let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                                    self.trace_start_at_loop(cl, base, target, Some(a));
+                                    self.trace_start_at_loop(cl!(), base!(), target, Some(a));
                                 }
                             }
                             set_reg!(a + 2, ctrl);
@@ -933,7 +942,7 @@ impl Vm {
                             // instruction from the loop head
                             if trace_on && self.jit.active_trace.is_some() {
                                 // SAFETY: see `next!`
-                                unsafe { *fpc = npc };
+                                unsafe { (*fr).pc = npc };
                                 return Ok(FastExit::Reload);
                             }
                         }
@@ -943,13 +952,14 @@ impl Vm {
                         // R[A] := vararg[R[C]] without allocating: integer key in
                         // [1,n] → that vararg, "n" → the count, else nil.
                         let key = reg!(inst.c());
-                        let n = n_varargs;
+                        // SAFETY: `fr` is the running frame
+                        let (fs, n) = unsafe { ((*fr).func_slot, (*fr).n_varargs) };
                         let v = match key {
                             Value::Int(k) if k >= 1 && (k as u64) <= n as u64 => {
-                                self.stack[(func_slot + k as u32) as usize]
+                                self.stack[(fs + k as u32) as usize]
                             }
                             Value::Float(f) if f.fract() == 0.0 && f >= 1.0 && f <= n as f64 => {
-                                self.stack[(func_slot + f as u32) as usize]
+                                self.stack[(fs + f as u32) as usize]
                             }
                             Value::Str(s) if s.as_bytes() == b"n" => Value::Int(n as i64),
                             _ => Value::Nil,
@@ -958,13 +968,13 @@ impl Vm {
                         next!()
                     }
                     Op::ErrNNil => {
-                        let v = self.r(base, inst.a());
+                        let v = self.r(base!(), inst.a());
                         if !matches!(v, Value::Nil) {
                             let bx = inst.bx();
                             let name = if bx == 0 {
                                 "?".to_string()
                             } else {
-                                match cl.proto.consts[(bx - 1) as usize] {
+                                match cl!().proto.consts[(bx - 1) as usize] {
                                     Value::Str(s) => {
                                         String::from_utf8_lossy(s.as_bytes()).into_owned()
                                     }
@@ -976,7 +986,7 @@ impl Vm {
                         next!()
                     }
                     Op::Call => {
-                        let abs = base + inst.a();
+                        let abs = base!() + inst.a();
                         let nargs = if inst.b() == 0 {
                             None
                         } else {
@@ -998,22 +1008,22 @@ impl Vm {
                     }
                     // the common returns: to a Lua caller or a metamethod's
                     // continuation in this activation, with nothing to close and
-                    // no hook (see `return_to_lua`); the loop head's `Return` arm
+                    // no hook (see `return_fast`); the loop head's `Return` arm
                     // does the rest
-                    Op::Return0 | Op::Return1 => {
-                        let (abs_a, nret) = if inst.op() == Op::Return0 {
-                            (base, 0)
-                        } else {
-                            (base + inst.a(), 1)
-                        };
-                        self.top = self.top.max(abs_a + nret);
-                        if self.return_to_lua(base, abs_a, nret, entry_depth) {
+                    Op::Return0 => {
+                        let base = base!();
+                        if self.return_fast(base, base, 0, entry_depth) {
                             reenter!()
                         }
                         return Ok(FastExit::Slow(inst));
                     }
-                    // listed rather than `_`, so that the jump table covers every
-                    // opcode without a range check
+                    Op::Return1 => {
+                        let base = base!();
+                        if self.return_fast(base, base + inst.a(), 1, entry_depth) {
+                            reenter!()
+                        }
+                        return Ok(FastExit::Slow(inst));
+                    }
                     // they stay in this frame: run out of line, then go on
                     Op::LoadKx
                     | Op::NewTable
@@ -1025,6 +1035,8 @@ impl Vm {
                     | Op::Closure
                     | Op::Vararg
                     | Op::GetVarg => self.run_frame_op(inst)?,
+                    // listed rather than `_`, so that the jump table covers every
+                    // opcode without a range check
                     Op::Close
                     | Op::Tbc
                     | Op::TailCall
