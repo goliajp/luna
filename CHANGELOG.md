@@ -92,7 +92,10 @@ optimization.
   could be freed by one collection and then marked by a later one, since
   the main thread's stack is marked whole while a coroutine runs and a
   suspended coroutine's stack is marked whole too. The collector now
-  clears the running stack above the live registers when marking ends.
+  clears the running stack above the live registers when marking ends,
+  and roots the whole running frame while a Rust debug hook runs (PUC's
+  `luaD_hook` does the same), so a hook that collects cannot free a
+  register written after the last safe point.
 - With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
   that stored into a table under a NaN key went on silently instead of
   raising "table index is NaN" as the interpreter does.

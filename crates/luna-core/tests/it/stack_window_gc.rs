@@ -117,3 +117,46 @@ fn missing_parameters_and_leading_locals_are_nil_after_a_dirty_frame() {
         "##,
     );
 }
+
+fn collecting_hook(vm: &mut Vm, _ev: luna_core::vm::exec::RustHookEvent) {
+    vm.collect_garbage();
+}
+
+// `s` is written after the last safe point, above `gc_top`; a collection
+// from a Rust hook must still see it (PUC roots the whole running frame
+// while a hook runs)
+#[test]
+fn a_collecting_rust_hook_keeps_registers_above_the_last_safe_point() {
+    for v in ALL {
+        let mut vm = Vm::new(v);
+        vm.eval("T = {}").expect("setup");
+        vm.set_rust_debug_hook(
+            Some(collecting_hook),
+            luna_core::vm::exec::HOOK_MASK_LINE,
+            0,
+        );
+        let r = vm.eval(
+            r#"
+            local t = T
+            t.x = string.rep("a", 50)
+            local a, b, c, d = 1, 2, 3, 4
+            local s = t.x
+            t.x = nil
+            local e = 5
+            local f = 6
+            return #s + a + b + c + d + e + f
+            "#,
+        );
+        match r {
+            Ok(vals) => assert!(
+                matches!(
+                    vals[0],
+                    luna_core::runtime::Value::Int(71) | luna_core::runtime::Value::Float(71.0)
+                ),
+                "{v:?}: {:?}",
+                vals[0]
+            ),
+            Err(e) => panic!("{v:?}: {}", vm.error_text(&e)),
+        }
+    }
+}
