@@ -22,6 +22,8 @@ use crate::vm::isa::{Inst, Op};
 use native_call::NativeKind;
 
 mod arith;
+#[cfg(test)]
+mod cont_trap_tests;
 mod index;
 pub(crate) mod native_call;
 mod num;
@@ -797,8 +799,22 @@ impl Drop for Vm {
 // `std::mem::take(&mut self.pending_tm)`).
 //
 // The shadow has no readers yet; it just stays in sync + asserts.
+//
+// `trap` is the dispatch loop's slow-path flag: a continuation frame on top
+// of the stack must be seen by the loop head, which tests nothing else
+// unless `trap` is set. So pushing a continuation sets it (the protected
+// call may finish without a frame of its own), and so does a pop that
+// leaves one on top.
 #[inline(always)]
-fn frames_push_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32, cf: CallFrame) {
+fn frames_push_sync(
+    frames: &mut Vec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+    cf: CallFrame,
+) {
+    if matches!(cf, CallFrame::Cont(_)) {
+        *trap = true;
+    }
     frames.push(cf);
     // Shadow maintenance is debug-only: release builds skip the
     // increment + assertion entirely. While nothing reads the shadow,
@@ -819,8 +835,15 @@ fn frames_push_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32, cf: CallF
 }
 
 #[inline(always)]
-fn frames_pop_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32) -> Option<CallFrame> {
+fn frames_pop_sync(
+    frames: &mut Vec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+) -> Option<CallFrame> {
     let r = frames.pop();
+    if matches!(frames.last(), Some(CallFrame::Cont(_))) {
+        *trap = true;
+    }
     #[cfg(debug_assertions)]
     {
         if r.is_some() {
@@ -2697,6 +2720,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Meta(MetaCont { action, saved_top }),
                 func_slot: cont_slot,
@@ -3785,7 +3809,7 @@ impl Vm {
         // a Lua frame). The trace can't continue past it; unwind +
         // deopt so interp redoes Op::Concat in the slow path.
         while self.frames.len() > pre_frames {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top);
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
         }
         if result.is_err() || post_frames > pre_frames {
             self.jit.counters.deopt += 1;
@@ -4046,6 +4070,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Lua(Frame {
                 closure: cl,
                 base,
@@ -4661,6 +4686,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Lua(Frame {
                 closure: cl,
                 base,
@@ -4746,6 +4772,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Pcall,
                 func_slot,
@@ -4793,6 +4820,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Xpcall { handler },
                 func_slot,
@@ -4849,6 +4877,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Pairs,
                 func_slot,
@@ -5145,6 +5174,7 @@ impl Vm {
             frames_push_sync(
                 &mut self.frames,
                 &mut self.frames_top,
+                &mut self.trap,
                 CallFrame::Cont(NativeCont {
                     kind: ContKind::Close(CloseCont {
                         from,
@@ -5267,7 +5297,8 @@ impl Vm {
             self.hook_tail_return()?;
         }
         let CallFrame::Lua(fr) =
-            frames_pop_sync(&mut self.frames, &mut self.frames_top).expect("no frame")
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
+                .expect("no frame")
         else {
             unreachable!("returning from a non-Lua frame")
         };
@@ -5303,7 +5334,8 @@ impl Vm {
         {
             return false;
         }
-        let Some(CallFrame::Lua(fr)) = frames_pop_sync(&mut self.frames, &mut self.frames_top)
+        let Some(CallFrame::Lua(fr)) =
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
         else {
             unreachable!("returning from a non-Lua frame")
         };
@@ -5780,7 +5812,7 @@ impl Vm {
             })
         {
             while self.frames.len() >= entry_depth {
-                frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             }
             return Unwound::Propagated(LuaError(err));
         }
@@ -5794,7 +5826,7 @@ impl Vm {
                     func_slot,
                     ..
                 }) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.stack.truncate(func_slot as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
@@ -5806,7 +5838,7 @@ impl Vm {
                     func_slot,
                     ..
                 }) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -5827,7 +5859,7 @@ impl Vm {
                     func_slot,
                     ..
                 }) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -5849,7 +5881,7 @@ impl Vm {
                     }
                 }
                 CallFrame::Cont(nc) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.pcall_depth -= 1;
                     let result = match nc.kind {
                         ContKind::Pcall => {
@@ -5968,7 +6000,7 @@ impl Vm {
                     // return `Caught` so `exec_with` re-enters the run loop;
                     // a synchronous drain returns Err exactly as the old
                     // path did.
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     let after = AfterClose::ResumeUnwind {
                         func_slot: f.func_slot,
                         err,
@@ -5995,7 +6027,8 @@ impl Vm {
 
     /// The loop head's slow path, taken while [`Vm::trap`] is set: tick the
     /// instruction budget, enforce the memory cap, then clear `trap` unless
-    /// one of them or an armed hook still needs the next instruction.
+    /// one of them, an armed hook or a continuation frame on top still needs
+    /// the next pass through the loop head.
     #[inline]
     fn trap_step(&mut self) -> Result<(), LuaError> {
         if let Some(b) = self.instr_budget.as_mut() {
@@ -6009,7 +6042,10 @@ impl Vm {
         {
             self.mem_cap_exceeded(cap)?;
         }
-        self.trap = self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed();
+        self.trap = self.instr_budget.is_some()
+            || self.heap.mem_cap.is_some()
+            || self.hook_armed()
+            || matches!(self.frames.last(), Some(CallFrame::Cont(_)));
         Ok(())
     }
 
@@ -6144,6 +6180,87 @@ impl Vm {
         Ok(())
     }
 
+    /// A continuation frame is on top: the call it protected has delivered
+    /// its results (or a `__close` handler / yieldable metamethod finished).
+    /// `Some` hands results out of this activation.
+    #[inline(never)]
+    fn finish_cont(
+        &mut self,
+        nc: NativeCont,
+        entry_depth: usize,
+    ) -> Result<Option<Vec<Value>>, LuaError> {
+        // a yieldable metamethod returned: complete the interrupted
+        // instruction (PUC luaV_finishOp) and resume the running frame.
+        if let ContKind::Meta(mc) = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            let result = if self.top > nc.func_slot {
+                self.stack[nc.func_slot as usize]
+            } else {
+                Value::Nil
+            };
+            self.stack.truncate(nc.func_slot as usize);
+            self.top = mc.saved_top;
+            self.finish_meta(mc.action, result)?;
+            return Ok(None);
+        }
+        // a __close handler returned successfully: discard its
+        // results, restore `top` to the slot the handler was called
+        // at (the surrounding frame's register window above this slot
+        // must stay alloc'd — never truncate the underlying stack),
+        // then continue the close chain (next slot, or fire
+        // AfterClose). When the close ends an entry activation,
+        // drive_close hands the results up to exec_with directly.
+        if let ContKind::Close(cc) = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.top = nc.func_slot;
+            if let Some(vals) = self.drive_close(cc.from, cc.pending, cc.after, entry_depth)? {
+                return Ok(Some(vals));
+            }
+            return Ok(None);
+        }
+        // __pairs returned: normalize its results to exactly the
+        // dialect's count (iterator, state, control, and on 5.5 the
+        // closing value) at pairs's slot, where the metamethod was
+        // called, and hand them to pairs's caller.
+        if let ContKind::Pairs = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            let total = crate::vm::builtins::pairs_mm_results(self) as u32;
+            let need = (nc.func_slot + total) as usize;
+            if self.stack.len() < need {
+                self.stack.resize(need, Value::Nil);
+            }
+            // the metamethod ran one slot above pairs's own
+            let first = nc.func_slot + 1;
+            let n = (self.top - first).min(total);
+            for i in 0..n {
+                self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
+            }
+            for s in (nc.func_slot + n)..(nc.func_slot + total) {
+                self.stack[s as usize] = Value::Nil;
+            }
+            self.top = nc.func_slot + total;
+            if self.frames.len() < entry_depth {
+                return Ok(Some(self.take_results(nc.func_slot)));
+            }
+            self.finish_results(nc.func_slot, total, nc.nresults);
+            return Ok(None);
+        }
+        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        self.pcall_depth -= 1;
+        // f's results sit at nc.func_slot+1.. (f was called one slot
+        // above the continuation), so writing `true` at the slot makes
+        // `true, results…` already contiguous.
+        let nret = self.top - (nc.func_slot + 1);
+        self.stack[nc.func_slot as usize] = Value::Bool(true);
+        let total = 1 + nret;
+        self.top = nc.func_slot + total;
+        if self.frames.len() < entry_depth {
+            return Ok(Some(self.take_results(nc.func_slot)));
+        }
+        self.finish_results(nc.func_slot, total, nc.nresults);
+        Ok(None)
+    }
+
     fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
         // the host may have set a budget, a cap or a hook since the last run
         self.trap = true;
@@ -6152,89 +6269,22 @@ impl Vm {
             if self.trap {
                 self.trap_step()?;
             }
-            // Single combined frame fetch: continuation arm OR Lua arm. Saves
-            // a second `self.frames.last()` slice access vs the prior split
-            // form (LLVM doesn't always CSE these across the cont branch).
             // A continuation frame on top means the call it protected just
-            // delivered its results — wrap as `true, results…` and hand to
-            // the pcall/xpcall caller. The error path is handled by `unwind`;
-            // this branch is only reached on success/resume completion.
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            let frame_peek = unsafe { self.frames.last().unwrap_unchecked() };
-            if let &CallFrame::Cont(nc) = frame_peek {
-                // a yieldable metamethod returned: complete the interrupted
-                // instruction (PUC luaV_finishOp) and resume the running frame.
-                if let ContKind::Meta(mc) = nc.kind {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let result = if self.top > nc.func_slot {
-                        self.stack[nc.func_slot as usize]
-                    } else {
-                        Value::Nil
-                    };
-                    self.stack.truncate(nc.func_slot as usize);
-                    self.top = mc.saved_top;
-                    self.finish_meta(mc.action, result)?;
-                    continue;
+            // delivered its results. Pushing a continuation, or popping down
+            // to one, sets `trap` (`frames_push_sync` / `frames_pop_sync`), so
+            // the loop head looks for one only under `trap`.
+            if self.trap
+                && let Some(&CallFrame::Cont(nc)) = self.frames.last()
+            {
+                if let Some(vals) = self.finish_cont(nc, entry_depth)? {
+                    return Ok(vals);
                 }
-                // a __close handler returned successfully: discard its
-                // results, restore `top` to the slot the handler was called
-                // at (the surrounding frame's register window above this slot
-                // must stay alloc'd — never truncate the underlying stack),
-                // then continue the close chain (next slot, or fire
-                // AfterClose). When the close ends an entry activation,
-                // drive_close hands the results up to exec_with directly.
-                if let ContKind::Close(cc) = nc.kind {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    self.top = nc.func_slot;
-                    if let Some(vals) =
-                        self.drive_close(cc.from, cc.pending, cc.after, entry_depth)?
-                    {
-                        return Ok(vals);
-                    }
-                    continue;
-                }
-                // __pairs returned: normalize its results to exactly the
-                // dialect's count (iterator, state, control, and on 5.5 the
-                // closing value) at pairs's slot, where the metamethod was
-                // called, and hand them to pairs's caller.
-                if let ContKind::Pairs = nc.kind {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let total = crate::vm::builtins::pairs_mm_results(self) as u32;
-                    let need = (nc.func_slot + total) as usize;
-                    if self.stack.len() < need {
-                        self.stack.resize(need, Value::Nil);
-                    }
-                    // the metamethod ran one slot above pairs's own
-                    let first = nc.func_slot + 1;
-                    let n = (self.top - first).min(total);
-                    for i in 0..n {
-                        self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
-                    }
-                    for s in (nc.func_slot + n)..(nc.func_slot + total) {
-                        self.stack[s as usize] = Value::Nil;
-                    }
-                    self.top = nc.func_slot + total;
-                    if self.frames.len() < entry_depth {
-                        return Ok(self.take_results(nc.func_slot));
-                    }
-                    self.finish_results(nc.func_slot, total, nc.nresults);
-                    continue;
-                }
-                frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                self.pcall_depth -= 1;
-                // f's results sit at nc.func_slot+1.. (f was called one slot
-                // above the continuation), so writing `true` at the slot makes
-                // `true, results…` already contiguous.
-                let nret = self.top - (nc.func_slot + 1);
-                self.stack[nc.func_slot as usize] = Value::Bool(true);
-                let total = 1 + nret;
-                self.top = nc.func_slot + total;
-                if self.frames.len() < entry_depth {
-                    return Ok(self.take_results(nc.func_slot));
-                }
-                self.finish_results(nc.func_slot, total, nc.nresults);
                 continue;
             }
+            debug_assert!(
+                matches!(self.frames.last(), Some(CallFrame::Lua(_))),
+                "a continuation frame on top with `trap` clear"
+            );
             // GC runs only at the allocation safe points below (PUC's
             // `luaC_checkGC` sites), each with a precise `gc_top`; the loop head
             // no longer collects, so a stale full-window `gc_top` cannot leak in.
@@ -6242,9 +6292,12 @@ impl Vm {
             // Hot-path frame fetch: the Cont arm above continues the loop,
             // so reaching here means `frame_peek` is the Lua frame. Reuse it
             // rather than re-fetching `self.frames.last()`.
-            let f = match frame_peek {
+            // SAFETY: the running thread always has a frame here, and it is a
+            // Lua frame: a continuation on top was consumed above
+            let f = match unsafe { self.frames.last().unwrap_unchecked() } {
                 CallFrame::Lua(f) => f,
-                _ => unreachable!("Cont frame survived the dispatch loop head"),
+                // SAFETY: see above
+                CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
             };
             let cl = f.closure;
             let base = f.base;
@@ -7084,7 +7137,7 @@ impl Vm {
                             // synthetic tail level for every one of them.
                             self.pending_tailcalls = fr.tailcalls.saturating_add(1);
                             self.pending_ccmt = fr.ccmt;
-                            frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                             if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
                                 && self.frames.len() < entry_depth
                             {
