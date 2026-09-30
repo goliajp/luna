@@ -271,6 +271,7 @@ impl Vm {
         count: i64,
     ) {
         self.hook.rust_func = hook;
+        self.trap = true;
         // Update event mask flags. Other categories of the Lua hook
         // stay as they were so a Lua-side debug.sethook + Rust hook
         // can coexist with independent event subscriptions.

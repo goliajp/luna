@@ -28,15 +28,23 @@ use crate::vm::error::LuaError;
 /// JIT-specific Vm state. See module docs.
 #[doc(hidden)]
 pub struct JitState {
-    /// Master JIT switch. Default `true`.
+    /// Master JIT switch. Off until a real backend is installed
+    /// ([`crate::vm::Vm::install_jit_backend`]), which turns it on unless
+    /// the embedder already chose a value with `Vm::set_jit_enabled`.
     /// Sandbox embedders that rely on `instr_budget` for DoS
     /// containment **must** call `Vm::set_jit_enabled(false)` —
     /// JIT'd counted-for loops compile to native Cranelift IR
     /// that does not tick the budget.
     pub enabled: bool,
 
-    /// Trace JIT subswitch.
+    /// Trace JIT subswitch. Same default and install rule as
+    /// [`Self::enabled`].
     pub trace_enabled: bool,
+
+    /// The embedder set [`Self::enabled`] / [`Self::trace_enabled`]
+    /// explicitly; installing a backend then leaves that flag alone.
+    pub(crate) enabled_chosen: bool,
+    pub(crate) trace_enabled_chosen: bool,
 
     /// Back-edge visits before a loop is recorded as a trace, and calls
     /// before a function is. [`crate::jit::trace::TRACE_HOT_THRESHOLD`]
@@ -297,16 +305,19 @@ impl JitCounters {
 
 impl JitState {
     /// Build an inert `JitState` whose backends are
-    /// [`crate::jit::NullJitBackend`], with `enabled = true` and
-    /// `trace_enabled = true`. Embedders that want an interp-only
-    /// Vm call `vm.set_trace_jit_enabled(false)` explicitly.
+    /// [`crate::jit::NullJitBackend`], with `enabled` and
+    /// `trace_enabled` off: nothing could compile, so the interpreter
+    /// skips the hot counters, the recorder and the trace lookup.
     /// `Vm::new_inner` calls this; the `luna` crate's
     /// `Vm::new_minimal_with_jit` then swaps the backends to
-    /// `CraneliftBackend` via `Vm::install_jit_backend`.
+    /// `CraneliftBackend` via `Vm::install_jit_backend`, which turns
+    /// both flags on.
     pub fn with_null_backend() -> JitState {
         JitState {
-            enabled: true,
-            trace_enabled: true,
+            enabled: false,
+            trace_enabled: false,
+            enabled_chosen: false,
+            trace_enabled_chosen: false,
             trace_hot_threshold: crate::jit::trace::TRACE_HOT_THRESHOLD,
             call_hot_threshold: crate::jit::trace::CALL_HOT_THRESHOLD,
             self_link_enabled: false,

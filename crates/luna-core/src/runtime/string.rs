@@ -68,6 +68,7 @@ impl crate::runtime::heap::Gc<LuaStr> {
     }
 
     /// Cached hash of the string (computed lazily for long strings).
+    #[inline]
     pub fn hash(&self) -> u32 {
         // SAFETY: `self.as_ptr()` is the start of this `LuaStr`'s header which was allocated with the trailing bytes / hash fields in the same allocation by `StringTable::intern`.
         unsafe { hash_of(self.as_ptr()) }
@@ -80,6 +81,7 @@ pub(crate) unsafe fn bytes_of<'a>(p: *const LuaStr) -> &'a [u8] {
 }
 
 /// SAFETY: as `bytes_of`.
+#[inline]
 pub(crate) unsafe fn hash_of(p: *const LuaStr) -> u32 {
     unsafe {
         if !(*p).hashed.get() {

@@ -66,6 +66,12 @@ pub mod jit_layout {
     /// constants in `jit_backend/mod.rs` to express that split.
     pub const TABLE_NODES_OFFSET: usize = std::mem::offset_of!(Table, nodes);
 
+    /// Byte offsets of the `u32` array-part counters `acount` and
+    /// `aprefix`, which the method JIT's inline array stores keep in step.
+    pub const TABLE_ACOUNT_OFFSET: usize = std::mem::offset_of!(Table, acount);
+    /// See [`TABLE_ACOUNT_OFFSET`].
+    pub const TABLE_APREFIX_OFFSET: usize = std::mem::offset_of!(Table, aprefix);
+
     /// Byte offset of `key: Value` within `Node` (= 0).
     pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key);
 
@@ -239,6 +245,13 @@ pub struct Table {
     /// free-slot search position, counts down (PUC lastfree).
     /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
     pub(crate) lastfree: u32,
+    /// Non-nil slots in the array part. With `aprefix` it answers `#t`
+    /// without a search when the array holds exactly a leading run
+    /// (`acount == aprefix < asize`: then `aprefix` is the only border
+    /// there, the one the binary search in `len` finds). Kept by `aset`,
+    /// `clear_weak` and `resize`; the method JIT's inline array stores
+    /// keep it too. Sits in padding, so `Table` does not grow.
+    pub(crate) acount: u32,
     /// SoA Robin Hood hash part, kept parallel to `nodes`. It is not
     /// on the public get/set/next path yet: the chain `nodes` stay
     /// authoritative and only the `soa_*` methods touch these arrays.
@@ -265,6 +278,10 @@ pub struct Table {
     /// unread — luna's mm lookup walks `metatable.get` each time
     #[allow(dead_code)]
     pub(crate) flags: u8,
+    /// A length whose leading slots `[0, aprefix)` are all non-nil; it may
+    /// lag behind the real run (that only disables the `#t` shortcut)
+    /// but never exceeds it.
+    pub(crate) aprefix: u32,
 }
 
 // SAFETY: `array_ptr` looks like an unprotected raw pointer field, but
@@ -291,6 +308,7 @@ impl Table {
             inline_storage: std::cell::UnsafeCell::new([0; INLINE_U64S]),
             nodes: Box::new([]),
             lastfree: 0,
+            acount: 0,
             keys: Box::new([]),
             vals: Box::new([]),
             meta: Box::new([]),
@@ -298,6 +316,7 @@ impl Table {
             iter_depth: 0,
             metatable: None,
             flags: 0,
+            aprefix: 0,
         }
     }
 
@@ -441,6 +460,7 @@ impl Table {
         self.asize as usize
     }
 
+    #[inline]
     fn aget(&self, idx: usize) -> Value {
         // SAFETY: callers gate on `idx < self.asize()` before reaching here
         // (`get_int`, `iter_array`, etc.). atags and avals are sized
@@ -454,16 +474,58 @@ impl Table {
         }
     }
 
+    #[inline]
     fn aset(&mut self, idx: usize, v: Value) {
         let (t, b) = v.unpack();
         // SAFETY: see `aget`. callers (`set_norm`, `set_int`) gate on
         // `idx < self.asize()`. The two `*_mut` calls each take a
         // distinct `&mut self` borrow whose lifetime ends at the
         // statement boundary, so they don't overlap.
+        // SAFETY: as above, `idx < self.asize()`.
+        let old = unsafe { *self.atags().get_unchecked(idx) };
         unsafe {
             *self.atags_mut().get_unchecked_mut(idx) = t;
             *self.avals_mut().get_unchecked_mut(idx) = b;
         }
+        self.note_atag_change(idx, old, t);
+    }
+
+    /// Keep `acount` / `aprefix` in step with one array-slot tag change.
+    #[inline]
+    fn note_atag_change(&mut self, idx: usize, old: u8, new: u8) {
+        if old == raw::NIL && new != raw::NIL {
+            self.acount += 1;
+            if idx == self.aprefix as usize {
+                // run over slots filled earlier, bounded so refilling a
+                // hole low in a long array stays O(1); a shorter prefix
+                // only disables the shortcut until the next `resize`
+                let asize = self.asize();
+                let atags = self.atags();
+                let stop = (idx + 64).min(asize);
+                let mut p = idx + 1;
+                while p < stop && atags[p] != raw::NIL {
+                    p += 1;
+                }
+                self.aprefix = p as u32;
+            }
+        } else if old != raw::NIL && new == raw::NIL {
+            self.acount -= 1;
+            if idx < self.aprefix as usize {
+                self.aprefix = idx as u32;
+            }
+        }
+    }
+
+    /// Recompute `acount` / `aprefix` from the tag bytes.
+    fn recount_array(&mut self) {
+        let atags = self.atags();
+        let count = atags.iter().filter(|&&t| t != raw::NIL).count();
+        let prefix = atags
+            .iter()
+            .position(|&t| t == raw::NIL)
+            .unwrap_or(atags.len());
+        self.acount = count as u32;
+        self.aprefix = prefix as u32;
     }
 
     // ---- reads ----
@@ -489,6 +551,7 @@ impl Table {
     }
 
     /// Integer-keyed variant of [`Self::get`].
+    #[inline]
     pub fn get_int(&self, i: i64) -> Value {
         if i >= 1 && (i as u64) <= self.asize() as u64 {
             return self.aget(i as usize - 1);
@@ -584,6 +647,11 @@ impl Table {
         if self.nodes.is_empty() {
             return None;
         }
+        if let Value::Str(s) = k
+            && s.is_short()
+        {
+            return self.find_short_str(s);
+        }
         let mut idx = self.main_position(k);
         loop {
             let n = &self.nodes[idx];
@@ -605,12 +673,49 @@ impl Table {
         }
     }
 
+    /// [`Self::find_node`] for an interned (short) string key: two short
+    /// strings are equal only if they are the same object, so the chain
+    /// walk compares pointers (PUC `luaH_getshortstr`). `nodes` is non-empty.
+    #[inline]
+    fn find_short_str(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
+        let mut idx = key.hash() as usize & (self.nodes.len() - 1);
+        loop {
+            debug_assert!(idx < self.nodes.len());
+            // SAFETY: the main position is masked to the node count and
+            // every `next` link is a node index written by `insert_new`.
+            let n = unsafe { self.nodes.get_unchecked(idx) };
+            if !n.dead_key
+                && let Value::Str(s) = n.key
+                && s.ptr_eq(key)
+            {
+                return Some(idx);
+            }
+            if n.next == NONE {
+                return None;
+            }
+            idx = n.next as usize;
+        }
+    }
+
     // ---- writes ----
 
     /// Insert / update `(key, val)`. `heap` is used to credit any internal
     /// Box growth (rehash) to `heap.bytes` so the counter stays in sync with
     /// real memory; `free_obj` subtracts `internal_bytes()` on the way out.
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
+        self.set_inlined(heap, key, val)
+    }
+
+    /// [`Self::set`] for the interpreter's own write path. `set` itself is
+    /// left to the compiler's judgement: marking it `#[inline]` made the
+    /// JIT's table-store helpers ~10% slower on aarch64.
+    #[inline]
+    pub(crate) fn set_inlined(
+        &mut self,
+        heap: &mut Heap,
+        key: Value,
+        val: Value,
+    ) -> Result<(), TableError> {
         let k = normalize_set_key(key)?;
         self.set_norm(heap, k, val)
     }
@@ -634,6 +739,7 @@ impl Table {
     /// The caller is responsible for firing `Heap::barrier_back` after a
     /// `true` return (same contract as the surrounding `raw_set`
     /// wrapper).
+    #[inline]
     pub fn try_set_existing(&mut self, key: Value, val: Value) -> bool {
         let k = match normalize_set_key(key) {
             Ok(k) => k,
@@ -712,6 +818,7 @@ impl Table {
     }
 
     /// `k` is already normalized (no nil, no NaN, integral floats → Int).
+    #[inline]
     fn set_norm(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
         if let Value::Int(i) = k
             && i >= 1
@@ -905,8 +1012,21 @@ impl Table {
         // slab; `array_ptr` already points to whichever it is, so
         // walking via raw offsets works the same for either case.
         let old_asize = self.asize as usize;
-        let mut old_pairs: Vec<(u8, RawVal)> = Vec::with_capacity(old_asize);
-        if old_asize > 0 {
+        // growing keeps every array entry at its index, so the old backing
+        // is copied as is (PUC `luaH_resize` reallocates in place);
+        // shrinking re-inserts entry by entry below
+        let grow = new_asize >= old_asize && old_asize > 0;
+        let mut old_pairs: Vec<(u8, RawVal)> = Vec::with_capacity(if grow { 0 } else { old_asize });
+        let mut old_slab: Box<[u64]> = Box::new([]);
+        let mut old_inline = [0u64; INLINE_U64S];
+        if grow {
+            if old_asize as u64 <= INLINE_ASIZE {
+                // SAFETY: exclusive &mut self; the inline bytes are read through the cell
+                old_inline = unsafe { *self.inline_storage.get() };
+            } else {
+                old_slab = std::mem::take(&mut self.slab);
+            }
+        } else if old_asize > 0 {
             // SAFETY: `array_ptr` was set up by `Heap::new_table` or
             // an earlier `resize`; it covers `old_asize * 9` bytes
             // (avals + atags).
@@ -955,6 +1075,26 @@ impl Table {
         // memory. `free_obj` subtracts `internal_bytes()` on the way out.
         let after = self.internal_bytes();
         heap.apply_bytes_delta(before, after);
+        if grow {
+            let src: *const u8 = if old_asize as u64 <= INLINE_ASIZE {
+                old_inline.as_ptr() as *const u8
+            } else {
+                old_slab.as_ptr() as *const u8
+            };
+            // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;
+            // the new one holds `new_asize >= old_asize` zero (nil) slots
+            unsafe {
+                let dst = self.array_base();
+                std::ptr::copy_nonoverlapping(src, dst, old_asize * 8);
+                std::ptr::copy_nonoverlapping(
+                    src.add(old_asize * 8),
+                    dst.add(new_asize * 8),
+                    old_asize,
+                );
+            }
+            drop(old_slab);
+        }
+        self.recount_array();
         // Re-insert old array entries via the public set_norm path
         // (which handles rehashing if the new array shrinks below the
         // entry count).
@@ -985,6 +1125,9 @@ impl Table {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> i64 {
         let asize = self.asize();
+        if self.acount == self.aprefix && (self.aprefix as usize) < asize {
+            return self.aprefix as i64;
+        }
         let atags = self.atags();
         if asize > 0 && atags[asize - 1] == raw::NIL {
             // binary search inside the array part
@@ -1245,6 +1388,7 @@ impl Table {
                     if is_dead(v) {
                         self.atags_mut()[i] = raw::NIL;
                         self.avals_mut()[i] = RawVal::NIL;
+                        self.note_atag_change(i, tag, raw::NIL);
                     } else {
                         mark_string(v);
                     }
@@ -1314,374 +1458,10 @@ impl Table {
     }
 }
 
-// =====================================================================
-// SoA + Robin Hood open-addressing hash part.
-//
-// Parallel to the chain-walk path: the chain `nodes` / `lastfree` is
-// the authoritative read path, and nothing outside this block and its
-// tests calls into it yet. These methods operate only on the `keys` /
-// `vals` / `meta` / `tombstones` SoA arrays — chain state is never
-// touched.
-//
-// Layout invariants the methods below maintain:
-//   - `keys.len() == vals.len() == meta.len()`, all power-of-two
-//     (or zero in the empty-stub state)
-//   - `meta[i] = meta_bits::EMPTY` iff slot i is free
-//   - tombstoned slots are scanned past by find but reused by insert
-//   - `tombstones` counts the meta slots with TOMBSTONE_BIT set
-//   - load factor (live + tombstone) / cap is kept ≤ 0.75 via
-//     `soa_grow_if_needed`, which bounds PSL
-//   - rehash is REFUSED when `iter_depth > 0` (nothing increments the
-//     counter yet, so the refusal path is unreachable today)
-// =====================================================================
+#[path = "table_soa.rs"]
+mod soa;
 
-/// Initial SoA capacity when growing from empty. Power of two.
-/// Picked at 4 so a 3-element table doesn't trigger an immediate
-/// regrowth.
-#[allow(dead_code)] // not yet wired into the public table paths
-pub(crate) const SOA_INITIAL_CAP: usize = 4;
-
-/// High load-factor threshold (3/4). SoA grow trigger. PSL_MAX is the u16 14-bit value so
-/// long-tail PSL overruns are recoverable via grow-retry.
-#[allow(dead_code)]
-const SOA_LOAD_NUM: usize = 3;
-#[allow(dead_code)]
-const SOA_LOAD_DEN: usize = 4;
-
-/// Tombstone density threshold (1/4). When tombstones/cap ≥ 25%
-/// the next non-resize-triggering rehash compacts them.
-#[allow(dead_code)]
-const SOA_TOMB_NUM: usize = 1;
-#[allow(dead_code)]
-const SOA_TOMB_DEN: usize = 4;
-
-#[allow(dead_code)] // not yet wired into public set/get/next
-impl Table {
-    /// Current SoA hash-part capacity in slots (0 = empty stub).
-    #[inline]
-    pub(crate) fn soa_cap(&self) -> usize {
-        self.meta.len()
-    }
-
-    /// Count of live (occupied & not tombstone) SoA slots.
-    /// O(n) — only used by the equivalence tests; the
-    /// hot rehash trigger uses `live_estimate = cap*3/4 - tombstones`
-    /// implicitly via `soa_grow_if_needed`.
-    #[cfg(test)]
-    pub(crate) fn soa_live_count(&self) -> usize {
-        self.meta.iter().filter(|&&m| meta_bits::is_live(m)).count()
-    }
-
-    /// Count of occupied (live OR tombstoned) SoA slots; this is
-    /// the value the load factor compares against `cap * 3/4`.
-    #[inline]
-    fn soa_occupied_count(&self) -> usize {
-        // O(n) sweep on each insert, so the worst case is bounded by
-        // per-insert amortised cost. A counter maintained incrementally
-        // would avoid the sweep if it ever shows up in profiles.
-        self.meta
-            .iter()
-            .filter(|&&m| meta_bits::is_occupied(m))
-            .count()
-    }
-
-    /// Robin Hood lookup. Returns the slot index of a *live*
-    /// matching key, or None if absent. Walks past tombstones (they
-    /// preserve probe chains). Returns None if the SoA cap is zero
-    /// (empty-stub state). Bound by `cap` probes; in practice
-    /// expected ≤ 8 at load 0.75.
-    pub(crate) fn soa_find_slot(&self, k: Value) -> Option<usize> {
-        let cap = self.meta.len();
-        if cap == 0 {
-            return None;
-        }
-        let mask = cap - 1;
-        let mut idx = (hash_key(k) as usize) & mask;
-        // Walk until empty slot or wrap. The `steps <= cap` bound
-        // is a safety net: a properly maintained Robin Hood table
-        // with load < 1 always has at least one empty slot, so a
-        // full wrap means table invariant violation.
-        for _ in 0..cap {
-            let m = self.meta[idx];
-            if !meta_bits::is_occupied(m) {
-                return None;
-            }
-            if !meta_bits::is_tombstone(m) && self.keys[idx].raw_eq(k) {
-                return Some(idx);
-            }
-            idx = (idx + 1) & mask;
-        }
-        None
-    }
-
-    /// Allocate fresh SoA arrays at `new_cap` (power of two) and
-    /// re-insert every live entry from the old SoA arrays. Tombstones
-    /// are dropped (count resets to 0). Used by `soa_grow_if_needed`
-    /// (new_cap = max(SOA_INITIAL_CAP, 2*cap)) and by tombstone
-    /// compaction (new_cap = cap).
-    ///
-    /// IMPORTANT: rehash MUST NOT fire while `iter_depth > 0`. All
-    /// current callers enter from non-iteration paths.
-    fn soa_rehash_to(&mut self, heap: &mut Heap, new_cap: usize) -> Result<(), TableError> {
-        debug_assert!(new_cap.is_power_of_two() && new_cap > 0);
-        let before = self.internal_bytes();
-        // Snapshot old live entries. This list is the canonical
-        // "must be present after rehash" set; we restart from it on
-        // any PSL-overflow retry.
-        let mut survivors: Vec<(Value, Value)> = Vec::with_capacity(self.meta.len());
-        for i in 0..self.meta.len() {
-            if meta_bits::is_live(self.meta[i]) {
-                survivors.push((self.keys[i], self.vals[i]));
-            }
-        }
-        // Install fresh empty arrays at `new_cap`. On PSL overflow
-        // during the re-insert pass (extremely rare with the 14-bit
-        // PSL budget — would need a pathological hash distribution),
-        // double the cap and replay the original `survivors` list
-        // from scratch. We don't try to salvage partial work — the
-        // rare-path retry cost is bounded by O(n × max_doublings),
-        // and max_doublings has a hard MAX_ASIZE ceiling.
-        let mut cap = new_cap;
-        loop {
-            if cap > MAX_ASIZE {
-                return Err(TableError::Overflow);
-            }
-            self.keys = vec![Value::Nil; cap].into_boxed_slice();
-            self.vals = vec![Value::Nil; cap].into_boxed_slice();
-            self.meta = vec![meta_bits::EMPTY; cap].into_boxed_slice();
-            self.tombstones = 0;
-            let mut overflowed = false;
-            for (k, v) in survivors.iter().copied() {
-                if self.soa_place_known_absent(k, v).is_err() {
-                    overflowed = true;
-                    break;
-                }
-            }
-            if !overflowed {
-                break;
-            }
-            cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
-        }
-        let after = self.internal_bytes();
-        heap.apply_bytes_delta(before, after);
-        Ok(())
-    }
-
-    /// Raw rob-from-rich placement for a key known to be absent
-    /// from the SoA arrays. Used by `soa_rehash_to` (re-insert pass)
-    /// and by `soa_insert` (new-key path after the explicit
-    /// soa_find_slot check). This routine does NOT auto-grow on a
-    /// load-factor trigger (caller's responsibility), but hands the
-    /// pending pair back as `Err((k, v))` when the probe sequence
-    /// passes `meta_bits::PSL_MAX` before an empty slot turns up. The
-    /// caller (`soa_insert`) grows and retries.
-    ///
-    /// On success returns the slot index where the new key landed
-    /// (after any rob-from-rich shuffle, the original `k` value is at
-    /// this returned index).
-    fn soa_place_known_absent(&mut self, k: Value, v: Value) -> Result<usize, (Value, Value)> {
-        let cap = self.meta.len();
-        debug_assert!(cap > 0);
-        let mask = cap - 1;
-        let landing = (hash_key(k) as usize) & mask;
-        let mut idx = landing;
-        let mut cur_psl: u16 = 0;
-        let mut cur_key = k;
-        let mut cur_val = v;
-        let mut placed_at: Option<usize> = None;
-        for _ in 0..cap {
-            let m = self.meta[idx];
-            if !meta_bits::is_occupied(m) || meta_bits::is_tombstone(m) {
-                if meta_bits::is_tombstone(m) {
-                    self.tombstones = self.tombstones.saturating_sub(1);
-                }
-                self.meta[idx] = meta_bits::pack(cur_psl, false);
-                self.keys[idx] = cur_key;
-                self.vals[idx] = cur_val;
-                return Ok(placed_at.unwrap_or(idx));
-            }
-            let stored_psl = meta_bits::psl(m);
-            if cur_psl > stored_psl {
-                // Rob: swap cur into this slot, evict stored to continue.
-                std::mem::swap(&mut cur_key, &mut self.keys[idx]);
-                std::mem::swap(&mut cur_val, &mut self.vals[idx]);
-                self.meta[idx] = meta_bits::pack(cur_psl, false);
-                if placed_at.is_none() {
-                    placed_at = Some(idx);
-                }
-                cur_psl = stored_psl;
-            }
-            idx = (idx + 1) & mask;
-            cur_psl = cur_psl.saturating_add(1);
-            if cur_psl > meta_bits::PSL_MAX {
-                // PSL exceeds the 14-bit storage budget — exceptionally
-                // rare with 16384 max. Caller (soa_insert / rehash
-                // outer loop) handles by growing & retrying. Partial
-                // state: all entries are still in the table EXCEPT
-                // `(cur_key, cur_val)` which is the latest homeless
-                // evictee — return it so caller can re-issue.
-                return Err((cur_key, cur_val));
-            }
-        }
-        // Wrapped cap probes with no free slot — invariant violation
-        // (load < 1 should guarantee at least one empty). Signal as
-        // PSL-overflow equivalent so caller grows + retries.
-        Err((cur_key, cur_val))
-    }
-
-    /// Grow SoA capacity if the load factor is at or above the
-    /// 0.75 trigger. Doubles cap; from empty grows to SOA_INITIAL_CAP.
-    fn soa_grow_if_needed(&mut self, heap: &mut Heap) -> Result<(), TableError> {
-        // defer rehash when an iterator is in flight (iter_depth is
-        // never incremented yet, so this does not fire today)
-        if self.iter_depth > 0 {
-            return Ok(());
-        }
-        let cap = self.meta.len();
-        if cap == 0 {
-            return self.soa_rehash_to(heap, SOA_INITIAL_CAP);
-        }
-        let occupied = self.soa_occupied_count();
-        if occupied * SOA_LOAD_DEN >= cap * SOA_LOAD_NUM {
-            let new_cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
-            return self.soa_rehash_to(heap, new_cap);
-        }
-        // Tombstone compaction (same cap, drops tombstones).
-        if self.tombstones as usize * SOA_TOMB_DEN >= cap * SOA_TOMB_NUM {
-            return self.soa_rehash_to(heap, cap);
-        }
-        Ok(())
-    }
-
-    /// Insert (or update) `(k, v)` in the SoA hash part. Routes
-    /// through `soa_find_slot` first so an existing key updates its
-    /// val in place; otherwise rob-from-rich places a new entry.
-    /// Auto-rehashes if the load factor would exceed 0.75 OR if the
-    /// place chain runs into a PSL overflow on a pathological hash
-    /// distribution.
-    ///
-    /// Only the equivalence tests call this; it is not yet hooked
-    /// into public `set` / `set_norm`.
-    pub(crate) fn soa_insert(
-        &mut self,
-        heap: &mut Heap,
-        k: Value,
-        v: Value,
-    ) -> Result<(), TableError> {
-        debug_assert!(!matches!(k, Value::Nil));
-        // 1. Update-in-place if key is already present (live slot).
-        if let Some(idx) = self.soa_find_slot(k) {
-            self.vals[idx] = v;
-            return Ok(());
-        }
-        // 2. New key: ensure capacity, then place. On PSL-overflow
-        // from the place chain (extremely rare with 14-bit PSL budget),
-        // grow + rehash with the homeless evictee merged in.
-        // `soa_rehash_with_extra` handles further retries internally,
-        // bounded by MAX_ASIZE.
-        self.soa_grow_if_needed(heap)?;
-        match self.soa_place_known_absent(k, v) {
-            Ok(_) => Ok(()),
-            Err(homeless) => {
-                let cap = self.meta.len();
-                let new_cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
-                self.soa_rehash_with_extra(heap, new_cap, homeless)
-            }
-        }
-    }
-
-    /// Rehash to `new_cap` while merging in an extra (k, v) pair
-    /// not currently in the SoA arrays. Used by `soa_insert` to
-    /// recover from PSL overflow: the homeless evictee from the failed
-    /// place chain gets appended to the survivor list before the
-    /// re-insert pass.
-    fn soa_rehash_with_extra(
-        &mut self,
-        heap: &mut Heap,
-        new_cap: usize,
-        extra: (Value, Value),
-    ) -> Result<(), TableError> {
-        let before = self.internal_bytes();
-        let mut survivors: Vec<(Value, Value)> = Vec::with_capacity(self.meta.len() + 1);
-        for i in 0..self.meta.len() {
-            if meta_bits::is_live(self.meta[i]) {
-                survivors.push((self.keys[i], self.vals[i]));
-            }
-        }
-        // Avoid duplicating the extra if its key was already placed at
-        // some slot during the failed rob chain (the rob may have
-        // landed the original input into a slot before overflowing on
-        // a downstream evictee — that case the meta-walk above picks
-        // it up).
-        if !survivors.iter().any(|(k, _)| k.raw_eq(extra.0)) {
-            survivors.push(extra);
-        }
-        let mut cap = new_cap;
-        loop {
-            if cap > MAX_ASIZE {
-                return Err(TableError::Overflow);
-            }
-            self.keys = vec![Value::Nil; cap].into_boxed_slice();
-            self.vals = vec![Value::Nil; cap].into_boxed_slice();
-            self.meta = vec![meta_bits::EMPTY; cap].into_boxed_slice();
-            self.tombstones = 0;
-            let mut overflowed = false;
-            for (k, v) in survivors.iter().copied() {
-                if self.soa_place_known_absent(k, v).is_err() {
-                    overflowed = true;
-                    break;
-                }
-            }
-            if !overflowed {
-                break;
-            }
-            cap = cap.checked_mul(2).ok_or(TableError::Overflow)?;
-        }
-        let after = self.internal_bytes();
-        heap.apply_bytes_delta(before, after);
-        Ok(())
-    }
-
-    /// Read SoA hash part. Mirrors `get_hash` but reads from
-    /// keys/vals/meta rather than nodes. Used by the equivalence
-    /// tests; not yet hooked into public `get` / `get_hash`.
-    pub(crate) fn soa_get(&self, k: Value) -> Value {
-        match self.soa_find_slot(k) {
-            Some(idx) => self.vals[idx],
-            None => Value::Nil,
-        }
-    }
-
-    /// Tombstone deletion. Marks the live slot for `k` as
-    /// tombstoned, preserving the slot index (no backward shift).
-    /// Slot-index stability is the PUC `next()` iteration invariant
-    /// — `nextvar.lua:520-521` requires that deleting prior keys
-    /// during a `pairs` traversal does NOT move unvisited keys.
-    /// Backward-shift deletion would violate this; tombstones are
-    /// the standard Robin Hood resolution.
-    ///
-    /// keys[idx] / vals[idx] are reset to Nil so the GC marker is
-    /// not held to the previous entries — only the tombstone bit
-    /// distinguishes "occupied tombstone" from "free empty".
-    ///
-    /// Returns true if the key was found and deleted, false if absent.
-    ///
-    /// Not yet hooked into public `set(k, Nil)`; that has to move
-    /// together with `next()`.
-    pub(crate) fn soa_delete(&mut self, k: Value) -> bool {
-        if let Some(idx) = self.soa_find_slot(k) {
-            let psl = meta_bits::psl(self.meta[idx]);
-            self.meta[idx] = meta_bits::pack(psl, true);
-            self.keys[idx] = Value::Nil;
-            self.vals[idx] = Value::Nil;
-            self.tombstones = self.tombstones.saturating_add(1);
-            true
-        } else {
-            false
-        }
-    }
-}
-
+#[inline]
 fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     match key {
         Value::Nil => Err(TableError::NilIndex),
@@ -2189,5 +1969,75 @@ mod tests {
                 assert!(t.get_int(i).raw_eq(Value::Int(i)));
             }
         });
+    }
+
+    /// `len` without the `acount` / `aprefix` shortcut: the search every
+    /// shortcut answer must equal.
+    fn len_by_search(t: &Table) -> i64 {
+        let asize = t.asize();
+        let atags = t.atags();
+        if asize > 0 && atags[asize - 1] == raw::NIL {
+            let (mut lo, mut hi) = (0usize, asize);
+            while hi - lo > 1 {
+                let m = lo + (hi - lo) / 2;
+                if atags[m - 1] == raw::NIL {
+                    hi = m;
+                } else {
+                    lo = m;
+                }
+            }
+            return lo as i64;
+        }
+        // array full or absent: the shortcut needs `aprefix < asize`, so
+        // `len` searches here too
+        t.len()
+    }
+
+    fn check_counts(t: &Table) {
+        let atags = t.atags();
+        let count = atags.iter().filter(|&&g| g != raw::NIL).count() as u32;
+        let run = atags
+            .iter()
+            .position(|&g| g == raw::NIL)
+            .unwrap_or(atags.len()) as u32;
+        assert_eq!(t.acount, count);
+        assert!(t.aprefix <= run, "aprefix {} past the run {run}", t.aprefix);
+        assert_eq!(t.len(), len_by_search(t));
+    }
+
+    #[test]
+    fn length_shortcut_matches_the_border_search() {
+        // xorshift, so the sequence is the same on every run
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move |n: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % n
+        };
+        for _ in 0..200 {
+            with_table(|heap, t| {
+                for _ in 0..300 {
+                    let k = next(80) as i64 + 1;
+                    let v = if next(4) == 0 {
+                        Value::Nil
+                    } else {
+                        Value::Int(k)
+                    };
+                    let _ = t.set_int(heap, k, v);
+                    check_counts(t);
+                }
+                // appends and pops at the border, as `t[#t + 1] = v` does
+                for _ in 0..100 {
+                    let n = t.len();
+                    if next(3) == 0 && n > 0 {
+                        let _ = t.set_int(heap, n, Value::Nil);
+                    } else {
+                        let _ = t.set_int(heap, n + 1, Value::Int(n));
+                    }
+                    check_counts(t);
+                }
+            });
+        }
     }
 }

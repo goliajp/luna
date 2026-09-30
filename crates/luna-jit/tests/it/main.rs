@@ -41,6 +41,7 @@ mod self_link_fib_correctness;
 mod selflink_yields_to_downrec;
 mod send_jit_module_wrapper;
 mod send_vm_jit_smoke;
+mod table_len_jit;
 mod trace_call_c_zero_single_return;
 mod trace_call_exit_sunk_table;
 mod trace_call_reentry_close;

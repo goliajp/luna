@@ -21,9 +21,31 @@ use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
 
+mod arith;
+mod index;
 mod num;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
+
+/// `R[A] := R[B] op R[C]`: the Int/Int and Float/Float cases are computed
+/// in the opcode arm (an arm yielding `None` falls through); everything else
+/// goes to `arith_slow`.
+macro_rules! arith_arm {
+    ($vm:ident, $inst:ident, $base:ident, $op:expr,
+     int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
+        let l = $vm.r($base, $inst.b());
+        let r = $vm.r($base, $inst.c());
+        let v: Option<Value> = match (l, r) {
+            (Value::Int($ia), Value::Int($ib)) => $iv,
+            (Value::Float($fa), Value::Float($fb)) => $fv,
+            _ => None,
+        };
+        match v {
+            Some(v) => $vm.set_r($base, $inst.a(), v),
+            None => $vm.arith_slow($inst, $base, $op, l, r)?,
+        }
+    }};
+}
 
 /// A Lua virtual machine: one OS thread's worth of Lua state.
 ///
@@ -237,6 +259,11 @@ pub struct Vm {
     /// true while the hook itself runs, so its own execution fires no events
     /// (PUC clears the mask for the duration)
     pub(crate) in_hook: bool,
+    /// PUC `trap`: the dispatch loop head has work beyond fetching the next
+    /// instruction — an instruction budget, a memory cap or an armed hook.
+    /// The loop head clears it when it finds none of them; whatever may
+    /// create one sets it (set spuriously, it costs one slow iteration).
+    pub(crate) trap: bool,
     /// arms the next Lua frame's `tailcalls` count (PUC `ci->u.l.tailcalls`),
     /// consumed by `push_frame`. `OP_TailCall` sets it to the caller's
     /// own tailcalls + 1 before begin_call so deeply tail-recursive chains
@@ -823,6 +850,8 @@ impl Vm {
     /// the Vec replacement to keep the shadow valid.
     #[inline(always)]
     fn frames_resync(&mut self) {
+        // a thread switch swaps in that thread's hook
+        self.trap = true;
         // Debug-only — see `frames_push_sync` comment.
         #[cfg(debug_assertions)]
         {
@@ -992,6 +1021,7 @@ impl Vm {
             ignore_env: false,
             hook: HookState::default(),
             in_hook: false,
+            trap: true,
             pending_tailcalls: 0,
             pending_ccmt: 0,
             errored_natives: Vec::new(),
@@ -1082,7 +1112,10 @@ impl Vm {
     /// Install a caller-supplied JIT backend. The
     /// `luna` crate uses this to swap in its `CraneliftBackend`; tests
     /// or third-party backends pass their own [`crate::jit::IntChunkCompiler`] /
-    /// [`crate::jit::TraceCompiler`] implementations. Re-installing on a Vm whose
+    /// [`crate::jit::TraceCompiler`] implementations. A Vm starts with
+    /// both JIT flags off; this turns on each flag the embedder has not
+    /// set with [`Self::set_jit_enabled`] / [`Self::set_trace_jit_enabled`]
+    /// (or [`Self::install_null_jit`]). Re-installing on a Vm whose
     /// closures already populated `Proto.jit: JitProtoState::Compiled`
     /// does NOT evict those cached entries — call right after
     /// construction for a clean swap.
@@ -1097,6 +1130,12 @@ impl Vm {
     {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
+        if !self.jit.enabled_chosen {
+            self.jit.enabled = true;
+        }
+        if !self.jit.trace_enabled_chosen {
+            self.jit.trace_enabled = true;
+        }
     }
 
     /// Install a caller-supplied JIT
@@ -1130,8 +1169,8 @@ impl Vm {
     pub fn install_null_jit(&mut self) {
         self.jit.chunk_compiler = Box::new(crate::jit::NullJitBackend);
         self.jit.trace_compiler = Box::new(crate::jit::NullJitBackend);
-        self.jit.enabled = false;
-        self.jit.trace_enabled = false;
+        self.set_jit_enabled(false);
+        self.set_trace_jit_enabled(false);
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
@@ -2433,6 +2472,7 @@ impl Vm {
     /// not, so the wrapper line is not re-fired.
     pub(crate) fn install_hook(&mut self, hook: HookState) {
         self.hook = hook;
+        self.trap = true;
         if self.hook.line
             && let Some(f) = self.frames.last_mut().and_then(CallFrame::lua_mut)
         {
@@ -2516,6 +2556,7 @@ impl Vm {
                 self.in_hook = true;
                 rh(self, evt);
                 self.in_hook = was_in_hook;
+                self.trap = true;
             }
         }
         let Some(hook) = self.hook.func else {
@@ -2541,6 +2582,7 @@ impl Vm {
         let r = self.call_value_impl(hook, &[name, lv], from_native);
         self.pending_is_hook = false;
         self.in_hook = false;
+        self.trap = true;
         self.stack.truncate(saved_len);
         self.top = saved_top;
         r.map(|_| ())
@@ -2665,69 +2707,6 @@ impl Vm {
         // a Lua callee); restore so it doesn't leak to a later push_frame.
         self.pending_tm = saved_tm;
         r?;
-        Ok(())
-    }
-
-    /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
-    fn op_index(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
-        // Read-time probe: a collectable key must be live at
-        // the moment it is used. O(1) membership test against the
-        // freed-pointer log — gc-verify diagnostic builds only; exact
-        // under quarantining allocators (ASAN).
-        #[cfg(feature = "gc-verify")]
-        if matches!(key, Value::Str(_)) {
-            let h = match key {
-                Value::Str(s) => s.as_ptr() as usize,
-                _ => unreachable!(),
-            };
-            if self.heap.recently_freed.contains(&h) {
-                let (pc, reg_info) = match self.frames.last() {
-                    Some(CallFrame::Lua(f)) => {
-                        let pc = f.pc as usize;
-                        let inst = f.closure.proto.code.get(pc.wrapping_sub(1));
-                        (
-                            pc,
-                            inst.map(|i| {
-                                format!(
-                                    "op[pc-1]={:?} a={} b={} c={} base={}",
-                                    i.op(),
-                                    i.a(),
-                                    i.b(),
-                                    i.c(),
-                                    f.base
-                                )
-                            })
-                            .unwrap_or_default(),
-                        )
-                    }
-                    _ => (0, String::new()),
-                };
-                panic!(
-                    "[gc-verify] op_index READ of dead string key {h:#x} \
-                     (gc_top {}, top {}, pc {pc}, {reg_info})",
-                    self.gc_top, self.top,
-                );
-            }
-        }
-        match self.index_step(t, key)? {
-            MmOut::Done(v) => self.stack[dst as usize] = v,
-            MmOut::Mm { func, recv } => {
-                self.begin_meta_call(func, &[recv, key], MetaAction::Store { dst }, "index")?;
-            }
-            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from index_step"),
-        }
-        Ok(())
-    }
-
-    /// `t[key] := v` for a VM write opcode, resolving `__newindex` yieldably.
-    fn op_newindex(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
-        match self.newindex_step(t, key, v)? {
-            MmOut::Done(_) => {}
-            MmOut::Mm { func, recv } => {
-                self.begin_meta_call(func, &[recv, key, v], MetaAction::Discard, "newindex")?;
-            }
-            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from newindex_step"),
-        }
         Ok(())
     }
 
@@ -3243,6 +3222,7 @@ impl Vm {
     /// short-script semantics.
     pub fn set_instr_budget(&mut self, budget: Option<i64>) {
         self.instr_budget = budget;
+        self.trap = true;
     }
 
     /// Remaining instruction budget (None when unbounded).
@@ -3250,11 +3230,14 @@ impl Vm {
         self.instr_budget
     }
 
-    /// Toggle the cranelift JIT. Default `true`. Sandbox embedders
+    /// Toggle the method JIT. Off on a Vm without a JIT backend, on once
+    /// one is installed ([`Self::install_jit_backend`]); a value set here
+    /// is kept across a later install. Sandbox embedders
     /// **must** disable JIT when relying on `instr_budget` — see the
     /// `jit_enabled` field doc for the rationale.
     pub fn set_jit_enabled(&mut self, enabled: bool) {
         self.jit.enabled = enabled;
+        self.jit.enabled_chosen = true;
     }
 
     /// Current JIT enable state.
@@ -3262,12 +3245,14 @@ impl Vm {
         self.jit.enabled
     }
 
-    /// Toggle the trace JIT. Off by default. When enabled, hot
+    /// Toggle the trace JIT. Same default and install rule as
+    /// [`Self::set_jit_enabled`]. When enabled, hot
     /// back-edges are counted on `Proto.trace_hot_count`; once the
     /// counter passes `TRACE_HOT_THRESHOLD`, the dispatch loop enters
     /// recording mode at the back-edge target.
     pub fn set_trace_jit_enabled(&mut self, enabled: bool) {
         self.jit.trace_enabled = enabled;
+        self.jit.trace_enabled_chosen = true;
     }
 
     /// Opt-in flag for the self-link cycle catch. See field
@@ -4149,6 +4134,7 @@ impl Vm {
     /// each request).
     pub fn set_memory_cap(&mut self, cap: Option<usize>) {
         self.heap.mem_cap = cap;
+        self.trap = true;
     }
 
     /// Approximate bytes the heap is currently holding. Object shells plus
@@ -5389,6 +5375,35 @@ impl Vm {
         Ok(None)
     }
 
+    /// Return0 / Return1 without the close and hook machinery (PUC
+    /// `OP_RETURN0` / `OP_RETURN1`): when no return hook can fire, nothing
+    /// in this frame needs closing and the caller is a Lua frame inside this
+    /// activation, the return is the pop, the result copy and
+    /// `finish_results` that `complete_return` would do. Returns `false`,
+    /// having done nothing, otherwise.
+    #[inline]
+    fn return_to_lua(&mut self, base: u32, abs_a: u32, nret: u32, entry_depth: usize) -> bool {
+        let n = self.frames.len();
+        if self.hook.ret && self.hook_armed()
+            || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
+            || self.tbc.last().is_some_and(|&s| s >= base)
+            || n <= entry_depth
+            || n < 2
+            || !matches!(self.frames[n - 2], CallFrame::Lua(_))
+        {
+            return false;
+        }
+        let Some(CallFrame::Lua(fr)) = frames_pop_sync(&mut self.frames, &mut self.frames_top)
+        else {
+            unreachable!("returning from a non-Lua frame")
+        };
+        for i in 0..nret {
+            self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
+        }
+        self.finish_results(fr.func_slot, nret, fr.nresults);
+        true
+    }
+
     #[doc(hidden)]
     pub fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
         match cl.upvals()[idx as usize].state() {
@@ -6068,84 +6083,111 @@ impl Vm {
         Unwound::Propagated(LuaError(err))
     }
 
+    /// The loop head's slow path, taken while [`Vm::trap`] is set: tick the
+    /// instruction budget, enforce the memory cap, then clear `trap` unless
+    /// one of them or an armed hook still needs the next instruction.
+    #[inline]
+    fn trap_step(&mut self) -> Result<(), LuaError> {
+        if let Some(b) = self.instr_budget.as_mut() {
+            *b -= 1;
+            if *b <= 0 {
+                return Err(self.instr_budget_exhausted());
+            }
+        }
+        if let Some(cap) = self.heap.mem_cap
+            && self.heap.bytes() > cap
+        {
+            self.mem_cap_exceeded(cap)?;
+        }
+        self.trap = self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed();
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn instr_budget_exhausted(&mut self) -> LuaError {
+        self.instr_budget = None;
+        // Async-mode cooperative
+        // yield. Set a sentinel flag so `exec_with`
+        // propagates the Err without `unwind` running
+        // (mirroring the `yielding.is_some()` path),
+        // and `call_value_impl` preserves the call
+        // frames for the next `poll`. Translation back
+        // to `DispatchOutcome::BudgetExhausted` happens
+        // in `drive_one`. The Err value itself is
+        // `Value::Nil` — a pure sentinel, never seen by
+        // user code.
+        if self.async_mode {
+            self.host_yield_pending = true;
+            return LuaError(Value::Nil);
+        }
+        // Classify the trip so embedders can
+        // distinguish budget exhaustion from a
+        // generic Runtime error and retry / give up
+        // accordingly.
+        self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
+        let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
+        LuaError(s)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn mem_cap_exceeded(&mut self, cap: usize) -> Result<(), LuaError> {
+        // First try a full collect — embedders set tight caps
+        // and the overshoot may be reclaimable (closures kept
+        // by short-lived frames, intermediate strings). Only
+        // disarm + raise if the cap is still breached after
+        // collection. PUC's `LUA_GCEMERGENCY` path matches.
+        //
+        // Root up to the deepest Lua frame's
+        // `base + max_stack` window rather than the entire
+        // `self.stack.len()`
+        // (covers register operands the current opcode
+        // might reference). The cap fires during table
+        // mutation in a tight `a[i] = i` loop where `a`
+        // lives at a frame-register slot past `self.top`
+        // (OP_NEWINDEX doesn't advance top); the deepest
+        // frame's max_stack window provably covers it
+        // since `a` is a register of the executing proto.
+        //
+        // Still over-roots caller frames' dead regs
+        // (slots between caller.base and the callee
+        // func_slot are live; slots past callee
+        // func_slot in caller's frame are dead until
+        // caller resumes). For fire-once cap path this
+        // residual over-root is acceptable; there is no
+        // full per-frame walk because a strong/weak pass
+        // split is semantically impossible — the weak pass
+        // depends on strong-pass marks.
+        let cap_root_top = self
+            .frames
+            .iter()
+            .rev()
+            .find_map(CallFrame::lua)
+            .map(|f| f.base + f.closure.proto.max_stack as u32)
+            .unwrap_or(self.top);
+        self.gc_top = cap_root_top.max(self.top);
+        self.collect_garbage();
+        if self.heap.bytes() > cap {
+            self.heap.mem_cap = None;
+            let s = Value::Str(self.heap.intern(b"memory cap exceeded"));
+            return Err(LuaError(s));
+        }
+        Ok(())
+    }
+
+    /// A count or line hook fires on the next instruction.
+    #[inline]
+    fn hook_armed(&self) -> bool {
+        !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+    }
+
     fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
+        // the host may have set a budget, a cap or a hook since the last run
+        self.trap = true;
         loop {
-            // Fast-path slow-check gate: most embedders run with both
-            // `instr_budget` and `mem_cap` as None, so a single combined
-            // is_some test lets the hot loop skip both branches with one
-            // load + branch instead of two.
-            if self.instr_budget.is_some() || self.heap.mem_cap.is_some() {
-                if let Some(b) = self.instr_budget.as_mut() {
-                    *b -= 1;
-                    if *b <= 0 {
-                        self.instr_budget = None;
-                        // Async-mode cooperative
-                        // yield. Set a sentinel flag so `exec_with`
-                        // propagates the Err without `unwind` running
-                        // (mirroring the `yielding.is_some()` path),
-                        // and `call_value_impl` preserves the call
-                        // frames for the next `poll`. Translation back
-                        // to `DispatchOutcome::BudgetExhausted` happens
-                        // in `drive_one`. The Err value itself is
-                        // `Value::Nil` — a pure sentinel, never seen by
-                        // user code.
-                        if self.async_mode {
-                            self.host_yield_pending = true;
-                            return Err(LuaError(Value::Nil));
-                        }
-                        // Classify the trip so embedders can
-                        // distinguish budget exhaustion from a
-                        // generic Runtime error and retry / give up
-                        // accordingly.
-                        self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
-                        let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
-                        return Err(LuaError(s));
-                    }
-                }
-                if let Some(cap) = self.heap.mem_cap
-                    && self.heap.bytes() > cap
-                {
-                    // First try a full collect — embedders set tight caps
-                    // and the overshoot may be reclaimable (closures kept
-                    // by short-lived frames, intermediate strings). Only
-                    // disarm + raise if the cap is still breached after
-                    // collection. PUC's `LUA_GCEMERGENCY` path matches.
-                    //
-                    // Root up to the deepest Lua frame's
-                    // `base + max_stack` window rather than the entire
-                    // `self.stack.len()`
-                    // (covers register operands the current opcode
-                    // might reference). The cap fires during table
-                    // mutation in a tight `a[i] = i` loop where `a`
-                    // lives at a frame-register slot past `self.top`
-                    // (OP_NEWINDEX doesn't advance top); the deepest
-                    // frame's max_stack window provably covers it
-                    // since `a` is a register of the executing proto.
-                    //
-                    // Still over-roots caller frames' dead regs
-                    // (slots between caller.base and the callee
-                    // func_slot are live; slots past callee
-                    // func_slot in caller's frame are dead until
-                    // caller resumes). For fire-once cap path this
-                    // residual over-root is acceptable; there is no
-                    // full per-frame walk because a strong/weak pass
-                    // split is semantically impossible — the weak pass
-                    // depends on strong-pass marks.
-                    let cap_root_top = self
-                        .frames
-                        .iter()
-                        .rev()
-                        .find_map(CallFrame::lua)
-                        .map(|f| f.base + f.closure.proto.max_stack as u32)
-                        .unwrap_or(self.top);
-                    self.gc_top = cap_root_top.max(self.top);
-                    self.collect_garbage();
-                    if self.heap.bytes() > cap {
-                        self.heap.mem_cap = None;
-                        let s = Value::Str(self.heap.intern(b"memory cap exceeded"));
-                        return Err(LuaError(s));
-                    }
-                }
+            if self.trap {
+                self.trap_step()?;
             }
             // Single combined frame fetch: continuation arm OR Lua arm. Saves
             // a second `self.frames.last()` slice access vs the prior split
@@ -7138,7 +7180,9 @@ impl Vm {
             // following tick re-admits naturally (with the budget
             // also reset by the deopt site).
             let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
-            self.jit.suppress_downrec_admit_once = false;
+            if downrec_admit_blocked {
+                self.jit.suppress_downrec_admit_once = false;
+            }
             if self.jit.trace_enabled
                 && cl.proto.has_dispatchable_trace.get()
                 && let Some(ct) = {
@@ -7938,13 +7982,9 @@ impl Vm {
             }
 
             // count + line hooks (PUC traceexec): before executing the
-            // instruction. Skipped while the hook itself runs.
-            // (Parens here are load-bearing — without them `&&` binds tighter
-            // than `||` and the `!in_hook` guard only gates the rust-hook arm,
-            // letting a Lua line hook recurse into itself → stack overflow
-            // on db.lua line-hook assertions. Matches the `hook_call_with` /
-            // `hook_return` predicate shape at lines 2245 / 2279 / 2294 / 4023.)
-            if !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some()) {
+            // instruction. Skipped while the hook itself runs. `trap` is set
+            // whenever a hook is armed, so the common case tests one byte.
+            if self.trap && self.hook_armed() {
                 let lines = &cl.proto.lines;
                 let cur_line = if lines.is_empty() {
                     None
@@ -8032,58 +8072,44 @@ impl Vm {
                 Op::GetTabUp => {
                     let t = self.upval_get(cl, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    self.op_index(t, key, base + inst.a())?;
+                    self.index_fast(t, key, base + inst.a())?;
                 }
                 Op::GetTable => {
                     let t = self.r(base, inst.b());
                     let key = self.r(base, inst.c());
-                    self.op_index(t, key, base + inst.a())?;
+                    self.index_fast(t, key, base + inst.a())?;
                 }
                 Op::GetI => {
                     let t = self.r(base, inst.b());
-                    self.op_index(t, Value::Int(inst.c() as i64), base + inst.a())?;
+                    self.index_fast(t, Value::Int(inst.c() as i64), base + inst.a())?;
                 }
                 Op::GetField => {
                     let t = self.r(base, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    // Fast path: known-Str const key + no
-                    // metatable on the table → skip `op_index` /
-                    // `index_step`'s MAX_TAG_LOOP setup and the outer
-                    // `Value` match. Falls through to the slow path
-                    // when either invariant breaks (`__index`
-                    // metamethods, non-Table receivers, non-Str keys).
-                    if let Value::Table(tb) = t
-                        && tb.metatable().is_none()
-                        && let Value::Str(s) = key
-                    {
-                        let v = tb.get_str(s);
-                        self.stack[(base + inst.a()) as usize] = v;
-                    } else {
-                        self.op_index(t, key, base + inst.a())?;
-                    }
+                    self.index_fast(t, key, base + inst.a())?;
                 }
                 Op::SetTabUp => {
                     let t = self.upval_get(cl, inst.a());
                     let key = cl.proto.consts[inst.b() as usize];
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, key, v)?;
+                    self.newindex_fast(t, key, v)?;
                 }
                 Op::SetTable => {
                     let t = self.r(base, inst.a());
                     let key = self.r(base, inst.b());
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, key, v)?;
+                    self.newindex_fast(t, key, v)?;
                 }
                 Op::SetI => {
                     let t = self.r(base, inst.a());
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, Value::Int(inst.b() as i64), v)?;
+                    self.newindex_fast(t, Value::Int(inst.b() as i64), v)?;
                 }
                 Op::SetField => {
                     let t = self.r(base, inst.a());
                     let key = cl.proto.consts[inst.b() as usize];
                     let v = self.r(base, inst.c());
-                    self.op_newindex(t, key, v)?;
+                    self.newindex_fast(t, key, v)?;
                 }
                 Op::NewTable => {
                     let t = self.heap.new_table();
@@ -8142,20 +8168,46 @@ impl Vm {
                     } else {
                         self.r(base, inst.c())
                     };
-                    self.op_index(o, key, base + inst.a())?;
+                    self.index_fast(o, key, base + inst.a())?;
                 }
-                Op::Add => self.arith_rr(inst, base, ArithOp::Add)?,
-                Op::Sub => self.arith_rr(inst, base, ArithOp::Sub)?,
-                Op::Mul => self.arith_rr(inst, base, ArithOp::Mul)?,
-                Op::Mod => self.arith_rr(inst, base, ArithOp::Mod)?,
-                Op::Pow => self.arith_rr(inst, base, ArithOp::Pow)?,
-                Op::Div => self.arith_rr(inst, base, ArithOp::Div)?,
-                Op::IDiv => self.arith_rr(inst, base, ArithOp::IDiv)?,
-                Op::BAnd => self.arith_rr(inst, base, ArithOp::BAnd)?,
-                Op::BOr => self.arith_rr(inst, base, ArithOp::BOr)?,
-                Op::BXor => self.arith_rr(inst, base, ArithOp::BXor)?,
-                Op::Shl => self.arith_rr(inst, base, ArithOp::Shl)?,
-                Op::Shr => self.arith_rr(inst, base, ArithOp::Shr)?,
+                Op::Add => arith_arm!(self, inst, base, ArithOp::Add,
+                    int(a, b) => Some(Value::Int(a.wrapping_add(b))),
+                    float(a, b) => Some(Value::Float(a + b))),
+                Op::Sub => arith_arm!(self, inst, base, ArithOp::Sub,
+                    int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
+                    float(a, b) => Some(Value::Float(a - b))),
+                Op::Mul => arith_arm!(self, inst, base, ArithOp::Mul,
+                    int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
+                    float(a, b) => Some(Value::Float(a * b))),
+                // a zero divisor takes the slow path for its error
+                Op::Mod => arith_arm!(self, inst, base, ArithOp::Mod,
+                    int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
+                    float(_a, _b) => None),
+                Op::IDiv => arith_arm!(self, inst, base, ArithOp::IDiv,
+                    int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
+                    float(_a, _b) => None),
+                Op::Div => arith_arm!(self, inst, base, ArithOp::Div,
+                    int(_a, _b) => None,
+                    float(a, b) => Some(Value::Float(a / b))),
+                Op::Pow => {
+                    let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
+                    self.arith_slow(inst, base, ArithOp::Pow, l, r)?
+                }
+                Op::BAnd => arith_arm!(self, inst, base, ArithOp::BAnd,
+                    int(a, b) => Some(Value::Int(a & b)),
+                    float(_a, _b) => None),
+                Op::BOr => arith_arm!(self, inst, base, ArithOp::BOr,
+                    int(a, b) => Some(Value::Int(a | b)),
+                    float(_a, _b) => None),
+                Op::BXor => arith_arm!(self, inst, base, ArithOp::BXor,
+                    int(a, b) => Some(Value::Int(a ^ b)),
+                    float(_a, _b) => None),
+                Op::Shl => arith_arm!(self, inst, base, ArithOp::Shl,
+                    int(a, b) => Some(Value::Int(shift_left(a, b))),
+                    float(_a, _b) => None),
+                Op::Shr => arith_arm!(self, inst, base, ArithOp::Shr,
+                    int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
+                    float(_a, _b) => None),
                 Op::Unm => {
                     let v = self.r(base, inst.b());
                     match self.unary_operand(v) {
@@ -8198,6 +8250,19 @@ impl Vm {
                 }
                 Op::Len => {
                     let v = self.r(base, inst.b());
+                    // no `__len` to look for: a string, or a table without
+                    // a metatable
+                    match v {
+                        Value::Str(s) => {
+                            self.set_r(base, inst.a(), Value::Int(s.len() as i64));
+                            continue;
+                        }
+                        Value::Table(t) if t.metatable().is_none() => {
+                            self.set_r(base, inst.a(), Value::Int(t.len()));
+                            continue;
+                        }
+                        _ => {}
+                    }
                     match self.len_step(v)? {
                         MmOut::Done(r) => self.set_r(base, inst.a(), r),
                         MmOut::Mm { func, recv } => {
@@ -8522,7 +8587,11 @@ impl Vm {
                     // the handler call *above* — landing at `self.top` would
                     // otherwise clobber a result with the handler closure.
                     self.top = self.top.max(abs_a + nret);
-                    if let Some(vals) = self.begin_close(
+                    if matches!(inst.op(), Op::Return0 | Op::Return1)
+                        && self.return_to_lua(base, abs_a, nret, entry_depth)
+                    {
+                        // done: the caller's frame is on top
+                    } else if let Some(vals) = self.begin_close(
                         base,
                         None,
                         AfterClose::Return {
@@ -8951,217 +9020,6 @@ impl Vm {
         }
     }
 
-    /// Length fast path: a string's byte count or a table's raw border when no
-    /// `__len` is present (`Done`); otherwise the `__len` metamethod (`Mm`),
-    /// called with the operand twice. Errors for a non-table with no `__len`.
-    fn len_step(&mut self, v: Value) -> Result<MmOut, LuaError> {
-        match v {
-            Value::Str(s) => Ok(MmOut::Done(Value::Int(s.len() as i64))),
-            Value::Table(t) => {
-                // PUC 5.1's `__len` applies to userdata only — `luaV_objlen`
-                // there takes the raw border for a table without consulting
-                // the metatable, so `#setmetatable({}, {__len = f})` is 0 on
-                // 5.1 and 7 on 5.2+. Verified against stock 5.1.5 / 5.2.4.
-                if self.version() == crate::version::LuaVersion::Lua51 {
-                    return Ok(MmOut::Done(Value::Int(t.len())));
-                }
-                let mm = self.get_mm(v, Mm::Len);
-                if mm.is_nil() {
-                    Ok(MmOut::Done(Value::Int(t.len())))
-                } else {
-                    Ok(MmOut::Mm { func: mm, recv: v })
-                }
-            }
-            _ => {
-                let mm = self.get_mm(v, Mm::Len);
-                if mm.is_nil() {
-                    Err(self.type_err("get length of", v))
-                } else {
-                    Ok(MmOut::Mm { func: mm, recv: v })
-                }
-            }
-        }
-    }
-
-    pub(crate) fn index_value(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
-        match self.index_step(t, key)? {
-            MmOut::Done(v) => Ok(v),
-            MmOut::Mm { func, recv } => self.call_mm1(func, &[recv, key]),
-            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from index_step"),
-        }
-    }
-
-    /// PUC `MAXTAGLOOP`: 100 links of `__index`/`__newindex` in 5.1/5.2,
-    /// 2000 from 5.3.
-    fn tag_loop_limit(&self) -> u32 {
-        if self.version <= LuaVersion::Lua52 {
-            100
-        } else {
-            MAX_TAG_LOOP
-        }
-    }
-
-    /// Resolve `t[key]` through the `__index` chain, stopping at the first raw
-    /// hit (`Done`) or function metamethod (`Mm`). Table-valued `__index` links
-    /// are followed inline (no yield possible); only a function link can yield.
-    fn index_step(&mut self, t: Value, key: Value) -> Result<MmOut, LuaError> {
-        let mut cur = t;
-        for _ in 0..self.tag_loop_limit() {
-            let mm = match cur {
-                Value::Table(tb) => {
-                    let v = tb.get(key);
-                    if !v.is_nil() {
-                        return Ok(MmOut::Done(v));
-                    }
-                    let mm = self.get_mm(cur, Mm::Index);
-                    if mm.is_nil() {
-                        return Ok(MmOut::Done(Value::Nil));
-                    }
-                    mm
-                }
-                v => {
-                    let mm = self.get_mm(v, Mm::Index);
-                    if mm.is_nil() {
-                        return Err(self.type_err("index", v));
-                    }
-                    mm
-                }
-            };
-            match mm {
-                Value::Closure(_) | Value::Native(_) => {
-                    return Ok(MmOut::Mm {
-                        func: mm,
-                        recv: cur,
-                    });
-                }
-                next => cur = next,
-            }
-        }
-        Err(self.runerror(if self.version <= LuaVersion::Lua52 {
-            "loop in gettable"
-        } else {
-            "'__index' chain too long; possible loop"
-        }))
-    }
-
-    pub(crate) fn newindex_value(
-        &mut self,
-        t: Value,
-        key: Value,
-        v: Value,
-    ) -> Result<(), LuaError> {
-        match self.newindex_step(t, key, v)? {
-            MmOut::Done(_) => Ok(()),
-            MmOut::Mm { func, recv } => {
-                self.call_value(func, &[recv, key, v])?;
-                Ok(())
-            }
-            MmOut::CompareSynth { .. } => unreachable!("CompareSynth from newindex_step"),
-        }
-    }
-
-    /// Resolve `t[key] = v` through the `__newindex` chain. A raw assignment is
-    /// performed inline (returning `Done`); only a function metamethod (`Mm`)
-    /// needs an actual call — which the caller may run yieldably.
-    fn newindex_step(&mut self, t: Value, key: Value, v: Value) -> Result<MmOut, LuaError> {
-        // Read-time probe (gc-verify): a dead query key at a
-        // WRITE site, attributed to the instruction that produced it.
-        #[cfg(feature = "gc-verify")]
-        if let Some(p) = match key {
-            Value::Str(s) => Some(s.as_ptr() as usize),
-            Value::Table(t2) => Some(t2.as_ptr() as usize),
-            _ => None,
-        } && crate::runtime::gc_verify_probe::is_freed(p)
-        {
-            let detail = match self.frames.last() {
-                Some(CallFrame::Lua(f)) => {
-                    let pc = f.pc as usize;
-                    let mut w = String::new();
-                    for q in pc.saturating_sub(6)..(pc + 2) {
-                        if let Some(inst) = f.closure.proto.code.get(q) {
-                            w.push_str(&format!(
-                                "\n  [{q}] {:?} a={} b={} c={} k={}",
-                                inst.op(),
-                                inst.a(),
-                                inst.b(),
-                                inst.c(),
-                                inst.k()
-                            ));
-                        }
-                    }
-                    format!("pc={pc} base={} gc_top={} window:{w}", f.base, self.gc_top)
-                }
-                _ => "non-Lua frame".into(),
-            };
-            panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
-        }
-        let mut cur = t;
-        for _ in 0..self.tag_loop_limit() {
-            let mm = match cur {
-                Value::Table(tb) => {
-                    // Single-walk collapse — Table::try_set_existing
-                    // fuses the prior `tb.get(key).is_nil()` gate and
-                    // `raw_set` walk into one chain traversal when the
-                    // key is already present with a non-nil value. The
-                    // __newindex chain semantics are preserved by the
-                    // identity (slot_nil ⇔ fire_newindex).
-                    //
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the
-                    // heap is single-threaded and the pointer is live as
-                    // long as it is reachable from active roots (see
-                    // heap.rs:5-7). Mirrors the raw_set wrapper below.
-                    if unsafe { tb.as_mut() }.try_set_existing(key, v) {
-                        self.heap
-                            .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                        return Ok(MmOut::Done(Value::Nil));
-                    }
-                    let mm = self.get_mm(cur, Mm::NewIndex);
-                    if mm.is_nil() {
-                        self.raw_set(tb, key, v)?;
-                        return Ok(MmOut::Done(Value::Nil));
-                    }
-                    mm
-                }
-                bad => {
-                    let mm = self.get_mm(bad, Mm::NewIndex);
-                    if mm.is_nil() {
-                        return Err(self.type_err("index", bad));
-                    }
-                    mm
-                }
-            };
-            match mm {
-                Value::Closure(_) | Value::Native(_) => {
-                    return Ok(MmOut::Mm {
-                        func: mm,
-                        recv: cur,
-                    });
-                }
-                next => cur = next,
-            }
-        }
-        Err(self.runerror(if self.version <= LuaVersion::Lua52 {
-            "loop in settable"
-        } else {
-            "'__newindex' chain too long; possible loop"
-        }))
-    }
-
-    pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        match unsafe { t.as_mut() }.set(&mut self.heap, key, v) {
-            Ok(()) => {
-                self.heap
-                    .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                Ok(())
-            }
-            Err(TableError::NilIndex) => Err(self.runerror("table index is nil")),
-            Err(TableError::NanIndex) => Err(self.runerror("table index is NaN")),
-            Err(TableError::Overflow) => Err(self.runerror("table overflow")),
-            Err(TableError::InvalidNext) => unreachable!(),
-        }
-    }
-
     /// Decide equality, or surface the `__eq` metamethod to call. `Done` carries
     /// the boolean result; `Mm` (when raw equality fails and both are tables
     /// with an `__eq`) carries the metamethod — called with `(l, r)`.
@@ -9194,171 +9052,6 @@ impl Vm {
     }
 
     // ---- arithmetic ----
-
-    #[inline(always)]
-    fn arith_rr(&mut self, inst: Inst, base: u32, op: ArithOp) -> Result<(), LuaError> {
-        let l = self.r(base, inst.b());
-        let r = self.r(base, inst.c());
-        // hot path: Int + Int for Add / Sub / Mul — fib_28, loop_int_1m,
-        // binary_trees all hammer these. Skipping coerce_num + the big
-        // arith_fast match shaves several conditional moves per op.
-        if let (Value::Int(a), Value::Int(b)) = (l, r) {
-            let fast = match op {
-                ArithOp::Add => Some(Value::Int(a.wrapping_add(b))),
-                ArithOp::Sub => Some(Value::Int(a.wrapping_sub(b))),
-                ArithOp::Mul => Some(Value::Int(a.wrapping_mul(b))),
-                _ => None,
-            };
-            if let Some(v) = fast {
-                self.set_r(base, inst.a(), v);
-                return Ok(());
-            }
-        }
-        // hot path: Float + Float for Add / Sub / Mul / Div — math_loop_100k
-        // and any numeric workload with non-integer accumulators benefits.
-        if let (Value::Float(a), Value::Float(b)) = (l, r) {
-            let fast = match op {
-                ArithOp::Add => Some(Value::Float(a + b)),
-                ArithOp::Sub => Some(Value::Float(a - b)),
-                ArithOp::Mul => Some(Value::Float(a * b)),
-                ArithOp::Div => Some(Value::Float(a / b)),
-                _ => None,
-            };
-            if let Some(v) = fast {
-                self.set_r(base, inst.a(), v);
-                return Ok(());
-            }
-        }
-        // An `Add` with k set is a 5.4+ `x - 0` (see `Op::Add`): the right
-        // operand is the integer 0, so it adds only when the left is a number.
-        let op = if inst.k() && op == ArithOp::Add && !matches!(l, Value::Int(_) | Value::Float(_))
-        {
-            ArithOp::Sub
-        } else {
-            op
-        };
-        match self.arith_fast(op, l, r)? {
-            Some(v) => self.set_r(base, inst.a(), v),
-            None => {
-                let mm = self.arith_mm_func(op, l, r)?;
-                let dst = base + inst.a();
-                self.begin_meta_call(mm, &[l, r], MetaAction::Store { dst }, op.mm_name())?;
-            }
-        }
-        Ok(())
-    }
-
-    /// The number a unary `-` operand stands for: 5.4+ leaves strings to
-    /// the string metatable, 5.3 converts them to floats (PUC `tonumber`).
-    fn unary_operand(&self, v: Value) -> Option<Num> {
-        let n = self.arith_operand()(v);
-        if self.version == LuaVersion::Lua53 && matches!(v, Value::Str(_)) {
-            n.map(|n| Num::Float(n.as_f64()))
-        } else {
-            n
-        }
-    }
-
-    /// How an arithmetic operand becomes a number: 5.4+ takes numbers only
-    /// (strings go to their metatable), 5.3 converts numeric strings, and
-    /// 5.1/5.2, which have only floats, convert them to floats (5.1 with C
-    /// `strtod`, so `"inf"` and `"0x1p4"` count).
-    fn arith_operand(&self) -> fn(Value) -> Option<Num> {
-        if self.version >= LuaVersion::Lua54 {
-            as_number
-        } else if self.version == LuaVersion::Lua53 {
-            coerce_num
-        } else if self.version == LuaVersion::Lua52 {
-            coerce_num_float
-        } else {
-            coerce_num_51
-        }
-    }
-
-    /// Fast path for an arithmetic/bitwise op: `Ok(Some(v))` when computed
-    /// directly, `Ok(None)` when a metamethod is required (the caller decides
-    /// whether to call it synchronously or yieldably).
-    fn arith_fast(&mut self, op: ArithOp, l: Value, r: Value) -> Result<Option<Value>, LuaError> {
-        use ArithOp::*;
-        // 5.4 moved string->number coercion out of the VM: a string operand
-        // goes to the string metatable's `__add` etc., and bitwise operators
-        // have no string metamethods at all.
-        let num = self.arith_operand();
-        if let BAnd | BOr | BXor | Shl | Shr = op {
-            let (Some(a), Some(b)) = (num(l), num(r)) else {
-                return Ok(None);
-            };
-            let (Some(a), Some(b)) = (int_of(a), int_of(b)) else {
-                // PUC luaG_tointerror: name the offending operand
-                return Err(self.no_int_rep_err());
-            };
-            let v = match op {
-                BAnd => a & b,
-                BOr => a | b,
-                BXor => a ^ b,
-                Shl => shift_left(a, b),
-                Shr => shift_left(a, b.wrapping_neg()),
-                _ => unreachable!(),
-            };
-            return Ok(Some(Value::Int(v)));
-        }
-        let (Some(mut ln), Some(mut rn)) = (num(l), num(r)) else {
-            return Ok(None);
-        };
-        // PUC 5.3 takes the integer path only when both operands are
-        // integers (`ttisinteger`); a converted string goes through
-        // `tonumber`, which yields a float.
-        if self.version == LuaVersion::Lua53
-            && (matches!(l, Value::Str(_)) || matches!(r, Value::Str(_)))
-        {
-            ln = Num::Float(ln.as_f64());
-            rn = Num::Float(rn.as_f64());
-        }
-        match arith_num(self.version, op, ln, rn) {
-            Ok(v) => Ok(Some(v)),
-            Err(msg) => Err(self.runerror(msg)),
-        }
-    }
-
-    /// Find the arithmetic/bitwise metamethod (left operand first), or raise the
-    /// PUC type error when neither operand provides one.
-    fn arith_mm_func(&mut self, op: ArithOp, l: Value, r: Value) -> Result<Value, LuaError> {
-        use ArithOp::*;
-        let event = match op {
-            Add => Mm::Add,
-            Sub => Mm::Sub,
-            Mul => Mm::Mul,
-            Div => Mm::Div,
-            Mod => Mm::Mod,
-            Pow => Mm::Pow,
-            IDiv => Mm::IDiv,
-            BAnd => Mm::BAnd,
-            BOr => Mm::BOr,
-            BXor => Mm::BXor,
-            Shl => Mm::Shl,
-            Shr => Mm::Shr,
-        };
-        let mut mm = self.get_mm(l, event);
-        if mm.is_nil() {
-            mm = self.get_mm(r, event);
-        }
-        if mm.is_nil() {
-            let what = if matches!(op, BAnd | BOr | BXor | Shl | Shr) {
-                "perform bitwise operation on"
-            } else {
-                "perform arithmetic on"
-            };
-            // luaG_opinterror blames the first operand that is not a number;
-            // before 5.4 a numeric string counts as one.
-            let bad = if self.arith_operand()(l).is_none() {
-                l
-            } else {
-                r
-            };
-            return Err(self.type_err(what, bad));
-        }
-        Ok(mm)
-    }
 
     // ---- comparison ----
 
