@@ -7,6 +7,7 @@
 //! interpreter trusts a translated proto to satisfy.
 
 pub(in crate::vm::dump) mod classic;
+mod encode;
 mod lower;
 pub(in crate::vm::dump) mod modern;
 pub(in crate::vm::dump) mod puc_51;
