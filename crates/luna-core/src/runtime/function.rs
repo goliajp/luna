@@ -43,6 +43,13 @@ pub struct LocVar {
     pub end_pc: u32,
 }
 
+/// An unused slot of [`Proto::trace_heads`].
+#[doc(hidden)]
+pub const TRACE_HEADS_NONE: u32 = u32::MAX;
+/// [`Proto::trace_heads`] once more than two traces can be entered.
+#[doc(hidden)]
+pub const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
+
 /// A compiled function (PUC Proto). Immutable after compilation.
 #[repr(C)]
 pub struct Proto {
@@ -171,6 +178,12 @@ pub struct Proto {
     /// `false` to `true`.
     #[doc(hidden)]
     pub has_dispatchable_trace: std::cell::Cell<bool>,
+    /// Head pcs of the traces that set `has_dispatchable_trace`, so the
+    /// interpreter looks traces up only where one can start: up to two, the
+    /// rest [`TRACE_HEADS_NONE`]; [`TRACE_HEADS_MANY`] in both once there are
+    /// more.
+    #[doc(hidden)]
+    pub trace_heads: std::cell::Cell<[u32; 2]>,
     /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
     /// a trace is cached there or recording it was abandoned. Set once,
     /// it spares every later call the scan of `traces`.
