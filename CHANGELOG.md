@@ -58,6 +58,11 @@ optimization.
   hook machinery when nothing needs it; growing a table's array part
   copies it in one block; and `#t` is answered from two counters when the
   array part holds exactly a leading run of values.
+- A metatable remembers which metamethods it lacks (PUC Lua's `flags`
+  cache), so looking up an absent `__index`, `__newindex`, `__eq`,
+  arithmetic or other event costs one bit test; the table forgets them as
+  soon as it gains any key. A string-keyed read that misses on a table
+  follows table-valued `__index` links directly. Results are unchanged.
 
 ### Fixed
 

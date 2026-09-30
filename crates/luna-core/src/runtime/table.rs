@@ -274,10 +274,11 @@ pub struct Table {
     /// `Option<Gc<Table>>` is 8 bytes via the NonNull-pointer-opt: 0
     /// ⇔ None, non-zero ⇔ Some.
     pub metatable: Option<Gc<Table>>,
-    /// reserved for an absent-metamethod cache (PUC `flags`); currently
-    /// unread — luna's mm lookup walks `metatable.get` each time
-    #[allow(dead_code)]
-    pub(crate) flags: u8,
+    /// Absent-metamethod cache (PUC `flags`): bit `1 << Mm` set means this
+    /// table, used as a metatable, has no such field. Set by the lookup on a
+    /// miss; cleared whenever a hash key gains a value (`set_norm`,
+    /// `insert_new`). A u32 in what was padding, so `Table` does not grow.
+    pub(crate) flags: u32,
     /// A length whose leading slots `[0, aprefix)` are all non-nil; it may
     /// lag behind the real run (that only disables the `#t` shortcut)
     /// but never exceeds it.
@@ -839,6 +840,8 @@ impl Table {
             if v.is_nil() {
                 self.clear_existing_slot(k);
             } else {
+                // may revive a tombstone: a metamethod can appear
+                self.flags = 0;
                 self.nodes[idx].val = v;
             }
             return Ok(());
@@ -850,6 +853,7 @@ impl Table {
     }
 
     fn insert_new(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
+        self.flags = 0;
         if self.nodes.is_empty() {
             self.rehash(heap, k)?;
             return self.set_norm(heap, k, v);
