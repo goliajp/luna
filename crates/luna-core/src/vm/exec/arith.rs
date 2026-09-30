@@ -8,14 +8,17 @@ impl Vm {
     pub(super) fn arith_rr(&mut self, inst: Inst, base: u32, op: ArithOp) -> Result<(), LuaError> {
         let l = self.r(base, inst.b());
         let r = self.r(base, inst.c());
-        // hot path: Int + Int for Add / Sub / Mul — fib_28, loop_int_1m,
-        // binary_trees all hammer these. Skipping coerce_num + the big
-        // arith_fast match shaves several conditional moves per op.
+        // hot path: Int op Int — fib_28, loop_int_1m, binary_trees all
+        // hammer these. Skipping coerce_num + the big arith_fast match
+        // shaves several conditional moves per op. A zero divisor takes the
+        // slow path for its error.
         if let (Value::Int(a), Value::Int(b)) = (l, r) {
             let fast = match op {
                 ArithOp::Add => Some(Value::Int(a.wrapping_add(b))),
                 ArithOp::Sub => Some(Value::Int(a.wrapping_sub(b))),
                 ArithOp::Mul => Some(Value::Int(a.wrapping_mul(b))),
+                ArithOp::Mod if b != 0 => Some(Value::Int(int_mod(a, b))),
+                ArithOp::IDiv if b != 0 => Some(Value::Int(int_idiv(a, b))),
                 _ => None,
             };
             if let Some(v) = fast {

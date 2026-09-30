@@ -122,21 +122,13 @@ pub(crate) fn arith_num(
             if b == 0 {
                 return Err("attempt to divide by zero");
             }
-            let mut q = a.wrapping_div(b);
-            if (a ^ b) < 0 && q.wrapping_mul(b) != a {
-                q -= 1;
-            }
-            Value::Int(q)
+            Value::Int(int_idiv(a, b))
         }
         (Mod, Num::Int(a), Num::Int(b)) => {
             if b == 0 {
                 return Err("attempt to perform 'n%0'");
             }
-            let mut m = a.wrapping_rem(b);
-            if m != 0 && (m ^ b) < 0 {
-                m += b;
-            }
-            Value::Int(m)
+            Value::Int(int_mod(a, b))
         }
         (Add, a, b) => Value::Float(a.as_f64() + b.as_f64()),
         (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
@@ -156,6 +148,25 @@ pub(crate) fn arith_num(
         (Mod, a, b) => Value::Float(float_mod(version, a.as_f64(), b.as_f64())),
         (BAnd | BOr | BXor | Shl | Shr, ..) => unreachable!("bitwise op in arith_num"),
     })
+}
+
+/// Floor division of integers, `b != 0` (PUC `luaV_idiv`; `MIN // -1`
+/// wraps to `MIN`).
+#[inline(always)]
+pub(super) fn int_idiv(a: i64, b: i64) -> i64 {
+    let q = a.wrapping_div(b);
+    if (a ^ b) < 0 && q.wrapping_mul(b) != a {
+        q - 1
+    } else {
+        q
+    }
+}
+
+/// Floor modulo of integers, `b != 0` (PUC `luaV_mod`; `MIN % -1` is 0).
+#[inline(always)]
+pub(super) fn int_mod(a: i64, b: i64) -> i64 {
+    let m = a.wrapping_rem(b);
+    if m != 0 && (m ^ b) < 0 { m + b } else { m }
 }
 
 /// A number's integer value, if it has one.
