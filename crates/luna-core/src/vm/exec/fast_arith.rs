@@ -161,3 +161,13 @@ macro_rules! arith_imm_arm {
     }};
 }
 pub(super) use arith_imm_arm;
+
+/// The object pointer of a collectable value at `p`.
+///
+/// # Safety
+/// `p` points at a value whose tag says it holds a `Gc` pointer.
+#[inline(always)]
+pub(super) unsafe fn raw_gc(p: *const Value) -> *mut u8 {
+    // SAFETY: the caller's contract; the pointer is the payload word
+    unsafe { *(p as *const *mut u8).add(1) }
+}
