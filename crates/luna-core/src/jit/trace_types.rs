@@ -1395,6 +1395,10 @@ pub struct CompileOptions {
     /// 5.4+ Int count form is lowered; pre-5.3 traces bail
     /// and stay on the interp side.
     pub pre53: bool,
+    /// Lua dialect — `true` for 5.1 / 5.2, where the math library
+    /// converts its number arguments to floats and returns floats
+    /// (`math.min(1, 2)` is the float `1`), `false` from 5.3.
+    pub float_only: bool,
     /// Emit AOT-relocatable IR.
     ///
     /// When `false` (the JIT default), interned-string-key arguments

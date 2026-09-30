@@ -2502,6 +2502,16 @@ fn use_var_f64(bcx: &mut FunctionBuilder<'_>, regs: &[Variable], reg: u32) -> Va
     bcx.ins().bitcast(types::F64, MemFlagsData::new(), raw)
 }
 
+/// Read a number register of kind `kind` (Int or Float) as an f64.
+fn use_var_as_f64(bcx: &mut FunctionBuilder<'_>, regs: &[Variable], reg: u32, kind: RegKind) -> Value {
+    if matches!(kind, RegKind::Float) {
+        use_var_f64(bcx, regs, reg)
+    } else {
+        let raw = bcx.use_var(regs[reg as usize]);
+        bcx.ins().fcvt_from_sint(types::F64, raw)
+    }
+}
+
 /// Store an f64 SSA value into a Variable as i64 bits.
 fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
     let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), val_f64);
@@ -5986,10 +5996,11 @@ fn lower_trace_into_inner<M: Module>(
                         // away, no IR.
                     }
                     FoldKind::Min2 | FoldKind::Max2 if fold.call_idx == i => {
-                        // 2-arg min/max. PUC's `math.min(a, b)` returns
-                        // one of its operands as it is, so the lowering
-                        // follows the recorded operand kinds:
+                        // 2-arg min/max. From 5.3 PUC's `math.min(a, b)`
+                        // returns one of its operands as it is, so the
+                        // lowering follows the recorded operand kinds:
                         //
+                        //   5.1 / 5.2    → `fcmp` + `select`, as floats
                         //   Int  / Int   → cranelift `smin` / `smax`
                         //   Float/ Float → `fcmp` + `select`
                         //   otherwise    → not compiled
@@ -6002,6 +6013,14 @@ fn lower_trace_into_inner<M: Module>(
                         // Anything but two numbers of one kind (strings
                         // compare too, from 5.3) is not compiled either.
                         let result_kind = match (k1, k2) {
+                            // 5.1 / 5.2 convert every argument to a
+                            // float (`luaL_checknumber`) and return
+                            // that float, whatever the argument kinds
+                            (RegKind::Int | RegKind::Float, RegKind::Int | RegKind::Float)
+                                if opts.float_only =>
+                            {
+                                RegKind::Float
+                            }
                             (RegKind::Float, RegKind::Float) => RegKind::Float,
                             (RegKind::Int, RegKind::Int) => RegKind::Int,
                             (RegKind::Int, RegKind::Float) | (RegKind::Float, RegKind::Int) => {
@@ -6041,8 +6060,8 @@ fn lower_trace_into_inner<M: Module>(
                             _ => return None,
                         };
                         if matches!(result_kind, RegKind::Float) {
-                            let a1 = use_var_f64(&mut bcx, regs, fold.arg1_reg);
-                            let a2 = use_var_f64(&mut bcx, regs, fold.arg2_reg);
+                            let a1 = use_var_as_f64(&mut bcx, regs, fold.arg1_reg, k1);
+                            let a2 = use_var_as_f64(&mut bcx, regs, fold.arg2_reg, k2);
                             // PUC keeps the first argument unless the
                             // second compares strictly better — not
                             // IEEE fmin/fmax, which differ on NaN and
@@ -10238,6 +10257,7 @@ mod s2b_call_truncation {
         let opts = CompileOptions {
             internal_loop: true,
             pre53: false,
+            float_only: false,
             aot: false,
         };
         let ct =
@@ -10315,6 +10335,7 @@ mod s2b_call_truncation {
         let opts = CompileOptions {
             internal_loop: false,
             pre53: true,
+            float_only: false,
             aot: false,
         };
         assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_none());

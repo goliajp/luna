@@ -209,6 +209,7 @@ impl Vm {
             let opts = crate::jit::trace::CompileOptions {
                 internal_loop: closed_record.side_trace_parent.is_none(),
                 pre53: self.version() <= LuaVersion::Lua53,
+                float_only: self.version() <= LuaVersion::Lua52,
                 aot: false,
             };
             // Route through trace_compiler; split-borrow JitState
