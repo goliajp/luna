@@ -565,44 +565,13 @@ impl Table {
         self.nodes.len()
     }
 
-    /// Walk the chain rooted at the key's main position.
+    /// The node holding key `k`. Interned strings take the pointer-compare
+    /// walk here; every other key walks out of line, so the string path
+    /// (the common one) does not pay for the general walk's saved registers.
+    #[inline]
     fn find_node(&self, k: Value) -> Option<usize> {
-        // read-time probe (gc-verify): both the query key and
-        // every node key compared below must be live. This is the
-        // convergence point of ALL hash lookups, so a dangling string
-        // is named at its dereference site with role attribution.
         #[cfg(feature = "gc-verify")]
-        {
-            let hdr = |v: Value| -> Option<usize> {
-                match v {
-                    Value::Str(s) => Some(s.as_ptr() as usize),
-                    Value::Table(t) => Some(t.as_ptr() as usize),
-                    _ => None,
-                }
-            };
-            if let Some(p) = hdr(k)
-                && crate::runtime::gc_verify_probe::is_freed(p)
-            {
-                panic!("[gc-verify] find_node QUERY key {p:#x} is freed (dangling)");
-            }
-            for (i, n) in self.nodes.iter().enumerate() {
-                // NOTE: tombstones (val nil, key kept) are NOT skipped —
-                // the walk below raw_eq's their keys too.
-                if n.dead_key {
-                    continue;
-                }
-                if let Some(p) = hdr(n.key)
-                    && crate::runtime::gc_verify_probe::is_freed(p)
-                {
-                    panic!(
-                        "[gc-verify] find_node NODE key {p:#x} (slot {i}, \
-                             tombstone {}, table {:#x}) is freed (dangling)",
-                        n.val.is_nil(),
-                        self as *const Table as usize
-                    );
-                }
-            }
-        }
+        self.verify_find_node_keys(k);
         if self.nodes.is_empty() {
             return None;
         }
@@ -611,6 +580,12 @@ impl Table {
         {
             return self.find_short_str(s);
         }
+        self.find_node_chain(k)
+    }
+
+    /// Walk the chain rooted at the key's main position. `nodes` is non-empty.
+    #[inline(never)]
+    fn find_node_chain(&self, k: Value) -> Option<usize> {
         let mut idx = self.main_position(k);
         loop {
             let n = &self.nodes[idx];
@@ -1422,6 +1397,10 @@ impl Table {
 
 #[path = "table_soa.rs"]
 mod soa;
+
+#[cfg(feature = "gc-verify")]
+#[path = "table_gc_verify.rs"]
+mod gc_verify;
 
 #[inline]
 fn normalize_set_key(key: Value) -> Result<Value, TableError> {
