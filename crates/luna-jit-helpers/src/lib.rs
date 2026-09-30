@@ -684,7 +684,10 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(t: i64, key_bits: i64, v
     let table = unsafe { g.as_mut() };
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
-    let _ = table.set(&mut vm.heap, k, v);
+    // a NaN key raises; the interpreter re-runs the call and reports it
+    if table.set(&mut vm.heap, k, v).is_err() {
+        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: invalid table key"));
+    }
 }
 
 /// `t[key]` where the JIT statically expects an Int
