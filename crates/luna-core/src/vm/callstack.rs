@@ -200,7 +200,7 @@ impl<'a> ThreadStack<'a> {
     }
 
     fn is_finalizer(&self, i: usize) -> bool {
-        matches!(self.levels[i], DbgKind::Lua(fi) if self.lua(fi).tm == Some("gc"))
+        matches!(self.levels[i], DbgKind::Lua(fi) if self.lua(fi).tm == Some(crate::runtime::function::FrameTm::Gc))
     }
 
     /// The instruction a Lua level is executing (PUC `currentpc`), with its

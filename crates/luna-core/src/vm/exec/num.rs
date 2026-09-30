@@ -18,27 +18,6 @@ pub(crate) enum ArithOp {
     Shr,
 }
 
-impl ArithOp {
-    /// PUC metamethod event name (`__add` → "add" etc.) used by
-    /// `debug.getinfo(level, "n")` inside a metamethod handler.
-    pub(super) fn mm_name(self) -> &'static str {
-        match self {
-            ArithOp::Add => "add",
-            ArithOp::Sub => "sub",
-            ArithOp::Mul => "mul",
-            ArithOp::Mod => "mod",
-            ArithOp::Pow => "pow",
-            ArithOp::Div => "div",
-            ArithOp::IDiv => "idiv",
-            ArithOp::BAnd => "band",
-            ArithOp::BOr => "bor",
-            ArithOp::BXor => "bxor",
-            ArithOp::Shl => "shl",
-            ArithOp::Shr => "shr",
-        }
-    }
-}
-
 pub(super) fn as_num(v: Value, version: LuaVersion) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),

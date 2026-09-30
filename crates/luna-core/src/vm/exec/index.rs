@@ -135,7 +135,7 @@ impl Vm {
         match self.index_step_from(t, key, probed)? {
             MmOut::Done(v) => self.stack[dst as usize] = v,
             MmOut::Mm { func, recv } => {
-                self.begin_meta_call(func, &[recv, key], MetaAction::Store { dst }, "index")?;
+                self.begin_meta_call(func, &[recv, key], MetaAction::Store { dst })?;
             }
             MmOut::CompareSynth { .. } => unreachable!("CompareSynth from index_step"),
         }
@@ -181,7 +181,7 @@ impl Vm {
         match self.newindex_step_from(t, key, v, probed)? {
             MmOut::Done(_) => {}
             MmOut::Mm { func, recv } => {
-                self.begin_meta_call(func, &[recv, key, v], MetaAction::Discard, "newindex")?;
+                self.begin_meta_call(func, &[recv, key, v], MetaAction::Discard)?;
             }
             MmOut::CompareSynth { .. } => unreachable!("CompareSynth from newindex_step"),
         }

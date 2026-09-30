@@ -33,11 +33,10 @@ pub struct Frame {
     /// interface does not read it: it places the running natives themselves
     /// among the frames.
     pub from_c: bool,
-    /// the metamethod event this frame is handling (e.g. "close" for a
-    /// `__close` handler call); the debug interface reads `"gc"` to recognize
-    /// a finalizer (PUC `CIST_FIN`), and names other handlers from the
-    /// instruction that called them.
-    pub tm: Option<&'static str>,
+    /// the metamethod event this frame is handling; the debug interface
+    /// reads [`FrameTm::Gc`] to recognize a finalizer (PUC `CIST_FIN`), and
+    /// names other handlers from the instruction that called them.
+    pub tm: Option<FrameTm>,
     /// true when this frame is the hook function itself (PUC sets
     /// `CIST_HOOKED`). `debug.getinfo(1).namewhat` returns `"hook"` for it.
     pub is_hook: bool,
@@ -53,6 +52,19 @@ pub struct Frame {
     /// each adds one argument (PUC 5.5 `CIST_CCMT`, reported as
     /// `getinfo("t").extraargs`).
     pub ccmt: u8,
+}
+
+/// Which kind of metamethod a Lua frame was called as (PUC
+/// `CallInfo.u.l.tm`, reduced to what the VM asks of it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum FrameTm {
+    /// a `__gc` finalizer
+    Gc,
+    /// a `__close` handler
+    Close,
+    /// any other metamethod
+    Meta,
 }
 
 /// An entry on a thread's call stack: either a Lua activation record or a
@@ -225,4 +237,16 @@ pub enum MetaAction {
         /// First operand register of the original concat span.
         base_a: u32,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // a frame is written on every call and read on every return
+    #[test]
+    fn a_lua_frame_is_at_most_40_bytes() {
+        assert!(std::mem::size_of::<Frame>() <= 40);
+        assert!(std::mem::size_of::<CallFrame>() <= 56);
+    }
 }

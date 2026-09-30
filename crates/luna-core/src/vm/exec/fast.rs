@@ -465,7 +465,7 @@ impl Vm {
                                 return Err(self.type_err("perform arithmetic on", v));
                             }
                             let dst = base + inst.a();
-                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst }, "unm")?;
+                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst })?;
                         }
                     }
                 }
@@ -485,7 +485,7 @@ impl Vm {
                                 return Err(self.type_err("perform bitwise operation on", v));
                             }
                             let dst = base + inst.a();
-                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst }, "bnot")?;
+                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst })?;
                         }
                     }
                 }
@@ -513,12 +513,7 @@ impl Vm {
                         MmOut::Done(r) => self.set_r(base, inst.a(), r),
                         MmOut::Mm { func, recv } => {
                             let dst = base + inst.a();
-                            self.begin_meta_call(
-                                func,
-                                &[recv, recv],
-                                MetaAction::Store { dst },
-                                "len",
-                            )?;
+                            self.begin_meta_call(func, &[recv, recv], MetaAction::Store { dst })?;
                         }
                         MmOut::CompareSynth { .. } => {
                             unreachable!("CompareSynth from len_step")
@@ -613,7 +608,7 @@ impl Vm {
                         next!()
                     }
                     let step = self.eq_step(l, r);
-                    self.op_compare(step, l, r, inst.k(), "eq")?;
+                    self.op_compare(step, l, r, inst.k())?;
                 }
                 Op::EqK => {
                     let l = reg!(inst.a());
@@ -625,7 +620,7 @@ impl Vm {
                         next!()
                     }
                     let step = self.eq_step(l, r);
-                    self.op_compare(step, l, r, inst.k(), "eq")?;
+                    self.op_compare(step, l, r, inst.k())?;
                 }
                 Op::Lt => {
                     let l = reg!(inst.a());
@@ -638,7 +633,7 @@ impl Vm {
                         next!()
                     }
                     let step = self.less_step(l, r, false)?;
-                    self.op_compare(step, l, r, inst.k(), "lt")?;
+                    self.op_compare(step, l, r, inst.k())?;
                 }
                 Op::Le => {
                     let l = reg!(inst.a());
@@ -650,7 +645,7 @@ impl Vm {
                         next!()
                     }
                     let step = self.less_step(l, r, true)?;
-                    self.op_compare(step, l, r, inst.k(), "le")?;
+                    self.op_compare(step, l, r, inst.k())?;
                 }
                 Op::Test => {
                     // the JMP that follows runs when the condition equals k
