@@ -27,6 +27,7 @@ mod call_fast;
 mod cont_trap_tests;
 mod fast;
 mod fast_arith;
+mod frame_ops;
 mod index;
 mod index_fast;
 mod limits;
@@ -6370,73 +6371,19 @@ impl Vm {
             };
             // the fast loop may have called or returned into another frame
             let &Frame {
-                closure: cl,
-                base,
-                func_slot,
-                n_varargs,
-                ..
+                closure: cl, base, ..
             } = self.top_frame();
             match inst.op() {
-                Op::LoadKx => {
-                    let extra = cl.proto.code[self.pc_of_top() as usize];
-                    self.bump_pc();
-                    let v = cl.proto.consts[extra.ax() as usize];
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::NewTable => {
-                    let t = self.heap.new_table();
-                    self.set_r(base, inst.a(), Value::Table(t));
-                    self.maybe_collect_garbage(base + inst.a() + 1);
-                }
-                Op::SetList => {
-                    let a = inst.a();
-                    let abs_a = base + a;
-                    // only `debug.setlocal` or crafted bytecode can put a
-                    // non-table here; PUC crashes, luna raises
-                    let t = match self.r(base, a) {
-                        Value::Table(t) => t,
-                        v => return Err(self.type_err("index", v)),
-                    };
-                    let n = if inst.b() == 0 {
-                        self.top - (abs_a + 1)
-                    } else {
-                        inst.b()
-                    };
-                    let offset = if inst.k() {
-                        let extra = cl.proto.code[self.pc_of_top() as usize];
-                        self.bump_pc();
-                        extra.ax() as i64
-                    } else {
-                        inst.c() as i64
-                    };
-                    for i in 1..=n {
-                        let v = self.r(base, a + i);
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        if let Err(TableError::Overflow) =
-                            unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
-                        {
-                            return Err(self.rt_err("table overflow"));
-                        }
-                    }
-                    // one barrier_back covers every store this op did — PUC's
-                    // `luaC_barrierback_` once-per-table optimisation
-                    self.heap
-                        .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                    // the element temps above the table are now consumed
-                    self.maybe_collect_garbage(base + a + 1);
-                }
-                Op::Pow => {
-                    let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                    self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)?
-                }
-                Op::Concat => {
-                    // right-associative fold over operands at base+a .. base+a+n,
-                    // in place on the stack so a yielding __concat can suspend.
-                    let a = inst.a();
-                    let n = inst.b();
-                    self.top = base + a + n;
-                    self.concat_run(base + a)?;
-                }
+                Op::LoadKx
+                | Op::NewTable
+                | Op::SetList
+                | Op::Pow
+                | Op::Concat
+                | Op::ForPrep
+                | Op::TForPrep
+                | Op::Closure
+                | Op::Vararg
+                | Op::GetVarg => self.run_frame_op(inst)?,
                 Op::Close => {
                     // Yieldable: drive __close handlers through the
                     // interpreter loop so a coroutine.yield() inside a
@@ -6615,12 +6562,6 @@ impl Vm {
                         return Ok(vals);
                     }
                 }
-                Op::ForPrep => self.for_prep(inst, base)?,
-                Op::TForPrep => {
-                    // the 4th control slot is the iterator's closing value
-                    self.register_tbc(base + inst.a() + 3)?;
-                    self.add_pc(inst.bx() as i32);
-                }
                 Op::TForCall => {
                     let abs = base + inst.a();
                     let need = (abs + 7) as usize;
@@ -6632,186 +6573,6 @@ impl Vm {
                     self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
                     let nvars = inst.c() as i32;
                     self.begin_call(abs + 4, Some(2), nvars, false)?;
-                }
-                Op::Closure => {
-                    let proto = cl.proto.protos[inst.bx() as usize];
-                    let n_ups = proto.upvals.len();
-                    // Build upvals on the stack for small
-                    // closures, skipping the per-call Vec/Box alloc
-                    // that closure_alloc's 10k iters pay. INLINE_UPVALS_N
-                    // = 2 covers most Lua source (1 captured local, or
-                    // _ENV + a single capture). Beyond that, fall back
-                    // to a heap Vec.
-                    use crate::runtime::function::INLINE_UPVALS_N;
-                    let mut stack_buf: [std::mem::MaybeUninit<
-                        Gc<crate::runtime::function::Upvalue>,
-                    >; INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-                    let mut heap_buf: Vec<Gc<crate::runtime::function::Upvalue>> = Vec::new();
-                    let use_inline = n_ups <= INLINE_UPVALS_N;
-                    if !use_inline {
-                        heap_buf.reserve_exact(n_ups);
-                    }
-                    for (i, d) in proto.upvals.iter().enumerate() {
-                        let uv = if d.in_stack {
-                            self.find_or_create_upval(base + d.index as u32)
-                        } else {
-                            cl.upvals()[d.index as usize]
-                        };
-                        if use_inline {
-                            stack_buf[i] = std::mem::MaybeUninit::new(uv);
-                        } else {
-                            heap_buf.push(uv);
-                        }
-                    }
-                    // Tiny shim around the two paths so the 5.1 _ENV
-                    // clone + cache check below see one uniform
-                    // `&mut [Gc<Upvalue>]`. The stack_buf slice points
-                    // into the local frame (still valid through the
-                    // rest of this Op::Closure handler).
-                    let ups: &mut [Gc<crate::runtime::function::Upvalue>] = if use_inline {
-                        // SAFETY: the first n_ups slots of stack_buf
-                        // were initialised above; we hand out a slice
-                        // covering exactly them.
-                        unsafe {
-                            std::slice::from_raw_parts_mut(
-                                stack_buf.as_mut_ptr()
-                                    as *mut Gc<crate::runtime::function::Upvalue>,
-                                n_ups,
-                            )
-                        }
-                    } else {
-                        &mut heap_buf[..]
-                    };
-                    // PUC 5.1 had per-function environments: every Lua
-                    // function carried its own `env` slot, snapshotted from
-                    // the creating function's env at closure time, so a
-                    // `setfenv` on one closure never bled into a sibling.
-                    // luna models that by giving the 5.1 closure a *fresh*
-                    // closed upvalue for whichever cell holds `_ENV`, seeded
-                    // from the parent's current env value. Only that cell is
-                    // cloned — every other upvalue keeps its open/shared
-                    // identity (so e.g. `local function range(...) ...
-                    // range(...) ... end` still sees its self-reference). 5.2+
-                    // keeps the shared-upval model (and the proto cache that
-                    // depends on it).
-                    let v51 = self.version() <= LuaVersion::Lua51;
-                    if v51 && proto.env_upval_idx != u8::MAX {
-                        let i = proto.env_upval_idx as usize;
-                        let cur = match ups[i].state() {
-                            UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
-                            UpvalState::Closed(v) => v,
-                        };
-                        ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
-                    }
-                    let ups_slice: &[Gc<crate::runtime::function::Upvalue>] = ups;
-                    // PUC 5.2+ `getcached`: a Proto remembers its last LClosure
-                    // and reuses it when every fresh-upvalue binding still
-                    // points to the same Upvalue object as the cached one.
-                    // That keeps `function() return outer end` repeated in a
-                    // loop comparing equal across iterations (the captured
-                    // outer is a shared open upvalue), while `function()
-                    // return loop_var end` gets a fresh closure each round
-                    // because the loop var is re-created per iteration. PUC
-                    // 5.1 predated the cache, and the per-closure `_ENV`
-                    // clone above would defeat it anyway, so skip it.
-                    let nc = if v51 {
-                        self.heap.new_closure_inline(proto, ups_slice)
-                    } else {
-                        let cached = proto.cache.get().filter(|c| {
-                            c.upvals().len() == ups_slice.len()
-                                && c.upvals()
-                                    .iter()
-                                    .zip(ups_slice.iter())
-                                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
-                        });
-                        match cached {
-                            Some(c) => c,
-                            None => {
-                                let n = self.heap.new_closure_inline(proto, ups_slice);
-                                proto.cache.set(Some(n));
-                                n
-                            }
-                        }
-                    };
-                    self.set_r(base, inst.a(), Value::Closure(nc));
-                    self.maybe_collect_garbage(base + inst.a() + 1);
-                }
-                Op::Vararg => {
-                    let abs_a = base + inst.a();
-                    let wanted = inst.c() as i32 - 1;
-                    // A materialized named vararg lives in func_slot (its writes
-                    // must be visible to `...`); otherwise spread the extra args
-                    // straight off the stack at func_slot+1 .. +n_varargs.
-                    let vt = match self.stack[func_slot as usize] {
-                        Value::Table(t) => Some(t),
-                        _ => None,
-                    };
-                    let n = match vt {
-                        Some(t) => {
-                            let n_key = Value::Str(self.heap.intern(b"n"));
-                            // PUC getnumargs: a named vararg `t.n` set out of the
-                            // integer range [0, INT_MAX/2] is rejected here
-                            match t.get(n_key) {
-                                Value::Int(n) if (n as u64) <= (i32::MAX as u64 / 2) => n as u32,
-                                _ => return Err(self.rt_err("vararg table has no proper 'n'")),
-                            }
-                        }
-                        None => n_varargs,
-                    };
-                    let count = if wanted < 0 { n } else { wanted as u32 };
-                    // a named vararg's `n` can be set to anything up to
-                    // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
-                    // stack cannot hold
-                    if abs_a + count > MAX_LUA_STACK {
-                        return Err(self.rt_err("stack overflow"));
-                    }
-                    let need = (abs_a + count) as usize;
-                    if self.stack.len() < need {
-                        self.stack.resize(need, Value::Nil);
-                    }
-                    for i in 0..count {
-                        let v = if i >= n {
-                            Value::Nil
-                        } else if let Some(t) = vt {
-                            t.get_int(i as i64 + 1)
-                        } else {
-                            self.stack[(func_slot + 1 + i) as usize]
-                        };
-                        self.stack[(abs_a + i) as usize] = v;
-                    }
-                    if wanted < 0 {
-                        self.top = abs_a + count;
-                    }
-                }
-                Op::GetVarg => {
-                    // materialize the vararg table (PUC table.pack shape) from the
-                    // stack varargs — used when the named vararg is written /
-                    // escapes / is `_ENV`. It is kept BOTH in func_slot (so `...`
-                    // sees later writes) and in the local register R[A].
-                    let n = n_varargs;
-                    let t = self.heap.new_table();
-                    {
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        let tm = unsafe { t.as_mut() };
-                        for i in 0..n {
-                            let _ = tm.set_int(
-                                &mut self.heap,
-                                i as i64 + 1,
-                                self.stack[(func_slot + 1 + i) as usize],
-                            );
-                        }
-                    }
-                    let n_key = Value::Str(self.heap.intern(b"n"));
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                    unsafe { t.as_mut() }
-                        .set(&mut self.heap, n_key, Value::Int(n as i64))
-                        .expect("'n' is a valid key");
-                    // once-per-table barrier (mirror SETLIST): t is born BLACK
-                    // during Propagate; the bulk inserts above don't barrier.
-                    self.heap
-                        .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                    self.stack[func_slot as usize] = Value::Table(t);
-                    self.set_r(base, inst.a(), Value::Table(t));
                 }
                 Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
                 op => unreachable!("{op:?} is run by the fast loop"),
