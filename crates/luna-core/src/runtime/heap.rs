@@ -213,6 +213,9 @@ pub struct Heap {
     bytes: usize,
     /// byte threshold at which the VM should run a collection (auto-GC pacing)
     next_gc: usize,
+    /// `next_gc`, or `usize::MAX` while auto-GC is stopped: the one
+    /// comparison a safe point makes
+    gc_limit: usize,
     /// PUC `g->currentwhite`: which white bit (WHITE0 or WHITE1) means
     /// "born / surviving this cycle". The other white is the dead-white that
     /// sweep collects. Flipped at the end of each mark cycle (`atomic`).
@@ -288,6 +291,7 @@ impl Heap {
             live: 0,
             bytes: 0,
             next_gc: GC_MIN_THRESHOLD,
+            gc_limit: GC_MIN_THRESHOLD,
             current_white: WHITE0,
             gray: Vec::new(),
             propagate: None,
@@ -500,6 +504,7 @@ impl Heap {
             f,
             upvals,
             is_async: false,
+            kind: crate::runtime::function::NativeKind::of(f),
         }))
     }
 
@@ -520,6 +525,7 @@ impl Heap {
             f,
             upvals,
             is_async: true,
+            kind: crate::runtime::function::NativeKind::Async,
         }))
     }
 
@@ -659,7 +665,7 @@ impl Heap {
     /// check for the interpreter loop).
     #[inline(always)]
     pub fn gc_due(&self) -> bool {
-        !self.gc_stopped && self.bytes >= self.next_gc
+        self.bytes >= self.gc_limit
     }
 
     /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
@@ -669,6 +675,12 @@ impl Heap {
 
     pub(crate) fn gc_set_stopped(&mut self, stopped: bool) {
         self.gc_stopped = stopped;
+        self.set_next_gc(self.next_gc);
+    }
+
+    fn set_next_gc(&mut self, next: usize) {
+        self.next_gc = next;
+        self.gc_limit = if self.gc_stopped { usize::MAX } else { next };
     }
 
     /// Re-arm with caller-supplied `pause` (PUC param, % of live bytes). The
@@ -682,13 +694,13 @@ impl Heap {
             .saturating_mul(pause)
             .saturating_div(100)
             .max(GC_MIN_THRESHOLD);
-        self.next_gc = target;
+        self.set_next_gc(target);
     }
 
     /// Re-arm the auto-GC threshold after a collection (PUC pause-style: next
     /// collection once the live set roughly doubles).
     pub fn rearm_gc(&mut self) {
-        self.next_gc = self.bytes.saturating_mul(2).max(GC_MIN_THRESHOLD);
+        self.set_next_gc(self.bytes.saturating_mul(2).max(GC_MIN_THRESHOLD));
     }
 
     /// Apply a `before → after` box-size delta from a Table mutation

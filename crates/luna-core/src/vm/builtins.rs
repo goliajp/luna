@@ -656,7 +656,7 @@ fn unnamed_native_name(vm: &mut Vm) -> String {
     if vm.version() == crate::version::LuaVersion::Lua51 {
         return "?".to_string();
     }
-    let Some(target) = vm.running_natives.last().map(|nc| nc.f) else {
+    let Some(target) = vm.running_natives.last().map(|a| a.nc.f) else {
         return "?".to_string();
     };
     vm.pushglobalfuncname(target)
