@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! The call stack as PUC's debug interface walks it.
 //!
 //! PUC keeps one `CallInfo` per running function, Lua or C, and phrases
@@ -21,6 +22,7 @@ use crate::vm::isa::Op;
 /// frames below it when it was entered.
 #[derive(Clone, Copy)]
 pub(crate) struct NativeAct {
+    pub(crate) nc: Gc<NativeClosure>,
     pub(crate) func_slot: u32,
     pub(crate) nargs: u32,
     pub(crate) depth: u32,
@@ -85,11 +87,8 @@ pub(crate) struct Ar {
 /// A read-only view of one thread's call stack.
 pub(crate) struct ThreadStack<'a> {
     pub(crate) frames: &'a [CallFrame],
-    /// `__call` counts of the Lua frames, by index into `frames`
-    frame_ccmt: &'a [u8],
     pub(crate) stack: &'a [Value],
     top: u32,
-    natives: &'a [Gc<NativeClosure>],
     acts: &'a [NativeAct],
     /// level 0 first
     pub(crate) levels: Vec<DbgKind>,
@@ -99,10 +98,8 @@ impl<'a> ThreadStack<'a> {
     fn new(
         v51: bool,
         frames: &'a [CallFrame],
-        frame_ccmt: &'a [u8],
         stack: &'a [Value],
         top: u32,
-        natives: &'a [Gc<NativeClosure>],
         acts: &'a [NativeAct],
         yield_slot: Option<u32>,
     ) -> Self {
@@ -140,10 +137,8 @@ impl<'a> ThreadStack<'a> {
         }
         ThreadStack {
             frames,
-            frame_ccmt,
             stack,
             top,
-            natives,
             acts,
             levels,
         }
@@ -165,7 +160,7 @@ impl<'a> ThreadStack<'a> {
         match self.levels[i] {
             DbgKind::Lua(fi) => Value::Closure(self.lua(fi).closure),
             DbgKind::Tail => Value::Nil,
-            DbgKind::C(CLevel::Native(k)) => Value::Native(self.natives[k]),
+            DbgKind::C(CLevel::Native(k)) => Value::Native(self.acts[k].nc),
             DbgKind::C(CLevel::Cont(fi)) => self.stack[self.cont_slot(fi) as usize],
             DbgKind::C(CLevel::Yield(fs)) => self.stack[fs as usize],
         }
@@ -376,22 +371,18 @@ impl Vm {
                 ThreadStack::new(
                     v51,
                     &c.frames,
-                    &c.frame_ccmt,
                     &c.stack,
                     c.top,
-                    &self.running_natives[natives.clone()],
-                    &self.running_native_acts[natives],
+                    &self.running_natives[natives],
                     yield_slot,
                 )
             }
             _ => ThreadStack::new(
                 v51,
                 &self.frames,
-                &self.frame_ccmt,
                 &self.stack,
                 self.top,
                 &self.running_natives[self.natives_base..],
-                &self.running_native_acts[self.natives_base..],
                 None,
             ),
         }
@@ -472,7 +463,7 @@ impl Vm {
                 let mut ar = self.closure_ar(f.closure);
                 ar.currentline = ts.currentline(i);
                 ar.istailcall = ts.is_tail(i);
-                ar.extraargs = ts.frame_ccmt[fi] as i64;
+                ar.extraargs = f.ccmt as i64;
                 ar
             }
             DbgKind::C(c) => {
@@ -1039,7 +1030,6 @@ fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
 /// A native that raised the error in flight, and where it ran.
 #[derive(Clone, Copy)]
 pub(crate) struct ErroredNative {
-    nc: Gc<NativeClosure>,
     act: NativeAct,
     err: Value,
 }
@@ -1057,9 +1047,9 @@ impl Vm {
 
     /// Is the running function a native (the level-0 `CallInfo` a C one)?
     pub(crate) fn native_on_top(&self) -> bool {
-        self.running_native_acts.len() > self.natives_base
+        self.running_natives.len() > self.natives_base
             && self
-                .running_native_acts
+                .running_natives
                 .last()
                 .is_some_and(|a| a.depth as usize == self.frames.len())
     }
@@ -1068,12 +1058,7 @@ impl Vm {
     /// the time the error reaches `unwind`, where PUC still has it; natives
     /// an error passes through on its way out collect innermost first, and
     /// a different error starts the list over.
-    pub(crate) fn note_errored_native(
-        &mut self,
-        nc: Gc<NativeClosure>,
-        act: NativeAct,
-        err: Value,
-    ) {
+    pub(crate) fn note_errored_native(&mut self, act: NativeAct, err: Value) {
         let continues = self
             .errored_natives
             .last()
@@ -1081,7 +1066,7 @@ impl Vm {
         if !continues {
             self.errored_natives.clear();
         }
-        self.errored_natives.push(ErroredNative { nc, act, err });
+        self.errored_natives.push(ErroredNative { act, err });
     }
 
     /// The natives recorded for `err` that were running at the top of the
@@ -1127,8 +1112,7 @@ impl Vm {
         let raised_by = self.take_errored_natives(err);
         let base = self.running_natives.len();
         for e in raised_by.iter().rev() {
-            self.running_natives.push(e.nc);
-            self.running_native_acts.push(e.act);
+            self.running_natives.push(e.act);
         }
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
@@ -1159,7 +1143,6 @@ impl Vm {
             self.msgh_applied = Some(out);
         }
         self.running_natives.truncate(base);
-        self.running_native_acts.truncate(base);
         out
     }
 

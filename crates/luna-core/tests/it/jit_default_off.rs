@@ -84,3 +84,33 @@ fn a_flag_set_before_install_is_kept() {
     assert!(!vm.jit_enabled());
     assert!(!vm.trace_jit_enabled());
 }
+
+fn eval_async_to_end(vm: &mut Vm) {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    let mut fut =
+        std::pin::pin!(vm.eval_async("local s = 0 for i = 1, 100 do s = s + i end return s"));
+    let mut cx = Context::from_waker(Waker::noop());
+    loop {
+        if let Poll::Ready(r) = fut.as_mut().poll(&mut cx) {
+            assert!(matches!(r.expect("eval_async")[0], Value::Int(5050)));
+            return;
+        }
+    }
+}
+
+#[test]
+fn eval_async_before_install_leaves_the_default() {
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    eval_async_to_end(&mut vm);
+    assert!(!vm.jit_enabled());
+    vm.install_jit_backend(NullJitBackend, NullJitBackend);
+    assert!(vm.jit_enabled());
+    assert!(vm.trace_jit_enabled());
+
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    vm.set_jit_enabled(false);
+    eval_async_to_end(&mut vm);
+    vm.install_jit_backend(NullJitBackend, NullJitBackend);
+    assert!(!vm.jit_enabled());
+}

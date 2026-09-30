@@ -13,16 +13,17 @@ use crate::numeric::{self, Num};
 use crate::runtime::heap::GcHeader;
 use crate::runtime::{
     AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, LuaClosure,
-    MetaAction, MetaCont, NativeClosure, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
+    MetaAction, MetaCont, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
 };
 use crate::version::LuaVersion;
-use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
 use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
+use native_call::NativeKind;
 
 mod arith;
 mod index;
+pub(crate) mod native_call;
 mod num;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
@@ -77,14 +78,6 @@ pub struct Vm {
     pub heap: Heap,
     pub(crate) stack: Vec<Value>,
     pub(crate) frames: Vec<CallFrame>,
-    /// How many `__call` metamethods were resolved to reach each Lua frame,
-    /// by index into `frames`; each adds one argument (PUC 5.5 `CIST_CCMT`
-    /// bits, reported as `getinfo("t").extraargs`). Written whenever a Lua
-    /// frame is pushed, so the entry for a live frame is always its own;
-    /// entries past `frames.len()` are stale and never read. Kept beside
-    /// `frames` rather than in `Frame` because `Frame` is public with all
-    /// fields public, where a new field is a breaking change.
-    pub(crate) frame_ccmt: Vec<u8>,
     /// Shadow of `self.frames.len()`. Synced on every push/pop in the
     /// `frames_push_sync`/`frames_pop_sync` helpers (debug-asserted on
     /// use). Not consumed by readers yet; it is scaffolding for replacing
@@ -328,11 +321,10 @@ pub struct Vm {
     /// native call (PUC `ar.name == NULL` at level 0 because the level-0
     /// caller is C, not Lua) and qualify the running function's name via
     /// `pushglobalfuncname` (e.g. `'sort'` → `'table.sort'`).
-    pub(crate) running_natives: Vec<Gc<NativeClosure>>,
-    /// Parallel to `running_natives`: where each native sits on the value
-    /// and frame stacks, so the debug interface can place it among the Lua
+    /// Each entry also records where the native sits on the value and
+    /// frame stacks, so the debug interface can place it among the Lua
     /// activations as PUC's CallInfo chain would (see `callstack`).
-    pub(crate) running_native_acts: Vec<crate::vm::callstack::NativeAct>,
+    pub(crate) running_natives: Vec<crate::vm::callstack::NativeAct>,
     /// Index into `running_natives` where the running thread's own natives
     /// begin; the ones below belong to the threads that resumed it.
     pub(crate) natives_base: usize,
@@ -538,7 +530,6 @@ pub const HOOK_MASK_COUNT: u32 = 8;
 struct SavedCtx {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
-    frame_ccmt: Vec<u8>,
     open_upvals: Vec<(u32, Gc<Upvalue>)>,
     tbc: Vec<u32>,
     top: u32,
@@ -612,6 +603,9 @@ pub(crate) enum Mm {
     Gc,
     Pairs,
 }
+
+// one absent bit per event in `Table::flags`
+const _: () = assert!(MM_NAMES.len() <= 32);
 
 const MM_NAMES: [&str; 28] = [
     "__index",
@@ -965,7 +959,6 @@ impl Vm {
             heap,
             stack: Vec::new(),
             frames: Vec::new(),
-            frame_ccmt: Vec::new(),
             frames_top: 0,
             open_upvals: Vec::new(),
             tbc: Vec::new(),
@@ -1037,7 +1030,6 @@ impl Vm {
             error_traceback: None,
             public_call_depth: 0,
             running_natives: Vec::new(),
-            running_native_acts: Vec::new(),
             natives_base: 0,
             // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
@@ -2060,7 +2052,6 @@ impl Vm {
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
-                m.frame_ccmt = rctx.frame_ccmt;
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
@@ -2096,7 +2087,6 @@ impl Vm {
             m.status = CoroStatus::Dead;
             m.stack = Vec::new();
             m.frames = Vec::new();
-            m.frame_ccmt = Vec::new();
             m.open_upvals = Vec::new();
             m.tbc = Vec::new();
             m.top = 0;
@@ -2203,7 +2193,6 @@ impl Vm {
         let saved = SavedCtx {
             stack: std::mem::take(&mut self.stack),
             frames: std::mem::take(&mut self.frames),
-            frame_ccmt: std::mem::take(&mut self.frame_ccmt),
             open_upvals: std::mem::take(&mut self.open_upvals),
             tbc: std::mem::take(&mut self.tbc),
             top: self.top,
@@ -2218,7 +2207,6 @@ impl Vm {
     fn put_ctx(&mut self, c: SavedCtx) {
         self.stack = c.stack;
         self.frames = c.frames;
-        self.frame_ccmt = c.frame_ccmt;
         self.open_upvals = c.open_upvals;
         self.tbc = c.tbc;
         self.top = c.top;
@@ -2234,7 +2222,6 @@ impl Vm {
         let m = unsafe { co.as_mut() };
         self.stack = std::mem::take(&mut m.stack);
         self.frames = std::mem::take(&mut m.frames);
-        self.frame_ccmt = std::mem::take(&mut m.frame_ccmt);
         self.open_upvals = std::mem::take(&mut m.open_upvals);
         self.tbc = std::mem::take(&mut m.tbc);
         self.top = m.top;
@@ -2251,7 +2238,6 @@ impl Vm {
         let m = unsafe { co.as_mut() };
         m.stack = c.stack;
         m.frames = c.frames;
-        m.frame_ccmt = c.frame_ccmt;
         m.open_upvals = c.open_upvals;
         m.tbc = c.tbc;
         m.top = c.top;
@@ -2290,7 +2276,6 @@ impl Vm {
                 let m = unsafe { r.as_mut() };
                 m.stack = rctx.stack;
                 m.frames = rctx.frames;
-                m.frame_ccmt = rctx.frame_ccmt;
                 m.open_upvals = rctx.open_upvals;
                 m.tbc = rctx.tbc;
                 m.top = rctx.top;
@@ -2554,7 +2539,13 @@ impl Vm {
             if let Some(evt) = evt {
                 let was_in_hook = self.in_hook;
                 self.in_hook = true;
+                // PUC `luaD_hook` roots the whole running frame while a hook
+                // runs: a register written after the last safe point may sit
+                // above `gc_top`, and the hook may collect
+                let gc_top = self.gc_top;
+                self.gc_top = gc_top.max(self.stack.len() as u32);
                 rh(self, evt);
+                self.gc_top = gc_top;
                 self.in_hook = was_in_hook;
                 self.trap = true;
             }
@@ -2780,9 +2771,26 @@ impl Vm {
     /// The metamethod of `v` for `mm`, or nil.
     pub(crate) fn get_mm(&self, v: Value, mm: Mm) -> Value {
         match self.metatable_of(v) {
-            Some(mt) => mt.get(Value::Str(self.mm_names[mm as usize])),
+            Some(mt) => self.fast_tm(mt, mm),
             None => Value::Nil,
         }
+    }
+
+    /// `mt[mm]` through the absent-metamethod bits in `mt.flags` (PUC
+    /// `fasttm`): a miss sets the event's bit, and any key the table gains
+    /// clears them all.
+    #[inline]
+    pub(crate) fn fast_tm(&self, mt: Gc<Table>, mm: Mm) -> Value {
+        let bit = 1u32 << mm as u32;
+        if mt.flags & bit != 0 {
+            return Value::Nil;
+        }
+        let v = mt.get_str(self.mm_names[mm as usize]);
+        if v.is_nil() {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            unsafe { mt.as_mut() }.flags |= bit;
+        }
+        v
     }
 
     /// PUC 5.1 `get_compTM`: a comparison metamethod (`__eq` / `__lt` / `__le`)
@@ -2793,8 +2801,7 @@ impl Vm {
     pub(crate) fn get_comp_mm(&self, l: Value, r: Value, mm: Mm) -> Value {
         let mt1 = self.metatable_of(l);
         let Some(mt1) = mt1 else { return Value::Nil };
-        let key = Value::Str(self.mm_names[mm as usize]);
-        let tm1 = mt1.get(key);
+        let tm1 = self.fast_tm(mt1, mm);
         if tm1.is_nil() {
             return Value::Nil;
         }
@@ -2803,7 +2810,7 @@ impl Vm {
         if mt1.as_ptr() == mt2.as_ptr() {
             return tm1;
         }
-        let tm2 = mt2.get(key);
+        let tm2 = self.fast_tm(mt2, mm);
         if tm2.is_nil() {
             return Value::Nil;
         }
@@ -2901,10 +2908,7 @@ impl Vm {
     /// O(SWEEP_DIVISOR) safe-points regardless of size.
     #[inline(always)]
     pub(crate) fn maybe_collect_garbage(&mut self, live_top: u32) {
-        if self.gc_finalizing {
-            return;
-        }
-        if !self.heap.gc_due() {
+        if !self.heap.gc_due() || self.gc_finalizing {
             return;
         }
         // Bare `live_top`, no `max(self.top)` widening: every frame-pop
@@ -2923,6 +2927,16 @@ impl Vm {
         if self.gc_step(budget) {
             self.heap.rearm_gc_pause(self.gc_pause);
         }
+    }
+
+    /// The running stack's contract with the collector (PUC
+    /// `traversethread`): the slots from `gc_top` up are dead when a cycle's
+    /// marking ends, so they are cleared right then, before the sweep frees
+    /// anything they point to. The other threads' stacks are marked whole.
+    /// So every slot of every stack holds nil or a live value.
+    fn clear_dead_stack(&mut self) {
+        let lo = (self.gc_top as usize).min(self.stack.len());
+        self.stack[lo..].fill(Value::Nil);
     }
 
     /// Enumerate the GC roots: first-class `Value` roots plus bare-object
@@ -3004,8 +3018,8 @@ impl Vm {
         // closure that's actively executing, leaving `nc.upvals`
         // dangling and the Rust local `nc` pointing at recycled memory
         // — the SIGSEGV pops on the very next field access or pop.
-        for &nc in &self.running_natives {
-            roots.push(Value::Native(nc));
+        for a in &self.running_natives {
+            roots.push(Value::Native(a.nc));
         }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
@@ -3075,6 +3089,7 @@ impl Vm {
         if self.gc_finalizing {
             return 0;
         }
+        self.clear_dead_stack();
         let (roots, extra) = self.gc_roots();
         let freed = self.heap.collect_ex(&roots, &extra);
         #[cfg(feature = "gc-verify")]
@@ -3159,6 +3174,7 @@ impl Vm {
         if self.gc_finalizing {
             return Ok(0);
         }
+        self.clear_dead_stack();
         let (roots, extra) = self.gc_roots();
         let freed = self.heap.collect_ex(&roots, &extra);
         #[cfg(feature = "gc-verify")]
@@ -3926,18 +3942,7 @@ impl Vm {
             // pairs, an async native) pushes frames or parks a future
             // instead of returning its results here
             let runs_to_completion = match self.stack[abs as usize] {
-                Value::Native(nc) => {
-                    use crate::runtime::value::NativeFn;
-                    !nc.is_async
-                        && ![
-                            nat_pcall as NativeFn,
-                            nat_xpcall as NativeFn,
-                            nat_host_xpcall as NativeFn,
-                            nat_pairs as NativeFn,
-                        ]
-                        .iter()
-                        .any(|&g| std::ptr::fn_addr_eq(nc.f, g))
-                }
+                Value::Native(nc) => nc.kind == NativeKind::Plain,
                 _ => false,
             };
             if !runs_to_completion || self.begin_call(abs + 4, Some(2), nvars, false).is_err() {
@@ -4024,7 +4029,6 @@ impl Vm {
         pc: u32,
         nresults: i32,
     ) {
-        self.set_frame_ccmt(0);
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -4043,6 +4047,7 @@ impl Vm {
                 tm: None,
                 is_hook: false,
                 tailcalls: 0,
+                ccmt: 0,
             }),
         );
     }
@@ -4153,8 +4158,8 @@ impl Vm {
     pub fn running_native_upvalue(&self, i: usize) -> Value {
         match self.running_natives.last() {
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            Some(nc) => unsafe {
-                let upvals = &(*nc.as_ptr()).upvals;
+            Some(a) => unsafe {
+                let upvals = &(*a.nc.as_ptr()).upvals;
                 upvals.get(i).copied().unwrap_or(Value::Nil)
             },
             None => Value::Nil,
@@ -4289,6 +4294,9 @@ impl Vm {
             if !self.heap.gc_step_propagate(budget) {
                 return false;
             }
+            self.clear_dead_stack();
+            let (roots, extra) = self.gc_roots();
+            self.heap.gc_remark(&roots, &extra);
             self.heap.gc_finish_atomic();
             // any __gc scheduled by atomic — run before sweep so a finalizer
             // re-registering `self` re-enters the next cycle, not this sweep
@@ -4414,100 +4422,10 @@ impl Vm {
                     return Ok(true);
                 }
                 Value::Native(nc) => {
-                    // Async-marked NativeClosure.
-                    // Route through the cooperative-yield mechanism
-                    // when async_mode is on; reject when called from
-                    // a sync `eval`/`call_value` path (would have no
-                    // executor to drive the returned future).
-                    if nc.is_async {
-                        if !self.async_mode {
-                            let s = Value::Str(
-                                self.heap.intern(b"async native called in sync context"),
-                            );
-                            self.last_error_kind = crate::vm::error::LuaErrorKind::Runtime;
-                            return Err(LuaError(s));
-                        }
-                        // Same root-up bookkeeping as the sync path:
-                        // pin args + result-count expectation so a
-                        // collection across the suspend boundary
-                        // keeps the arg window live.
-                        self.native_nresults = nresults;
-                        self.gc_top = func_slot + nargs + 1;
-                        // Fire the "call" hook BEFORE
-                        // building the future. Mirrors the sync native
-                        // path's `hook_call(true, nargs)` site
-                        // (`exec.rs` further down) so embedders with a
-                        // Rust debug hook installed see a Call event
-                        // for async natives identical to the sync
-                        // path. The matching "return" hook fires from
-                        // `commit_async_native_result` in
-                        // `async_drive.rs` after the future resolves.
-                        // Placement: after the `native_nresults` / `gc_top`
-                        // pin, before the future is constructed, so a
-                        // hook body that triggers GC observes the
-                        // correct pinned window. On hook error the
-                        // sentinel never returns and
-                        // `pending_async_native_*` remain `None` —
-                        // the executor sees `DispatchOutcome::Error`.
-                        self.hook_call(true, nargs)?;
-                        // Transmute the stored NativeFn back to its
-                        // real AsyncNativeFn shape. Sound because
-                        // `set_async_native` / `create_async_native`
-                        // installed an AsyncNativeFn through the
-                        // identically-sized fn-pointer slot, and the
-                        // `is_async` marker bit is what records that
-                        // fact.
-                        let async_fn: crate::vm::async_drive::AsyncNativeFn =
-                            // SAFETY: same-size fn pointers; provenance
-                            // preserved through `mem::transmute`. The
-                            // `is_async` marker is the only safe-to-call
-                            // gate, set exclusively by
-                            // `Vm::create_async_native`.
-                            unsafe { std::mem::transmute(nc.f) };
-                        let vm_ptr: *mut Vm = self;
-                        let fut = async_fn(vm_ptr, func_slot, nargs);
-                        // Stash the future + post-call context for
-                        // `drive_one` to surface to `EvalFuture::poll`.
-                        self.pending_async_native_fut = Some(fut);
-                        self.pending_async_native_ctx = Some(AsyncNativeCallCtx {
-                            func_slot,
-                            nargs,
-                            nresults,
-                            gc_top: self.gc_top,
-                        });
-                        // Sentinel Err walked up to `drive_one` (same
-                        // shape as `host_yield_pending`'s budget yield).
-                        // Value::Nil — never seen by user code.
-                        return Err(LuaError(Value::Nil));
-                    }
-                    // pcall/xpcall are yieldable: rather than calling the
-                    // protected function through the Rust stack (which cannot be
-                    // suspended), push a continuation frame and drive the call
-                    // through the interpreter loop (PUC lua_pcallk). A yield
-                    // inside it is preserved with the thread's saved frames.
-                    use crate::runtime::value::NativeFn;
-                    if std::ptr::fn_addr_eq(nc.f, nat_pcall as NativeFn) {
-                        return self.begin_pcall(func_slot, nargs, nresults);
-                    }
-                    if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
-                        // 5.1 `xpcall(f, err)` calls `f` with no arguments
-                        let forward = self.version > LuaVersion::Lua51;
-                        return self.begin_xpcall(func_slot, nargs, nresults, forward);
-                    }
-                    if std::ptr::fn_addr_eq(nc.f, nat_host_xpcall as NativeFn) {
-                        return self.begin_xpcall(func_slot, nargs, nresults, true);
-                    }
-                    // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
-                    // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
-                    // lua_call, and 5.1 has no `__pairs`: the native handles those.
-                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn)
-                        && nargs >= 1
-                        && self.version >= LuaVersion::Lua54
+                    if nc.kind != NativeKind::Plain
+                        && let Some(r) = self.begin_special_native(nc, func_slot, nargs, nresults)
                     {
-                        let arg = self.stack[(func_slot + 1) as usize];
-                        if !self.get_mm(arg, Mm::Pairs).is_nil() {
-                            return self.begin_pairs(func_slot, nresults);
-                        }
+                        return r;
                     }
                     // a native that collects (e.g. `collectgarbage`) roots up to
                     // its own arguments — the caller's live registers all sit
@@ -4522,16 +4440,15 @@ impl Vm {
                     // Popped after the matching return hook fires — even on
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
-                    self.running_natives.push(nc);
-                    self.running_native_acts
-                        .push(crate::vm::callstack::NativeAct {
-                            func_slot,
-                            nargs,
-                            depth: self.frames.len() as u32,
-                            // a tail call resolved its `__call` chain before
-                            // calling here and passed the count in tail_ccmt
-                            ccmt: tail_ccmt + chain as u8,
-                        });
+                    self.running_natives.push(crate::vm::callstack::NativeAct {
+                        nc,
+                        func_slot,
+                        nargs,
+                        depth: self.frames.len() as u32,
+                        // a tail call resolved its `__call` chain before
+                        // calling here and passed the count in tail_ccmt
+                        ccmt: tail_ccmt + chain as u8,
+                    });
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -4550,7 +4467,6 @@ impl Vm {
                     // Err and the matching "return" hook fires on resume instead.
                     if let Err(e) = self.hook_call(true, nargs) {
                         self.running_natives.pop();
-                        self.running_native_acts.pop();
                         return Err(e);
                     }
                     // Trap a Rust panic in the native and surface it as
@@ -4581,9 +4497,8 @@ impl Vm {
                             // PUC raises with the native still on the stack;
                             // remember it for the handler and traceback of the
                             // error (see `raise_to_handler`)
-                            let act = self.running_native_acts.pop().expect("pushed above");
-                            self.running_natives.pop();
-                            self.note_errored_native(nc, act, e.0);
+                            let act = self.running_natives.pop().expect("pushed above");
+                            self.note_errored_native(act, e.0);
                             return Err(e);
                         }
                     };
@@ -4613,11 +4528,11 @@ impl Vm {
                                 self.stack[(func_slot + i) as usize];
                         }
                         // widen the C-frame's argument window for getlocal
-                        if let Some(act) = self.running_native_acts.last_mut() {
+                        if let Some(act) = self.running_natives.last_mut() {
                             act.nargs = nargs + nret;
                         }
                         let hr = self.hook_return(true, nargs + 1, nret);
-                        if let Some(act) = self.running_native_acts.last_mut() {
+                        if let Some(act) = self.running_natives.last_mut() {
                             act.nargs = nargs;
                         }
                         // restore results into the slot finish_results expects
@@ -4626,11 +4541,9 @@ impl Vm {
                                 self.stack[(res_dst + i) as usize];
                         }
                         self.running_natives.pop();
-                        self.running_native_acts.pop();
                         hr?;
                     } else {
                         self.running_natives.pop();
-                        self.running_native_acts.pop();
                     }
                     self.finish_results(func_slot, nret, nresults);
                     // the native may have allocated; collect with the results as
@@ -4717,8 +4630,11 @@ impl Vm {
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
         }
-        // wipe the register window beyond the kept parameters (stale values —
-        // required for GC-safety and codegen). The varargs below `base` survive.
+        // the whole window past the kept parameters is cleared: the trace
+        // dispatcher compares every register's tag in the window with the
+        // trace's entry tags, so a stale value where the recording saw nil
+        // would turn the trace away (and 5.1's compiler drops a leading
+        // `local x` LoadNil on this promise, as PUC 5.1 does)
         let kept = nargs.saturating_sub(n_varargs).min(nparams);
         // SAFETY: just resized above so `need <= stack.len()`; `base + kept <=
         // need` since `base + nparams <= base + max_stack = need` and `kept <=
@@ -4728,8 +4644,6 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..need)
                 .fill(Value::Nil);
         }
-        let ccmt = std::mem::take(&mut self.pending_ccmt);
-        self.set_frame_ccmt(ccmt);
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -4749,6 +4663,7 @@ impl Vm {
                 // hook so its frame reports `namewhat = "hook"` via getinfo.
                 is_hook: std::mem::take(&mut self.pending_is_hook),
                 tailcalls: std::mem::take(&mut self.pending_tailcalls),
+                ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
         // PUC 5.1 `LUAI_COMPAT_VARARG`: populate the hidden `arg` local with
@@ -4892,17 +4807,15 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
-        self.running_natives.push(nc);
-        self.running_native_acts
-            .push(crate::vm::callstack::NativeAct {
-                func_slot,
-                nargs,
-                depth: self.frames.len() as u32,
-                ccmt: 0,
-            });
+        self.running_natives.push(crate::vm::callstack::NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth: self.frames.len() as u32,
+            ccmt: 0,
+        });
         let r = check(self);
         self.running_natives.pop();
-        self.running_native_acts.pop();
         r
     }
 
@@ -4937,15 +4850,6 @@ impl Vm {
     /// frame is on top — a continuation frame is never the running frame (it is
     /// consumed the instant the call it protects unwinds onto it).
     #[inline]
-    /// Records the `__call` count of the Lua frame about to be pushed.
-    fn set_frame_ccmt(&mut self, ccmt: u8) {
-        let i = self.frames.len();
-        if self.frame_ccmt.len() <= i {
-            self.frame_ccmt.resize(i + 1, 0);
-        }
-        self.frame_ccmt[i] = ccmt;
-    }
-
     fn top_frame(&self) -> &Frame {
         self.frames
             .last()
@@ -4961,40 +4865,32 @@ impl Vm {
             .expect("running Lua frame")
     }
 
-    /// Pad/announce results sitting at func_slot.
+    /// Pad/announce results sitting at func_slot. Results past `wanted`
+    /// are cleared; nothing else is: values left higher up by the call are
+    /// dead and stay safe to mark (see `clear_dead_stack`), as with PUC's
+    /// `moveresults`.
+    #[inline]
     pub(crate) fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
-        // Capture the call's high-water-mark before
-        // setting the new top so we can Nil-clear slots that the
-        // call temporarily wrote but no longer holds — matching
-        // PUC's `L->top` discipline (slots past L->top are "free"
-        // and the next push overwrites them). Without this clear,
-        // a stale `Value::Closure` (e.g. the called function
-        // itself, when wanted = 0) sits at `func_slot` and a
-        // later GC with wider `gc_top` traces it after the
-        // closure has been freed by a previous narrow safe-point
-        // GC → heap-buffer-overflow in `Marker::header` (sort.lua
-        // comparator case).
-        let prev_top = self.top as usize;
         if wanted < 0 {
             self.top = func_slot + nret;
-        } else {
-            let wanted = wanted as u32;
-            let need = (func_slot + wanted) as usize;
-            if self.stack.len() < need {
-                self.stack.resize(need, Value::Nil);
-            }
-            for i in nret..wanted {
-                self.stack[(func_slot + i) as usize] = Value::Nil;
-            }
-            self.top = func_slot + wanted;
+            return;
         }
-        let new_top = self.top as usize;
-        let clear_end = prev_top.min(self.stack.len());
-        if new_top < clear_end {
-            for slot in &mut self.stack[new_top..clear_end] {
-                *slot = Value::Nil;
-            }
+        let wanted = wanted as u32;
+        let new_top = func_slot + wanted;
+        if nret < wanted {
+            self.pad_results(func_slot + nret, new_top);
+        } else if nret > wanted {
+            self.stack[new_top as usize..(func_slot + nret) as usize].fill(Value::Nil);
         }
+        self.top = new_top;
+    }
+
+    /// Nil the missing results `[from, to)`.
+    fn pad_results(&mut self, from: u32, to: u32) {
+        if self.stack.len() < to as usize {
+            self.stack.resize(to as usize, Value::Nil);
+        }
+        self.stack[from as usize..to as usize].fill(Value::Nil);
     }
 
     /// Current Lua call-frame depth (read-only).
@@ -6305,9 +6201,10 @@ impl Vm {
             //   take the record for compile + cache.
             // - Otherwise, capture the op. If the record overflows
             //   MAX_TRACE_LEN, abort by dropping it.
-            if self.jit.trace_enabled
-                && let Some(_rec) = self.jit.active_trace.as_mut()
-            {
+            // read once: with the trace JIT off this is the only JIT test an
+            // instruction makes
+            let trace_on = self.jit.trace_enabled;
+            if trace_on && self.jit.active_trace.is_some() {
                 // Depth tracking. The trace head's frame is
                 // at index `recording_frame_base`; every Op::Call that
                 // pushes a new frame bumps the live depth, every
@@ -7131,9 +7028,14 @@ impl Vm {
                         // explicitly under the close-cause bucket so
                         // probes can tally overflow vs other abort
                         // causes in O(1).
+                        let (head_proto, head_pc) = (rec.head_proto, rec.head_pc);
                         self.jit.active_trace = None;
                         self.jit.counters.aborted += 1;
                         self.jit.counters.bump_close_cause("trace-overflow");
+                        // counted like a failed compile: a head whose
+                        // recordings keep overflowing is given up instead
+                        // of being recorded again on every hot crossing
+                        note_trace_compile_failure(head_proto, head_pc);
                     }
                 }
             }
@@ -7179,12 +7081,12 @@ impl Vm {
             // single dispatch tick consumes the suppression — the
             // following tick re-admits naturally (with the budget
             // also reset by the deopt site).
-            let downrec_admit_blocked = self.jit.suppress_downrec_admit_once;
-            if downrec_admit_blocked {
-                self.jit.suppress_downrec_admit_once = false;
-            }
-            if self.jit.trace_enabled
-                && cl.proto.has_dispatchable_trace.get()
+            // The one-shot suppression only matters where a downrec trace
+            // could be admitted, which needs the proto's flag.
+            let admit = trace_on && cl.proto.has_dispatchable_trace.get();
+            let downrec_admit_blocked =
+                admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
+            if admit
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
@@ -8544,7 +8446,7 @@ impl Vm {
                         // recursive tail calls and expects to see the
                         // synthetic tail level for every one of them.
                         self.pending_tailcalls = fr.tailcalls.saturating_add(1);
-                        self.pending_ccmt = self.frame_ccmt[self.frames.len() - 1];
+                        self.pending_ccmt = fr.ccmt;
                         frames_pop_sync(&mut self.frames, &mut self.frames_top);
                         if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
                             && self.frames.len() < entry_depth
@@ -8606,66 +8508,36 @@ impl Vm {
                 }
                 Op::ForPrep => self.for_prep(inst, base)?,
                 Op::ForLoop => {
-                    // Trace JIT back-edge counter on the
-                    // numeric-for back-edge. ForLoop is always at
-                    // a back-edge position (when it continues);
-                    // for the trace recorder we treat it as the
-                    // close-detection equivalent of `Op::Jmp` with
-                    // negative offset. Counter only ticks when the
-                    // back-edge will actually fire (count > 0 in
-                    // the 5.4+ Int form, comparable predicates in
-                    // pre-5.3 / Float). The cheap check up front
-                    // matches the for_loop helper's branch.
-                    if self.jit.trace_enabled {
-                        let a = inst.a();
-                        let pre53 = self.version() <= LuaVersion::Lua53;
-                        let take_back_edge =
-                            match (self.r(base, a), self.r(base, a + 1), self.r(base, a + 2)) {
-                                (Value::Int(_), Value::Int(count), Value::Int(_)) if !pre53 => {
-                                    count != 0
-                                }
-                                (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
-                                    let next = cur.wrapping_add(st);
-                                    if st > 0 { next <= lim } else { next >= lim }
-                                }
-                                (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
-                                    let next = cur + st;
-                                    if st > 0.0 { next <= lim } else { next >= lim }
-                                }
-                                _ => false,
-                            };
-                        if take_back_edge {
-                            let proto = cl.proto;
-                            let c = proto.trace_hot_count.get();
-                            if c < u32::MAX / 2 {
-                                proto.trace_hot_count.set(c + 1);
+                    self.for_loop(inst, base)?;
+                    // The trace JIT counts the back-edges `for_loop` took (it
+                    // moved pc back from `pc + 1`) and starts recording at
+                    // the body once the count reaches the threshold.
+                    if self.jit.trace_enabled && self.top_frame().pc != pc + 1 {
+                        let proto = cl.proto;
+                        let c = proto.trace_hot_count.get();
+                        if c < u32::MAX / 2 {
+                            proto.trace_hot_count.set(c + 1);
+                        }
+                        if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none() {
+                            // the back-edge target is the body's first op
+                            let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
+                            let max_stack = cl.proto.max_stack as usize;
+                            let base_us = base as usize;
+                            let mut entry_tags = Vec::with_capacity(max_stack);
+                            for i in 0..max_stack {
+                                let (tag, _) = self.stack[base_us + i].unpack();
+                                entry_tags.push(tag);
                             }
-                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
-                            {
-                                // ForLoop's back-edge target = pc
-                                // after `add_pc(-bx)` runs from the
-                                // already-bumped f.pc (= pc + 1).
-                                // So target = (pc + 1) - bx.
-                                let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                                let max_stack = cl.proto.max_stack as usize;
-                                let base_us = base as usize;
-                                let mut entry_tags = Vec::with_capacity(max_stack);
-                                for i in 0..max_stack {
-                                    let (tag, _) = self.stack[base_us + i].unpack();
-                                    entry_tags.push(tag);
-                                }
-                                self.jit.active_trace =
-                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                        cl.proto, target, entry_tags, false,
-                                    )));
-                                // Record the frame the trace
-                                // started in. The currently-running
-                                // Lua frame is at len() - 1.
-                                self.jit.recording_frame_base = self.frames.len() - 1;
-                            }
+                            self.jit.active_trace =
+                                Some(Box::new(crate::jit::trace::TraceRecord::start(
+                                    cl.proto, target, entry_tags, false,
+                                )));
+                            // Record the frame the trace
+                            // started in. The currently-running
+                            // Lua frame is at len() - 1.
+                            self.jit.recording_frame_base = self.frames.len() - 1;
                         }
                     }
-                    self.for_loop(inst, base)?;
                 }
                 Op::TForPrep => {
                     // the 4th control slot is the iterator's closing value
@@ -9876,10 +9748,10 @@ impl Vm {
     }
 }
 
-/// Recordings of one trace head that may fail to compile before the head
-/// is no longer recorded (LuaJIT likewise blacklists a trace start after
-/// repeated failures). A few tries, since a later recording can see
-/// different register kinds.
+/// Recordings of one trace head that may fail to compile, or overflow the
+/// recorder, before the head is no longer recorded (LuaJIT likewise
+/// blacklists a trace start after repeated failures). A few tries, since a
+/// later recording can see different register kinds or take a shorter path.
 const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
 
 fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {

@@ -58,9 +58,44 @@ optimization.
   hook machinery when nothing needs it; growing a table's array part
   copies it in one block; and `#t` is answered from two counters when the
   array part holds exactly a leading run of values.
+- A metatable remembers which metamethods it lacks (PUC Lua's `flags`
+  cache), so looking up an absent `__index`, `__newindex`, `__eq`,
+  arithmetic or other event costs one bit test; the table forgets them as
+  soon as it gains any key. A string-keyed read that misses on a table
+  follows table-valued `__index` links directly. Results are unchanged.
+- Calling a native does less bookkeeping: whether it is `pcall`,
+  `xpcall`, `pairs` or an async native is decided once when the closure
+  is created, the running natives are kept in one list instead of two,
+  the post-call collection check is a single comparison, and a return
+  clears only the results the caller did not want.
+- The trace JIT gives up a loop or function entry whose recordings keep
+  running past the longest trace it builds, after three of them, as it
+  already did for one whose traces keep failing to compile. Before, such
+  a place was recorded again every time it turned hot: a function called
+  in a loop paid for a recording on every call.
+- With the trace JIT on, the interpreter does less per instruction when
+  nothing is being recorded and the function has no enterable trace: the
+  per-instruction checks test the condition that is almost always false
+  first, and a numeric `for` counts its back-edges after stepping instead
+  of re-reading its three control slots.
+- `runtime::Frame` has a new public field, `ccmt: u8`: the number of
+  `__call` metamethods resolved to reach the frame, which the Vm used to
+  keep in a vector beside the frames.
 
 ### Fixed
 
+- A Vm with no JIT backend that ran `eval_async` before
+  `install_jit_backend` kept the method JIT off afterwards: the future's
+  temporary switch-off counted as the embedder's own choice.
+- Use after free in the collector: values a returned function left in
+  stack slots above its caller's registers (closures, strings, userdata)
+  could be freed by one collection and then marked by a later one, since
+  the main thread's stack is marked whole while a coroutine runs and a
+  suspended coroutine's stack is marked whole too. The collector now
+  clears the running stack above the live registers when marking ends,
+  and roots the whole running frame while a Rust debug hook runs (PUC's
+  `luaD_hook` does the same), so a hook that collects cannot free a
+  register written after the last safe point.
 - With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
   that stored into a table under a NaN key went on silently instead of
   raising "table index is NaN" as the interpreter does.

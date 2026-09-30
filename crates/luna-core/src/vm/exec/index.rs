@@ -23,9 +23,53 @@ impl Vm {
                 self.stack[dst as usize] = v;
                 return Ok(());
             }
+            if let Value::Str(s) = key {
+                return self.index_str_miss(t, s, dst);
+            }
             return self.op_index_from(t, key, dst, true);
         }
+        #[cfg(not(feature = "gc-verify"))]
+        if let Value::Str(s) = key {
+            return self.index_str_miss(t, s, dst);
+        }
         self.op_index(t, key, dst)
+    }
+
+    /// `R[dst] := t[key]` for a string key when `t` is a table whose raw
+    /// `t[key]` is nil, or not a table: follows up to four table-valued
+    /// `__index` links with the pointer-chain lookup (PUC `luaV_finishget`
+    /// with `fasttm`). Anything else restarts the full chain from `t`, so
+    /// the loop limit and errors are those of `index_step`.
+    #[cfg(not(feature = "gc-verify"))]
+    #[inline(never)]
+    fn index_str_miss(
+        &mut self,
+        t: Value,
+        key: Gc<crate::runtime::string::LuaStr>,
+        dst: u32,
+    ) -> Result<(), LuaError> {
+        let mut on_table = matches!(t, Value::Table(_));
+        let mut mt = self.metatable_of(t);
+        for _ in 0..4 {
+            let Some(m) = mt else { break };
+            match self.fast_tm(m, Mm::Index) {
+                Value::Nil if on_table => {
+                    self.stack[dst as usize] = Value::Nil;
+                    return Ok(());
+                }
+                Value::Table(next) => {
+                    let v = next.get_str(key);
+                    mt = next.metatable();
+                    if !v.is_nil() || mt.is_none() {
+                        self.stack[dst as usize] = v;
+                        return Ok(());
+                    }
+                    on_table = true;
+                }
+                _ => break,
+            }
+        }
+        self.op_index_from(t, Value::Str(key), dst, matches!(t, Value::Table(_)))
     }
 
     /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
@@ -200,7 +244,10 @@ impl Vm {
             let mm = match cur {
                 Value::Table(tb) => {
                     if !std::mem::take(&mut skip) {
-                        let v = tb.get(key);
+                        let v = match key {
+                            Value::Str(s) => tb.get_str(s),
+                            k => tb.get(k),
+                        };
                         if !v.is_nil() {
                             return Ok(MmOut::Done(v));
                         }
