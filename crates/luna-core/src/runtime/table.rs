@@ -532,7 +532,6 @@ impl Table {
 
     /// Raw lookup (no `__index` metamethod). Returns `Value::Nil` when
     /// the key is absent. `Value::Nil` and NaN floats return `nil` directly.
-    #[inline]
     pub fn get(&self, key: Value) -> Value {
         match key {
             Value::Int(i) => self.get_int(i),
@@ -572,7 +571,6 @@ impl Table {
         self.get_hash(Value::Str(key))
     }
 
-    #[inline]
     fn get_hash(&self, k: Value) -> Value {
         match self.find_node(k) {
             Some(idx) => self.nodes[idx].val,
@@ -609,7 +607,6 @@ impl Table {
     }
 
     /// Walk the chain rooted at the key's main position.
-    #[inline]
     fn find_node(&self, k: Value) -> Option<usize> {
         // read-time probe (gc-verify): both the query key and
         // every node key compared below must be live. This is the
@@ -705,8 +702,20 @@ impl Table {
     /// Insert / update `(key, val)`. `heap` is used to credit any internal
     /// Box growth (rehash) to `heap.bytes` so the counter stays in sync with
     /// real memory; `free_obj` subtracts `internal_bytes()` on the way out.
-    #[inline]
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
+        self.set_inlined(heap, key, val)
+    }
+
+    /// [`Self::set`] for the interpreter's own write path. `set` itself is
+    /// left to the compiler's judgement: marking it `#[inline]` made the
+    /// JIT's table-store helpers ~10% slower on aarch64.
+    #[inline]
+    pub(crate) fn set_inlined(
+        &mut self,
+        heap: &mut Heap,
+        key: Value,
+        val: Value,
+    ) -> Result<(), TableError> {
         let k = normalize_set_key(key)?;
         self.set_norm(heap, k, val)
     }
@@ -1103,7 +1112,6 @@ impl Table {
         }
     }
 
-    #[inline]
     fn main_position(&self, k: Value) -> usize {
         debug_assert!(!self.nodes.is_empty());
         hash_key(k) as usize & (self.nodes.len() - 1)
@@ -1466,7 +1474,6 @@ fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     }
 }
 
-#[inline]
 fn hash_key(k: Value) -> u64 {
     match k {
         Value::Int(i) => i as u64, // identity mod size (PUC hashint)
