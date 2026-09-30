@@ -146,3 +146,74 @@ fn flag_is_set_for_an_undispatchable_trace_admitted_by_its_downrec_link() {
         "the downrec trace was never admitted"
     );
 }
+
+// the call trigger stops looking at a Proto's entry once a trace is cached
+// there or recording it was abandoned; `trace_call_head_settled` stands in
+// for scanning `traces` on every call
+
+#[test]
+fn call_head_settles_when_a_call_trace_is_cached() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+    vm.open_base();
+    let r = run(
+        &mut vm,
+        b"
+        local o = {t = {}}
+        local function get(self, k) return self.t[k] end
+        local n = 0
+        for i = 1, 500 do if get(o, i) == nil then n = n + 1 end end
+        return n, get
+    ",
+    );
+    let Value::Closure(get) = r[1] else { panic!() };
+    assert!(get.proto.traces.borrow().iter().any(|t| t.head_pc == 0));
+    assert!(get.proto.trace_call_head_settled.get());
+}
+
+#[test]
+fn call_head_settles_when_recording_it_is_abandoned() {
+    // a trace compiler that never succeeds: the head is abandoned after
+    // three failed recordings and no later call records it again
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+    vm.install_null_jit();
+    vm.set_trace_jit_enabled(true);
+    let r = run(
+        &mut vm,
+        b"
+        local function f(x) return x + 1 end
+        local s = 0
+        for i = 1, 20 do s = f(s) end
+        return s, f
+    ",
+    );
+    let Value::Closure(f) = r[1] else { panic!() };
+    assert!(
+        !f.proto.trace_call_head_settled.get(),
+        "settled below the threshold"
+    );
+    let r = run(
+        &mut vm,
+        b"
+        local function f(x) return x + 1 end
+        local s = 0
+        for i = 1, 1000 do s = f(s) end
+        return s, f
+    ",
+    );
+    assert!(matches!(r[0], Value::Int(1000)), "{r:?}");
+    let Value::Closure(f) = r[1] else { panic!() };
+    assert!(f.proto.trace_call_head_settled.get());
+    assert!(f.proto.traces.borrow().is_empty());
+    let failed = vm.trace_compile_failed_count();
+    // three for f's entry, at most one for the loop's back-edge
+    assert!((3..=4).contains(&failed), "{failed}");
+    for i in 0..200 {
+        vm.call_value(Value::Closure(f), &[Value::Int(i)])
+            .expect("call f");
+    }
+    assert_eq!(
+        vm.trace_compile_failed_count(),
+        failed,
+        "recording did not stop"
+    );
+}

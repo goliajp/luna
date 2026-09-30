@@ -4385,17 +4385,15 @@ impl Vm {
                         // trace every call.
                         //
                         // Additionally short-circuit on
-                        // `proto.trace_gave_up`. The per-Proto discard
-                        // cap force-compiles a partial trace and
-                        // flips this flag; subsequent calls into
-                        // this Proto skip the RefCell borrow + Vec
-                        // scan entirely. The threshold is compared
-                        // first so that calls below it skip them too.
+                        // `proto.trace_gave_up`: the per-Proto discard
+                        // cap force-compiles a partial trace and flips
+                        // it. `trace_call_head_settled` stands for
+                        // "a trace is cached at pc 0 or recording it was
+                        // abandoned", so no call scans `traces`.
                         if c >= self.jit.call_hot_threshold
                             && self.jit.active_trace.is_none()
                             && !proto.trace_gave_up.get()
-                            && !proto.traces.borrow().iter().any(|t| t.head_pc == 0)
-                            && !trace_head_abandoned(proto, 0)
+                            && !proto.trace_call_head_settled.get()
                         {
                             // The new frame is on top: index in
                             // `self.frames` is `len() - 1`.
@@ -10481,9 +10479,18 @@ const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
 
 fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
     let mut failures = proto.trace_compile_failures.borrow_mut();
-    match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
-        Some((_, n)) => *n = n.saturating_add(1),
-        None => failures.push((head_pc, 1)),
+    let n = match failures.iter_mut().find(|(pc, _)| *pc == head_pc) {
+        Some((_, n)) => {
+            *n = n.saturating_add(1);
+            *n
+        }
+        None => {
+            failures.push((head_pc, 1));
+            1
+        }
+    };
+    if head_pc == 0 && n >= MAX_TRACE_COMPILE_FAILURES {
+        proto.trace_call_head_settled.set(true);
     }
 }
 
@@ -10492,6 +10499,9 @@ fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_p
 fn cache_trace(proto: Gc<crate::runtime::function::Proto>, ct: crate::jit::trace::CompiledTrace) {
     if ct.dispatchable || ct.downrec_link.is_some() {
         proto.has_dispatchable_trace.set(true);
+    }
+    if ct.head_pc == 0 {
+        proto.trace_call_head_settled.set(true);
     }
     proto.traces.borrow_mut().push(TArc::new(ct));
 }

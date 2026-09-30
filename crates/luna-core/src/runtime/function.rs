@@ -382,6 +382,11 @@ pub struct Proto {
     /// instruction. Traces are never removed, so it only goes from
     /// `false` to `true`.
     pub has_dispatchable_trace: std::cell::Cell<bool>,
+    /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
+    /// a trace is cached there or recording it was abandoned. Set once,
+    /// it spares every later call the scan of `traces`.
+    #[doc(hidden)]
+    pub trace_call_head_settled: std::cell::Cell<bool>,
 }
 
 /// Per-Proto JIT cache state. Copy so it fits a plain
