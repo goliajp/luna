@@ -8,7 +8,7 @@ use crate::runtime::value::Value;
 use crate::vm::isa::Inst;
 
 pub use crate::runtime::call_frame::{
-    AfterClose, CallFrame, CloseCont, ContKind, Frame, MetaAction, MetaCont, NativeCont,
+    AfterClose, CallFrame, CloseCont, ContKind, Frame, FrameTm, MetaAction, MetaCont, NativeCont,
 };
 
 /// Where a closure's upvalue is captured from, relative to the *enclosing*

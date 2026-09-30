@@ -81,6 +81,17 @@ optimization.
 - `runtime::Frame` has a new public field, `ccmt: u8`: the number of
   `__call` metamethods resolved to reach the frame, which the Vm used to
   keep in a vector beside the frames.
+- The interpreter runs the opcodes that only read and write registers,
+  and Lua-to-Lua calls and returns, in a loop that keeps the program
+  counter, the register window and the constants in locals; the frame is
+  reloaded only after something that may have changed it (a metamethod,
+  an error, a hook, a native that ran Lua code). A function holding a
+  compiled trace hands an instruction to the trace dispatcher only at the
+  pcs where a trace starts, no longer on every instruction.
+- `runtime::Frame::tm` is now `Option<runtime::function::FrameTm>` (one
+  byte) instead of `Option<&'static str>`: the frame records whether it
+  runs a finalizer, a `__close` handler or another metamethod, not the
+  event's name. `Frame` shrinks from 56 to 40 bytes.
 
 ### Fixed
 

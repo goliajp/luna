@@ -288,7 +288,7 @@ pub struct Vm {
     /// pushed by `push_frame`; `close_slots` sets this before calling a
     /// `__close` handler so `debug.traceback` names it "metamethod 'close'"
     /// (PUC `CallInfo.u.l.tm`). Single-shot: `push_frame` consumes it.
-    pending_tm: Option<&'static str>,
+    pending_tm: Option<crate::runtime::function::FrameTm>,
     /// `true` when the next `push_frame` is the user hook function itself,
     /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
     /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
@@ -2682,7 +2682,6 @@ impl Vm {
         func: Value,
         args: &[Value],
         action: MetaAction,
-        tm: &'static str,
     ) -> Result<(), LuaError> {
         let saved_top = self.top;
         let cont_slot = self.stack.len() as u32;
@@ -2699,7 +2698,9 @@ impl Vm {
                 nresults: 1,
             }),
         );
-        let saved_tm = self.pending_tm.replace(tm);
+        let saved_tm = self
+            .pending_tm
+            .replace(crate::runtime::function::FrameTm::Meta);
         // begin_call drives a Lua metamethod through the loop (returns true) or
         // runs a native one inline (returns false, leaving results at cont_slot
         // for the loop head to pick up); either way the Meta cont resolves there.
@@ -2714,24 +2715,17 @@ impl Vm {
     /// Apply a comparison opcode's outcome: a known boolean drives the
     /// conditional skip directly; a metamethod is called yieldably, its
     /// truthiness driving the skip on return.
-    fn op_compare(
-        &mut self,
-        step: MmOut,
-        l: Value,
-        r: Value,
-        k: bool,
-        tm: &'static str,
-    ) -> Result<(), LuaError> {
+    fn op_compare(&mut self, step: MmOut, l: Value, r: Value, k: bool) -> Result<(), LuaError> {
         match step {
             MmOut::Done(v) => self.cond_skip(v.truthy(), k),
             MmOut::Mm { func, .. } => {
-                self.begin_meta_call(func, &[l, r], MetaAction::Compare { k, negate: false }, tm)?;
+                self.begin_meta_call(func, &[l, r], MetaAction::Compare { k, negate: false })?;
             }
             MmOut::CompareSynth { func } => {
                 // ≤5.3 `__le` falls back to `not __lt(r, l)`; the swap and
                 // negation are driven through `MetaAction::Compare` so the
                 // metamethod call can yield like any other compare.
-                self.begin_meta_call(func, &[r, l], MetaAction::Compare { k, negate: true }, "lt")?;
+                self.begin_meta_call(func, &[r, l], MetaAction::Compare { k, negate: true })?;
             }
         }
         Ok(())
@@ -4239,7 +4233,9 @@ impl Vm {
                 // Bare event name; `frame_name` / `c_frame_name` add the
                 // `"__"` debug prefix for 5.2/5.3, drop it for 5.4+. Matches
                 // the convention used by `__close`, `__index`, …
-                let saved_tm = self.pending_tm.replace("gc");
+                let saved_tm = self
+                    .pending_tm
+                    .replace(crate::runtime::function::FrameTm::Gc);
                 // PUC `GCTM` runs the finalizer with `luaD_pcall` and no
                 // message handler
                 if let Err(e) = self.call_protected(gc, &[obj]) {
@@ -5025,7 +5021,9 @@ impl Vm {
             // restored around the call to cover the path where `mm` is a
             // native (`push_frame` never consumes it) or it raises before
             // reaching push_frame.
-            let saved_tm = self.pending_tm.replace("close");
+            let saved_tm = self
+                .pending_tm
+                .replace(crate::runtime::function::FrameTm::Close);
             // PUC 5.4 `prepclosingmethod` always pushed (obj, errobj) — errobj
             // is nil on a normal close (5.4 locals.lua :875's
             // `func2close(coroutine.yield)` wrap pins `(self, nil)` back
@@ -5142,7 +5140,9 @@ impl Vm {
             self.closing_err = pending;
             // PUC `luaF_close` flags the handler frame as "metamethod 'close'"
             // for traceback / getinfo.
-            let saved_tm = self.pending_tm.replace("close");
+            let saved_tm = self
+                .pending_tm
+                .replace(crate::runtime::function::FrameTm::Close);
             frames_push_sync(
                 &mut self.frames,
                 &mut self.frames_top,
@@ -7411,12 +7411,7 @@ impl Vm {
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.
                     let dst = i - 1;
-                    self.begin_meta_call(
-                        mm,
-                        &[x, y],
-                        MetaAction::Concat { dst, base_a },
-                        "concat",
-                    )?;
+                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a })?;
                     return Ok(());
                 }
             }

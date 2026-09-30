@@ -29,7 +29,7 @@ impl Vm {
             None => {
                 let mm = self.arith_mm_func(op, l, r)?;
                 let dst = base + inst.a();
-                self.begin_meta_call(mm, &[l, r], MetaAction::Store { dst }, op.mm_name())?;
+                self.begin_meta_call(mm, &[l, r], MetaAction::Store { dst })?;
             }
         }
         Ok(())
