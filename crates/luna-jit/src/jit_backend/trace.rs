@@ -5432,6 +5432,11 @@ fn lower_trace_into_inner<M: Module>(
             }
         })
         .collect();
+    // The kinds the body is lowered for. A back-edge may run it again
+    // only when the caller window holds these same kinds; otherwise
+    // the next pass would read (and hand to an exit) a register with
+    // bits of one kind as another, e.g. an Int as a Float.
+    let head_kinds: Vec<RegKind> = current_kinds[..max_stack].to_vec();
     let mut dispatchable: bool = true;
     // the first emit-pass site that flips
     // dispatchable to false wins this label; CompiledTrace
@@ -8482,7 +8487,11 @@ fn lower_trace_into_inner<M: Module>(
                 // either: that skips the body code before the inner
                 // loop. Compute the body start explicitly.
                 let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
-                if do_internal_loop && body_pc == record.head_pc {
+                let mut tail_kinds = current_kinds[..max_stack].to_vec();
+                for k in [a, a + 1, a + 3] {
+                    tail_kinds[k] = RegKind::Int;
+                }
+                if do_internal_loop && body_pc == record.head_pc && tail_kinds == head_kinds {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
@@ -8613,7 +8622,14 @@ fn lower_trace_into_inner<M: Module>(
                 // as for ForLoop: continue at the loop body, which is
                 // the trace head only when the trace was recorded from it
                 let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
-                if do_internal_loop && body_pc == record.head_pc {
+                // the loop variables passed the tag check above, and the
+                // control variable is a copy of the key
+                let mut tail_kinds = current_kinds[..max_stack].to_vec();
+                for k in (a + 4)..(a + 4 + nvars.min(2)).min(max_stack) {
+                    tail_kinds[k] = head_kinds[k];
+                }
+                tail_kinds[a + 2] = head_kinds[a + 4];
+                if do_internal_loop && body_pc == record.head_pc && tail_kinds == head_kinds {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
@@ -8632,7 +8648,7 @@ fn lower_trace_into_inner<M: Module>(
             }
             _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
         }
-    } else if do_internal_loop {
+    } else if do_internal_loop && current_kinds[..max_stack] == head_kinds[..] {
         sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
         bcx.ins().jump(body_loop, &[]);
     } else {
