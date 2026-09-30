@@ -27,6 +27,26 @@ mod num;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
 
+/// `R[A] := R[B] op R[C]`: the Int/Int and Float/Float cases are computed
+/// in the opcode arm (an arm yielding `None` falls through); everything else
+/// goes to `arith_slow`.
+macro_rules! arith_arm {
+    ($vm:ident, $inst:ident, $base:ident, $op:expr,
+     int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
+        let l = $vm.r($base, $inst.b());
+        let r = $vm.r($base, $inst.c());
+        let v: Option<Value> = match (l, r) {
+            (Value::Int($ia), Value::Int($ib)) => $iv,
+            (Value::Float($fa), Value::Float($fb)) => $fv,
+            _ => None,
+        };
+        match v {
+            Some(v) => $vm.set_r($base, $inst.a(), v),
+            None => $vm.arith_slow($inst, $base, $op, l, r)?,
+        }
+    }};
+}
+
 /// A Lua virtual machine: one OS thread's worth of Lua state.
 ///
 /// # Threading model
@@ -8135,18 +8155,44 @@ impl Vm {
                     };
                     self.op_index(o, key, base + inst.a())?;
                 }
-                Op::Add => self.arith_rr(inst, base, ArithOp::Add)?,
-                Op::Sub => self.arith_rr(inst, base, ArithOp::Sub)?,
-                Op::Mul => self.arith_rr(inst, base, ArithOp::Mul)?,
-                Op::Mod => self.arith_rr(inst, base, ArithOp::Mod)?,
-                Op::Pow => self.arith_rr(inst, base, ArithOp::Pow)?,
-                Op::Div => self.arith_rr(inst, base, ArithOp::Div)?,
-                Op::IDiv => self.arith_rr(inst, base, ArithOp::IDiv)?,
-                Op::BAnd => self.arith_rr(inst, base, ArithOp::BAnd)?,
-                Op::BOr => self.arith_rr(inst, base, ArithOp::BOr)?,
-                Op::BXor => self.arith_rr(inst, base, ArithOp::BXor)?,
-                Op::Shl => self.arith_rr(inst, base, ArithOp::Shl)?,
-                Op::Shr => self.arith_rr(inst, base, ArithOp::Shr)?,
+                Op::Add => arith_arm!(self, inst, base, ArithOp::Add,
+                    int(a, b) => Some(Value::Int(a.wrapping_add(b))),
+                    float(a, b) => Some(Value::Float(a + b))),
+                Op::Sub => arith_arm!(self, inst, base, ArithOp::Sub,
+                    int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
+                    float(a, b) => Some(Value::Float(a - b))),
+                Op::Mul => arith_arm!(self, inst, base, ArithOp::Mul,
+                    int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
+                    float(a, b) => Some(Value::Float(a * b))),
+                // a zero divisor takes the slow path for its error
+                Op::Mod => arith_arm!(self, inst, base, ArithOp::Mod,
+                    int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
+                    float(_a, _b) => None),
+                Op::IDiv => arith_arm!(self, inst, base, ArithOp::IDiv,
+                    int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
+                    float(_a, _b) => None),
+                Op::Div => arith_arm!(self, inst, base, ArithOp::Div,
+                    int(_a, _b) => None,
+                    float(a, b) => Some(Value::Float(a / b))),
+                Op::Pow => {
+                    let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
+                    self.arith_slow(inst, base, ArithOp::Pow, l, r)?
+                }
+                Op::BAnd => arith_arm!(self, inst, base, ArithOp::BAnd,
+                    int(a, b) => Some(Value::Int(a & b)),
+                    float(_a, _b) => None),
+                Op::BOr => arith_arm!(self, inst, base, ArithOp::BOr,
+                    int(a, b) => Some(Value::Int(a | b)),
+                    float(_a, _b) => None),
+                Op::BXor => arith_arm!(self, inst, base, ArithOp::BXor,
+                    int(a, b) => Some(Value::Int(a ^ b)),
+                    float(_a, _b) => None),
+                Op::Shl => arith_arm!(self, inst, base, ArithOp::Shl,
+                    int(a, b) => Some(Value::Int(shift_left(a, b))),
+                    float(_a, _b) => None),
+                Op::Shr => arith_arm!(self, inst, base, ArithOp::Shr,
+                    int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
+                    float(_a, _b) => None),
                 Op::Unm => {
                     let v = self.r(base, inst.b());
                     match self.unary_operand(v) {
