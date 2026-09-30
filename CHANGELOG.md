@@ -47,9 +47,23 @@ optimization.
   embedder has not already set with `set_jit_enabled` /
   `set_trace_jit_enabled`. `jit_enabled()` and `trace_jit_enabled()`
   report `false` on such a Vm.
+- Interpreter fast paths that PUC Lua also takes, with unchanged results:
+  the dispatch loop tests one flag for an instruction budget, a memory cap
+  or an armed hook instead of checking each on every instruction; integer
+  `%` and `//` and the integer and float arithmetic and bitwise operators
+  are computed in the opcode itself; table reads return a raw hit without
+  entering the `__index` path, and string keys shorter than 41 bytes are
+  matched by identity; table writes update a present key in place;
+  `return` with zero or one value into a Lua caller skips the close and
+  hook machinery when nothing needs it; growing a table's array part
+  copies it in one block; and `#t` is answered from two counters when the
+  array part holds exactly a leading run of values.
 
 ### Added
 
+- `luna_core::runtime::table::jit_layout::{TABLE_ACOUNT_OFFSET,
+  TABLE_APREFIX_OFFSET}`: offsets of the two array-part counters behind
+  `#t`, which the method JIT's inline array stores keep up to date.
 - `Proto::has_dispatchable_trace`, `Proto::trace_call_head_settled` and
   `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
