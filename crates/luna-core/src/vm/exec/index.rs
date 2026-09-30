@@ -360,7 +360,7 @@ impl Vm {
 
     pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        match unsafe { t.as_mut() }.set(&mut self.heap, key, v) {
+        match unsafe { t.as_mut() }.set_inlined(&mut self.heap, key, v) {
             Ok(()) => {
                 self.heap
                     .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
