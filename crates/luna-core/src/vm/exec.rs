@@ -22,6 +22,7 @@ use crate::vm::isa::{Inst, Op};
 use native_call::NativeKind;
 
 mod arith;
+mod call_fast;
 #[cfg(test)]
 mod cont_trap_tests;
 mod fast;

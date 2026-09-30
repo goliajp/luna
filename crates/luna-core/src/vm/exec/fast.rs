@@ -5,7 +5,9 @@
 
 use super::*;
 use crate::runtime::value::tag;
-use fast_arith::{arith_arm, arith_imm_arm, put_int, raw_flt, raw_int, raw_tag, raw_truthy};
+use fast_arith::{
+    arith_arm, arith_imm_arm, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
+};
 
 /// The running frame, as the loop head found it.
 pub(super) struct Fast {
@@ -981,6 +983,16 @@ impl Vm {
                             Some(inst.b() - 1)
                         };
                         let wanted = inst.c() as i32 - 1;
+                        let pf = regs.wrapping_add(inst.a() as usize);
+                        // SAFETY: the called register is in the frame
+                        if !WATCH && !trace_on && unsafe { raw_tag(pf) } == tag::CLOSURE {
+                            // SAFETY: a closure tag means a live closure
+                            let callee = Gc::from_ptr(unsafe { raw_gc(pf) } as *mut LuaClosure);
+                            let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
+                            if self.push_lua_frame_fast(callee, abs, n, wanted) {
+                                continue 'frames;
+                            }
+                        }
                         self.begin_call(abs, nargs, wanted, false)?;
                         reenter!()
                     }
