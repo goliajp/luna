@@ -23,6 +23,8 @@ fn overflowing_heads_stop_being_recorded() {
     let src = src();
     for v in [LuaVersion::Lua51, LuaVersion::Lua54, LuaVersion::Lua55] {
         let mut vm = luna_jit::new_with_jit(v);
+        // the method JIT would take the all-integer `f` off the interpreter
+        vm.set_jit_enabled(false);
         vm.jit.trace_hot_threshold = 1;
         vm.jit.call_hot_threshold = 1;
         let r = vm.eval(&src).expect("eval");
