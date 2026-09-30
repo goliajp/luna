@@ -4,6 +4,36 @@
 
 use super::*;
 
+/// See [`crate::runtime::NativeClosure::kind`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeKind {
+    Plain,
+    Async,
+    Pcall,
+    Xpcall,
+    HostXpcall,
+    Pairs,
+}
+
+impl NativeKind {
+    /// The kind of a synchronous native calling `f`.
+    pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
+        use crate::runtime::value::NativeFn;
+        use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
+        if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
+            NativeKind::Pcall
+        } else if std::ptr::fn_addr_eq(f, nat_xpcall as NativeFn) {
+            NativeKind::Xpcall
+        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
+            NativeKind::HostXpcall
+        } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
+            NativeKind::Pairs
+        } else {
+            NativeKind::Plain
+        }
+    }
+}
+
 impl Vm {
     /// `stack[func_slot]` is `nc`, a native whose kind is not
     /// [`NativeKind::Plain`]. `None` when it is to be called like any other

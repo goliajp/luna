@@ -10,7 +10,6 @@
 use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
-use crate::runtime::function::NativeKind;
 use crate::runtime::heap::GcHeader;
 use crate::runtime::{
     AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, LuaClosure,
@@ -20,10 +19,11 @@ use crate::version::LuaVersion;
 use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
+use native_call::NativeKind;
 
 mod arith;
 mod index;
-mod native_call;
+pub(crate) mod native_call;
 mod num;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
