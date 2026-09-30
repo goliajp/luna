@@ -5375,6 +5375,35 @@ impl Vm {
         Ok(None)
     }
 
+    /// Return0 / Return1 without the close and hook machinery (PUC
+    /// `OP_RETURN0` / `OP_RETURN1`): when no return hook can fire, nothing
+    /// in this frame needs closing and the caller is a Lua frame inside this
+    /// activation, the return is the pop, the result copy and
+    /// `finish_results` that `complete_return` would do. Returns `false`,
+    /// having done nothing, otherwise.
+    #[inline]
+    fn return_to_lua(&mut self, base: u32, abs_a: u32, nret: u32, entry_depth: usize) -> bool {
+        let n = self.frames.len();
+        if self.hook.ret && self.hook_armed()
+            || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
+            || self.tbc.last().is_some_and(|&s| s >= base)
+            || n <= entry_depth
+            || n < 2
+            || !matches!(self.frames[n - 2], CallFrame::Lua(_))
+        {
+            return false;
+        }
+        let Some(CallFrame::Lua(fr)) = frames_pop_sync(&mut self.frames, &mut self.frames_top)
+        else {
+            unreachable!("returning from a non-Lua frame")
+        };
+        for i in 0..nret {
+            self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
+        }
+        self.finish_results(fr.func_slot, nret, fr.nresults);
+        true
+    }
+
     #[doc(hidden)]
     pub fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
         match cl.upvals()[idx as usize].state() {
@@ -8545,7 +8574,11 @@ impl Vm {
                     // the handler call *above* — landing at `self.top` would
                     // otherwise clobber a result with the handler closure.
                     self.top = self.top.max(abs_a + nret);
-                    if let Some(vals) = self.begin_close(
+                    if matches!(inst.op(), Op::Return0 | Op::Return1)
+                        && self.return_to_lua(base, abs_a, nret, entry_depth)
+                    {
+                        // done: the caller's frame is on top
+                    } else if let Some(vals) = self.begin_close(
                         base,
                         None,
                         AfterClose::Return {
