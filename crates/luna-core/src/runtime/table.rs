@@ -434,7 +434,7 @@ impl Table {
     }
 
     #[inline]
-    fn aset(&mut self, idx: usize, v: Value) {
+    pub(crate) fn aset(&mut self, idx: usize, v: Value) {
         let (t, b) = v.unpack();
         // SAFETY: see `aget`. callers (`set_norm`, `set_int`) gate on
         // `idx < self.asize()`. The two `*_mut` calls each take a
