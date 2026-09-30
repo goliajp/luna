@@ -8043,35 +8043,21 @@ impl Vm {
                 Op::GetTabUp => {
                     let t = self.upval_get(cl, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    self.op_index(t, key, base + inst.a())?;
+                    self.index_fast(t, key, base + inst.a())?;
                 }
                 Op::GetTable => {
                     let t = self.r(base, inst.b());
                     let key = self.r(base, inst.c());
-                    self.op_index(t, key, base + inst.a())?;
+                    self.index_fast(t, key, base + inst.a())?;
                 }
                 Op::GetI => {
                     let t = self.r(base, inst.b());
-                    self.op_index(t, Value::Int(inst.c() as i64), base + inst.a())?;
+                    self.index_fast(t, Value::Int(inst.c() as i64), base + inst.a())?;
                 }
                 Op::GetField => {
                     let t = self.r(base, inst.b());
                     let key = cl.proto.consts[inst.c() as usize];
-                    // Fast path: known-Str const key + no
-                    // metatable on the table → skip `op_index` /
-                    // `index_step`'s MAX_TAG_LOOP setup and the outer
-                    // `Value` match. Falls through to the slow path
-                    // when either invariant breaks (`__index`
-                    // metamethods, non-Table receivers, non-Str keys).
-                    if let Value::Table(tb) = t
-                        && tb.metatable().is_none()
-                        && let Value::Str(s) = key
-                    {
-                        let v = tb.get_str(s);
-                        self.stack[(base + inst.a()) as usize] = v;
-                    } else {
-                        self.op_index(t, key, base + inst.a())?;
-                    }
+                    self.index_fast(t, key, base + inst.a())?;
                 }
                 Op::SetTabUp => {
                     let t = self.upval_get(cl, inst.a());
@@ -8153,7 +8139,7 @@ impl Vm {
                     } else {
                         self.r(base, inst.c())
                     };
-                    self.op_index(o, key, base + inst.a())?;
+                    self.index_fast(o, key, base + inst.a())?;
                 }
                 Op::Add => arith_arm!(self, inst, base, ArithOp::Add,
                     int(a, b) => Some(Value::Int(a.wrapping_add(b))),

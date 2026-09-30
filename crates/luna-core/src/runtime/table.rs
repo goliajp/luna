@@ -441,6 +441,7 @@ impl Table {
         self.asize as usize
     }
 
+    #[inline]
     fn aget(&self, idx: usize) -> Value {
         // SAFETY: callers gate on `idx < self.asize()` before reaching here
         // (`get_int`, `iter_array`, etc.). atags and avals are sized
@@ -454,6 +455,7 @@ impl Table {
         }
     }
 
+    #[inline]
     fn aset(&mut self, idx: usize, v: Value) {
         let (t, b) = v.unpack();
         // SAFETY: see `aget`. callers (`set_norm`, `set_int`) gate on
@@ -470,6 +472,7 @@ impl Table {
 
     /// Raw lookup (no `__index` metamethod). Returns `Value::Nil` when
     /// the key is absent. `Value::Nil` and NaN floats return `nil` directly.
+    #[inline]
     pub fn get(&self, key: Value) -> Value {
         match key {
             Value::Int(i) => self.get_int(i),
@@ -489,6 +492,7 @@ impl Table {
     }
 
     /// Integer-keyed variant of [`Self::get`].
+    #[inline]
     pub fn get_int(&self, i: i64) -> Value {
         if i >= 1 && (i as u64) <= self.asize() as u64 {
             return self.aget(i as usize - 1);
@@ -508,6 +512,7 @@ impl Table {
         self.get_hash(Value::Str(key))
     }
 
+    #[inline]
     fn get_hash(&self, k: Value) -> Value {
         match self.find_node(k) {
             Some(idx) => self.nodes[idx].val,
@@ -544,6 +549,7 @@ impl Table {
     }
 
     /// Walk the chain rooted at the key's main position.
+    #[inline]
     fn find_node(&self, k: Value) -> Option<usize> {
         // read-time probe (gc-verify): both the query key and
         // every node key compared below must be live. This is the
@@ -584,6 +590,11 @@ impl Table {
         if self.nodes.is_empty() {
             return None;
         }
+        if let Value::Str(s) = k
+            && s.is_short()
+        {
+            return self.find_short_str(s);
+        }
         let mut idx = self.main_position(k);
         loop {
             let n = &self.nodes[idx];
@@ -605,11 +616,36 @@ impl Table {
         }
     }
 
+    /// [`Self::find_node`] for an interned (short) string key: two short
+    /// strings are equal only if they are the same object, so the chain
+    /// walk compares pointers (PUC `luaH_getshortstr`). `nodes` is non-empty.
+    #[inline]
+    fn find_short_str(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
+        let mut idx = key.hash() as usize & (self.nodes.len() - 1);
+        loop {
+            debug_assert!(idx < self.nodes.len());
+            // SAFETY: the main position is masked to the node count and
+            // every `next` link is a node index written by `insert_new`.
+            let n = unsafe { self.nodes.get_unchecked(idx) };
+            if !n.dead_key
+                && let Value::Str(s) = n.key
+                && s.ptr_eq(key)
+            {
+                return Some(idx);
+            }
+            if n.next == NONE {
+                return None;
+            }
+            idx = n.next as usize;
+        }
+    }
+
     // ---- writes ----
 
     /// Insert / update `(key, val)`. `heap` is used to credit any internal
     /// Box growth (rehash) to `heap.bytes` so the counter stays in sync with
     /// real memory; `free_obj` subtracts `internal_bytes()` on the way out.
+    #[inline]
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
         let k = normalize_set_key(key)?;
         self.set_norm(heap, k, val)
@@ -634,6 +670,7 @@ impl Table {
     /// The caller is responsible for firing `Heap::barrier_back` after a
     /// `true` return (same contract as the surrounding `raw_set`
     /// wrapper).
+    #[inline]
     pub fn try_set_existing(&mut self, key: Value, val: Value) -> bool {
         let k = match normalize_set_key(key) {
             Ok(k) => k,
@@ -712,6 +749,7 @@ impl Table {
     }
 
     /// `k` is already normalized (no nil, no NaN, integral floats → Int).
+    #[inline]
     fn set_norm(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
         if let Value::Int(i) = k
             && i >= 1
@@ -972,6 +1010,7 @@ impl Table {
         }
     }
 
+    #[inline]
     fn main_position(&self, k: Value) -> usize {
         debug_assert!(!self.nodes.is_empty());
         hash_key(k) as usize & (self.nodes.len() - 1)
@@ -1317,6 +1356,7 @@ impl Table {
 #[path = "table_soa.rs"]
 mod soa;
 
+#[inline]
 fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     match key {
         Value::Nil => Err(TableError::NilIndex),
@@ -1329,6 +1369,7 @@ fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     }
 }
 
+#[inline]
 fn hash_key(k: Value) -> u64 {
     match k {
         Value::Int(i) => i as u64, // identity mod size (PUC hashint)

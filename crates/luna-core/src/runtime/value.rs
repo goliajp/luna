@@ -231,6 +231,7 @@ impl Value {
     /// Raw equality (no metamethods): `rawequal` and table-key identity.
     /// Mixed int/float numbers are equal iff the float is exactly integral
     /// and equals the integer (PUC luaV_equalobj F2Ieq rule).
+    #[inline]
     pub fn raw_eq(self, other: Value) -> bool {
         match (self, other) {
             (Value::Nil, Value::Nil) => true,
@@ -252,6 +253,7 @@ impl Value {
     }
 }
 
+#[inline]
 fn str_eq(a: Gc<LuaStr>, b: Gc<LuaStr>) -> bool {
     if a.ptr_eq(b) {
         return true;
@@ -354,6 +356,7 @@ impl RawVal {
 
 impl Value {
     #[doc(hidden)]
+    #[inline]
     pub fn unpack(self) -> (u8, RawVal) {
         match self {
             Value::Nil => (raw::NIL, RawVal::NIL),
@@ -374,6 +377,7 @@ impl Value {
     /// SAFETY: `(tag, v)` must come from a matching `unpack` of a value that
     /// is still alive.
     #[doc(hidden)]
+    #[inline]
     pub unsafe fn pack(tag: u8, v: RawVal) -> Value {
         unsafe {
             match tag {
