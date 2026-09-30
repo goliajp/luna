@@ -296,9 +296,7 @@ fn jump_targets(p: &Proto) -> Vec<bool> {
             }
             Op::ForLoop | Op::TForLoop => mark(pc + 1 - bx),
             Op::TForPrep => mark(pc + 1 + bx),
-            Op::LFalseSkip | Op::Eq | Op::Lt | Op::Le | Op::EqK | Op::Test | Op::TestSet => {
-                mark(pc + 2)
-            }
+            op if op == Op::LFalseSkip || op.is_test() => mark(pc + 2),
             _ => {}
         }
     }

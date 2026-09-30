@@ -18,9 +18,11 @@
 
 mod asm;
 mod classic;
+mod classic_const;
 mod classic_flow;
 mod format;
 mod modern;
+mod modern_const;
 mod modern_flow;
 
 use self::asm::{Asm, Res, Window, loop_windows};
@@ -265,7 +267,18 @@ fn check_skips(p: &Proto, pc_map: &[u32]) -> Res<()> {
     for (pc, i) in p.code.iter().enumerate() {
         let skips = matches!(
             i.op(),
-            Op::LFalseSkip | Op::Eq | Op::Lt | Op::Le | Op::EqK | Op::Test | Op::TestSet
+            Op::LFalseSkip
+                | Op::Eq
+                | Op::Lt
+                | Op::Le
+                | Op::EqK
+                | Op::EqI
+                | Op::LtI
+                | Op::LeI
+                | Op::GtI
+                | Op::GeI
+                | Op::Test
+                | Op::TestSet
         );
         if skips && (pc + 2 >= pc_map.len() || pc_map[pc + 2] - pc_map[pc + 1] != 1) {
             return Err(format!(

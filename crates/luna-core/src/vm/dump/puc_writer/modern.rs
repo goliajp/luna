@@ -5,7 +5,8 @@
 //!
 //! - arithmetic is followed by the `MMBIN` naming its metamethod event;
 //!   luna's flagged `Add` (a source `x - 0`) is PUC's `ADDI x 0` with a
-//!   `__sub` `MMBINI`;
+//!   `__sub` `MMBINI`; the constant- and immediate-operand forms are in
+//!   [`super::modern_const`];
 //! - the fast field ops (`GETFIELD`, `GETTABUP`, `SETFIELD`, `SETTABUP`,
 //!   and `SELF` in 5.5) take short-string keys only, so a longer key goes
 //!   through a register as PUC's parser does;
@@ -45,7 +46,7 @@ fn opn(ops: &[Kind], k: Kind) -> u32 {
 }
 
 /// `ltm.h` `TMS` of an arithmetic operator (the same in 5.4 and 5.5).
-fn event(op: Op) -> Option<u32> {
+pub(super) fn event(op: Op) -> Option<u32> {
     Some(match op {
         Op::Add => 6,
         Op::Sub => 7,
@@ -74,12 +75,16 @@ impl M<'_, '_> {
     }
 
     pub(super) fn abc(&self, k: Kind, a: u32, b: u32, c: u32, kf: bool) -> Res<u32> {
+        self.raw_abc(self.op(k), a, b, c, kf)
+    }
+
+    pub(super) fn raw_abc(&self, op: u32, a: u32, b: u32, c: u32, kf: bool) -> Res<u32> {
         if a > 255 || b > 255 || c > 255 {
             return Err(self
                 .asm
                 .err(format_args!("operands {a} {b} {c} do not fit")));
         }
-        Ok(self.op(k) | (a << 7) | ((kf as u32) << 15) | (b << 16) | (c << 24))
+        Ok(op | (a << 7) | ((kf as u32) << 15) | (b << 16) | (c << 24))
     }
 
     /// 5.5's `NEWTABLE` / `SETLIST` layout: 6-bit `vB`, 10-bit `vC`.
@@ -257,6 +262,8 @@ impl M<'_, '_> {
                 self.emit(self.abc(Kind::Arith(l.op), a, b, c, false))?;
                 self.emit(self.abc(Kind::MmBin, b, c, tm, false))?;
             }
+            Op::AddI | Op::SubI | Op::ShrI | Op::ShlI => self.arith_i(l)?,
+            op if op.arith_const_op().is_some() => self.arith_k(l)?,
             Op::Unm | Op::BNot | Op::Not | Op::Len => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Unary(l.op), a, b, 0, false))?;

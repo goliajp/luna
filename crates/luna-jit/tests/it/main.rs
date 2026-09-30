@@ -31,6 +31,7 @@ mod jit_vm_scoped_rebind;
 mod lua_facade;
 mod materialize_frames_counter;
 mod math_fold_semantics;
+mod method_jit_const_operands;
 mod method_jit_float_keys;
 mod method_jit_kind_edges;
 mod method_jit_upvalues;

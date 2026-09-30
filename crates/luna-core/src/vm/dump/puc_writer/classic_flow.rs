@@ -31,6 +31,7 @@ impl C<'_, '_> {
                 };
                 self.emit(self.abc(k, l.k as u32, a, b))?;
             }
+            Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => self.cmp_const(l)?,
             Op::Test => {
                 let a = self.asm.r(l.a)?;
                 self.emit(self.abc(Kind::Test, a, 0, l.k as u32))?;

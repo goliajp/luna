@@ -46,6 +46,11 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         | Op::Lt
         | Op::Le
         | Op::EqK
+        | Op::EqI
+        | Op::LtI
+        | Op::LeI
+        | Op::GtI
+        | Op::GeI
         | Op::Test
         | Op::Return
         | Op::Return0

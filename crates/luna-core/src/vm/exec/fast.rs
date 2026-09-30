@@ -5,9 +5,10 @@
 
 use super::*;
 
-/// `R[A] := R[B] op R[C]`: the Int/Int and Float/Float cases are computed
-/// in the opcode arm (an arm yielding `None` falls through); everything else
-/// goes to `arith_slow`. `true` when the opcode arm finished the operation.
+/// `R[A] := R[B] op R[C]`: two integers and two floats are computed in the
+/// opcode arm, a float meeting an integer as two floats (an arm yielding
+/// `None` falls through); everything else goes to `arith_slow`. `true` when
+/// the opcode arm finished the operation.
 macro_rules! arith_arm {
     ($vm:ident, $regs:ident, $inst:ident, $base:ident, $op:expr,
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
@@ -18,6 +19,14 @@ macro_rules! arith_arm {
         let v: Option<Value> = match (l, r) {
             (Value::Int($ia), Value::Int($ib)) => $iv,
             (Value::Float($fa), Value::Float($fb)) => $fv,
+            (Value::Float($fa), Value::Int(i)) => {
+                let $fb = i as f64;
+                $fv
+            }
+            (Value::Int(i), Value::Float($fb)) => {
+                let $fa = i as f64;
+                $fv
+            }
             _ => None,
         };
         match v {
@@ -27,7 +36,44 @@ macro_rules! arith_arm {
                 true
             }
             None => {
-                $vm.arith_slow($inst, $base, $op, l, r)?;
+                $vm.arith_slow($inst.a(), $base, $op, l, r, $inst.k())?;
+                false
+            }
+        }
+    }};
+}
+
+/// `R[A] := R[B] op c` for a constant or immediate `c`: as `arith_arm`, and
+/// a float meeting an integer is computed as two floats. The slow path gets
+/// the operands in source order (`k`: the constant was on the left).
+macro_rules! arith_c_arm {
+    ($vm:ident, $regs:ident, $inst:ident, $base:ident, $op:expr, $c:expr,
+     int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
+        // SAFETY: `$regs` is the running frame's register window (see `Vm::r`)
+        let x = unsafe { *$regs.add($inst.b() as usize) };
+        let c: Value = $c;
+        let v: Option<Value> = match (x, c) {
+            (Value::Int($ia), Value::Int($ib)) => $iv,
+            (Value::Float($fa), Value::Float($fb)) => $fv,
+            (Value::Float($fa), Value::Int(i)) => {
+                let $fb = i as f64;
+                $fv
+            }
+            (Value::Int(i), Value::Float($fb)) => {
+                let $fa = i as f64;
+                $fv
+            }
+            _ => None,
+        };
+        match v {
+            Some(v) => {
+                // SAFETY: as above
+                unsafe { *$regs.add($inst.a() as usize) = v };
+                true
+            }
+            None => {
+                let (l, r) = if $inst.k() { (c, x) } else { (x, c) };
+                $vm.arith_slow($inst.a(), $base, $op, l, r, false)?;
                 false
             }
         }
@@ -65,6 +111,7 @@ impl Vm {
         mut inst: Inst,
         mut npc: u32,
     ) -> Result<FastExit, LuaError> {
+        let v54 = self.version() >= LuaVersion::Lua54;
         let Fast {
             mut cl,
             mut base,
@@ -402,7 +449,7 @@ impl Vm {
                 }
                 Op::Div => {
                     if arith_arm!(self, regs, inst, base, ArithOp::Div,
-                    int(_a, _b) => None,
+                    int(a, b) => Some(Value::Float(a as f64 / b as f64)),
                     float(a, b) => Some(Value::Float(a / b)))
                     {
                         next!()
@@ -444,6 +491,119 @@ impl Vm {
                     if arith_arm!(self, regs, inst, base, ArithOp::Shr,
                     int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
                     float(_a, _b) => None)
+                    {
+                        next!()
+                    }
+                }
+                Op::AddI => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Add, Value::Int(inst.sc() as i64),
+                        int(a, b) => Some(Value::Int(a.wrapping_add(b))),
+                        float(a, b) => Some(Value::Float(a + b)))
+                    {
+                        next!()
+                    }
+                }
+                Op::SubI => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Sub, Value::Int(inst.sc() as i64),
+                        int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
+                        float(a, b) => Some(Value::Float(a - b)))
+                    {
+                        next!()
+                    }
+                }
+                Op::AddK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Add, konst!(inst.c()),
+                        int(a, b) => Some(Value::Int(a.wrapping_add(b))),
+                        float(a, b) => Some(Value::Float(a + b)))
+                    {
+                        next!()
+                    }
+                }
+                Op::SubK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Sub, konst!(inst.c()),
+                        int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
+                        float(a, b) => Some(Value::Float(a - b)))
+                    {
+                        next!()
+                    }
+                }
+                Op::MulK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Mul, konst!(inst.c()),
+                        int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
+                        float(a, b) => Some(Value::Float(a * b)))
+                    {
+                        next!()
+                    }
+                }
+                // a zero divisor takes the slow path for its error
+                Op::ModK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Mod, konst!(inst.c()),
+                        int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
+                        float(a, b) => { let _ = (a, b); None })
+                    {
+                        next!()
+                    }
+                }
+                Op::IDivK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::IDiv, konst!(inst.c()),
+                        int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
+                        float(a, b) => { let _ = (a, b); None })
+                    {
+                        next!()
+                    }
+                }
+                Op::DivK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Div, konst!(inst.c()),
+                        int(a, b) => Some(Value::Float(a as f64 / b as f64)),
+                        float(a, b) => Some(Value::Float(a / b)))
+                    {
+                        next!()
+                    }
+                }
+                Op::PowK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Pow, konst!(inst.c()),
+                        int(a, b) => Some(Value::Float(num_pow(v54, a as f64, b as f64))),
+                        float(a, b) => Some(Value::Float(num_pow(v54, a, b))))
+                    {
+                        next!()
+                    }
+                }
+                Op::BAndK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::BAnd, konst!(inst.c()),
+                        int(a, b) => Some(Value::Int(a & b)),
+                        float(a, b) => { let _ = (a, b); None })
+                    {
+                        next!()
+                    }
+                }
+                Op::BOrK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::BOr, konst!(inst.c()),
+                        int(a, b) => Some(Value::Int(a | b)),
+                        float(a, b) => { let _ = (a, b); None })
+                    {
+                        next!()
+                    }
+                }
+                Op::BXorK => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::BXor, konst!(inst.c()),
+                        int(a, b) => Some(Value::Int(a ^ b)),
+                        float(a, b) => { let _ = (a, b); None })
+                    {
+                        next!()
+                    }
+                }
+                Op::ShrI => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Shr, Value::Int(inst.sc() as i64),
+                        int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
+                        float(a, b) => { let _ = (a, b); None })
+                    {
+                        next!()
+                    }
+                }
+                Op::ShlI => {
+                    if arith_c_arm!(self, regs, inst, base, ArithOp::Shl, Value::Int(inst.sc() as i64),
+                        int(a, b) => Some(Value::Int(shift_left(a, b))),
+                        float(a, b) => { let _ = (a, b); None })
                     {
                         next!()
                     }
@@ -522,79 +682,26 @@ impl Vm {
                 }
                 Op::Jmp => {
                     let off = inst.sj();
-                    // Trace JIT back-edge counter. A negative
-                    // jump offset is a loop back-edge (the only canonical
-                    // backward jumps the compiler emits — `while`, `for`,
-                    // `repeat`). Tick the per-Proto counter and, once it
-                    // exceeds the threshold, start a trace recording. The
-                    // whole block is gated on `trace_jit_enabled` so
-                    // existing benches see one branch-not-taken and no
-                    // counter writes.
+                    npc = (npc as i64 + off as i64) as u32;
+                    // a backward jump is a loop's back-edge: the trace JIT
+                    // counts them, and from the threshold on looks whether
+                    // to record from the target
                     if trace_on && off < 0 {
                         let proto = cl.proto;
                         let c = proto.trace_hot_count.get();
                         if c < u32::MAX / 2 {
                             proto.trace_hot_count.set(c + 1);
                         }
-                        // Relaxed back-edge trigger:
-                        // `c >= THRESHOLD` (not `c == THRESHOLD`) so
-                        // a missed crossing (active_trace busy with
-                        // a call-trigger, or the recorder slot
-                        // happened to be in use) doesn't permanently
-                        // lock this back-edge target out. The
-                        // `already_cached` short-circuit prevents
-                        // duplicate recordings: once a trace is
-                        // cached for this target, subsequent
-                        // crossings skip the start. This pairs with
-                        // the discard-on-partial-coverage close
-                        // handling — when a short call-trigger is
-                        // discarded, the back-edge can still find an
-                        // open slot at the next iteration.
-                        let target_pc = (pc as i32 + 1 + off).max(0) as u32;
-                        // Threshold first, then the gave-up
-                        // short-circuit, then the RefCell borrow +
-                        // scan: cold back-edges and Protos whose
-                        // discard cap force-compiled a partial trace
-                        // skip the scan.
+                        let target = (pc as i32 + 1 + off).max(0) as u32;
                         if c >= self.jit.trace_hot_threshold
-                            && self.jit.active_trace.is_none()
-                            && !proto.trace_gave_up.get()
-                            && !proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
-                            && !trace_head_abandoned(proto, target_pc)
+                            && self.trace_start_at_jmp(cl, base, target)
                         {
-                            // Back-edge target = pc after `add_pc(off)`,
-                            // i.e. current `pc + 1 + off` (the dispatch
-                            // loop has already advanced f.pc to pc+1).
-                            let target = (pc as i32 + 1 + off).max(0) as u32;
-                            // Snapshot per-slot Value tag at trace
-                            // entry so the lowerer's kind tracker
-                            // knows which arith path to lower
-                            // (iadd vs fadd, etc.).
-                            let max_stack = cl.proto.max_stack as usize;
-                            let base_us = base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
-                            }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                )));
-                            // Record the frame the trace
-                            // started in. `self.frames.len() - 1`
-                            // since we're inside the currently-running
-                            // Lua frame's dispatch.
-                            self.jit.recording_frame_base = self.frames.len() - 1;
+                            // the recording sees the next instruction from
+                            // the loop head
+                            // SAFETY: see `next!`
+                            unsafe { *fpc = npc };
+                            return Ok(FastExit::Reload);
                         }
-                    }
-                    npc = (npc as i64 + off as i64) as u32;
-                    // a recording that just started must see the next
-                    // instruction from the loop head
-                    if trace_on && off < 0 && self.jit.active_trace.is_some() {
-                        // SAFETY: see `next!`
-                        unsafe { *fpc = npc };
-                        return Ok(FastExit::Reload);
                     }
                     next!()
                 }
@@ -646,6 +753,107 @@ impl Vm {
                     }
                     let step = self.less_step(l, r, true)?;
                     self.op_compare(step, l, r, inst.k())?;
+                }
+                // raw equality with a number: no metamethod can be involved
+                Op::EqI => {
+                    let im = inst.sb();
+                    let eq = match reg!(inst.a()) {
+                        Value::Int(a) => a == im as i64,
+                        Value::Float(f) => f == im as f64,
+                        _ => false,
+                    };
+                    if eq != inst.k() {
+                        npc += 1;
+                    }
+                    next!()
+                }
+                Op::LtI => {
+                    let x = reg!(inst.a());
+                    let im = inst.sb();
+                    let res = match x {
+                        Value::Int(a) => a < im as i64,
+                        Value::Float(f) => f < im as f64,
+                        _ => {
+                            let imv = if inst.c() != 0 {
+                                Value::Float(im as f64)
+                            } else {
+                                Value::Int(im as i64)
+                            };
+                            let step = self.less_step(x, imv, false)?;
+                            self.op_compare(step, x, imv, inst.k())?;
+                            resume!()
+                        }
+                    };
+                    if res != inst.k() {
+                        npc += 1;
+                    }
+                    next!()
+                }
+                Op::LeI => {
+                    let x = reg!(inst.a());
+                    let im = inst.sb();
+                    let res = match x {
+                        Value::Int(a) => a <= im as i64,
+                        Value::Float(f) => f <= im as f64,
+                        _ => {
+                            let imv = if inst.c() != 0 {
+                                Value::Float(im as f64)
+                            } else {
+                                Value::Int(im as i64)
+                            };
+                            let step = self.less_step(x, imv, true)?;
+                            self.op_compare(step, x, imv, inst.k())?;
+                            resume!()
+                        }
+                    };
+                    if res != inst.k() {
+                        npc += 1;
+                    }
+                    next!()
+                }
+                Op::GtI => {
+                    let x = reg!(inst.a());
+                    let im = inst.sb();
+                    let res = match x {
+                        Value::Int(a) => a > im as i64,
+                        Value::Float(f) => f > im as f64,
+                        _ => {
+                            let imv = if inst.c() != 0 {
+                                Value::Float(im as f64)
+                            } else {
+                                Value::Int(im as i64)
+                            };
+                            let step = self.less_step(imv, x, false)?;
+                            self.op_compare(step, imv, x, inst.k())?;
+                            resume!()
+                        }
+                    };
+                    if res != inst.k() {
+                        npc += 1;
+                    }
+                    next!()
+                }
+                Op::GeI => {
+                    let x = reg!(inst.a());
+                    let im = inst.sb();
+                    let res = match x {
+                        Value::Int(a) => a >= im as i64,
+                        Value::Float(f) => f >= im as f64,
+                        _ => {
+                            let imv = if inst.c() != 0 {
+                                Value::Float(im as f64)
+                            } else {
+                                Value::Int(im as i64)
+                            };
+                            let step = self.less_step(imv, x, true)?;
+                            self.op_compare(step, imv, x, inst.k())?;
+                            resume!()
+                        }
+                    };
+                    if res != inst.k() {
+                        npc += 1;
+                    }
+                    next!()
                 }
                 Op::Test => {
                     // the JMP that follows runs when the condition equals k
@@ -713,21 +921,7 @@ impl Vm {
                         if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none() {
                             // the back-edge target is the body's first op
                             let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                            let max_stack = cl.proto.max_stack as usize;
-                            let base_us = base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
-                            }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                )));
-                            // Record the frame the trace
-                            // started in. The currently-running
-                            // Lua frame is at len() - 1.
-                            self.jit.recording_frame_base = self.frames.len() - 1;
+                            self.trace_start_at_loop(cl, base, target, None);
                             slow = true;
                         }
                     }
@@ -742,13 +936,9 @@ impl Vm {
                     let a = inst.a();
                     let ctrl = reg!(a + 4);
                     if !ctrl.is_nil() {
-                        // Trace JIT back-edge counter on
-                        // generic-for back-edge. TForLoop sits at the
-                        // tail of `for k,v in expr do ... end`; recorder
-                        // treats it as the close-detection equivalent of
-                        // a negative Op::Jmp. Gate on `take_back_edge`
-                        // (= `ctrl != nil`) so empty-iter loops don't
-                        // pollute hot_count.
+                        // the generic-for's back-edge, counted like a
+                        // numeric one; an iterator that returned nothing
+                        // takes no back-edge
                         if trace_on {
                             let proto = cl.proto;
                             let c = proto.trace_hot_count.get();
@@ -757,50 +947,9 @@ impl Vm {
                             }
                             if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
                             {
-                                // TForLoop back-edge target = pc after
-                                // `add_pc(-bx)` runs from the already-
-                                // bumped f.pc (= pc + 1). So target =
-                                // (pc + 1) - bx, normally landing on
-                                // body_top (the op right after TForPrep).
+                                // the body's first op, right after TForPrep
                                 let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                                let max_stack = cl.proto.max_stack as usize;
-                                let base_us = base as usize;
-                                let mut entry_tags = Vec::with_capacity(max_stack);
-                                for i in 0..max_stack {
-                                    let (tag, _) = self.stack[base_us + i].unpack();
-                                    entry_tags.push(tag);
-                                }
-                                // Snapshot the iter
-                                // fn's address if Native, so the
-                                // lowerer can specialise ipairs into
-                                // inline Table aget IR.
-                                let iter_ptr =
-                                    if let Value::Native(n) = self.stack[base_us + a as usize] {
-                                        Some(n.f as usize)
-                                    } else {
-                                        None
-                                    };
-                                // Snapshot R[A+5]'s
-                                // tag (= current iter's val from
-                                // the just-fired TForCall). The
-                                // inline aget fast_blk emits a
-                                // runtime guard against this tag;
-                                // mixed-tag arrays deopt rather
-                                // than producing garbage pointers
-                                // through the spill path.
-                                let val_slot = base_us + (a as usize) + 5;
-                                let val_tag = if val_slot < self.stack.len() {
-                                    Some(self.stack[val_slot].unpack().0)
-                                } else {
-                                    None
-                                };
-                                let mut rec = crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                );
-                                rec.tfor_iter_ptr = iter_ptr;
-                                rec.tfor_val_tag = val_tag;
-                                self.jit.active_trace = Some(Box::new(rec));
-                                self.jit.recording_frame_base = self.frames.len() - 1;
+                                self.trace_start_at_loop(cl, base, target, Some(a));
                             }
                         }
                         set_reg!(a + 2, ctrl);
