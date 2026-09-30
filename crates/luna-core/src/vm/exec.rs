@@ -1082,7 +1082,10 @@ impl Vm {
     /// Install a caller-supplied JIT backend. The
     /// `luna` crate uses this to swap in its `CraneliftBackend`; tests
     /// or third-party backends pass their own [`crate::jit::IntChunkCompiler`] /
-    /// [`crate::jit::TraceCompiler`] implementations. Re-installing on a Vm whose
+    /// [`crate::jit::TraceCompiler`] implementations. A Vm starts with
+    /// both JIT flags off; this turns on each flag the embedder has not
+    /// set with [`Self::set_jit_enabled`] / [`Self::set_trace_jit_enabled`]
+    /// (or [`Self::install_null_jit`]). Re-installing on a Vm whose
     /// closures already populated `Proto.jit: JitProtoState::Compiled`
     /// does NOT evict those cached entries — call right after
     /// construction for a clean swap.
@@ -1097,6 +1100,12 @@ impl Vm {
     {
         self.jit.chunk_compiler = Box::new(chunk);
         self.jit.trace_compiler = Box::new(trace);
+        if !self.jit.enabled_chosen {
+            self.jit.enabled = true;
+        }
+        if !self.jit.trace_enabled_chosen {
+            self.jit.trace_enabled = true;
+        }
     }
 
     /// Install a caller-supplied JIT
@@ -1130,8 +1139,8 @@ impl Vm {
     pub fn install_null_jit(&mut self) {
         self.jit.chunk_compiler = Box::new(crate::jit::NullJitBackend);
         self.jit.trace_compiler = Box::new(crate::jit::NullJitBackend);
-        self.jit.enabled = false;
-        self.jit.trace_enabled = false;
+        self.set_jit_enabled(false);
+        self.set_trace_jit_enabled(false);
     }
 
     /// Open the entire 5.5 standard library on a `new_minimal`-built Vm.
@@ -3250,11 +3259,14 @@ impl Vm {
         self.instr_budget
     }
 
-    /// Toggle the cranelift JIT. Default `true`. Sandbox embedders
+    /// Toggle the method JIT. Off on a Vm without a JIT backend, on once
+    /// one is installed ([`Self::install_jit_backend`]); a value set here
+    /// is kept across a later install. Sandbox embedders
     /// **must** disable JIT when relying on `instr_budget` — see the
     /// `jit_enabled` field doc for the rationale.
     pub fn set_jit_enabled(&mut self, enabled: bool) {
         self.jit.enabled = enabled;
+        self.jit.enabled_chosen = true;
     }
 
     /// Current JIT enable state.
@@ -3262,12 +3274,14 @@ impl Vm {
         self.jit.enabled
     }
 
-    /// Toggle the trace JIT. Off by default. When enabled, hot
+    /// Toggle the trace JIT. Same default and install rule as
+    /// [`Self::set_jit_enabled`]. When enabled, hot
     /// back-edges are counted on `Proto.trace_hot_count`; once the
     /// counter passes `TRACE_HOT_THRESHOLD`, the dispatch loop enters
     /// recording mode at the back-edge target.
     pub fn set_trace_jit_enabled(&mut self, enabled: bool) {
         self.jit.trace_enabled = enabled;
+        self.jit.trace_enabled_chosen = true;
     }
 
     /// Opt-in flag for the self-link cycle catch. See field

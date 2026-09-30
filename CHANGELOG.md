@@ -39,6 +39,14 @@ optimization.
 - The interpreter skips the per-instruction trace lookup on functions
   that hold no enterable trace, and the call trigger no longer scans a
   function's traces on every call once its entry is settled.
+- A Vm with no JIT backend installed (`Vm::new`, `Vm::new_minimal`, the
+  sandbox builder, any embedder that depends on `luna-core` alone) starts
+  with both JIT flags off, so it no longer counts hot loops and calls or
+  records traces that nothing could compile. `Vm::install_jit_backend`
+  (and so `luna_jit::install_default_jit`) turns on each flag the
+  embedder has not already set with `set_jit_enabled` /
+  `set_trace_jit_enabled`. `jit_enabled()` and `trace_jit_enabled()`
+  report `false` on such a Vm.
 
 ### Added
 
