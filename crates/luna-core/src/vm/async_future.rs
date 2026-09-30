@@ -91,9 +91,12 @@ impl<'vm> Future for EvalFuture<'vm> {
                 // Stash JIT setting + disable for the duration (JIT
                 // traces don't honor instr_budget per opcode, so async
                 // mode + JIT could starve the executor).
+                // The flag is set directly: through `set_jit_enabled` it
+                // would count as the embedder's choice, and installing a
+                // backend afterwards would then leave the JIT off.
                 if this.saved_jit_enabled.is_none() {
-                    this.saved_jit_enabled = Some(this.vm.jit_enabled());
-                    this.vm.set_jit_enabled(false);
+                    this.saved_jit_enabled = Some(this.vm.jit.enabled);
+                    this.vm.jit.enabled = false;
                 }
                 // Compile. On syntax error we transition directly to
                 // Done with the error — no Lua frames were pushed,
@@ -110,7 +113,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                         let s = this.vm.intern_str(&msg);
                         // Restore JIT + clean up before returning.
                         if let Some(prev) = this.saved_jit_enabled.take() {
-                            this.vm.set_jit_enabled(prev);
+                            this.vm.jit.enabled = prev;
                         }
                         this.vm.async_mode = false;
                         this.vm.async_waker = None;
@@ -161,7 +164,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                         DispatchOutcome::Complete(values) => {
                             // Restore JIT + clear async state.
                             if let Some(prev) = this.saved_jit_enabled.take() {
-                                this.vm.set_jit_enabled(prev);
+                                this.vm.jit.enabled = prev;
                             }
                             this.vm.async_mode = false;
                             this.vm.async_waker = None;
@@ -170,7 +173,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                         }
                         DispatchOutcome::Error(e) => {
                             if let Some(prev) = this.saved_jit_enabled.take() {
-                                this.vm.set_jit_enabled(prev);
+                                this.vm.jit.enabled = prev;
                             }
                             this.vm.async_mode = false;
                             this.vm.async_waker = None;
@@ -215,7 +218,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                             // `Poll::Ready(Err)` arm runs below.
                             if let Err(e) = this.vm.commit_async_native_result(nret) {
                                 if let Some(prev) = this.saved_jit_enabled.take() {
-                                    this.vm.set_jit_enabled(prev);
+                                    this.vm.jit.enabled = prev;
                                 }
                                 this.vm.async_mode = false;
                                 this.vm.async_waker = None;
@@ -234,7 +237,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                             // failed, so its slot is gone.
                             this.vm.pending_async_native_ctx = None;
                             if let Some(prev) = this.saved_jit_enabled.take() {
-                                this.vm.set_jit_enabled(prev);
+                                this.vm.jit.enabled = prev;
                             }
                             this.vm.async_mode = false;
                             this.vm.async_waker = None;
@@ -261,7 +264,7 @@ impl<'vm> Drop for EvalFuture<'vm> {
         // not done here; there is no `Vm::cancel_async`. Embedders
         // relying on cancellation should construct a fresh Vm per request.
         if let Some(prev) = self.saved_jit_enabled.take() {
-            self.vm.set_jit_enabled(prev);
+            self.vm.jit.enabled = prev;
         }
         // Always clear async state on drop so the next `eval` / `eval_async`
         // call on the same Vm starts clean.

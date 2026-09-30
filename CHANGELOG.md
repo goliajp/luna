@@ -74,6 +74,9 @@ optimization.
 
 ### Fixed
 
+- A Vm with no JIT backend that ran `eval_async` before
+  `install_jit_backend` kept the method JIT off afterwards: the future's
+  temporary switch-off counted as the embedder's own choice.
 - Use after free in the collector: values a returned function left in
   stack slots above its caller's registers (closures, strings, userdata)
   could be freed by one collection and then marked by a later one, since
