@@ -1,6 +1,7 @@
 // CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Function objects: compiled prototypes, Lua closures, upvalues.
 
+use crate::runtime::fnv::FnvHash128;
 use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::Value;
@@ -234,50 +235,6 @@ pub enum JitProtoState {
 // already is !Send (Heap holds raw GcHeader pointers), so we don't
 // need any auto-trait gymnastics — this comment exists so a future
 // audit doesn't try to flip the trait without thinking.
-
-/// Hand-rolled FNV-1a-128 state.
-/// Used by [`Proto::stable_hash`] to fingerprint a Proto without
-/// pulling a third-party hash crate (`luna-core` 0-dep contract).
-///
-/// FNV-1a is not cryptographic; collision-resistance suffices for the
-/// AOT proto-ID use case because a collision would surface as a
-/// trace-vs-proto mismatch and the dispatcher's existing tag/shape
-/// guards would deopt to interp rather than corrupt state.
-struct FnvHash128 {
-    state: u128,
-}
-
-impl FnvHash128 {
-    /// Standard FNV-1a-128 offset basis.
-    const OFFSET_BASIS: u128 = 0x6c62272e07bb014262b821756295c58d;
-    /// Standard FNV-1a-128 prime.
-    const PRIME: u128 = 0x0000000001000000000000000000013b;
-
-    fn new() -> Self {
-        FnvHash128 {
-            state: Self::OFFSET_BASIS,
-        }
-    }
-
-    /// Absorb `bytes` into the running hash. FNV-1a: per byte, XOR
-    /// into the low octet of state, then multiply by the prime (wrap).
-    fn update(&mut self, bytes: &[u8]) {
-        let mut s = self.state;
-        for &b in bytes {
-            s ^= b as u128;
-            s = s.wrapping_mul(Self::PRIME);
-        }
-        self.state = s;
-    }
-
-    /// Finalise to 16 big-endian bytes (network order — stable across
-    /// platforms; the LE/BE choice is cosmetic since the only consumer
-    /// is byte-equality, but BE matches the canonical FNV-1a-128
-    /// reference output if anyone cross-checks).
-    fn finish(self) -> [u8; 16] {
-        self.state.to_be_bytes()
-    }
-}
 
 impl Proto {
     /// Stable 128-bit hash over a
@@ -545,37 +502,7 @@ pub struct NativeClosure {
     pub is_async: bool,
     /// Which natives the call path runs itself; fixed at creation, so a
     /// call tests one byte instead of comparing `f` with each of them.
-    pub(crate) kind: NativeKind,
-}
-
-/// See [`NativeClosure::kind`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NativeKind {
-    Plain,
-    Async,
-    Pcall,
-    Xpcall,
-    HostXpcall,
-    Pairs,
-}
-
-impl NativeKind {
-    /// The kind of a synchronous native calling `f`.
-    pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
-        use crate::runtime::value::NativeFn;
-        use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
-        if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
-            NativeKind::Pcall
-        } else if std::ptr::fn_addr_eq(f, nat_xpcall as NativeFn) {
-            NativeKind::Xpcall
-        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
-            NativeKind::HostXpcall
-        } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
-            NativeKind::Pairs
-        } else {
-            NativeKind::Plain
-        }
-    }
+    pub(crate) kind: crate::vm::exec::native_call::NativeKind,
 }
 
 impl NativeClosure {
