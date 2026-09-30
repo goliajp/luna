@@ -25,6 +25,7 @@ mod arith;
 #[cfg(test)]
 mod cont_trap_tests;
 mod fast;
+mod fast_arith;
 mod index;
 mod index_fast;
 mod limits;
@@ -6338,6 +6339,13 @@ impl Vm {
                 };
             }
 
+            let mut heads = [crate::runtime::function::TRACE_HEADS_NONE; 2];
+            let stay = !self.trap
+                && (!trace_on
+                    || self.jit.active_trace.is_none() && {
+                        heads = cl.proto.trace_heads.get();
+                        heads[0] != crate::runtime::function::TRACE_HEADS_MANY
+                    });
             let fx = fast::Fast {
                 cl,
                 base,
@@ -6347,8 +6355,15 @@ impl Vm {
                 trace_on,
                 pre53,
                 entry_depth,
+                stay,
+                heads,
             };
-            let inst = match self.run_fast(fx, inst, pc + 1)? {
+            let out = if stay && heads[0] == crate::runtime::function::TRACE_HEADS_NONE {
+                self.run_fast::<false>(fx, inst, pc + 1)?
+            } else {
+                self.run_fast::<true>(fx, inst, pc + 1)?
+            };
+            let inst = match out {
                 fast::FastExit::Reload => continue,
                 fast::FastExit::Slow(inst) => inst,
             };

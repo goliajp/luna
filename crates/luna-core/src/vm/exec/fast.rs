@@ -4,81 +4,8 @@
 //! that its register allocation does not depend on the rest of the loop.
 
 use super::*;
-
-/// `R[A] := R[B] op R[C]`: two integers and two floats are computed in the
-/// opcode arm, a float meeting an integer as two floats (an arm yielding
-/// `None` falls through); everything else goes to `arith_slow`. `true` when
-/// the opcode arm finished the operation.
-macro_rules! arith_arm {
-    ($vm:ident, $regs:ident, $inst:ident, $base:ident, $op:expr,
-     int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
-        // SAFETY: `$regs` is the running frame's register window (see `Vm::r`)
-        let l = unsafe { *$regs.add($inst.b() as usize) };
-        // SAFETY: as above
-        let r = unsafe { *$regs.add($inst.c() as usize) };
-        let v: Option<Value> = match (l, r) {
-            (Value::Int($ia), Value::Int($ib)) => $iv,
-            (Value::Float($fa), Value::Float($fb)) => $fv,
-            (Value::Float($fa), Value::Int(i)) => {
-                let $fb = i as f64;
-                $fv
-            }
-            (Value::Int(i), Value::Float($fb)) => {
-                let $fa = i as f64;
-                $fv
-            }
-            _ => None,
-        };
-        match v {
-            Some(v) => {
-                // SAFETY: as above
-                unsafe { *$regs.add($inst.a() as usize) = v };
-                true
-            }
-            None => {
-                $vm.arith_slow($inst.a(), $base, $op, l, r, $inst.k())?;
-                false
-            }
-        }
-    }};
-}
-
-/// `R[A] := R[B] op c` for a constant or immediate `c`: as `arith_arm`, and
-/// a float meeting an integer is computed as two floats. The slow path gets
-/// the operands in source order (`k`: the constant was on the left).
-macro_rules! arith_c_arm {
-    ($vm:ident, $regs:ident, $inst:ident, $base:ident, $op:expr, $c:expr,
-     int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
-        // SAFETY: `$regs` is the running frame's register window (see `Vm::r`)
-        let x = unsafe { *$regs.add($inst.b() as usize) };
-        let c: Value = $c;
-        let v: Option<Value> = match (x, c) {
-            (Value::Int($ia), Value::Int($ib)) => $iv,
-            (Value::Float($fa), Value::Float($fb)) => $fv,
-            (Value::Float($fa), Value::Int(i)) => {
-                let $fb = i as f64;
-                $fv
-            }
-            (Value::Int(i), Value::Float($fb)) => {
-                let $fa = i as f64;
-                $fv
-            }
-            _ => None,
-        };
-        match v {
-            Some(v) => {
-                // SAFETY: as above
-                unsafe { *$regs.add($inst.a() as usize) = v };
-                true
-            }
-            None => {
-                let (l, r) = if $inst.k() { (c, x) } else { (x, c) };
-                $vm.arith_slow($inst.a(), $base, $op, l, r, false)?;
-                false
-            }
-        }
-    }};
-}
+use crate::runtime::value::tag;
+use fast_arith::{arith_arm, arith_imm_arm, put_int, raw_flt, raw_int, raw_tag, raw_truthy};
 
 /// The running frame, as the loop head found it.
 pub(super) struct Fast {
@@ -91,6 +18,11 @@ pub(super) struct Fast {
     pub(super) trace_on: bool,
     pub(super) pre53: bool,
     pub(super) entry_depth: usize,
+    /// false when some instruction needs the loop head's checks (a trap,
+    /// a recording, or more trace heads than `heads` holds)
+    pub(super) stay: bool,
+    /// the pcs where a trace this function could enter starts
+    pub(super) heads: [u32; 2],
 }
 
 /// Why the fast loop handed control back.
@@ -103,9 +35,11 @@ pub(super) enum FastExit {
 
 impl Vm {
     /// Run instructions from `inst` (at `npc - 1`) until one needs the loop
-    /// head. The frame's pc is `npc` on entry and is kept current.
+    /// head. The frame's pc is `npc` on entry and is kept current. `WATCH`
+    /// is false when `fx.stay` holds and `fx.heads` is empty: that loop then
+    /// tests nothing per instruction.
     #[inline(never)]
-    pub(super) fn run_fast(
+    pub(super) fn run_fast<const WATCH: bool>(
         &mut self,
         fx: Fast,
         mut inst: Inst,
@@ -120,6 +54,8 @@ impl Vm {
             trace_on,
             pre53,
             entry_depth,
+            stay,
+            heads,
         } = fx;
         // From here the running frame's state lives in locals (PUC keeps
         // `pc`, `base` and `k` in registers the same way). An arm that only
@@ -134,19 +70,6 @@ impl Vm {
         // could enter.
         let mut code = cl.proto.code.as_ptr();
         let mut kptr = cl.proto.consts.as_ptr();
-        let mut klen = cl.proto.consts.len();
-        // nothing in a fast arm sets `trap`, so it is tested here once.
-        // With a trace this function could enter, the fast arms stop at
-        // the pcs where one starts, for the dispatcher to look.
-        let mut heads = [crate::runtime::function::TRACE_HEADS_NONE; 2];
-        let stay = !self.trap
-            && (!trace_on
-                || self.jit.active_trace.is_none() && {
-                    heads = cl.proto.trace_heads.get();
-                    heads[0] != crate::runtime::function::TRACE_HEADS_MANY
-                });
-        // one test per instruction in the common case
-        let plain = stay && heads[0] == crate::runtime::function::TRACE_HEADS_NONE;
         // the register window, valid while `self.stack` neither moves nor
         // is written through a reference
         // SAFETY: `push_frame` sized the stack to `base + max_stack`
@@ -165,14 +88,17 @@ impl Vm {
         }
         macro_rules! konst {
             ($i:expr) => {
-                // SAFETY: `kptr` / `klen` are the running proto's constants
-                unsafe { std::slice::from_raw_parts(kptr, klen) }
-                [($i) as usize]
+                // SAFETY: the compiler and the bytecode verifier keep
+                // constant indices below the proto's constant count
+                unsafe { *kptr.add(($i) as usize) }
             };
         }
         macro_rules! next {
             () => {{
-                if !plain && (!stay || npc == heads[0] || npc == heads[1]) {
+                // nothing in a fast arm sets `trap`, so `stay` holds for the
+                // whole loop; with a trace this function could enter, the
+                // arms stop at the pcs where one starts, for the dispatcher
+                if WATCH && (!stay || npc == heads[0] || npc == heads[1]) {
                     // SAFETY: `fpc` points into the running frame, which no
                     // fast arm moves
                     unsafe { *fpc = npc };
@@ -213,10 +139,9 @@ impl Vm {
                 fpc = &mut f.pc;
                 code = cl.proto.code.as_ptr();
                 kptr = cl.proto.consts.as_ptr();
-                klen = cl.proto.consts.len();
                 // stay only between frames with nothing to watch, so that
-                // `plain`, `stay` and `heads` hold for the whole loop
-                if !plain
+                // `stay` and `heads` hold for the whole loop
+                if WATCH
                     || trace_on
                         && (self.jit.active_trace.is_some()
                             || cl.proto.trace_heads.get()[0]
@@ -256,6 +181,70 @@ impl Vm {
                     fpc = &mut f.pc;
                     // SAFETY: as at the start
                     regs = unsafe { self.stack.as_mut_ptr().add(base as usize) };
+                    next!()
+                }};
+            }
+            // `R[A] < R[B]` / `<=` (PUC `op_order`): two integers or two
+            // floats here, the rest (mixed numbers, strings, `__lt` / `__le`)
+            // by `less_step`
+            macro_rules! order_arm {
+                ($op:tt, $or_eq:expr) => {{
+                    let (pl, pr) = (
+                        regs.wrapping_add(inst.a() as usize),
+                        regs.wrapping_add(inst.b() as usize),
+                    );
+                    // SAFETY: registers of the running frame
+                    let (tl, tr) = unsafe { (raw_tag(pl), raw_tag(pr)) };
+                    let res = if tl == tag::INT && tr == tag::INT {
+                        // SAFETY: two integers
+                        (unsafe { raw_int(pl) }) $op (unsafe { raw_int(pr) })
+                    } else if tl == tag::FLOAT && tr == tag::FLOAT {
+                        // SAFETY: two floats
+                        (unsafe { raw_flt(pl) }) $op (unsafe { raw_flt(pr) })
+                    } else {
+                        // SAFETY: as above
+                        let (l, r) = unsafe { (*pl, *pr) };
+                        let step = self.less_step(l, r, $or_eq)?;
+                        self.op_compare(step, l, r, inst.k())?;
+                        resume!()
+                    };
+                    if res != inst.k() {
+                        npc += 1;
+                    }
+                    next!()
+                }};
+            }
+            // `R[A] op sB` (PUC `op_orderI`); `$swap`: the immediate is the
+            // left operand of the metamethod (`>` and `>=`), and `C` says it
+            // was written as a float
+            macro_rules! order_imm_arm {
+                ($op:tt, $swap:expr, $or_eq:expr) => {{
+                    let px = regs.wrapping_add(inst.a() as usize);
+                    let im = inst.sb();
+                    // SAFETY: a register of the running frame
+                    let t = unsafe { raw_tag(px) };
+                    let res = if t == tag::INT {
+                        // SAFETY: an integer
+                        (unsafe { raw_int(px) }) $op (im as i64)
+                    } else if t == tag::FLOAT {
+                        // SAFETY: a float
+                        (unsafe { raw_flt(px) }) $op (im as f64)
+                    } else {
+                        // SAFETY: as above
+                        let x = unsafe { *px };
+                        let imv = if inst.c() != 0 {
+                            Value::Float(im as f64)
+                        } else {
+                            Value::Int(im as i64)
+                        };
+                        let (l, r) = if $swap { (imv, x) } else { (x, imv) };
+                        let step = self.less_step(l, r, $or_eq)?;
+                        self.op_compare(step, l, r, inst.k())?;
+                        resume!()
+                    };
+                    if res != inst.k() {
+                        npc += 1;
+                    }
                     next!()
                 }};
             }
@@ -413,204 +402,232 @@ impl Vm {
                         self.index_miss(o, key, dst)?;
                     }
                     Op::Add => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Add,
-                        int(a, b) => Some(Value::Int(a.wrapping_add(b))),
-                        float(a, b) => Some(Value::Float(a + b)))
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Add, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::Sub => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Sub,
-                        int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
-                        float(a, b) => Some(Value::Float(a - b)))
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Sub, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::Mul => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Mul,
-                        int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
-                        float(a, b) => Some(Value::Float(a * b)))
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Mul, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     // a zero divisor takes the slow path for its error
                     Op::Mod => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Mod,
-                        int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Mod, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::IDiv => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::IDiv,
-                        int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::IDiv, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::Div => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Div,
-                        int(a, b) => Some(Value::Float(a as f64 / b as f64)),
-                        float(a, b) => Some(Value::Float(a / b)))
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Div, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::BAnd => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::BAnd,
-                        int(a, b) => Some(Value::Int(a & b)),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::BAnd, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::BOr => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::BOr,
-                        int(a, b) => Some(Value::Int(a | b)),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::BOr, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::BXor => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::BXor,
-                        int(a, b) => Some(Value::Int(a ^ b)),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::BXor, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::Shl => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Shl,
-                        int(a, b) => Some(Value::Int(shift_left(a, b))),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Shl, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::Shr => {
-                        if arith_arm!(self, regs, inst, base, ArithOp::Shr,
-                        int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
-                        float(_a, _b) => None)
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                            int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
+                            slow(l, r) => self.arith_slow(inst.a(), base, ArithOp::Shr, l, r, inst.k()))
                         {
                             next!()
                         }
                     }
                     Op::AddI => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Add, Value::Int(inst.sc() as i64),
-                            int(a, b) => Some(Value::Int(a.wrapping_add(b))),
-                            float(a, b) => Some(Value::Float(a + b)))
-                        {
+                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
+                            int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
+                            slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Add, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::SubI => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Sub, Value::Int(inst.sc() as i64),
-                            int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
-                            float(a, b) => Some(Value::Float(a - b)))
-                        {
+                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
+                            int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
+                            slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Sub, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::AddK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Add, konst!(inst.c()),
-                            int(a, b) => Some(Value::Int(a.wrapping_add(b))),
-                            float(a, b) => Some(Value::Float(a + b)))
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Add, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::SubK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Sub, konst!(inst.c()),
-                            int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
-                            float(a, b) => Some(Value::Float(a - b)))
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Sub, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::MulK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Mul, konst!(inst.c()),
-                            int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
-                            float(a, b) => Some(Value::Float(a * b)))
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Mul, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     // a zero divisor takes the slow path for its error
                     Op::ModK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Mod, konst!(inst.c()),
-                            int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Mod, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::IDivK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::IDiv, konst!(inst.c()),
-                            int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::IDiv, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::DivK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Div, konst!(inst.c()),
-                            int(a, b) => Some(Value::Float(a as f64 / b as f64)),
-                            float(a, b) => Some(Value::Float(a / b)))
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Div, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::PowK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Pow, konst!(inst.c()),
-                            int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))),
-                            float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))))
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))),
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::BAndK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::BAnd, konst!(inst.c()),
-                            int(a, b) => Some(Value::Int(a & b)),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::BAnd, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::BOrK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::BOr, konst!(inst.c()),
-                            int(a, b) => Some(Value::Int(a | b)),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::BOr, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::BXorK => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::BXor, konst!(inst.c()),
-                            int(a, b) => Some(Value::Int(a ^ b)),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
+                        slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::BXor, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::ShrI => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Shr, Value::Int(inst.sc() as i64),
-                            int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
+                            int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
+                            slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Shr, l, r, false)
+                        }) {
                             next!()
                         }
                     }
                     Op::ShlI => {
-                        if arith_c_arm!(self, regs, inst, base, ArithOp::Shl, Value::Int(inst.sc() as i64),
-                            int(a, b) => Some(Value::Int(shift_left(a, b))),
-                            float(a, b) => { let _ = (a, b); None })
-                        {
+                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
+                            int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
+                            slow(x, c) => {
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base, ArithOp::Shl, l, r, false)
+                        }) {
                             next!()
                         }
                     }
@@ -656,8 +673,9 @@ impl Vm {
                         }
                     }
                     Op::Not => {
-                        let v = reg!(inst.b());
-                        set_reg!(inst.a(), Value::Bool(!v.truthy()));
+                        // SAFETY: a register of the running frame
+                        let t = unsafe { raw_truthy(regs.add(inst.b() as usize)) };
+                        set_reg!(inst.a(), Value::Bool(!t));
                         next!()
                     }
                     Op::Len => {
@@ -716,165 +734,88 @@ impl Vm {
                         next!()
                     }
                     Op::Eq => {
-                        let l = reg!(inst.a());
-                        let r = reg!(inst.b());
-                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                            if (a == b) != inst.k() {
-                                npc += 1;
-                            }
-                            next!()
-                        }
-                        let step = self.eq_step(l, r);
-                        self.op_compare(step, l, r, inst.k())?;
-                    }
-                    Op::EqK => {
-                        let l = reg!(inst.a());
-                        let r = konst!(inst.b());
-                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                            if (a == b) != inst.k() {
-                                npc += 1;
-                            }
-                            next!()
-                        }
-                        let step = self.eq_step(l, r);
-                        self.op_compare(step, l, r, inst.k())?;
-                    }
-                    Op::Lt => {
-                        let l = reg!(inst.a());
-                        let r = reg!(inst.b());
-                        // hot path: Int < Int — drops the MmOut + op_compare match
-                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                            if (a < b) != inst.k() {
-                                npc += 1;
-                            }
-                            next!()
-                        }
-                        let step = self.less_step(l, r, false)?;
-                        self.op_compare(step, l, r, inst.k())?;
-                    }
-                    Op::Le => {
-                        let l = reg!(inst.a());
-                        let r = reg!(inst.b());
-                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                            if (a <= b) != inst.k() {
-                                npc += 1;
-                            }
-                            next!()
-                        }
-                        let step = self.less_step(l, r, true)?;
-                        self.op_compare(step, l, r, inst.k())?;
-                    }
-                    // raw equality with a number: no metamethod can be involved
-                    Op::EqI => {
-                        let im = inst.sb();
-                        let eq = match reg!(inst.a()) {
-                            Value::Int(a) => a == im as i64,
-                            Value::Float(f) => f == im as f64,
-                            _ => false,
+                        let (pl, pr) = (
+                            regs.wrapping_add(inst.a() as usize),
+                            regs.wrapping_add(inst.b() as usize),
+                        );
+                        // SAFETY: registers of the running frame
+                        let (tl, tr) = unsafe { (raw_tag(pl), raw_tag(pr)) };
+                        // `__eq` is looked for only between two tables or two
+                        // full userdata
+                        let eq = if tl == tag::INT && tr == tag::INT {
+                            // SAFETY: two integers
+                            unsafe { raw_int(pl) == raw_int(pr) }
+                        } else if tl != tr || tl != tag::TABLE && tl != tag::USERDATA {
+                            // SAFETY: as above
+                            unsafe { (*pl).raw_eq(*pr) }
+                        } else {
+                            // SAFETY: as above
+                            let (l, r) = unsafe { (*pl, *pr) };
+                            let step = self.eq_step(l, r);
+                            self.op_compare(step, l, r, inst.k())?;
+                            resume!()
                         };
                         if eq != inst.k() {
                             npc += 1;
                         }
                         next!()
                     }
-                    Op::LtI => {
-                        let x = reg!(inst.a());
-                        let im = inst.sb();
-                        let res = match x {
-                            Value::Int(a) => a < im as i64,
-                            Value::Float(f) => f < im as f64,
-                            _ => {
-                                let imv = if inst.c() != 0 {
-                                    Value::Float(im as f64)
-                                } else {
-                                    Value::Int(im as i64)
-                                };
-                                let step = self.less_step(x, imv, false)?;
-                                self.op_compare(step, x, imv, inst.k())?;
-                                resume!()
+                    // a constant is never a table or a userdata: no `__eq`
+                    Op::EqK => {
+                        let (pl, pk) = (
+                            regs.wrapping_add(inst.a() as usize),
+                            kptr.wrapping_add(inst.b() as usize),
+                        );
+                        // SAFETY: a register and a constant of the running frame
+                        let eq = unsafe {
+                            if raw_tag(pl) == tag::INT && raw_tag(pk) == tag::INT {
+                                raw_int(pl) == raw_int(pk)
+                            } else {
+                                (*pl).raw_eq(*pk)
                             }
                         };
-                        if res != inst.k() {
+                        if eq != inst.k() {
                             npc += 1;
                         }
                         next!()
                     }
-                    Op::LeI => {
-                        let x = reg!(inst.a());
+                    Op::Lt => order_arm!(<, false),
+                    Op::Le => order_arm!(<=, true),
+                    // raw equality with a number: no metamethod can be involved
+                    Op::EqI => {
+                        let px = regs.wrapping_add(inst.a() as usize);
                         let im = inst.sb();
-                        let res = match x {
-                            Value::Int(a) => a <= im as i64,
-                            Value::Float(f) => f <= im as f64,
-                            _ => {
-                                let imv = if inst.c() != 0 {
-                                    Value::Float(im as f64)
-                                } else {
-                                    Value::Int(im as i64)
-                                };
-                                let step = self.less_step(x, imv, true)?;
-                                self.op_compare(step, x, imv, inst.k())?;
-                                resume!()
+                        // SAFETY: a register of the running frame
+                        let eq = unsafe {
+                            match raw_tag(px) {
+                                tag::INT => raw_int(px) == im as i64,
+                                tag::FLOAT => raw_flt(px) == im as f64,
+                                _ => false,
                             }
                         };
-                        if res != inst.k() {
+                        if eq != inst.k() {
                             npc += 1;
                         }
                         next!()
                     }
-                    Op::GtI => {
-                        let x = reg!(inst.a());
-                        let im = inst.sb();
-                        let res = match x {
-                            Value::Int(a) => a > im as i64,
-                            Value::Float(f) => f > im as f64,
-                            _ => {
-                                let imv = if inst.c() != 0 {
-                                    Value::Float(im as f64)
-                                } else {
-                                    Value::Int(im as i64)
-                                };
-                                let step = self.less_step(imv, x, false)?;
-                                self.op_compare(step, imv, x, inst.k())?;
-                                resume!()
-                            }
-                        };
-                        if res != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
-                    }
-                    Op::GeI => {
-                        let x = reg!(inst.a());
-                        let im = inst.sb();
-                        let res = match x {
-                            Value::Int(a) => a >= im as i64,
-                            Value::Float(f) => f >= im as f64,
-                            _ => {
-                                let imv = if inst.c() != 0 {
-                                    Value::Float(im as f64)
-                                } else {
-                                    Value::Int(im as i64)
-                                };
-                                let step = self.less_step(imv, x, true)?;
-                                self.op_compare(step, imv, x, inst.k())?;
-                                resume!()
-                            }
-                        };
-                        if res != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
-                    }
+                    Op::LtI => order_imm_arm!(<, false, false),
+                    Op::LeI => order_imm_arm!(<=, false, true),
+                    Op::GtI => order_imm_arm!(>, true, false),
+                    Op::GeI => order_imm_arm!(>=, true, true),
                     Op::Test => {
                         // the JMP that follows runs when the condition equals k
-                        if reg!(inst.a()).truthy() != inst.k() {
+                        // SAFETY: a register of the running frame
+                        if unsafe { raw_truthy(regs.add(inst.a() as usize)) } != inst.k() {
                             npc += 1;
                         }
                         next!()
                     }
                     Op::TestSet => {
-                        let v = reg!(inst.b());
-                        if v.truthy() == inst.k() {
+                        let pb = regs.wrapping_add(inst.b() as usize);
+                        // SAFETY: a register of the running frame
+                        if unsafe { raw_truthy(pb) } == inst.k() {
+                            // SAFETY: as above
+                            let v = unsafe { *pb };
                             set_reg!(inst.a(), v);
                         } else {
                             npc += 1;
@@ -882,42 +823,56 @@ impl Vm {
                         next!()
                     }
                     Op::ForLoop => {
-                        // `for_loop` is the reference: 5.1–5.3 step and compare with
-                        // the limit, 5.4+ count down; anything else it raises on
-                        let a = inst.a();
+                        let ra = regs.wrapping_add(inst.a() as usize);
                         let back = npc.wrapping_sub(inst.bx());
                         let mut slow = false;
-                        match (reg!(a), reg!(a + 1), reg!(a + 2)) {
-                            (Value::Int(cur), Value::Int(count), Value::Int(st)) if !pre53 => {
-                                if count != 0 {
+                        // SAFETY: the loop's four registers are in the frame
+                        // (the verifier checks the run)
+                        let (t0, t1, t2) =
+                            unsafe { (raw_tag(ra), raw_tag(ra.add(1)), raw_tag(ra.add(2))) };
+                        if t0 == tag::INT && t1 == tag::INT && t2 == tag::INT {
+                            // SAFETY: three integers; the index and the count
+                            // or limit keep their tags, the control variable
+                            // is the body's to change
+                            unsafe {
+                                let (cur, x, st) =
+                                    (raw_int(ra), raw_int(ra.add(1)), raw_int(ra.add(2)));
+                                if !pre53 {
+                                    if x != 0 {
+                                        let next = cur.wrapping_add(st);
+                                        put_int(ra, next);
+                                        put_int(ra.add(1), x.wrapping_sub(1));
+                                        ra.add(3).write(Value::Int(next));
+                                        npc = back;
+                                    }
+                                } else {
                                     let next = cur.wrapping_add(st);
-                                    set_reg!(a, Value::Int(next));
-                                    set_reg!(a + 1, Value::Int(count.wrapping_sub(1)));
-                                    set_reg!(a + 3, Value::Int(next));
-                                    npc = back;
+                                    if if st > 0 { next <= x } else { next >= x } {
+                                        put_int(ra, next);
+                                        ra.add(3).write(Value::Int(next));
+                                        npc = back;
+                                    }
                                 }
                             }
-                            (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
-                                let next = cur.wrapping_add(st);
-                                if if st > 0 { next <= lim } else { next >= lim } {
-                                    set_reg!(a, Value::Int(next));
-                                    set_reg!(a + 3, Value::Int(next));
-                                    npc = back;
-                                }
-                            }
-                            (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
+                        } else if t0 == tag::FLOAT && t1 == tag::FLOAT && t2 == tag::FLOAT {
+                            // SAFETY: three floats
+                            unsafe {
+                                let (cur, lim, st) =
+                                    (raw_flt(ra), raw_flt(ra.add(1)), raw_flt(ra.add(2)));
                                 let next = cur + st;
                                 if if st > 0.0 { next <= lim } else { next >= lim } {
-                                    set_reg!(a, Value::Float(next));
-                                    set_reg!(a + 3, Value::Float(next));
+                                    ra.write(Value::Float(next));
+                                    ra.add(3).write(Value::Float(next));
                                     npc = back;
                                 }
                             }
-                            _ => {
-                                self.for_loop(inst, base)?;
-                                npc = self.top_frame().pc;
-                                slow = true;
-                            }
+                        } else {
+                            // `for_loop` is the reference: 5.1–5.3 step and
+                            // compare with the limit, 5.4+ count down; anything
+                            // else it raises on
+                            self.for_loop(inst, base)?;
+                            npc = self.top_frame().pc;
+                            slow = true;
                         }
                         // The trace JIT counts the back-edges taken and starts
                         // recording at the body once the count reaches the
