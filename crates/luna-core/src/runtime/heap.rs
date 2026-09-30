@@ -552,7 +552,6 @@ impl Heap {
             natives: 0..0,
             stack: Vec::new(),
             frames: Vec::new(),
-            frame_ccmt: Vec::new(),
             open_upvals: Vec::new(),
             tbc: Vec::new(),
             top: 0,

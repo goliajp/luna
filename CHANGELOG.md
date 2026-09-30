@@ -63,6 +63,9 @@ optimization.
   arithmetic or other event costs one bit test; the table forgets them as
   soon as it gains any key. A string-keyed read that misses on a table
   follows table-valued `__index` links directly. Results are unchanged.
+- `runtime::Frame` has a new public field, `ccmt: u8`: the number of
+  `__call` metamethods resolved to reach the frame, which the Vm used to
+  keep in a vector beside the frames.
 
 ### Fixed
 
