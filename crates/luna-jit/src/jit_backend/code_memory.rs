@@ -233,4 +233,84 @@ mod tests {
         assert_eq!(lines(0x1000, 0x40, 64).collect::<Vec<_>>(), [0x1000]);
         assert_eq!(lines(0x103f, 1, 64).collect::<Vec<_>>(), [0x1000]);
     }
+
+    // a page that already ran code is made writable, rewritten and made
+    // executable again. the kernel syncs the caches only when a page is
+    // first mapped, so here `sync_icache` alone decides whether the new
+    // instructions run
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[test]
+    fn rewritten_code_in_a_page_that_already_ran_runs_new_instructions() {
+        use super::sync_icache;
+        use std::ffi::c_void;
+
+        unsafe extern "C" {
+            fn mmap(
+                addr: *mut c_void,
+                len: usize,
+                prot: i32,
+                flags: i32,
+                fd: i32,
+                off: i64,
+            ) -> *mut c_void;
+            fn mprotect(addr: *mut c_void, len: usize, prot: i32) -> i32;
+            fn munmap(addr: *mut c_void, len: usize) -> i32;
+        }
+        const PROT_READ: i32 = 1;
+        const PROT_WRITE: i32 = 2;
+        const PROT_EXEC: i32 = 4;
+        const MAP_PRIVATE: i32 = 2;
+        const MAP_ANONYMOUS: i32 = 0x20;
+        const PAGE: usize = 4096;
+        const RET: u32 = 0xd65f_03c0;
+
+        // SAFETY: a fresh private anonymous mapping
+        let page = unsafe {
+            mmap(
+                std::ptr::null_mut(),
+                PAGE,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(page as isize, -1, "mmap");
+        let code = page.cast::<u32>();
+        let mut stale = Vec::new();
+        for i in 0..200_000u32 {
+            let k = i & 0xffff;
+            // SAFETY: the page is ours; it is writable between the mprotect calls
+            unsafe {
+                assert_eq!(
+                    mprotect(page, PAGE, PROT_READ | PROT_WRITE),
+                    0,
+                    "mprotect rw"
+                );
+                // movz w0, #k; ret
+                code.write_volatile(0x5280_0000 | (k << 5));
+                code.add(1).write_volatile(RET);
+                sync_icache(page as usize, 8);
+                assert_eq!(
+                    mprotect(page, PAGE, PROT_READ | PROT_EXEC),
+                    0,
+                    "mprotect rx"
+                );
+            }
+            // SAFETY: the page holds a complete function returning a u32
+            let f: extern "C" fn() -> u32 = unsafe { std::mem::transmute(page) };
+            let got = f();
+            if got != k {
+                stale.push((i, k, got));
+            }
+        }
+        // SAFETY: mapped above
+        unsafe { munmap(page, PAGE) };
+        assert!(
+            stale.is_empty(),
+            "stale code ran {} times: {:?}",
+            stale.len(),
+            &stale[..stale.len().min(5)]
+        );
+    }
 }
