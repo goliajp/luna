@@ -5294,44 +5294,6 @@ impl Vm {
         Ok(None)
     }
 
-    /// Return0 / Return1 without the close and hook machinery (PUC
-    /// `OP_RETURN0` / `OP_RETURN1`): when no return hook can fire, nothing
-    /// in this frame needs closing and the caller is a Lua frame or a
-    /// metamethod's continuation inside this activation, the return is the
-    /// pop, the result copy and the result count that `complete_return`
-    /// would do. Returns `false`, having done nothing, otherwise.
-    #[inline]
-    fn return_to_lua(&mut self, base: u32, abs_a: u32, nret: u32, entry_depth: usize) -> bool {
-        let n = self.frames.len();
-        if self.hook.ret && self.hook_armed()
-            || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
-            || self.tbc.last().is_some_and(|&s| s >= base)
-            || n <= entry_depth
-            || n < 2
-        {
-            return false;
-        }
-        let to_meta = match &self.frames[n - 2] {
-            CallFrame::Lua(_) => false,
-            CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => true,
-            CallFrame::Cont(_) => return false,
-        };
-        let Some(CallFrame::Lua(fr)) =
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
-        else {
-            unreachable!("returning from a non-Lua frame")
-        };
-        for i in 0..nret {
-            self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
-        }
-        if to_meta {
-            self.top = fr.func_slot + nret;
-        } else {
-            self.finish_results(fr.func_slot, nret, fr.nresults);
-        }
-        true
-    }
-
     #[doc(hidden)]
     pub fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
         match cl.upvals()[idx as usize].state() {
@@ -6230,8 +6192,6 @@ impl Vm {
             };
             let cl = f.closure;
             let base = f.base;
-            let func_slot = f.func_slot;
-            let n_varargs = f.n_varargs;
             let pc = f.pc;
             let oldpc = f.hook_oldpc;
 
@@ -6320,10 +6280,10 @@ impl Vm {
             // (cont frames drained above) so the and_then/Option layers are
             // dead weight.
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            let mut fpc: *mut u32 = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+            let mut fr: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
                 CallFrame::Lua(fmut) => {
                     fmut.pc = pc + 1;
-                    &mut fmut.pc
+                    fmut
                 }
                 _ => unreachable!("Cont frame at pc bump"),
             };
@@ -6335,8 +6295,8 @@ impl Vm {
                 self.exec_hooks(cl, pc, oldpc)?;
                 // a hook runs Lua code, which can move `self.frames`
                 // SAFETY: as above
-                fpc = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                    CallFrame::Lua(fmut) => &mut fmut.pc,
+                fr = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                    CallFrame::Lua(fmut) => fmut,
                     _ => unreachable!("Cont frame after a hook"),
                 };
             }
@@ -6349,11 +6309,7 @@ impl Vm {
                         heads[0] != crate::runtime::function::TRACE_HEADS_MANY
                     });
             let fx = fast::Fast {
-                cl,
-                base,
-                func_slot,
-                n_varargs,
-                fpc,
+                fr,
                 trace_on,
                 pre53,
                 entry_depth,
@@ -6546,7 +6502,7 @@ impl Vm {
                     // otherwise clobber a result with the handler closure.
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
-                        && self.return_to_lua(base, abs_a, nret, entry_depth)
+                        && self.return_fast(base, abs_a, nret, entry_depth)
                     {
                         // done: the caller's frame is on top
                     } else if let Some(vals) = self.begin_close(
