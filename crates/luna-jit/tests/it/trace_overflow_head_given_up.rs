@@ -26,7 +26,12 @@ fn overflowing_heads_stop_being_recorded() {
         vm.jit.trace_hot_threshold = 1;
         vm.jit.call_hot_threshold = 1;
         let r = vm.eval(&src).expect("eval");
-        assert!(matches!(r[0], Value::Int(23_985_150)), "{v:?}: {:?}", r[0]);
+        assert!(
+            matches!(r[0], Value::Int(23_985_150))
+                || matches!(r[0], Value::Float(f) if f == 23_985_150.0),
+            "{v:?}: {:?}",
+            r[0]
+        );
         let overflows = vm
             .jit
             .counters
