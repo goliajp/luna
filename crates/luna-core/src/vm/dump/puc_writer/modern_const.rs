@@ -10,7 +10,7 @@
 //! that parser would put it.
 
 use super::asm::{L, Res};
-use super::modern::{M, event};
+use super::modern::M;
 use crate::runtime::Value;
 use crate::vm::dump::puc::modern::Kind;
 use crate::vm::isa::{MAX_SC, MIN_SC, OFFSET_SC, Op};
@@ -107,4 +107,23 @@ impl M<'_, '_> {
         let a = self.asm.r(l.a)?;
         self.emit(self.abc(kind, a, l.b, (l.c != 0) as u32, l.k))
     }
+}
+
+/// `ltm.h` `TMS` of an arithmetic operator (the same in 5.4 and 5.5).
+pub(super) fn event(op: Op) -> Option<u32> {
+    Some(match op {
+        Op::Add => 6,
+        Op::Sub => 7,
+        Op::Mul => 8,
+        Op::Mod => 9,
+        Op::Pow => 10,
+        Op::Div => 11,
+        Op::IDiv => 12,
+        Op::BAnd => 13,
+        Op::BOr => 14,
+        Op::BXor => 15,
+        Op::Shl => 16,
+        Op::Shr => 17,
+        _ => return None,
+    })
 }

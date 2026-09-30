@@ -94,8 +94,6 @@ fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, B
 /// vice-versa) errors cleanly rather than misinterpreting bytes.
 pub(super) const BODY_TAG: &[u8] = b"\x00LunaV1\x00";
 
-// ---- writer ----
-
 fn w_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
