@@ -6201,9 +6201,10 @@ impl Vm {
             //   take the record for compile + cache.
             // - Otherwise, capture the op. If the record overflows
             //   MAX_TRACE_LEN, abort by dropping it.
-            // `active_trace` first: it is None on nearly every instruction,
-            // so one load decides with the trace JIT on or off
-            if self.jit.active_trace.is_some() && self.jit.trace_enabled {
+            // read once: with the trace JIT off this is the only JIT test an
+            // instruction makes
+            let trace_on = self.jit.trace_enabled;
+            if trace_on && self.jit.active_trace.is_some() {
                 // Depth tracking. The trace head's frame is
                 // at index `recording_frame_base`; every Op::Call that
                 // pushes a new frame bumps the live depth, every
@@ -7080,14 +7081,12 @@ impl Vm {
             // single dispatch tick consumes the suppression — the
             // following tick re-admits naturally (with the budget
             // also reset by the deopt site).
-            // The proto's flag comes first: it is false on nearly every
-            // instruction, and `cl.proto` is already loaded for the fetch.
             // The one-shot suppression only matters where a downrec trace
-            // could be admitted, which needs the flag.
-            let downrec_admit_blocked = cl.proto.has_dispatchable_trace.get()
-                && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
-            if cl.proto.has_dispatchable_trace.get()
-                && self.jit.trace_enabled
+            // could be admitted, which needs the proto's flag.
+            let admit = trace_on && cl.proto.has_dispatchable_trace.get();
+            let downrec_admit_blocked =
+                admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
+            if admit
                 && let Some(ct) = {
                     let traces = cl.proto.traces.borrow();
                     traces
