@@ -59,6 +59,12 @@ optimization.
   copies it in one block; and `#t` is answered from two counters when the
   array part holds exactly a leading run of values.
 
+### Fixed
+
+- With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
+  that stored into a table under a NaN key went on silently instead of
+  raising "table index is NaN" as the interpreter does.
+
 ### Added
 
 - `luna_core::runtime::table::jit_layout::{TABLE_ACOUNT_OFFSET,
