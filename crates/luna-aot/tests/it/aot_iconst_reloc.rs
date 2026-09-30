@@ -192,6 +192,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
     let opts = CompileOptions {
         internal_loop: false,
         pre53: false,
+        float_only: false,
         aot: true,
     };
 

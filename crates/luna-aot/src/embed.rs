@@ -1892,7 +1892,9 @@ fn harvest_and_emit_aot_traces(
         let fn_name = format!("luna_aot_trace_{idx:08x}");
         let opts = CompileOptions {
             internal_loop: true,
-            pre53: matches!(version, LuaVersion::Lua51 | LuaVersion::Lua52),
+            // the same dialect flags the JIT compiled these records with
+            pre53: version <= LuaVersion::Lua53,
+            float_only: version <= LuaVersion::Lua52,
             aot: true,
         };
         // Re-lower this record into the ObjectModule under a unique
