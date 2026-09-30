@@ -19,6 +19,7 @@ pub(crate) mod gc_verify_probe {
     }
 }
 mod call_frame;
+mod fnv;
 pub mod function;
 pub mod heap;
 pub mod string;

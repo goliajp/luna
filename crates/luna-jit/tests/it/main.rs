@@ -80,6 +80,7 @@ mod trace_loadnil_whitelist;
 mod trace_loop_concat_edge_cases;
 mod trace_math_minmax_fold;
 mod trace_move_alias_escape;
+mod trace_overflow_head_given_up;
 mod trace_recorder_clean_close;
 mod trace_recording_smoke;
 mod trace_self_link_body;

@@ -49,6 +49,10 @@ pub struct Frame {
     /// `getinfo(2..lim)` and expects each to be `"tail"`). The 5.2+
     /// `istailcall` boolean is `tailcalls > 0`.
     pub tailcalls: u32,
+    /// How many `__call` metamethods were resolved to reach this function;
+    /// each adds one argument (PUC 5.5 `CIST_CCMT`, reported as
+    /// `getinfo("t").extraargs`).
+    pub ccmt: u8,
 }
 
 /// An entry on a thread's call stack: either a Lua activation record or a
