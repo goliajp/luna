@@ -2872,7 +2872,14 @@ impl<'a> Compiler<'a> {
                         Expr::Int(i) if (0..=255).contains(i) => SetKey::Int(*i as u32),
                         _ => {
                             let ke = self.expr(key)?;
-                            let kr = self.exp_to_nextreg(ke)?;
+                            let kr = match ke {
+                                Exp::Reg(r)
+                                    if self.assign_stat_can_skip_key_snapshot(targets, exprs) =>
+                                {
+                                    r
+                                }
+                                ke => self.exp_to_nextreg(ke)?,
+                            };
                             SetKey::Reg(kr)
                         }
                     };
@@ -3579,6 +3586,29 @@ impl<'a> Compiler<'a> {
         }
         // AST-side gate (call walker + obj-is-name check).
         ast::metamethod_safe_for_index_lhs(self.ast, obj_eid, exprs[0])
+    }
+
+    /// The key of a single `t[k] = e` can stay in its local's register (as
+    /// in PUC, which reads the register when it stores) when `k` is a local
+    /// of this function that no closure captures and `e` calls nothing
+    /// unknown: nothing can then change the local before the store.
+    fn assign_stat_can_skip_key_snapshot(&self, targets: &[ExprId], exprs: &[ExprId]) -> bool {
+        if targets.len() != 1 || exprs.len() != 1 {
+            return false;
+        }
+        let Expr::Index { key, .. } = self.ast.expr(targets[0]) else {
+            return false;
+        };
+        let Expr::Name(n) = self.ast.expr(*key) else {
+            return false;
+        };
+        let Some(local) = self.lr().locals.iter().rev().find(|l| l.name == n.text) else {
+            return false;
+        };
+        !local.captured
+            && !local.vararg_virtual
+            && local.konst.is_none()
+            && ast::rhs_calls_nothing_unknown(self.ast, exprs[0])
     }
 }
 

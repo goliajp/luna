@@ -748,9 +748,12 @@ fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
 #[doc(hidden)]
 #[allow(dead_code)]
 pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: ExprId) -> bool {
-    if !matches!(chunk.expr(obj_eid), Expr::Name(_)) {
-        return false;
-    }
+    matches!(chunk.expr(obj_eid), Expr::Name(_)) && rhs_calls_nothing_unknown(chunk, rhs_eid)
+}
+
+/// True when evaluating `rhs_eid` calls no function other than the known
+/// pure builtins.
+pub fn rhs_calls_nothing_unknown(chunk: &Chunk, rhs_eid: ExprId) -> bool {
     matches!(
         walk_rhs_for_calls(chunk, rhs_eid),
         RhsCallScan::None | RhsCallScan::OnlyKnownPure
