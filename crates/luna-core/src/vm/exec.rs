@@ -8509,10 +8509,11 @@ impl Vm {
                 }
                 Op::ForPrep => self.for_prep(inst, base)?,
                 Op::ForLoop => {
-                    // The trace JIT counts the back-edges `for_loop` takes
-                    // and starts recording at the body once the count
-                    // reaches the threshold.
-                    if self.for_loop(inst, base)? && self.jit.trace_enabled {
+                    self.for_loop(inst, base)?;
+                    // The trace JIT counts the back-edges `for_loop` took (it
+                    // moved pc back from `pc + 1`) and starts recording at
+                    // the body once the count reaches the threshold.
+                    if self.jit.trace_enabled && self.top_frame().pc != pc + 1 {
                         let proto = cl.proto;
                         let c = proto.trace_hot_count.get();
                         if c < u32::MAX / 2 {
@@ -9185,8 +9186,7 @@ impl Vm {
     }
 
     #[inline(always)]
-    /// `OP_FORLOOP`; whether it jumped back to the loop body.
-    fn for_loop(&mut self, inst: Inst, base: u32) -> Result<bool, LuaError> {
+    fn for_loop(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
         // PUC 5.1–5.3 `OP_FORLOOP` compares the post-step `i` to `limit`
         // directly (R[a+1] holds the limit, *not* a remaining-count) so the
@@ -9207,7 +9207,6 @@ impl Vm {
                     self.set_r(base, a + 3, Value::Int(next));
                     self.add_pc(-(inst.bx() as i32));
                 }
-                Ok(cont)
             }
             // the count is unsigned (PUC `lua_Unsigned`): a loop over
             // more than 2^63 values stores a "negative" one
@@ -9219,31 +9218,27 @@ impl Vm {
                     self.set_r(base, a + 3, Value::Int(next));
                     self.add_pc(-(inst.bx() as i32));
                 }
-                Ok(count != 0)
             }
             (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
-                Ok(self.float_for_step(inst, base, cur, lim, st))
+                self.float_for_step(inst, base, cur, lim, st);
             }
             // 5.1/5.2 have one number type, so a number of the other
             // representation stored into a slot is still a valid state
             (x, l, s) if v <= LuaVersion::Lua52 => {
                 match (as_number(x), as_number(l), as_number(s)) {
-                    (Some(cur), Some(lim), Some(st)) => Ok(self.float_for_step(
-                        inst,
-                        base,
-                        cur.as_f64(),
-                        lim.as_f64(),
-                        st.as_f64(),
-                    )),
-                    _ => Err(self.rt_err("'for' state corrupted")),
+                    (Some(cur), Some(lim), Some(st)) => {
+                        self.float_for_step(inst, base, cur.as_f64(), lim.as_f64(), st.as_f64())
+                    }
+                    _ => return Err(self.rt_err("'for' state corrupted")),
                 }
             }
-            _ => Err(self.rt_err("'for' state corrupted")),
+            _ => return Err(self.rt_err("'for' state corrupted")),
         }
+        Ok(())
     }
 
     #[inline(always)]
-    fn float_for_step(&mut self, inst: Inst, base: u32, cur: f64, lim: f64, st: f64) -> bool {
+    fn float_for_step(&mut self, inst: Inst, base: u32, cur: f64, lim: f64, st: f64) {
         let a = inst.a();
         let next = cur + st;
         let cont = if st > 0.0 { next <= lim } else { next >= lim };
@@ -9252,7 +9247,6 @@ impl Vm {
             self.set_r(base, a + 3, Value::Float(next));
             self.add_pc(-(inst.bx() as i32));
         }
-        cont
     }
 
     // ---- native helpers (used by builtins) ----
