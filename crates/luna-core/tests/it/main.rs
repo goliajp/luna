@@ -30,6 +30,7 @@ mod library_edge_arguments;
 mod loop_trap;
 mod lua_error_structured;
 mod macro_lua;
+mod mm_absent_cache;
 mod nan_matches_host_printf;
 mod native_typed;
 mod proto_stable_hash;

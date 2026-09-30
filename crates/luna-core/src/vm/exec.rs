@@ -613,6 +613,9 @@ pub(crate) enum Mm {
     Pairs,
 }
 
+// one absent bit per event in `Table::flags`
+const _: () = assert!(MM_NAMES.len() <= 32);
+
 const MM_NAMES: [&str; 28] = [
     "__index",
     "__newindex",
@@ -2780,9 +2783,26 @@ impl Vm {
     /// The metamethod of `v` for `mm`, or nil.
     pub(crate) fn get_mm(&self, v: Value, mm: Mm) -> Value {
         match self.metatable_of(v) {
-            Some(mt) => mt.get(Value::Str(self.mm_names[mm as usize])),
+            Some(mt) => self.fast_tm(mt, mm),
             None => Value::Nil,
         }
+    }
+
+    /// `mt[mm]` through the absent-metamethod bits in `mt.flags` (PUC
+    /// `fasttm`): a miss sets the event's bit, and any key the table gains
+    /// clears them all.
+    #[inline]
+    pub(crate) fn fast_tm(&self, mt: Gc<Table>, mm: Mm) -> Value {
+        let bit = 1u32 << mm as u32;
+        if mt.flags & bit != 0 {
+            return Value::Nil;
+        }
+        let v = mt.get_str(self.mm_names[mm as usize]);
+        if v.is_nil() {
+            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+            unsafe { mt.as_mut() }.flags |= bit;
+        }
+        v
     }
 
     /// PUC 5.1 `get_compTM`: a comparison metamethod (`__eq` / `__lt` / `__le`)
@@ -2793,8 +2813,7 @@ impl Vm {
     pub(crate) fn get_comp_mm(&self, l: Value, r: Value, mm: Mm) -> Value {
         let mt1 = self.metatable_of(l);
         let Some(mt1) = mt1 else { return Value::Nil };
-        let key = Value::Str(self.mm_names[mm as usize]);
-        let tm1 = mt1.get(key);
+        let tm1 = self.fast_tm(mt1, mm);
         if tm1.is_nil() {
             return Value::Nil;
         }
@@ -2803,7 +2822,7 @@ impl Vm {
         if mt1.as_ptr() == mt2.as_ptr() {
             return tm1;
         }
-        let tm2 = mt2.get(key);
+        let tm2 = self.fast_tm(mt2, mm);
         if tm2.is_nil() {
             return Value::Nil;
         }
