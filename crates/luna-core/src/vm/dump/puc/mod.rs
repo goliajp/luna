@@ -8,6 +8,7 @@
 
 pub(in crate::vm::dump) mod classic;
 mod encode;
+mod lines;
 mod lower;
 pub(in crate::vm::dump) mod modern;
 pub(in crate::vm::dump) mod puc_51;

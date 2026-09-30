@@ -90,9 +90,12 @@ pub mod trace;
 // Owner newtype for `cranelift_jit::JITModule`, used by the per-`Vm`
 // JIT storage. Scoped `pub(crate)` — no embedder surface.
 pub(crate) mod code_memory;
+mod const_operands;
 mod getupval_roles;
+mod math_fold;
 mod send_jit_module;
 use getupval_roles::determine_getupval_roles;
+use math_fold::try_match_math_fold;
 #[allow(unused_imports)]
 pub use send_jit_module::SendJitModule;
 
@@ -642,7 +645,11 @@ pub fn lower_int_chunk_into<M: Module>(
     // boundaries. A BB starts at PC 0, at every jump target, and at the
     // instruction immediately after a terminator (Jmp, Return, or a
     // paired Lt|Le|Eq+Jmp).
-    let n = proto.code.len();
+    // the passes below read register operands only
+    let first_scratch = (proto.max_stack as usize).max(num_params);
+    let code = const_operands::split_const_operands(&proto, first_scratch)?;
+    let code = &code[..];
+    let n = code.len();
     let mut bb_starts = vec![false; n];
     if n == 0 {
         return None;
@@ -653,7 +660,8 @@ pub fn lower_int_chunk_into<M: Module>(
     // tag. Carried across Move; cleared by any other writer. Lookup
     // at Op::Call decides whether it's a self-recursive call we can
     // lower. Indexed by Lua register number.
-    let max_stack = (proto.max_stack as usize).max(num_params);
+    // two more registers: the constant operands' scratch (`split_const_operands`)
+    let max_stack = (proto.max_stack as usize).max(num_params) + 2;
     let mut self_upval: Vec<bool> = vec![false; max_stack];
     // per-PC role for `Op::GetUpval`. SelfMarker (true at
     // the bool position is misleading — see the enum-like split below)
@@ -662,7 +670,7 @@ pub fn lower_int_chunk_into<M: Module>(
     // `function () return k * k end` can JIT. `is_upval_value_read[pc]`
     // is true iff the role is ValueRead. Pre-pass below decides via
     // an 8-op lookahead from each `GetUpval`.
-    let is_upval_value_read: Vec<bool> = determine_getupval_roles(&proto);
+    let is_upval_value_read: Vec<bool> = determine_getupval_roles(code);
     // PC of every Op::Call that resolves to the self-recursion edge.
     // Emit-side consumes this to lower as a cranelift `call fn_id`.
     let mut self_call_pcs: Vec<bool> = vec![false; n];
@@ -741,7 +749,7 @@ pub fn lower_int_chunk_into<M: Module>(
     if env_upval_present {
         let mut try_pc = 0usize;
         while try_pc + 3 < n {
-            if let Some(fold) = try_match_math_fold(&proto, try_pc, float_only) {
+            if let Some(fold) = try_match_math_fold(&proto, code, try_pc, float_only) {
                 folded_math[try_pc] = true;
                 folded_math[try_pc + 1] = true;
                 folded_math[try_pc + 2] = true;
@@ -756,7 +764,7 @@ pub fn lower_int_chunk_into<M: Module>(
     // The folds are checked once, at entry; a table store in the body
     // could reassign a math field after that.
     if !math_folds.is_empty()
-        && proto.code.iter().any(|i| {
+        && code.iter().any(|i| {
             matches!(
                 i.op(),
                 Op::SetTable | Op::SetI | Op::SetField | Op::SetTabUp
@@ -768,7 +776,7 @@ pub fn lower_int_chunk_into<M: Module>(
 
     let mut pc = 0;
     while pc < n {
-        let ins = proto.code[pc];
+        let ins = code[pc];
         match ins.op() {
             Op::LoadI => {
                 let a = ins.a() as usize;
@@ -952,8 +960,8 @@ pub fn lower_int_chunk_into<M: Module>(
                 // SetList side).
                 let next_is_variadic_setlist = c == 0
                     && pc + 1 < n
-                    && matches!(proto.code[pc + 1].op(), Op::SetList)
-                    && proto.code[pc + 1].b() == 0;
+                    && matches!(code[pc + 1].op(), Op::SetList)
+                    && code[pc + 1].b() == 0;
                 let nresults = if next_is_variadic_setlist {
                     1
                 } else {
@@ -1042,7 +1050,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 // (PUC's `cond_skip` invariant). luna's compiler never
                 // emits one without the other; if we see a lone Lt/Le/Eq
                 // the proto is malformed for our purposes — bail out.
-                let &jmp = proto.code.get(pc + 1)?;
+                let &jmp = code.get(pc + 1)?;
                 if !matches!(jmp.op(), Op::Jmp) {
                     return None;
                 }
@@ -1079,7 +1087,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 if loop_pc >= n {
                     return None;
                 }
-                let loop_ins = proto.code[loop_pc];
+                let loop_ins = code[loop_pc];
                 if !matches!(loop_ins.op(), Op::ForLoop) || loop_ins.a() as usize != a {
                     return None;
                 }
@@ -1170,7 +1178,7 @@ pub fn lower_int_chunk_into<M: Module>(
                     if pc == 0 {
                         return None;
                     }
-                    let prev = proto.code[pc - 1];
+                    let prev = code[pc - 1];
                     if !matches!(prev.op(), Op::Call) || prev.c() != 0 {
                         return None;
                     }
@@ -1282,7 +1290,7 @@ pub fn lower_int_chunk_into<M: Module>(
         let mut found_terminator = false;
         let mut p = bb_start;
         while p < bb_end {
-            let ins = proto.code[p];
+            let ins = code[p];
             match ins.op() {
                 Op::Jmp => {
                     let tgt = jmp_target(p, ins);
@@ -1297,7 +1305,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 Op::Lt | Op::Le | Op::Eq => {
                     // Paired with the next op (always Jmp per scan).
-                    let jmp = proto.code[p + 1];
+                    let jmp = code[p + 1];
                     let tgt = jmp_target(p + 1, jmp);
                     if tgt < n {
                         let s = pc_to_bb[tgt];
@@ -1386,7 +1394,7 @@ pub fn lower_int_chunk_into<M: Module>(
         let bb_start = bb_pcs[bb_idx];
         let bb_end = bb_pcs.get(bb_idx + 1).copied().unwrap_or(n);
         for p in bb_start..bb_end {
-            let ins = proto.code[p];
+            let ins = code[p];
             match ins.op() {
                 Op::NewTable => {
                     if let Some(slot) = state.get_mut(ins.a() as usize) {
@@ -1513,7 +1521,7 @@ pub fn lower_int_chunk_into<M: Module>(
 
     // Per-use BB-level safety check.
     for p in 0..n {
-        let ins = proto.code[p];
+        let ins = code[p];
         let check_reg = match ins.op() {
             Op::SetTable | Op::SetList => Some(ins.a() as usize),
             Op::GetI | Op::GetTable | Op::Len => Some(ins.b() as usize),
@@ -1525,7 +1533,7 @@ pub fn lower_int_chunk_into<M: Module>(
             let mut state = bb_entry[bb_idx].clone();
             // Apply ops up to (but not including) p.
             for q in bb_start..p {
-                let prev = proto.code[q];
+                let prev = code[q];
                 match prev.op() {
                     Op::NewTable => {
                         if let Some(slot) = state.get_mut(prev.a() as usize) {
@@ -1603,11 +1611,11 @@ pub fn lower_int_chunk_into<M: Module>(
         let limit_pc = prep_pc - 2;
         let step_pc = prep_pc - 1;
 
-        let nt = proto.code[nt_pc];
-        let init = proto.code[init_pc];
-        let limit = proto.code[limit_pc];
-        let step = proto.code[step_pc];
-        let fp = proto.code[prep_pc];
+        let nt = code[nt_pc];
+        let init = code[init_pc];
+        let limit = code[limit_pc];
+        let step = code[step_pc];
+        let fp = code[prep_pc];
 
         if !matches!(nt.op(), Op::NewTable) {
             continue;
@@ -1675,7 +1683,7 @@ pub fn lower_int_chunk_into<M: Module>(
         visited[0] = true;
         let mut safe_return_reached = false;
         while let Some(pc) = stack.pop() {
-            let ins = proto.code[pc];
+            let ins = code[pc];
             match ins.op() {
                 Op::Return0 | Op::Return1 => {
                     safe_return_reached = true;
@@ -1690,7 +1698,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
                 Op::Lt | Op::Le | Op::Eq => {
                     // skip the paired Jmp's PC; consider both successors
-                    let jmp = proto.code[pc + 1];
+                    let jmp = code[pc + 1];
                     let jmp_tgt = jmp_target(pc + 1, jmp);
                     if jmp_tgt < n && !visited[jmp_tgt] {
                         visited[jmp_tgt] = true;
@@ -1794,7 +1802,7 @@ pub fn lower_int_chunk_into<M: Module>(
         }
         let mut pc = 0;
         while pc < n {
-            let ins = proto.code[pc];
+            let ins = code[pc];
             match ins.op() {
                 Op::LoadI => {
                     if !RegKind::unify(&mut reg_kinds[ins.a() as usize], RegKind::Int) {
@@ -2411,7 +2419,7 @@ pub fn lower_int_chunk_into<M: Module>(
         let bb_start = bb_pcs[bb_idx];
         let bb_end = bb_pcs.get(bb_idx + 1).copied().unwrap_or(n);
         for p in bb_start..bb_end {
-            let ins = proto.code[p];
+            let ins = code[p];
             // Math fold: the underlying GetField / Move / Call inside
             // a fold are skipped at emit (`pc += 3` after the
             // GetTabUp), so their would-be writes don't happen. Only
@@ -2704,7 +2712,8 @@ pub fn lower_int_chunk_into<M: Module>(
     // gets a Cranelift type chosen from `reg_kinds[i]` (Int → I64,
     // Float → F64). Unset registers default to I64 — they're unreachable
     // in well-formed Lua but we still need a valid SSA shape.
-    let max_stack = (proto.max_stack as usize).max(num_params);
+    // two more registers: the constant operands' scratch (`split_const_operands`)
+    let max_stack = (proto.max_stack as usize).max(num_params) + 2;
     let mut regs: Vec<Variable> = Vec::with_capacity(max_stack);
     let entry_block_params: Vec<_> = bcx.block_params(entry).to_vec();
     for i in 0..max_stack {
@@ -2793,7 +2802,7 @@ pub fn lower_int_chunk_into<M: Module>(
             }
         }
         let _ = current_block; // tracked only for parity assertions in tests.
-        let ins = proto.code[pc];
+        let ins = code[pc];
         let a_kind = |k: &[RegKind], idx: u32| k.get(idx as usize).copied().unwrap_or(RegKind::Int);
         match ins.op() {
             Op::LoadI => {
@@ -3312,7 +3321,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 }
             }
             Op::Lt | Op::Le | Op::Eq => {
-                let jmp = proto.code[pc + 1];
+                let jmp = code[pc + 1];
                 debug_assert!(matches!(jmp.op(), Op::Jmp), "scanner enforces pairing");
                 let lhs = bcx.use_var(regs[ins.a() as usize]);
                 let rhs = bcx.use_var(regs[ins.b() as usize]);
@@ -3543,7 +3552,7 @@ pub fn lower_int_chunk_into<M: Module>(
                 let a = ins.a() as usize;
                 let b_field = ins.b();
                 let b = if b_field == 0 {
-                    let prev = proto.code[pc - 1];
+                    let prev = code[pc - 1];
                     (prev.a() as usize).saturating_sub(a)
                 } else {
                     b_field as usize
@@ -4026,84 +4035,6 @@ fn aligned_def(
         bcx.ins().bitcast(want, MemFlagsData::new(), value)
     };
     bcx.def_var(regs[idx], aligned);
-}
-
-/// try to recognize the 4-op `<env>.math.<fn>(R[arg])` window
-/// starting at `start_pc`. Returns `Some(MathFold)` on match, `None`
-/// otherwise. Pure inspection — no side effects, no whitelist
-/// promotion. Caller (`try_compile_int_chunk`'s pre-scan) marks the
-/// participating PCs in `folded_math[]` and pushes the fold to
-/// `math_folds`.
-fn try_match_math_fold(proto: &Proto, start_pc: usize, float_only: bool) -> Option<MathFold> {
-    let code = &proto.code;
-    let i0 = *code.get(start_pc)?;
-    let i1 = *code.get(start_pc + 1)?;
-    let i2 = *code.get(start_pc + 2)?;
-    let i3 = *code.get(start_pc + 3)?;
-
-    if !matches!(i0.op(), Op::GetTabUp) {
-        return None;
-    }
-    if !matches!(i1.op(), Op::GetField) {
-        return None;
-    }
-    if !matches!(i2.op(), Op::Move) {
-        return None;
-    }
-    if !matches!(i3.op(), Op::Call) {
-        return None;
-    }
-
-    let a = i0.a();
-    // GetTabUp reads upvals[B] indexed by consts[C]. We pin B=0
-    // (env upvalue). The frontend invariant (`env_upval_present`
-    // check in `try_compile_int_chunk`) guarantees upvals[0].name
-    // == "_ENV".
-    if i0.b() != 0 {
-        return None;
-    }
-    let k_math = proto.consts.get(i0.c() as usize).copied()?;
-    let LuaValue::Str(s) = k_math else {
-        return None;
-    };
-    if s.as_bytes() != b"math" {
-        return None;
-    }
-
-    // GetField R[A] = R[A].<key>. Same dest as source — the GetTabUp
-    // result is consumed in place.
-    if i1.a() != a || i1.b() != a {
-        return None;
-    }
-    let k_fn = proto.consts.get(i1.c() as usize).copied()?;
-    let LuaValue::Str(fname) = k_fn else {
-        return None;
-    };
-    let fn_name = MATH_LIBM_FNS
-        .iter()
-        .find_map(|&(needle, name)| (needle == fname.as_bytes()).then_some(name))?;
-
-    // Move R[A+1] = R[arg]. The destination must be the Call's arg
-    // slot.
-    if i2.a() != a + 1 {
-        return None;
-    }
-    let arg_reg = i2.b();
-
-    // Call R[A], B=2 (1 arg), C=2 (1 return).
-    if i3.a() != a || i3.b() != 2 || i3.c() != 2 {
-        return None;
-    }
-
-    Some(MathFold {
-        start_pc,
-        fn_name,
-        arg_reg,
-        dst_reg: a,
-        int_result: !float_only && is_rounding(fn_name),
-        math_key: s,
-        name_key: fname,
-    })
 }
 
 #[inline]

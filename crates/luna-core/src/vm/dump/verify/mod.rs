@@ -255,9 +255,7 @@ impl Checker<'_> {
             // the extra argument at pc + 1 is consumed, not executed
             Op::LoadKx => (None, [Some(pc_i + 2), None]),
             Op::SetList if i.k() => (None, [Some(pc_i + 2), None]),
-            Op::Eq | Op::Lt | Op::Le | Op::EqK | Op::Test | Op::TestSet | Op::LFalseSkip => {
-                (Some(next), [Some(pc_i + 2), None])
-            }
+            op if op.is_test() || op == Op::LFalseSkip => (Some(next), [Some(pc_i + 2), None]),
             // 5.1–5.3 enter the loop at its ForLoop; 5.4+ skip past it
             Op::ForPrep => {
                 let loop_pc = pc_i + i.bx() as i64;
@@ -315,7 +313,7 @@ impl Checker<'_> {
                 }
                 Ok(None)
             }
-            Op::Eq | Op::Lt | Op::Le | Op::EqK | Op::Test | Op::TestSet => {
+            op if op.is_test() => {
                 if self.ops.get(pc + 1) != Some(&Op::Jmp) {
                     return Err(self.err(pc, "not followed by a Jmp".to_string()));
                 }

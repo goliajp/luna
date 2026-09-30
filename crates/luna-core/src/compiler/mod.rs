@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+mod binop;
 mod ctconst;
 mod fold;
 use ctconst::{CtConst, ct_value};
@@ -25,7 +26,7 @@ use crate::numeric::Num;
 use crate::runtime::heap::{GcHeader, ObjTag};
 use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
-use crate::vm::isa::{Inst, MAX_BX, MAX_SJ, Op};
+use crate::vm::isa::{Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MIN_SC, OFFSET_SC, Op};
 
 /// Lower an [`Chunk`] into a [`Proto`] (luna bytecode) for the
 /// given dialect. The interned source name is attached to the proto for
@@ -275,6 +276,7 @@ enum VarKind {
 }
 
 /// Where an expression's value currently lives.
+#[derive(Clone, Copy)]
 enum Exp {
     Nil,
     True,
@@ -287,10 +289,13 @@ enum Exp {
     /// instruction at index has an unassigned A (destination pending)
     Reloc(usize),
     /// comparison not yet materialized
+    /// `l` is A, `r` is B (a register, or the biased immediate of `EqI`…
+    /// `GeI`, or the constant index of `EqK`), `c` is C
     Cmp {
         op: Op,
         l: u32,
         r: u32,
+        c: u32,
     },
     /// open multi-result producer (CALL/VARARG) at `pc`, results from `base`
     Open {
@@ -404,6 +409,7 @@ impl Level {
             trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
             traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
             has_dispatchable_trace: std::cell::Cell::new(false),
+            trace_heads: std::cell::Cell::new([crate::runtime::function::TRACE_HEADS_NONE; 2]),
             trace_call_head_settled: std::cell::Cell::new(false),
         }
     }
@@ -1937,8 +1943,8 @@ impl<'a> Compiler<'a> {
                 }
             }
             Exp::Reloc(pc) => self.patch_dest(pc, reg),
-            Exp::Cmp { op, l, r } => {
-                self.emit(Inst::iabc(op, l, r, 0, true));
+            Exp::Cmp { op, l, r, c } => {
+                self.emit(Inst::iabc(op, l, r, c, true));
                 self.emit(Inst::isj(Op::Jmp, 1));
                 self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
                 let tpad = self.here();
@@ -1979,8 +1985,8 @@ impl<'a> Compiler<'a> {
         let saved = self.lr().freereg;
         let e = self.expr(id)?;
         match e {
-            Exp::Cmp { op, l, r } => {
-                self.emit(Inst::iabc(op, l, r, 0, false));
+            Exp::Cmp { op, l, r, c } => {
+                self.emit(Inst::iabc(op, l, r, c, false));
             }
             e => {
                 let r = self.exp_to_anyreg(e)?;
@@ -2026,145 +2032,6 @@ impl<'a> Compiler<'a> {
         Ok(Exp::Reloc(self.emit(Inst::iabc(opcode, 0, r, 0, false))))
     }
 
-    fn binop(
-        &mut self,
-        op: BinOp,
-        lhs: ExprId,
-        rhs: ExprId,
-        line: u32,
-    ) -> Result<Exp, SyntaxError> {
-        match op {
-            BinOp::And | BinOp::Or => return self.and_or(op, lhs, rhs, line),
-            BinOp::Concat => return self.concat(lhs, rhs, line),
-            _ => {}
-        }
-        let saved = self.lr().freereg;
-        // PUC's `infix` discharges the left operand *after* consuming the
-        // operator token (luaK_indexed → luaK_exp2anyreg called from infix),
-        // so any GET emitted for the lhs lands on the operator's line, not
-        // on the line of the lhs itself (db.lua :193 line-trace family).
-        // luna parses the lhs ahead of time; pin the line through
-        // `force_line` for the duration of the lhs walk so every emit it
-        // performs is attributed to the operator's line, then drop the pin
-        // before parsing the rhs (which discharges at its own last-token
-        // line, matching PUC).
-        let saved_force = self.force_line.replace(line);
-        // a 5.1 left operand whose logic folds away (see `numeral`)
-        let mut zeros = Vec::new();
-        let le = match numeral(self.ast, lhs, self.version, &mut zeros) {
-            Some(n) if self.version == LuaVersion::Lua51 && is_logical(self.ast, lhs) => {
-                self.note_zeros(&zeros);
-                match n {
-                    Num::Int(i) => Exp::Int(i),
-                    Num::Float(f) => Exp::Float(f),
-                }
-            }
-            _ => self.expr(lhs)?,
-        };
-        zeros.clear();
-        if let Some(folded) = fold_arith(op, &le, self.ast, rhs, self.version, &mut zeros) {
-            self.note_zeros(&zeros);
-            self.force_line = saved_force;
-            return Ok(folded);
-        }
-        // PUC 5.1 puts a numeral left operand in the constant table only
-        // after the right operand (`luaK_infix` leaves numerals be, and
-        // `codearith` takes the right one first). For a zero that order
-        // decides which sign the function's zeros share (see `zero_51`).
-        let deferred = match le {
-            Exp::Float(f) if f == 0.0 && self.version == LuaVersion::Lua51 => Some(f),
-            _ => None,
-        };
-        let l = match deferred {
-            Some(_) => self.reserve(1)?,
-            None => self.exp_to_anyreg(le)?,
-        };
-        self.force_line = saved_force;
-        // Protect the left operand's register if it is a fresh temporary at the
-        // top of the stack (e.g. a CONCAT result): evaluating the right operand
-        // must not reuse and clobber it before the binary op reads it.
-        if l >= saved {
-            self.set_freereg(l + 1);
-        }
-        // 5.4+ compiles `x - K` for a small integer constant K as `x + -K`
-        // (`ADDI`). That is the same number except for K = 0, where
-        // `-0.0 - 0` becomes `-0.0 + 0`, which is `0.0`. K is whatever
-        // PUC's parser folds to a constant: `(0)`, `1 - 1`, `5 % 5`...
-        let sub_zero = op == BinOp::Sub && self.version >= LuaVersion::Lua54 && {
-            let ast = self.ast;
-            matches!(
-                ct_value(ast, rhs, &mut |name| self.ct_const_named(name)),
-                Some(CtConst::Int(0))
-            )
-        };
-        let re = self.expr(rhs)?;
-        let r = self.exp_to_anyreg(re)?;
-        if let Some(f) = deferred {
-            let saved_line = self.force_line.replace(line);
-            self.exp_to_reg(Exp::Float(f), l)?;
-            self.force_line = saved_line;
-        }
-        self.set_freereg(saved);
-        // PUC attributes the arith op itself to the operator's line, but
-        // leaves `lastline` at the rhs's last token (so a following SETTABUP
-        // / SETUPVAL for the assignment lands on the rhs's end line, not the
-        // operator). Pin the line for the arith emit, but don't stomp
-        // `last_line` permanently.
-        let saved_force_arith = self.force_line.replace(line);
-        let r_op = (|| -> Result<Exp, SyntaxError> {
-            Ok(match op {
-                BinOp::Add => self.arith(Op::Add, l, r),
-                BinOp::Sub if sub_zero => Exp::Reloc(self.emit(Inst::iabc(Op::Add, 0, l, r, true))),
-                BinOp::Sub => self.arith(Op::Sub, l, r),
-                BinOp::Mul => self.arith(Op::Mul, l, r),
-                BinOp::Div => self.arith(Op::Div, l, r),
-                BinOp::IDiv => self.arith(Op::IDiv, l, r),
-                BinOp::Mod => self.arith(Op::Mod, l, r),
-                BinOp::Pow => self.arith(Op::Pow, l, r),
-                BinOp::BAnd => self.arith(Op::BAnd, l, r),
-                BinOp::BOr => self.arith(Op::BOr, l, r),
-                BinOp::BXor => self.arith(Op::BXor, l, r),
-                BinOp::Shl => self.arith(Op::Shl, l, r),
-                BinOp::Shr => self.arith(Op::Shr, l, r),
-                BinOp::Eq => Exp::Cmp { op: Op::Eq, l, r },
-                BinOp::Ne => self.negate_cmp(Op::Eq, l, r)?,
-                BinOp::Lt => Exp::Cmp { op: Op::Lt, l, r },
-                BinOp::Le => Exp::Cmp { op: Op::Le, l, r },
-                BinOp::Gt => Exp::Cmp {
-                    op: Op::Lt,
-                    l: r,
-                    r: l,
-                },
-                BinOp::Ge => Exp::Cmp {
-                    op: Op::Le,
-                    l: r,
-                    r: l,
-                },
-                BinOp::And | BinOp::Or | BinOp::Concat => unreachable!(),
-            })
-        })();
-        self.force_line = saved_force_arith;
-        r_op
-    }
-
-    fn arith(&mut self, op: Op, l: u32, r: u32) -> Exp {
-        Exp::Reloc(self.emit(Inst::iabc(op, 0, l, r, false)))
-    }
-
-    /// `a ~= b`: comparison materialized with inverted k.
-    fn negate_cmp(&mut self, op: Op, l: u32, r: u32) -> Result<Exp, SyntaxError> {
-        let reg = self.reserve(1)?;
-        self.l().freereg -= 1;
-        self.emit(Inst::iabc(op, l, r, 0, false));
-        self.emit(Inst::isj(Op::Jmp, 1));
-        self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
-        let tpad = self.here();
-        self.emit(Inst::iabc(Op::LoadTrue, reg, 0, 0, false));
-        // Jmp(1) lands on tpad — mark.
-        self.mark_target(tpad);
-        Ok(Exp::Reg(reg))
-    }
-
     fn and_or(
         &mut self,
         op: BinOp,
@@ -2183,10 +2050,10 @@ impl<'a> Compiler<'a> {
         // the result register and patch X's jump to land at the matching pad
         // of Y's materialization. db.lua :603 (count-hook ceiling) needs the
         // 3-op savings vs the legacy `materialize X → Test → Jmp` path.
-        if let Exp::Cmp { op: cop, l, r } = le {
+        if let Exp::Cmp { op: cop, l, r, c } = le {
             let is_and = matches!(op, BinOp::And);
             // For AND, Jmp on cond==false (k=false). For OR, Jmp on cond==true (k=true).
-            self.emit(Inst::iabc(cop, l, r, 0, !is_and));
+            self.emit(Inst::iabc(cop, l, r, c, !is_and));
             let jmp_lhs = self.emit_jump();
             self.set_freereg(base);
             let re = self.expr(rhs)?;
@@ -2207,8 +2074,9 @@ impl<'a> Compiler<'a> {
                     op: y_op,
                     l: y_l,
                     r: y_r,
+                    c: y_c,
                 } => {
-                    self.emit(Inst::iabc(y_op, y_l, y_r, 0, true));
+                    self.emit(Inst::iabc(y_op, y_l, y_r, y_c, true));
                     self.emit(Inst::isj(Op::Jmp, 1));
                     let fpad = self.here();
                     self.emit(Inst::iabc(Op::LFalseSkip, reg, 0, 0, false));
@@ -3301,8 +3169,8 @@ impl<'a> Compiler<'a> {
         let e = self.expr(cond)?;
         let saved = self.lr().freereg;
         match e {
-            Exp::Cmp { op, l, r } => {
-                self.emit(Inst::iabc(op, l, r, 0, false));
+            Exp::Cmp { op, l, r, c } => {
+                self.emit(Inst::iabc(op, l, r, c, false));
             }
             e => {
                 let r = self.exp_to_anyreg(e)?;
@@ -3764,6 +3632,20 @@ fn is_retargetable_op(op: Op) -> bool {
             | BXor
             | Shl
             | Shr
+            | AddI
+            | SubI
+            | AddK
+            | SubK
+            | MulK
+            | ModK
+            | PowK
+            | DivK
+            | IDivK
+            | BAndK
+            | BOrK
+            | BXorK
+            | ShrI
+            | ShlI
             | Unm
             | BNot
             | Not

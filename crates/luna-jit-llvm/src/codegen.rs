@@ -28,11 +28,10 @@
 //!
 //! ## Cache key
 //!
-//! Both paths share the FNV-1a-64-over-bytecode-words key (see
-//! `proto_cache_key`). Constants are *not* fed in yet — the recognised
-//! shapes either don't touch consts (LoadI/Move/arith on regs) or
-//! treat them as unobservable (dead-locals LoadK). Any op that reads
-//! a constant operand (e.g. `Add R, K`) must widen the key.
+//! Both paths share the key over the bytecode words and the numeric
+//! constants (see `proto_cache_key`): the constant-operand ops
+//! (`AddK`, `EqK`, …) read `proto.consts`, so two protos with the same
+//! code but different constants must not share native code.
 //!
 //! ## Lifetime path
 //!
@@ -42,6 +41,7 @@
 //! pair lands in `LlvmJitStorage::engines` and gets dropped together
 //! when the Vm drops.
 
+use crate::operands::{Operand, int_arith, int_compare, is_arith, is_compare, operand_regs};
 use crate::storage::{CachedEntry, EnginePair, LlvmJitStorage};
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
@@ -49,7 +49,7 @@ use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
 use inkwell::values::{FunctionValue, PointerValue};
 use luna_core::jit::{CompileResult, JitStorage};
-use luna_core::runtime::{Gc, function::Proto};
+use luna_core::runtime::{Gc, Value, function::Proto};
 use luna_core::vm::isa::{Inst, Op};
 use std::collections::HashMap;
 use std::hash::Hasher;
@@ -453,6 +453,8 @@ struct ChunkPlan<'a> {
     /// tells the lowerer which PCs to emit; unreachable PCs are
     /// skipped entirely.
     code: &'a [Inst],
+    /// The constant table the `K` forms read.
+    consts: &'a [Value],
     /// Number of i64 register slots to alloca on entry.
     num_regs: u32,
     /// Number of positional i64 args the JIT entry
@@ -506,6 +508,7 @@ struct ChunkPlan<'a> {
 impl<'a> ChunkPlan<'a> {
     fn from_proto(proto: &'a Proto) -> Option<Self> {
         let code: &'a [Inst] = &proto.code;
+        let consts: &'a [Value] = &proto.consts;
         let n = code.len();
         if n == 0 {
             return None;
@@ -519,8 +522,11 @@ impl<'a> ChunkPlan<'a> {
         }
 
         // Pass 1: per-op whitelist gate + structural validation.
-        // `Lt|Le|Eq` must be followed by a `Jmp`; mark the Jmp as
-        // consumed by the condbr.
+        // A comparison must be followed by a `Jmp`; mark the Jmp as
+        // consumed by the condbr. The arithmetic and comparison ops
+        // are lowered on integer operands only: a constant operand
+        // that is not an integer refuses the function
+        // (`operands::int_arith` / `int_compare`).
         //
         // `Op::GetUpval` (both SelfMarker + ValueRead
         // roles, classified in a subsequent pass) and `Op::Call`
@@ -529,16 +535,10 @@ impl<'a> ChunkPlan<'a> {
         let mut consumed_jmp = vec![false; n];
         for (pc, ins) in code.iter().enumerate() {
             match ins.op() {
-                Op::LoadI
-                | Op::LoadNil
-                | Op::Move
-                | Op::Add
-                | Op::Sub
-                | Op::Mul
-                | Op::Mod
-                | Op::Jmp
-                | Op::Return0
-                | Op::Return1 => {}
+                Op::LoadI | Op::LoadNil | Op::Move | Op::Jmp | Op::Return0 | Op::Return1 => {}
+                op if is_arith(op) => {
+                    int_arith(*ins, consts)?;
+                }
                 Op::GetUpval => {
                     // Upval idx must be in bounds. The self-rec /
                     // value-read classification + Float-tag concerns
@@ -569,7 +569,8 @@ impl<'a> ChunkPlan<'a> {
                         return None;
                     }
                 }
-                Op::Lt | Op::Le | Op::Eq => {
+                op if is_compare(op) => {
+                    int_compare(*ins, consts)?;
                     let peer = code.get(pc + 1)?;
                     if peer.op() != Op::Jmp {
                         return None;
@@ -684,11 +685,12 @@ impl<'a> ChunkPlan<'a> {
                 _ => {
                     // Other ops clear the tag for any register they
                     // write. For the present whitelist that's: LoadI
-                    // / LoadNil / Add / Sub / Mul / Mod — all write
+                    // / LoadNil / the arithmetic ops — all write
                     // arithmetic / immediate values that can't be a
                     // closure pointer.
                     let writes: &[u32] = match ins.op() {
-                        Op::LoadI | Op::Add | Op::Sub | Op::Mul | Op::Mod => &[ins.a()],
+                        Op::LoadI => &[ins.a()],
+                        op if is_arith(op) => &[ins.a()],
                         // LoadNil writes R[A..=A+B]; clear them.
                         Op::LoadNil => {
                             for off in 0..=ins.b() {
@@ -734,7 +736,7 @@ impl<'a> ChunkPlan<'a> {
                     }
                     worklist.push(jmp_target(pc, ins));
                 }
-                Op::Lt | Op::Le | Op::Eq => {
+                op if is_compare(op) => {
                     // The peer Jmp at pc+1 supplies the false-edge
                     // target; pc+2 is the true-edge (skip-next) fall.
                     worklist.push(pc + 2);
@@ -771,7 +773,7 @@ impl<'a> ChunkPlan<'a> {
 
         // Pass 4: BB starts. PC 0 always; jump targets; every PC
         // immediately after a terminator; the fall-through PC after
-        // a `Lt|Le|Eq` (pc+2 — the consumed Jmp at pc+1 is folded).
+        // a comparison (pc+2 — the consumed Jmp at pc+1 is folded).
         let mut bb_starts = vec![false; n];
         bb_starts[0] = true;
         for (pc, ins) in code.iter().enumerate() {
@@ -779,7 +781,7 @@ impl<'a> ChunkPlan<'a> {
                 continue;
             }
             match ins.op() {
-                Op::Lt | Op::Le | Op::Eq => {
+                op if is_compare(op) => {
                     if pc + 2 < n {
                         bb_starts[pc + 2] = true;
                     }
@@ -815,11 +817,12 @@ impl<'a> ChunkPlan<'a> {
             if !reachable[pc] {
                 continue;
             }
+            let operands = operand_regs(*ins).into_iter().max().unwrap_or(0);
             let max_slot = match ins.op() {
                 Op::LoadI | Op::Move | Op::Return1 | Op::GetUpval => ins.a(),
                 Op::LoadNil => ins.a() + ins.b(),
-                Op::Add | Op::Sub | Op::Mul | Op::Mod => ins.a().max(ins.b()).max(ins.c()),
-                Op::Lt | Op::Le | Op::Eq => ins.a().max(ins.b()),
+                op if is_arith(op) => ins.a().max(operands),
+                op if is_compare(op) => operands,
                 Op::Call | Op::TailCall => {
                     // Op::Call/TailCall read R[A] (function) and
                     // R[A+1..A+nargs] (args); A is the max slot.
@@ -862,8 +865,7 @@ impl<'a> ChunkPlan<'a> {
                 continue;
             }
             let reads: Vec<u32> = match ins.op() {
-                Op::Add | Op::Sub | Op::Mul | Op::Mod => vec![ins.b(), ins.c()],
-                Op::Lt | Op::Le | Op::Eq => vec![ins.a(), ins.b()],
+                op if is_arith(op) || is_compare(op) => operand_regs(*ins),
                 Op::Return1 => vec![ins.a()],
                 Op::Call | Op::TailCall => (1..ins.b()).map(|off| ins.a() + off).collect(),
                 _ => continue,
@@ -875,6 +877,7 @@ impl<'a> ChunkPlan<'a> {
 
         Some(ChunkPlan {
             code,
+            consts,
             num_regs: regs,
             num_params: proto.num_params as u32,
             returns_one,
@@ -968,8 +971,7 @@ fn uses_register_as_value(ins: &Inst, tagged: &[bool]) -> bool {
     let is_tagged = |idx: u32| tagged.get(idx as usize).copied().unwrap_or(false);
     match ins.op() {
         Op::Return1 => is_tagged(ins.a()),
-        Op::Add | Op::Sub | Op::Mul | Op::Mod => is_tagged(ins.b()) || is_tagged(ins.c()),
-        Op::Lt | Op::Le | Op::Eq => is_tagged(ins.a()) || is_tagged(ins.b()),
+        op if is_arith(op) || is_compare(op) => operand_regs(*ins).into_iter().any(is_tagged),
         // Op::Call / Op::TailCall args (R[A+1..A+nargs]) are value uses.
         Op::Call | Op::TailCall => {
             let nargs = ins.b().saturating_sub(1);
@@ -992,15 +994,8 @@ fn uses_register_as_value(ins: &Inst, tagged: &[bool]) -> bool {
 /// tagged marker when a register is overwritten.
 fn primary_write_reg(ins: &Inst) -> Option<u32> {
     match ins.op() {
-        Op::LoadI
-        | Op::LoadNil
-        | Op::Move
-        | Op::Add
-        | Op::Sub
-        | Op::Mul
-        | Op::Mod
-        | Op::GetUpval
-        | Op::Call => Some(ins.a()),
+        Op::LoadI | Op::LoadNil | Op::Move | Op::GetUpval | Op::Call => Some(ins.a()),
+        op if is_arith(op) => Some(ins.a()),
         _ => None,
     }
 }
@@ -1016,30 +1011,39 @@ fn jmp_target(pc: usize, ins: Inst) -> usize {
 // Compute-path whitelist notes (consumption itself happens inside
 // `ChunkPlan::from_proto`):
 //
-// - `LoadI` / `LoadNil` / `Move` / arith: the cache key over bytecode
-//   words is sufficient — the recognised ops don't touch
-//   `proto.consts`.
-// - `Mod` uses Lua semantics (floor mod, sign matches divisor), not
-//   C's truncating srem. `Op::Div` is intentionally **excluded**
-//   because Lua 5.4 `/` always returns a float regardless of operand
-//   types; emitting it as int sdiv would silently mis-compile `2 / 3`
-//   (Lua → 0.666…, the int chunk would return 0). Div needs
-//   float-reg support (`ret_is_float=true` + `f64::from_bits`
-//   reinterpret).
-// - `Lt` / `Le` / `Eq` + `Jmp`: comparison-then-jmp becomes a single
-//   LLVM `condbr`; bare `Jmp` becomes `br`. Multiple reachable
-//   returns are tolerated (must agree on `Return0`-vs-`Return1`
-//   shape).
-// - Whitelisting `LoadK(Int)` must widen the cache key to include the
-//   constant table.
+// - `Mod` / `ModK` use Lua semantics (floor mod, sign matches
+//   divisor), not C's truncating srem. `Op::Div` / `DivK` are
+//   intentionally **excluded** because Lua 5.4 `/` always returns a
+//   float regardless of operand types; emitting it as int sdiv would
+//   silently mis-compile `2 / 3` (Lua → 0.666…, the int chunk would
+//   return 0). Div needs float-reg support (`ret_is_float=true` +
+//   `f64::from_bits` reinterpret).
+// - A comparison + `Jmp` becomes a single LLVM `condbr`; bare `Jmp`
+//   becomes `br`. Multiple reachable returns are tolerated (must agree
+//   on `Return0`-vs-`Return1` shape).
+// - The `K` forms read an integer constant; `LoadK` itself stays
+//   outside the compute whitelist.
 
-/// Stable cache key for a Proto. FNV-1a-64 over the bytecode words
-/// + the dialect bit. Constants are not fed in (an op that reads a
-/// constant operand, e.g. `Add R, K`, must widen the key).
+/// Stable cache key for a Proto: the bytecode words, the numeric
+/// constants (the `K` forms fold them into the code) and the dialect
+/// bit.
 fn proto_cache_key(proto: &Proto, pre53: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for inst in proto.code.iter() {
         h.write_u32(inst.0);
+    }
+    for c in proto.consts.iter() {
+        match c {
+            Value::Int(i) => {
+                h.write_u8(0);
+                h.write_i64(*i);
+            }
+            Value::Float(f) => {
+                h.write_u8(1);
+                h.write_u64(f.to_bits());
+            }
+            _ => h.write_u8(2),
+        }
     }
     h.write_u8(pre53 as u8);
     h.finish()
@@ -1092,11 +1096,15 @@ fn compile_constant_zero_chunk() -> Option<(*const u8, EnginePair)> {
 /// - `Move rA, rB`       → load regs[B]; store regs[A]
 /// - `Add|Sub|Mul rA,rB,rC` → load regs[B]; load regs[C]; <iop>; store
 /// - `Mod rA, rB, rC`    → load, srem, sign-fixup select, store
+/// - `AddI|AddK|…`       → as the register form, with the immediate or
+///                          integer constant in place of regs[C]
 /// - `Return0`           → ret i64 0
 /// - `Return1 rA`        → load regs[A]; ret
 /// - `Jmp`               → br bb_<target>
 /// - `Lt|Le|Eq rA,rB,k`  → load, icmp, condbr (k flips arms; pc+1 Jmp
 ///                          provides the false-edge target)
+/// - `LtI|GtI|EqK|…`     → the same, comparing regs[A] with the
+///                          immediate or integer constant
 fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
     let ctx_box: Box<Context> = Box::new(Context::create());
     // SAFETY: `ctx_box` is heap-allocated and never moved out of the
@@ -1235,7 +1243,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 builder.build_unconditional_branch(tgt_bb).ok()?;
                 bb_terminated = true;
             }
-            Op::Lt | Op::Le | Op::Eq => {
+            op if is_compare(op) => {
                 // Lua predicate semantics:
                 //   if ((R[A] <op> R[B]) ~= k) then pc++
                 // i.e. SKIP the next Jmp when the comparison's truth
@@ -1246,14 +1254,11 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 // because:
                 //   cmp == k  ↔ DON'T skip ↔ take the Jmp
                 //   cmp != k  ↔ SKIP       ↔ take the fall-through
-                let pred = match ins.op() {
-                    Op::Lt => inkwell::IntPredicate::SLT,
-                    Op::Le => inkwell::IntPredicate::SLE,
-                    Op::Eq => inkwell::IntPredicate::EQ,
-                    _ => unreachable!(),
-                };
+                // The immediate and constant forms compare R[A] with
+                // the operand folded into the instruction.
+                let (pred, rhs) = int_compare(ins, plan.consts)?;
                 let lhs = emitter.load_reg(ins.a(), "cmp_lhs")?;
-                let rhs = emitter.load_reg(ins.b(), "cmp_rhs")?;
+                let rhs = emitter.operand_value(rhs, "cmp_rhs")?;
                 let cmp = builder.build_int_compare(pred, lhs, rhs, "cmp_res").ok()?;
                 let jmp_ins = plan.code.get(pc + 1)?;
                 let jmp_pc = pc + 1;
@@ -1361,7 +1366,7 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
                 bb_terminated = true;
             }
             _ => {
-                emitter.emit_op(ins)?;
+                emitter.emit_op(ins, plan.consts)?;
             }
         }
         pc += 1;
@@ -1382,10 +1387,10 @@ fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, EnginePair)> {
 /// and the entry block's register-file alloca; each `emit_op` call
 /// appends the op's IR sequence at the builder's current position.
 ///
-/// `emit_op` handles non-control-flow ops (LoadI / LoadNil / Move /
-/// Add / Sub / Mul / Mod). Control-flow ops (`Return0|Return1|Jmp|
-/// Lt|Le|Eq`) are handled in [`compile_compute_chunk`] directly so
-/// the outer loop can switch BBs around the emitted terminator.
+/// `emit_op` handles non-control-flow ops (LoadI / LoadNil / Move and
+/// the arithmetic ops). Control-flow ops (`Return0|Return1|Jmp` and
+/// the comparisons) are handled in [`compile_compute_chunk`] directly
+/// so the outer loop can switch BBs around the emitted terminator.
 struct ComputeEmitter<'ctx, 'a> {
     ctx: &'ctx Context,
     builder: &'a inkwell::builder::Builder<'ctx>,
@@ -1471,30 +1476,104 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(v.into_int_value())
     }
 
-    /// Shared emit for `R[A] = R[B] <op> R[C]`
-    /// where `<op>` is a single-instruction LLVM int binop (Add / Sub
-    /// / Mul / ...). Loads `b`/`c`, applies `op_fn`, stores into `a`.
-    fn emit_int_binop<F>(&self, ins: Inst, label: &str, op_fn: F) -> Option<()>
-    where
-        F: Fn(
-            &inkwell::builder::Builder<'ctx>,
-            inkwell::values::IntValue<'ctx>,
-            inkwell::values::IntValue<'ctx>,
-            &str,
-        ) -> Option<inkwell::values::IntValue<'ctx>>,
-    {
-        let a = ins.a();
-        let b = ins.b();
-        let c = ins.c();
-        let lhs = self.load_reg(b, &format!("{label}_lhs"))?;
-        let rhs = self.load_reg(c, &format!("{label}_rhs"))?;
-        let result = op_fn(self.builder, lhs, rhs, &format!("{label}_res"))?;
-        let dst = self.reg_slot_ptr(a, &format!("{label}_dst"))?;
-        self.builder.build_store(dst, result).ok()?;
+    /// An operand as an i64: a register load, or the constant itself.
+    fn operand_value(
+        &self,
+        operand: Operand,
+        name: &str,
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        match operand {
+            Operand::Reg(idx) => self.load_reg(idx, name),
+            Operand::Imm(imm) => Some(self.i64_type.const_int(imm as u64, true)),
+        }
+    }
+
+    /// `R[A] = lhs <op> rhs` for the arithmetic ops (register,
+    /// immediate and constant forms alike): wrapping i64 add / sub /
+    /// mul, matching Lua's integer arithmetic
+    /// (`math.maxinteger + 1 == math.mininteger`), and floor mod.
+    ///
+    /// No type-tag inspection: the compute whitelist has no op that
+    /// produces a non-int value into a reg (LoadNil → 0, LoadI/Move →
+    /// ints, arithmetic → int) and a constant operand is admitted only
+    /// when it is an integer.
+    fn emit_arith(&self, ins: Inst, consts: &[Value]) -> Option<()> {
+        let (op, lhs, rhs) = int_arith(ins, consts)?;
+        let lhs = self.operand_value(lhs, "arith_lhs")?;
+        let rhs = self.operand_value(rhs, "arith_rhs")?;
+        let b = self.builder;
+        let result = match op {
+            Op::Add => b.build_int_add(lhs, rhs, "add_res").ok()?,
+            Op::Sub => b.build_int_sub(lhs, rhs, "sub_res").ok()?,
+            Op::Mul => b.build_int_mul(lhs, rhs, "mul_res").ok()?,
+            Op::Mod => self.floor_mod(lhs, rhs)?,
+            _ => return None,
+        };
+        let dst = self.reg_slot_ptr(ins.a(), "arith_dst")?;
+        b.build_store(dst, result).ok()?;
         Some(())
     }
 
-    fn emit_op(&mut self, ins: Inst) -> Option<()> {
+    /// Lua-semantic int mod (`lhs % rhs`).
+    fn floor_mod(
+        &self,
+        lhs: inkwell::values::IntValue<'ctx>,
+        rhs: inkwell::values::IntValue<'ctx>,
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        // Lua 5.4 / 5.5 `%` for two ints:
+        //     R[A] = R[B] - floor(R[B] / R[C]) * R[C]
+        // which differs from C's `%` (truncating remainder)
+        // when the operand signs differ. Examples:
+        //
+        //   |  a |  b |  a % b (Lua) |  a srem b (C) |
+        //   |----|----|--------------|---------------|
+        //   |  7 |  3 |       1      |        1      |
+        //   | -7 |  3 |       2      |       -1      |
+        //   |  7 | -3 |      -2      |        1      |
+        //   | -7 | -3 |      -1      |       -1      |
+        //
+        // LLVM's `srem` matches the C semantics, so we adjust:
+        //     r = srem(a, b)
+        //     r != 0  AND  (r ^ b) < 0   ⇒  r += b
+        // (the "(r ^ b) < 0" test asks "do r and b have
+        // different signs?"; combined with r != 0 it catches
+        // exactly the rows above where Lua and C disagree.)
+        //
+        // Branch-free via `select`. Division-by-zero is the
+        // interpreter's job (it raises "attempt to perform
+        // 'n%%0'"); a `ModK` by a constant zero is refused up front, and
+        // a Mod chunk that dynamically uses zero as R[C] still wouldn't
+        // reach here through normal parser-emitted bytecode, so we accept
+        // LLVM's UB on `srem x, 0` rather than emit a runtime check.
+        let raw = self
+            .builder
+            .build_int_signed_rem(lhs, rhs, "mod_srem")
+            .ok()?;
+        let zero = self.i64_type.const_zero();
+        let nonzero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, raw, zero, "mod_raw_nonzero")
+            .ok()?;
+        // Sign-differ test: (raw XOR rhs) < 0 ↔ MSBs differ.
+        let xor = self.builder.build_xor(raw, rhs, "mod_sign_xor").ok()?;
+        let sign_differ = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, xor, zero, "mod_sign_differ")
+            .ok()?;
+        let need_fix = self
+            .builder
+            .build_and(nonzero, sign_differ, "mod_need_fix")
+            .ok()?;
+        let fixed = self.builder.build_int_add(raw, rhs, "mod_fixed").ok()?;
+        Some(
+            self.builder
+                .build_select(need_fix, fixed, raw, "mod_result")
+                .ok()?
+                .into_int_value(),
+        )
+    }
+
+    fn emit_op(&mut self, ins: Inst, consts: &[Value]) -> Option<()> {
         match ins.op() {
             Op::LoadI => {
                 let a = ins.a();
@@ -1524,99 +1603,12 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 self.builder.build_store(dst, v).ok()?;
                 Some(())
             }
-            Op::Add => {
-                // Int add `R[A] = R[B] + R[C]`. Pure
-                // signed-i64 add; no overflow check (the int-chunk
-                // ABI silently wraps, matching Lua 5.4's integer
-                // arithmetic semantics for the `+` operator on two
-                // ints — `math.maxinteger + 1 == math.mininteger`).
-                //
-                // No type-tag inspection: the compute whitelist
-                // currently has no op that produces a non-int value
-                // into a reg (LoadNil → 0, LoadI/Move → ints, this
-                // Add → int). If LoadFalse/LoadTrue (which produce
-                // bool bit patterns) or LoadK(Float) is whitelisted,
-                // this arm will need to refuse (or wrap with)
-                // cross-type operands.
-                self.emit_int_binop(ins, "add", |b, l, r, n| b.build_int_add(l, r, n).ok())
-            }
-            Op::Sub => {
-                // Int sub `R[A] = R[B] - R[C]`. Same
-                // wrapping i64 semantics as Add.
-                self.emit_int_binop(ins, "sub", |b, l, r, n| b.build_int_sub(l, r, n).ok())
-            }
-            Op::Mul => {
-                // Int mul `R[A] = R[B] * R[C]`. Same
-                // wrapping i64 semantics as Add.
-                self.emit_int_binop(ins, "mul", |b, l, r, n| b.build_int_mul(l, r, n).ok())
-            }
-            Op::Mod => {
-                // Lua-semantic int mod.
-                //
-                // Lua 5.4 / 5.5 `%` for two ints:
-                //     R[A] = R[B] - floor(R[B] / R[C]) * R[C]
-                // which differs from C's `%` (truncating remainder)
-                // when the operand signs differ. Examples:
-                //
-                //   |  a |  b |  a % b (Lua) |  a srem b (C) |
-                //   |----|----|--------------|---------------|
-                //   |  7 |  3 |       1      |        1      |
-                //   | -7 |  3 |       2      |       -1      |
-                //   |  7 | -3 |      -2      |        1      |
-                //   | -7 | -3 |      -1      |       -1      |
-                //
-                // LLVM's `srem` matches the C semantics, so we adjust:
-                //     r = srem(a, b)
-                //     r != 0  AND  (r ^ b) < 0   ⇒  r += b
-                // (the "(r ^ b) < 0" test asks "do r and b have
-                // different signs?"; combined with r != 0 it catches
-                // exactly the rows above where Lua and C disagree.)
-                //
-                // Branch-free via `select`. Division-by-zero is the
-                // interpreter's job (it raises "attempt to perform
-                // 'n%%0'"); a Mod chunk that statically uses zero as
-                // R[C] still wouldn't reach here through normal
-                // parser-emitted bytecode, so we accept LLVM's UB on
-                // `srem x, 0` rather than emit a runtime check.
-                let a = ins.a();
-                let b = ins.b();
-                let c = ins.c();
-                let lhs = self.load_reg(b, "mod_lhs")?;
-                let rhs = self.load_reg(c, "mod_rhs")?;
-                let raw = self
-                    .builder
-                    .build_int_signed_rem(lhs, rhs, "mod_srem")
-                    .ok()?;
-                let zero = self.i64_type.const_zero();
-                let nonzero = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::NE, raw, zero, "mod_raw_nonzero")
-                    .ok()?;
-                // Sign-differ test: (raw XOR rhs) < 0 ↔ MSBs differ.
-                let xor = self.builder.build_xor(raw, rhs, "mod_sign_xor").ok()?;
-                let sign_differ = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::SLT, xor, zero, "mod_sign_differ")
-                    .ok()?;
-                let need_fix = self
-                    .builder
-                    .build_and(nonzero, sign_differ, "mod_need_fix")
-                    .ok()?;
-                let fixed = self.builder.build_int_add(raw, rhs, "mod_fixed").ok()?;
-                let result = self
-                    .builder
-                    .build_select(need_fix, fixed, raw, "mod_result")
-                    .ok()?
-                    .into_int_value();
-                let dst = self.reg_slot_ptr(a, "mod_dst")?;
-                self.builder.build_store(dst, result).ok()?;
-                Some(())
-            }
+            op if is_arith(op) => self.emit_arith(ins, consts),
             _ => {
                 // Whitelist guarded this in `ChunkPlan::from_proto`;
-                // control-flow ops (Return0/Return1/Jmp/Lt/Le/Eq)
-                // are handled in `compile_compute_chunk`'s outer
-                // loop, not here. Any other op slipping through =
+                // control-flow ops (Return0/Return1/Jmp and the
+                // comparisons) are handled in `compile_compute_chunk`'s
+                // outer loop, not here. Any other op slipping through =
                 // someone added it to the whitelist without an
                 // emit arm; bail rather than emit junk.
                 None

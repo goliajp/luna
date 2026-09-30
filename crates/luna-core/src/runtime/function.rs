@@ -8,40 +8,16 @@ use crate::runtime::value::Value;
 use crate::vm::isa::Inst;
 
 pub use crate::runtime::call_frame::{
-    AfterClose, CallFrame, CloseCont, ContKind, Frame, MetaAction, MetaCont, NativeCont,
+    AfterClose, CallFrame, CloseCont, ContKind, Frame, FrameTm, MetaAction, MetaCont, NativeCont,
 };
+pub use crate::runtime::debug_info::{LocVar, UpvalDesc};
 
-/// Where a closure's upvalue is captured from, relative to the *enclosing*
-/// function (PUC Upvaldesc).
-#[derive(Clone, Debug)]
-pub struct UpvalDesc {
-    /// captured from the enclosing frame's registers (true) or from the
-    /// enclosing closure's own upvalues (false)
-    pub in_stack: bool,
-    /// Index in the enclosing frame's register file (when `in_stack`) or
-    /// in the enclosing closure's upvalue array (otherwise).
-    pub index: u8,
-    /// variable name, for error messages and debug info
-    pub name: Box<str>,
-    /// the captured variable is `<const>` (5.5): assignment through this
-    /// upvalue is a compile-time error
-    pub read_only: bool,
-}
-
-/// Debug record for a local variable: its name and the pc range over which it
-/// occupies register `reg`. Used to name registers in error messages and
-/// debug.getinfo (PUC LocVar).
-#[derive(Clone, Debug)]
-pub struct LocVar {
-    /// Local-variable name.
-    pub name: Box<str>,
-    /// Register holding the variable while in scope.
-    pub reg: u32,
-    /// First pc where the variable is live.
-    pub start_pc: u32,
-    /// Pc one past the last where the variable is live.
-    pub end_pc: u32,
-}
+/// An unused slot of [`Proto::trace_heads`].
+#[doc(hidden)]
+pub const TRACE_HEADS_NONE: u32 = u32::MAX;
+/// [`Proto::trace_heads`] once more than two traces can be entered.
+#[doc(hidden)]
+pub const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
 
 /// A compiled function (PUC Proto). Immutable after compilation.
 #[repr(C)]
@@ -171,6 +147,12 @@ pub struct Proto {
     /// `false` to `true`.
     #[doc(hidden)]
     pub has_dispatchable_trace: std::cell::Cell<bool>,
+    /// Head pcs of the traces that set `has_dispatchable_trace`, so the
+    /// interpreter looks traces up only where one can start: up to two, the
+    /// rest [`TRACE_HEADS_NONE`]; [`TRACE_HEADS_MANY`] in both once there are
+    /// more.
+    #[doc(hidden)]
+    pub trace_heads: std::cell::Cell<[u32; 2]>,
     /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
     /// a trace is cached there or recording it was abandoned. Set once,
     /// it spares every later call the scan of `traces`.

@@ -1,8 +1,9 @@
 //! Instruction set: u32 instructions with the PUC 5.5 field layout
 //! (op 7 | A 8 | k 1 | B 8 | C 8, plus Bx/sBx/Ax/sJ variants). The opcode
-//! set follows lopcodes.h (v5.5.0) with deliberate trims: no K-/immediate-arith
-//! variants and no MMBIN* (metamethod fallback is handled inline by the Rust
-//! dispatch loop).
+//! set follows lopcodes.h (v5.5.0) with one deliberate trim: no MMBIN*
+//! (metamethod fallback is handled inline by the Rust dispatch loop, so the
+//! constant- and immediate-operand arithmetic opcodes name their own
+//! operator).
 
 /// Opcode kinds for the luna bytecode. Layout follows PUC `lopcodes.h`
 /// (5.5.0); semantics may differ where noted in the dispatcher.
@@ -147,188 +148,98 @@ pub enum Op {
     /// Extended-immediate payload for the preceding instruction (see
     /// `LoadKx`).
     ExtraArg,
+    // The constant- and immediate-operand forms (PUC 5.4 `ADDI`, `ADDK`…,
+    // `EQI`…). They come after `ExtraArg` so that the opcodes above keep
+    // their numbers. An arithmetic one falls back to the metamethod of its
+    // own operator, on the operands in source order: with `k` set the
+    // constant was the left operand.
+    /// `R[A] := R[B] + sC`.
+    AddI,
+    /// `R[A] := R[B] - sC`.
+    SubI,
+    /// `R[A] := R[B] + K[C]:number`.
+    AddK,
+    /// `R[A] := R[B] - K[C]:number`.
+    SubK,
+    /// `R[A] := R[B] * K[C]:number`.
+    MulK,
+    /// `R[A] := R[B] % K[C]:number`.
+    ModK,
+    /// `R[A] := R[B] ^ K[C]:number`.
+    PowK,
+    /// `R[A] := R[B] / K[C]:number`.
+    DivK,
+    /// `R[A] := R[B] // K[C]:number`.
+    IDivK,
+    /// `R[A] := R[B] & K[C]:integer`.
+    BAndK,
+    /// `R[A] := R[B] | K[C]:integer`.
+    BOrK,
+    /// `R[A] := R[B] ~ K[C]:integer`.
+    BXorK,
+    /// `R[A] := R[B] >> sC`.
+    ShrI,
+    /// `R[A] := R[B] << sC` (PUC's `SHLI` is `sC << R[B]`; luna has no
+    /// `MMBINI` to say which shift the source wrote).
+    ShlI,
+    /// `if ((R[A] == sB) ~= k) then pc++`; with `C` set the immediate is the
+    /// float `sB`. Raw: no metamethod.
+    EqI,
+    /// `if ((R[A] < sB) ~= k) then pc++`; `C` as for `EqI`.
+    LtI,
+    /// `if ((R[A] <= sB) ~= k) then pc++`; `C` as for `EqI`.
+    LeI,
+    /// `if ((R[A] > sB) ~= k) then pc++`; `C` as for `EqI`.
+    GtI,
+    /// `if ((R[A] >= sB) ~= k) then pc++`; `C` as for `EqI`.
+    GeI,
 }
 
-/// Total number of opcodes defined in [`Op`].
-pub const NUM_OPS: usize = Op::ExtraArg as usize + 1;
-
-/// One encoded instruction.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Inst(
-    /// The 32-bit packed instruction word; layout depends on the
-    /// instruction format (iABC / iABx / iAsBx / iAx / isJ).
-    pub u32,
-);
-
-const POS_A: u32 = 7;
-const POS_K: u32 = 15;
-const POS_B: u32 = 16;
-const POS_C: u32 = 24;
-const POS_BX: u32 = 15;
-
-/// Maximum value encodable in the `A` field.
-pub const MAX_A: u32 = 0xFF;
-/// Maximum value encodable in the `B` field.
-pub const MAX_B: u32 = 0xFF;
-/// Maximum value encodable in the `C` field.
-pub const MAX_C: u32 = 0xFF;
-/// Maximum value encodable in the `Bx` field.
-pub const MAX_BX: u32 = (1 << 17) - 1;
-/// Maximum value encodable in the signed `sBx` field (bias = MAX_BX/2).
-pub const MAX_SBX: i32 = (MAX_BX >> 1) as i32; // 65535
-/// Maximum value encodable in the `Ax` field.
-pub const MAX_AX: u32 = (1 << 25) - 1;
-/// Maximum magnitude encodable in the signed `sJ` (jump offset) field.
-pub const MAX_SJ: i32 = ((1u32 << 24) - 1) as i32; // sJ stored with this offset
-
-impl Inst {
-    /// [`Inst::iabc`] for operands that come from outside (a translated
-    /// PUC chunk): `None` when a field does not fit, instead of an encoding
-    /// that spills into the neighbouring field.
-    pub(crate) fn try_iabc(op: Op, a: u32, b: u32, c: u32, k: bool) -> Option<Inst> {
-        (a <= MAX_A && b <= MAX_B && c <= MAX_C).then(|| Inst::iabc(op, a, b, c, k))
+impl Op {
+    /// The register-operand opcode a constant- or immediate-operand
+    /// arithmetic opcode computes, `None` for any other opcode.
+    pub fn arith_const_op(self) -> Option<Op> {
+        Some(match self {
+            Op::AddI | Op::AddK => Op::Add,
+            Op::SubI | Op::SubK => Op::Sub,
+            Op::MulK => Op::Mul,
+            Op::ModK => Op::Mod,
+            Op::PowK => Op::Pow,
+            Op::DivK => Op::Div,
+            Op::IDivK => Op::IDiv,
+            Op::BAndK => Op::BAnd,
+            Op::BOrK => Op::BOr,
+            Op::BXorK => Op::BXor,
+            Op::ShrI => Op::Shr,
+            Op::ShlI => Op::Shl,
+            _ => return None,
+        })
     }
 
-    /// [`Inst::iabx`] with the range check of [`Inst::try_iabc`].
-    pub(crate) fn try_iabx(op: Op, a: u32, bx: u32) -> Option<Inst> {
-        (a <= MAX_A && bx <= MAX_BX).then(|| Inst::iabx(op, a, bx))
-    }
-
-    /// [`Inst::iasbx`] with the range check of [`Inst::try_iabc`].
-    pub(crate) fn try_iasbx(op: Op, a: u32, sbx: i32) -> Option<Inst> {
-        (a <= MAX_A && (-MAX_SBX..=MAX_BX as i32 - MAX_SBX).contains(&sbx))
-            .then(|| Inst::iasbx(op, a, sbx))
-    }
-
-    /// [`Inst::iax`] with the range check of [`Inst::try_iabc`].
-    pub(crate) fn try_iax(op: Op, ax: u32) -> Option<Inst> {
-        (ax <= MAX_AX).then(|| Inst::iax(op, ax))
-    }
-
-    /// [`Inst::isj`] with the range check of [`Inst::try_iabc`].
-    pub(crate) fn try_isj(op: Op, sj: i32) -> Option<Inst> {
-        (-MAX_SJ..=MAX_SJ).contains(&sj).then(|| Inst::isj(op, sj))
-    }
-
-    /// Build an iABC-format instruction (`A`, `B`, `C`, `k` flag).
-    pub fn iabc(op: Op, a: u32, b: u32, c: u32, k: bool) -> Inst {
-        debug_assert!(a <= MAX_A && b <= MAX_B && c <= MAX_C);
-        Inst(op as u32 | (a << POS_A) | ((k as u32) << POS_K) | (b << POS_B) | (c << POS_C))
-    }
-
-    /// Build an iABx-format instruction (`A`, unsigned `Bx`).
-    pub fn iabx(op: Op, a: u32, bx: u32) -> Inst {
-        debug_assert!(a <= MAX_A && bx <= MAX_BX);
-        Inst(op as u32 | (a << POS_A) | (bx << POS_BX))
-    }
-
-    /// Build an iAsBx-format instruction (`A`, signed `sBx`).
-    pub fn iasbx(op: Op, a: u32, sbx: i32) -> Inst {
-        // Bx is biased by MAX_SBX, so the top value, MAX_SBX + 1, fits too
-        // (PUC 5.4+ `LOADI` uses it)
-        debug_assert!((-MAX_SBX..=MAX_BX as i32 - MAX_SBX).contains(&sbx));
-        Inst::iabx(op, a, (sbx + MAX_SBX) as u32)
-    }
-
-    /// Build an iAx-format instruction (unsigned 25-bit `Ax`).
-    pub fn iax(op: Op, ax: u32) -> Inst {
-        debug_assert!(ax <= MAX_AX);
-        Inst(op as u32 | (ax << POS_A))
-    }
-
-    /// Build an isJ-format instruction (signed jump offset `sJ`).
-    pub fn isj(op: Op, sj: i32) -> Inst {
-        debug_assert!((-MAX_SJ..=MAX_SJ).contains(&sj));
-        Inst::iax(op, (sj + MAX_SJ) as u32)
-    }
-
-    /// Decode the opcode field.
-    #[inline(always)]
-    pub fn op(self) -> Op {
-        let raw = (self.0 & 0x7F) as u8;
-        debug_assert!((raw as usize) < NUM_OPS, "corrupt opcode {raw}");
-        // SAFETY: instructions are only built via the constructors above with
-        // a valid Op; Op is repr(u8) and dense from 0..NUM_OPS.
-        unsafe { std::mem::transmute::<u8, Op>(raw) }
-    }
-
-    /// Decode the `A` field.
-    #[inline(always)]
-    pub fn a(self) -> u32 {
-        (self.0 >> POS_A) & 0xFF
-    }
-
-    /// Decode the `k` flag (constant-vs-register selector for some ops).
-    #[inline(always)]
-    pub fn k(self) -> bool {
-        (self.0 >> POS_K) & 1 != 0
-    }
-
-    /// The operator an arithmetic instruction stands for in the source: an
-    /// `Add` with `k` set is a subtraction (see [`Op::Add`]).
-    pub(crate) fn source_op(self) -> Op {
-        match self.op() {
-            Op::Add if self.k() => Op::Sub,
-            op => op,
-        }
-    }
-
-    /// Decode the `B` field.
-    #[inline(always)]
-    pub fn b(self) -> u32 {
-        (self.0 >> POS_B) & 0xFF
-    }
-
-    /// Decode the `C` field.
-    #[inline(always)]
-    pub fn c(self) -> u32 {
-        self.0 >> POS_C
-    }
-
-    /// Decode the unsigned `Bx` field.
-    #[inline(always)]
-    pub fn bx(self) -> u32 {
-        self.0 >> POS_BX
-    }
-
-    /// Decode the signed `sBx` field.
-    #[inline(always)]
-    pub fn sbx(self) -> i32 {
-        self.bx() as i32 - MAX_SBX
-    }
-
-    /// Decode the unsigned `Ax` field.
-    #[inline(always)]
-    pub fn ax(self) -> u32 {
-        self.0 >> POS_A
-    }
-
-    /// Decode the signed jump offset `sJ`.
-    #[inline(always)]
-    pub fn sj(self) -> i32 {
-        self.ax() as i32 - MAX_SJ
-    }
-
-    /// Patch the sJ field of a jump (forward-jump backfill).
-    pub fn set_sj(&mut self, sj: i32) {
-        debug_assert!((-MAX_SJ..=MAX_SJ).contains(&sj));
-        self.0 = (self.0 & 0x7F) | (((sj + MAX_SJ) as u32) << POS_A);
-    }
-}
-
-impl std::fmt::Debug for Inst {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:?} a={} b={} c={} k={}",
-            self.op(),
-            self.a(),
-            self.b(),
-            self.c(),
-            self.k()
+    /// A conditional test: the instruction after it is the `Jmp` it may skip.
+    pub fn is_test(self) -> bool {
+        matches!(
+            self,
+            Op::Eq
+                | Op::Lt
+                | Op::Le
+                | Op::EqK
+                | Op::EqI
+                | Op::LtI
+                | Op::LeI
+                | Op::GtI
+                | Op::GeI
+                | Op::Test
+                | Op::TestSet
         )
     }
 }
+
+/// Total number of opcodes defined in [`Op`].
+pub const NUM_OPS: usize = Op::GeI as usize + 1;
+
+mod inst;
+pub use inst::*;
 
 #[cfg(test)]
 mod tests {

@@ -217,3 +217,52 @@ fn call_head_settles_when_recording_it_is_abandoned() {
         "recording did not stop"
     );
 }
+
+// The interpreter's fast loop only hands an instruction to the dispatcher at
+// a pc listed in `Proto::trace_heads`. A loop head reached by falling
+// through from the instruction before it (the first arrival, no back edge
+// yet) must still be entered: with a one-iteration loop, that arrival is
+// the only chance the trace has to run.
+#[test]
+fn a_head_reached_by_falling_through_is_entered() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+    vm.set_jit_enabled(false);
+    let r = run(
+        &mut vm,
+        b"
+        local function f(n)
+            local i = 0
+            while i < n do i = i + 1 end
+            return i
+        end
+        return f
+    ",
+    );
+    let Value::Closure(f) = r[0] else {
+        panic!("{r:?}")
+    };
+    let warm = vm
+        .call_value(Value::Closure(f), &[Value::Int(1000)])
+        .expect("warm");
+    assert!(matches!(warm[0], Value::Int(1000)), "{warm:?}");
+    let heads = f.proto.trace_heads.get();
+    let admissible_heads: Vec<u32> = f
+        .proto
+        .traces
+        .borrow()
+        .iter()
+        .filter(|t| t.dispatchable || t.downrec_link.is_some())
+        .map(|t| t.head_pc)
+        .collect();
+    assert_eq!(admissible_heads.len(), 1, "{admissible_heads:?}");
+    assert_eq!(heads[0], admissible_heads[0]);
+    assert_eq!(heads[1], luna_jit::runtime::function::TRACE_HEADS_NONE);
+    let before = vm.trace_dispatched_count();
+    for _ in 0..100 {
+        let r = vm
+            .call_value(Value::Closure(f), &[Value::Int(1)])
+            .expect("call");
+        assert!(matches!(r[0], Value::Int(1)), "{r:?}");
+    }
+    assert_eq!(vm.trace_dispatched_count() - before, 100);
+}

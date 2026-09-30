@@ -22,31 +22,22 @@ use crate::vm::isa::{Inst, Op};
 use native_call::NativeKind;
 
 mod arith;
+#[cfg(test)]
+mod cont_trap_tests;
+mod fast;
 mod index;
+mod index_fast;
+mod limits;
 pub(crate) mod native_call;
 mod num;
+mod trace_close;
+mod trace_dispatch;
+mod trace_exit;
+mod trace_exit_decode;
+mod trace_record;
+mod trace_start;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
-
-/// `R[A] := R[B] op R[C]`: the Int/Int and Float/Float cases are computed
-/// in the opcode arm (an arm yielding `None` falls through); everything else
-/// goes to `arith_slow`.
-macro_rules! arith_arm {
-    ($vm:ident, $inst:ident, $base:ident, $op:expr,
-     int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
-        let l = $vm.r($base, $inst.b());
-        let r = $vm.r($base, $inst.c());
-        let v: Option<Value> = match (l, r) {
-            (Value::Int($ia), Value::Int($ib)) => $iv,
-            (Value::Float($fa), Value::Float($fb)) => $fv,
-            _ => None,
-        };
-        match v {
-            Some(v) => $vm.set_r($base, $inst.a(), v),
-            None => $vm.arith_slow($inst, $base, $op, l, r)?,
-        }
-    }};
-}
 
 /// A Lua virtual machine: one OS thread's worth of Lua state.
 ///
@@ -300,7 +291,7 @@ pub struct Vm {
     /// pushed by `push_frame`; `close_slots` sets this before calling a
     /// `__close` handler so `debug.traceback` names it "metamethod 'close'"
     /// (PUC `CallInfo.u.l.tm`). Single-shot: `push_frame` consumes it.
-    pending_tm: Option<&'static str>,
+    pending_tm: Option<crate::runtime::function::FrameTm>,
     /// `true` when the next `push_frame` is the user hook function itself,
     /// so `debug.getinfo(1).namewhat` resolves to `"hook"` (PUC
     /// `CIST_HOOKED`). `run_hook` arms it before dispatching the hook.
@@ -783,8 +774,22 @@ impl Drop for Vm {
 // `std::mem::take(&mut self.pending_tm)`).
 //
 // The shadow has no readers yet; it just stays in sync + asserts.
+//
+// `trap` is the dispatch loop's slow-path flag: a continuation frame on top
+// of the stack must be seen by the loop head, which tests nothing else
+// unless `trap` is set. So pushing a continuation sets it (the protected
+// call may finish without a frame of its own), and so does a pop that
+// leaves one on top.
 #[inline(always)]
-fn frames_push_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32, cf: CallFrame) {
+fn frames_push_sync(
+    frames: &mut Vec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+    cf: CallFrame,
+) {
+    if matches!(cf, CallFrame::Cont(_)) {
+        *trap = true;
+    }
     frames.push(cf);
     // Shadow maintenance is debug-only: release builds skip the
     // increment + assertion entirely. While nothing reads the shadow,
@@ -805,8 +810,15 @@ fn frames_push_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32, cf: CallF
 }
 
 #[inline(always)]
-fn frames_pop_sync(frames: &mut Vec<CallFrame>, frames_top: &mut u32) -> Option<CallFrame> {
+fn frames_pop_sync(
+    frames: &mut Vec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+) -> Option<CallFrame> {
     let r = frames.pop();
+    if matches!(frames.last(), Some(CallFrame::Cont(_))) {
+        *trap = true;
+    }
     #[cfg(debug_assertions)]
     {
         if r.is_some() {
@@ -2673,7 +2685,6 @@ impl Vm {
         func: Value,
         args: &[Value],
         action: MetaAction,
-        tm: &'static str,
     ) -> Result<(), LuaError> {
         let saved_top = self.top;
         let cont_slot = self.stack.len() as u32;
@@ -2683,13 +2694,16 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Meta(MetaCont { action, saved_top }),
                 func_slot: cont_slot,
                 nresults: 1,
             }),
         );
-        let saved_tm = self.pending_tm.replace(tm);
+        let saved_tm = self
+            .pending_tm
+            .replace(crate::runtime::function::FrameTm::Meta);
         // begin_call drives a Lua metamethod through the loop (returns true) or
         // runs a native one inline (returns false, leaving results at cont_slot
         // for the loop head to pick up); either way the Meta cont resolves there.
@@ -2704,24 +2718,17 @@ impl Vm {
     /// Apply a comparison opcode's outcome: a known boolean drives the
     /// conditional skip directly; a metamethod is called yieldably, its
     /// truthiness driving the skip on return.
-    fn op_compare(
-        &mut self,
-        step: MmOut,
-        l: Value,
-        r: Value,
-        k: bool,
-        tm: &'static str,
-    ) -> Result<(), LuaError> {
+    fn op_compare(&mut self, step: MmOut, l: Value, r: Value, k: bool) -> Result<(), LuaError> {
         match step {
             MmOut::Done(v) => self.cond_skip(v.truthy(), k),
             MmOut::Mm { func, .. } => {
-                self.begin_meta_call(func, &[l, r], MetaAction::Compare { k, negate: false }, tm)?;
+                self.begin_meta_call(func, &[l, r], MetaAction::Compare { k, negate: false })?;
             }
             MmOut::CompareSynth { func } => {
                 // ≤5.3 `__le` falls back to `not __lt(r, l)`; the swap and
                 // negation are driven through `MetaAction::Compare` so the
                 // metamethod call can yield like any other compare.
-                self.begin_meta_call(func, &[r, l], MetaAction::Compare { k, negate: true }, "lt")?;
+                self.begin_meta_call(func, &[r, l], MetaAction::Compare { k, negate: true })?;
             }
         }
         Ok(())
@@ -3771,7 +3778,7 @@ impl Vm {
         // a Lua frame). The trace can't continue past it; unwind +
         // deopt so interp redoes Op::Concat in the slow path.
         while self.frames.len() > pre_frames {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top);
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
         }
         if result.is_err() || post_frames > pre_frames {
             self.jit.counters.deopt += 1;
@@ -4032,6 +4039,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Lua(Frame {
                 closure: cl,
                 base,
@@ -4228,7 +4236,9 @@ impl Vm {
                 // Bare event name; `frame_name` / `c_frame_name` add the
                 // `"__"` debug prefix for 5.2/5.3, drop it for 5.4+. Matches
                 // the convention used by `__close`, `__index`, …
-                let saved_tm = self.pending_tm.replace("gc");
+                let saved_tm = self
+                    .pending_tm
+                    .replace(crate::runtime::function::FrameTm::Gc);
                 // PUC `GCTM` runs the finalizer with `luaD_pcall` and no
                 // message handler
                 if let Err(e) = self.call_protected(gc, &[obj]) {
@@ -4647,6 +4657,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Lua(Frame {
                 closure: cl,
                 base,
@@ -4732,6 +4743,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Pcall,
                 func_slot,
@@ -4779,6 +4791,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Xpcall { handler },
                 func_slot,
@@ -4835,6 +4848,7 @@ impl Vm {
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
+            &mut self.trap,
             CallFrame::Cont(NativeCont {
                 kind: ContKind::Pairs,
                 func_slot,
@@ -5010,7 +5024,9 @@ impl Vm {
             // restored around the call to cover the path where `mm` is a
             // native (`push_frame` never consumes it) or it raises before
             // reaching push_frame.
-            let saved_tm = self.pending_tm.replace("close");
+            let saved_tm = self
+                .pending_tm
+                .replace(crate::runtime::function::FrameTm::Close);
             // PUC 5.4 `prepclosingmethod` always pushed (obj, errobj) — errobj
             // is nil on a normal close (5.4 locals.lua :875's
             // `func2close(coroutine.yield)` wrap pins `(self, nil)` back
@@ -5127,10 +5143,13 @@ impl Vm {
             self.closing_err = pending;
             // PUC `luaF_close` flags the handler frame as "metamethod 'close'"
             // for traceback / getinfo.
-            let saved_tm = self.pending_tm.replace("close");
+            let saved_tm = self
+                .pending_tm
+                .replace(crate::runtime::function::FrameTm::Close);
             frames_push_sync(
                 &mut self.frames,
                 &mut self.frames_top,
+                &mut self.trap,
                 CallFrame::Cont(NativeCont {
                     kind: ContKind::Close(CloseCont {
                         from,
@@ -5253,7 +5272,8 @@ impl Vm {
             self.hook_tail_return()?;
         }
         let CallFrame::Lua(fr) =
-            frames_pop_sync(&mut self.frames, &mut self.frames_top).expect("no frame")
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
+                .expect("no frame")
         else {
             unreachable!("returning from a non-Lua frame")
         };
@@ -5273,10 +5293,10 @@ impl Vm {
 
     /// Return0 / Return1 without the close and hook machinery (PUC
     /// `OP_RETURN0` / `OP_RETURN1`): when no return hook can fire, nothing
-    /// in this frame needs closing and the caller is a Lua frame inside this
-    /// activation, the return is the pop, the result copy and
-    /// `finish_results` that `complete_return` would do. Returns `false`,
-    /// having done nothing, otherwise.
+    /// in this frame needs closing and the caller is a Lua frame or a
+    /// metamethod's continuation inside this activation, the return is the
+    /// pop, the result copy and the result count that `complete_return`
+    /// would do. Returns `false`, having done nothing, otherwise.
     #[inline]
     fn return_to_lua(&mut self, base: u32, abs_a: u32, nret: u32, entry_depth: usize) -> bool {
         let n = self.frames.len();
@@ -5285,18 +5305,27 @@ impl Vm {
             || self.tbc.last().is_some_and(|&s| s >= base)
             || n <= entry_depth
             || n < 2
-            || !matches!(self.frames[n - 2], CallFrame::Lua(_))
         {
             return false;
         }
-        let Some(CallFrame::Lua(fr)) = frames_pop_sync(&mut self.frames, &mut self.frames_top)
+        let to_meta = match &self.frames[n - 2] {
+            CallFrame::Lua(_) => false,
+            CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => true,
+            CallFrame::Cont(_) => return false,
+        };
+        let Some(CallFrame::Lua(fr)) =
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
         else {
             unreachable!("returning from a non-Lua frame")
         };
         for i in 0..nret {
             self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
         }
-        self.finish_results(fr.func_slot, nret, fr.nresults);
+        if to_meta {
+            self.top = fr.func_slot + nret;
+        } else {
+            self.finish_results(fr.func_slot, nret, fr.nresults);
+        }
         true
     }
 
@@ -5459,6 +5488,21 @@ impl Vm {
                 }
             }
             Op::Unm | Op::BNot => cands.push(instr.b()),
+            // arithmetic on a constant or an immediate: the register operand
+            Op::AddI
+            | Op::SubI
+            | Op::AddK
+            | Op::SubK
+            | Op::MulK
+            | Op::ModK
+            | Op::PowK
+            | Op::DivK
+            | Op::IDivK
+            | Op::BAndK
+            | Op::BOrK
+            | Op::BXorK
+            | Op::ShrI
+            | Op::ShlI => cands.push(instr.b()),
             // indexing an upvalue table (`_ENV` for a global): PUC
             // `getupvalname` finds the value among the closure's upvalues
             Op::GetTabUp | Op::SetTabUp => {
@@ -5487,7 +5531,7 @@ impl Vm {
         // a register first and do name it.
         let rk_operands = self.version <= LuaVersion::Lua53
             && matches!(
-                instr.op(),
+                instr.source_op(),
                 Op::Add
                     | Op::Sub
                     | Op::Mul
@@ -5594,7 +5638,8 @@ impl Vm {
         }
         let instr = p.code[pc - 1];
         let mut regs = vec![instr.b()];
-        if !instr.k() {
+        // C of a constant- or immediate-operand opcode is not a register
+        if !instr.k() && instr.arith_const_op().is_none() {
             regs.push(instr.c());
         }
         let no_int = |n: Option<Num>| matches!(n, Some(Num::Float(x)) if crate::runtime::value::f2i_exact(x).is_none());
@@ -5766,7 +5811,7 @@ impl Vm {
             })
         {
             while self.frames.len() >= entry_depth {
-                frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             }
             return Unwound::Propagated(LuaError(err));
         }
@@ -5780,7 +5825,7 @@ impl Vm {
                     func_slot,
                     ..
                 }) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.stack.truncate(func_slot as usize);
                     self.top = mc.saved_top.min(func_slot);
                     self.tbc.retain(|&s| s < func_slot);
@@ -5792,7 +5837,7 @@ impl Vm {
                     func_slot,
                     ..
                 }) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -5813,7 +5858,7 @@ impl Vm {
                     func_slot,
                     ..
                 }) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.stack.truncate(func_slot as usize);
                     self.top = func_slot;
                     self.tbc.retain(|&s| s < func_slot);
@@ -5835,7 +5880,7 @@ impl Vm {
                     }
                 }
                 CallFrame::Cont(nc) => {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     self.pcall_depth -= 1;
                     let result = match nc.kind {
                         ContKind::Pcall => {
@@ -5954,7 +5999,7 @@ impl Vm {
                     // return `Caught` so `exec_with` re-enters the run loop;
                     // a synchronous drain returns Err exactly as the old
                     // path did.
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                    frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     let after = AfterClose::ResumeUnwind {
                         func_slot: f.func_slot,
                         err,
@@ -5981,7 +6026,8 @@ impl Vm {
 
     /// The loop head's slow path, taken while [`Vm::trap`] is set: tick the
     /// instruction budget, enforce the memory cap, then clear `trap` unless
-    /// one of them or an armed hook still needs the next instruction.
+    /// one of them, an armed hook or a continuation frame on top still needs
+    /// the next pass through the loop head.
     #[inline]
     fn trap_step(&mut self) -> Result<(), LuaError> {
         if let Some(b) = self.instr_budget.as_mut() {
@@ -5995,80 +6041,10 @@ impl Vm {
         {
             self.mem_cap_exceeded(cap)?;
         }
-        self.trap = self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed();
-        Ok(())
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn instr_budget_exhausted(&mut self) -> LuaError {
-        self.instr_budget = None;
-        // Async-mode cooperative
-        // yield. Set a sentinel flag so `exec_with`
-        // propagates the Err without `unwind` running
-        // (mirroring the `yielding.is_some()` path),
-        // and `call_value_impl` preserves the call
-        // frames for the next `poll`. Translation back
-        // to `DispatchOutcome::BudgetExhausted` happens
-        // in `drive_one`. The Err value itself is
-        // `Value::Nil` — a pure sentinel, never seen by
-        // user code.
-        if self.async_mode {
-            self.host_yield_pending = true;
-            return LuaError(Value::Nil);
-        }
-        // Classify the trip so embedders can
-        // distinguish budget exhaustion from a
-        // generic Runtime error and retry / give up
-        // accordingly.
-        self.last_error_kind = crate::vm::error::LuaErrorKind::InstrBudget;
-        let s = Value::Str(self.heap.intern(b"instruction budget exceeded"));
-        LuaError(s)
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn mem_cap_exceeded(&mut self, cap: usize) -> Result<(), LuaError> {
-        // First try a full collect — embedders set tight caps
-        // and the overshoot may be reclaimable (closures kept
-        // by short-lived frames, intermediate strings). Only
-        // disarm + raise if the cap is still breached after
-        // collection. PUC's `LUA_GCEMERGENCY` path matches.
-        //
-        // Root up to the deepest Lua frame's
-        // `base + max_stack` window rather than the entire
-        // `self.stack.len()`
-        // (covers register operands the current opcode
-        // might reference). The cap fires during table
-        // mutation in a tight `a[i] = i` loop where `a`
-        // lives at a frame-register slot past `self.top`
-        // (OP_NEWINDEX doesn't advance top); the deepest
-        // frame's max_stack window provably covers it
-        // since `a` is a register of the executing proto.
-        //
-        // Still over-roots caller frames' dead regs
-        // (slots between caller.base and the callee
-        // func_slot are live; slots past callee
-        // func_slot in caller's frame are dead until
-        // caller resumes). For fire-once cap path this
-        // residual over-root is acceptable; there is no
-        // full per-frame walk because a strong/weak pass
-        // split is semantically impossible — the weak pass
-        // depends on strong-pass marks.
-        let cap_root_top = self
-            .frames
-            .iter()
-            .rev()
-            .find_map(CallFrame::lua)
-            .map(|f| f.base + f.closure.proto.max_stack as u32)
-            .unwrap_or(self.top);
-        self.gc_top = cap_root_top.max(self.top);
-        self.collect_garbage();
-        if self.heap.bytes() > cap {
-            self.heap.mem_cap = None;
-            let s = Value::Str(self.heap.intern(b"memory cap exceeded"));
-            return Err(LuaError(s));
-        }
+        self.trap = self.instr_budget.is_some()
+            || self.heap.mem_cap.is_some()
+            || self.hook_armed()
+            || matches!(self.frames.last(), Some(CallFrame::Cont(_)));
         Ok(())
     }
 
@@ -6078,96 +6054,163 @@ impl Vm {
         !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some())
     }
 
+    /// Count and line hooks (PUC `traceexec`), fired before the instruction
+    /// at `pc` of `cl` runs; `oldpc` is where the frame's line hook last looked.
+    #[inline(never)]
+    fn exec_hooks(&mut self, cl: Gc<LuaClosure>, pc: u32, oldpc: u32) -> Result<(), LuaError> {
+        let lines = &cl.proto.lines;
+        let cur_line = if lines.is_empty() {
+            None
+        } else {
+            Some(lines[(pc as usize).min(lines.len() - 1)] as i64)
+        };
+        // count hook: fire every `count_base` instructions
+        if self.hook.count {
+            self.hook.count_left -= 1;
+            if self.hook.count_left <= 0 {
+                self.hook.count_left = self.hook.count_base;
+                // hooked function is the running Lua frame: its frame
+                // is on the stack, so no synthetic C level is needed.
+                self.run_hook(b"count", cur_line, false)?;
+            }
+        }
+        // line hook: fire on a fresh frame, a backward jump (loop), or a
+        // change of source line.
+        if self.hook.line {
+            if lines.is_empty() {
+                // PUC: a stripped chunk has no line info, so
+                // `getfuncline` returns -1. The line hook still fires
+                // on the first instruction of the new frame (where
+                // `npci <= oldpc` holds at oldpc=0), with the line
+                // pushed as `nil` instead of an integer (db.lua :1030
+                // "hook called without debug info for 1st instruction").
+                if oldpc == u32::MAX {
+                    self.run_hook(b"line", None, false)?;
+                    self.top_frame_mut().hook_oldpc = pc;
+                }
+            } else {
+                let newline = lines[(pc as usize).min(lines.len() - 1)];
+                // PUC `traceexec`: fire on frame entry (`oldpc == MAX`),
+                // on a backward jump (`pc < oldpc` — strict; an equal pc
+                // would re-fire the install-site after `oldpc = pc`),
+                // or when the source line changes.
+                let fire = oldpc == u32::MAX
+                    || pc < oldpc
+                    || newline != lines[(oldpc as usize).min(lines.len() - 1)];
+                if fire {
+                    self.run_hook(b"line", Some(newline as i64), false)?;
+                }
+                self.top_frame_mut().hook_oldpc = pc;
+            }
+        }
+        Ok(())
+    }
+
+    /// A continuation frame is on top: the call it protected has delivered
+    /// its results (or a `__close` handler / yieldable metamethod finished).
+    /// `Some` hands results out of this activation.
+    #[inline(never)]
+    fn finish_cont(
+        &mut self,
+        nc: NativeCont,
+        entry_depth: usize,
+    ) -> Result<Option<Vec<Value>>, LuaError> {
+        // a yieldable metamethod returned: complete the interrupted
+        // instruction (PUC luaV_finishOp) and resume the running frame.
+        if let ContKind::Meta(mc) = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            let result = if self.top > nc.func_slot {
+                self.stack[nc.func_slot as usize]
+            } else {
+                Value::Nil
+            };
+            self.stack.truncate(nc.func_slot as usize);
+            self.top = mc.saved_top;
+            self.finish_meta(mc.action, result)?;
+            return Ok(None);
+        }
+        // a __close handler returned successfully: discard its
+        // results, restore `top` to the slot the handler was called
+        // at (the surrounding frame's register window above this slot
+        // must stay alloc'd — never truncate the underlying stack),
+        // then continue the close chain (next slot, or fire
+        // AfterClose). When the close ends an entry activation,
+        // drive_close hands the results up to exec_with directly.
+        if let ContKind::Close(cc) = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            self.top = nc.func_slot;
+            if let Some(vals) = self.drive_close(cc.from, cc.pending, cc.after, entry_depth)? {
+                return Ok(Some(vals));
+            }
+            return Ok(None);
+        }
+        // __pairs returned: normalize its results to exactly the
+        // dialect's count (iterator, state, control, and on 5.5 the
+        // closing value) at pairs's slot, where the metamethod was
+        // called, and hand them to pairs's caller.
+        if let ContKind::Pairs = nc.kind {
+            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            let total = crate::vm::builtins::pairs_mm_results(self) as u32;
+            let need = (nc.func_slot + total) as usize;
+            if self.stack.len() < need {
+                self.stack.resize(need, Value::Nil);
+            }
+            // the metamethod ran one slot above pairs's own
+            let first = nc.func_slot + 1;
+            let n = (self.top - first).min(total);
+            for i in 0..n {
+                self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
+            }
+            for s in (nc.func_slot + n)..(nc.func_slot + total) {
+                self.stack[s as usize] = Value::Nil;
+            }
+            self.top = nc.func_slot + total;
+            if self.frames.len() < entry_depth {
+                return Ok(Some(self.take_results(nc.func_slot)));
+            }
+            self.finish_results(nc.func_slot, total, nc.nresults);
+            return Ok(None);
+        }
+        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        self.pcall_depth -= 1;
+        // f's results sit at nc.func_slot+1.. (f was called one slot
+        // above the continuation), so writing `true` at the slot makes
+        // `true, results…` already contiguous.
+        let nret = self.top - (nc.func_slot + 1);
+        self.stack[nc.func_slot as usize] = Value::Bool(true);
+        let total = 1 + nret;
+        self.top = nc.func_slot + total;
+        if self.frames.len() < entry_depth {
+            return Ok(Some(self.take_results(nc.func_slot)));
+        }
+        self.finish_results(nc.func_slot, total, nc.nresults);
+        Ok(None)
+    }
+
     fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
         // the host may have set a budget, a cap or a hook since the last run
         self.trap = true;
+        let pre53 = self.version() <= LuaVersion::Lua53;
         loop {
             if self.trap {
                 self.trap_step()?;
             }
-            // Single combined frame fetch: continuation arm OR Lua arm. Saves
-            // a second `self.frames.last()` slice access vs the prior split
-            // form (LLVM doesn't always CSE these across the cont branch).
             // A continuation frame on top means the call it protected just
-            // delivered its results — wrap as `true, results…` and hand to
-            // the pcall/xpcall caller. The error path is handled by `unwind`;
-            // this branch is only reached on success/resume completion.
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            let frame_peek = unsafe { self.frames.last().unwrap_unchecked() };
-            if let &CallFrame::Cont(nc) = frame_peek {
-                // a yieldable metamethod returned: complete the interrupted
-                // instruction (PUC luaV_finishOp) and resume the running frame.
-                if let ContKind::Meta(mc) = nc.kind {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let result = if self.top > nc.func_slot {
-                        self.stack[nc.func_slot as usize]
-                    } else {
-                        Value::Nil
-                    };
-                    self.stack.truncate(nc.func_slot as usize);
-                    self.top = mc.saved_top;
-                    self.finish_meta(mc.action, result)?;
-                    continue;
+            // delivered its results. Pushing a continuation, or popping down
+            // to one, sets `trap` (`frames_push_sync` / `frames_pop_sync`), so
+            // the loop head looks for one only under `trap`.
+            if self.trap
+                && let Some(&CallFrame::Cont(nc)) = self.frames.last()
+            {
+                if let Some(vals) = self.finish_cont(nc, entry_depth)? {
+                    return Ok(vals);
                 }
-                // a __close handler returned successfully: discard its
-                // results, restore `top` to the slot the handler was called
-                // at (the surrounding frame's register window above this slot
-                // must stay alloc'd — never truncate the underlying stack),
-                // then continue the close chain (next slot, or fire
-                // AfterClose). When the close ends an entry activation,
-                // drive_close hands the results up to exec_with directly.
-                if let ContKind::Close(cc) = nc.kind {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    self.top = nc.func_slot;
-                    if let Some(vals) =
-                        self.drive_close(cc.from, cc.pending, cc.after, entry_depth)?
-                    {
-                        return Ok(vals);
-                    }
-                    continue;
-                }
-                // __pairs returned: normalize its results to exactly the
-                // dialect's count (iterator, state, control, and on 5.5 the
-                // closing value) at pairs's slot, where the metamethod was
-                // called, and hand them to pairs's caller.
-                if let ContKind::Pairs = nc.kind {
-                    frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                    let total = crate::vm::builtins::pairs_mm_results(self) as u32;
-                    let need = (nc.func_slot + total) as usize;
-                    if self.stack.len() < need {
-                        self.stack.resize(need, Value::Nil);
-                    }
-                    // the metamethod ran one slot above pairs's own
-                    let first = nc.func_slot + 1;
-                    let n = (self.top - first).min(total);
-                    for i in 0..n {
-                        self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
-                    }
-                    for s in (nc.func_slot + n)..(nc.func_slot + total) {
-                        self.stack[s as usize] = Value::Nil;
-                    }
-                    self.top = nc.func_slot + total;
-                    if self.frames.len() < entry_depth {
-                        return Ok(self.take_results(nc.func_slot));
-                    }
-                    self.finish_results(nc.func_slot, total, nc.nresults);
-                    continue;
-                }
-                frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                self.pcall_depth -= 1;
-                // f's results sit at nc.func_slot+1.. (f was called one slot
-                // above the continuation), so writing `true` at the slot makes
-                // `true, results…` already contiguous.
-                let nret = self.top - (nc.func_slot + 1);
-                self.stack[nc.func_slot as usize] = Value::Bool(true);
-                let total = 1 + nret;
-                self.top = nc.func_slot + total;
-                if self.frames.len() < entry_depth {
-                    return Ok(self.take_results(nc.func_slot));
-                }
-                self.finish_results(nc.func_slot, total, nc.nresults);
                 continue;
             }
+            debug_assert!(
+                matches!(self.frames.last(), Some(CallFrame::Lua(_))),
+                "a continuation frame on top with `trap` clear"
+            );
             // GC runs only at the allocation safe points below (PUC's
             // `luaC_checkGC` sites), each with a precise `gc_top`; the loop head
             // no longer collects, so a stale full-window `gc_top` cannot leak in.
@@ -6175,9 +6218,12 @@ impl Vm {
             // Hot-path frame fetch: the Cont arm above continues the loop,
             // so reaching here means `frame_peek` is the Lua frame. Reuse it
             // rather than re-fetching `self.frames.last()`.
-            let f = match frame_peek {
+            // SAFETY: the running thread always has a frame here, and it is a
+            // Lua frame: a continuation on top was consumed above
+            let f = match unsafe { self.frames.last().unwrap_unchecked() } {
                 CallFrame::Lua(f) => f,
-                _ => unreachable!("Cont frame survived the dispatch loop head"),
+                // SAFETY: see above
+                CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
             };
             let cl = f.closure;
             let base = f.base;
@@ -6205,839 +6251,7 @@ impl Vm {
             // instruction makes
             let trace_on = self.jit.trace_enabled;
             if trace_on && self.jit.active_trace.is_some() {
-                // Depth tracking. The trace head's frame is
-                // at index `recording_frame_base`; every Op::Call that
-                // pushes a new frame bumps the live depth, every
-                // Op::Return that pops one decrements it.
-                //
-                // **Three clean-close conditions**:
-                // - `at_head`: cur_depth == 0 AND about-to-execute the
-                //   trace's head_pc on its head_proto (loop closed back
-                //   to start). Same for loop-triggered and call-triggered
-                //   traces, so a call-triggered trace does not close on
-                //   the first re-entry (that would leave fib's body at 7
-                //   depth=0 ops); it inlines up to MAX_INLINE_DEPTH
-                //   levels before any close.
-                // - `returned_past_head`: trace head's frame is gone
-                //   (callee returned past it, or the call-trigger
-                //   started a recording inside a callee that has now
-                //   returned). Whatever ops were recorded form the
-                //   trace body; the lowerer treats the partial trace
-                //   the same as InlineAbort.
-                // - `depth_cap_hit`: cur_depth > MAX_INLINE_DEPTH.
-                //   Recording any deeper would just bloat the IR; close
-                //   with the body we have. Lowerer's existing length
-                //   gate + InlineAbort path handles short bodies.
-                let returned_past_head = self.frames.len() <= self.jit.recording_frame_base;
-                let cur_depth = if returned_past_head {
-                    0
-                } else {
-                    self.frames.len() - 1 - self.jit.recording_frame_base
-                };
-                let depth_cap_hit = cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
-                let rec = self.jit.active_trace.as_mut().expect("just checked Some");
-                let at_head_loop = cur_depth == 0
-                    && !rec.ops.is_empty()
-                    && !returned_past_head
-                    && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
-                    && pc == rec.head_pc;
-                // Self-link cycle catch (mirrors LuaJIT's
-                // `check_call_unroll` at `lj_record.c:1869`). Trips when:
-                //   1. We're about to execute the head_pc on head_proto
-                //      at depth > 0 (we're re-entering the trace head
-                //      from inside an inlined recursion level — UpRec).
-                //   2. The count of ancestor frames in the recording
-                //      window that share `head_proto` exceeds
-                //      [`RECUNROLL_THRESHOLD`] (default 2).
-                // For fib(N): head_pc=0, head_proto=fib. After 2 inline
-                // recursion levels are captured, the recorder enters
-                // the 3rd nested fib frame, sees cur_depth=3 > 2, and
-                // trips this catch — closing with `SelfRecKind::UpRec`.
-                // The lowerer's `TraceEnd::SelfLink` tail emits the
-                // bump-base + branch-to-self loop body.
-                //
-                // TailRec vs UpRec: LJ distinguishes via
-                // `framedepth + retdepth == 0`. luna doesn't track
-                // retdepth separately; cur_depth == 0 with a non-empty
-                // call chain in tail position is rare (would require
-                // explicit Lua TCO). We use cur_depth > 0 as the UpRec
-                // condition (fib's case); cur_depth == 0 with positive
-                // ancestor count would route to TailRec, but luna's
-                // recorder doesn't currently produce that shape because
-                // tail-call elision pops the caller frame and we'd
-                // hit `at_head_loop` instead.
-                let self_link_trip: Option<crate::jit::trace::SelfRecKind> = {
-                    if self.jit.self_link_enabled
-                        && !returned_past_head
-                        && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
-                        && pc == rec.head_pc
-                        && cur_depth > 0
-                    {
-                        // Count ancestor frames sharing head_proto.
-                        // self.frames[recording_frame_base..] currently
-                        // includes the just-pushed frame at the top
-                        // (the one about to execute head_pc). Ancestors
-                        // = the slice excluding the top frame.
-                        let head_proto_ptr = rec.head_proto.as_ptr();
-                        let last_idx = self.frames.len() - 1;
-                        let mut count = 0usize;
-                        for i in self.jit.recording_frame_base..last_idx {
-                            if let CallFrame::Lua(f) = &self.frames[i]
-                                && std::ptr::eq(f.closure.proto.as_ptr(), head_proto_ptr)
-                            {
-                                count += 1;
-                            }
-                        }
-                        if count > crate::jit::trace::RECUNROLL_THRESHOLD {
-                            // cur_depth > 0 → UpRec (fib pattern).
-                            // cur_depth == 0 wouldn't reach this arm.
-                            Some(crate::jit::trace::SelfRecKind::UpRec)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                };
-                if let Some(kind) = self_link_trip {
-                    // SelfLink relax for self-recursive patterns at frame
-                    // depth >= 2.
-                    //
-                    // Stamping `self_link_kind` unconditionally at the
-                    // head_pc re-entry would never dispatch: the
-                    // `downrec_close` marker can only fire from the
-                    // depth>0 Op::Return path (`rec.retfs` chain),
-                    // which never reaches the recorder for fib(28)-like
-                    // shapes that hit the SelfLink cycle catch BEFORE
-                    // any base-case Return — leaving `downrec_close`
-                    // None and routing the trace through the safe
-                    // `dispatchable=false` `"self-link-retf-r1"` path.
-                    //
-                    // So when the SelfLink trip fires AND
-                    // `cur_depth >= 2` (the count > RECUNROLL_THRESHOLD
-                    // gate already requires this — kept explicit as a
-                    // safety floor), route the close through `downrec_
-                    // close` INSTEAD of `self_link_kind`. The recorder
-                    // synthesises the close marker from the most
-                    // recent Op::Call at depth `cur_depth - 1`:
-                    //   - `return_pc` = `call.pc + 1` (caller's resume
-                    //     PC after the recursive call returns; mirror
-                    //     of the `caller_pc` derivation at the
-                    //     depth>0 Op::Return capture path below).
-                    //   - `target_proto` = `call.proto` (caller's
-                    //     proto; equals `rec.head_proto` for self-
-                    //     recursion).
-                    //   - `depth_delta` = `1` (the recorder always
-                    //     unrolls one level; the Op::Return path uses
-                    //     the same constant).
-                    //
-                    // The lowerer's `end_idx` picker routes through
-                    // `TraceEnd::DownRec` ahead of the `self_link_kind`
-                    // arm and emits the stitch-sentinel +
-                    // caller-pc-guard scaffold. A single-candidate guard
-                    // chain (this path produces 1 caller_pc candidate
-                    // because `rec.retfs` is empty) keeps
-                    // `dispatchable=false` + `"downrec-stitch-pending"`
-                    // label (the lowerer requires
-                    // `multi_way_candidate_count >= 2`). Net behaviour:
-                    // trace compiles under DownRec routing; interp runs
-                    // the recursion naturally.
-                    //
-                    // The `cur_depth >= 2` gate is automatically
-                    // satisfied by the count > RECUNROLL_THRESHOLD=2
-                    // trip condition (3 ancestor frames sharing
-                    // head_proto implies cur_depth >= 3), kept
-                    // explicit so a future RECUNROLL_THRESHOLD tweak
-                    // doesn't silently flip shallow-recursion
-                    // shapes (cur_depth == 1) onto the DownRec arm.
-                    //
-                    // The recorded body still uses depth-baked
-                    // op_offsets[] addressing, so this is routing
-                    // scaffolding and gives no speedup by itself.
-                    let _ = kind;
-                    let relaxed_to_downrec = cur_depth >= 2 && rec.downrec_close.is_none() && {
-                        let caller_depth_u8 = (cur_depth - 1) as u8;
-                        if let Some(call_op) = rec.ops.iter().rev().find(|r| {
-                            r.inline_depth == caller_depth_u8
-                                && matches!(r.inst.op(), crate::vm::isa::Op::Call)
-                        }) {
-                            rec.downrec_close = Some(crate::jit::trace::DownRecClose {
-                                return_pc: call_op.pc + 1,
-                                target_proto: call_op.proto,
-                                depth_delta: 1,
-                            });
-                            true
-                        } else {
-                            false
-                        }
-                    };
-                    if relaxed_to_downrec {
-                        // Close-cause taxonomy: tag the lift so
-                        // probes can tally the fire rate. Mirrors
-                        // the `"downrec-restart"` bump for the
-                        // depth>0 Op::Return path (different trip
-                        // origin, same downstream routing). The
-                        // existing `"self-link-retf-r1"` label still
-                        // fires for trips that DON'T relax (no
-                        // candidate Op::Call ancestor in rec.ops, or
-                        // cur_depth < 2) via the lowerer's
-                        // dispatch_off_reason mirror at the close
-                        // handler — kept as a regression safety net.
-                        self.jit
-                            .counters
-                            .bump_close_cause("selflink-yields-to-downrec");
-                    } else {
-                        rec.self_link_kind = Some(kind);
-                    }
-                }
-                let should_close =
-                    at_head_loop || returned_past_head || depth_cap_hit || self_link_trip.is_some();
-                if should_close {
-                    // Long-trace bias: a call-triggered
-                    // recording that closed with a very short body
-                    // (fib base case: `Lt`/`Jmp`/`Return1` = 3 ops,
-                    // binary_trees `make(0)`: 4 ops) is pathological.
-                    // Compiling + caching it pins `Proto.traces` to a
-                    // trace that the length gate will refuse to
-                    // dispatch (per `MIN_DISPATCHABLE_TRUNC_BODY_FLOOR
-                    // = 40`), AND blocks the back-edge / longer-call
-                    // path from re-recording the same head_pc (the
-                    // dedup `already_cached` check below short-
-                    // circuits). The fix: discard the short call-
-                    // triggered recording WITHOUT caching, and bias
-                    // the proto's `call_hot_count` back to
-                    // `THRESHOLD - HOT_RETRY_WINDOW` so the next
-                    // sequence of calls retries the trigger at a
-                    // different (hopefully deeper) recursion point.
-                    //
-                    // Back-edge triggered traces are exempt — a
-                    // tight numeric-for loop's body is legitimately
-                    // 3 ops (`Add`, ForLoop) and DOES dispatch
-                    // usefully when re-entered many times.
-                    // Coverage heuristic to detect
-                    // pathologically partial call-triggered traces:
-                    // for self-recursive / branchy protos like
-                    // `fib` (~17 bytecode ops) or
-                    // `binary_trees.make` (~26 ops), the recorder
-                    // can fire at a BASE-case entry (`fib(0)` or
-                    // `make(0)`) producing a 3–4 op trace that
-                    // covers a tiny fraction of the proto's code.
-                    // That trace is doomed by the length gate
-                    // post-compile AND blocks any longer follow-up
-                    // (the dedup `already_cached` check below). The
-                    // fix: discard call-triggered closes where
-                    // `rec.ops.len() * 2 < head_proto.code.len()`
-                    // (less than half the proto's bytecode), so the
-                    // back-edge / longer call path can take over.
-                    //
-                    // Why coverage > raw length:protos with
-                    // intrinsically short bodies (closure
-                    // factories: `Closure + Return1` = 2 ops,
-                    // simple wrappers: `LoadI + Return1` = 2 ops)
-                    // record 100% coverage even at length 2 — those
-                    // ARE legitimately short and the closure /
-                    // sunk-emit lowering paths make
-                    // them worth compiling. The heuristic admits
-                    // them. fib's `[Lt, Jmp, Return1]` (3 of ~17)
-                    // and make's `[Lt, Jmp, LoadI, Return1]` (4 of
-                    // ~26) get discarded.
-                    //
-                    // Back-edge triggered traces are unaffected —
-                    // a tight numeric-for body legitimately covers
-                    // 3 of ~3 proto ops it can dispatch from
-                    // (`Add + ForLoop`) and the recorder fires on
-                    // the back-edge, not call entry.
-                    //
-                    // `call_hot_count` is intentionally NOT reset
-                    // (an earlier draft tried `THRESHOLD - 32` but
-                    // caused active_trace contention with the
-                    // outer back-edge trigger — see
-                    // setlist_b_zero_with_call_c_zero_sunk_emits).
-                    // We give up on dispatching the pathological
-                    // shape on the same proto; the back-edge or a
-                    // longer call path on a deeper recursion point
-                    // can still record + cache a real trace.
-                    let proto_code_len = rec.head_proto.code.len();
-                    let is_partial_coverage = rec.ops.len() * 2 < proto_code_len;
-                    // Per-Proto discard cap. The relaxed
-                    // trigger condition (`c >= THRESHOLD &&
-                    // !already_cached`) means a Proto whose every
-                    // recording is partial-coverage will re-fire the
-                    // trigger every call indefinitely (1500+ in
-                    // `binary_trees`-pattern test). The cap stops
-                    // discarding after `MAX_DISCARDS_PER_PROTO` —
-                    // the next close falls through to compile (even
-                    // if partial), caches the trace, and the
-                    // `already_cached` short-circuit kills the
-                    // storm. Dispatch may still be refused
-                    // post-compile (length gate), but the recorder
-                    // stops churning.
-                    const MAX_DISCARDS_PER_PROTO: u32 = 5;
-                    let prior_discards = rec.head_proto.trace_discard_count.get();
-                    let cap_reached = prior_discards >= MAX_DISCARDS_PER_PROTO;
-                    // Flip the `gave_up` flag the
-                    // moment cap is reached (BEFORE the close-
-                    // dispatching branch below). The trigger gates
-                    // short-circuit on this flag, skipping the
-                    // RefCell + linear `already_cached` scan on
-                    // every subsequent call to this Proto. Useful
-                    // for `binary_trees_pattern`-class loads where
-                    // a single Proto sees ~20k calls post-cap.
-                    if cap_reached
-                        && rec.is_call_triggered
-                        && is_partial_coverage
-                        && !rec.head_proto.trace_gave_up.get()
-                    {
-                        rec.head_proto.trace_gave_up.set(true);
-                    }
-                    if rec.is_call_triggered && is_partial_coverage && !cap_reached {
-                        // Tally as closed (for visibility) but DROP
-                        // without compile/cache. Use the existing
-                        // closed-lens accumulator so probes can
-                        // observe the discarded shape.
-                        // Bump discard count BEFORE
-                        // dropping the recording so the next
-                        // close sees the updated counter.
-                        rec.head_proto.trace_discard_count.set(prior_discards + 1);
-                        self.jit.counters.closed += 1;
-                        self.jit
-                            .counters
-                            .closed_lens
-                            .push((rec.is_call_triggered, rec.ops.len()));
-                        // Partial-coverage discard close path.
-                        // `closed` + `closed_lens` alone can't separate
-                        // a real successful close from a discard tally,
-                        // so tag explicitly to keep the recorder-side
-                        // close-cause taxonomy single-source.
-                        self.jit
-                            .counters
-                            .bump_close_cause("partial-coverage-discard");
-                        self.jit.active_trace = None;
-                        // Continue with interp loop — don't
-                        // fall through to compile path.
-                        // The op at `pc` hasn't dispatched yet;
-                        // the outer loop iteration handles it.
-                    } else {
-                        rec.closed = true;
-                        // Detach the closed record, then try
-                        // to compile it. Dedup by `head_pc`: a Proto
-                        // already carrying a CompiledTrace for this PC
-                        // skips recompile (the hot counter caps
-                        // re-recording at `u32::MAX / 2` anyway, but
-                        // explicit dedup keeps `Proto.traces` short
-                        // for the dispatcher's linear scan).
-                        //
-                        // On failure we just bump the failed counter
-                        // and drop the record.
-                        let head_pc_val = rec.head_pc;
-                        let closed_record = self
-                            .jit
-                            .active_trace
-                            .take()
-                            .expect("active_trace was Some this branch");
-                        self.jit.counters.closed += 1;
-                        self.jit
-                            .counters
-                            .closed_lens
-                            .push((closed_record.is_call_triggered, closed_record.ops.len()));
-                        // Cache the trace on the
-                        // recorder's *head proto*, not the current
-                        // closure's proto. For non-recursive
-                        // call-triggered traces, close fires after
-                        // `Return1` pops the callee frame — `cl` at
-                        // that point is the CALLER's closure, while
-                        // `closed_record.head_proto` is the CALLEE's
-                        // proto (the one we actually want the trace
-                        // to be discoverable from on the next call).
-                        // Self-recursive fib closed via depth-cap
-                        // mid-recursion, so `cl.proto == head_proto`
-                        // there, but only by coincidence.
-                        let head_proto = closed_record.head_proto;
-                        let already_cached = head_proto
-                            .traces
-                            .borrow()
-                            .iter()
-                            .any(|t| t.head_pc == head_pc_val);
-                        if !already_cached {
-                            // Internal-loop = true: the trace runs in
-                            // a native loop until a cmp side-exits, so
-                            // the dispatcher's per-entry marshal cost
-                            // amortizes across the whole run of
-                            // iterations the loop's recorded direction
-                            // stays valid. The lowerer auto-downgrades
-                            // to one-shot for cmp-less or Call-truncating
-                            // traces.
-                            // Side traces MUST NOT
-                            // internal-loop. The parent's recorded prefix
-                            // (ops at PCs < side trace's head_pc) defines
-                            // values for registers the child's body reads
-                            // without re-writing each iter — e.g. for
-                            // s12_step_b, parent's `pc=19 Add R[12] = R[1]
-                            // + R[11]` sets R[12], and the child trace
-                            // (head_pc=24) re-runs `pc=20 Move R[1] =
-                            // R[12]` each iter via its outer ForLoop
-                            // internal-loop, ALWAYS reading the stale
-                            // entry-time R[12]. The parent's Add never
-                            // re-runs during child's loop, so R[1] gets
-                            // pinned to one stale value. Force one-shot
-                            // for side traces: each parent-exit round-
-                            // trips through dispatcher → parent's Add
-                            // runs → side trace runs ONE iter → return.
-                            let opts = crate::jit::trace::CompileOptions {
-                                internal_loop: closed_record.side_trace_parent.is_none(),
-                                pre53: self.version() <= LuaVersion::Lua53,
-                                aot: false,
-                            };
-                            // Route through trace_compiler; split-borrow JitState
-                            // so the trait method can take `&mut dyn JitStorage`.
-                            let result = {
-                                let jit = &mut self.jit;
-                                jit.storage.claim(self.jit_owner_id);
-                                let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
-                                jit.trace_compiler
-                                    .try_compile_trace(storage, &closed_record, opts)
-                            };
-                            match result {
-                                Some(mut ct) => {
-                                    // Tally Sinkable sites
-                                    // + actually-sunk-emit sites + materialise
-                                    // emit sites before moving `ct` into
-                                    // Proto.traces.
-                                    self.jit.counters.sinkable_seen +=
-                                        ct.sinkable_sites_seen as u64;
-                                    self.jit.counters.accum_bufferable_seen +=
-                                        ct.accum_bufferable_seen as u64;
-                                    self.jit.counters.sunk_alloc += ct.sunk_alloc_seen as u64;
-                                    self.jit.counters.materialize_emit +=
-                                        ct.materialize_emit_count as u64;
-                                    self.jit.counters.closure_emit += ct.closure_seen as u64;
-                                    if ct.is_inline_abort_close {
-                                        self.jit.counters.inline_abort += 1;
-                                    }
-                                    // Split tally so a
-                                    // probe can answer the AOT
-                                    // `accepted_with_per_exit_inline`
-                                    // gate's question at the JIT
-                                    // surface too: how many compiled
-                                    // traces emitted depth>0 cmp
-                                    // side-exits, and how many of
-                                    // those survived all the
-                                    // `dispatchable = false` pins
-                                    // (`InlineAbort-gate`,
-                                    // `self-link-retf-r1`,
-                                    // `downrec-stitch-pending`, etc.).
-                                    if !ct.per_exit_inline.is_empty() {
-                                        self.jit.counters.per_exit_inline_compiled += 1;
-                                        if ct.dispatchable {
-                                            self.jit.counters.per_exit_inline_dispatchable += 1;
-                                        }
-                                    }
-                                    if let Some(reason) = ct.dispatch_off_reason {
-                                        self.jit.counters.dispatch_off_reasons.push(reason);
-                                        // Mirror
-                                        // the ordered Vec push into
-                                        // the per-reason HashMap so
-                                        // probes can answer "how many
-                                        // of each dispatch_off label
-                                        // fired" in O(1) without
-                                        // walking the Vec. Same
-                                        // bucket as the recorder-side
-                                        // abort/discard tags above.
-                                        self.jit.counters.bump_close_cause(reason);
-                                    }
-                                    // Count compiled traces that
-                                    // carry a down-recursion stitch
-                                    // link. Bumped here (not at the
-                                    // lowerer emit site) because the
-                                    // Vm's JitCounters live on the Vm,
-                                    // and the lowerer doesn't have a
-                                    // Vm handle. Read via
-                                    // `Vm::trace_downrec_link_compiled_count`.
-                                    if ct.downrec_link.is_some() {
-                                        self.jit.counters.downrec_link_compiled += 1;
-                                    }
-                                    // Multi-way guard emit counter.
-                                    // Bumped when the lowerer collected
-                                    // >= 2 distinct caller_pc candidates
-                                    // and lifted `dispatchable=true`.
-                                    // The single-CMP shape stores
-                                    // `1` here without bumping; non-
-                                    // DownRec closes store `0`.
-                                    if ct.downrec_multi_way_count >= 2 {
-                                        self.jit.counters.multi_way_guard_emitted += 1;
-                                    }
-                                    // Side-trace finalisation.
-                                    // Pin `dispatchable=false` so the
-                                    // primary lookup `traces.find(|t|
-                                    // t.head_pc == pc && t.dispatchable)`
-                                    // never matches this entry — the
-                                    // side trace is meant to be entered
-                                    // ONLY through the parent's exit
-                                    // indirection, not the
-                                    // back-edge / call-trigger paths.
-                                    // Then write the entry fn ptr into
-                                    // the parent's `exit_side_trace_ptrs`
-                                    // slot so the parent's IR can read it.
-                                    if let Some((parent_proto, parent_head_pc, parent_exit_idx)) =
-                                        closed_record.side_trace_parent
-                                    {
-                                        // The lowerer's own verdict: a trace it
-                                        // compiled but would not dispatch (an
-                                        // untyped table read, an inline abort)
-                                        // is not safe to enter from the parent's
-                                        // exit either — unless the only reason
-                                        // was the length gate, which weighs
-                                        // dispatch overhead, not soundness (the
-                                        // lowerer records the other reasons
-                                        // first).
-                                        let runnable = ct.dispatchable
-                                            || ct.dispatch_off_reason == Some("length-gate");
-                                        ct.dispatchable = false;
-                                        let entry_ptr = ct.entry as *const () as *const u8;
-                                        let _side_trace_head_pc = closed_record.head_pc;
-                                        let parent_traces = parent_proto.traces.borrow();
-                                        if let Some(parent_ct) = parent_traces
-                                            .iter()
-                                            .find(|t| t.head_pc == parent_head_pc)
-                                        {
-                                            // Shape-match
-                                            // gate. Find the parent's per-exit
-                                            // tag snapshot at the wired exit
-                                            // (inline / tag / global) and
-                                            // check the child's entry_tags
-                                            // match. If not, leave the cell
-                                            // null + skip cache populate so
-                                            // the parent IR's
-                                            // `call_indirect` stays inert at
-                                            // this exit (the child's
-                                            // shape-specialised IR would
-                                            // mis-interpret raw bits the
-                                            // parent writes to reg_state).
-                                            let inline_n = parent_ct.per_exit_inline.len();
-                                            let tags_n = parent_ct.per_exit_tags.len();
-                                            let parent_exit_tags_slice: &[
-                                            crate::jit::trace::ExitTag
-                                        ] = if parent_exit_idx < inline_n {
-                                            &parent_ct.per_exit_inline
-                                                [parent_exit_idx]
-                                                .exit_tags
-                                        } else if parent_exit_idx
-                                            < inline_n + tags_n
-                                        {
-                                            &parent_ct.per_exit_tags
-                                                [parent_exit_idx - inline_n]
-                                                .1
-                                        } else {
-                                            &parent_ct.exit_tags
-                                        };
-                                            let shape_matches =
-                                                crate::jit::trace::exit_tags_match_entry_tags(
-                                                    &ct.entry_tags,
-                                                    parent_exit_tags_slice,
-                                                    &parent_ct.entry_tags,
-                                                );
-                                            if !shape_matches {
-                                                self.jit.counters.side_trace_shape_mismatch += 1;
-                                            }
-                                            let shape_ok = runnable && shape_matches;
-                                            // Write the child's
-                                            // entry fn ptr to BOTH the legacy
-                                            // `exit_side_trace_ptrs[idx]`
-                                            // cell (read by the
-                                            // walk_any_side_ptr_non_null tests)
-                                            // AND the per-kind cell
-                                            // whose heap address the parent's
-                                            // IR baked. The IR-baked
-                                            // cell is what the call_indirect
-                                            // gate actually reads. Only write
-                                            // when the shape gate passes.
-                                            if shape_ok {
-                                                if let Some(cell) = parent_ct
-                                                    .exit_side_trace_ptrs
-                                                    .get(parent_exit_idx)
-                                                {
-                                                    cell.set(entry_ptr);
-                                                }
-                                                // Compute (kind, local) for the
-                                                // IR-baked cell. Layout follows
-                                                // exit_hit_counts: inline first,
-                                                // then per_exit_tags, then the
-                                                // global tail slot.
-                                                let (sent_kind, sent_local) = if parent_exit_idx
-                                                    < inline_n
-                                                {
-                                                    parent_ct.per_exit_inline[parent_exit_idx]
-                                                        .side_trace_ptr
-                                                        .set(entry_ptr);
-                                                    (
-                                                        crate::jit::trace::SIDE_SENT_KIND_INLINE,
-                                                        parent_exit_idx as u32,
-                                                    )
-                                                } else if parent_exit_idx < inline_n + tags_n {
-                                                    let local = parent_exit_idx - inline_n;
-                                                    if let Some(b) =
-                                                        parent_ct.tags_side_trace_ptrs.get(local)
-                                                    {
-                                                        b.set(entry_ptr);
-                                                    }
-                                                    (
-                                                        crate::jit::trace::SIDE_SENT_KIND_TAG,
-                                                        local as u32,
-                                                    )
-                                                } else {
-                                                    parent_ct.global_side_trace_ptr.set(entry_ptr);
-                                                    (crate::jit::trace::SIDE_SENT_KIND_GLOBAL, 0)
-                                                };
-                                                self.jit.counters.side_trace_compiled += 1;
-                                                // Flip the
-                                                // parent's fast-path hint so
-                                                // the dispatcher knows to do
-                                                // the tentative decode + cell
-                                                // check on subsequent
-                                                // dispatches. Set once and
-                                                // stays true (we never unwire
-                                                // a side trace today).
-                                                parent_ct.has_any_side_wired.set(true);
-
-                                                // Populate
-                                                // the O(1) lookup cache the
-                                                // dispatcher consults on
-                                                // sentinel-bit-set returns.
-                                                // Key is the encoded sentinel
-                                                // (same encoding the IR ORs
-                                                // into bits 56..=62 of the
-                                                // child's i64 return).
-                                                let sentinel =
-                                                    crate::jit::trace::encode_side_sentinel(
-                                                        sent_kind, sent_local,
-                                                    );
-                                                let predicted_idx = if std::ptr::eq(
-                                                    parent_proto.as_ptr(),
-                                                    head_proto.as_ptr(),
-                                                ) {
-                                                    parent_traces.len() as u32
-                                                } else {
-                                                    head_proto.traces.borrow().len() as u32
-                                                };
-                                                parent_ct
-                                                    .side_trace_cache
-                                                    .borrow_mut()
-                                                    .insert(sentinel, predicted_idx);
-                                            }
-                                        }
-                                        drop(parent_traces);
-                                    }
-                                    cache_trace(head_proto, ct);
-                                    self.jit.counters.compiled += 1;
-                                }
-                                None => {
-                                    self.jit.counters.compile_failed += 1;
-                                    note_trace_compile_failure(head_proto, closed_record.head_pc);
-                                    self.jit
-                                        .counters
-                                        .compile_failed_reasons
-                                        .push(self.jit.trace_compiler.last_compile_checkpoint());
-                                }
-                            }
-                        }
-                    } // close the long-trace-bias else branch
-                } else {
-                    // Depth-aware push at the
-                    // current `cur_depth`. The `depth_cap_hit` /
-                    // `returned_past_head` early-exit is handled by
-                    // the `should_close` branch above; reaching here
-                    // means `cur_depth <= MAX_INLINE_DEPTH` and the
-                    // trace head's frame is still live.
-                    let depth_u8 = cur_depth as u8;
-                    if depth_u8 > self.jit.max_depth_seen {
-                        self.jit.max_depth_seen = depth_u8;
-                    }
-                    // Fix up a prior `Op::Call C=0` (multi-
-                    // return / variable return count). Recorder pushed
-                    // it with var_count=None before the call dispatched;
-                    // now that the call has returned and we're about to
-                    // push the next op, top reflects the actual return
-                    // count. Snapshot top - (caller.base + call.a).
-                    if let Some(last) = rec.ops.last_mut()
-                        && matches!(last.inst.op(), crate::vm::isa::Op::Call)
-                        && last.inst.c() == 0
-                        && last.var_count.is_none()
-                        && let Some(f) = self.frames.last().and_then(CallFrame::lua)
-                    {
-                        let from = f.base + last.inst.a();
-                        if self.top >= from {
-                            last.var_count = Some(self.top - from);
-                        }
-                    }
-                    // For SetList B=0, snapshot the source
-                    // count = top - A - 1 (mirrors Lua's `n = top - ra
-                    // - 1` from lvm.c OP_SETLIST). Sources are
-                    // R[A+1..top), exclusive top. For Call C=0's
-                    // var_count (the return count = top - A inclusive),
-                    // see the prior-op fix-up above; here we
-                    // initialise the current Call op to None and let
-                    // the fix-up on the next op's push populate it.
-                    let var_count = if matches!(inst.op(), crate::vm::isa::Op::SetList)
-                        && inst.b() == 0
-                        && let Some(f) = self.frames.last().and_then(CallFrame::lua)
-                    {
-                        let from = f.base + inst.a();
-                        if self.top > from {
-                            Some(self.top - from - 1)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    let op = crate::jit::trace::RecordedOp {
-                        proto: cl.proto,
-                        pc,
-                        inst,
-                        inline_depth: depth_u8,
-                        var_count,
-                    };
-                    // Depth>0 Return0/Return1 mirrors
-                    // LuaJIT's `IR_RETF` (lj_record.c:922+ lj_record_ret).
-                    // Captured as a side-channel `RetfRecord` parallel to
-                    // `ops` when `self_link_enabled` is on. The
-                    // down-rec stitch consumes these to guard side-trace
-                    // inlined-frame topology against the recorded shape.
-                    // Gated on the same flag as the cycle catch so the
-                    // ship-default path (p16 off) sees zero behavior
-                    // change. `caller_pc` is the recorded enclosing Call's
-                    // pc + 1 — interp's resume point after the inlined
-                    // frame pops.
-                    if self.jit.self_link_enabled
-                        && depth_u8 > 0
-                        && matches!(
-                            inst.op(),
-                            crate::vm::isa::Op::Return0 | crate::vm::isa::Op::Return1
-                        )
-                    {
-                        let results: u8 = match inst.op() {
-                            crate::vm::isa::Op::Return0 => 0,
-                            crate::vm::isa::Op::Return1 => 1,
-                            _ => 0,
-                        };
-                        // Most recent Op::Call recorded at the caller's
-                        // depth (`depth_u8 - 1`) is the frame this Return
-                        // is unwinding from. Reverse scan stops at the
-                        // first match.
-                        let caller_depth = depth_u8 - 1;
-                        let caller_call = rec.ops.iter().rev().find(|r| {
-                            r.inline_depth == caller_depth
-                                && matches!(r.inst.op(), crate::vm::isa::Op::Call)
-                        });
-                        let caller_pc = caller_call.map(|r| r.pc + 1).unwrap_or(pc);
-                        // Capture the caller's proto
-                        // for the RetfRecord. LuaJIT `IR_RETF.op1`
-                        // equivalent. For fib(28) the caller's proto
-                        // equals the trace head; for future mutual
-                        // recursion the recorded Op::Call's proto is the
-                        // right target. Fallback to head_proto when no
-                        // enclosing Call op was captured (mirrors
-                        // `caller_pc`'s fallback to the Return's own pc).
-                        let caller_proto = caller_call.map(|r| r.proto).unwrap_or(rec.head_proto);
-                        rec.retfs.push(crate::jit::trace::RetfRecord {
-                            from_depth: depth_u8,
-                            to_depth: caller_depth,
-                            results,
-                            caller_pc,
-                            proto: caller_proto,
-                        });
-                        // DownRec close trigger:
-                        // count RetfRecords on this recording whose
-                        // `proto` matches `caller_proto` (LuaJIT
-                        // `check_downrec_unroll` chain filter
-                        // `op1 == ptref`). Threshold mirrors
-                        // RECUNROLL_THRESHOLD; first trip stamps the
-                        // `downrec_close` marker, subsequent retfs
-                        // keep the marker without overwrite. The
-                        // lowerer's end_idx picker routes through
-                        // TraceEnd::DownRec when the marker is set.
-                        if rec.downrec_close.is_none() {
-                            let caller_proto_ptr = caller_proto.as_ptr();
-                            let prior_match_count = rec
-                                .retfs
-                                .iter()
-                                .filter(|r| r.proto.as_ptr() == caller_proto_ptr)
-                                .count();
-                            // Strictly-greater-than threshold matches
-                            // LuaJIT `count + J->tailcalled > recunroll`.
-                            // The newly-pushed retf is already counted.
-                            if prior_match_count > crate::jit::trace::RECUNROLL_THRESHOLD {
-                                rec.downrec_close = Some(crate::jit::trace::DownRecClose {
-                                    return_pc: caller_pc,
-                                    target_proto: caller_proto,
-                                    depth_delta: 1,
-                                });
-                                // Close-cause taxonomy: tag the
-                                // restart with `"downrec-restart"`. The
-                                // lowerer adds `"downrec-stitch-failed"` when
-                                // the lifted back-edge falls back to
-                                // deopt.
-                                self.jit.counters.bump_close_cause("downrec-restart");
-                            }
-                        }
-                    }
-                    // Capture FieldIcSnapshot for the
-                    // FIRST eligible Op::GetField site under env-gate
-                    // LUNA_JIT_FIELD_IC=1. "Eligible" means:
-                    //   - R[B] is Value::Table with metatable.is_none()
-                    //   - K[C] is Value::Str
-                    //   - The string key actually occupies a hash slot
-                    //     (so the IC's slot_idx is a real index, not
-                    //     a probe sentinel).
-                    // Once captured, subsequent GetFields skip this
-                    // logic (rec.field_ic_snapshot.is_some() short-
-                    // circuits). Env-OFF short-circuits on the cached
-                    // atomic check inside field_ic_enabled().
-                    if rec.field_ic_snapshot.is_none()
-                        && matches!(inst.op(), crate::vm::isa::Op::GetField)
-                        && crate::jit::trace_types::field_ic_enabled()
-                    {
-                        let b = inst.b();
-                        let c_idx = inst.c() as usize;
-                        let r_b = self.stack[(base + b) as usize];
-                        if let Value::Table(g) = r_b
-                            && g.metatable().is_none()
-                            && c_idx < cl.proto.consts.len()
-                            && let Value::Str(s) = cl.proto.consts[c_idx]
-                        {
-                            let key = Value::Str(s);
-                            let tbl_ref = &*g;
-                            if let Some(slot_idx) = tbl_ref.find_node_idx(key)
-                                && let Some(val) = tbl_ref.node_val_at(slot_idx)
-                            {
-                                let op_idx = rec.ops.len() as u32;
-                                rec.field_ic_snapshot =
-                                    Some(crate::jit::trace_types::FieldIcSnapshot {
-                                        op_idx,
-                                        nodes_len: tbl_ref.nodes_capacity() as u64,
-                                        slot_idx: slot_idx as u64,
-                                        key_ptr_bits: s.as_ptr() as u64,
-                                        cached_val_tag: val.tag_byte(),
-                                    });
-                                self.jit.counters.field_ic_snapshot_captured += 1;
-                            }
-                        }
-                    }
-                    if !rec.push(op) {
-                        // Recorder overflow (MAX_TRACE_LEN). Tag it
-                        // explicitly under the close-cause bucket so
-                        // probes can tally overflow vs other abort
-                        // causes in O(1).
-                        let (head_proto, head_pc) = (rec.head_proto, rec.head_pc);
-                        self.jit.active_trace = None;
-                        self.jit.counters.aborted += 1;
-                        self.jit.counters.bump_close_cause("trace-overflow");
-                        // counted like a failed compile: a head whose
-                        // recordings keep overflowing is given up instead
-                        // of being recorded again on every hot crossing
-                        note_trace_compile_failure(head_proto, head_pc);
-                    }
-                }
+                self.trace_record_step(cl, pc, inst, base);
             }
 
             // Trace JIT dispatcher.
@@ -7086,783 +6300,8 @@ impl Vm {
             let admit = trace_on && cl.proto.has_dispatchable_trace.get();
             let downrec_admit_blocked =
                 admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
-            if admit
-                && let Some(ct) = {
-                    let traces = cl.proto.traces.borrow();
-                    traces
-                        .iter()
-                        .find(|t| {
-                            if t.head_pc != pc {
-                                return false;
-                            }
-                            let is_downrec = t.downrec_link.is_some();
-                            // The one-shot suppress
-                            // flag blocks any admit (primary or fallback)
-                            // for `downrec_link`-bearing traces so the
-                            // next interp iter can run the natural op
-                            // at `head_pc` and advance past it. The multi-way
-                            // `dispatchable=true` lift means the suppress
-                            // must also cover the primary `t.dispatchable`
-                            // arm — otherwise the lifted lookup would
-                            // immediately re-admit after a force-deopt
-                            // and the infinite loop returns.
-                            if downrec_admit_blocked {
-                                return false;
-                            }
-                            // Primary arm: `dispatchable=true` traces
-                            // (lifted multi-way DownRec or normal traces).
-                            // Fallback arm: single-CMP `dispatchable=false`
-                            // DownRec traces (single-CMP guard kept
-                            // pinned because the 90% miss-rate would
-                            // make blind admit perf-negative).
-                            t.dispatchable || is_downrec
-                        })
-                        .cloned()
-                }
-            {
-                // Borrow Rc<[T]> fields as &Rc<[T]> instead
-                // of cloning. The outer `ct: Rc<CompiledTrace>` is held
-                // across the entire dispatch block so the fields outlive
-                // all consumers.
-                let entry_fn = ct.entry;
-                let head_pc_val = ct.head_pc;
-                let window_size = ct.window_size;
-                let exit_tags = &ct.exit_tags;
-                let per_exit_tags = &ct.per_exit_tags;
-                let per_exit_inline = &ct.per_exit_inline;
-                let compile_entry_tags = &ct.entry_tags;
-                let global_tag_res_kind = ct.global_tag_res_kind;
-                let exit_hit_counts = &ct.exit_hit_counts;
-                let max_stack = cl.proto.max_stack as usize;
-                let window_size_us = window_size as usize;
-                let base_us = base as usize;
-                // `reg_state` sized to the trace's `window_size`, which
-                // may exceed max_stack.
-                // Marshal-in still only writes [0..max_stack); slots
-                // [max_stack..window_size) are zero-initialised and
-                // filled by the trace's own GetUpval / arith.
-                // Reuse the Vm's amortised buffers
-                // instead of allocating fresh Vecs each dispatch.
-                // mem::take leaves an empty placeholder we restore
-                // at the end of the dispatch block (success +
-                // deopt paths both fall through to the restore).
-                let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
-                entry_tags.clear();
-                entry_tags.reserve(max_stack);
-                // This trace was admitted via the
-                // `downrec_link.is_some()` arm rather than the normal
-                // `dispatchable=true` arm. The pre-invoke path
-                // populates a reserved saved-PC slot just past the
-                // normal register window so the lowerer's guard load
-                // (`reg_state[window_size]`) compares the runtime
-                // saved caller PC against the recorded `dr_return_pc`.
-                //
-                // No `!ct.dispatchable` gate: when the lowerer lifts
-                // `dispatchable = true` for multi-way guards, the
-                // trace's body still emits the downrec sentinel shape
-                // on return — the saved-PC slot
-                // and post-invoke classifier must keep firing.
-                // `downrec_link.is_some()` is the unique structural
-                // signal that the trace closes via DownRec.
-                let is_downrec_entry = ct.downrec_link.is_some();
-                let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
-                reg_state.clear();
-                // When admitting a downrec trace,
-                // size the buffer to `window_size + 1` so the lowerer
-                // can `load(I64, ..., reg_state, window_size * 8)`
-                // for the saved caller PC guard input. The extra slot
-                // is the LAST element so cranelift's existing
-                // `0..window_size` accesses are unaffected.
-                let reg_state_len = if is_downrec_entry {
-                    window_size_us + 1
-                } else {
-                    window_size_us
-                };
-                reg_state.resize(reg_state_len, 0i64);
-                let mut dispatch_ok = true;
-                for i in 0..max_stack {
-                    let v = self.stack[base_us + i];
-                    let (tag, raw) = v.unpack();
-                    entry_tags.push(tag);
-                    // Entry tag guard. The trace's IR
-                    // is specialised to the compile-time entry tags
-                    // (via current_kinds propagation from
-                    // from_entry_tag). A runtime tag mismatch means
-                    // body ops would mis-interpret raw bits (e.g.
-                    // treat a Str pointer as Int payload → garbage).
-                    // Skip dispatch on mismatch so interp handles
-                    // this entry shape; the trace stays cached for
-                    // future entries that match.
-                    if i < compile_entry_tags.len() && tag != compile_entry_tags[i] {
-                        dispatch_ok = false;
-                        break;
-                    }
-                    match tag {
-                        // Int / Float / Table / Nil all marshal
-                        // to raw payload cleanly; the trace's IR
-                        // treats the 8-byte slot as an i64 (with
-                        // f64 ops bitcasting around the boundary).
-                        crate::runtime::value::raw::INT
-                        | crate::runtime::value::raw::FLOAT
-                        | crate::runtime::value::raw::TABLE
-                        | crate::runtime::value::raw::CLOSURE
-                        // Native iter slots (e.g.
-                        // R[A] = ipairs_iter) are present in
-                        // generic-for traces; the raw bits are a
-                        // valid `*mut NativeClosure` and round-trip
-                        // cleanly.
-                        | crate::runtime::value::raw::NATIVE
-                        // Str slots show up in
-                        // string-concat traces; raw bits = `*mut
-                        // LuaStr` (interned, GC-managed). Round-
-                        // trips cleanly as a heap pointer.
-                        | crate::runtime::value::raw::STR
-                        | crate::runtime::value::raw::NIL => {
-                            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                            reg_state[i] = unsafe { raw.zero as i64 };
-                        }
-                        _ => {
-                            dispatch_ok = false;
-                            break;
-                        }
-                    }
-                }
-
-                if dispatch_ok {
-                    debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
-                    // A recording in progress cannot see what the trace runs
-                    // natively: it would resume after the trace with ops
-                    // missing, and could close as a loop that never ran (a
-                    // side trace of two ops returning its own head, which
-                    // the dispatcher then entered forever). Drop it.
-                    if self.jit.active_trace.take().is_some() {
-                        self.jit.counters.aborted += 1;
-                        self.jit.counters.bump_close_cause("reached-compiled-trace");
-                    }
-                    self.jit.pending_err = None;
-                    // Snapshot the pre-entry frame
-                    // count. A cmp@d>0 side-exit calls the materialize
-                    // helper which pushes inlined frames onto
-                    // `vm.frames`; on deopt those frames must be popped
-                    // before falling through to the interpreter, else
-                    // the stack grows unboundedly per deopted dispatch.
-                    let pre_frames = self.frames.len();
-                    // Saved-PC slot population. The
-                    // recorded `dr_return_pc` on the closing trace is
-                    // the caller's resume PC captured at a depth>0
-                    // Return push (recorder push site). The natural runtime analogue for self-
-                    // stitch is the dispatching frame's PARENT frame's
-                    // PC: the trace's head_pc sits inside a Lua frame,
-                    // and the parent (caller) frame's `pc` is what
-                    // luna would observe as `[base-8]` in the LJ
-                    // `asm_retf` shape (`lj_asm_arm64.h:565`). When
-                    // the parent isn't a Lua frame (top-level dispatch
-                    // — first invocation through `call_value`), no
-                    // saved PC exists; we write 0, which always
-                    // mismatches the recorded `dr_return_pc != 0`
-                    // invariant (debug-asserted in the luna-jit trace
-                    // lowerer).
-                    if is_downrec_entry {
-                        let saved_pc: i64 = if pre_frames >= 2 {
-                            match &self.frames[pre_frames - 2] {
-                                CallFrame::Lua(parent) => parent.pc as i64,
-                                CallFrame::Cont(_) => 0,
-                            }
-                        } else {
-                            0
-                        };
-                        reg_state[window_size_us] = saved_pc;
-                    }
-                    // `LUNA_AOT_PROBE`
-                    // diagnostic hook. The probe fires once per trace dispatch
-                    // (regardless of JIT vs AOT origin — both go through this
-                    // arm), letting the AOT smoke test verify mcode actually
-                    // executed. Guarded behind `OnceLock` so the env read is
-                    // a one-time cost per process; not gated on a particular
-                    // counter so the smoke test gets a deterministic single-
-                    // line `aot_trace_fired pc=N` per first dispatch.
-                    if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
-                        eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
-                    }
-                    let continuation_pc = {
-                        // chunk_compiler.enter
-                        // (CraneliftBackend delegates to enter_jit;
-                        // NullJitBackend returns an inert guard).
-                        let vm_ptr: *mut Vm = self;
-                        let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        unsafe { entry_fn(reg_state.as_mut_ptr()) }
-                    };
-                    self.jit.counters.dispatched += 1;
-
-                    if self.jit.pending_err.is_some() {
-                        self.jit.pending_err = None;
-                        self.jit.counters.deopt += 1;
-                        // Unwind any helper-pushed
-                        // inlined frames before the interpreter resumes.
-                        // Don't restore reg_state — the trace's partial
-                        // writes are discarded; interp re-executes from
-                        // the original `pc`.
-                        while self.frames.len() > pre_frames {
-                            frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                        }
-                        if is_downrec_entry {
-                            // pending_err observed
-                            // mid-trace inside a downrec admit. Treat
-                            // it as a guard miss: bump `downrec_deopt`
-                            // and suppress the next downrec admit so
-                            // interp can advance past `head_pc` and
-                            // the same trace doesn't immediately re-
-                            // fire on the next loop iteration.
-                            self.jit.counters.downrec_deopt += 1;
-                            self.jit.suppress_downrec_admit_once = true;
-                        }
-                    } else if is_downrec_entry && {
-                        // Only enter the
-                        // downrec classifier for returns whose shape
-                        // matches the lowerer's `downrec_idx_opt` tail
-                        // emit: either the stitch_blk DOWNREC sentinel
-                        // (HIT) or the deopt_blk GLOBAL-sentinel-with-
-                        // body==head_pc (MISS via guard fail). Any
-                        // other return from a downrec trace (intermediate
-                        // body cmp side-exit, GetField inference fail,
-                        // etc.) carries a different sentinel/body shape
-                        // and means the body exited BEFORE reaching the
-                        // downrec close — classify those through the
-                        // normal decode path (else branch below) so
-                        // reg_state restores + pc advances correctly.
-                        // Classifying them all as MISS would skip the
-                        // normal restore, inflating `downrec_deopt` with
-                        // non-downrec events and losing the trace's
-                        // mid-flight writes.
-                        let raw_ret = continuation_pc as u64;
-                        let from_side_trace = (raw_ret >> 63) & 1 == 1;
-                        let sentinel_code = if from_side_trace {
-                            ((raw_ret >> 56) & 0x7F) as u32
-                        } else {
-                            0
-                        };
-                        let raw_body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
-                        let global_deopt_code = crate::jit::trace_types::encode_side_sentinel(
-                            crate::jit::trace_types::SIDE_SENT_KIND_GLOBAL,
-                            0,
-                        );
-                        from_side_trace
-                            && (crate::jit::trace_types::is_downrec_sentinel(sentinel_code)
-                                || (sentinel_code == global_deopt_code
-                                    && raw_body == head_pc_val as u64))
-                    } {
-                        // Downrec event classifier.
-                        let raw_ret = continuation_pc as u64;
-                        let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
-                        if crate::jit::trace_types::is_downrec_sentinel(sentinel_code) {
-                            // Guard HIT — saved_pc matched one of the
-                            // baked candidates and the trace's
-                            // `stitch_blk` arm returned the DOWNREC
-                            // sentinel. Cycle-safety checkpoint:
-                            // decrement budget; on underflow,
-                            // reclassify as deopt + reset budget.
-                            // `STITCH_DEPTH_DEFAULT = 32` lets
-                            // ~all natural HITs in a hot loop fire
-                            // before reset pressure.
-                            if self.jit.stitch_depth_remaining > 0 {
-                                self.jit.stitch_depth_remaining -= 1;
-                                self.jit.counters.downrec_dispatched += 1;
-                            } else {
-                                self.jit.counters.downrec_deopt += 1;
-                                self.jit.stitch_depth_remaining =
-                                    crate::vm::jit_state::JitState::STITCH_DEPTH_DEFAULT;
-                            }
-                        } else {
-                            // Guard MISS via the lowerer's deopt_blk
-                            // arm (GLOBAL sentinel + body == head_pc).
-                            // The deopt_blk emit performs the
-                            // store-back via `emit_store_back_and_return_pc`,
-                            // so the live stack already reflects the
-                            // body's writes; no extra restore needed
-                            // from the dispatcher side.
-                            self.jit.counters.downrec_deopt += 1;
-                        }
-                        self.jit.suppress_downrec_admit_once = true;
-                        // Pop helper-pushed inlined frames (defensive —
-                        // the downrec emit shape doesn't push frames in the
-                        // tail, but a body side-exit before reaching
-                        // the tail may have via the materialize helper).
-                        while self.frames.len() > pre_frames {
-                            frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                        }
-                        self.jit.reg_state_buf = reg_state;
-                        self.jit.entry_tags_buf = entry_tags;
-                        continue;
-                    } else {
-                        // Restore each slot using the trace's
-                        // exit-tag analysis (see ExitTag docs).
-                        // Decode the IR's
-                        // side-exit shape. Upper 32 bits = (site_idx
-                        // + 1) for inline cmp side-exits, 0 for
-                        // legacy clean-tail / non-inline exits.
-                        // The decode lives in
-                        // `crate::jit::trace::decode_exit_shape` so
-                        // side-trace returns can reuse it with the SIDE
-                        // TRACE's shape inputs when the sentinel bit
-                        // is set on `raw_ret`.
-                        let raw_ret = continuation_pc as u64;
-                        // Side-trace return decode.
-                        // Bit 63 of `raw_ret` is the side-trace
-                        // marker the parent's IR OR'd in when it
-                        // tail-called into a wired child trace.
-                        // Bits 56..=62 carry the sentinel code (the
-                        // cache key into the parent's
-                        // `side_trace_cache`); bits 0..=55 are the
-                        // child's own return value (encoded site or
-                        // plain cont_pc) which we MUST decode using
-                        // the CHILD's per_exit_inline / per_exit_tags
-                        // / exit_tags / exit_hit_counts — not the
-                        // parent's. The dispatcher snapshot read
-                        // above holds the parent's shapes; when bit
-                        // 63 is set we re-fetch the child's via the
-                        // sentinel-keyed cache.
-                        let from_side_trace = (raw_ret >> 63) & 1 == 1;
-                        let (
-                            decode_inline,
-                            decode_tags,
-                            decode_exit_tags,
-                            decode_hit_counts,
-                            decode_body,
-                            child_ran,
-                        ) = if from_side_trace {
-                            let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
-                            let body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
-                            let traces = cl.proto.traces.borrow();
-                            let child_idx = traces
-                                .iter()
-                                .find(|t| t.head_pc == head_pc_val)
-                                .and_then(|pct| {
-                                    pct.side_trace_cache.borrow().get(&sentinel_code).copied()
-                                });
-                            if let Some(idx) = child_idx
-                                && let Some(child) = traces.get(idx as usize)
-                            {
-                                if crate::jit::trace::v2c_probe_enabled() {
-                                    eprintln!(
-                                        "[v2c-A3-decode] sentinel={:#04x} body={:#018x} child_idx={} child.n_ops={} child.head_pc={} child.window_size={} parent.pc={} parent.window_size={} child.dispatchable={} child.inline_abort={}",
-                                        sentinel_code,
-                                        body,
-                                        idx,
-                                        child.n_ops,
-                                        child.head_pc,
-                                        child.window_size,
-                                        pc,
-                                        window_size,
-                                        child.dispatchable,
-                                        child.is_inline_abort_close,
-                                    );
-                                }
-                                (
-                                    child.per_exit_inline.clone(),
-                                    child.per_exit_tags.clone(),
-                                    child.exit_tags.clone(),
-                                    child.exit_hit_counts.clone(),
-                                    body,
-                                    true,
-                                )
-                            } else {
-                                if crate::jit::trace::v2c_probe_enabled() {
-                                    eprintln!(
-                                        "[v2c-A3-decode] sentinel={:#04x} body={:#018x} child MISS (fallback parent shapes)",
-                                        sentinel_code, body,
-                                    );
-                                }
-                                // Cache miss — fall back to parent
-                                // shapes with the body bits. Best-
-                                // effort; the trace_side_trace_
-                                // shape_mismatch_count records this
-                                // path indirectly (close-handler
-                                // skips wiring on mismatch so we
-                                // shouldn't reach here when shape
-                                // gate held).
-                                (
-                                    per_exit_inline.clone(),
-                                    per_exit_tags.clone(),
-                                    exit_tags.clone(),
-                                    exit_hit_counts.clone(),
-                                    body,
-                                    true,
-                                )
-                            }
-                        } else {
-                            // Dispatcher-level side-trace invocation,
-                            // rather than an IR gate (`load + icmp +
-                            // brif`) at every emit_store_back callsite,
-                            // which measured as a net slowdown. The
-                            // tentative decode + cell load always runs:
-                            // short-circuiting it on a
-                            // `parent_has_side` hint measured slower on
-                            // btrees_d8 and no faster on fib_10.
-                            {
-                                let tentative = crate::jit::trace::decode_exit_shape(
-                                    raw_ret,
-                                    per_exit_inline,
-                                    per_exit_tags,
-                                    exit_tags,
-                                );
-                                let tentative_exit_idx = tentative.exit_hit_idx;
-                                let child_invoke = {
-                                    let traces = cl.proto.traces.borrow();
-                                    traces.iter().find(|t| t.head_pc == head_pc_val).and_then(
-                                        |pct| {
-                                            let cell =
-                                                pct.exit_side_trace_ptrs.get(tentative_exit_idx)?;
-                                            let fn_ptr = cell.get();
-                                            if fn_ptr.is_null() {
-                                                return None;
-                                            }
-                                            traces
-                                                .iter()
-                                                .find(|t| {
-                                                    t.entry as *const () as *const u8 == fn_ptr
-                                                })
-                                                .map(|child| {
-                                                    (
-                                                        child.entry,
-                                                        child.per_exit_inline.clone(),
-                                                        child.per_exit_tags.clone(),
-                                                        child.exit_tags.clone(),
-                                                        child.exit_hit_counts.clone(),
-                                                    )
-                                                })
-                                        },
-                                    )
-                                };
-                                if let Some((cent, cpi, cpt, cet, chc)) = child_invoke {
-                                    let child_raw_ret = {
-                                        // chunk_compiler.enter
-                                        // (side-trace entry).
-                                        let vm_ptr: *mut Vm = self;
-                                        let _guard =
-                                            self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                                        unsafe { cent(reg_state.as_mut_ptr()) }
-                                    };
-                                    (cpi, cpt, cet, chc, child_raw_ret as u64, true)
-                                } else {
-                                    (
-                                        per_exit_inline.clone(),
-                                        per_exit_tags.clone(),
-                                        exit_tags.clone(),
-                                        exit_hit_counts.clone(),
-                                        raw_ret,
-                                        false,
-                                    )
-                                }
-                            }
-                        };
-                        let decoded = crate::jit::trace::decode_exit_shape(
-                            decode_body,
-                            &decode_inline,
-                            &decode_tags,
-                            &decode_exit_tags,
-                        );
-                        let site_id = decoded.site_id;
-                        let cont_pc = decoded.cont_pc;
-                        let exit_hit_idx = decoded.exit_hit_idx;
-                        let exit_tags_for_pc = decoded.exit_tags_for_pc;
-                        // When a side trace ran (tail-called by the
-                        // parent's code or invoked here), force
-                        // using_global_exit_tags=false so the restore
-                        // loop takes the per-tag slow path:
-                        // `global_tag_res_kind` classifies the parent's
-                        // exit tags, not the child's.
-                        let using_global_exit_tags = if child_ran {
-                            false
-                        } else {
-                            decoded.using_global_exit_tags
-                        };
-                        // Increment the counter (saturate
-                        // at u32::MAX to avoid wrap on long runs).
-                        // Track whether this increment is
-                        // the one that crossed `HOTEXIT_THRESHOLD`
-                        // (transition: previous v < threshold, new v
-                        // == threshold). The side-trace start is
-                        // deferred to just before `continue;` so
-                        // vm.stack and frame.pc are fully restored
-                        // (the snapshot reads post-restore values).
-                        let mut side_trace_should_start = false;
-                        // For side-trace returns the
-                        // counter to bump is the CHILD's (decoded
-                        // shape lookup) — `exit_hit_idx` is into the
-                        // decoded layout, so use the matching
-                        // `decode_hit_counts`. For parent decode
-                        // they're aliased (clone of the parent's
-                        // own Rc).
-                        if let Some(c) = decode_hit_counts.get(exit_hit_idx) {
-                            let v = c.get();
-                            if v < u32::MAX {
-                                c.set(v + 1);
-                            }
-                            // After a side trace ran, `exit_hit_idx` is an
-                            // exit of that child, but a side trace is
-                            // recorded and wired as one of `head_pc_val`'s
-                            // exits: it would replace the side trace on the
-                            // parent's exit of that number, which resumes
-                            // elsewhere.
-                            if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
-                                && !child_ran
-                                && self.jit.active_trace.is_none()
-                                && self.jit.trace_enabled
-                            {
-                                side_trace_should_start = true;
-                            }
-                        }
-                        // At an inline cmp@d>0
-                        // side-exit, the helper has pushed N frames on
-                        // top of the trace head's frame and
-                        // `exit_tags_for_pc.len()` covers the full
-                        // window (caller + each inlined frame's
-                        // window). Slots beyond `max_stack` belong to
-                        // an inlined frame: their `Untouched` entries
-                        // default to Nil (no entry-tag fallback —
-                        // marshal-in only captured caller slots) and
-                        // we write to interp stack at `base + i` which
-                        // mirrors `op_offsets`-derived layout.
-                        let slot_count = exit_tags_for_pc.len();
-                        // The helper only extends
-                        // vm.stack up to the deepest pushed frame's
-                        // window, but the exit_tags snapshot covers
-                        // the trace's full `window_size` (which
-                        // includes depth-N+1 scratch slots that the
-                        // trace's IR may have written without a
-                        // matching pushed frame). Extend with Nil so
-                        // the write at the tail doesn't panic; these
-                        // slots get overwritten by the writeback loop
-                        // and won't leak meaningful data past the
-                        // pushed frames' R[0..max_stack) windows.
-                        if self.stack.len() < base_us + slot_count {
-                            self.stack
-                                .resize(base_us + slot_count, crate::runtime::Value::Nil);
-                        }
-                        // Fast-path restore loop. When
-                        // we landed on the global `exit_tags`,
-                        // dispatch on the compile-time
-                        // classification: skip the loop entirely
-                        // for `AllUntouched`, do a tag-free
-                        // `Value::Int(...)` write per slot for
-                        // `AllInt`, otherwise fall through to the
-                        // general match-arm loop. site_id > 0
-                        // (inline frame mat) and per_exit_tags
-                        // hits always take the general path —
-                        // their per-side-exit shapes aren't
-                        // pre-classified yet.
-                        // A generic-for exit whose TForCall wrote the loop
-                        // variables to the stack with tags the trace did not
-                        // compile for: leave those slots as they are.
-                        let keep_tfor =
-                            if decode_body & crate::jit::trace_types::EXIT_KEEP_TFOR_VARS != 0 {
-                                let call = cl.proto.code[cont_pc as usize - 1];
-                                debug_assert!(matches!(call.op(), crate::vm::isa::Op::TForCall));
-                                let first = call.a() as usize + 4;
-                                first..first + call.c() as usize
-                            } else {
-                                0..0
-                            };
-                        let fast_path_taken = if using_global_exit_tags && keep_tfor.is_empty() {
-                            match global_tag_res_kind {
-                                crate::jit::trace::TagResKind::AllUntouched => {
-                                    // No-op: vm.stack already
-                                    // matches the trace's post-
-                                    // entry state for these
-                                    // slots (entry values not
-                                    // overridden, or already
-                                    // spilled by helpers).
-                                    true
-                                }
-                                crate::jit::trace::TagResKind::AllInt => {
-                                    for i in 0..slot_count {
-                                        self.stack[base_us + i] =
-                                            crate::runtime::Value::Int(reg_state[i]);
-                                    }
-                                    true
-                                }
-                                crate::jit::trace::TagResKind::Mixed => false,
-                            }
-                        } else {
-                            false
-                        };
-                        if !fast_path_taken {
-                            for i in 0..slot_count {
-                                if keep_tfor.contains(&i) {
-                                    continue;
-                                }
-                                let tag = match exit_tags_for_pc[i] {
-                                    crate::jit::trace::ExitTag::Untouched => {
-                                        if i < max_stack {
-                                            entry_tags[i]
-                                        } else {
-                                            crate::runtime::value::raw::NIL
-                                        }
-                                    }
-                                    crate::jit::trace::ExitTag::Int => {
-                                        crate::runtime::value::raw::INT
-                                    }
-                                    crate::jit::trace::ExitTag::Float => {
-                                        crate::runtime::value::raw::FLOAT
-                                    }
-                                    crate::jit::trace::ExitTag::Table => {
-                                        crate::runtime::value::raw::TABLE
-                                    }
-                                    crate::jit::trace::ExitTag::Closure => {
-                                        crate::runtime::value::raw::CLOSURE
-                                    }
-                                    // Trace actively wrote Nil
-                                    // to this slot (e.g. via Op::LoadNil).
-                                    // Restore as Nil regardless of the entry
-                                    // tag, since the i64 payload is 0 and
-                                    // packing as the entry tag (e.g. INT)
-                                    // would mis-type the slot.
-                                    crate::jit::trace::ExitTag::Nil => {
-                                        crate::runtime::value::raw::NIL
-                                    }
-                                    // Trace wrote a Str ptr
-                                    // to this slot (LoadK Str / Move from
-                                    // Str / Concat result). Restore as
-                                    // Value::Str with raw bits round-
-                                    // tripped.
-                                    crate::jit::trace::ExitTag::Str => {
-                                        crate::runtime::value::raw::STR
-                                    }
-                                };
-                                // SAFETY: tag is from a verified slot
-                                // (entry validated above) or pinned by
-                                // the exit-tag analysis to INT/TABLE.
-                                // The raw payload sits in reg_state[i].
-                                // Stack was extended by the materialize
-                                // helper for inline frames.
-                                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                                self.stack[base_us + i] = unsafe {
-                                    Value::pack(
-                                        tag,
-                                        crate::runtime::value::RawVal {
-                                            zero: reg_state[i] as u64,
-                                        },
-                                    )
-                                };
-                            }
-                        }
-                        // For non-inline exits the
-                        // helper was never called (no metas chain for
-                        // this cont_pc), so `frames.last()` is the
-                        // trace head's frame and we set its pc to
-                        // cont_pc as before. For inline exits the
-                        // helper baked the side-exit PC into the
-                        // innermost frame's `pc` at push time
-                        // (chain.last().pc was overridden at emit),
-                        // so this assignment to `frames.last_mut().pc
-                        // = cont_pc` is a redundant-but-correct
-                        // confirmation.
-                        let _ = &per_exit_inline; // hold the Rc alive across dispatch
-                        // For inline side-exits the
-                        // helper has pushed N frames on top. The trace
-                        // head frame is at `pre_frames - 1`; set its
-                        // pc to `head_resume_pc` so when the chain
-                        // eventually pops back to it, interp resumes
-                        // PAST the trace's depth-0 Op::Call instead of
-                        // restarting from `head_pc` and re-triggering
-                        // dispatch (infinite loop). The innermost
-                        // (helper-pushed) frame already has its pc
-                        // baked in at compile time, but we still
-                        // assign `cont_pc` below for parity with the
-                        // non-inline path (no-op).
-                        if site_id > 0 {
-                            let idx = (site_id - 1) as usize;
-                            let head_resume_pc = decode_inline[idx].head_resume_pc;
-                            if pre_frames > 0
-                                && let CallFrame::Lua(f) = &mut self.frames[pre_frames - 1]
-                            {
-                                f.pc = head_resume_pc;
-                            }
-                        }
-                        let frames_len_now = self.frames.len();
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                            CallFrame::Lua(fmut) => {
-                                if crate::jit::trace::v2c_probe_enabled() {
-                                    eprintln!(
-                                        "[v2c-set-pc] from_side={} sentinel_or_raw={:#018x} prev_pc={} new_cont_pc={} site_id={} frames.len={} pre_frames={} max_stack={}",
-                                        from_side_trace,
-                                        raw_ret,
-                                        fmut.pc,
-                                        cont_pc,
-                                        site_id,
-                                        frames_len_now,
-                                        pre_frames,
-                                        max_stack,
-                                    );
-                                }
-                                fmut.pc = cont_pc;
-                            }
-                            _ => unreachable!("Cont frame at trace dispatch"),
-                        }
-                        // Deferred side-trace start. The
-                        // increment block above flagged this exit's
-                        // hit count crossing HOTEXIT_THRESHOLD; now
-                        // that vm.stack is restored and frame.pc is
-                        // settled, snapshot entry_tags from the
-                        // resume frame's window and create the
-                        // recorder. The recorder's first push fires
-                        // on the next interp iteration at cont_pc.
-                        //
-                        // `head_proto` for the side trace = cl.proto
-                        // (trace JIT only inlines self-recursive
-                        // calls today, so cont_pc always lands in
-                        // the same proto as the parent). Frame base
-                        // is the resume frame (top of `self.frames`
-                        // — inline-pushed frames moved this).
-                        if side_trace_should_start {
-                            let (resume_base, resume_proto) = match self.frames.last() {
-                                Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
-                                _ => (base_us, cl.proto),
-                            };
-                            let resume_max_stack = resume_proto.max_stack as usize;
-                            let mut side_entry_tags: Vec<u8> = Vec::with_capacity(resume_max_stack);
-                            // Extend stack if cont_pc's frame window
-                            // overhangs the current stack len (rare,
-                            // but inline-pushed frame stack writes
-                            // only covered the trace's writeback).
-                            if self.stack.len() < resume_base + resume_max_stack {
-                                self.stack.resize(
-                                    resume_base + resume_max_stack,
-                                    crate::runtime::Value::Nil,
-                                );
-                            }
-                            for i in 0..resume_max_stack {
-                                let (tag, _) = self.stack[resume_base + i].unpack();
-                                side_entry_tags.push(tag);
-                            }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start_side_trace(
-                                    resume_proto,
-                                    cont_pc,
-                                    side_entry_tags,
-                                    cl.proto,
-                                    head_pc_val,
-                                    exit_hit_idx,
-                                )));
-                            self.jit.recording_frame_base = self.frames.len() - 1;
-                            self.jit.counters.side_trace_started += 1;
-                        }
-                        // Put the dispatch buffers back
-                        // before the `continue;` so the next
-                        // dispatch picks up the same allocation.
-                        self.jit.reg_state_buf = reg_state;
-                        self.jit.entry_tags_buf = entry_tags;
-                        continue;
-                    }
-                }
-                // !dispatch_ok / deopt path / non-cont
-                // exit also restore the buffers before falling
-                // through to the interp.
-                self.jit.reg_state_buf = reg_state;
-                self.jit.entry_tags_buf = entry_tags;
+            if admit && self.trace_dispatch(cl, pc, base, downrec_admit_blocked) {
+                continue;
             }
 
             // PUC `vmfetch` increments savedpc BEFORE firing traceexec, so
@@ -7878,140 +6317,55 @@ impl Vm {
             // (cont frames drained above) so the and_then/Option layers are
             // dead weight.
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                CallFrame::Lua(fmut) => fmut.pc = pc + 1,
+            let mut fpc: *mut u32 = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                CallFrame::Lua(fmut) => {
+                    fmut.pc = pc + 1;
+                    &mut fmut.pc
+                }
                 _ => unreachable!("Cont frame at pc bump"),
-            }
+            };
 
             // count + line hooks (PUC traceexec): before executing the
             // instruction. Skipped while the hook itself runs. `trap` is set
             // whenever a hook is armed, so the common case tests one byte.
             if self.trap && self.hook_armed() {
-                let lines = &cl.proto.lines;
-                let cur_line = if lines.is_empty() {
-                    None
-                } else {
-                    Some(lines[(pc as usize).min(lines.len() - 1)] as i64)
+                self.exec_hooks(cl, pc, oldpc)?;
+                // a hook runs Lua code, which can move `self.frames`
+                // SAFETY: as above
+                fpc = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                    CallFrame::Lua(fmut) => &mut fmut.pc,
+                    _ => unreachable!("Cont frame after a hook"),
                 };
-                // count hook: fire every `count_base` instructions
-                if self.hook.count {
-                    self.hook.count_left -= 1;
-                    if self.hook.count_left <= 0 {
-                        self.hook.count_left = self.hook.count_base;
-                        // hooked function is the running Lua frame: its frame
-                        // is on the stack, so no synthetic C level is needed.
-                        self.run_hook(b"count", cur_line, false)?;
-                    }
-                }
-                // line hook: fire on a fresh frame, a backward jump (loop), or a
-                // change of source line.
-                if self.hook.line {
-                    if lines.is_empty() {
-                        // PUC: a stripped chunk has no line info, so
-                        // `getfuncline` returns -1. The line hook still fires
-                        // on the first instruction of the new frame (where
-                        // `npci <= oldpc` holds at oldpc=0), with the line
-                        // pushed as `nil` instead of an integer (db.lua :1030
-                        // "hook called without debug info for 1st instruction").
-                        if oldpc == u32::MAX {
-                            self.run_hook(b"line", None, false)?;
-                            self.top_frame_mut().hook_oldpc = pc;
-                        }
-                    } else {
-                        let newline = lines[(pc as usize).min(lines.len() - 1)];
-                        // PUC `traceexec`: fire on frame entry (`oldpc == MAX`),
-                        // on a backward jump (`pc < oldpc` — strict; an equal pc
-                        // would re-fire the install-site after `oldpc = pc`),
-                        // or when the source line changes.
-                        let fire = oldpc == u32::MAX
-                            || pc < oldpc
-                            || newline != lines[(oldpc as usize).min(lines.len() - 1)];
-                        if fire {
-                            self.run_hook(b"line", Some(newline as i64), false)?;
-                        }
-                        self.top_frame_mut().hook_oldpc = pc;
-                    }
-                }
             }
 
+            let fx = fast::Fast {
+                cl,
+                base,
+                func_slot,
+                n_varargs,
+                fpc,
+                trace_on,
+                pre53,
+                entry_depth,
+            };
+            let inst = match self.run_fast(fx, inst, pc + 1)? {
+                fast::FastExit::Reload => continue,
+                fast::FastExit::Slow(inst) => inst,
+            };
+            // the fast loop may have called or returned into another frame
+            let &Frame {
+                closure: cl,
+                base,
+                func_slot,
+                n_varargs,
+                ..
+            } = self.top_frame();
             match inst.op() {
-                Op::Move => {
-                    let v = self.r(base, inst.b());
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::LoadI => self.set_r(base, inst.a(), Value::Int(inst.sbx() as i64)),
-                Op::LoadF => self.set_r(base, inst.a(), Value::Float(inst.sbx() as f64)),
-                Op::LoadK => {
-                    let v = cl.proto.consts[inst.bx() as usize];
-                    self.set_r(base, inst.a(), v);
-                }
                 Op::LoadKx => {
                     let extra = cl.proto.code[self.pc_of_top() as usize];
                     self.bump_pc();
                     let v = cl.proto.consts[extra.ax() as usize];
                     self.set_r(base, inst.a(), v);
-                }
-                Op::LoadFalse => self.set_r(base, inst.a(), Value::Bool(false)),
-                Op::LFalseSkip => {
-                    self.set_r(base, inst.a(), Value::Bool(false));
-                    self.bump_pc();
-                }
-                Op::LoadTrue => self.set_r(base, inst.a(), Value::Bool(true)),
-                Op::LoadNil => {
-                    let a = inst.a();
-                    for i in 0..=inst.b() {
-                        self.set_r(base, a + i, Value::Nil);
-                    }
-                }
-                Op::GetUpval => {
-                    let v = self.upval_get(cl, inst.b());
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::SetUpval => {
-                    let v = self.r(base, inst.a());
-                    self.upval_set(cl, inst.b(), v);
-                }
-                Op::GetTabUp => {
-                    let t = self.upval_get(cl, inst.b());
-                    let key = cl.proto.consts[inst.c() as usize];
-                    self.index_fast(t, key, base + inst.a())?;
-                }
-                Op::GetTable => {
-                    let t = self.r(base, inst.b());
-                    let key = self.r(base, inst.c());
-                    self.index_fast(t, key, base + inst.a())?;
-                }
-                Op::GetI => {
-                    let t = self.r(base, inst.b());
-                    self.index_fast(t, Value::Int(inst.c() as i64), base + inst.a())?;
-                }
-                Op::GetField => {
-                    let t = self.r(base, inst.b());
-                    let key = cl.proto.consts[inst.c() as usize];
-                    self.index_fast(t, key, base + inst.a())?;
-                }
-                Op::SetTabUp => {
-                    let t = self.upval_get(cl, inst.a());
-                    let key = cl.proto.consts[inst.b() as usize];
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, key, v)?;
-                }
-                Op::SetTable => {
-                    let t = self.r(base, inst.a());
-                    let key = self.r(base, inst.b());
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, key, v)?;
-                }
-                Op::SetI => {
-                    let t = self.r(base, inst.a());
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, Value::Int(inst.b() as i64), v)?;
-                }
-                Op::SetField => {
-                    let t = self.r(base, inst.a());
-                    let key = cl.proto.consts[inst.b() as usize];
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, key, v)?;
                 }
                 Op::NewTable => {
                     let t = self.heap.new_table();
@@ -8055,129 +6409,9 @@ impl Vm {
                     // the element temps above the table are now consumed
                     self.maybe_collect_garbage(base + a + 1);
                 }
-                Op::SelfOp => {
-                    let o = self.r(base, inst.b());
-                    self.set_r(base, inst.a() + 1, o);
-                    // PUC OP_SELF's C is a constant index when the k-flag is
-                    // set; otherwise it points to a register that holds the
-                    // (constant-loaded) key. luna's compiler falls back to the
-                    // register form when the constant index exceeds OP_SELF's
-                    // 8-bit C field (5.1 big.lua's `a:findfield(...)` against
-                    // a table with 250+ string keys, where "findfield" lands
-                    // past const #255). The exec must honour the same split.
-                    let key = if inst.k() {
-                        cl.proto.consts[inst.c() as usize]
-                    } else {
-                        self.r(base, inst.c())
-                    };
-                    self.index_fast(o, key, base + inst.a())?;
-                }
-                Op::Add => arith_arm!(self, inst, base, ArithOp::Add,
-                    int(a, b) => Some(Value::Int(a.wrapping_add(b))),
-                    float(a, b) => Some(Value::Float(a + b))),
-                Op::Sub => arith_arm!(self, inst, base, ArithOp::Sub,
-                    int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
-                    float(a, b) => Some(Value::Float(a - b))),
-                Op::Mul => arith_arm!(self, inst, base, ArithOp::Mul,
-                    int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
-                    float(a, b) => Some(Value::Float(a * b))),
-                // a zero divisor takes the slow path for its error
-                Op::Mod => arith_arm!(self, inst, base, ArithOp::Mod,
-                    int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
-                    float(_a, _b) => None),
-                Op::IDiv => arith_arm!(self, inst, base, ArithOp::IDiv,
-                    int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
-                    float(_a, _b) => None),
-                Op::Div => arith_arm!(self, inst, base, ArithOp::Div,
-                    int(_a, _b) => None,
-                    float(a, b) => Some(Value::Float(a / b))),
                 Op::Pow => {
                     let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                    self.arith_slow(inst, base, ArithOp::Pow, l, r)?
-                }
-                Op::BAnd => arith_arm!(self, inst, base, ArithOp::BAnd,
-                    int(a, b) => Some(Value::Int(a & b)),
-                    float(_a, _b) => None),
-                Op::BOr => arith_arm!(self, inst, base, ArithOp::BOr,
-                    int(a, b) => Some(Value::Int(a | b)),
-                    float(_a, _b) => None),
-                Op::BXor => arith_arm!(self, inst, base, ArithOp::BXor,
-                    int(a, b) => Some(Value::Int(a ^ b)),
-                    float(_a, _b) => None),
-                Op::Shl => arith_arm!(self, inst, base, ArithOp::Shl,
-                    int(a, b) => Some(Value::Int(shift_left(a, b))),
-                    float(_a, _b) => None),
-                Op::Shr => arith_arm!(self, inst, base, ArithOp::Shr,
-                    int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
-                    float(_a, _b) => None),
-                Op::Unm => {
-                    let v = self.r(base, inst.b());
-                    match self.unary_operand(v) {
-                        Some(Num::Int(i)) => {
-                            self.set_r(base, inst.a(), Value::Int(i.wrapping_neg()))
-                        }
-                        Some(Num::Float(f)) => self.set_r(base, inst.a(), Value::Float(-f)),
-                        None => {
-                            let mm = self.get_mm(v, Mm::Unm);
-                            if mm.is_nil() {
-                                return Err(self.type_err("perform arithmetic on", v));
-                            }
-                            let dst = base + inst.a();
-                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst }, "unm")?;
-                        }
-                    }
-                }
-                Op::BNot => {
-                    let v = self.r(base, inst.b());
-                    match self.arith_operand()(v) {
-                        Some(n) => {
-                            let Some(i) = int_of(n) else {
-                                return Err(self.no_int_rep_err());
-                            };
-                            self.set_r(base, inst.a(), Value::Int(!i));
-                        }
-                        None => {
-                            let mm = self.get_mm(v, Mm::BNot);
-                            if mm.is_nil() {
-                                return Err(self.type_err("perform bitwise operation on", v));
-                            }
-                            let dst = base + inst.a();
-                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst }, "bnot")?;
-                        }
-                    }
-                }
-                Op::Not => {
-                    let v = self.r(base, inst.b());
-                    self.set_r(base, inst.a(), Value::Bool(!v.truthy()));
-                }
-                Op::Len => {
-                    let v = self.r(base, inst.b());
-                    // no `__len` to look for: a string, or a table without
-                    // a metatable
-                    match v {
-                        Value::Str(s) => {
-                            self.set_r(base, inst.a(), Value::Int(s.len() as i64));
-                            continue;
-                        }
-                        Value::Table(t) if t.metatable().is_none() => {
-                            self.set_r(base, inst.a(), Value::Int(t.len()));
-                            continue;
-                        }
-                        _ => {}
-                    }
-                    match self.len_step(v)? {
-                        MmOut::Done(r) => self.set_r(base, inst.a(), r),
-                        MmOut::Mm { func, recv } => {
-                            let dst = base + inst.a();
-                            self.begin_meta_call(
-                                func,
-                                &[recv, recv],
-                                MetaAction::Store { dst },
-                                "len",
-                            )?;
-                        }
-                        MmOut::CompareSynth { .. } => unreachable!("CompareSynth from len_step"),
-                    }
+                    self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)?
                 }
                 Op::Concat => {
                     // right-associative fold over operands at base+a .. base+a+n,
@@ -8204,147 +6438,6 @@ impl Vm {
                 }
                 Op::Tbc => {
                     self.register_tbc(base + inst.a())?;
-                }
-                Op::Jmp => {
-                    let off = inst.sj();
-                    // Trace JIT back-edge counter. A negative
-                    // jump offset is a loop back-edge (the only canonical
-                    // backward jumps the compiler emits — `while`, `for`,
-                    // `repeat`). Tick the per-Proto counter and, once it
-                    // exceeds the threshold, start a trace recording. The
-                    // whole block is gated on `trace_jit_enabled` so
-                    // existing benches see one branch-not-taken and no
-                    // counter writes.
-                    if self.jit.trace_enabled && off < 0 {
-                        let proto = cl.proto;
-                        let c = proto.trace_hot_count.get();
-                        if c < u32::MAX / 2 {
-                            proto.trace_hot_count.set(c + 1);
-                        }
-                        // Relaxed back-edge trigger:
-                        // `c >= THRESHOLD` (not `c == THRESHOLD`) so
-                        // a missed crossing (active_trace busy with
-                        // a call-trigger, or the recorder slot
-                        // happened to be in use) doesn't permanently
-                        // lock this back-edge target out. The
-                        // `already_cached` short-circuit prevents
-                        // duplicate recordings: once a trace is
-                        // cached for this target, subsequent
-                        // crossings skip the start. This pairs with
-                        // the discard-on-partial-coverage close
-                        // handling — when a short call-trigger is
-                        // discarded, the back-edge can still find an
-                        // open slot at the next iteration.
-                        let target_pc = (pc as i32 + 1 + off as i32).max(0) as u32;
-                        // Threshold first, then the gave-up
-                        // short-circuit, then the RefCell borrow +
-                        // scan: cold back-edges and Protos whose
-                        // discard cap force-compiled a partial trace
-                        // skip the scan.
-                        if c >= self.jit.trace_hot_threshold
-                            && self.jit.active_trace.is_none()
-                            && !proto.trace_gave_up.get()
-                            && !proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
-                            && !trace_head_abandoned(proto, target_pc)
-                        {
-                            // Back-edge target = pc after `add_pc(off)`,
-                            // i.e. current `pc + 1 + off` (the dispatch
-                            // loop has already advanced f.pc to pc+1).
-                            let target = (pc as i32 + 1 + off as i32).max(0) as u32;
-                            // Snapshot per-slot Value tag at trace
-                            // entry so the lowerer's kind tracker
-                            // knows which arith path to lower
-                            // (iadd vs fadd, etc.).
-                            let max_stack = cl.proto.max_stack as usize;
-                            let base_us = base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
-                            }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                )));
-                            // Record the frame the trace
-                            // started in. `self.frames.len() - 1`
-                            // since we're inside the currently-running
-                            // Lua frame's dispatch.
-                            self.jit.recording_frame_base = self.frames.len() - 1;
-                        }
-                    }
-                    self.add_pc(off);
-                }
-                Op::Eq => {
-                    let l = self.r(base, inst.a());
-                    let r = self.r(base, inst.b());
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a == b) != inst.k() {
-                            self.bump_pc();
-                        }
-                    } else {
-                        let step = self.eq_step(l, r);
-                        self.op_compare(step, l, r, inst.k(), "eq")?;
-                    }
-                }
-                Op::EqK => {
-                    let l = self.r(base, inst.a());
-                    let r = cl.proto.consts[inst.b() as usize];
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a == b) != inst.k() {
-                            self.bump_pc();
-                        }
-                    } else {
-                        let step = self.eq_step(l, r);
-                        self.op_compare(step, l, r, inst.k(), "eq")?;
-                    }
-                }
-                Op::Lt => {
-                    let l = self.r(base, inst.a());
-                    let r = self.r(base, inst.b());
-                    // hot path: Int < Int — drops the MmOut + op_compare match
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a < b) != inst.k() {
-                            self.bump_pc();
-                        }
-                    } else {
-                        let step = self.less_step(l, r, false)?;
-                        self.op_compare(step, l, r, inst.k(), "lt")?;
-                    }
-                }
-                Op::Le => {
-                    let l = self.r(base, inst.a());
-                    let r = self.r(base, inst.b());
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a <= b) != inst.k() {
-                            self.bump_pc();
-                        }
-                    } else {
-                        let step = self.less_step(l, r, true)?;
-                        self.op_compare(step, l, r, inst.k(), "le")?;
-                    }
-                }
-                Op::Test => {
-                    let cond = self.r(base, inst.a()).truthy();
-                    self.cond_skip(cond, inst.k());
-                }
-                Op::TestSet => {
-                    let v = self.r(base, inst.b());
-                    if v.truthy() == inst.k() {
-                        self.set_r(base, inst.a(), v);
-                    } else {
-                        self.bump_pc();
-                    }
-                }
-                Op::Call => {
-                    let abs = base + inst.a();
-                    let nargs = if inst.b() == 0 {
-                        None
-                    } else {
-                        Some(inst.b() - 1)
-                    };
-                    let wanted = inst.c() as i32 - 1;
-                    self.begin_call(abs, nargs, wanted, false)?;
                 }
                 Op::TailCall => {
                     let fr = *self.top_frame();
@@ -8447,7 +6540,7 @@ impl Vm {
                         // synthetic tail level for every one of them.
                         self.pending_tailcalls = fr.tailcalls.saturating_add(1);
                         self.pending_ccmt = fr.ccmt;
-                        frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                         if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
                             && self.frames.len() < entry_depth
                         {
@@ -8507,38 +6600,6 @@ impl Vm {
                     }
                 }
                 Op::ForPrep => self.for_prep(inst, base)?,
-                Op::ForLoop => {
-                    self.for_loop(inst, base)?;
-                    // The trace JIT counts the back-edges `for_loop` took (it
-                    // moved pc back from `pc + 1`) and starts recording at
-                    // the body once the count reaches the threshold.
-                    if self.jit.trace_enabled && self.top_frame().pc != pc + 1 {
-                        let proto = cl.proto;
-                        let c = proto.trace_hot_count.get();
-                        if c < u32::MAX / 2 {
-                            proto.trace_hot_count.set(c + 1);
-                        }
-                        if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none() {
-                            // the back-edge target is the body's first op
-                            let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                            let max_stack = cl.proto.max_stack as usize;
-                            let base_us = base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
-                            }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                )));
-                            // Record the frame the trace
-                            // started in. The currently-running
-                            // Lua frame is at len() - 1.
-                            self.jit.recording_frame_base = self.frames.len() - 1;
-                        }
-                    }
-                }
                 Op::TForPrep => {
                     // the 4th control slot is the iterator's closing value
                     self.register_tbc(base + inst.a() + 3)?;
@@ -8555,75 +6616,6 @@ impl Vm {
                     self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
                     let nvars = inst.c() as i32;
                     self.begin_call(abs + 4, Some(2), nvars, false)?;
-                }
-                Op::TForLoop => {
-                    let a = inst.a();
-                    let ctrl = self.r(base, a + 4);
-                    if !ctrl.is_nil() {
-                        // Trace JIT back-edge counter on
-                        // generic-for back-edge. TForLoop sits at the
-                        // tail of `for k,v in expr do ... end`; recorder
-                        // treats it as the close-detection equivalent of
-                        // a negative Op::Jmp. Gate on `take_back_edge`
-                        // (= `ctrl != nil`) so empty-iter loops don't
-                        // pollute hot_count.
-                        if self.jit.trace_enabled {
-                            let proto = cl.proto;
-                            let c = proto.trace_hot_count.get();
-                            if c < u32::MAX / 2 {
-                                proto.trace_hot_count.set(c + 1);
-                            }
-                            if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
-                            {
-                                // TForLoop back-edge target = pc after
-                                // `add_pc(-bx)` runs from the already-
-                                // bumped f.pc (= pc + 1). So target =
-                                // (pc + 1) - bx, normally landing on
-                                // body_top (the op right after TForPrep).
-                                let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                                let max_stack = cl.proto.max_stack as usize;
-                                let base_us = base as usize;
-                                let mut entry_tags = Vec::with_capacity(max_stack);
-                                for i in 0..max_stack {
-                                    let (tag, _) = self.stack[base_us + i].unpack();
-                                    entry_tags.push(tag);
-                                }
-                                // Snapshot the iter
-                                // fn's address if Native, so the
-                                // lowerer can specialise ipairs into
-                                // inline Table aget IR.
-                                let iter_ptr =
-                                    if let Value::Native(n) = self.stack[base_us + a as usize] {
-                                        Some(n.f as usize)
-                                    } else {
-                                        None
-                                    };
-                                // Snapshot R[A+5]'s
-                                // tag (= current iter's val from
-                                // the just-fired TForCall). The
-                                // inline aget fast_blk emits a
-                                // runtime guard against this tag;
-                                // mixed-tag arrays deopt rather
-                                // than producing garbage pointers
-                                // through the spill path.
-                                let val_slot = base_us + (a as usize) + 5;
-                                let val_tag = if val_slot < self.stack.len() {
-                                    Some(self.stack[val_slot].unpack().0)
-                                } else {
-                                    None
-                                };
-                                let mut rec = crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                );
-                                rec.tfor_iter_ptr = iter_ptr;
-                                rec.tfor_val_tag = val_tag;
-                                self.jit.active_trace = Some(Box::new(rec));
-                                self.jit.recording_frame_base = self.frames.len() - 1;
-                            }
-                        }
-                        self.set_r(base, a + 2, ctrl);
-                        self.add_pc(-(inst.bx() as i32));
-                    }
                 }
                 Op::Closure => {
                     let proto = cl.proto.protos[inst.bx() as usize];
@@ -8805,40 +6797,10 @@ impl Vm {
                     self.stack[func_slot as usize] = Value::Table(t);
                     self.set_r(base, inst.a(), Value::Table(t));
                 }
-                Op::VargIdx => {
-                    // R[A] := vararg[R[C]] without allocating: integer key in
-                    // [1,n] → that vararg, "n" → the count, else nil.
-                    let key = self.r(base, inst.c());
-                    let n = n_varargs;
-                    let v = match key {
-                        Value::Int(k) if k >= 1 && (k as u64) <= n as u64 => {
-                            self.stack[(func_slot + k as u32) as usize]
-                        }
-                        Value::Float(f) if f.fract() == 0.0 && f >= 1.0 && f <= n as f64 => {
-                            self.stack[(func_slot + f as u32) as usize]
-                        }
-                        Value::Str(s) if s.as_bytes() == b"n" => Value::Int(n as i64),
-                        _ => Value::Nil,
-                    };
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::ErrNNil => {
-                    let v = self.r(base, inst.a());
-                    if !matches!(v, Value::Nil) {
-                        let bx = inst.bx();
-                        let name = if bx == 0 {
-                            "?".to_string()
-                        } else {
-                            match cl.proto.consts[(bx - 1) as usize] {
-                                Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-                                _ => "?".to_string(),
-                            }
-                        };
-                        return Err(self.rt_err(&format!("global '{name}' already defined")));
-                    }
-                }
                 Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
+                op => unreachable!("{op:?} is run by the fast loop"),
             }
+            // the loop head reloads everything from the frame
         }
     }
 
@@ -9403,12 +7365,7 @@ impl Vm {
                     }
                     // result lands at i-1, dropping y (top→i); resume continues.
                     let dst = i - 1;
-                    self.begin_meta_call(
-                        mm,
-                        &[x, y],
-                        MetaAction::Concat { dst, base_a },
-                        "concat",
-                    )?;
+                    self.begin_meta_call(mm, &[x, y], MetaAction::Concat { dst, base_a })?;
                     return Ok(());
                 }
             }
@@ -9776,6 +7733,16 @@ fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_p
 fn cache_trace(proto: Gc<crate::runtime::function::Proto>, ct: crate::jit::trace::CompiledTrace) {
     if ct.dispatchable || ct.downrec_link.is_some() {
         proto.has_dispatchable_trace.set(true);
+        use crate::runtime::function::{TRACE_HEADS_MANY, TRACE_HEADS_NONE};
+        let mut heads = proto.trace_heads.get();
+        if heads[0] == TRACE_HEADS_NONE || heads[0] == ct.head_pc {
+            heads[0] = ct.head_pc;
+        } else if heads[1] == TRACE_HEADS_NONE || heads[1] == ct.head_pc {
+            heads[1] = ct.head_pc;
+        } else {
+            heads = [TRACE_HEADS_MANY; 2];
+        }
+        proto.trace_heads.set(heads);
     }
     if ct.head_pc == 0 {
         proto.trace_call_head_settled.set(true);
