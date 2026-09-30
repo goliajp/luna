@@ -82,7 +82,8 @@ optimization.
   `__call` metamethods resolved to reach the frame, which the Vm used to
   keep in a vector beside the frames.
 - The interpreter runs the opcodes that only read and write registers,
-  and Lua-to-Lua calls and returns, in a loop that keeps the program
+  Lua-to-Lua calls and returns, and the return of a metamethod written in
+  Lua to the instruction that called it, in a loop that keeps the program
   counter, the register window and the constants in locals; the frame is
   reloaded only after something that may have changed it (a metamethod,
   an error, a hook, a native that ran Lua code). A function holding a

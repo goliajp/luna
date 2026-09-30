@@ -5293,10 +5293,10 @@ impl Vm {
 
     /// Return0 / Return1 without the close and hook machinery (PUC
     /// `OP_RETURN0` / `OP_RETURN1`): when no return hook can fire, nothing
-    /// in this frame needs closing and the caller is a Lua frame inside this
-    /// activation, the return is the pop, the result copy and
-    /// `finish_results` that `complete_return` would do. Returns `false`,
-    /// having done nothing, otherwise.
+    /// in this frame needs closing and the caller is a Lua frame or a
+    /// metamethod's continuation inside this activation, the return is the
+    /// pop, the result copy and the result count that `complete_return`
+    /// would do. Returns `false`, having done nothing, otherwise.
     #[inline]
     fn return_to_lua(&mut self, base: u32, abs_a: u32, nret: u32, entry_depth: usize) -> bool {
         let n = self.frames.len();
@@ -5305,10 +5305,14 @@ impl Vm {
             || self.tbc.last().is_some_and(|&s| s >= base)
             || n <= entry_depth
             || n < 2
-            || !matches!(self.frames[n - 2], CallFrame::Lua(_))
         {
             return false;
         }
+        let to_meta = match &self.frames[n - 2] {
+            CallFrame::Lua(_) => false,
+            CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => true,
+            CallFrame::Cont(_) => return false,
+        };
         let Some(CallFrame::Lua(fr)) =
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
         else {
@@ -5317,7 +5321,11 @@ impl Vm {
         for i in 0..nret {
             self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
         }
-        self.finish_results(fr.func_slot, nret, fr.nresults);
+        if to_meta {
+            self.top = fr.func_slot + nret;
+        } else {
+            self.finish_results(fr.func_slot, nret, fr.nresults);
+        }
         true
     }
 
