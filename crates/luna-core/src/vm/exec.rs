@@ -7021,9 +7021,14 @@ impl Vm {
                         // explicitly under the close-cause bucket so
                         // probes can tally overflow vs other abort
                         // causes in O(1).
+                        let (head_proto, head_pc) = (rec.head_proto, rec.head_pc);
                         self.jit.active_trace = None;
                         self.jit.counters.aborted += 1;
                         self.jit.counters.bump_close_cause("trace-overflow");
+                        // counted like a failed compile: a head whose
+                        // recordings keep overflowing is given up instead
+                        // of being recorded again on every hot crossing
+                        note_trace_compile_failure(head_proto, head_pc);
                     }
                 }
             }
@@ -9766,10 +9771,10 @@ impl Vm {
     }
 }
 
-/// Recordings of one trace head that may fail to compile before the head
-/// is no longer recorded (LuaJIT likewise blacklists a trace start after
-/// repeated failures). A few tries, since a later recording can see
-/// different register kinds.
+/// Recordings of one trace head that may fail to compile, or overflow the
+/// recorder, before the head is no longer recorded (LuaJIT likewise
+/// blacklists a trace start after repeated failures). A few tries, since a
+/// later recording can see different register kinds or take a shorter path.
 const MAX_TRACE_COMPILE_FAILURES: u8 = 3;
 
 fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {

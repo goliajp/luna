@@ -68,6 +68,11 @@ optimization.
   is created, the running natives are kept in one list instead of two,
   the post-call collection check is a single comparison, and a return
   clears only the results the caller did not want.
+- The trace JIT gives up a loop or function entry whose recordings keep
+  running past the longest trace it builds, after three of them, as it
+  already did for one whose traces keep failing to compile. Before, such
+  a place was recorded again every time it turned hot: a function called
+  in a loop paid for a recording on every call.
 - `runtime::Frame` has a new public field, `ccmt: u8`: the number of
   `__call` metamethods resolved to reach the frame, which the Vm used to
   keep in a vector beside the frames.
