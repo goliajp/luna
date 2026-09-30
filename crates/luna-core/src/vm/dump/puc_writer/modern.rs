@@ -19,6 +19,7 @@
 //!   one where luna keeps three and four, so each loop is a register window.
 
 use super::asm::{Asm, L, Res};
+use super::modern_const::event;
 use crate::vm::dump::puc::modern::Kind;
 use crate::vm::isa::Op;
 
@@ -43,25 +44,6 @@ fn opn(ops: &[Kind], k: Kind) -> u32 {
     ops.iter()
         .position(|&x| x == k)
         .expect("every emitted kind has an opcode") as u32
-}
-
-/// `ltm.h` `TMS` of an arithmetic operator (the same in 5.4 and 5.5).
-pub(super) fn event(op: Op) -> Option<u32> {
-    Some(match op {
-        Op::Add => 6,
-        Op::Sub => 7,
-        Op::Mul => 8,
-        Op::Mod => 9,
-        Op::Pow => 10,
-        Op::Div => 11,
-        Op::IDiv => 12,
-        Op::BAnd => 13,
-        Op::BOr => 14,
-        Op::BXor => 15,
-        Op::Shl => 16,
-        Op::Shr => 17,
-        _ => return None,
-    })
 }
 
 pub(super) struct M<'a, 'p> {
