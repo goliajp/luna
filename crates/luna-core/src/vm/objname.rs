@@ -46,6 +46,11 @@ fn writes_reg(i: Inst, reg: u32) -> bool {
         | Op::Lt
         | Op::Le
         | Op::EqK
+        | Op::EqI
+        | Op::LtI
+        | Op::LeI
+        | Op::GtI
+        | Op::GeI
         | Op::Test
         | Op::Return
         | Op::Return0
@@ -234,4 +239,35 @@ pub fn getobjname_in(
         }
         _ => None,
     }
+}
+
+/// The metamethod event an instruction can call, per PUC
+/// `funcnamefromcode` of each version (5.2's `getfuncname`). 5.1 names no
+/// metamethod.
+pub(crate) fn instr_event(v: LuaVersion, op: Op) -> Option<&'static str> {
+    Some(match op {
+        Op::SelfOp | Op::GetTabUp | Op::GetTable | Op::GetI | Op::GetField => "index",
+        Op::SetTabUp | Op::SetTable | Op::SetI | Op::SetField => "newindex",
+        Op::Eq => "eq",
+        Op::Add => "add",
+        Op::Sub => "sub",
+        Op::Mul => "mul",
+        Op::Div => "div",
+        Op::Mod => "mod",
+        Op::Pow => "pow",
+        Op::Unm => "unm",
+        Op::Len => "len",
+        Op::Lt => "lt",
+        Op::Le => "le",
+        Op::Concat => "concat",
+        Op::IDiv if v >= LuaVersion::Lua53 => "idiv",
+        Op::BAnd if v >= LuaVersion::Lua53 => "band",
+        Op::BOr if v >= LuaVersion::Lua53 => "bor",
+        Op::BXor if v >= LuaVersion::Lua53 => "bxor",
+        Op::Shl if v >= LuaVersion::Lua53 => "shl",
+        Op::Shr if v >= LuaVersion::Lua53 => "shr",
+        Op::BNot if v >= LuaVersion::Lua53 => "bnot",
+        Op::Close | Op::Return if v >= LuaVersion::Lua54 => "close",
+        _ => return None,
+    })
 }

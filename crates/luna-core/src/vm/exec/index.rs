@@ -4,37 +4,6 @@
 use super::*;
 
 impl Vm {
-    /// `R[dst] := t[key]` for the read opcodes (PUC `luaV_fastget`): a raw
-    /// hit on a table is the result, since `__index` is consulted only when
-    /// the raw value is nil; a miss on a table without a metatable is nil.
-    /// Anything else continues the `__index` chain without repeating the
-    /// raw probe.
-    #[inline(always)]
-    pub(super) fn index_fast(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
-        // gc-verify builds keep every read on the probed path
-        #[cfg(not(feature = "gc-verify"))]
-        if let Value::Table(tb) = t {
-            let v = match key {
-                Value::Str(s) => tb.get_str(s),
-                Value::Int(i) => tb.get_int(i),
-                k => tb.get(k),
-            };
-            if !v.is_nil() || tb.metatable().is_none() {
-                self.stack[dst as usize] = v;
-                return Ok(());
-            }
-            if let Value::Str(s) = key {
-                return self.index_str_miss(t, s, dst);
-            }
-            return self.op_index_from(t, key, dst, true);
-        }
-        #[cfg(not(feature = "gc-verify"))]
-        if let Value::Str(s) = key {
-            return self.index_str_miss(t, s, dst);
-        }
-        self.op_index(t, key, dst)
-    }
-
     /// `R[dst] := t[key]` for a string key when `t` is a table whose raw
     /// `t[key]` is nil, or not a table: follows up to four table-valued
     /// `__index` links with the pointer-chain lookup (PUC `luaV_finishget`
@@ -42,7 +11,7 @@ impl Vm {
     /// the loop limit and errors are those of `index_step`.
     #[cfg(not(feature = "gc-verify"))]
     #[inline(never)]
-    fn index_str_miss(
+    pub(super) fn index_str_miss(
         &mut self,
         t: Value,
         key: Gc<crate::runtime::string::LuaStr>,
@@ -73,13 +42,14 @@ impl Vm {
     }
 
     /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
+    #[cfg(feature = "gc-verify")]
     pub(super) fn op_index(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
         self.op_index_from(t, key, dst, false)
     }
 
     /// [`Self::op_index`]; `probed` = `t` is a table whose raw `t[key]` the
     /// caller already found nil.
-    fn op_index_from(
+    pub(super) fn op_index_from(
         &mut self,
         t: Value,
         key: Value,
@@ -128,41 +98,16 @@ impl Vm {
         match self.index_step_from(t, key, probed)? {
             MmOut::Done(v) => self.stack[dst as usize] = v,
             MmOut::Mm { func, recv } => {
-                self.begin_meta_call(func, &[recv, key], MetaAction::Store { dst }, "index")?;
+                self.begin_meta_call(func, &[recv, key], MetaAction::Store { dst })?;
             }
             MmOut::CompareSynth { .. } => unreachable!("CompareSynth from index_step"),
         }
         Ok(())
     }
 
-    /// `t[key] := v` for a VM write opcode, resolving `__newindex` yieldably.
-    pub(super) fn op_newindex(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
-        self.op_newindex_from(t, key, v, false)
-    }
-
-    /// `t[key] := v` for the write opcodes (PUC `luaV_fastset`): overwriting
-    /// a key that is present with a non-nil value never involves
-    /// `__newindex`; anything else runs the chain without repeating that
-    /// probe.
-    #[inline(always)]
-    pub(super) fn newindex_fast(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
-        // gc-verify builds keep every write on the probed path
-        #[cfg(not(feature = "gc-verify"))]
-        if let Value::Table(tb) = t {
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            if unsafe { tb.as_mut() }.try_set_existing(key, v) {
-                self.heap
-                    .barrier_back(tb.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                return Ok(());
-            }
-            return self.op_newindex_from(t, key, v, true);
-        }
-        self.op_newindex(t, key, v)
-    }
-
     /// [`Self::op_newindex`]; `probed` = `t` is a table on which the caller's
     /// `try_set_existing` already failed.
-    fn op_newindex_from(
+    pub(super) fn op_newindex_from(
         &mut self,
         t: Value,
         key: Value,
@@ -172,7 +117,7 @@ impl Vm {
         match self.newindex_step_from(t, key, v, probed)? {
             MmOut::Done(_) => {}
             MmOut::Mm { func, recv } => {
-                self.begin_meta_call(func, &[recv, key, v], MetaAction::Discard, "newindex")?;
+                self.begin_meta_call(func, &[recv, key, v], MetaAction::Discard)?;
             }
             MmOut::CompareSynth { .. } => unreachable!("CompareSynth from newindex_step"),
         }

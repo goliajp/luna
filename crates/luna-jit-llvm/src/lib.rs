@@ -33,6 +33,7 @@ use luna_core::runtime::{Gc, LuaClosure, function::Proto};
 use luna_core::vm::Vm;
 
 mod codegen;
+mod operands;
 mod storage;
 mod trace;
 

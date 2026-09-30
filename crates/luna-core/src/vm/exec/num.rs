@@ -18,27 +18,6 @@ pub(crate) enum ArithOp {
     Shr,
 }
 
-impl ArithOp {
-    /// PUC metamethod event name (`__add` → "add" etc.) used by
-    /// `debug.getinfo(level, "n")` inside a metamethod handler.
-    pub(super) fn mm_name(self) -> &'static str {
-        match self {
-            ArithOp::Add => "add",
-            ArithOp::Sub => "sub",
-            ArithOp::Mul => "mul",
-            ArithOp::Mod => "mod",
-            ArithOp::Pow => "pow",
-            ArithOp::Div => "div",
-            ArithOp::IDiv => "idiv",
-            ArithOp::BAnd => "band",
-            ArithOp::BOr => "bor",
-            ArithOp::BXor => "bxor",
-            ArithOp::Shl => "shl",
-            ArithOp::Shr => "shr",
-        }
-    }
-}
-
 pub(super) fn as_num(v: Value, version: LuaVersion) -> Option<Num> {
     match v {
         Value::Int(i) => Some(Num::Int(i)),
@@ -134,20 +113,22 @@ pub(crate) fn arith_num(
         (Sub, a, b) => Value::Float(a.as_f64() - b.as_f64()),
         (Mul, a, b) => Value::Float(a.as_f64() * b.as_f64()),
         (Div, a, b) => Value::Float(a.as_f64() / b.as_f64()),
-        // 5.4+ `luai_numpow` squares by multiplying, which can differ from
-        // the C library's `pow` in the last bit
-        (Pow, a, b) => {
-            let (a, b) = (a.as_f64(), b.as_f64());
-            Value::Float(if b == 2.0 && version >= LuaVersion::Lua54 {
-                a * a
-            } else {
-                a.powf(b)
-            })
-        }
+        (Pow, a, b) => Value::Float(num_pow(
+            version >= LuaVersion::Lua54,
+            a.as_f64(),
+            b.as_f64(),
+        )),
         (IDiv, a, b) => Value::Float((a.as_f64() / b.as_f64()).floor()),
         (Mod, a, b) => Value::Float(float_mod(version, a.as_f64(), b.as_f64())),
         (BAnd | BOr | BXor | Shl | Shr, ..) => unreachable!("bitwise op in arith_num"),
     })
+}
+
+/// `a ^ b`. 5.4+ `luai_numpow` squares by multiplying, which can differ
+/// from the C library's `pow` in the last bit.
+#[inline(always)]
+pub(super) fn num_pow(v54: bool, a: f64, b: f64) -> f64 {
+    if b == 2.0 && v54 { a * a } else { a.powf(b) }
 }
 
 /// Floor division of integers, `b != 0` (PUC `luaV_idiv`; `MIN // -1`

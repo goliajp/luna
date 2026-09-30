@@ -94,8 +94,6 @@ fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, B
 /// vice-versa) errors cleanly rather than misinterpreting bytes.
 pub(super) const BODY_TAG: &[u8] = b"\x00LunaV1\x00";
 
-// ---- writer ----
-
 fn w_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
@@ -366,6 +364,7 @@ fn r_proto(
         trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         has_dispatchable_trace: std::cell::Cell::new(false),
+        trace_heads: std::cell::Cell::new([crate::runtime::function::TRACE_HEADS_NONE; 2]),
         trace_call_head_settled: std::cell::Cell::new(false),
     }))
 }

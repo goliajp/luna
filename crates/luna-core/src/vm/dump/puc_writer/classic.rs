@@ -6,7 +6,8 @@
 //!
 //! - luna's immediates (`LoadI`, `LoadF`, `GetI`, `SetI`) and constant
 //!   field keys become constants, as a number of the dialect (5.1 and 5.2
-//!   have no integers);
+//!   have no integers); the constant- and immediate-operand arithmetic
+//!   and comparisons take theirs as `RK` operands ([`super::classic_const`]);
 //! - luna's `Close` is `OP_CLOSE` in 5.1 and a `JMP` that closes in
 //!   5.2/5.3;
 //! - the generic `for` keeps three hidden slots, so its body is a register
@@ -155,23 +156,6 @@ impl C<'_, '_> {
         self.emit(Ok(x | (k << 6)))
     }
 
-    /// An `RK` operand naming constant `k`: the constant itself when its
-    /// index fits, else a scratch register it is loaded into.
-    pub(super) fn rk(&mut self, k: u32) -> Res<u32> {
-        if k < RK_BIT {
-            return Ok(k | RK_BIT);
-        }
-        let t = self.asm.temp()?;
-        self.load_k(t, k)?;
-        Ok(t)
-    }
-
-    pub(super) fn rk_num(&mut self, i: i64) -> Res<u32> {
-        let v = self.num(i);
-        let k = self.asm.konst(v);
-        self.rk(k)
-    }
-
     /// Luna upvalue `u` in 5.1, which has no `_ENV` upvalue.
     pub(super) fn upval(&self, u: u32) -> Res<u32> {
         if self.f.ver != 51 {
@@ -305,6 +289,7 @@ impl C<'_, '_> {
                 let (b, c) = (self.operand(l.b)?, self.operand(l.c)?);
                 self.emit(self.abc(Kind::Arith(l.op), a, b, c))?;
             }
+            op if op.arith_const_op().is_some() => self.arith_const(l)?,
             Op::Unm | Op::BNot | Op::Not | Op::Len => {
                 let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
                 self.emit(self.abc(Kind::Unary(l.op), a, b, 0))?;

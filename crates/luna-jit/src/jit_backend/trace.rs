@@ -24,7 +24,11 @@ use luna_core::vm::isa::{Inst, Op};
 // codegen entry points side-by-side.
 pub use luna_core::jit::trace_types::*;
 
+mod const_operands;
+mod op_helpers;
+use op_helpers::*;
 mod slots;
+use const_operands::{VConst, split_const_operands};
 use cranelift::prelude::*;
 use cranelift_codegen::ir::UserFuncName;
 use cranelift_codegen::settings;
@@ -671,249 +675,6 @@ fn emit_lt_float_int(bcx: &mut FunctionBuilder<'_>, f: Value, i: Value) -> Value
 /// turn a float into an integer when it fits.
 fn is_rounding(fn_name: &str) -> bool {
     matches!(fn_name, "floor" | "ceil")
-}
-
-/// Single-op classifier — the per-op decision logic used by the
-/// look-ahead walker [`infer_getx_exit_lookahead`].
-///
-/// The helpers returning a GetX value (`Op::GetI` / `Op::GetTable` /
-/// `Op::GetField` / `Op::GetTabUp`) hand back the table cell's raw
-/// 8-byte payload — Int, Table, Float, or anything else. A static
-/// prediction of the payload's tag needs context from the use site.
-///
-/// - Arithmetic / numeric cmp operand → must be Int.
-/// - Table-base operand (Get / Set / Len) → must be Table.
-/// - Anything else (`Move`, `Eq`, trace tail, literal
-///   materialisation) → unknown; return `None`. The walker treats
-///   `LoadI / LoadF / LoadK` as transparent and walks past them.
-///
-/// `Op::Eq` is *not* a tag indicator: values of any two types can
-/// be compared, so the cmp itself doesn't pin the result's tag.
-fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
-    let na = next.a();
-    let nb = next.b();
-    let nc = next.c();
-    match next.op() {
-        // Arith: A := B op C. The result's reg is Int; if a
-        // GetX output is consumed here it's an Int operand.
-        Op::Add | Op::Sub | Op::Mul => {
-            if nb == getx_a || nc == getx_a {
-                Some(ExitTag::Int)
-            } else {
-                None
-            }
-        }
-        // Lt / Le compare ordering — operand must be numeric.
-        Op::Lt | Op::Le => {
-            if na == getx_a || nb == getx_a {
-                Some(ExitTag::Int)
-            } else {
-                None
-            }
-        }
-        // Table-base reads: A := B[*]. The B operand must be a
-        // table; if GetX's output feeds it, we know it's a Table.
-        Op::GetI | Op::GetTable | Op::GetField => {
-            if nb == getx_a {
-                Some(ExitTag::Table)
-            } else {
-                None
-            }
-        }
-        // Table-base writes: A[*] := *. The A operand must be a
-        // table.
-        Op::SetI | Op::SetTable | Op::SetList | Op::SetField => {
-            if na == getx_a {
-                Some(ExitTag::Table)
-            } else {
-                None
-            }
-        }
-        // `#R[B]` requires R[B] to be a table.
-        Op::Len => {
-            if nb == getx_a {
-                Some(ExitTag::Table)
-            } else {
-                None
-            }
-        }
-        // `Op::Eq` compares values of any two types, so it tells
-        // us nothing about the operand's tag.
-        _ => None,
-    }
-}
-
-/// Look-ahead variant of [`infer_getx_exit`]: walks the recorded ops
-/// after the GetX, skipping ops that are *transparent* (provably
-/// don't read `R[getx_a]` and don't overwrite it). Returns as soon
-/// as the first non-transparent op classifies the use, or `None` if
-/// nothing in the trail consumes the slot or the slot is overwritten
-/// first.
-///
-/// The transparent set is intentionally tight: only `LoadI`,
-/// `LoadF`, `LoadK` (literal materialisation into a register slot ≠
-/// getx_a) qualify. These ops never read any register, so they can
-/// never consume `R[getx_a]`; if their `A` ≠ `getx_a` they also
-/// don't overwrite it. Anything else stops the walk — either we
-/// classify (Add / Sub / Mul / Lt / Le / Get* / Set* / Len) or
-/// we conservatively return `None`.
-///
-/// This unblocks the common Lua codegen pattern
-///
-/// ```text
-///   GetField R[a], R[base], "k"   ; read
-///   LoadI    R[a+1], <literal>    ; materialise const operand
-///   Le       R[?],  R[a], R[a+1]  ; compare R[a] vs literal
-/// ```
-///
-/// where the 1-op-ahead path saw `LoadI` next and bailed.
-fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -> Option<ExitTag> {
-    // Bound the walk — analysis cost cap on faulty trace shapes.
-    // Most use sites are within 1-2 ops; 4 is generous.
-    const MAX_LOOKAHEAD: usize = 4;
-    for rop in ops_after.iter().take(MAX_LOOKAHEAD) {
-        let inst = rop.inst;
-        let op = inst.op();
-        let a = inst.a();
-        // First, a per-op classification attempt — if the use site
-        // is right here, that wins.
-        if let Some(tag) = infer_getx_exit_inst(getx_a, inst) {
-            return Some(tag);
-        }
-        // Transparent: `LoadI / LoadF / LoadK` materialise a
-        // literal into `R[A]`. They read no registers. If `A` is
-        // not our slot they don't affect it; walk past. This
-        // covers the canonical Lua codegen pattern
-        // `GetField R[a]; LoadI R[a+1], K; Le R[?], R[a], R[a+1]`
-        // where the 1-op-ahead path would have stopped at LoadI.
-        if matches!(op, Op::LoadI | Op::LoadF | Op::LoadK) {
-            if a == getx_a {
-                // LoadX overwrites our slot before any use — give up.
-                return None;
-            }
-            continue;
-        }
-        // Any other op stops the walk: either the per-op classifier
-        // already pinned a tag (handled above) or we conservatively
-        // bail to avoid a wrong static prediction.
-        return None;
-    }
-    None
-}
-
-/// [`emit_floor_divmod`] for a divisor `k` known to be neither 0 nor -1:
-/// the truncated remainder needs adjusting exactly when it is nonzero and
-/// of the other sign than `k`, which for a known sign is one sign test,
-/// done without a compare as an all-ones mask (`|r| < |k|`, so negating
-/// `r` cannot overflow).
-///
-/// For `k > 0` there is a shorter exact form: with `s = x >> 63` (0 or
-/// all ones), `t = x ^ s` is `x` or `-x - 1`, never negative and never
-/// overflowing, and `floor(x / k) = (t / k) ^ s` with an unsigned
-/// division, which Cranelift strength-reduces to a multiply; the
-/// remainder is then `x - k * q` with no sign adjustment.
-fn emit_floor_divmod_by(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, k: i64) -> Value {
-    let kv = bcx.ins().iconst(types::I64, k);
-    if k > 0 {
-        let s = bcx.ins().sshr_imm_u(a, 63);
-        let t = bcx.ins().bxor(a, s);
-        let ut = bcx.ins().udiv(t, kv);
-        let q = bcx.ins().bxor(ut, s);
-        return if op == Op::IDiv {
-            q
-        } else {
-            let qk = bcx.ins().imul(q, kv);
-            bcx.ins().isub(a, qk)
-        };
-    }
-    let q = bcx.ins().sdiv(a, kv);
-    let qk = bcx.ins().imul(q, kv);
-    let r = bcx.ins().isub(a, qk);
-    let wrong_sign = if k > 0 { r } else { bcx.ins().ineg(r) };
-    let mask = bcx.ins().sshr_imm_u(wrong_sign, 63);
-    if op == Op::IDiv {
-        bcx.ins().iadd(q, mask)
-    } else {
-        let adj = bcx.ins().band_imm_s(mask, k);
-        bcx.ins().iadd(r, adj)
-    }
-}
-
-/// Lua's integer `//` or `%` for a nonzero divisor: rounded toward minus
-/// infinity (the remainder takes the divisor's sign), and `x // -1` wraps
-/// where a machine division by -1 would trap on minint.
-fn emit_floor_divmod(bcx: &mut FunctionBuilder<'_>, op: Op, a: Value, b: Value) -> Value {
-    let minus_one = bcx.ins().iconst(types::I64, -1);
-    let one = bcx.ins().iconst(types::I64, 1);
-    let zero = bcx.ins().iconst(types::I64, 0);
-    let is_m1 = bcx.ins().icmp(IntCC::Equal, b, minus_one);
-    let safe_b = bcx.ins().select(is_m1, one, b);
-    let q = bcx.ins().sdiv(a, safe_b);
-    let qb = bcx.ins().imul(q, safe_b);
-    let r = bcx.ins().isub(a, qb);
-    // a nonzero remainder whose sign differs from the divisor's
-    let r_nz = bcx.ins().icmp(IntCC::NotEqual, r, zero);
-    let signs = bcx.ins().bxor(r, b);
-    let differ = bcx.ins().icmp(IntCC::SignedLessThan, signs, zero);
-    let adjust = bcx.ins().band(r_nz, differ);
-    if op == Op::IDiv {
-        let q1 = bcx.ins().isub(q, one);
-        let floored = bcx.ins().select(adjust, q1, q);
-        let neg = bcx.ins().ineg(a);
-        bcx.ins().select(is_m1, neg, floored)
-    } else {
-        let rb = bcx.ins().iadd(r, b);
-        let floored = bcx.ins().select(adjust, rb, r);
-        bcx.ins().select(is_m1, zero, floored)
-    }
-}
-
-/// The kind a GetX result is typed as, from its inferred use, and the
-/// value tag its checked read demands (`None`: the use is not typed).
-fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
-    use luna_core::runtime::value::raw;
-    match tag {
-        Some(ExitTag::Int) => Some((RegKind::Int, raw::INT)),
-        Some(ExitTag::Table) => Some((RegKind::Table, raw::TABLE)),
-        Some(ExitTag::Float) => Some((RegKind::Float, raw::FLOAT)),
-        _ => None,
-    }
-}
-
-/// forward-look exit-tag inference for `Op::GetUpval`.
-/// Walks the recorded ops following the GetUpval until either:
-/// - an `Op::Call` with `A == getupval_a` is found → the upval is
-///   that Call's function target → `Some(ExitTag::Closure)`.
-/// - an op that writes `R[getupval_a]` is found before the Call →
-///   the upval is overwritten in this slot → `None`.
-/// - the walk runs out → `None`.
-fn infer_upval_exit(getupval_a: u32, ops_after: &[RecordedOp]) -> Option<ExitTag> {
-    for rop in ops_after {
-        let next = rop.inst;
-        if next.op() == Op::Call && next.a() == getupval_a {
-            return Some(ExitTag::Closure);
-        }
-        // Conservative writes-A detection: ops that don't write A
-        // are control / cmp / store ops. Everything else writes A.
-        let writes_a = !matches!(
-            next.op(),
-            Op::Lt
-                | Op::Le
-                | Op::Eq
-                | Op::EqK
-                | Op::Jmp
-                | Op::SetI
-                | Op::SetTable
-                | Op::SetList
-                | Op::Return0
-                | Op::Return1
-                | Op::Return
-        );
-        if writes_a && next.a() == getupval_a {
-            return None;
-        }
-    }
-    None
 }
 
 /// Per-register *current* kind tracked during the lowerer's forward
@@ -3732,6 +3493,23 @@ fn lower_trace_into_inner<M: Module>(
 
     let head_proto = record.head_proto;
     let max_stack = head_proto.max_stack as usize;
+    // Every pass below reads register operands: a constant- or
+    // immediate-operand op is lowered as its register form with the
+    // constant in virtual register `max_stack` (one past the op's frame,
+    // never stored back), whose kind and value `vconsts` holds.
+    let translated;
+    let (record, vconsts) = match split_const_operands(record, max_stack as u32) {
+        Some((t, v)) => {
+            translated = t;
+            (&translated, v)
+        }
+        None => (record, Vec::new()),
+    };
+    let vconst = |i: usize| vconsts.get(i).copied().flatten();
+    // a register index past the frame, other than the virtual one
+    let oob = |i: usize, r: u32| {
+        r as usize >= max_stack && !(r as usize == max_stack && vconst(i).is_some())
+    };
     let n = record.ops.len();
 
     // recorder invariant: the first recorded op is at
@@ -4560,7 +4338,7 @@ fn lower_trace_into_inner<M: Module>(
                 }
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
-                if a >= max_stack || b >= max_stack || c >= max_stack {
+                if a >= max_stack || oob(i, b as u32) || oob(i, c as u32) {
                     {
                         checkpoint("bail:cmp-dirs-body-other");
                         return None;
@@ -4572,7 +4350,7 @@ fn lower_trace_into_inner<M: Module>(
             // trusted); Float / mixed paths would need RegKind
             // tracking like the method JIT.
             Op::IDiv | Op::Mod | Op::BAnd | Op::BOr | Op::BXor | Op::Shl | Op::Shr => {
-                if a >= max_stack || b >= max_stack || c >= max_stack {
+                if a >= max_stack || oob(i, b as u32) || oob(i, c as u32) {
                     {
                         checkpoint("bail:cmp-dirs-body-other");
                         return None;
@@ -4714,7 +4492,7 @@ fn lower_trace_into_inner<M: Module>(
                 }
             }
             Op::Lt | Op::Le | Op::Eq => {
-                if a >= max_stack || b >= max_stack {
+                if oob(i, a as u32) || oob(i, b as u32) {
                     {
                         checkpoint("bail:cmp-ab-oob");
                         return None;
@@ -5956,16 +5734,25 @@ fn lower_trace_into_inner<M: Module>(
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
     stored.extend(regs_full.iter().map(|&v| Some(bcx.use_var(v))));
+    // the virtual register of a constant-operand op (see `vconsts`)
+    let kvar = bcx.declare_var(types::I64);
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.
         sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
+        let vk = vconst(i);
         // R[C] of a register-operand op, read before this op's own write
         // forgets it (`x = x % 7` divides by the old value)
-        let rc_const = known_int
-            .get(op_offsets[i] as usize + rop.inst.c() as usize)
-            .copied()
-            .flatten();
+        let rc_const = match vk {
+            Some(k) if rop.inst.c() as usize == max_stack => match k {
+                VConst::Int(n) => Some(n),
+                VConst::Float(_) => None,
+            },
+            _ => known_int
+                .get(op_offsets[i] as usize + rop.inst.c() as usize)
+                .copied()
+                .flatten(),
+        };
         for w in op_writes_at_offset(rop, op_offsets[i]) {
             if let Some(slot) = known_int.get_mut(w as usize) {
                 *slot = None;
@@ -5980,6 +5767,35 @@ fn lower_trace_into_inner<M: Module>(
         // Vec with explicit `off + X` indexing.
         let off = op_offsets[i] as usize;
         let regs: &[Variable] = &regs_full[off..off + max_stack];
+        // a constant operand: its value in `kvar`, which `regs` gets as
+        // register `max_stack`
+        let regs_v: Vec<Variable>;
+        let regs: &[Variable] = match vk {
+            Some(k) => {
+                let v = match k {
+                    VConst::Int(n) => bcx.ins().iconst(types::I64, n),
+                    VConst::Float(f) => {
+                        let fv = bcx.ins().f64const(f);
+                        bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
+                    }
+                };
+                bcx.def_var(kvar, v);
+                regs_v = regs.iter().copied().chain([kvar]).collect();
+                &regs_v
+            }
+            None => regs,
+        };
+        // the kind of an operand register, the virtual one included
+        macro_rules! kind {
+            ($r:expr) => {{
+                let r: u32 = $r;
+                match vk {
+                    Some(VConst::Int(_)) if r as usize == max_stack => RegKind::Int,
+                    Some(VConst::Float(_)) if r as usize == max_stack => RegKind::Float,
+                    _ => k_op(&current_kinds, off as u32 + r),
+                }
+            }};
+        }
         // body emit handler for the 4-op
         // string-accumulator idiom. Skip the 2 pre-Moves + the
         // post-Move (they're collapsed into the buffered emit).
@@ -6325,8 +6141,8 @@ fn lower_trace_into_inner<M: Module>(
                 current_kinds[off + ins.a() as usize] = k;
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
-                let kb = k_op(&current_kinds, off as u32 + ins.b());
-                let kc = k_op(&current_kinds, off as u32 + ins.c());
+                let kb = kind!(ins.b());
+                let kc = kind!(ins.c());
                 // A string operand is coerced (or has `__add` & co. in its
                 // metatable); only numbers are lowered, since the payload of
                 // anything else is a pointer.
@@ -6422,8 +6238,8 @@ fn lower_trace_into_inner<M: Module>(
                 // Lowered for two integers only: a float operand makes
                 // `//` and `%` float ops and the bitwise ops convert or
                 // raise; a string is coerced.
-                let kb = k_op(&current_kinds, off as u32 + ins.b());
-                let kc = k_op(&current_kinds, off as u32 + ins.c());
+                let kb = kind!(ins.b());
+                let kc = kind!(ins.c());
                 if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
                     return None;
                 }
@@ -6841,8 +6657,8 @@ fn lower_trace_into_inner<M: Module>(
                 let dir = cmp_dirs[i].expect("cmp dir set in pre-emit");
                 let invert = matches!(dir, CmpDir::SkippedJmp);
                 let k_effective = if invert { !ins.k() } else { ins.k() };
-                let ka = k_op(&current_kinds, off as u32 + ins.a());
-                let kb = k_op(&current_kinds, off as u32 + ins.b());
+                let ka = kind!(ins.a());
+                let kb = kind!(ins.b());
                 let float_path = matches!(ka, RegKind::Float) || matches!(kb, RegKind::Float);
                 let cond = if float_path {
                     if !matches!(ka, RegKind::Float) || !matches!(kb, RegKind::Float) {
@@ -7142,6 +6958,9 @@ fn lower_trace_into_inner<M: Module>(
                     let call = bcx.ins().call(func_ref, &[t, k_imm]);
                     let v = bcx.inst_results(call)[0];
                     bcx.def_var(regs[ins.a() as usize], v);
+                    // the value's type is not known: the register's
+                    // earlier kind no longer describes it
+                    current_kinds[off + ins.a() as usize] = RegKind::Unset;
                     dispatchable = false;
                     dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
                 }
@@ -7179,6 +6998,8 @@ fn lower_trace_into_inner<M: Module>(
                         let call = bcx.ins().call(func_ref, &[t, key]);
                         let v = bcx.inst_results(call)[0];
                         bcx.def_var(regs[ins.a() as usize], v);
+                        // as for GetI
+                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetTable:inference-fail"));
@@ -7439,6 +7260,8 @@ fn lower_trace_into_inner<M: Module>(
                     Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
                     Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
                     _ => {
+                        // as for GetI
+                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetField:inference-fail"));
@@ -7477,6 +7300,8 @@ fn lower_trace_into_inner<M: Module>(
                     Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
                     Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
                     _ => {
+                        // as for GetI
+                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetTabUp:inference-fail"));

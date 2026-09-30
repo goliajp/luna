@@ -98,11 +98,11 @@ fn retarget_arith_add_local_local_one_emits_no_move() {
         0,
         "the Reloc-landing peephole must elide the trailing Move for `local = local + 1`"
     );
-    // Add still emits exactly once, landing directly into the local.
+    // the add still emits exactly once, landing directly into the local
     assert_eq!(
-        count_ops(&code, Op::Add),
+        count_ops(&code, Op::AddI),
         1,
-        "the single Add stays; only its A field is retargeted"
+        "the single AddI stays; only its A field is retargeted"
     );
     assert_eq!(eval_int(src), 1);
 }

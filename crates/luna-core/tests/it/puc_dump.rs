@@ -15,6 +15,10 @@
 //! Needs `PUC_LUA_51` … `PUC_LUA_55` (and `PUC_LUAC_5x` for the stripped
 //! case); a dialect without them is skipped with a notice, or fails under
 //! `LUNA_DIFF_PUC_REQUIRE_ALL=1`.
+//!
+//! `const_operand_forms_round_trip_through_luna` needs no interpreter: the
+//! constant- and immediate-operand opcodes luna's compiler emits are dumped
+//! under every dialect and the dump is run against the source.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -242,6 +246,137 @@ fn dump_round_trips_through_luna() {
             Ok(())
         },
     );
+}
+
+/// Every constant- and immediate-operand opcode, each side of the operator,
+/// with immediates PUC's parser can and cannot negate (`x - 128`,
+/// `x << 128`), float immediates, metamethods that show their argument
+/// order and `math.type`, and an arithmetic error naming its operand.
+const CONST_OPERANDS: &str = r#"
+local mtype = math.type or type
+local function tag(v)
+  if type(v) == "table" then return "obj" end
+  if type(v) == "number" then return mtype(v) .. ":" .. tostring(v) end
+  return type(v) .. ":" .. tostring(v)
+end
+local mt = {}
+for _, ev in ipairs { "add", "sub", "mul", "div", "mod", "pow", "idiv", "band", "bor", "bxor", "shl", "shr" } do
+  mt["__" .. ev] = function(a, b) return ev .. "(" .. tag(a) .. "," .. tag(b) .. ")" end
+end
+mt.__lt = function(a, b) print("lt(" .. tag(a) .. "," .. tag(b) .. ")") return true end
+mt.__le = function(a, b) print("le(" .. tag(a) .. "," .. tag(b) .. ")") return false end
+local obj = setmetatable({}, mt)
+print(obj + 1, 1 + obj, obj + 128, obj + -127, obj - 1, obj - 128, obj - -127, obj - 0, 1 - obj)
+print(obj * 3, 3 * obj, obj / 4, obj % 7, obj ^ 2, obj + 0.5, 0.5 + obj, obj * 1000000, obj - 1000)
+-- 5.1 calls an order metamethod only for two operands of the same type
+if _VERSION >= "Lua 5.2" then
+  print(obj < 2, 2 < obj, obj <= 2, 2 <= obj, obj > 2, 2 > obj, obj >= 2, 2 >= obj)
+  print(obj < 2.0, 2.0 < obj, obj <= -5.0, obj < -128)
+end
+print(obj == 1, 1 == obj, obj ~= 1, obj == 1.0, obj == "s")
+local x = 7
+print(x + 1, x + 128, x + -127, x - 1, x - 128, x - -127, x - 0, x * 3, x / 4, x % 7, x ^ 2)
+print(x + 0.5, x * 2.5, x % 1000, x % -7, x / -3, x ^ -1, 4 / x, 7 % x, 2 ^ x)
+print(x == 7, x == 8, 7 == x, x ~= 7, x == 7.0, x == 1000, x == "7", x ~= "abc")
+print(x < 8, x <= 7, x > 6, x >= 7, 8 > x, 6 < x, x < -128, x > 128, x < 7.0, x <= 7.5, x >= 128, 128 <= x)
+local y = -3.5
+print(y + 1, y - 1, y * 2, y < 0, y <= -3, y >= -4, y == -3.5, y > -4.0, y + 0.5)
+local s = "10"
+print(s + 1, 1 + s, s - 1, s * 2, s < "5", s == 10, s == "10")
+if _VERSION >= "Lua 5.3" then
+  local f = load([[
+    local obj, x = ...
+    print(obj // 3, 3 // obj, obj & 12, 12 & obj, obj | 1, 1 | obj, obj ~ 255, 255 ~ obj)
+    print(obj << 1, obj << 128, obj >> 1, obj << -3, obj >> -3, obj >> 128, 3 << obj, 3 >> obj)
+    print(x // 3, x // -3, x & 12, 12 & x, x | 1, x ~ 255, x << 1, x << 128, x >> 1, x << -3, x >> -3)
+    print(x << 63, x >> 70, x & 1000, x // 0.5, math.maxinteger + 1 == math.mininteger, 3 << x, 3 >> x)
+    print(x < 7.0, x == 7.0, x ~= 7.0, x < 2^53, x & 1.0, x | 2.0)
+  ]])
+  f(obj, 7)
+end
+local function loops(n)
+  local acc, c = 0, 0
+  for i = 1, n do
+    acc = acc + i % 7 - 1
+    if i < 10 then c = c + 1 end
+    if i >= 90 then c = c + 100 end
+    if 50 <= i then c = c + 1000 end
+    if i == 42 then c = c + 1000000 end
+    if i ~= 42 then c = c - 1 end
+  end
+  return acc, c
+end
+print(loops(100))
+"#;
+
+/// Errors name the operand that is a local; the chunk name in front
+/// differs between the source and its dump, the rest must not. Needs the
+/// debug information a stripped dump drops.
+const CONST_OPERAND_ERRORS: &str = r#"
+local function err(f)
+  local ok, e = pcall(f)
+  return ok, (tostring(e):gsub("^[^:]*:%d+: ", ""))
+end
+print(err(function() local n = nil return n + 1 end))
+print(err(function() local n = {} return 2 * n end))
+print(err(function() local n = "abc" return n - 1 end))
+print(err(function() local n = false return n < 2 end))
+print(err(function() local n = false return 2 < n end))
+print(err(function() local n = {} return n % 7 end))
+if _VERSION >= "Lua 5.3" then
+  print(err(load("local n = 2.5 return n & 1")))
+  print(err(load("local n = 2.5 return n << 3")))
+  print(err(load("local n = {} return 1 | n")))
+end
+"#;
+
+/// Dump `source` under `version`, load the dump back and run it: the same
+/// outcome as running the source, which must have printed `expect`.
+fn round_trip_on_luna(
+    dialect: &str,
+    version: LuaVersion,
+    source: &str,
+    expect: &str,
+    strips: &[bool],
+    failed: &mut Vec<String>,
+) {
+    let want = run_on_luna(version, source.as_bytes()).expect("source runs");
+    assert!(
+        matches!(&want, Outcome::Output(s) if s.contains(expect)),
+        "{dialect}: the source did not print {expect:?}: {want:?}"
+    );
+    for &strip in strips {
+        let got = luna_dump(version, source, strip).and_then(|bytes| run_on_luna(version, &bytes));
+        if got.as_ref() != Ok(&want) {
+            failed.push(format!(
+                "{dialect} strip={strip}:\n--- source ---\n{want:?}\n--- dump ---\n{got:?}"
+            ));
+        }
+    }
+}
+
+#[test]
+fn const_operand_forms_round_trip_through_luna() {
+    let mut failed = Vec::new();
+    for &(dialect, version, _, _) in DIALECTS {
+        round_trip_on_luna(
+            dialect,
+            version,
+            CONST_OPERANDS,
+            "sub(obj,",
+            &[false, true],
+            &mut failed,
+        );
+        round_trip_on_luna(
+            dialect,
+            version,
+            CONST_OPERAND_ERRORS,
+            "local 'n'",
+            &[false],
+            &mut failed,
+        );
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
 #[test]

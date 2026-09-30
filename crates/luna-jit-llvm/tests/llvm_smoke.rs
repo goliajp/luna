@@ -517,10 +517,10 @@ fn div_chunk_bails_until_float_support() {
 /// Comparison + control flow.
 ///
 /// `local x = 5; if x < 10 then return 1 else return 0 end` compiles
-/// to a Lt+Jmp pair plus two Return1 paths. The compute path lowers
-/// the Lt+Jmp pair to a single LLVM `condbr` and emits one LLVM BB
-/// per source BB. For x=5 (5<10 = true), the JIT entry must take the
-/// then-branch and return 1.
+/// to a LtI+Jmp pair plus two Return1 paths. The compute path lowers
+/// the comparison+Jmp pair to a single LLVM `condbr` and emits one
+/// LLVM BB per source BB. For x=5 (5<10 = true), the JIT entry must
+/// take the then-branch and return 1.
 #[test]
 fn if_lt_then_else_takes_correct_branch() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
@@ -531,7 +531,7 @@ fn if_lt_then_else_takes_correct_branch() {
         )
         .expect("compile");
     let proto = closure.proto;
-    assert!(proto.code.iter().any(|i| i.op() == Op::Lt));
+    assert!(proto.code.iter().any(|i| i.op() == Op::LtI));
     assert!(proto.code.iter().any(|i| i.op() == Op::Jmp));
 
     let backend = LlvmBackend;
@@ -838,16 +838,16 @@ fn fib_shape_nested_branchy_chunk() {
     let proto = closure.proto;
 
     // Confirm the chunk really exercises the breadth of ops the test
-    // claims. If the parser ever folds any of these out, the test
-    // loses coverage — surface that loudly.
+    // claims, constant operands in their immediate / constant forms.
+    // If the parser ever folds any of these out, surface that loudly.
     for op in [
         Op::LoadI,
-        Op::Lt,
-        Op::Eq,
+        Op::LtI,
+        Op::EqI,
         Op::Mul,
-        Op::Sub,
-        Op::Mod,
-        Op::Add,
+        Op::SubI,
+        Op::ModK,
+        Op::AddI,
         Op::Jmp,
         Op::Return1,
     ] {

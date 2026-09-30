@@ -1,10 +1,9 @@
 //! Which `GetUpval` reads of a chunk feed arithmetic (a value) and which
 //! only name the function itself (a self-call marker).
 
-use luna_core::runtime::function::Proto;
 use luna_core::vm::isa::{Inst, Op};
 
-/// classify every `Op::GetUpval` in `proto` as either the
+/// classify every `Op::GetUpval` in `code` as either the
 /// existing **SelfMarker** role (the loaded value is used only as a
 /// `Op::Call` func slot — lowered as a direct cranelift call
 /// without ever materialising the upvalue) or the new **ValueRead**
@@ -23,19 +22,19 @@ use luna_core::vm::isa::{Inst, Op};
 ///   on `self_upval`. Cases like `function () return x end` (Return1
 ///   reads R[A] without a numeric operator) stay in the default-bail
 ///   bucket because we can't assume the runtime type of `x`.
-pub(super) fn determine_getupval_roles(proto: &Proto) -> Vec<bool> {
+pub(super) fn determine_getupval_roles(code: &[Inst]) -> Vec<bool> {
     const WINDOW: usize = 8;
-    let n = proto.code.len();
+    let n = code.len();
     let mut roles = vec![false; n];
     for pc in 0..n {
-        let ins = proto.code[pc];
+        let ins = code[pc];
         if !matches!(ins.op(), Op::GetUpval) {
             continue;
         }
         let target_a = ins.a() as usize;
         let end = (pc + 1 + WINDOW).min(n);
         for q in (pc + 1)..end {
-            let q_ins = proto.code[q];
+            let q_ins = code[q];
             // Op::Call with R[A] as func slot — confirmed SelfMarker.
             if matches!(q_ins.op(), Op::Call) && q_ins.a() as usize == target_a {
                 break;
