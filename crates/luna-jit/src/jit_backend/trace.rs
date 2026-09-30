@@ -3599,9 +3599,9 @@ pub fn base_var_scaffold_declared_count() -> u64 {
 
 /// Traces this thread has run through Cranelift and finalized into
 /// machine code for a Vm or via [`try_compile_trace_with_options`].
-/// Diagnostic-only:
-/// it tells a trace cached with code from one cached without
-/// ([`trace_is_enterable`]).
+/// Diagnostic-only: it tells a trace cached with code from one a Vm
+/// cached without, because nothing could enter it.
+#[doc(hidden)]
 pub fn trace_codegen_count() -> u64 {
     TRACE_CODEGEN.with(|c| c.get())
 }
@@ -9344,7 +9344,7 @@ fn lower_trace_into_inner<M: Module>(
 /// admits it at its head (dispatchable, or linked for down-recursion), or
 /// it is a side trace whose parent's exit calls it, which the Vm allows
 /// for a trace that is only too short to dispatch on its own.
-pub fn trace_is_enterable(record: &TraceRecord, ct: &CompiledTrace) -> bool {
+pub(crate) fn trace_is_enterable(record: &TraceRecord, ct: &CompiledTrace) -> bool {
     ct.dispatchable
         || ct.downrec_link.is_some()
         || (record.side_trace_parent.is_some() && ct.dispatch_off_reason == Some("length-gate"))

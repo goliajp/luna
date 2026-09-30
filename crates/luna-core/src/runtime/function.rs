@@ -381,6 +381,7 @@ pub struct Proto {
     /// interpreter checks this before scanning `traces` on every
     /// instruction. Traces are never removed, so it only goes from
     /// `false` to `true`.
+    #[doc(hidden)]
     pub has_dispatchable_trace: std::cell::Cell<bool>,
     /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
     /// a trace is cached there or recording it was abandoned. Set once,
