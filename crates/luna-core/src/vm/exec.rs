@@ -10,19 +10,20 @@
 use crate::frontend::SyntaxError;
 use crate::jit::send_compat::TArc;
 use crate::numeric::{self, Num};
+use crate::runtime::function::NativeKind;
 use crate::runtime::heap::GcHeader;
 use crate::runtime::{
     AfterClose, CallFrame, CloseCont, ContKind, Coro, CoroStatus, Frame, Gc, Heap, LuaClosure,
-    MetaAction, MetaCont, NativeClosure, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
+    MetaAction, MetaCont, NativeCont, Table, TableError, UpvalState, Upvalue, Value,
 };
 use crate::version::LuaVersion;
-use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
 use crate::vm::callstack::DbgKind;
 use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
 
 mod arith;
 mod index;
+mod native_call;
 mod num;
 use num::*;
 pub(crate) use num::{ArithOp, arith_num, str_to_num};
@@ -320,11 +321,10 @@ pub struct Vm {
     /// native call (PUC `ar.name == NULL` at level 0 because the level-0
     /// caller is C, not Lua) and qualify the running function's name via
     /// `pushglobalfuncname` (e.g. `'sort'` → `'table.sort'`).
-    pub(crate) running_natives: Vec<Gc<NativeClosure>>,
-    /// Parallel to `running_natives`: where each native sits on the value
-    /// and frame stacks, so the debug interface can place it among the Lua
+    /// Each entry also records where the native sits on the value and
+    /// frame stacks, so the debug interface can place it among the Lua
     /// activations as PUC's CallInfo chain would (see `callstack`).
-    pub(crate) running_native_acts: Vec<crate::vm::callstack::NativeAct>,
+    pub(crate) running_natives: Vec<crate::vm::callstack::NativeAct>,
     /// Index into `running_natives` where the running thread's own natives
     /// begin; the ones below belong to the threads that resumed it.
     pub(crate) natives_base: usize,
@@ -1030,7 +1030,6 @@ impl Vm {
             error_traceback: None,
             public_call_depth: 0,
             running_natives: Vec::new(),
-            running_native_acts: Vec::new(),
             natives_base: 0,
             // JIT-specific state lives in the `JitState`
             // sidecar. The `luna` crate's `Vm::new_minimal_with_jit` /
@@ -2903,10 +2902,7 @@ impl Vm {
     /// O(SWEEP_DIVISOR) safe-points regardless of size.
     #[inline(always)]
     pub(crate) fn maybe_collect_garbage(&mut self, live_top: u32) {
-        if self.gc_finalizing {
-            return;
-        }
-        if !self.heap.gc_due() {
+        if !self.heap.gc_due() || self.gc_finalizing {
             return;
         }
         // Bare `live_top`, no `max(self.top)` widening: every frame-pop
@@ -3016,8 +3012,8 @@ impl Vm {
         // closure that's actively executing, leaving `nc.upvals`
         // dangling and the Rust local `nc` pointing at recycled memory
         // — the SIGSEGV pops on the very next field access or pop.
-        for &nc in &self.running_natives {
-            roots.push(Value::Native(nc));
+        for a in &self.running_natives {
+            roots.push(Value::Native(a.nc));
         }
         // the running thread's debug hook (suspended threads root theirs via
         // Coro::trace / the main_ctx sweep below)
@@ -3940,18 +3936,7 @@ impl Vm {
             // pairs, an async native) pushes frames or parks a future
             // instead of returning its results here
             let runs_to_completion = match self.stack[abs as usize] {
-                Value::Native(nc) => {
-                    use crate::runtime::value::NativeFn;
-                    !nc.is_async
-                        && ![
-                            nat_pcall as NativeFn,
-                            nat_xpcall as NativeFn,
-                            nat_host_xpcall as NativeFn,
-                            nat_pairs as NativeFn,
-                        ]
-                        .iter()
-                        .any(|&g| std::ptr::fn_addr_eq(nc.f, g))
-                }
+                Value::Native(nc) => nc.kind == NativeKind::Plain,
                 _ => false,
             };
             if !runs_to_completion || self.begin_call(abs + 4, Some(2), nvars, false).is_err() {
@@ -4167,8 +4152,8 @@ impl Vm {
     pub fn running_native_upvalue(&self, i: usize) -> Value {
         match self.running_natives.last() {
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            Some(nc) => unsafe {
-                let upvals = &(*nc.as_ptr()).upvals;
+            Some(a) => unsafe {
+                let upvals = &(*a.nc.as_ptr()).upvals;
                 upvals.get(i).copied().unwrap_or(Value::Nil)
             },
             None => Value::Nil,
@@ -4431,100 +4416,10 @@ impl Vm {
                     return Ok(true);
                 }
                 Value::Native(nc) => {
-                    // Async-marked NativeClosure.
-                    // Route through the cooperative-yield mechanism
-                    // when async_mode is on; reject when called from
-                    // a sync `eval`/`call_value` path (would have no
-                    // executor to drive the returned future).
-                    if nc.is_async {
-                        if !self.async_mode {
-                            let s = Value::Str(
-                                self.heap.intern(b"async native called in sync context"),
-                            );
-                            self.last_error_kind = crate::vm::error::LuaErrorKind::Runtime;
-                            return Err(LuaError(s));
-                        }
-                        // Same root-up bookkeeping as the sync path:
-                        // pin args + result-count expectation so a
-                        // collection across the suspend boundary
-                        // keeps the arg window live.
-                        self.native_nresults = nresults;
-                        self.gc_top = func_slot + nargs + 1;
-                        // Fire the "call" hook BEFORE
-                        // building the future. Mirrors the sync native
-                        // path's `hook_call(true, nargs)` site
-                        // (`exec.rs` further down) so embedders with a
-                        // Rust debug hook installed see a Call event
-                        // for async natives identical to the sync
-                        // path. The matching "return" hook fires from
-                        // `commit_async_native_result` in
-                        // `async_drive.rs` after the future resolves.
-                        // Placement: after the `native_nresults` / `gc_top`
-                        // pin, before the future is constructed, so a
-                        // hook body that triggers GC observes the
-                        // correct pinned window. On hook error the
-                        // sentinel never returns and
-                        // `pending_async_native_*` remain `None` —
-                        // the executor sees `DispatchOutcome::Error`.
-                        self.hook_call(true, nargs)?;
-                        // Transmute the stored NativeFn back to its
-                        // real AsyncNativeFn shape. Sound because
-                        // `set_async_native` / `create_async_native`
-                        // installed an AsyncNativeFn through the
-                        // identically-sized fn-pointer slot, and the
-                        // `is_async` marker bit is what records that
-                        // fact.
-                        let async_fn: crate::vm::async_drive::AsyncNativeFn =
-                            // SAFETY: same-size fn pointers; provenance
-                            // preserved through `mem::transmute`. The
-                            // `is_async` marker is the only safe-to-call
-                            // gate, set exclusively by
-                            // `Vm::create_async_native`.
-                            unsafe { std::mem::transmute(nc.f) };
-                        let vm_ptr: *mut Vm = self;
-                        let fut = async_fn(vm_ptr, func_slot, nargs);
-                        // Stash the future + post-call context for
-                        // `drive_one` to surface to `EvalFuture::poll`.
-                        self.pending_async_native_fut = Some(fut);
-                        self.pending_async_native_ctx = Some(AsyncNativeCallCtx {
-                            func_slot,
-                            nargs,
-                            nresults,
-                            gc_top: self.gc_top,
-                        });
-                        // Sentinel Err walked up to `drive_one` (same
-                        // shape as `host_yield_pending`'s budget yield).
-                        // Value::Nil — never seen by user code.
-                        return Err(LuaError(Value::Nil));
-                    }
-                    // pcall/xpcall are yieldable: rather than calling the
-                    // protected function through the Rust stack (which cannot be
-                    // suspended), push a continuation frame and drive the call
-                    // through the interpreter loop (PUC lua_pcallk). A yield
-                    // inside it is preserved with the thread's saved frames.
-                    use crate::runtime::value::NativeFn;
-                    if std::ptr::fn_addr_eq(nc.f, nat_pcall as NativeFn) {
-                        return self.begin_pcall(func_slot, nargs, nresults);
-                    }
-                    if std::ptr::fn_addr_eq(nc.f, nat_xpcall as NativeFn) {
-                        // 5.1 `xpcall(f, err)` calls `f` with no arguments
-                        let forward = self.version > LuaVersion::Lua51;
-                        return self.begin_xpcall(func_slot, nargs, nresults, forward);
-                    }
-                    if std::ptr::fn_addr_eq(nc.f, nat_host_xpcall as NativeFn) {
-                        return self.begin_xpcall(func_slot, nargs, nresults, true);
-                    }
-                    // From 5.4 on, pairs(t) calls a __pairs metamethod yieldably
-                    // (PUC luaB_pairs uses lua_callk). 5.2/5.3 use a plain
-                    // lua_call, and 5.1 has no `__pairs`: the native handles those.
-                    if std::ptr::fn_addr_eq(nc.f, nat_pairs as NativeFn)
-                        && nargs >= 1
-                        && self.version >= LuaVersion::Lua54
+                    if nc.kind != NativeKind::Plain
+                        && let Some(r) = self.begin_special_native(nc, func_slot, nargs, nresults)
                     {
-                        let arg = self.stack[(func_slot + 1) as usize];
-                        if !self.get_mm(arg, Mm::Pairs).is_nil() {
-                            return self.begin_pairs(func_slot, nresults);
-                        }
+                        return r;
                     }
                     // a native that collects (e.g. `collectgarbage`) roots up to
                     // its own arguments — the caller's live registers all sit
@@ -4539,16 +4434,15 @@ impl Vm {
                     // Popped after the matching return hook fires — even on
                     // error, the pop must happen, so the body is bracketed
                     // through a scope guard.
-                    self.running_natives.push(nc);
-                    self.running_native_acts
-                        .push(crate::vm::callstack::NativeAct {
-                            func_slot,
-                            nargs,
-                            depth: self.frames.len() as u32,
-                            // a tail call resolved its `__call` chain before
-                            // calling here and passed the count in tail_ccmt
-                            ccmt: tail_ccmt + chain as u8,
-                        });
+                    self.running_natives.push(crate::vm::callstack::NativeAct {
+                        nc,
+                        func_slot,
+                        nargs,
+                        depth: self.frames.len() as u32,
+                        // a tail call resolved its `__call` chain before
+                        // calling here and passed the count in tail_ccmt
+                        ccmt: tail_ccmt + chain as u8,
+                    });
                     // PUC C-call discipline: entering a C function sets
                     // L->top to func + 1 + nargs, so a collect triggered
                     // INSIDE the native (explicit `collectgarbage()`, or
@@ -4567,7 +4461,6 @@ impl Vm {
                     // Err and the matching "return" hook fires on resume instead.
                     if let Err(e) = self.hook_call(true, nargs) {
                         self.running_natives.pop();
-                        self.running_native_acts.pop();
                         return Err(e);
                     }
                     // Trap a Rust panic in the native and surface it as
@@ -4598,9 +4491,8 @@ impl Vm {
                             // PUC raises with the native still on the stack;
                             // remember it for the handler and traceback of the
                             // error (see `raise_to_handler`)
-                            let act = self.running_native_acts.pop().expect("pushed above");
-                            self.running_natives.pop();
-                            self.note_errored_native(nc, act, e.0);
+                            let act = self.running_natives.pop().expect("pushed above");
+                            self.note_errored_native(act, e.0);
                             return Err(e);
                         }
                     };
@@ -4630,11 +4522,11 @@ impl Vm {
                                 self.stack[(func_slot + i) as usize];
                         }
                         // widen the C-frame's argument window for getlocal
-                        if let Some(act) = self.running_native_acts.last_mut() {
+                        if let Some(act) = self.running_natives.last_mut() {
                             act.nargs = nargs + nret;
                         }
                         let hr = self.hook_return(true, nargs + 1, nret);
-                        if let Some(act) = self.running_native_acts.last_mut() {
+                        if let Some(act) = self.running_natives.last_mut() {
                             act.nargs = nargs;
                         }
                         // restore results into the slot finish_results expects
@@ -4643,11 +4535,9 @@ impl Vm {
                                 self.stack[(res_dst + i) as usize];
                         }
                         self.running_natives.pop();
-                        self.running_native_acts.pop();
                         hr?;
                     } else {
                         self.running_natives.pop();
-                        self.running_native_acts.pop();
                     }
                     self.finish_results(func_slot, nret, nresults);
                     // the native may have allocated; collect with the results as
@@ -4911,17 +4801,15 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
-        self.running_natives.push(nc);
-        self.running_native_acts
-            .push(crate::vm::callstack::NativeAct {
-                func_slot,
-                nargs,
-                depth: self.frames.len() as u32,
-                ccmt: 0,
-            });
+        self.running_natives.push(crate::vm::callstack::NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth: self.frames.len() as u32,
+            ccmt: 0,
+        });
         let r = check(self);
         self.running_natives.pop();
-        self.running_native_acts.pop();
         r
     }
 
@@ -4971,40 +4859,32 @@ impl Vm {
             .expect("running Lua frame")
     }
 
-    /// Pad/announce results sitting at func_slot.
+    /// Pad/announce results sitting at func_slot. Results past `wanted`
+    /// are cleared; nothing else is: values left higher up by the call are
+    /// dead and stay safe to mark (see `clear_dead_stack`), as with PUC's
+    /// `moveresults`.
+    #[inline]
     pub(crate) fn finish_results(&mut self, func_slot: u32, nret: u32, wanted: i32) {
-        // Capture the call's high-water-mark before
-        // setting the new top so we can Nil-clear slots that the
-        // call temporarily wrote but no longer holds — matching
-        // PUC's `L->top` discipline (slots past L->top are "free"
-        // and the next push overwrites them). Without this clear,
-        // a stale `Value::Closure` (e.g. the called function
-        // itself, when wanted = 0) sits at `func_slot` and a
-        // later GC with wider `gc_top` traces it after the
-        // closure has been freed by a previous narrow safe-point
-        // GC → heap-buffer-overflow in `Marker::header` (sort.lua
-        // comparator case).
-        let prev_top = self.top as usize;
         if wanted < 0 {
             self.top = func_slot + nret;
-        } else {
-            let wanted = wanted as u32;
-            let need = (func_slot + wanted) as usize;
-            if self.stack.len() < need {
-                self.stack.resize(need, Value::Nil);
-            }
-            for i in nret..wanted {
-                self.stack[(func_slot + i) as usize] = Value::Nil;
-            }
-            self.top = func_slot + wanted;
+            return;
         }
-        let new_top = self.top as usize;
-        let clear_end = prev_top.min(self.stack.len());
-        if new_top < clear_end {
-            for slot in &mut self.stack[new_top..clear_end] {
-                *slot = Value::Nil;
-            }
+        let wanted = wanted as u32;
+        let new_top = func_slot + wanted;
+        if nret < wanted {
+            self.pad_results(func_slot + nret, new_top);
+        } else if nret > wanted {
+            self.stack[new_top as usize..(func_slot + nret) as usize].fill(Value::Nil);
         }
+        self.top = new_top;
+    }
+
+    /// Nil the missing results `[from, to)`.
+    fn pad_results(&mut self, from: u32, to: u32) {
+        if self.stack.len() < to as usize {
+            self.stack.resize(to as usize, Value::Nil);
+        }
+        self.stack[from as usize..to as usize].fill(Value::Nil);
     }
 
     /// Current Lua call-frame depth (read-only).

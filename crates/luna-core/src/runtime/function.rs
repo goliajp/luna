@@ -543,6 +543,39 @@ pub struct NativeClosure {
     /// instead of invoking `f` synchronously. Default `false` (sync
     /// native) for every other construction site.
     pub is_async: bool,
+    /// Which natives the call path runs itself; fixed at creation, so a
+    /// call tests one byte instead of comparing `f` with each of them.
+    pub(crate) kind: NativeKind,
+}
+
+/// See [`NativeClosure::kind`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeKind {
+    Plain,
+    Async,
+    Pcall,
+    Xpcall,
+    HostXpcall,
+    Pairs,
+}
+
+impl NativeKind {
+    /// The kind of a synchronous native calling `f`.
+    pub(crate) fn of(f: crate::runtime::value::NativeFn) -> NativeKind {
+        use crate::runtime::value::NativeFn;
+        use crate::vm::builtins::{nat_host_xpcall, nat_pairs, nat_pcall, nat_xpcall};
+        if std::ptr::fn_addr_eq(f, nat_pcall as NativeFn) {
+            NativeKind::Pcall
+        } else if std::ptr::fn_addr_eq(f, nat_xpcall as NativeFn) {
+            NativeKind::Xpcall
+        } else if std::ptr::fn_addr_eq(f, nat_host_xpcall as NativeFn) {
+            NativeKind::HostXpcall
+        } else if std::ptr::fn_addr_eq(f, nat_pairs as NativeFn) {
+            NativeKind::Pairs
+        } else {
+            NativeKind::Plain
+        }
+    }
 }
 
 impl NativeClosure {

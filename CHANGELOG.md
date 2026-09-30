@@ -63,6 +63,11 @@ optimization.
   arithmetic or other event costs one bit test; the table forgets them as
   soon as it gains any key. A string-keyed read that misses on a table
   follows table-valued `__index` links directly. Results are unchanged.
+- Calling a native does less bookkeeping: whether it is `pcall`,
+  `xpcall`, `pairs` or an async native is decided once when the closure
+  is created, the running natives are kept in one list instead of two,
+  the post-call collection check is a single comparison, and a return
+  clears only the results the caller did not want.
 - `runtime::Frame` has a new public field, `ccmt: u8`: the number of
   `__call` metamethods resolved to reach the frame, which the Vm used to
   keep in a vector beside the frames.

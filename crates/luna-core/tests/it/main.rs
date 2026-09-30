@@ -32,6 +32,7 @@ mod lua_error_structured;
 mod macro_lua;
 mod mm_absent_cache;
 mod nan_matches_host_printf;
+mod native_call_bookkeeping;
 mod native_typed;
 mod proto_stable_hash;
 mod puc_51_undump;
