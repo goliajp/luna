@@ -39,9 +39,37 @@ optimization.
 - The interpreter skips the per-instruction trace lookup on functions
   that hold no enterable trace, and the call trigger no longer scans a
   function's traces on every call once its entry is settled.
+- A Vm with no JIT backend installed (`Vm::new`, `Vm::new_minimal`, the
+  sandbox builder, any embedder that depends on `luna-core` alone) starts
+  with both JIT flags off, so it no longer counts hot loops and calls or
+  records traces that nothing could compile. `Vm::install_jit_backend`
+  (and so `luna_jit::install_default_jit`) turns on each flag the
+  embedder has not already set with `set_jit_enabled` /
+  `set_trace_jit_enabled`. `jit_enabled()` and `trace_jit_enabled()`
+  report `false` on such a Vm.
+- Interpreter fast paths that PUC Lua also takes, with unchanged results:
+  the dispatch loop tests one flag for an instruction budget, a memory cap
+  or an armed hook instead of checking each on every instruction; integer
+  `%` and `//` and the integer and float arithmetic and bitwise operators
+  are computed in the opcode itself; table reads return a raw hit without
+  entering the `__index` path, and string keys shorter than 41 bytes are
+  matched by identity; table writes update a present key in place;
+  `return` with zero or one value into a Lua caller skips the close and
+  hook machinery when nothing needs it; growing a table's array part
+  copies it in one block; and `#t` is answered from two counters when the
+  array part holds exactly a leading run of values.
+
+### Fixed
+
+- With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
+  that stored into a table under a NaN key went on silently instead of
+  raising "table index is NaN" as the interpreter does.
 
 ### Added
 
+- `luna_core::runtime::table::jit_layout::{TABLE_ACOUNT_OFFSET,
+  TABLE_APREFIX_OFFSET}`: offsets of the two array-part counters behind
+  `#t`, which the method JIT's inline array stores keep up to date.
 - `Proto::has_dispatchable_trace`, `Proto::trace_call_head_settled` and
   `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
