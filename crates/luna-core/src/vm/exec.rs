@@ -35,20 +35,29 @@ pub(crate) use num::{ArithOp, arith_num, str_to_num};
 
 /// `R[A] := R[B] op R[C]`: the Int/Int and Float/Float cases are computed
 /// in the opcode arm (an arm yielding `None` falls through); everything else
-/// goes to `arith_slow`.
+/// goes to `arith_slow`. `true` when the opcode arm finished the operation.
 macro_rules! arith_arm {
-    ($vm:ident, $inst:ident, $base:ident, $op:expr,
+    ($vm:ident, $regs:ident, $inst:ident, $base:ident, $op:expr,
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
-        let l = $vm.r($base, $inst.b());
-        let r = $vm.r($base, $inst.c());
+        // SAFETY: `$regs` is the running frame's register window (see `Vm::r`)
+        let l = unsafe { *$regs.add($inst.b() as usize) };
+        // SAFETY: as above
+        let r = unsafe { *$regs.add($inst.c() as usize) };
         let v: Option<Value> = match (l, r) {
             (Value::Int($ia), Value::Int($ib)) => $iv,
             (Value::Float($fa), Value::Float($fb)) => $fv,
             _ => None,
         };
         match v {
-            Some(v) => $vm.set_r($base, $inst.a(), v),
-            None => $vm.arith_slow($inst, $base, $op, l, r)?,
+            Some(v) => {
+                // SAFETY: as above
+                unsafe { *$regs.add($inst.a() as usize) = v };
+                true
+            }
+            None => {
+                $vm.arith_slow($inst, $base, $op, l, r)?;
+                false
+            }
         }
     }};
 }
@@ -6083,10 +6092,63 @@ impl Vm {
         !self.in_hook && (self.hook.func.is_some() || self.hook.rust_func.is_some())
     }
 
+    /// Count and line hooks (PUC `traceexec`), fired before the instruction
+    /// at `pc` of `cl` runs; `oldpc` is where the frame's line hook last looked.
+    #[inline(never)]
+    fn exec_hooks(&mut self, cl: Gc<LuaClosure>, pc: u32, oldpc: u32) -> Result<(), LuaError> {
+        let lines = &cl.proto.lines;
+        let cur_line = if lines.is_empty() {
+            None
+        } else {
+            Some(lines[(pc as usize).min(lines.len() - 1)] as i64)
+        };
+        // count hook: fire every `count_base` instructions
+        if self.hook.count {
+            self.hook.count_left -= 1;
+            if self.hook.count_left <= 0 {
+                self.hook.count_left = self.hook.count_base;
+                // hooked function is the running Lua frame: its frame
+                // is on the stack, so no synthetic C level is needed.
+                self.run_hook(b"count", cur_line, false)?;
+            }
+        }
+        // line hook: fire on a fresh frame, a backward jump (loop), or a
+        // change of source line.
+        if self.hook.line {
+            if lines.is_empty() {
+                // PUC: a stripped chunk has no line info, so
+                // `getfuncline` returns -1. The line hook still fires
+                // on the first instruction of the new frame (where
+                // `npci <= oldpc` holds at oldpc=0), with the line
+                // pushed as `nil` instead of an integer (db.lua :1030
+                // "hook called without debug info for 1st instruction").
+                if oldpc == u32::MAX {
+                    self.run_hook(b"line", None, false)?;
+                    self.top_frame_mut().hook_oldpc = pc;
+                }
+            } else {
+                let newline = lines[(pc as usize).min(lines.len() - 1)];
+                // PUC `traceexec`: fire on frame entry (`oldpc == MAX`),
+                // on a backward jump (`pc < oldpc` — strict; an equal pc
+                // would re-fire the install-site after `oldpc = pc`),
+                // or when the source line changes.
+                let fire = oldpc == u32::MAX
+                    || pc < oldpc
+                    || newline != lines[(oldpc as usize).min(lines.len() - 1)];
+                if fire {
+                    self.run_hook(b"line", Some(newline as i64), false)?;
+                }
+                self.top_frame_mut().hook_oldpc = pc;
+            }
+        }
+        Ok(())
+    }
+
     fn run(&mut self, entry_depth: usize) -> Result<Vec<Value>, LuaError> {
         // the host may have set a budget, a cap or a hook since the last run
         self.trap = true;
-        loop {
+        let pre53 = self.version() <= LuaVersion::Lua53;
+        'outer: loop {
             if self.trap {
                 self.trap_step()?;
             }
@@ -6276,696 +6338,854 @@ impl Vm {
             // (cont frames drained above) so the and_then/Option layers are
             // dead weight.
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                CallFrame::Lua(fmut) => fmut.pc = pc + 1,
+            let mut fpc: *mut u32 = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                CallFrame::Lua(fmut) => {
+                    fmut.pc = pc + 1;
+                    &mut fmut.pc
+                }
                 _ => unreachable!("Cont frame at pc bump"),
-            }
+            };
 
             // count + line hooks (PUC traceexec): before executing the
             // instruction. Skipped while the hook itself runs. `trap` is set
             // whenever a hook is armed, so the common case tests one byte.
             if self.trap && self.hook_armed() {
-                let lines = &cl.proto.lines;
-                let cur_line = if lines.is_empty() {
-                    None
-                } else {
-                    Some(lines[(pc as usize).min(lines.len() - 1)] as i64)
+                self.exec_hooks(cl, pc, oldpc)?;
+                // a hook runs Lua code, which can move `self.frames`
+                // SAFETY: as above
+                fpc = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                    CallFrame::Lua(fmut) => &mut fmut.pc,
+                    _ => unreachable!("Cont frame after a hook"),
                 };
-                // count hook: fire every `count_base` instructions
-                if self.hook.count {
-                    self.hook.count_left -= 1;
-                    if self.hook.count_left <= 0 {
-                        self.hook.count_left = self.hook.count_base;
-                        // hooked function is the running Lua frame: its frame
-                        // is on the stack, so no synthetic C level is needed.
-                        self.run_hook(b"count", cur_line, false)?;
-                    }
-                }
-                // line hook: fire on a fresh frame, a backward jump (loop), or a
-                // change of source line.
-                if self.hook.line {
-                    if lines.is_empty() {
-                        // PUC: a stripped chunk has no line info, so
-                        // `getfuncline` returns -1. The line hook still fires
-                        // on the first instruction of the new frame (where
-                        // `npci <= oldpc` holds at oldpc=0), with the line
-                        // pushed as `nil` instead of an integer (db.lua :1030
-                        // "hook called without debug info for 1st instruction").
-                        if oldpc == u32::MAX {
-                            self.run_hook(b"line", None, false)?;
-                            self.top_frame_mut().hook_oldpc = pc;
-                        }
-                    } else {
-                        let newline = lines[(pc as usize).min(lines.len() - 1)];
-                        // PUC `traceexec`: fire on frame entry (`oldpc == MAX`),
-                        // on a backward jump (`pc < oldpc` — strict; an equal pc
-                        // would re-fire the install-site after `oldpc = pc`),
-                        // or when the source line changes.
-                        let fire = oldpc == u32::MAX
-                            || pc < oldpc
-                            || newline != lines[(oldpc as usize).min(lines.len() - 1)];
-                        if fire {
-                            self.run_hook(b"line", Some(newline as i64), false)?;
-                        }
-                        self.top_frame_mut().hook_oldpc = pc;
-                    }
-                }
             }
 
-            match inst.op() {
-                Op::Move => {
-                    let v = self.r(base, inst.b());
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::LoadI => self.set_r(base, inst.a(), Value::Int(inst.sbx() as i64)),
-                Op::LoadF => self.set_r(base, inst.a(), Value::Float(inst.sbx() as f64)),
-                Op::LoadK => {
-                    let v = cl.proto.consts[inst.bx() as usize];
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::LoadKx => {
-                    let extra = cl.proto.code[self.pc_of_top() as usize];
-                    self.bump_pc();
-                    let v = cl.proto.consts[extra.ax() as usize];
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::LoadFalse => self.set_r(base, inst.a(), Value::Bool(false)),
-                Op::LFalseSkip => {
-                    self.set_r(base, inst.a(), Value::Bool(false));
-                    self.bump_pc();
-                }
-                Op::LoadTrue => self.set_r(base, inst.a(), Value::Bool(true)),
-                Op::LoadNil => {
-                    let a = inst.a();
-                    for i in 0..=inst.b() {
-                        self.set_r(base, a + i, Value::Nil);
+            // From here the running frame's state lives in locals (PUC keeps
+            // `pc`, `base` and `k` in registers the same way). The fast arms
+            // never call, allocate or run a metamethod, so they never push or
+            // pop a frame and `self.frames` does not move: they advance `npc`
+            // and store it through `fpc`, which keeps the frame's pc current
+            // for errors and for the slow arms. Every other arm ends by going
+            // back to the loop head, which reloads the state from the frame
+            // (PUC `Protect` / `savepc`). The fast arms keep fetching here while
+            // no instruction needs the head's checks: no trap, no recording and
+            // no compiled trace this function could enter.
+            let code = cl.proto.code.as_ptr();
+            let consts: &[Value] = &cl.proto.consts;
+            // nothing in a fast arm sets `trap`, so it is tested here once.
+            // With a trace this function could enter, the fast arms stop at
+            // the pcs where one starts, for the dispatcher above to look.
+            let mut heads = [crate::runtime::function::TRACE_HEADS_NONE; 2];
+            let stay = !self.trap
+                && (!trace_on
+                    || self.jit.active_trace.is_none() && {
+                        heads = cl.proto.trace_heads.get();
+                        heads[0] != crate::runtime::function::TRACE_HEADS_MANY
+                    });
+            // one test per instruction in the common case
+            let plain = stay && heads[0] == crate::runtime::function::TRACE_HEADS_NONE;
+            // the register window, valid while `self.stack` neither moves nor
+            // is written through a reference (a fast arm that calls something
+            // that might write it takes the pointer again)
+            // SAFETY: `push_frame` sized the stack to `base + max_stack`
+            let mut regs: *mut Value = unsafe { self.stack.as_mut_ptr().add(base as usize) };
+            macro_rules! reg {
+                ($i:expr) => {
+                    // SAFETY: registers are below `max_stack` (see `Vm::r`)
+                    unsafe { *regs.add(($i) as usize) }
+                };
+            }
+            macro_rules! set_reg {
+                ($i:expr, $v:expr) => {
+                    // SAFETY: as for `reg!`
+                    unsafe { *regs.add(($i) as usize) = $v }
+                };
+            }
+            let mut npc = pc + 1;
+            let mut inst = inst;
+            macro_rules! next {
+                () => {{
+                    if !plain && (!stay || npc == heads[0] || npc == heads[1]) {
+                        // SAFETY: `fpc` points into the running frame, which no
+                        // fast arm moves
+                        unsafe { *fpc = npc };
+                        continue 'outer;
                     }
-                }
-                Op::GetUpval => {
-                    let v = self.upval_get(cl, inst.b());
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::SetUpval => {
-                    let v = self.r(base, inst.a());
-                    self.upval_set(cl, inst.b(), v);
-                }
-                Op::GetTabUp => {
-                    let t = self.upval_get(cl, inst.b());
-                    let key = cl.proto.consts[inst.c() as usize];
-                    self.index_fast(t, key, base + inst.a())?;
-                }
-                Op::GetTable => {
-                    let t = self.r(base, inst.b());
-                    let key = self.r(base, inst.c());
-                    self.index_fast(t, key, base + inst.a())?;
-                }
-                Op::GetI => {
-                    let t = self.r(base, inst.b());
-                    self.index_fast(t, Value::Int(inst.c() as i64), base + inst.a())?;
-                }
-                Op::GetField => {
-                    let t = self.r(base, inst.b());
-                    let key = cl.proto.consts[inst.c() as usize];
-                    self.index_fast(t, key, base + inst.a())?;
-                }
-                Op::SetTabUp => {
-                    let t = self.upval_get(cl, inst.a());
-                    let key = cl.proto.consts[inst.b() as usize];
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, key, v)?;
-                }
-                Op::SetTable => {
-                    let t = self.r(base, inst.a());
-                    let key = self.r(base, inst.b());
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, key, v)?;
-                }
-                Op::SetI => {
-                    let t = self.r(base, inst.a());
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, Value::Int(inst.b() as i64), v)?;
-                }
-                Op::SetField => {
-                    let t = self.r(base, inst.a());
-                    let key = cl.proto.consts[inst.b() as usize];
-                    let v = self.r(base, inst.c());
-                    self.newindex_fast(t, key, v)?;
-                }
-                Op::NewTable => {
-                    let t = self.heap.new_table();
-                    self.set_r(base, inst.a(), Value::Table(t));
-                    self.maybe_collect_garbage(base + inst.a() + 1);
-                }
-                Op::SetList => {
-                    let a = inst.a();
-                    let abs_a = base + a;
-                    // only `debug.setlocal` or crafted bytecode can put a
-                    // non-table here; PUC crashes, luna raises
-                    let t = match self.r(base, a) {
-                        Value::Table(t) => t,
-                        v => return Err(self.type_err("index", v)),
-                    };
-                    let n = if inst.b() == 0 {
-                        self.top - (abs_a + 1)
-                    } else {
-                        inst.b()
-                    };
-                    let offset = if inst.k() {
+                    // SAFETY: as for the fetch at the loop head
+                    inst = unsafe { *code.add(npc as usize) };
+                    npc += 1;
+                    // SAFETY: see above
+                    unsafe { *fpc = npc };
+                    continue;
+                }};
+            }
+            loop {
+                // the instruction now running (the loop head's `pc` is only the first)
+                let pc = npc - 1;
+                match inst.op() {
+                    Op::Move => {
+                        let v = reg!(inst.b());
+                        set_reg!(inst.a(), v);
+                        next!()
+                    }
+                    Op::LoadI => {
+                        set_reg!(inst.a(), Value::Int(inst.sbx() as i64));
+                        next!()
+                    }
+                    Op::LoadF => {
+                        set_reg!(inst.a(), Value::Float(inst.sbx() as f64));
+                        next!()
+                    }
+                    Op::LoadK => {
+                        let v = consts[inst.bx() as usize];
+                        set_reg!(inst.a(), v);
+                        next!()
+                    }
+                    Op::LoadKx => {
                         let extra = cl.proto.code[self.pc_of_top() as usize];
                         self.bump_pc();
-                        extra.ax() as i64
-                    } else {
-                        inst.c() as i64
-                    };
-                    for i in 1..=n {
-                        let v = self.r(base, a + i);
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        if let Err(TableError::Overflow) =
-                            unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
-                        {
-                            return Err(self.rt_err("table overflow"));
-                        }
+                        let v = cl.proto.consts[extra.ax() as usize];
+                        self.set_r(base, inst.a(), v);
                     }
-                    // one barrier_back covers every store this op did — PUC's
-                    // `luaC_barrierback_` once-per-table optimisation
-                    self.heap
-                        .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                    // the element temps above the table are now consumed
-                    self.maybe_collect_garbage(base + a + 1);
-                }
-                Op::SelfOp => {
-                    let o = self.r(base, inst.b());
-                    self.set_r(base, inst.a() + 1, o);
-                    // PUC OP_SELF's C is a constant index when the k-flag is
-                    // set; otherwise it points to a register that holds the
-                    // (constant-loaded) key. luna's compiler falls back to the
-                    // register form when the constant index exceeds OP_SELF's
-                    // 8-bit C field (5.1 big.lua's `a:findfield(...)` against
-                    // a table with 250+ string keys, where "findfield" lands
-                    // past const #255). The exec must honour the same split.
-                    let key = if inst.k() {
-                        cl.proto.consts[inst.c() as usize]
-                    } else {
-                        self.r(base, inst.c())
-                    };
-                    self.index_fast(o, key, base + inst.a())?;
-                }
-                Op::Add => arith_arm!(self, inst, base, ArithOp::Add,
-                    int(a, b) => Some(Value::Int(a.wrapping_add(b))),
-                    float(a, b) => Some(Value::Float(a + b))),
-                Op::Sub => arith_arm!(self, inst, base, ArithOp::Sub,
-                    int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
-                    float(a, b) => Some(Value::Float(a - b))),
-                Op::Mul => arith_arm!(self, inst, base, ArithOp::Mul,
-                    int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
-                    float(a, b) => Some(Value::Float(a * b))),
-                // a zero divisor takes the slow path for its error
-                Op::Mod => arith_arm!(self, inst, base, ArithOp::Mod,
-                    int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
-                    float(_a, _b) => None),
-                Op::IDiv => arith_arm!(self, inst, base, ArithOp::IDiv,
-                    int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
-                    float(_a, _b) => None),
-                Op::Div => arith_arm!(self, inst, base, ArithOp::Div,
-                    int(_a, _b) => None,
-                    float(a, b) => Some(Value::Float(a / b))),
-                Op::Pow => {
-                    let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                    self.arith_slow(inst, base, ArithOp::Pow, l, r)?
-                }
-                Op::BAnd => arith_arm!(self, inst, base, ArithOp::BAnd,
-                    int(a, b) => Some(Value::Int(a & b)),
-                    float(_a, _b) => None),
-                Op::BOr => arith_arm!(self, inst, base, ArithOp::BOr,
-                    int(a, b) => Some(Value::Int(a | b)),
-                    float(_a, _b) => None),
-                Op::BXor => arith_arm!(self, inst, base, ArithOp::BXor,
-                    int(a, b) => Some(Value::Int(a ^ b)),
-                    float(_a, _b) => None),
-                Op::Shl => arith_arm!(self, inst, base, ArithOp::Shl,
-                    int(a, b) => Some(Value::Int(shift_left(a, b))),
-                    float(_a, _b) => None),
-                Op::Shr => arith_arm!(self, inst, base, ArithOp::Shr,
-                    int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
-                    float(_a, _b) => None),
-                Op::Unm => {
-                    let v = self.r(base, inst.b());
-                    match self.unary_operand(v) {
-                        Some(Num::Int(i)) => {
-                            self.set_r(base, inst.a(), Value::Int(i.wrapping_neg()))
-                        }
-                        Some(Num::Float(f)) => self.set_r(base, inst.a(), Value::Float(-f)),
-                        None => {
-                            let mm = self.get_mm(v, Mm::Unm);
-                            if mm.is_nil() {
-                                return Err(self.type_err("perform arithmetic on", v));
-                            }
-                            let dst = base + inst.a();
-                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst }, "unm")?;
-                        }
+                    Op::LoadFalse => {
+                        set_reg!(inst.a(), Value::Bool(false));
+                        next!()
                     }
-                }
-                Op::BNot => {
-                    let v = self.r(base, inst.b());
-                    match self.arith_operand()(v) {
-                        Some(n) => {
-                            let Some(i) = int_of(n) else {
-                                return Err(self.no_int_rep_err());
-                            };
-                            self.set_r(base, inst.a(), Value::Int(!i));
-                        }
-                        None => {
-                            let mm = self.get_mm(v, Mm::BNot);
-                            if mm.is_nil() {
-                                return Err(self.type_err("perform bitwise operation on", v));
-                            }
-                            let dst = base + inst.a();
-                            self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst }, "bnot")?;
-                        }
+                    Op::LFalseSkip => {
+                        set_reg!(inst.a(), Value::Bool(false));
+                        npc += 1;
+                        next!()
                     }
-                }
-                Op::Not => {
-                    let v = self.r(base, inst.b());
-                    self.set_r(base, inst.a(), Value::Bool(!v.truthy()));
-                }
-                Op::Len => {
-                    let v = self.r(base, inst.b());
-                    // no `__len` to look for: a string, or a table without
-                    // a metatable
-                    match v {
-                        Value::Str(s) => {
-                            self.set_r(base, inst.a(), Value::Int(s.len() as i64));
-                            continue;
-                        }
-                        Value::Table(t) if t.metatable().is_none() => {
-                            self.set_r(base, inst.a(), Value::Int(t.len()));
-                            continue;
-                        }
-                        _ => {}
+                    Op::LoadTrue => {
+                        set_reg!(inst.a(), Value::Bool(true));
+                        next!()
                     }
-                    match self.len_step(v)? {
-                        MmOut::Done(r) => self.set_r(base, inst.a(), r),
-                        MmOut::Mm { func, recv } => {
-                            let dst = base + inst.a();
-                            self.begin_meta_call(
-                                func,
-                                &[recv, recv],
-                                MetaAction::Store { dst },
-                                "len",
-                            )?;
+                    Op::LoadNil => {
+                        let a = inst.a();
+                        for i in 0..=inst.b() {
+                            set_reg!(a + i, Value::Nil);
                         }
-                        MmOut::CompareSynth { .. } => unreachable!("CompareSynth from len_step"),
+                        next!()
                     }
-                }
-                Op::Concat => {
-                    // right-associative fold over operands at base+a .. base+a+n,
-                    // in place on the stack so a yielding __concat can suspend.
-                    let a = inst.a();
-                    let n = inst.b();
-                    self.top = base + a + n;
-                    self.concat_run(base + a)?;
-                }
-                Op::Close => {
-                    // Yieldable: drive __close handlers through the
-                    // interpreter loop so a coroutine.yield() inside a
-                    // handler suspends cleanly (locals.lua block-end yield).
-                    // `drive_close` parks the handler call at `self.top`, so
-                    // raise `top` past this frame's full register window
-                    // first — a goto out of a nested for-loop can fire
-                    // OP_Close while `self.top` still sits at the inner
-                    // body's working top, which would let `push_frame`'s
-                    // wipe clobber the outer tbc slot before it could be
-                    // closed (locals.lua:1219 nested-for goto regression).
-                    self.top = self.top.max(base + cl.proto.max_stack as u32);
-                    let _ =
-                        self.begin_close(base + inst.a(), None, AfterClose::Block, entry_depth)?;
-                }
-                Op::Tbc => {
-                    self.register_tbc(base + inst.a())?;
-                }
-                Op::Jmp => {
-                    let off = inst.sj();
-                    // Trace JIT back-edge counter. A negative
-                    // jump offset is a loop back-edge (the only canonical
-                    // backward jumps the compiler emits — `while`, `for`,
-                    // `repeat`). Tick the per-Proto counter and, once it
-                    // exceeds the threshold, start a trace recording. The
-                    // whole block is gated on `trace_jit_enabled` so
-                    // existing benches see one branch-not-taken and no
-                    // counter writes.
-                    if self.jit.trace_enabled && off < 0 {
-                        let proto = cl.proto;
-                        let c = proto.trace_hot_count.get();
-                        if c < u32::MAX / 2 {
-                            proto.trace_hot_count.set(c + 1);
-                        }
-                        // Relaxed back-edge trigger:
-                        // `c >= THRESHOLD` (not `c == THRESHOLD`) so
-                        // a missed crossing (active_trace busy with
-                        // a call-trigger, or the recorder slot
-                        // happened to be in use) doesn't permanently
-                        // lock this back-edge target out. The
-                        // `already_cached` short-circuit prevents
-                        // duplicate recordings: once a trace is
-                        // cached for this target, subsequent
-                        // crossings skip the start. This pairs with
-                        // the discard-on-partial-coverage close
-                        // handling — when a short call-trigger is
-                        // discarded, the back-edge can still find an
-                        // open slot at the next iteration.
-                        let target_pc = (pc as i32 + 1 + off as i32).max(0) as u32;
-                        // Threshold first, then the gave-up
-                        // short-circuit, then the RefCell borrow +
-                        // scan: cold back-edges and Protos whose
-                        // discard cap force-compiled a partial trace
-                        // skip the scan.
-                        if c >= self.jit.trace_hot_threshold
-                            && self.jit.active_trace.is_none()
-                            && !proto.trace_gave_up.get()
-                            && !proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
-                            && !trace_head_abandoned(proto, target_pc)
-                        {
-                            // Back-edge target = pc after `add_pc(off)`,
-                            // i.e. current `pc + 1 + off` (the dispatch
-                            // loop has already advanced f.pc to pc+1).
-                            let target = (pc as i32 + 1 + off as i32).max(0) as u32;
-                            // Snapshot per-slot Value tag at trace
-                            // entry so the lowerer's kind tracker
-                            // knows which arith path to lower
-                            // (iadd vs fadd, etc.).
-                            let max_stack = cl.proto.max_stack as usize;
-                            let base_us = base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
-                            }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                )));
-                            // Record the frame the trace
-                            // started in. `self.frames.len() - 1`
-                            // since we're inside the currently-running
-                            // Lua frame's dispatch.
-                            self.jit.recording_frame_base = self.frames.len() - 1;
-                        }
+                    Op::GetUpval => {
+                        let v = self.upval_get(cl, inst.b());
+                        set_reg!(inst.a(), v);
+                        next!()
                     }
-                    self.add_pc(off);
-                }
-                Op::Eq => {
-                    let l = self.r(base, inst.a());
-                    let r = self.r(base, inst.b());
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a == b) != inst.k() {
+                    Op::SetUpval => {
+                        let v = reg!(inst.a());
+                        self.upval_set(cl, inst.b(), v);
+                        // the write may have gone through `self.stack`
+                        // SAFETY: as at the loop head
+                        regs = unsafe { self.stack.as_mut_ptr().add(base as usize) };
+                        next!()
+                    }
+                    Op::GetTabUp => {
+                        let t = self.upval_get(cl, inst.b());
+                        let key = consts[inst.c() as usize];
+                        let dst = base + inst.a();
+                        if let Some(v) = self.index_raw(t, key) {
+                            set_reg!(inst.a(), v);
+                            next!()
+                        }
+                        self.index_miss(t, key, dst)?;
+                    }
+                    Op::GetTable => {
+                        let t = reg!(inst.b());
+                        let key = reg!(inst.c());
+                        let dst = base + inst.a();
+                        if let Some(v) = self.index_raw(t, key) {
+                            set_reg!(inst.a(), v);
+                            next!()
+                        }
+                        self.index_miss(t, key, dst)?;
+                    }
+                    Op::GetI => {
+                        let t = reg!(inst.b());
+                        let key = Value::Int(inst.c() as i64);
+                        let dst = base + inst.a();
+                        if let Some(v) = self.index_raw(t, key) {
+                            set_reg!(inst.a(), v);
+                            next!()
+                        }
+                        self.index_miss(t, key, dst)?;
+                    }
+                    Op::GetField => {
+                        let t = reg!(inst.b());
+                        let key = consts[inst.c() as usize];
+                        let dst = base + inst.a();
+                        if let Some(v) = self.index_raw(t, key) {
+                            set_reg!(inst.a(), v);
+                            next!()
+                        }
+                        self.index_miss(t, key, dst)?;
+                    }
+                    Op::SetTabUp => {
+                        let t = self.upval_get(cl, inst.a());
+                        let key = consts[inst.b() as usize];
+                        let v = reg!(inst.c());
+                        if self.newindex_raw(t, key, v) {
+                            next!()
+                        }
+                        self.newindex_miss(t, key, v)?;
+                    }
+                    Op::SetTable => {
+                        let t = reg!(inst.a());
+                        let key = reg!(inst.b());
+                        let v = reg!(inst.c());
+                        if self.newindex_raw(t, key, v) {
+                            next!()
+                        }
+                        self.newindex_miss(t, key, v)?;
+                    }
+                    Op::SetI => {
+                        let t = reg!(inst.a());
+                        let key = Value::Int(inst.b() as i64);
+                        let v = reg!(inst.c());
+                        if self.newindex_raw(t, key, v) {
+                            next!()
+                        }
+                        self.newindex_miss(t, key, v)?;
+                    }
+                    Op::SetField => {
+                        let t = reg!(inst.a());
+                        let key = consts[inst.b() as usize];
+                        let v = reg!(inst.c());
+                        if self.newindex_raw(t, key, v) {
+                            next!()
+                        }
+                        self.newindex_miss(t, key, v)?;
+                    }
+                    Op::NewTable => {
+                        let t = self.heap.new_table();
+                        self.set_r(base, inst.a(), Value::Table(t));
+                        self.maybe_collect_garbage(base + inst.a() + 1);
+                    }
+                    Op::SetList => {
+                        let a = inst.a();
+                        let abs_a = base + a;
+                        // only `debug.setlocal` or crafted bytecode can put a
+                        // non-table here; PUC crashes, luna raises
+                        let t = match self.r(base, a) {
+                            Value::Table(t) => t,
+                            v => return Err(self.type_err("index", v)),
+                        };
+                        let n = if inst.b() == 0 {
+                            self.top - (abs_a + 1)
+                        } else {
+                            inst.b()
+                        };
+                        let offset = if inst.k() {
+                            let extra = cl.proto.code[self.pc_of_top() as usize];
                             self.bump_pc();
+                            extra.ax() as i64
+                        } else {
+                            inst.c() as i64
+                        };
+                        for i in 1..=n {
+                            let v = self.r(base, a + i);
+                            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                            if let Err(TableError::Overflow) =
+                                unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
+                            {
+                                return Err(self.rt_err("table overflow"));
+                            }
                         }
-                    } else {
+                        // one barrier_back covers every store this op did — PUC's
+                        // `luaC_barrierback_` once-per-table optimisation
+                        self.heap
+                            .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                        // the element temps above the table are now consumed
+                        self.maybe_collect_garbage(base + a + 1);
+                    }
+                    Op::SelfOp => {
+                        let o = reg!(inst.b());
+                        set_reg!(inst.a() + 1, o);
+                        // PUC OP_SELF's C is a constant index when the k-flag is
+                        // set; otherwise it points to a register that holds the
+                        // (constant-loaded) key. luna's compiler falls back to the
+                        // register form when the constant index exceeds OP_SELF's
+                        // 8-bit C field (5.1 big.lua's `a:findfield(...)` against
+                        // a table with 250+ string keys, where "findfield" lands
+                        // past const #255). The exec must honour the same split.
+                        let key = if inst.k() {
+                            consts[inst.c() as usize]
+                        } else {
+                            reg!(inst.c())
+                        };
+                        let dst = base + inst.a();
+                        if let Some(v) = self.index_raw(o, key) {
+                            set_reg!(inst.a(), v);
+                            next!()
+                        }
+                        self.index_miss(o, key, dst)?;
+                    }
+                    Op::Add => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Add,
+                        int(a, b) => Some(Value::Int(a.wrapping_add(b))),
+                        float(a, b) => Some(Value::Float(a + b)))
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Sub => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Sub,
+                        int(a, b) => Some(Value::Int(a.wrapping_sub(b))),
+                        float(a, b) => Some(Value::Float(a - b)))
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Mul => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Mul,
+                        int(a, b) => Some(Value::Int(a.wrapping_mul(b))),
+                        float(a, b) => Some(Value::Float(a * b)))
+                        {
+                            next!()
+                        }
+                    }
+                    // a zero divisor takes the slow path for its error
+                    Op::Mod => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Mod,
+                        int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::IDiv => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::IDiv,
+                        int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Div => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Div,
+                        int(_a, _b) => None,
+                        float(a, b) => Some(Value::Float(a / b)))
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Pow => {
+                        let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
+                        self.arith_slow(inst, base, ArithOp::Pow, l, r)?
+                    }
+                    Op::BAnd => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::BAnd,
+                        int(a, b) => Some(Value::Int(a & b)),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::BOr => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::BOr,
+                        int(a, b) => Some(Value::Int(a | b)),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::BXor => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::BXor,
+                        int(a, b) => Some(Value::Int(a ^ b)),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Shl => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Shl,
+                        int(a, b) => Some(Value::Int(shift_left(a, b))),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Shr => {
+                        if arith_arm!(self, regs, inst, base, ArithOp::Shr,
+                        int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))),
+                        float(_a, _b) => None)
+                        {
+                            next!()
+                        }
+                    }
+                    Op::Unm => {
+                        let v = reg!(inst.b());
+                        match self.unary_operand(v) {
+                            Some(Num::Int(i)) => {
+                                set_reg!(inst.a(), Value::Int(i.wrapping_neg()));
+                                next!()
+                            }
+                            Some(Num::Float(f)) => {
+                                set_reg!(inst.a(), Value::Float(-f));
+                                next!()
+                            }
+                            None => {
+                                let mm = self.get_mm(v, Mm::Unm);
+                                if mm.is_nil() {
+                                    return Err(self.type_err("perform arithmetic on", v));
+                                }
+                                let dst = base + inst.a();
+                                self.begin_meta_call(
+                                    mm,
+                                    &[v, v],
+                                    MetaAction::Store { dst },
+                                    "unm",
+                                )?;
+                            }
+                        }
+                    }
+                    Op::BNot => {
+                        let v = reg!(inst.b());
+                        match self.arith_operand()(v) {
+                            Some(n) => {
+                                let Some(i) = int_of(n) else {
+                                    return Err(self.no_int_rep_err());
+                                };
+                                set_reg!(inst.a(), Value::Int(!i));
+                                next!()
+                            }
+                            None => {
+                                let mm = self.get_mm(v, Mm::BNot);
+                                if mm.is_nil() {
+                                    return Err(self.type_err("perform bitwise operation on", v));
+                                }
+                                let dst = base + inst.a();
+                                self.begin_meta_call(
+                                    mm,
+                                    &[v, v],
+                                    MetaAction::Store { dst },
+                                    "bnot",
+                                )?;
+                            }
+                        }
+                    }
+                    Op::Not => {
+                        let v = reg!(inst.b());
+                        set_reg!(inst.a(), Value::Bool(!v.truthy()));
+                        next!()
+                    }
+                    Op::Len => {
+                        let v = reg!(inst.b());
+                        // no `__len` to look for: a string, or a table without
+                        // a metatable
+                        match v {
+                            Value::Str(s) => {
+                                set_reg!(inst.a(), Value::Int(s.len() as i64));
+                                next!()
+                            }
+                            Value::Table(t) if t.metatable().is_none() => {
+                                set_reg!(inst.a(), Value::Int(t.len()));
+                                next!()
+                            }
+                            _ => {}
+                        }
+                        match self.len_step(v)? {
+                            MmOut::Done(r) => self.set_r(base, inst.a(), r),
+                            MmOut::Mm { func, recv } => {
+                                let dst = base + inst.a();
+                                self.begin_meta_call(
+                                    func,
+                                    &[recv, recv],
+                                    MetaAction::Store { dst },
+                                    "len",
+                                )?;
+                            }
+                            MmOut::CompareSynth { .. } => {
+                                unreachable!("CompareSynth from len_step")
+                            }
+                        }
+                    }
+                    Op::Concat => {
+                        // right-associative fold over operands at base+a .. base+a+n,
+                        // in place on the stack so a yielding __concat can suspend.
+                        let a = inst.a();
+                        let n = inst.b();
+                        self.top = base + a + n;
+                        self.concat_run(base + a)?;
+                    }
+                    Op::Close => {
+                        // Yieldable: drive __close handlers through the
+                        // interpreter loop so a coroutine.yield() inside a
+                        // handler suspends cleanly (locals.lua block-end yield).
+                        // `drive_close` parks the handler call at `self.top`, so
+                        // raise `top` past this frame's full register window
+                        // first — a goto out of a nested for-loop can fire
+                        // OP_Close while `self.top` still sits at the inner
+                        // body's working top, which would let `push_frame`'s
+                        // wipe clobber the outer tbc slot before it could be
+                        // closed (locals.lua:1219 nested-for goto regression).
+                        self.top = self.top.max(base + cl.proto.max_stack as u32);
+                        let _ = self.begin_close(
+                            base + inst.a(),
+                            None,
+                            AfterClose::Block,
+                            entry_depth,
+                        )?;
+                    }
+                    Op::Tbc => {
+                        self.register_tbc(base + inst.a())?;
+                    }
+                    Op::Jmp => {
+                        let off = inst.sj();
+                        // Trace JIT back-edge counter. A negative
+                        // jump offset is a loop back-edge (the only canonical
+                        // backward jumps the compiler emits — `while`, `for`,
+                        // `repeat`). Tick the per-Proto counter and, once it
+                        // exceeds the threshold, start a trace recording. The
+                        // whole block is gated on `trace_jit_enabled` so
+                        // existing benches see one branch-not-taken and no
+                        // counter writes.
+                        if trace_on && off < 0 {
+                            let proto = cl.proto;
+                            let c = proto.trace_hot_count.get();
+                            if c < u32::MAX / 2 {
+                                proto.trace_hot_count.set(c + 1);
+                            }
+                            // Relaxed back-edge trigger:
+                            // `c >= THRESHOLD` (not `c == THRESHOLD`) so
+                            // a missed crossing (active_trace busy with
+                            // a call-trigger, or the recorder slot
+                            // happened to be in use) doesn't permanently
+                            // lock this back-edge target out. The
+                            // `already_cached` short-circuit prevents
+                            // duplicate recordings: once a trace is
+                            // cached for this target, subsequent
+                            // crossings skip the start. This pairs with
+                            // the discard-on-partial-coverage close
+                            // handling — when a short call-trigger is
+                            // discarded, the back-edge can still find an
+                            // open slot at the next iteration.
+                            let target_pc = (pc as i32 + 1 + off as i32).max(0) as u32;
+                            // Threshold first, then the gave-up
+                            // short-circuit, then the RefCell borrow +
+                            // scan: cold back-edges and Protos whose
+                            // discard cap force-compiled a partial trace
+                            // skip the scan.
+                            if c >= self.jit.trace_hot_threshold
+                                && self.jit.active_trace.is_none()
+                                && !proto.trace_gave_up.get()
+                                && !proto.traces.borrow().iter().any(|t| t.head_pc == target_pc)
+                                && !trace_head_abandoned(proto, target_pc)
+                            {
+                                // Back-edge target = pc after `add_pc(off)`,
+                                // i.e. current `pc + 1 + off` (the dispatch
+                                // loop has already advanced f.pc to pc+1).
+                                let target = (pc as i32 + 1 + off as i32).max(0) as u32;
+                                // Snapshot per-slot Value tag at trace
+                                // entry so the lowerer's kind tracker
+                                // knows which arith path to lower
+                                // (iadd vs fadd, etc.).
+                                let max_stack = cl.proto.max_stack as usize;
+                                let base_us = base as usize;
+                                let mut entry_tags = Vec::with_capacity(max_stack);
+                                for i in 0..max_stack {
+                                    let (tag, _) = self.stack[base_us + i].unpack();
+                                    entry_tags.push(tag);
+                                }
+                                self.jit.active_trace =
+                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
+                                        cl.proto, target, entry_tags, false,
+                                    )));
+                                // Record the frame the trace
+                                // started in. `self.frames.len() - 1`
+                                // since we're inside the currently-running
+                                // Lua frame's dispatch.
+                                self.jit.recording_frame_base = self.frames.len() - 1;
+                            }
+                        }
+                        npc = (npc as i64 + off as i64) as u32;
+                        // a recording that just started must see the next
+                        // instruction from the loop head
+                        if trace_on && off < 0 && self.jit.active_trace.is_some() {
+                            // SAFETY: see `next!`
+                            unsafe { *fpc = npc };
+                            continue 'outer;
+                        }
+                        next!()
+                    }
+                    Op::Eq => {
+                        let l = reg!(inst.a());
+                        let r = reg!(inst.b());
+                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
+                            if (a == b) != inst.k() {
+                                npc += 1;
+                            }
+                            next!()
+                        }
                         let step = self.eq_step(l, r);
                         self.op_compare(step, l, r, inst.k(), "eq")?;
                     }
-                }
-                Op::EqK => {
-                    let l = self.r(base, inst.a());
-                    let r = cl.proto.consts[inst.b() as usize];
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a == b) != inst.k() {
-                            self.bump_pc();
+                    Op::EqK => {
+                        let l = reg!(inst.a());
+                        let r = cl.proto.consts[inst.b() as usize];
+                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
+                            if (a == b) != inst.k() {
+                                npc += 1;
+                            }
+                            next!()
                         }
-                    } else {
                         let step = self.eq_step(l, r);
                         self.op_compare(step, l, r, inst.k(), "eq")?;
                     }
-                }
-                Op::Lt => {
-                    let l = self.r(base, inst.a());
-                    let r = self.r(base, inst.b());
-                    // hot path: Int < Int — drops the MmOut + op_compare match
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a < b) != inst.k() {
-                            self.bump_pc();
+                    Op::Lt => {
+                        let l = reg!(inst.a());
+                        let r = reg!(inst.b());
+                        // hot path: Int < Int — drops the MmOut + op_compare match
+                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
+                            if (a < b) != inst.k() {
+                                npc += 1;
+                            }
+                            next!()
                         }
-                    } else {
                         let step = self.less_step(l, r, false)?;
                         self.op_compare(step, l, r, inst.k(), "lt")?;
                     }
-                }
-                Op::Le => {
-                    let l = self.r(base, inst.a());
-                    let r = self.r(base, inst.b());
-                    if let (Value::Int(a), Value::Int(b)) = (l, r) {
-                        if (a <= b) != inst.k() {
-                            self.bump_pc();
+                    Op::Le => {
+                        let l = reg!(inst.a());
+                        let r = reg!(inst.b());
+                        if let (Value::Int(a), Value::Int(b)) = (l, r) {
+                            if (a <= b) != inst.k() {
+                                npc += 1;
+                            }
+                            next!()
                         }
-                    } else {
                         let step = self.less_step(l, r, true)?;
                         self.op_compare(step, l, r, inst.k(), "le")?;
                     }
-                }
-                Op::Test => {
-                    let cond = self.r(base, inst.a()).truthy();
-                    self.cond_skip(cond, inst.k());
-                }
-                Op::TestSet => {
-                    let v = self.r(base, inst.b());
-                    if v.truthy() == inst.k() {
-                        self.set_r(base, inst.a(), v);
-                    } else {
-                        self.bump_pc();
+                    Op::Test => {
+                        // the JMP that follows runs when the condition equals k
+                        if reg!(inst.a()).truthy() != inst.k() {
+                            npc += 1;
+                        }
+                        next!()
                     }
-                }
-                Op::Call => {
-                    let abs = base + inst.a();
-                    let nargs = if inst.b() == 0 {
-                        None
-                    } else {
-                        Some(inst.b() - 1)
-                    };
-                    let wanted = inst.c() as i32 - 1;
-                    self.begin_call(abs, nargs, wanted, false)?;
-                }
-                Op::TailCall => {
-                    let fr = *self.top_frame();
-                    let abs = base + inst.a();
-                    let mut nargs = if inst.b() == 0 {
-                        self.top - (abs + 1)
-                    } else {
-                        inst.b() - 1
-                    };
-                    // A tail call pops this frame before begin_call, so a
-                    // non-callable target would lose its name/position. Report
-                    // it now (PUC reads funcname from the still-current ci),
-                    // while the frame is intact, for "(field 'x')"-style info.
-                    let mut func = self.stack[abs as usize];
-                    if !matches!(func, Value::Closure(_) | Value::Native(_))
-                        && self.get_mm(func, Mm::Call).is_nil()
-                    {
-                        return Err(self.call_err(func));
+                    Op::TestSet => {
+                        let v = reg!(inst.b());
+                        if v.truthy() == inst.k() {
+                            set_reg!(inst.a(), v);
+                        } else {
+                            npc += 1;
+                        }
+                        next!()
                     }
-                    // PUC `luaD_pretailcall` resolves a chain of `__call`
-                    // metamethods *in place* before deciding whether to
-                    // collapse this frame. Without that, each __call hop
-                    // would push a fresh Lua frame and a 10000-deep
-                    // tail-recursion through a 100-deep __call chain
-                    // (5.4 calls.lua :172) blows up. Mirror the PUC loop:
-                    // shift args right, install the handler at `abs`, retry.
-                    // Chain depth limit matches the call-site `begin_call`
-                    // version cap (5.5 calls.lua :223 — 15 max, then "too
-                    // long"; 16th wrap fails the call). An infinite
-                    // self-referential `__call` would otherwise spin.
-                    let chain_cap = if self.version >= LuaVersion::Lua55 {
-                        15
-                    } else {
-                        MAX_CCMT
-                    };
-                    let mut chain = 0u32;
-                    while !matches!(func, Value::Closure(_) | Value::Native(_)) {
-                        let mm = self.get_mm(func, Mm::Call);
-                        if mm.is_nil() || self.call_mm_unusable(mm) {
+                    Op::Call => {
+                        let abs = base + inst.a();
+                        let nargs = if inst.b() == 0 {
+                            None
+                        } else {
+                            Some(inst.b() - 1)
+                        };
+                        let wanted = inst.c() as i32 - 1;
+                        self.begin_call(abs, nargs, wanted, false)?;
+                    }
+                    Op::TailCall => {
+                        let fr = *self.top_frame();
+                        let abs = base + inst.a();
+                        let mut nargs = if inst.b() == 0 {
+                            self.top - (abs + 1)
+                        } else {
+                            inst.b() - 1
+                        };
+                        // A tail call pops this frame before begin_call, so a
+                        // non-callable target would lose its name/position. Report
+                        // it now (PUC reads funcname from the still-current ci),
+                        // while the frame is intact, for "(field 'x')"-style info.
+                        let mut func = self.stack[abs as usize];
+                        if !matches!(func, Value::Closure(_) | Value::Native(_))
+                            && self.get_mm(func, Mm::Call).is_nil()
+                        {
                             return Err(self.call_err(func));
                         }
-                        chain += 1;
-                        if chain > chain_cap {
-                            return Err(self.rt_err("'__call' chain too long"));
-                        }
-                        let end = (abs + 1 + nargs) as usize;
-                        if self.stack.len() < end + 1 {
-                            self.stack.resize(end + 1, Value::Nil);
-                        }
-                        for i in (0..=nargs).rev() {
-                            self.stack[(abs + 1 + i) as usize] = self.stack[(abs + i) as usize];
-                        }
-                        self.stack[abs as usize] = mm;
-                        nargs += 1;
-                        self.top = abs + 1 + nargs;
-                        func = mm;
-                    }
-                    // PUC's tail-call collapse is Lua→Lua only. A tail call to
-                    // a C function runs the C function under the *current* Lua
-                    // activation (no frame fold — a C frame has nothing to
-                    // collapse into); after the C function returns, the
-                    // calling Lua function returns those results normally.
-                    // Mirror that: keep our Lua frame on the stack, call the
-                    // target through `begin_call(abs, …)` as a regular call,
-                    // and let the fallback `Op::Return` that the compiler
-                    // emits right after `Op::TailCall` forward the results.
-                    // 5.1 closure.lua :177's `return getfenv()` from inside
-                    // foo needs level 1 to resolve to foo, not to the
-                    // thread's globals fallback that happens when no Lua
-                    // frame is on the stack.
-                    let lua_target = matches!(func, Value::Closure(_));
-                    if lua_target {
-                        self.close_slots(fr.base, None)?;
-                        for i in 0..=nargs {
-                            self.stack[(fr.func_slot + i) as usize] =
-                                self.stack[(abs + i) as usize];
-                        }
-                        // Clear the slot range that's now
-                        // stranded by the tail-call collapse. The args
-                        // were copied to `[fr.func_slot..fr.func_slot+
-                        // nargs+1)`; the source slots `[abs..abs+
-                        // nargs+1)` still hold the same `Value::Closure
-                        // / Value::Str / ...` entries, but they're past
-                        // the new call's window. Without this clear, a
-                        // later GC with wider gc_top would mark stale
-                        // pointers there (same hazard the
-                        // finish_results slot-clear closes for the
-                        // Op::Return path).
-                        let new_top_lower_bound = fr.func_slot + nargs + 1;
-                        let prev_top = (self.top as usize).min(self.stack.len());
-                        if (new_top_lower_bound as usize) < prev_top {
-                            for slot in &mut self.stack[new_top_lower_bound as usize..prev_top] {
-                                *slot = Value::Nil;
+                        // PUC `luaD_pretailcall` resolves a chain of `__call`
+                        // metamethods *in place* before deciding whether to
+                        // collapse this frame. Without that, each __call hop
+                        // would push a fresh Lua frame and a 10000-deep
+                        // tail-recursion through a 100-deep __call chain
+                        // (5.4 calls.lua :172) blows up. Mirror the PUC loop:
+                        // shift args right, install the handler at `abs`, retry.
+                        // Chain depth limit matches the call-site `begin_call`
+                        // version cap (5.5 calls.lua :223 — 15 max, then "too
+                        // long"; 16th wrap fails the call). An infinite
+                        // self-referential `__call` would otherwise spin.
+                        let chain_cap = if self.version >= LuaVersion::Lua55 {
+                            15
+                        } else {
+                            MAX_CCMT
+                        };
+                        let mut chain = 0u32;
+                        while !matches!(func, Value::Closure(_) | Value::Native(_)) {
+                            let mm = self.get_mm(func, Mm::Call);
+                            if mm.is_nil() || self.call_mm_unusable(mm) {
+                                return Err(self.call_err(func));
                             }
+                            chain += 1;
+                            if chain > chain_cap {
+                                return Err(self.rt_err("'__call' chain too long"));
+                            }
+                            let end = (abs + 1 + nargs) as usize;
+                            if self.stack.len() < end + 1 {
+                                self.stack.resize(end + 1, Value::Nil);
+                            }
+                            for i in (0..=nargs).rev() {
+                                self.stack[(abs + 1 + i) as usize] = self.stack[(abs + i) as usize];
+                            }
+                            self.stack[abs as usize] = mm;
+                            nargs += 1;
+                            self.top = abs + 1 + nargs;
+                            func = mm;
                         }
-                        // PUC `CIST_TAIL`: the new Lua activation inherits
-                        // the popped frame's tailcalls count plus one for
-                        // this collapse. 5.1 db.lua :372 hammers 30000
-                        // recursive tail calls and expects to see the
-                        // synthetic tail level for every one of them.
-                        self.pending_tailcalls = fr.tailcalls.saturating_add(1);
-                        self.pending_ccmt = fr.ccmt;
-                        frames_pop_sync(&mut self.frames, &mut self.frames_top);
-                        if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
-                            && self.frames.len() < entry_depth
+                        // PUC's tail-call collapse is Lua→Lua only. A tail call to
+                        // a C function runs the C function under the *current* Lua
+                        // activation (no frame fold — a C frame has nothing to
+                        // collapse into); after the C function returns, the
+                        // calling Lua function returns those results normally.
+                        // Mirror that: keep our Lua frame on the stack, call the
+                        // target through `begin_call(abs, …)` as a regular call,
+                        // and let the fallback `Op::Return` that the compiler
+                        // emits right after `Op::TailCall` forward the results.
+                        // 5.1 closure.lua :177's `return getfenv()` from inside
+                        // foo needs level 1 to resolve to foo, not to the
+                        // thread's globals fallback that happens when no Lua
+                        // frame is on the stack.
+                        let lua_target = matches!(func, Value::Closure(_));
+                        if lua_target {
+                            self.close_slots(fr.base, None)?;
+                            for i in 0..=nargs {
+                                self.stack[(fr.func_slot + i) as usize] =
+                                    self.stack[(abs + i) as usize];
+                            }
+                            // Clear the slot range that's now
+                            // stranded by the tail-call collapse. The args
+                            // were copied to `[fr.func_slot..fr.func_slot+
+                            // nargs+1)`; the source slots `[abs..abs+
+                            // nargs+1)` still hold the same `Value::Closure
+                            // / Value::Str / ...` entries, but they're past
+                            // the new call's window. Without this clear, a
+                            // later GC with wider gc_top would mark stale
+                            // pointers there (same hazard the
+                            // finish_results slot-clear closes for the
+                            // Op::Return path).
+                            let new_top_lower_bound = fr.func_slot + nargs + 1;
+                            let prev_top = (self.top as usize).min(self.stack.len());
+                            if (new_top_lower_bound as usize) < prev_top {
+                                for slot in &mut self.stack[new_top_lower_bound as usize..prev_top]
+                                {
+                                    *slot = Value::Nil;
+                                }
+                            }
+                            // PUC `CIST_TAIL`: the new Lua activation inherits
+                            // the popped frame's tailcalls count plus one for
+                            // this collapse. 5.1 db.lua :372 hammers 30000
+                            // recursive tail calls and expects to see the
+                            // synthetic tail level for every one of them.
+                            self.pending_tailcalls = fr.tailcalls.saturating_add(1);
+                            self.pending_ccmt = fr.ccmt;
+                            frames_pop_sync(&mut self.frames, &mut self.frames_top);
+                            if !self.begin_call(fr.func_slot, Some(nargs), fr.nresults, false)?
+                                && self.frames.len() < entry_depth
+                            {
+                                // a native completed what was this function's result
+                                return Ok(self.take_results(fr.func_slot));
+                            }
+                        } else {
+                            // Native (or __call-bearing) target: regular call. The
+                            // results land at `abs..self.top` and the next op (the
+                            // fallback `Op::Return`) forwards them. `wanted = -1`
+                            // because the caller will multret them through Return.
+                            // PUC's precallC gives the C call this tail call's own
+                            // `__call` count (5.5 extraargs); the chain was already
+                            // resolved above, so hand it over.
+                            self.pending_ccmt = chain as u8;
+                            self.begin_call(abs, Some(nargs), -1, false)?;
+                        }
+                    }
+                    Op::Return | Op::Return0 | Op::Return1 => {
+                        let (abs_a, nret) = match inst.op() {
+                            Op::Return0 => (base, 0),
+                            Op::Return1 => (base + inst.a(), 1),
+                            _ => {
+                                let abs_a = base + inst.a();
+                                let nret = if inst.b() == 0 {
+                                    self.top - abs_a
+                                } else {
+                                    inst.b() - 1
+                                };
+                                (abs_a, nret)
+                            }
+                        };
+                        // close before moving results: __close handlers run above
+                        // the stack top, so the result region [abs_a..abs_a+nret)
+                        // stays intact across any yields the close performs.
+                        // Fixed-count returns may leave `self.top` below the last
+                        // result slot (the compiler does not always re-bump it);
+                        // raise it past the result region so `drive_close` parks
+                        // the handler call *above* — landing at `self.top` would
+                        // otherwise clobber a result with the handler closure.
+                        self.top = self.top.max(abs_a + nret);
+                        if matches!(inst.op(), Op::Return0 | Op::Return1)
+                            && self.return_to_lua(base, abs_a, nret, entry_depth)
                         {
-                            // a native completed what was this function's result
-                            return Ok(self.take_results(fr.func_slot));
+                            // done: the caller's frame is on top
+                        } else if let Some(vals) = self.begin_close(
+                            base,
+                            None,
+                            AfterClose::Return {
+                                abs_a,
+                                nret,
+                                from_native: false,
+                            },
+                            entry_depth,
+                        )? {
+                            return Ok(vals);
                         }
-                    } else {
-                        // Native (or __call-bearing) target: regular call. The
-                        // results land at `abs..self.top` and the next op (the
-                        // fallback `Op::Return`) forwards them. `wanted = -1`
-                        // because the caller will multret them through Return.
-                        // PUC's precallC gives the C call this tail call's own
-                        // `__call` count (5.5 extraargs); the chain was already
-                        // resolved above, so hand it over.
-                        self.pending_ccmt = chain as u8;
-                        self.begin_call(abs, Some(nargs), -1, false)?;
                     }
-                }
-                Op::Return | Op::Return0 | Op::Return1 => {
-                    let (abs_a, nret) = match inst.op() {
-                        Op::Return0 => (base, 0),
-                        Op::Return1 => (base + inst.a(), 1),
-                        _ => {
-                            let abs_a = base + inst.a();
-                            let nret = if inst.b() == 0 {
-                                self.top - abs_a
-                            } else {
-                                inst.b() - 1
-                            };
-                            (abs_a, nret)
-                        }
-                    };
-                    // close before moving results: __close handlers run above
-                    // the stack top, so the result region [abs_a..abs_a+nret)
-                    // stays intact across any yields the close performs.
-                    // Fixed-count returns may leave `self.top` below the last
-                    // result slot (the compiler does not always re-bump it);
-                    // raise it past the result region so `drive_close` parks
-                    // the handler call *above* — landing at `self.top` would
-                    // otherwise clobber a result with the handler closure.
-                    self.top = self.top.max(abs_a + nret);
-                    if matches!(inst.op(), Op::Return0 | Op::Return1)
-                        && self.return_to_lua(base, abs_a, nret, entry_depth)
-                    {
-                        // done: the caller's frame is on top
-                    } else if let Some(vals) = self.begin_close(
-                        base,
-                        None,
-                        AfterClose::Return {
-                            abs_a,
-                            nret,
-                            from_native: false,
-                        },
-                        entry_depth,
-                    )? {
-                        return Ok(vals);
-                    }
-                }
-                Op::ForPrep => self.for_prep(inst, base)?,
-                Op::ForLoop => {
-                    self.for_loop(inst, base)?;
-                    // The trace JIT counts the back-edges `for_loop` took (it
-                    // moved pc back from `pc + 1`) and starts recording at
-                    // the body once the count reaches the threshold.
-                    if self.jit.trace_enabled && self.top_frame().pc != pc + 1 {
-                        let proto = cl.proto;
-                        let c = proto.trace_hot_count.get();
-                        if c < u32::MAX / 2 {
-                            proto.trace_hot_count.set(c + 1);
-                        }
-                        if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none() {
-                            // the back-edge target is the body's first op
-                            let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
-                            let max_stack = cl.proto.max_stack as usize;
-                            let base_us = base as usize;
-                            let mut entry_tags = Vec::with_capacity(max_stack);
-                            for i in 0..max_stack {
-                                let (tag, _) = self.stack[base_us + i].unpack();
-                                entry_tags.push(tag);
+                    Op::ForPrep => self.for_prep(inst, base)?,
+                    Op::ForLoop => {
+                        // `for_loop` is the reference: 5.1–5.3 step and compare with
+                        // the limit, 5.4+ count down; anything else it raises on
+                        let a = inst.a();
+                        let back = npc.wrapping_sub(inst.bx());
+                        let mut slow = false;
+                        match (reg!(a), reg!(a + 1), reg!(a + 2)) {
+                            (Value::Int(cur), Value::Int(count), Value::Int(st)) if !pre53 => {
+                                if count != 0 {
+                                    let next = cur.wrapping_add(st);
+                                    set_reg!(a, Value::Int(next));
+                                    set_reg!(a + 1, Value::Int(count.wrapping_sub(1)));
+                                    set_reg!(a + 3, Value::Int(next));
+                                    npc = back;
+                                }
                             }
-                            self.jit.active_trace =
-                                Some(Box::new(crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
-                                )));
-                            // Record the frame the trace
-                            // started in. The currently-running
-                            // Lua frame is at len() - 1.
-                            self.jit.recording_frame_base = self.frames.len() - 1;
+                            (Value::Int(cur), Value::Int(lim), Value::Int(st)) if pre53 => {
+                                let next = cur.wrapping_add(st);
+                                if if st > 0 { next <= lim } else { next >= lim } {
+                                    set_reg!(a, Value::Int(next));
+                                    set_reg!(a + 3, Value::Int(next));
+                                    npc = back;
+                                }
+                            }
+                            (Value::Float(cur), Value::Float(lim), Value::Float(st)) => {
+                                let next = cur + st;
+                                if if st > 0.0 { next <= lim } else { next >= lim } {
+                                    set_reg!(a, Value::Float(next));
+                                    set_reg!(a + 3, Value::Float(next));
+                                    npc = back;
+                                }
+                            }
+                            _ => {
+                                self.for_loop(inst, base)?;
+                                npc = self.top_frame().pc;
+                                slow = true;
+                            }
                         }
-                    }
-                }
-                Op::TForPrep => {
-                    // the 4th control slot is the iterator's closing value
-                    self.register_tbc(base + inst.a() + 3)?;
-                    self.add_pc(inst.bx() as i32);
-                }
-                Op::TForCall => {
-                    let abs = base + inst.a();
-                    let need = (abs + 7) as usize;
-                    if self.stack.len() < need {
-                        self.stack.resize(need, Value::Nil);
-                    }
-                    self.stack[(abs + 4) as usize] = self.stack[abs as usize];
-                    self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
-                    self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
-                    let nvars = inst.c() as i32;
-                    self.begin_call(abs + 4, Some(2), nvars, false)?;
-                }
-                Op::TForLoop => {
-                    let a = inst.a();
-                    let ctrl = self.r(base, a + 4);
-                    if !ctrl.is_nil() {
-                        // Trace JIT back-edge counter on
-                        // generic-for back-edge. TForLoop sits at the
-                        // tail of `for k,v in expr do ... end`; recorder
-                        // treats it as the close-detection equivalent of
-                        // a negative Op::Jmp. Gate on `take_back_edge`
-                        // (= `ctrl != nil`) so empty-iter loops don't
-                        // pollute hot_count.
-                        if self.jit.trace_enabled {
+                        // The trace JIT counts the back-edges taken and starts
+                        // recording at the body once the count reaches the
+                        // threshold.
+                        if trace_on && npc != pc + 1 {
                             let proto = cl.proto;
                             let c = proto.trace_hot_count.get();
                             if c < u32::MAX / 2 {
@@ -6973,11 +7193,7 @@ impl Vm {
                             }
                             if c == self.jit.trace_hot_threshold && self.jit.active_trace.is_none()
                             {
-                                // TForLoop back-edge target = pc after
-                                // `add_pc(-bx)` runs from the already-
-                                // bumped f.pc (= pc + 1). So target =
-                                // (pc + 1) - bx, normally landing on
-                                // body_top (the op right after TForPrep).
+                                // the back-edge target is the body's first op
                                 let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
                                 let max_stack = cl.proto.max_stack as usize;
                                 let base_us = base as usize;
@@ -6986,256 +7202,342 @@ impl Vm {
                                     let (tag, _) = self.stack[base_us + i].unpack();
                                     entry_tags.push(tag);
                                 }
-                                // Snapshot the iter
-                                // fn's address if Native, so the
-                                // lowerer can specialise ipairs into
-                                // inline Table aget IR.
-                                let iter_ptr =
-                                    if let Value::Native(n) = self.stack[base_us + a as usize] {
+                                self.jit.active_trace =
+                                    Some(Box::new(crate::jit::trace::TraceRecord::start(
+                                        cl.proto, target, entry_tags, false,
+                                    )));
+                                // Record the frame the trace
+                                // started in. The currently-running
+                                // Lua frame is at len() - 1.
+                                self.jit.recording_frame_base = self.frames.len() - 1;
+                                slow = true;
+                            }
+                        }
+                        if slow {
+                            // SAFETY: see `next!`
+                            unsafe { *fpc = npc };
+                            continue 'outer;
+                        }
+                        next!()
+                    }
+                    Op::TForPrep => {
+                        // the 4th control slot is the iterator's closing value
+                        self.register_tbc(base + inst.a() + 3)?;
+                        self.add_pc(inst.bx() as i32);
+                    }
+                    Op::TForCall => {
+                        let abs = base + inst.a();
+                        let need = (abs + 7) as usize;
+                        if self.stack.len() < need {
+                            self.stack.resize(need, Value::Nil);
+                        }
+                        self.stack[(abs + 4) as usize] = self.stack[abs as usize];
+                        self.stack[(abs + 5) as usize] = self.stack[(abs + 1) as usize];
+                        self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
+                        let nvars = inst.c() as i32;
+                        self.begin_call(abs + 4, Some(2), nvars, false)?;
+                    }
+                    Op::TForLoop => {
+                        let a = inst.a();
+                        let ctrl = reg!(a + 4);
+                        if !ctrl.is_nil() {
+                            // Trace JIT back-edge counter on
+                            // generic-for back-edge. TForLoop sits at the
+                            // tail of `for k,v in expr do ... end`; recorder
+                            // treats it as the close-detection equivalent of
+                            // a negative Op::Jmp. Gate on `take_back_edge`
+                            // (= `ctrl != nil`) so empty-iter loops don't
+                            // pollute hot_count.
+                            if trace_on {
+                                let proto = cl.proto;
+                                let c = proto.trace_hot_count.get();
+                                if c < u32::MAX / 2 {
+                                    proto.trace_hot_count.set(c + 1);
+                                }
+                                if c == self.jit.trace_hot_threshold
+                                    && self.jit.active_trace.is_none()
+                                {
+                                    // TForLoop back-edge target = pc after
+                                    // `add_pc(-bx)` runs from the already-
+                                    // bumped f.pc (= pc + 1). So target =
+                                    // (pc + 1) - bx, normally landing on
+                                    // body_top (the op right after TForPrep).
+                                    let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
+                                    let max_stack = cl.proto.max_stack as usize;
+                                    let base_us = base as usize;
+                                    let mut entry_tags = Vec::with_capacity(max_stack);
+                                    for i in 0..max_stack {
+                                        let (tag, _) = self.stack[base_us + i].unpack();
+                                        entry_tags.push(tag);
+                                    }
+                                    // Snapshot the iter
+                                    // fn's address if Native, so the
+                                    // lowerer can specialise ipairs into
+                                    // inline Table aget IR.
+                                    let iter_ptr = if let Value::Native(n) =
+                                        self.stack[base_us + a as usize]
+                                    {
                                         Some(n.f as usize)
                                     } else {
                                         None
                                     };
-                                // Snapshot R[A+5]'s
-                                // tag (= current iter's val from
-                                // the just-fired TForCall). The
-                                // inline aget fast_blk emits a
-                                // runtime guard against this tag;
-                                // mixed-tag arrays deopt rather
-                                // than producing garbage pointers
-                                // through the spill path.
-                                let val_slot = base_us + (a as usize) + 5;
-                                let val_tag = if val_slot < self.stack.len() {
-                                    Some(self.stack[val_slot].unpack().0)
-                                } else {
-                                    None
-                                };
-                                let mut rec = crate::jit::trace::TraceRecord::start(
-                                    cl.proto, target, entry_tags, false,
+                                    // Snapshot R[A+5]'s
+                                    // tag (= current iter's val from
+                                    // the just-fired TForCall). The
+                                    // inline aget fast_blk emits a
+                                    // runtime guard against this tag;
+                                    // mixed-tag arrays deopt rather
+                                    // than producing garbage pointers
+                                    // through the spill path.
+                                    let val_slot = base_us + (a as usize) + 5;
+                                    let val_tag = if val_slot < self.stack.len() {
+                                        Some(self.stack[val_slot].unpack().0)
+                                    } else {
+                                        None
+                                    };
+                                    let mut rec = crate::jit::trace::TraceRecord::start(
+                                        cl.proto, target, entry_tags, false,
+                                    );
+                                    rec.tfor_iter_ptr = iter_ptr;
+                                    rec.tfor_val_tag = val_tag;
+                                    self.jit.active_trace = Some(Box::new(rec));
+                                    self.jit.recording_frame_base = self.frames.len() - 1;
+                                }
+                            }
+                            set_reg!(a + 2, ctrl);
+                            npc = npc.wrapping_sub(inst.bx());
+                            // a recording that just started must see the next
+                            // instruction from the loop head
+                            if trace_on && self.jit.active_trace.is_some() {
+                                // SAFETY: see `next!`
+                                unsafe { *fpc = npc };
+                                continue 'outer;
+                            }
+                        }
+                        next!()
+                    }
+                    Op::Closure => {
+                        let proto = cl.proto.protos[inst.bx() as usize];
+                        let n_ups = proto.upvals.len();
+                        // Build upvals on the stack for small
+                        // closures, skipping the per-call Vec/Box alloc
+                        // that closure_alloc's 10k iters pay. INLINE_UPVALS_N
+                        // = 2 covers most Lua source (1 captured local, or
+                        // _ENV + a single capture). Beyond that, fall back
+                        // to a heap Vec.
+                        use crate::runtime::function::INLINE_UPVALS_N;
+                        let mut stack_buf: [std::mem::MaybeUninit<
+                            Gc<crate::runtime::function::Upvalue>,
+                        >; INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
+                        let mut heap_buf: Vec<Gc<crate::runtime::function::Upvalue>> = Vec::new();
+                        let use_inline = n_ups <= INLINE_UPVALS_N;
+                        if !use_inline {
+                            heap_buf.reserve_exact(n_ups);
+                        }
+                        for (i, d) in proto.upvals.iter().enumerate() {
+                            let uv = if d.in_stack {
+                                self.find_or_create_upval(base + d.index as u32)
+                            } else {
+                                cl.upvals()[d.index as usize]
+                            };
+                            if use_inline {
+                                stack_buf[i] = std::mem::MaybeUninit::new(uv);
+                            } else {
+                                heap_buf.push(uv);
+                            }
+                        }
+                        // Tiny shim around the two paths so the 5.1 _ENV
+                        // clone + cache check below see one uniform
+                        // `&mut [Gc<Upvalue>]`. The stack_buf slice points
+                        // into the local frame (still valid through the
+                        // rest of this Op::Closure handler).
+                        let ups: &mut [Gc<crate::runtime::function::Upvalue>] = if use_inline {
+                            // SAFETY: the first n_ups slots of stack_buf
+                            // were initialised above; we hand out a slice
+                            // covering exactly them.
+                            unsafe {
+                                std::slice::from_raw_parts_mut(
+                                    stack_buf.as_mut_ptr()
+                                        as *mut Gc<crate::runtime::function::Upvalue>,
+                                    n_ups,
+                                )
+                            }
+                        } else {
+                            &mut heap_buf[..]
+                        };
+                        // PUC 5.1 had per-function environments: every Lua
+                        // function carried its own `env` slot, snapshotted from
+                        // the creating function's env at closure time, so a
+                        // `setfenv` on one closure never bled into a sibling.
+                        // luna models that by giving the 5.1 closure a *fresh*
+                        // closed upvalue for whichever cell holds `_ENV`, seeded
+                        // from the parent's current env value. Only that cell is
+                        // cloned — every other upvalue keeps its open/shared
+                        // identity (so e.g. `local function range(...) ...
+                        // range(...) ... end` still sees its self-reference). 5.2+
+                        // keeps the shared-upval model (and the proto cache that
+                        // depends on it).
+                        let v51 = self.version() <= LuaVersion::Lua51;
+                        if v51 && proto.env_upval_idx != u8::MAX {
+                            let i = proto.env_upval_idx as usize;
+                            let cur = match ups[i].state() {
+                                UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
+                                UpvalState::Closed(v) => v,
+                            };
+                            ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
+                        }
+                        let ups_slice: &[Gc<crate::runtime::function::Upvalue>] = ups;
+                        // PUC 5.2+ `getcached`: a Proto remembers its last LClosure
+                        // and reuses it when every fresh-upvalue binding still
+                        // points to the same Upvalue object as the cached one.
+                        // That keeps `function() return outer end` repeated in a
+                        // loop comparing equal across iterations (the captured
+                        // outer is a shared open upvalue), while `function()
+                        // return loop_var end` gets a fresh closure each round
+                        // because the loop var is re-created per iteration. PUC
+                        // 5.1 predated the cache, and the per-closure `_ENV`
+                        // clone above would defeat it anyway, so skip it.
+                        let nc = if v51 {
+                            self.heap.new_closure_inline(proto, ups_slice)
+                        } else {
+                            let cached = proto.cache.get().filter(|c| {
+                                c.upvals().len() == ups_slice.len()
+                                    && c.upvals()
+                                        .iter()
+                                        .zip(ups_slice.iter())
+                                        .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
+                            });
+                            match cached {
+                                Some(c) => c,
+                                None => {
+                                    let n = self.heap.new_closure_inline(proto, ups_slice);
+                                    proto.cache.set(Some(n));
+                                    n
+                                }
+                            }
+                        };
+                        self.set_r(base, inst.a(), Value::Closure(nc));
+                        self.maybe_collect_garbage(base + inst.a() + 1);
+                    }
+                    Op::Vararg => {
+                        let abs_a = base + inst.a();
+                        let wanted = inst.c() as i32 - 1;
+                        // A materialized named vararg lives in func_slot (its writes
+                        // must be visible to `...`); otherwise spread the extra args
+                        // straight off the stack at func_slot+1 .. +n_varargs.
+                        let vt = match self.stack[func_slot as usize] {
+                            Value::Table(t) => Some(t),
+                            _ => None,
+                        };
+                        let n = match vt {
+                            Some(t) => {
+                                let n_key = Value::Str(self.heap.intern(b"n"));
+                                // PUC getnumargs: a named vararg `t.n` set out of the
+                                // integer range [0, INT_MAX/2] is rejected here
+                                match t.get(n_key) {
+                                    Value::Int(n) if (n as u64) <= (i32::MAX as u64 / 2) => {
+                                        n as u32
+                                    }
+                                    _ => return Err(self.rt_err("vararg table has no proper 'n'")),
+                                }
+                            }
+                            None => n_varargs,
+                        };
+                        let count = if wanted < 0 { n } else { wanted as u32 };
+                        // a named vararg's `n` can be set to anything up to
+                        // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
+                        // stack cannot hold
+                        if abs_a + count > MAX_LUA_STACK {
+                            return Err(self.rt_err("stack overflow"));
+                        }
+                        let need = (abs_a + count) as usize;
+                        if self.stack.len() < need {
+                            self.stack.resize(need, Value::Nil);
+                        }
+                        for i in 0..count {
+                            let v = if i >= n {
+                                Value::Nil
+                            } else if let Some(t) = vt {
+                                t.get_int(i as i64 + 1)
+                            } else {
+                                self.stack[(func_slot + 1 + i) as usize]
+                            };
+                            self.stack[(abs_a + i) as usize] = v;
+                        }
+                        if wanted < 0 {
+                            self.top = abs_a + count;
+                        }
+                    }
+                    Op::GetVarg => {
+                        // materialize the vararg table (PUC table.pack shape) from the
+                        // stack varargs — used when the named vararg is written /
+                        // escapes / is `_ENV`. It is kept BOTH in func_slot (so `...`
+                        // sees later writes) and in the local register R[A].
+                        let n = n_varargs;
+                        let t = self.heap.new_table();
+                        {
+                            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                            let tm = unsafe { t.as_mut() };
+                            for i in 0..n {
+                                let _ = tm.set_int(
+                                    &mut self.heap,
+                                    i as i64 + 1,
+                                    self.stack[(func_slot + 1 + i) as usize],
                                 );
-                                rec.tfor_iter_ptr = iter_ptr;
-                                rec.tfor_val_tag = val_tag;
-                                self.jit.active_trace = Some(Box::new(rec));
-                                self.jit.recording_frame_base = self.frames.len() - 1;
                             }
                         }
-                        self.set_r(base, a + 2, ctrl);
-                        self.add_pc(-(inst.bx() as i32));
-                    }
-                }
-                Op::Closure => {
-                    let proto = cl.proto.protos[inst.bx() as usize];
-                    let n_ups = proto.upvals.len();
-                    // Build upvals on the stack for small
-                    // closures, skipping the per-call Vec/Box alloc
-                    // that closure_alloc's 10k iters pay. INLINE_UPVALS_N
-                    // = 2 covers most Lua source (1 captured local, or
-                    // _ENV + a single capture). Beyond that, fall back
-                    // to a heap Vec.
-                    use crate::runtime::function::INLINE_UPVALS_N;
-                    let mut stack_buf: [std::mem::MaybeUninit<
-                        Gc<crate::runtime::function::Upvalue>,
-                    >; INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-                    let mut heap_buf: Vec<Gc<crate::runtime::function::Upvalue>> = Vec::new();
-                    let use_inline = n_ups <= INLINE_UPVALS_N;
-                    if !use_inline {
-                        heap_buf.reserve_exact(n_ups);
-                    }
-                    for (i, d) in proto.upvals.iter().enumerate() {
-                        let uv = if d.in_stack {
-                            self.find_or_create_upval(base + d.index as u32)
-                        } else {
-                            cl.upvals()[d.index as usize]
-                        };
-                        if use_inline {
-                            stack_buf[i] = std::mem::MaybeUninit::new(uv);
-                        } else {
-                            heap_buf.push(uv);
-                        }
-                    }
-                    // Tiny shim around the two paths so the 5.1 _ENV
-                    // clone + cache check below see one uniform
-                    // `&mut [Gc<Upvalue>]`. The stack_buf slice points
-                    // into the local frame (still valid through the
-                    // rest of this Op::Closure handler).
-                    let ups: &mut [Gc<crate::runtime::function::Upvalue>] = if use_inline {
-                        // SAFETY: the first n_ups slots of stack_buf
-                        // were initialised above; we hand out a slice
-                        // covering exactly them.
-                        unsafe {
-                            std::slice::from_raw_parts_mut(
-                                stack_buf.as_mut_ptr()
-                                    as *mut Gc<crate::runtime::function::Upvalue>,
-                                n_ups,
-                            )
-                        }
-                    } else {
-                        &mut heap_buf[..]
-                    };
-                    // PUC 5.1 had per-function environments: every Lua
-                    // function carried its own `env` slot, snapshotted from
-                    // the creating function's env at closure time, so a
-                    // `setfenv` on one closure never bled into a sibling.
-                    // luna models that by giving the 5.1 closure a *fresh*
-                    // closed upvalue for whichever cell holds `_ENV`, seeded
-                    // from the parent's current env value. Only that cell is
-                    // cloned — every other upvalue keeps its open/shared
-                    // identity (so e.g. `local function range(...) ...
-                    // range(...) ... end` still sees its self-reference). 5.2+
-                    // keeps the shared-upval model (and the proto cache that
-                    // depends on it).
-                    let v51 = self.version() <= LuaVersion::Lua51;
-                    if v51 && proto.env_upval_idx != u8::MAX {
-                        let i = proto.env_upval_idx as usize;
-                        let cur = match ups[i].state() {
-                            UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
-                            UpvalState::Closed(v) => v,
-                        };
-                        ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
-                    }
-                    let ups_slice: &[Gc<crate::runtime::function::Upvalue>] = ups;
-                    // PUC 5.2+ `getcached`: a Proto remembers its last LClosure
-                    // and reuses it when every fresh-upvalue binding still
-                    // points to the same Upvalue object as the cached one.
-                    // That keeps `function() return outer end` repeated in a
-                    // loop comparing equal across iterations (the captured
-                    // outer is a shared open upvalue), while `function()
-                    // return loop_var end` gets a fresh closure each round
-                    // because the loop var is re-created per iteration. PUC
-                    // 5.1 predated the cache, and the per-closure `_ENV`
-                    // clone above would defeat it anyway, so skip it.
-                    let nc = if v51 {
-                        self.heap.new_closure_inline(proto, ups_slice)
-                    } else {
-                        let cached = proto.cache.get().filter(|c| {
-                            c.upvals().len() == ups_slice.len()
-                                && c.upvals()
-                                    .iter()
-                                    .zip(ups_slice.iter())
-                                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
-                        });
-                        match cached {
-                            Some(c) => c,
-                            None => {
-                                let n = self.heap.new_closure_inline(proto, ups_slice);
-                                proto.cache.set(Some(n));
-                                n
-                            }
-                        }
-                    };
-                    self.set_r(base, inst.a(), Value::Closure(nc));
-                    self.maybe_collect_garbage(base + inst.a() + 1);
-                }
-                Op::Vararg => {
-                    let abs_a = base + inst.a();
-                    let wanted = inst.c() as i32 - 1;
-                    // A materialized named vararg lives in func_slot (its writes
-                    // must be visible to `...`); otherwise spread the extra args
-                    // straight off the stack at func_slot+1 .. +n_varargs.
-                    let vt = match self.stack[func_slot as usize] {
-                        Value::Table(t) => Some(t),
-                        _ => None,
-                    };
-                    let n = match vt {
-                        Some(t) => {
-                            let n_key = Value::Str(self.heap.intern(b"n"));
-                            // PUC getnumargs: a named vararg `t.n` set out of the
-                            // integer range [0, INT_MAX/2] is rejected here
-                            match t.get(n_key) {
-                                Value::Int(n) if (n as u64) <= (i32::MAX as u64 / 2) => n as u32,
-                                _ => return Err(self.rt_err("vararg table has no proper 'n'")),
-                            }
-                        }
-                        None => n_varargs,
-                    };
-                    let count = if wanted < 0 { n } else { wanted as u32 };
-                    // a named vararg's `n` can be set to anything up to
-                    // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
-                    // stack cannot hold
-                    if abs_a + count > MAX_LUA_STACK {
-                        return Err(self.rt_err("stack overflow"));
-                    }
-                    let need = (abs_a + count) as usize;
-                    if self.stack.len() < need {
-                        self.stack.resize(need, Value::Nil);
-                    }
-                    for i in 0..count {
-                        let v = if i >= n {
-                            Value::Nil
-                        } else if let Some(t) = vt {
-                            t.get_int(i as i64 + 1)
-                        } else {
-                            self.stack[(func_slot + 1 + i) as usize]
-                        };
-                        self.stack[(abs_a + i) as usize] = v;
-                    }
-                    if wanted < 0 {
-                        self.top = abs_a + count;
-                    }
-                }
-                Op::GetVarg => {
-                    // materialize the vararg table (PUC table.pack shape) from the
-                    // stack varargs — used when the named vararg is written /
-                    // escapes / is `_ENV`. It is kept BOTH in func_slot (so `...`
-                    // sees later writes) and in the local register R[A].
-                    let n = n_varargs;
-                    let t = self.heap.new_table();
-                    {
+                        let n_key = Value::Str(self.heap.intern(b"n"));
                         // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        let tm = unsafe { t.as_mut() };
-                        for i in 0..n {
-                            let _ = tm.set_int(
-                                &mut self.heap,
-                                i as i64 + 1,
-                                self.stack[(func_slot + 1 + i) as usize],
-                            );
-                        }
+                        unsafe { t.as_mut() }
+                            .set(&mut self.heap, n_key, Value::Int(n as i64))
+                            .expect("'n' is a valid key");
+                        // once-per-table barrier (mirror SETLIST): t is born BLACK
+                        // during Propagate; the bulk inserts above don't barrier.
+                        self.heap
+                            .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+                        self.stack[func_slot as usize] = Value::Table(t);
+                        self.set_r(base, inst.a(), Value::Table(t));
                     }
-                    let n_key = Value::Str(self.heap.intern(b"n"));
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                    unsafe { t.as_mut() }
-                        .set(&mut self.heap, n_key, Value::Int(n as i64))
-                        .expect("'n' is a valid key");
-                    // once-per-table barrier (mirror SETLIST): t is born BLACK
-                    // during Propagate; the bulk inserts above don't barrier.
-                    self.heap
-                        .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                    self.stack[func_slot as usize] = Value::Table(t);
-                    self.set_r(base, inst.a(), Value::Table(t));
-                }
-                Op::VargIdx => {
-                    // R[A] := vararg[R[C]] without allocating: integer key in
-                    // [1,n] → that vararg, "n" → the count, else nil.
-                    let key = self.r(base, inst.c());
-                    let n = n_varargs;
-                    let v = match key {
-                        Value::Int(k) if k >= 1 && (k as u64) <= n as u64 => {
-                            self.stack[(func_slot + k as u32) as usize]
-                        }
-                        Value::Float(f) if f.fract() == 0.0 && f >= 1.0 && f <= n as f64 => {
-                            self.stack[(func_slot + f as u32) as usize]
-                        }
-                        Value::Str(s) if s.as_bytes() == b"n" => Value::Int(n as i64),
-                        _ => Value::Nil,
-                    };
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::ErrNNil => {
-                    let v = self.r(base, inst.a());
-                    if !matches!(v, Value::Nil) {
-                        let bx = inst.bx();
-                        let name = if bx == 0 {
-                            "?".to_string()
-                        } else {
-                            match cl.proto.consts[(bx - 1) as usize] {
-                                Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
-                                _ => "?".to_string(),
+                    Op::VargIdx => {
+                        // R[A] := vararg[R[C]] without allocating: integer key in
+                        // [1,n] → that vararg, "n" → the count, else nil.
+                        let key = reg!(inst.c());
+                        let n = n_varargs;
+                        let v = match key {
+                            Value::Int(k) if k >= 1 && (k as u64) <= n as u64 => {
+                                self.stack[(func_slot + k as u32) as usize]
                             }
+                            Value::Float(f) if f.fract() == 0.0 && f >= 1.0 && f <= n as f64 => {
+                                self.stack[(func_slot + f as u32) as usize]
+                            }
+                            Value::Str(s) if s.as_bytes() == b"n" => Value::Int(n as i64),
+                            _ => Value::Nil,
                         };
-                        return Err(self.rt_err(&format!("global '{name}' already defined")));
+                        set_reg!(inst.a(), v);
+                        next!()
                     }
+                    Op::ErrNNil => {
+                        let v = self.r(base, inst.a());
+                        if !matches!(v, Value::Nil) {
+                            let bx = inst.bx();
+                            let name = if bx == 0 {
+                                "?".to_string()
+                            } else {
+                                match cl.proto.consts[(bx - 1) as usize] {
+                                    Value::Str(s) => {
+                                        String::from_utf8_lossy(s.as_bytes()).into_owned()
+                                    }
+                                    _ => "?".to_string(),
+                                }
+                            };
+                            return Err(self.rt_err(&format!("global '{name}' already defined")));
+                        }
+                        next!()
+                    }
+                    Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
                 }
-                Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
+                // a slow arm: the loop head reloads everything from the frame
+                continue 'outer;
             }
         }
     }
@@ -8174,6 +8476,16 @@ fn note_trace_compile_failure(proto: Gc<crate::runtime::function::Proto>, head_p
 fn cache_trace(proto: Gc<crate::runtime::function::Proto>, ct: crate::jit::trace::CompiledTrace) {
     if ct.dispatchable || ct.downrec_link.is_some() {
         proto.has_dispatchable_trace.set(true);
+        use crate::runtime::function::{TRACE_HEADS_MANY, TRACE_HEADS_NONE};
+        let mut heads = proto.trace_heads.get();
+        if heads[0] == TRACE_HEADS_NONE || heads[0] == ct.head_pc {
+            heads[0] = ct.head_pc;
+        } else if heads[1] == TRACE_HEADS_NONE || heads[1] == ct.head_pc {
+            heads[1] = ct.head_pc;
+        } else {
+            heads = [TRACE_HEADS_MANY; 2];
+        }
+        proto.trace_heads.set(heads);
     }
     if ct.head_pc == 0 {
         proto.trace_call_head_settled.set(true);

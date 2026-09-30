@@ -366,6 +366,7 @@ fn r_proto(
         trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
         has_dispatchable_trace: std::cell::Cell::new(false),
+        trace_heads: std::cell::Cell::new([crate::runtime::function::TRACE_HEADS_NONE; 2]),
         trace_call_head_settled: std::cell::Cell::new(false),
     }))
 }
