@@ -214,18 +214,25 @@ fn variable_changes_kind_across_a_generic_for_back_edge() {
     );
 }
 
-/// A table in one iteration and an integer in the next: restoring the
-/// integer's bits as a table would hand the collector a wild pointer.
+/// A table in one iteration and an integer in the next. Restoring the
+/// integer's bits as a table hands the collector a wild pointer (the
+/// process died in `collectgarbage`); restoring the table as an integer
+/// drops the last reference to a live table.
 #[test]
 fn variable_changes_between_table_and_integer() {
-    let src = r#"
-        local x = {}
-        local i = 0
-        while i < 300 do
-          i = i + 1
-          if i % 2 == 1 then x = 7 else x = {} end
-        end
-        collectgarbage()
-        return type(x)"#;
-    assert_same(src, &all("table"));
+    let src = |odd: &str, even: &str| {
+        format!(
+            r#"
+            local x = {{}}
+            local i = 0
+            while i < 300 do
+              i = i + 1
+              if i % 2 == 1 then x = {odd} else x = {even} end
+            end
+            collectgarbage()
+            return type(x) .. " " .. (type(x) == "table" and "" or tostring(x))"#
+        )
+    };
+    assert_same(&src("7", "{}"), &all("table "));
+    assert_same(&src("{}", "7"), &all("number 7"));
 }
