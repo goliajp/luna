@@ -8250,6 +8250,19 @@ impl Vm {
                 }
                 Op::Len => {
                     let v = self.r(base, inst.b());
+                    // no `__len` to look for: a string, or a table without
+                    // a metatable
+                    match v {
+                        Value::Str(s) => {
+                            self.set_r(base, inst.a(), Value::Int(s.len() as i64));
+                            continue;
+                        }
+                        Value::Table(t) if t.metatable().is_none() => {
+                            self.set_r(base, inst.a(), Value::Int(t.len()));
+                            continue;
+                        }
+                        _ => {}
+                    }
                     match self.len_step(v)? {
                         MmOut::Done(r) => self.set_r(base, inst.a(), r),
                         MmOut::Mm { func, recv } => {
