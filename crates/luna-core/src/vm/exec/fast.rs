@@ -1014,21 +1014,22 @@ impl Vm {
                     }
                     // listed rather than `_`, so that the jump table covers every
                     // opcode without a range check
+                    // they stay in this frame: run out of line, then go on
                     Op::LoadKx
                     | Op::NewTable
                     | Op::SetList
                     | Op::Pow
                     | Op::Concat
-                    | Op::Close
+                    | Op::ForPrep
+                    | Op::TForPrep
+                    | Op::Closure
+                    | Op::Vararg
+                    | Op::GetVarg => self.run_frame_op(inst)?,
+                    Op::Close
                     | Op::Tbc
                     | Op::TailCall
                     | Op::Return
-                    | Op::ForPrep
-                    | Op::TForPrep
                     | Op::TForCall
-                    | Op::Closure
-                    | Op::Vararg
-                    | Op::GetVarg
                     | Op::ExtraArg => return Ok(FastExit::Slow(inst)),
                 }
                 // a fast arm's slow path
