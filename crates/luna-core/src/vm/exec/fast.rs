@@ -118,10 +118,23 @@ impl Vm {
                 // SAFETY: as for the fetch at the loop head
                 inst = unsafe { *code.add(npc as usize) };
                 npc += 1;
-                // SAFETY: see above
-                unsafe { (*fr).pc = npc };
+                if WATCH {
+                    // SAFETY: see above
+                    unsafe { (*fr).pc = npc };
+                }
                 continue;
             }};
+        }
+        // Without anything to watch the frame's pc is stored only before
+        // whatever can read it: a call, a metamethod, an error, the loop
+        // head (PUC `savepc`). Every slow path below starts with this.
+        macro_rules! save {
+            () => {
+                if !WATCH {
+                    // SAFETY: `fr` is the running frame
+                    unsafe { (*fr).pc = npc };
+                }
+            };
         }
         // the top frame, known to be a Lua frame while `trap` is clear
         macro_rules! top_lua {
@@ -164,8 +177,6 @@ impl Vm {
                 // SAFETY: as for the fetch at the loop head
                 inst = unsafe { *code.add(npc as usize) };
                 npc += 1;
-                // SAFETY: see above
-                unsafe { (*fr).pc = npc };
             }
             switched = true;
             // after a call or return: take on whatever frame is now on top
@@ -205,6 +216,7 @@ impl Vm {
                         set_reg!(inst.a(), v);
                         next!()
                     }
+                    save!();
                     // SAFETY: as above
                     let (t, key) = unsafe { (*pt, *pk) };
                     self.index_miss(t, key, base!() + inst.a())?;
@@ -221,6 +233,7 @@ impl Vm {
                     if unsafe { self.newindex_raw_at(pt, pk, v) } {
                         next!()
                     }
+                    save!();
                     // SAFETY: as above
                     let (t, key) = unsafe { (*pt, *pk) };
                     self.newindex_miss(t, key, v)?;
@@ -246,6 +259,7 @@ impl Vm {
                     } else {
                         // SAFETY: as above
                         let (l, r) = unsafe { (*pl, *pr) };
+                        save!();
                         let step = self.less_step(l, r, $or_eq)?;
                         self.op_compare(step, l, r, inst.k())?;
                         resume!()
@@ -280,6 +294,7 @@ impl Vm {
                             Value::Int(im as i64)
                         };
                         let (l, r) = if $swap { (imv, x) } else { (x, imv) };
+                        save!();
                         let step = self.less_step(l, r, $or_eq)?;
                         self.op_compare(step, l, r, inst.k())?;
                         resume!()
@@ -355,6 +370,7 @@ impl Vm {
                             next!()
                         }
                         let key = konst!(inst.c());
+                        save!();
                         self.index_miss(t, key, base!() + inst.a())?;
                     }
                     Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize)),
@@ -367,6 +383,7 @@ impl Vm {
                             set_reg!(inst.a(), v);
                             next!()
                         }
+                        save!();
                         self.index_miss(t, key, dst)?;
                     }
                     Op::SetTabUp => {
@@ -378,6 +395,7 @@ impl Vm {
                             next!()
                         }
                         let key = konst!(inst.b());
+                        save!();
                         self.newindex_miss(t, key, v)?;
                     }
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize)),
@@ -389,6 +407,7 @@ impl Vm {
                         if self.newindex_raw(t, key, v) {
                             next!()
                         }
+                        save!();
                         self.newindex_miss(t, key, v)?;
                     }
                     Op::SelfOp => {
@@ -416,12 +435,13 @@ impl Vm {
                         }
                         // SAFETY: as above
                         let key = unsafe { *pk };
+                        save!();
                         self.index_miss(o, key, base!() + inst.a())?;
                     }
                     Op::Add => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -429,7 +449,7 @@ impl Vm {
                     Op::Sub => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -437,7 +457,7 @@ impl Vm {
                     Op::Mul => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -446,7 +466,7 @@ impl Vm {
                     Op::Mod => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -454,7 +474,7 @@ impl Vm {
                     Op::IDiv => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -462,7 +482,7 @@ impl Vm {
                     Op::Div => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -470,7 +490,7 @@ impl Vm {
                     Op::BAnd => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -478,7 +498,7 @@ impl Vm {
                     Op::BOr => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -486,7 +506,7 @@ impl Vm {
                     Op::BXor => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -494,7 +514,7 @@ impl Vm {
                     Op::Shl => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -502,7 +522,7 @@ impl Vm {
                     Op::Shr => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
                             int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, inst.k()))
+                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, inst.k()) })
                         {
                             next!()
                         }
@@ -511,6 +531,7 @@ impl Vm {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
                             int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
                             slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, false)
                         }) {
@@ -521,6 +542,7 @@ impl Vm {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
                             int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
                             slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, false)
                         }) {
@@ -531,6 +553,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, false)
                         }) {
@@ -541,6 +564,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, false)
                         }) {
@@ -551,6 +575,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, false)
                         }) {
@@ -562,6 +587,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, false)
                         }) {
@@ -572,6 +598,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, false)
                         }) {
@@ -582,6 +609,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, false)
                         }) {
@@ -592,6 +620,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))),
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Pow, l, r, false)
                         }) {
@@ -602,6 +631,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, false)
                         }) {
@@ -612,6 +642,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, false)
                         }) {
@@ -622,6 +653,7 @@ impl Vm {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
                         int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
                         slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, false)
                         }) {
@@ -632,6 +664,7 @@ impl Vm {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
                             int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
                             slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, false)
                         }) {
@@ -642,6 +675,7 @@ impl Vm {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
                             int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
                             slow(x, c) => {
+                            save!();
                             let (l, r) = if inst.k() { (c, x) } else { (x, c) };
                             self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, false)
                         }) {
@@ -660,6 +694,7 @@ impl Vm {
                                 next!()
                             }
                             None => {
+                                save!();
                                 let mm = self.get_mm(v, Mm::Unm);
                                 if mm.is_nil() {
                                     return Err(self.type_err("perform arithmetic on", v));
@@ -674,12 +709,14 @@ impl Vm {
                         match self.arith_operand()(v) {
                             Some(n) => {
                                 let Some(i) = int_of(n) else {
+                                    save!();
                                     return Err(self.no_int_rep_err());
                                 };
                                 set_reg!(inst.a(), Value::Int(!i));
                                 next!()
                             }
                             None => {
+                                save!();
                                 let mm = self.get_mm(v, Mm::BNot);
                                 if mm.is_nil() {
                                     return Err(self.type_err("perform bitwise operation on", v));
@@ -710,6 +747,7 @@ impl Vm {
                             }
                             _ => {}
                         }
+                        save!();
                         match self.len_step(v)? {
                             MmOut::Done(r) => self.set_r(base!(), inst.a(), r),
                             MmOut::Mm { func, recv } => {
@@ -738,6 +776,7 @@ impl Vm {
                                 proto.trace_hot_count.set(c + 1);
                             }
                             let target = (pc as i32 + 1 + off).max(0) as u32;
+                            save!();
                             if c >= self.jit.trace_hot_threshold
                                 && self.trace_start_at_jmp(cl!(), base!(), target)
                             {
@@ -768,6 +807,7 @@ impl Vm {
                         } else {
                             // SAFETY: as above
                             let (l, r) = unsafe { (*pl, *pr) };
+                            save!();
                             let step = self.eq_step(l, r);
                             self.op_compare(step, l, r, inst.k())?;
                             resume!()
@@ -887,6 +927,7 @@ impl Vm {
                             // `for_loop` is the reference: 5.1–5.3 step and
                             // compare with the limit, 5.4+ count down; anything
                             // else it raises on
+                            save!();
                             self.for_loop(inst, base!())?;
                             npc = self.top_frame().pc;
                             slow = true;
@@ -904,6 +945,7 @@ impl Vm {
                             {
                                 // the back-edge target is the body's first op
                                 let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
+                                save!();
                                 self.trace_start_at_loop(cl!(), base!(), target, None);
                                 slow = true;
                             }
@@ -933,6 +975,7 @@ impl Vm {
                                 {
                                     // the body's first op, right after TForPrep
                                     let target = (pc as i32 + 1 - inst.bx() as i32).max(0) as u32;
+                                    save!();
                                     self.trace_start_at_loop(cl!(), base!(), target, Some(a));
                                 }
                             }
@@ -981,11 +1024,13 @@ impl Vm {
                                     _ => "?".to_string(),
                                 }
                             };
+                            save!();
                             return Err(self.rt_err(&format!("global '{name}' already defined")));
                         }
                         next!()
                     }
                     Op::Call => {
+                        save!();
                         let abs = base!() + inst.a();
                         let nargs = if inst.b() == 0 {
                             None
@@ -1015,6 +1060,7 @@ impl Vm {
                         if self.return_fast(base, base, 0, entry_depth) {
                             reenter!()
                         }
+                        save!();
                         return Ok(FastExit::Slow(inst));
                     }
                     Op::Return1 => {
@@ -1022,6 +1068,7 @@ impl Vm {
                         if self.return_fast(base, base + inst.a(), 1, entry_depth) {
                             reenter!()
                         }
+                        save!();
                         return Ok(FastExit::Slow(inst));
                     }
                     // they stay in this frame: run out of line, then go on
@@ -1034,7 +1081,10 @@ impl Vm {
                     | Op::TForPrep
                     | Op::Closure
                     | Op::Vararg
-                    | Op::GetVarg => self.run_frame_op(inst)?,
+                    | Op::GetVarg => {
+                        save!();
+                        self.run_frame_op(inst)?
+                    }
                     // listed rather than `_`, so that the jump table covers every
                     // opcode without a range check
                     Op::Close
@@ -1042,7 +1092,10 @@ impl Vm {
                     | Op::TailCall
                     | Op::Return
                     | Op::TForCall
-                    | Op::ExtraArg => return Ok(FastExit::Slow(inst)),
+                    | Op::ExtraArg => {
+                        save!();
+                        return Ok(FastExit::Slow(inst));
+                    }
                 }
                 // a fast arm's slow path
                 resume!()
