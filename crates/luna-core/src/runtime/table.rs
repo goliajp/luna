@@ -66,6 +66,12 @@ pub mod jit_layout {
     /// constants in `jit_backend/mod.rs` to express that split.
     pub const TABLE_NODES_OFFSET: usize = std::mem::offset_of!(Table, nodes);
 
+    /// Byte offsets of the `u32` array-part counters `acount` and
+    /// `aprefix`, which the method JIT's inline array stores keep in step.
+    pub const TABLE_ACOUNT_OFFSET: usize = std::mem::offset_of!(Table, acount);
+    /// See [`TABLE_ACOUNT_OFFSET`].
+    pub const TABLE_APREFIX_OFFSET: usize = std::mem::offset_of!(Table, aprefix);
+
     /// Byte offset of `key: Value` within `Node` (= 0).
     pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key);
 
@@ -239,6 +245,13 @@ pub struct Table {
     /// free-slot search position, counts down (PUC lastfree).
     /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
     pub(crate) lastfree: u32,
+    /// Non-nil slots in the array part. With `aprefix` it answers `#t`
+    /// without a search when the array holds exactly a leading run
+    /// (`acount == aprefix < asize`: then `aprefix` is the only border
+    /// there, the one the binary search in `len` finds). Kept by `aset`,
+    /// `clear_weak` and `resize`; the method JIT's inline array stores
+    /// keep it too. Sits in padding, so `Table` does not grow.
+    pub(crate) acount: u32,
     /// SoA Robin Hood hash part, kept parallel to `nodes`. It is not
     /// on the public get/set/next path yet: the chain `nodes` stay
     /// authoritative and only the `soa_*` methods touch these arrays.
@@ -265,6 +278,10 @@ pub struct Table {
     /// unread — luna's mm lookup walks `metatable.get` each time
     #[allow(dead_code)]
     pub(crate) flags: u8,
+    /// A length whose leading slots `[0, aprefix)` are all non-nil; it may
+    /// lag behind the real run (that only disables the `#t` shortcut)
+    /// but never exceeds it.
+    pub(crate) aprefix: u32,
 }
 
 // SAFETY: `array_ptr` looks like an unprotected raw pointer field, but
@@ -291,6 +308,7 @@ impl Table {
             inline_storage: std::cell::UnsafeCell::new([0; INLINE_U64S]),
             nodes: Box::new([]),
             lastfree: 0,
+            acount: 0,
             keys: Box::new([]),
             vals: Box::new([]),
             meta: Box::new([]),
@@ -298,6 +316,7 @@ impl Table {
             iter_depth: 0,
             metatable: None,
             flags: 0,
+            aprefix: 0,
         }
     }
 
@@ -462,10 +481,51 @@ impl Table {
         // `idx < self.asize()`. The two `*_mut` calls each take a
         // distinct `&mut self` borrow whose lifetime ends at the
         // statement boundary, so they don't overlap.
+        // SAFETY: as above, `idx < self.asize()`.
+        let old = unsafe { *self.atags().get_unchecked(idx) };
         unsafe {
             *self.atags_mut().get_unchecked_mut(idx) = t;
             *self.avals_mut().get_unchecked_mut(idx) = b;
         }
+        self.note_atag_change(idx, old, t);
+    }
+
+    /// Keep `acount` / `aprefix` in step with one array-slot tag change.
+    #[inline]
+    fn note_atag_change(&mut self, idx: usize, old: u8, new: u8) {
+        if old == raw::NIL && new != raw::NIL {
+            self.acount += 1;
+            if idx == self.aprefix as usize {
+                // run over slots filled earlier, bounded so refilling a
+                // hole low in a long array stays O(1); a shorter prefix
+                // only disables the shortcut until the next `resize`
+                let asize = self.asize();
+                let atags = self.atags();
+                let stop = (idx + 64).min(asize);
+                let mut p = idx + 1;
+                while p < stop && atags[p] != raw::NIL {
+                    p += 1;
+                }
+                self.aprefix = p as u32;
+            }
+        } else if old != raw::NIL && new == raw::NIL {
+            self.acount -= 1;
+            if idx < self.aprefix as usize {
+                self.aprefix = idx as u32;
+            }
+        }
+    }
+
+    /// Recompute `acount` / `aprefix` from the tag bytes.
+    fn recount_array(&mut self) {
+        let atags = self.atags();
+        let count = atags.iter().filter(|&&t| t != raw::NIL).count();
+        let prefix = atags
+            .iter()
+            .position(|&t| t == raw::NIL)
+            .unwrap_or(atags.len());
+        self.acount = count as u32;
+        self.aprefix = prefix as u32;
     }
 
     // ---- reads ----
@@ -943,8 +1003,21 @@ impl Table {
         // slab; `array_ptr` already points to whichever it is, so
         // walking via raw offsets works the same for either case.
         let old_asize = self.asize as usize;
-        let mut old_pairs: Vec<(u8, RawVal)> = Vec::with_capacity(old_asize);
-        if old_asize > 0 {
+        // growing keeps every array entry at its index, so the old backing
+        // is copied as is (PUC `luaH_resize` reallocates in place);
+        // shrinking re-inserts entry by entry below
+        let grow = new_asize >= old_asize && old_asize > 0;
+        let mut old_pairs: Vec<(u8, RawVal)> = Vec::with_capacity(if grow { 0 } else { old_asize });
+        let mut old_slab: Box<[u64]> = Box::new([]);
+        let mut old_inline = [0u64; INLINE_U64S];
+        if grow {
+            if old_asize as u64 <= INLINE_ASIZE {
+                // SAFETY: exclusive &mut self; the inline bytes are read through the cell
+                old_inline = unsafe { *self.inline_storage.get() };
+            } else {
+                old_slab = std::mem::take(&mut self.slab);
+            }
+        } else if old_asize > 0 {
             // SAFETY: `array_ptr` was set up by `Heap::new_table` or
             // an earlier `resize`; it covers `old_asize * 9` bytes
             // (avals + atags).
@@ -993,6 +1066,26 @@ impl Table {
         // memory. `free_obj` subtracts `internal_bytes()` on the way out.
         let after = self.internal_bytes();
         heap.apply_bytes_delta(before, after);
+        if grow {
+            let src: *const u8 = if old_asize as u64 <= INLINE_ASIZE {
+                old_inline.as_ptr() as *const u8
+            } else {
+                old_slab.as_ptr() as *const u8
+            };
+            // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;
+            // the new one holds `new_asize >= old_asize` zero (nil) slots
+            unsafe {
+                let dst = self.array_base();
+                std::ptr::copy_nonoverlapping(src, dst, old_asize * 8);
+                std::ptr::copy_nonoverlapping(
+                    src.add(old_asize * 8),
+                    dst.add(new_asize * 8),
+                    old_asize,
+                );
+            }
+            drop(old_slab);
+        }
+        self.recount_array();
         // Re-insert old array entries via the public set_norm path
         // (which handles rehashing if the new array shrinks below the
         // entry count).
@@ -1024,6 +1117,9 @@ impl Table {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> i64 {
         let asize = self.asize();
+        if self.acount == self.aprefix && (self.aprefix as usize) < asize {
+            return self.aprefix as i64;
+        }
         let atags = self.atags();
         if asize > 0 && atags[asize - 1] == raw::NIL {
             // binary search inside the array part
@@ -1284,6 +1380,7 @@ impl Table {
                     if is_dead(v) {
                         self.atags_mut()[i] = raw::NIL;
                         self.avals_mut()[i] = RawVal::NIL;
+                        self.note_atag_change(i, tag, raw::NIL);
                     } else {
                         mark_string(v);
                     }
@@ -1865,5 +1962,75 @@ mod tests {
                 assert!(t.get_int(i).raw_eq(Value::Int(i)));
             }
         });
+    }
+
+    /// `len` without the `acount` / `aprefix` shortcut: the search every
+    /// shortcut answer must equal.
+    fn len_by_search(t: &Table) -> i64 {
+        let asize = t.asize();
+        let atags = t.atags();
+        if asize > 0 && atags[asize - 1] == raw::NIL {
+            let (mut lo, mut hi) = (0usize, asize);
+            while hi - lo > 1 {
+                let m = lo + (hi - lo) / 2;
+                if atags[m - 1] == raw::NIL {
+                    hi = m;
+                } else {
+                    lo = m;
+                }
+            }
+            return lo as i64;
+        }
+        // array full or absent: the shortcut needs `aprefix < asize`, so
+        // `len` searches here too
+        t.len()
+    }
+
+    fn check_counts(t: &Table) {
+        let atags = t.atags();
+        let count = atags.iter().filter(|&&g| g != raw::NIL).count() as u32;
+        let run = atags
+            .iter()
+            .position(|&g| g == raw::NIL)
+            .unwrap_or(atags.len()) as u32;
+        assert_eq!(t.acount, count);
+        assert!(t.aprefix <= run, "aprefix {} past the run {run}", t.aprefix);
+        assert_eq!(t.len(), len_by_search(t));
+    }
+
+    #[test]
+    fn length_shortcut_matches_the_border_search() {
+        // xorshift, so the sequence is the same on every run
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move |n: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % n
+        };
+        for _ in 0..200 {
+            with_table(|heap, t| {
+                for _ in 0..300 {
+                    let k = next(80) as i64 + 1;
+                    let v = if next(4) == 0 {
+                        Value::Nil
+                    } else {
+                        Value::Int(k)
+                    };
+                    let _ = t.set_int(heap, k, v);
+                    check_counts(t);
+                }
+                // appends and pops at the border, as `t[#t + 1] = v` does
+                for _ in 0..100 {
+                    let n = t.len();
+                    if next(3) == 0 && n > 0 {
+                        let _ = t.set_int(heap, n, Value::Nil);
+                    } else {
+                        let _ = t.set_int(heap, n + 1, Value::Int(n));
+                    }
+                    check_counts(t);
+                }
+            });
+        }
     }
 }

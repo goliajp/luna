@@ -207,6 +207,9 @@ pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::run
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
 pub(crate) const STR_SHORT_OFFSET: usize = luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET;
+const TABLE_ACOUNT_OFFSET: i32 = luna_core::runtime::table::jit_layout::TABLE_ACOUNT_OFFSET as i32;
+const TABLE_APREFIX_OFFSET: i32 =
+    luna_core::runtime::table::jit_layout::TABLE_APREFIX_OFFSET as i32;
 
 /// table-field IC scaffold.
 ///
@@ -483,6 +486,35 @@ fn want_tag(kind: RegKind) -> i64 {
 /// call so the interpreter re-runs it, as a metatable does. Reading the
 /// raw payload unchecked turned a nil into integer 0 or float 0.0.
 ///
+/// After an inline store of a non-nil value into array slot `idx` whose
+/// tag was `old_tag`, keep `Table`'s `acount` / `aprefix` as `aset` does
+/// (a nil slot turning non-nil counts, and extends a leading run that ends
+/// exactly there), then continue at `next`.
+fn emit_array_fill_count(
+    bcx: &mut FunctionBuilder,
+    t: Value,
+    idx: Value,
+    old_tag: Value,
+    next: Block,
+) {
+    let count_blk = bcx.create_block();
+    let was_nil = bcx.ins().icmp_imm_u(IntCC::Equal, old_tag, RAW_TAG_NIL);
+    bcx.ins().brif(was_nil, count_blk, &[], next, &[]);
+    bcx.switch_to_block(count_blk);
+    bcx.seal_block(count_blk);
+    let flags = MemFlagsData::trusted();
+    let acount = bcx.ins().load(types::I32, flags, t, TABLE_ACOUNT_OFFSET);
+    let acount = bcx.ins().iadd_imm_u(acount, 1);
+    bcx.ins().store(flags, acount, t, TABLE_ACOUNT_OFFSET);
+    let aprefix = bcx.ins().load(types::I32, flags, t, TABLE_APREFIX_OFFSET);
+    let wide = bcx.ins().uextend(types::I64, aprefix);
+    let at_end = bcx.ins().icmp(IntCC::Equal, wide, idx);
+    let grown = bcx.ins().iadd_imm_u(aprefix, 1);
+    let aprefix = bcx.ins().select(at_end, grown, aprefix);
+    bcx.ins().store(flags, aprefix, t, TABLE_APREFIX_OFFSET);
+    bcx.ins().jump(next, &[]);
+}
+
 /// `fast_ok` selects the inline array read (`key - 1` in range, no
 /// metatable); otherwise `slow` names a `*_checked` helper and its key.
 fn emit_checked_get<M: Module>(
@@ -3444,13 +3476,16 @@ pub fn lower_int_chunk_into<M: Module>(
                     let avals_bytes = bcx.ins().ishl(asize, three);
                     let atags_ptr = bcx.ins().iadd(avals_ptr, avals_bytes);
                     let tag_dst = bcx.ins().iadd(atags_ptr, key_minus_1);
+                    let old_tag = bcx
+                        .ins()
+                        .uload8(types::I64, MemFlagsData::trusted(), tag_dst, 0);
                     let tag_byte = bcx.ins().iconst(types::I8, RAW_TAG_INT);
                     bcx.ins()
                         .store(MemFlagsData::trusted(), tag_byte, tag_dst, 0);
                     let val_off = bcx.ins().ishl(key_minus_1, three); // *8
                     let val_dst = bcx.ins().iadd(avals_ptr, val_off);
                     bcx.ins().store(MemFlagsData::trusted(), val, val_dst, 0);
-                    bcx.ins().jump(merge_blk, &[]);
+                    emit_array_fill_count(&mut bcx, t, key_minus_1, old_tag, merge_blk);
 
                     bcx.switch_to_block(slow_blk);
                     bcx.seal_block(slow_blk);
@@ -3576,6 +3611,19 @@ pub fn lower_int_chunk_into<M: Module>(
                 let fits = bcx
                     .ins()
                     .icmp(IntCC::UnsignedGreaterThanOrEqual, asize, b_v);
+                // the inline stores fill an all-nil array part (a fresh
+                // constructor table) with non-nil values, so afterwards
+                // `acount` and `aprefix` are both `b`; anything else takes
+                // the helper path, which keeps them itself
+                let fits = if elems.iter().all(|&(tag, _)| tag != RAW_TAG_NIL) {
+                    let acount =
+                        bcx.ins()
+                            .load(types::I32, MemFlagsData::trusted(), t, TABLE_ACOUNT_OFFSET);
+                    let empty = bcx.ins().icmp_imm_u(IntCC::Equal, acount, 0);
+                    bcx.ins().band(fits, empty)
+                } else {
+                    bcx.ins().iconst(types::I8, 0)
+                };
                 let fast_blk = bcx.create_block();
                 let slow_blk = bcx.create_block();
                 let merge_blk = bcx.create_block();
@@ -3604,6 +3652,11 @@ pub fn lower_int_chunk_into<M: Module>(
                     let val_dst = bcx.ins().iadd(avals_ptr, val_off);
                     bcx.ins().store(MemFlagsData::trusted(), bits, val_dst, 0);
                 }
+                let filled = bcx.ins().iconst(types::I32, b as i64);
+                bcx.ins()
+                    .store(MemFlagsData::trusted(), filled, t, TABLE_ACOUNT_OFFSET);
+                bcx.ins()
+                    .store(MemFlagsData::trusted(), filled, t, TABLE_APREFIX_OFFSET);
                 bcx.ins().jump(merge_blk, &[]);
 
                 bcx.switch_to_block(slow_blk);
