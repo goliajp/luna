@@ -4,8 +4,44 @@
 use super::*;
 
 impl Vm {
+    /// `R[dst] := t[key]` for the read opcodes (PUC `luaV_fastget`): a raw
+    /// hit on a table is the result, since `__index` is consulted only when
+    /// the raw value is nil; a miss on a table without a metatable is nil.
+    /// Anything else continues the `__index` chain without repeating the
+    /// raw probe.
+    #[inline(always)]
+    pub(super) fn index_fast(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
+        // gc-verify builds keep every read on the probed path
+        #[cfg(not(feature = "gc-verify"))]
+        if let Value::Table(tb) = t {
+            let v = match key {
+                Value::Str(s) => tb.get_str(s),
+                Value::Int(i) => tb.get_int(i),
+                k => tb.get(k),
+            };
+            if !v.is_nil() || tb.metatable().is_none() {
+                self.stack[dst as usize] = v;
+                return Ok(());
+            }
+            return self.op_index_from(t, key, dst, true);
+        }
+        self.op_index(t, key, dst)
+    }
+
     /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
     pub(super) fn op_index(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
+        self.op_index_from(t, key, dst, false)
+    }
+
+    /// [`Self::op_index`]; `probed` = `t` is a table whose raw `t[key]` the
+    /// caller already found nil.
+    fn op_index_from(
+        &mut self,
+        t: Value,
+        key: Value,
+        dst: u32,
+        probed: bool,
+    ) -> Result<(), LuaError> {
         // Read-time probe: a collectable key must be live at
         // the moment it is used. O(1) membership test against the
         // freed-pointer log — gc-verify diagnostic builds only; exact
@@ -45,7 +81,7 @@ impl Vm {
                 );
             }
         }
-        match self.index_step(t, key)? {
+        match self.index_step_from(t, key, probed)? {
             MmOut::Done(v) => self.stack[dst as usize] = v,
             MmOut::Mm { func, recv } => {
                 self.begin_meta_call(func, &[recv, key], MetaAction::Store { dst }, "index")?;
@@ -121,13 +157,21 @@ impl Vm {
     /// hit (`Done`) or function metamethod (`Mm`). Table-valued `__index` links
     /// are followed inline (no yield possible); only a function link can yield.
     pub(super) fn index_step(&mut self, t: Value, key: Value) -> Result<MmOut, LuaError> {
+        self.index_step_from(t, key, false)
+    }
+
+    /// [`Self::index_step`]; `probed` skips the raw probe of `t` itself.
+    fn index_step_from(&mut self, t: Value, key: Value, probed: bool) -> Result<MmOut, LuaError> {
         let mut cur = t;
+        let mut skip = probed;
         for _ in 0..self.tag_loop_limit() {
             let mm = match cur {
                 Value::Table(tb) => {
-                    let v = tb.get(key);
-                    if !v.is_nil() {
-                        return Ok(MmOut::Done(v));
+                    if !std::mem::take(&mut skip) {
+                        let v = tb.get(key);
+                        if !v.is_nil() {
+                            return Ok(MmOut::Done(v));
+                        }
                     }
                     let mm = self.get_mm(cur, Mm::Index);
                     if mm.is_nil() {
