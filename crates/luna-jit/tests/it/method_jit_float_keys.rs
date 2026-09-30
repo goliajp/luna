@@ -97,3 +97,25 @@ fn a_read_of_another_type_is_not_reinterpreted() {
         }
     }
 }
+
+/// A float store (5.1 / 5.2) under a NaN key raises in the interpreter;
+/// the method JIT's store helper used to drop the error, so the call
+/// returned normally.
+#[test]
+fn nan_key_store_raises_with_the_jit_on() {
+    let src = "local function f() local t = {} t[0/0] = 1 return 1 end \
+               local n, msg = 0, nil \
+               for i = 1, 200 do \
+                 local ok, e = pcall(f) \
+                 if ok then n = n + 1 else msg = e end \
+               end \
+               return n .. ' ' .. tostring(msg):gsub('^.-:%d+: ', '')";
+    for v in [LuaVersion::Lua51, LuaVersion::Lua52] {
+        let mut vm = luna_jit::new_with_jit(v);
+        let r = vm.eval(src).expect("eval");
+        let Value::Str(s) = r[0] else {
+            panic!("expected a string, got {:?}", r[0]);
+        };
+        assert_eq!(s.as_bytes(), b"0 table index is NaN", "{v:?}");
+    }
+}
