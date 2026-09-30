@@ -105,7 +105,10 @@ fn min_of_an_integer_and_a_float() {
 
 #[test]
 fn max_of_an_integer_and_a_float() {
-    assert_same(&minmax_loop("math.max(#seq, -(2^53 + (- f2)))"), &all("900"));
+    assert_same(
+        &minmax_loop("math.max(#seq, -(2^53 + (- f2)))"),
+        &all("900"),
+    );
 }
 
 #[test]
