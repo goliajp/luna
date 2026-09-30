@@ -631,6 +631,59 @@ impl Table {
         }
     }
 
+    /// The node holding the string key `key`, found by pointer (PUC
+    /// `luaH_getshortstr`). Exact for a short (interned) string; for a long
+    /// one a hit is exact and a miss proves nothing.
+    #[inline(always)]
+    fn str_node_by_ptr(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
+        #[cfg(feature = "gc-verify")]
+        self.verify_find_node_keys(Value::Str(key));
+        let n = self.nodes.len();
+        if n == 0 {
+            return None;
+        }
+        // a short string's hash is set when it is interned; a long one's
+        // may still be the seed, which only makes a hit unlikely
+        let mut idx = key.stored_hash() as usize & (n - 1);
+        loop {
+            // SAFETY: the main position is masked to the node count and
+            // every `next` link is a node index written by `insert_new`
+            let node = unsafe { self.nodes.get_unchecked(idx) };
+            if let Value::Str(s) = node.key
+                && s.ptr_eq(key)
+                && !node.dead_key
+            {
+                return Some(idx);
+            }
+            if node.next == NONE {
+                return None;
+            }
+            idx = node.next as usize;
+        }
+    }
+
+    /// The value slot of string key `key`; see [`Self::str_node_by_ptr`].
+    #[inline(always)]
+    pub(crate) fn str_slot_by_ptr(
+        &self,
+        key: Gc<crate::runtime::string::LuaStr>,
+    ) -> Option<&Value> {
+        let i = self.str_node_by_ptr(key)?;
+        // SAFETY: a node index found above
+        Some(unsafe { &self.nodes.get_unchecked(i).val })
+    }
+
+    /// [`Self::str_slot_by_ptr`] for a write.
+    #[inline(always)]
+    pub(crate) fn str_slot_by_ptr_mut(
+        &mut self,
+        key: Gc<crate::runtime::string::LuaStr>,
+    ) -> Option<&mut Value> {
+        let i = self.str_node_by_ptr(key)?;
+        // SAFETY: a node index found above
+        Some(unsafe { &mut self.nodes.get_unchecked_mut(i).val })
+    }
+
     // ---- writes ----
 
     /// Insert / update `(key, val)`. `heap` is used to credit any internal

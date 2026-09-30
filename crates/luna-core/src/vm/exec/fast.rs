@@ -184,6 +184,38 @@ impl Vm {
                     next!()
                 }};
             }
+            // `R[A] := R[B][*pk]` for a key in a register or a constant
+            macro_rules! get_arm {
+                ($pk:expr) => {{
+                    let pt = regs.wrapping_add(inst.b() as usize);
+                    let pk: *const Value = $pk;
+                    // SAFETY: a register and a register or constant of the
+                    // running frame
+                    if let Some(v) = unsafe { Vm::index_raw_at(pt, pk) } {
+                        set_reg!(inst.a(), v);
+                        next!()
+                    }
+                    // SAFETY: as above
+                    let (t, key) = unsafe { (*pt, *pk) };
+                    self.index_miss(t, key, base + inst.a())?;
+                }};
+            }
+            // `R[A][*pk] := R[C]` for a key in a register or a constant
+            macro_rules! set_arm {
+                ($pk:expr) => {{
+                    let pt = regs.wrapping_add(inst.a() as usize);
+                    let pk: *const Value = $pk;
+                    let v = reg!(inst.c());
+                    // SAFETY: a register and a register or constant of the
+                    // running frame
+                    if unsafe { self.newindex_raw_at(pt, pk, v) } {
+                        next!()
+                    }
+                    // SAFETY: as above
+                    let (t, key) = unsafe { (*pt, *pk) };
+                    self.newindex_miss(t, key, v)?;
+                }};
+            }
             // `R[A] < R[B]` / `<=` (PUC `op_order`): two integers or two
             // floats here, the rest (mixed numbers, strings, `__lt` / `__le`)
             // by `less_step`
@@ -305,24 +337,17 @@ impl Vm {
                     }
                     Op::GetTabUp => {
                         let t = self.upval_get(cl, inst.b());
+                        let pk = kptr.wrapping_add(inst.c() as usize);
+                        // SAFETY: a constant of the running proto
+                        if let Some(v) = unsafe { Vm::index_raw_key_at(t, pk) } {
+                            set_reg!(inst.a(), v);
+                            next!()
+                        }
                         let key = konst!(inst.c());
-                        let dst = base + inst.a();
-                        if let Some(v) = self.index_raw(t, key) {
-                            set_reg!(inst.a(), v);
-                            next!()
-                        }
-                        self.index_miss(t, key, dst)?;
+                        self.index_miss(t, key, base + inst.a())?;
                     }
-                    Op::GetTable => {
-                        let t = reg!(inst.b());
-                        let key = reg!(inst.c());
-                        let dst = base + inst.a();
-                        if let Some(v) = self.index_raw(t, key) {
-                            set_reg!(inst.a(), v);
-                            next!()
-                        }
-                        self.index_miss(t, key, dst)?;
-                    }
+                    Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize)),
+                    Op::GetField => get_arm!(kptr.wrapping_add(inst.c() as usize)),
                     Op::GetI => {
                         let t = reg!(inst.b());
                         let key = Value::Int(inst.c() as i64);
@@ -333,34 +358,19 @@ impl Vm {
                         }
                         self.index_miss(t, key, dst)?;
                     }
-                    Op::GetField => {
-                        let t = reg!(inst.b());
-                        let key = konst!(inst.c());
-                        let dst = base + inst.a();
-                        if let Some(v) = self.index_raw(t, key) {
-                            set_reg!(inst.a(), v);
-                            next!()
-                        }
-                        self.index_miss(t, key, dst)?;
-                    }
                     Op::SetTabUp => {
                         let t = self.upval_get(cl, inst.a());
+                        let pk = kptr.wrapping_add(inst.b() as usize);
+                        let v = reg!(inst.c());
+                        // SAFETY: a constant of the running proto
+                        if unsafe { self.newindex_raw_key_at(t, pk, v) } {
+                            next!()
+                        }
                         let key = konst!(inst.b());
-                        let v = reg!(inst.c());
-                        if self.newindex_raw(t, key, v) {
-                            next!()
-                        }
                         self.newindex_miss(t, key, v)?;
                     }
-                    Op::SetTable => {
-                        let t = reg!(inst.a());
-                        let key = reg!(inst.b());
-                        let v = reg!(inst.c());
-                        if self.newindex_raw(t, key, v) {
-                            next!()
-                        }
-                        self.newindex_miss(t, key, v)?;
-                    }
+                    Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize)),
+                    Op::SetField => set_arm!(kptr.wrapping_add(inst.b() as usize)),
                     Op::SetI => {
                         let t = reg!(inst.a());
                         let key = Value::Int(inst.b() as i64);
@@ -370,17 +380,10 @@ impl Vm {
                         }
                         self.newindex_miss(t, key, v)?;
                     }
-                    Op::SetField => {
-                        let t = reg!(inst.a());
-                        let key = konst!(inst.b());
-                        let v = reg!(inst.c());
-                        if self.newindex_raw(t, key, v) {
-                            next!()
-                        }
-                        self.newindex_miss(t, key, v)?;
-                    }
                     Op::SelfOp => {
-                        let o = reg!(inst.b());
+                        let pb = regs.wrapping_add(inst.b() as usize);
+                        // SAFETY: a register of the running frame
+                        let o = unsafe { *pb };
                         set_reg!(inst.a() + 1, o);
                         // PUC OP_SELF's C is a constant index when the k-flag is
                         // set; otherwise it points to a register that holds the
@@ -389,17 +392,20 @@ impl Vm {
                         // 8-bit C field (5.1 big.lua's `a:findfield(...)` against
                         // a table with 250+ string keys, where "findfield" lands
                         // past const #255). The exec must honour the same split.
-                        let key = if inst.k() {
-                            konst!(inst.c())
+                        let pk = if inst.k() {
+                            kptr.wrapping_add(inst.c() as usize)
                         } else {
-                            reg!(inst.c())
+                            regs.wrapping_add(inst.c() as usize)
                         };
-                        let dst = base + inst.a();
-                        if let Some(v) = self.index_raw(o, key) {
+                        // SAFETY: a register or constant of the running frame;
+                        // the object is read from its copy, `R[A]` may be `R[C]`
+                        if let Some(v) = unsafe { Vm::index_raw_key_at(o, pk) } {
                             set_reg!(inst.a(), v);
                             next!()
                         }
-                        self.index_miss(o, key, dst)?;
+                        // SAFETY: as above
+                        let key = unsafe { *pk };
+                        self.index_miss(o, key, base + inst.a())?;
                     }
                     Op::Add => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
