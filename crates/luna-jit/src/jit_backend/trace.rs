@@ -8344,9 +8344,8 @@ fn lower_trace_into_inner<M: Module>(
                 // the loop variables passed the tag check above, and the
                 // control variable is a copy of the key
                 let mut tail_kinds = current_kinds[..max_stack].to_vec();
-                for k in (a + 4)..(a + 4 + nvars.min(2)).min(max_stack) {
-                    tail_kinds[k] = head_kinds[k];
-                }
+                let vars = (a + 4)..(a + 4 + nvars.min(2)).min(max_stack);
+                tail_kinds[vars.clone()].copy_from_slice(&head_kinds[vars]);
                 tail_kinds[a + 2] = head_kinds[a + 4];
                 if do_internal_loop && body_pc == record.head_pc && tail_kinds == head_kinds {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
