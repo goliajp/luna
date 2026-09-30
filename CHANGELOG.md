@@ -66,6 +66,12 @@ optimization.
 
 ### Fixed
 
+- Use after free in the collector: values a returned function left in
+  stack slots above its caller's registers (closures, strings, userdata)
+  could be freed by one collection and then marked by a later one, since
+  the main thread's stack is marked whole while a coroutine runs and a
+  suspended coroutine's stack is marked whole too. The collector now
+  clears the running stack above the live registers when marking ends.
 - With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
   that stored into a table under a NaN key went on silently instead of
   raising "table index is NaN" as the interpreter does.

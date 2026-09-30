@@ -2944,6 +2944,16 @@ impl Vm {
         }
     }
 
+    /// The running stack's contract with the collector (PUC
+    /// `traversethread`): the slots from `gc_top` up are dead when a cycle's
+    /// marking ends, so they are cleared right then, before the sweep frees
+    /// anything they point to. The other threads' stacks are marked whole.
+    /// So every slot of every stack holds nil or a live value.
+    fn clear_dead_stack(&mut self) {
+        let lo = (self.gc_top as usize).min(self.stack.len());
+        self.stack[lo..].fill(Value::Nil);
+    }
+
     /// Enumerate the GC roots: first-class `Value` roots plus bare-object
     /// roots (open upvalues, which are not first-class Values). Shared by the
     /// full collector and the incremental-sweep driver so both snapshot the
@@ -3094,6 +3104,7 @@ impl Vm {
         if self.gc_finalizing {
             return 0;
         }
+        self.clear_dead_stack();
         let (roots, extra) = self.gc_roots();
         let freed = self.heap.collect_ex(&roots, &extra);
         #[cfg(feature = "gc-verify")]
@@ -3178,6 +3189,7 @@ impl Vm {
         if self.gc_finalizing {
             return Ok(0);
         }
+        self.clear_dead_stack();
         let (roots, extra) = self.gc_roots();
         let freed = self.heap.collect_ex(&roots, &extra);
         #[cfg(feature = "gc-verify")]
@@ -4308,6 +4320,9 @@ impl Vm {
             if !self.heap.gc_step_propagate(budget) {
                 return false;
             }
+            self.clear_dead_stack();
+            let (roots, extra) = self.gc_roots();
+            self.heap.gc_remark(&roots, &extra);
             self.heap.gc_finish_atomic();
             // any __gc scheduled by atomic — run before sweep so a finalizer
             // re-registering `self` re-enters the next cycle, not this sweep
@@ -4736,8 +4751,11 @@ impl Vm {
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
         }
-        // wipe the register window beyond the kept parameters (stale values —
-        // required for GC-safety and codegen). The varargs below `base` survive.
+        // the whole window past the kept parameters is cleared: the trace
+        // dispatcher compares every register's tag in the window with the
+        // trace's entry tags, so a stale value where the recording saw nil
+        // would turn the trace away (and 5.1's compiler drops a leading
+        // `local x` LoadNil on this promise, as PUC 5.1 does)
         let kept = nargs.saturating_sub(n_varargs).min(nparams);
         // SAFETY: just resized above so `need <= stack.len()`; `base + kept <=
         // need` since `base + nparams <= base + max_stack = need` and `kept <=

@@ -721,6 +721,7 @@ impl Heap {
         // re-marked (kept alive) by the upcoming mark_all so the VM's
         // run_finalizers can still see them.
         if self.phase == GcPhase::Propagate {
+            self.gc_remark(roots, extra);
             self.gc_finish_atomic();
         }
         if self.phase == GcPhase::Sweep {
@@ -1070,6 +1071,21 @@ impl Heap {
             m.header(h);
         }
         for &h in &self.tobefnz {
+            m.header(h);
+        }
+        self.stash_marker(m);
+    }
+
+    /// Mark `roots` / `extra` again before the atomic step (PUC `atomic`
+    /// re-marks the running thread): what the mutator stored in them since
+    /// `gc_start_propagate` survives this cycle. Precondition: `Propagate`.
+    pub(crate) fn gc_remark(&mut self, roots: &[Value], extra: &[*mut GcHeader]) {
+        debug_assert!(self.phase == GcPhase::Propagate);
+        let mut m = self.loan_marker();
+        for &r in roots {
+            m.value(r);
+        }
+        for &h in extra {
             m.header(h);
         }
         self.stash_marker(m);
