@@ -111,7 +111,6 @@ impl Vm {
         mut inst: Inst,
         mut npc: u32,
     ) -> Result<FastExit, LuaError> {
-        let v54 = self.version() >= LuaVersion::Lua54;
         let Fast {
             mut cl,
             mut base,
@@ -562,8 +561,8 @@ impl Vm {
                 }
                 Op::PowK => {
                     if arith_c_arm!(self, regs, inst, base, ArithOp::Pow, konst!(inst.c()),
-                        int(a, b) => Some(Value::Float(num_pow(v54, a as f64, b as f64))),
-                        float(a, b) => Some(Value::Float(num_pow(v54, a, b))))
+                        int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))),
+                        float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))))
                     {
                         next!()
                     }
