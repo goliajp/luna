@@ -71,6 +71,13 @@ fn each_operator_takes_its_constant_form() {
     ];
     for v in ALL {
         for &(expr, want) in cases {
+            // before 5.3 a numeral is a float: an immediate integer form
+            // becomes the constant form
+            let want = match (want, v <= LuaVersion::Lua52) {
+                (Op::AddI, true) => Op::AddK,
+                (Op::SubI, true) => Op::SubK,
+                (w, _) => w,
+            };
             let code = ops(v, &format!("local x = ... {expr}"));
             assert!(code.contains(&want), "{v:?} `{expr}`: {code:?}");
             assert!(
