@@ -89,20 +89,27 @@ pub(super) fn entry_live(
             }
         }
     }
-    if may_loop {
-        for s in 0..max_stack {
-            if live[s] {
-                continue;
+    let pending: Vec<usize> = (0..max_stack)
+        .filter(|&s| !live[s] && last_write[s].is_some())
+        .collect();
+    if may_loop && !pending.is_empty() {
+        let lv = Liveness::of(record.head_proto);
+        // what is live where an exit taken at or before each op can resume
+        let mut at_exit = lv.at(record.head_pc);
+        let mut inlined = false;
+        let mut upto: Vec<(Set, bool)> = Vec::with_capacity(ops.len());
+        for rop in ops {
+            inlined |= rop.inline_depth > 0;
+            if rop.inline_depth == 0 {
+                for pc in resume_pcs(rop.proto, rop.pc) {
+                    at_exit = at_exit.union(lv.at(pc));
+                }
             }
-            if let Some(last) = last_write[s] {
-                live[s] = !ops[..=last].iter().all(|rop| {
-                    rop.inline_depth == 0
-                        && resume_pcs(rop.proto, rop.pc)
-                            .into_iter()
-                            .chain([record.head_pc])
-                            .all(|pc| dead_at(rop.proto, pc, s as u32))
-                });
-            }
+            upto.push((at_exit, inlined));
+        }
+        for s in pending {
+            let (set, inlined) = upto[last_write[s].expect("pending slots are written")];
+            live[s] = inlined || set.has(s);
         }
     }
     live
@@ -180,149 +187,160 @@ fn resume_pcs(proto: Gc<Proto>, pc: u32) -> Vec<u32> {
         .collect()
 }
 
-/// How far `dead_at` looks before it calls a register live.
-const DEAD_SCAN_BUDGET: usize = 256;
+/// A set of a frame's registers.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct Set([u64; 4]);
 
-/// Whether, from `pc` on, register `s` of a frame running `proto` is
-/// written before anything reads it on every path. `false` when not
-/// shown within [`DEAD_SCAN_BUDGET`] instructions.
-pub(super) fn dead_at(proto: Gc<Proto>, pc: u32, s: u32) -> bool {
-    // a captured local is read through its upvalue by any call
-    let captured = proto.protos.iter().any(|p| {
-        p.upvals
+impl Set {
+    const ALL: Set = Set([u64::MAX; 4]);
+    fn has(self, s: usize) -> bool {
+        s < 256 && self.0[s / 64] >> (s % 64) & 1 == 1
+    }
+    fn with(mut self, s: u32) -> Set {
+        if s < 256 {
+            self.0[s as usize / 64] |= 1 << (s % 64);
+        }
+        self
+    }
+    fn range(lo: u32, n: u32) -> Set {
+        (lo..lo.saturating_add(n).min(256)).fold(Set::default(), Set::with)
+    }
+    fn from(lo: u32) -> Set {
+        Set::range(lo, 256)
+    }
+    fn union(self, o: Set) -> Set {
+        Set(std::array::from_fn(|i| self.0[i] | o.0[i]))
+    }
+    fn minus(self, o: Set) -> Set {
+        Set(std::array::from_fn(|i| self.0[i] & !o.0[i]))
+    }
+}
+
+/// A function longer than this is not analysed: every register a looping
+/// trace writes without reading first is then checked on entry, which
+/// keeps the compile time of a trace in a big chunk bounded.
+const MAX_ANALYSED_CODE: usize = 4096;
+
+/// Which registers each instruction of a function may read before writing
+/// them on some path from it (backward liveness over the whole function).
+/// A register a nested function captures counts as live everywhere: any
+/// call can read it through the upvalue.
+struct Liveness {
+    live_in: Vec<Set>,
+    captured: Set,
+}
+
+impl Liveness {
+    fn of(proto: Gc<Proto>) -> Liveness {
+        let code = &proto.code;
+        let captured = proto
+            .protos
             .iter()
-            .any(|d| d.in_stack && u32::from(d.index) == s)
-    });
-    if captured {
-        return false;
+            .flat_map(|p| p.upvals.iter())
+            .filter(|d| d.in_stack)
+            .fold(Set::default(), |acc, d| acc.with(u32::from(d.index)));
+        if code.len() > MAX_ANALYSED_CODE {
+            return Liveness {
+                live_in: vec![Set::ALL; code.len()],
+                captured,
+            };
+        }
+        let rw: Vec<(Set, Set)> = code
+            .iter()
+            .map(|&inst| {
+                let (r, w) = op_reads_writes(inst);
+                (
+                    r.into_iter().fold(Set::default(), Set::with),
+                    w.into_iter().fold(Set::default(), Set::with),
+                )
+            })
+            .collect();
+        let mut live_in = vec![Set::default(); code.len()];
+        loop {
+            let mut changed = false;
+            for p in (0..code.len()).rev() {
+                let new = transfer(proto, code[p], p as i64, rw[p], |q| {
+                    if q < 0 || q as usize >= code.len() {
+                        Set::ALL
+                    } else {
+                        live_in[q as usize]
+                    }
+                });
+                if new != live_in[p] {
+                    live_in[p] = new;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Liveness { live_in, captured }
     }
-    let code = &proto.code;
-    let mut seen = vec![false; code.len()];
-    let mut todo = vec![pc as i64];
-    let mut budget = DEAD_SCAN_BUDGET;
-    while let Some(p) = todo.pop() {
-        if p < 0 || p as usize >= code.len() {
-            return false;
-        }
-        if std::mem::replace(&mut seen[p as usize], true) {
-            continue;
-        }
-        if budget == 0 {
-            return false;
-        }
-        budget -= 1;
-        match step(proto, code[p as usize], s) {
-            Step::Read => return false,
-            Step::Written => {}
-            Step::Next(succ) => todo.extend(succ.into_iter().map(|d| p + d)),
-        }
+
+    fn at(&self, pc: u32) -> Set {
+        self.live_in
+            .get(pc as usize)
+            .copied()
+            .unwrap_or(Set::ALL)
+            .union(self.captured)
     }
-    true
 }
 
-enum Step {
-    /// the op may read the register before writing it
-    Read,
-    /// the op writes it (or the frame ends) on every path
-    Written,
-    /// neither: continue at these offsets from the op
-    Next(Vec<i64>),
-}
-
-fn step(proto: Gc<Proto>, inst: Inst, s: u32) -> Step {
+/// The registers live before `inst` (at `p`) given those live before
+/// each instruction (`out`): read before written on some path.
+fn transfer(
+    proto: Gc<Proto>,
+    inst: Inst,
+    p: i64,
+    (r, w): (Set, Set),
+    out: impl Fn(i64) -> Set,
+) -> Set {
     let a = inst.a();
     let (b, c) = (inst.b(), inst.c());
-    let reads = |r: &[u32]| r.contains(&s);
-    let from = |lo: u32, n: u32| s >= lo && s < lo + n;
+    let both = |x: i64, y: i64| out(p + x).union(out(p + y));
+    let reg = |n: u32| Set::default().with(n);
     match inst.op() {
-        Op::Jmp => Step::Next(vec![1 + inst.sj() as i64]),
-        Op::Eq | Op::Lt | Op::Le => step_branch(reads(&[a, b])),
-        Op::EqK | Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI | Op::Test => step_branch(s == a),
+        Op::Jmp => out(p + 1 + inst.sj() as i64),
+        Op::Eq
+        | Op::Lt
+        | Op::Le
+        | Op::EqK
+        | Op::EqI
+        | Op::LtI
+        | Op::LeI
+        | Op::GtI
+        | Op::GeI
+        | Op::Test
         // the copy happens on one path only
-        Op::TestSet => step_branch(s == b),
-        Op::LFalseSkip if s == a => Step::Written,
-        Op::LFalseSkip => Step::Next(vec![2]),
-        Op::ForLoop => {
-            if from(a, 3) {
-                Step::Read
-            } else if s == a + 3 {
-                // set before the body runs again; out of scope after it
-                Step::Written
-            } else {
-                Step::Next(vec![1, 1 - inst.bx() as i64])
-            }
-        }
-        Op::TForLoop => {
-            if s == a + 4 {
-                Step::Read
-            } else {
-                Step::Next(vec![1, 1 - inst.bx() as i64])
-            }
-        }
-        Op::ForPrep => Step::Read,
-        Op::TForPrep if s == a + 3 => Step::Read,
-        Op::TForPrep => Step::Next(vec![1 + inst.bx() as i64]),
-        Op::TForCall => {
-            if from(a, 4) {
-                Step::Read
-            } else if s >= a + 4 {
-                // the iterator's frame and results take everything above
-                Step::Written
-            } else {
-                Step::Next(vec![1])
-            }
-        }
-        Op::Call => {
-            if b == 0 || c == 0 || from(a, b) {
-                Step::Read
-            } else if s >= a {
-                // results, and above them registers the call consumed
-                Step::Written
-            } else {
-                Step::Next(vec![1])
-            }
-        }
+        | Op::TestSet => r.union(both(1, 2)),
+        Op::LFalseSkip => out(p + 2).minus(reg(a)),
+        // R[A+3] is set before the body runs again and out of scope after
+        Op::ForLoop => Set::range(a, 3).union(both(1, 1 - inst.bx() as i64).minus(reg(a + 3))),
+        Op::TForLoop => reg(a + 4).union(both(1, 1 - inst.bx() as i64)),
+        Op::ForPrep => Set::ALL,
+        Op::TForPrep => reg(a + 3).union(out(p + 1 + inst.bx() as i64)),
+        // the iterator's frame and results take everything above R[A+3]
+        Op::TForCall => Set::range(a, 4).union(out(p + 1).minus(Set::from(a + 4))),
+        Op::Call if b == 0 || c == 0 => Set::ALL,
+        // results, and above them registers the call consumed
+        Op::Call => Set::range(a, b).union(out(p + 1).minus(Set::from(a))),
         // with k set they close upvalues and to-be-closed values first
-        Op::TailCall => step_end(inst.k() || b == 0 || from(a, b)),
-        Op::Return => step_end(inst.k() || b == 0 || from(a, b - 1)),
-        Op::Return0 => Step::Written,
-        Op::Return1 => step_end(s == a),
-        Op::Close if s >= a => Step::Read,
-        Op::Tbc if s == a => Step::Read,
-        Op::SetList if b == 0 || from(a, b + 1) => Step::Read,
-        Op::Vararg if c == 0 => {
-            if s >= a {
-                Step::Read
-            } else {
-                Step::Next(vec![1])
-            }
-        }
-        Op::Vararg if from(a, c - 1) => Step::Written,
-        Op::Vararg => Step::Next(vec![1]),
-        Op::Closure if captured_sources(proto, inst.bx() as usize).any(|r| r == s) => Step::Read,
-        _ => {
-            let (r, w) = op_reads_writes(inst);
-            if reads(&r) {
-                Step::Read
-            } else if w.contains(&s) {
-                Step::Written
-            } else {
-                Step::Next(vec![1])
-            }
-        }
+        Op::TailCall | Op::Return if inst.k() || b == 0 => Set::ALL,
+        Op::TailCall => Set::range(a, b),
+        Op::Return => Set::range(a, b - 1),
+        Op::Return0 => Set::default(),
+        Op::Return1 => reg(a),
+        Op::Close => Set::from(a).union(out(p + 1)),
+        Op::Tbc => reg(a).union(out(p + 1)),
+        Op::SetList if b == 0 => Set::ALL,
+        Op::SetList => Set::range(a, b + 1).union(out(p + 1)),
+        Op::Vararg if c == 0 => Set::from(a).union(out(p + 1)),
+        Op::Vararg => out(p + 1).minus(Set::range(a, c - 1)),
+        Op::Closure => captured_sources(proto, inst.bx() as usize)
+            .fold(out(p + 1).minus(reg(a)), Set::with),
+        _ => r.union(out(p + 1).minus(w)),
     }
-}
-
-fn step_branch(read: bool) -> Step {
-    if read {
-        Step::Read
-    } else {
-        Step::Next(vec![1, 2])
-    }
-}
-
-fn step_end(read: bool) -> Step {
-    if read { Step::Read } else { Step::Written }
 }
 
 /// The exit tags of the parent trace's exit a side trace starts from
