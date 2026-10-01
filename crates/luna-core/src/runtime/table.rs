@@ -825,12 +825,29 @@ impl Table {
             nums[ceil_log2(i as u64)] += 1;
             int_keys += 1;
         }
-        let atags = self.atags();
-        for (i, &tag) in atags.iter().enumerate() {
-            if tag != raw::NIL {
-                nums[ceil_log2(i as u64 + 1)] += 1;
-                int_keys += 1;
-                total += 1;
+        let asize = self.asize();
+        if self.acount as usize == asize {
+            // a full array part: slots 1..=asize all count, bucket by bucket
+            // (bucket b holds (2^(b-1), 2^b], bucket 0 holds 1)
+            debug_assert!(self.atags().iter().all(|&t| t != raw::NIL));
+            let mut lo = 1usize;
+            let mut b = 0usize;
+            while lo <= asize {
+                let hi = (1usize << b).min(asize);
+                nums[b] += hi + 1 - lo;
+                lo = hi + 1;
+                b += 1;
+            }
+            int_keys += asize;
+            total += asize;
+        } else {
+            let atags = self.atags();
+            for (i, &tag) in atags.iter().enumerate() {
+                if tag != raw::NIL {
+                    nums[ceil_log2(i as u64 + 1)] += 1;
+                    int_keys += 1;
+                    total += 1;
+                }
             }
         }
         for n in self.nodes.iter() {
@@ -976,8 +993,16 @@ impl Table {
                 );
             }
             drop(old_slab);
+            // growing appends nil slots, which leaves both counts as they were
+            #[cfg(debug_assertions)]
+            {
+                let kept = (self.acount, self.aprefix);
+                self.recount_array();
+                debug_assert_eq!(kept, (self.acount, self.aprefix));
+            }
+        } else {
+            self.recount_array();
         }
-        self.recount_array();
         // Re-insert old array entries via the public set_norm path
         // (which handles rehashing if the new array shrinks below the
         // entry count).

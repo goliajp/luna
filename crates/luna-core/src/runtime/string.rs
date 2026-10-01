@@ -174,6 +174,7 @@ impl StringTable {
     }
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
+    #[inline]
     pub(crate) fn intern(&mut self, bytes: &[u8], seed: u32) -> (*mut LuaStr, bool) {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
         let h = lua_hash(bytes, seed);
@@ -202,6 +203,8 @@ impl StringTable {
         (p, true)
     }
 
+    #[cold]
+    #[inline(never)]
     fn grow(&mut self) {
         let mut nb = vec![ptr::null_mut(); self.buckets.len() * 2];
         let mask = nb.len() - 1;
