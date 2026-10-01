@@ -6,34 +6,74 @@ use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
 use fast_arith::{raw_gc, raw_int, raw_tag};
 
-/// Raw `tb[*pk]` with the key read in place: strings by pointer, integers
-/// in the array part first, other keys by the general lookup out of line.
+/// Raw `tb[*pk]` with the key read in place (strings by pointer, integers
+/// in the array part, other keys by the general lookup out of line),
+/// copied to `dst` when it settles the read without `__index`: a non-nil
+/// value, or any value of a table without a metatable. `false`, with `dst`
+/// untouched, leaves the read to the `__index` chain. The value goes from
+/// its slot to `dst` directly, as PUC `setobj2s` does: passed back as a
+/// `Value` it took a detour through stack slots.
 ///
 /// # Safety
-/// `pk` points at an initialised value.
+/// `pk` points at an initialised value and `dst` at a register; `dst` is
+/// written only after `pk` is read.
 #[inline(always)]
-unsafe fn table_get_at(tb: &Table, pk: *const Value) -> Value {
+unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool {
+    let plain = tb.metatable().is_none();
     // SAFETY: the caller's contract; payloads are read after their tags
     unsafe {
         match raw_tag(pk) {
             tag::STR => {
                 let key = Gc::from_ptr(raw_gc(pk) as *mut LuaStr);
                 match tb.str_slot_by_ptr(key) {
-                    Some(v) => *v,
-                    None if key.is_short() => Value::Nil,
-                    None => table_get_cold(tb, *pk),
+                    Some(slot) => {
+                        if !plain && raw_tag(slot) == tag::NIL {
+                            return false;
+                        }
+                        std::ptr::copy_nonoverlapping(slot, dst, 1);
+                        true
+                    }
+                    None if key.is_short() => {
+                        if plain {
+                            dst.write(Value::Nil);
+                        }
+                        plain
+                    }
+                    None => table_get_cold(tb, *pk, dst, plain),
                 }
             }
-            tag::INT => tb.get_int(raw_int(pk)),
-            _ => table_get_cold(tb, *pk),
+            tag::INT => {
+                let i = raw_int(pk);
+                if i >= 1 && i as u64 <= tb.asize {
+                    let idx = i as usize - 1;
+                    let t = *tb.atags().get_unchecked(idx);
+                    if !plain && t == crate::runtime::value::raw::NIL {
+                        return false;
+                    }
+                    Value::pack_into(dst, t, *tb.avals().get_unchecked(idx));
+                    return true;
+                }
+                table_get_cold(tb, *pk, dst, plain)
+            }
+            _ => table_get_cold(tb, *pk, dst, plain),
         }
     }
 }
 
+/// [`table_get_into`] for the keys it does not look up inline.
+///
+/// # Safety
+/// As for `table_get_into`.
 #[cold]
 #[inline(never)]
-fn table_get_cold(tb: &Table, key: Value) -> Value {
-    tb.get(key)
+unsafe fn table_get_cold(tb: &Table, key: Value, dst: *mut Value, plain: bool) -> bool {
+    let v = tb.get(key);
+    if v.is_nil() && !plain {
+        return false;
+    }
+    // SAFETY: the caller's contract
+    unsafe { dst.write(v) };
+    true
 }
 
 /// Overwrite `tb[*pk]` with `v` when the key is present with a non-nil
@@ -93,45 +133,39 @@ fn table_set_existing_cold(tb: &mut Table, key: Value, v: Value) -> bool {
 }
 
 impl Vm {
-    /// [`Self::index_raw`] with the table and the key read in place, which
-    /// keeps them out of stack slots in the fast loop.
+    /// `t[key]` without `__index` (PUC `luaV_fastget`), with the table and the key read in place and
+    /// the result copied to `dst` (see [`table_get_into`]); `false`, with
+    /// `dst` untouched, leaves the read to [`Self::index_miss`].
     ///
     /// # Safety
-    /// `pt` and `pk` point at initialised values.
+    /// `pt` and `pk` point at initialised values and `dst` at a register.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
-    pub(super) unsafe fn index_raw_at(pt: *const Value, pk: *const Value) -> Option<Value> {
+    pub(super) unsafe fn index_raw_at(pt: *const Value, pk: *const Value, dst: *mut Value) -> bool {
         // gc-verify builds keep every read on the probed path
         #[cfg(not(feature = "gc-verify"))]
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
             if raw_tag(pt) == tag::TABLE {
-                let tb = &*(raw_gc(pt) as *const Table);
-                let v = table_get_at(tb, pk);
-                if !v.is_nil() || tb.metatable().is_none() {
-                    return Some(v);
-                }
+                return table_get_into(&*(raw_gc(pt) as *const Table), pk, dst);
             }
         }
-        None
+        false
     }
 
-    /// [`Self::index_raw`] on a table value with the key read in place.
+    /// [`Self::index_raw_at`] on a table value.
     ///
     /// # Safety
-    /// `pk` points at an initialised value.
+    /// `pk` points at an initialised value and `dst` at a register.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
-    pub(super) unsafe fn index_raw_key_at(t: Value, pk: *const Value) -> Option<Value> {
+    pub(super) unsafe fn index_raw_key_at(t: Value, pk: *const Value, dst: *mut Value) -> bool {
         #[cfg(not(feature = "gc-verify"))]
         if let Value::Table(tb) = t {
             // SAFETY: the caller's contract
-            let v = unsafe { table_get_at(&tb, pk) };
-            if !v.is_nil() || tb.metatable().is_none() {
-                return Some(v);
-            }
+            return unsafe { table_get_into(&tb, pk, dst) };
         }
-        None
+        false
     }
 
     /// [`Self::newindex_raw`] with the table and the key read in place.
@@ -188,29 +222,7 @@ impl Vm {
         false
     }
 
-    /// `t[key]` without `__index` (PUC `luaV_fastget`): a raw hit on a table
-    /// is the result, since `__index` is consulted only when the raw value is
-    /// nil, and a miss on a table without a metatable is nil. `None` leaves
-    /// the read to [`Self::index_miss`].
-    #[inline(always)]
-    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
-    pub(super) fn index_raw(&self, t: Value, key: Value) -> Option<Value> {
-        // gc-verify builds keep every read on the probed path
-        #[cfg(not(feature = "gc-verify"))]
-        if let Value::Table(tb) = t {
-            let v = match key {
-                Value::Str(s) => tb.get_str(s),
-                Value::Int(i) => tb.get_int(i),
-                k => tb.get(k),
-            };
-            if !v.is_nil() || tb.metatable().is_none() {
-                return Some(v);
-            }
-        }
-        None
-    }
-
-    /// A read opcode that [`Self::index_raw`] could not finish: continues the
+    /// A read opcode that [`Self::index_raw_at`] could not finish: continues the
     /// `__index` chain without repeating the raw probe.
     #[inline(never)]
     pub(super) fn index_miss(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
