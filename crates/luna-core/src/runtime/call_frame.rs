@@ -165,8 +165,10 @@ pub enum ContKind {
 pub struct CloseCont {
     /// the close threshold: keep closing tbc slots ≥ from until exhausted
     pub from: u32,
-    /// the error object threaded through subsequent handlers, if any
-    pub pending: Option<Value>,
+    /// an error object is threaded through the remaining handlers; it sits
+    /// in the continuation's own stack slot (`NativeCont::func_slot`), just
+    /// below the handler's call, where the collector sees it
+    pub has_pending: bool,
     /// what to do once every slot ≥ from is closed
     pub after: AfterClose,
 }
@@ -189,13 +191,11 @@ pub enum AfterClose {
     },
     /// Error unwind: the close runs while unwinding a Lua frame. When every
     /// handler is done, pop the deferred Lua frame, truncate to `func_slot`,
-    /// and re-raise — preferring a handler-raised error over `err` (PUC
-    /// luaF_close).
+    /// and re-raise the threaded error: the original one, or the last a
+    /// handler raised (PUC luaF_close).
     ResumeUnwind {
         /// Slot to truncate the value stack to before re-raising.
         func_slot: u32,
-        /// Original error value to re-raise (or replaced by a handler raise).
-        err: Value,
     },
 }
 
@@ -243,10 +243,12 @@ pub enum MetaAction {
 mod tests {
     use super::*;
 
-    // a frame is written on every call and read on every return
+    // a frame is written on every call and read on every return, and a
+    // continuation takes no more room on the call stack than a Lua frame
     #[test]
-    fn a_lua_frame_is_at_most_40_bytes() {
+    fn a_call_stack_entry_is_at_most_40_bytes() {
         assert!(std::mem::size_of::<Frame>() <= 40);
-        assert!(std::mem::size_of::<CallFrame>() <= 56);
+        assert!(std::mem::size_of::<NativeCont>() <= 32);
+        assert!(std::mem::size_of::<CallFrame>() <= 40);
     }
 }

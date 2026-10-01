@@ -22,14 +22,18 @@ use crate::vm::isa::{Inst, Op};
 use native_call::NativeKind;
 
 mod arith;
+mod call_fast;
 #[cfg(test)]
 mod cont_trap_tests;
 mod fast;
+mod fast_arith;
+mod frame_ops;
 mod index;
 mod index_fast;
 mod limits;
 pub(crate) mod native_call;
 mod num;
+mod num_double;
 mod trace_close;
 mod trace_dispatch;
 mod trace_exit;
@@ -960,6 +964,7 @@ impl Vm {
         // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
         // values strongly. gc.lua's "weak tables" section relies on that.
         heap.no_ephemeron = version <= LuaVersion::Lua51;
+        heap.signed_zero_keys = version <= LuaVersion::Lua52;
         // PUC 5.3 needs two GC cycles to finalize a table caught in a
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
@@ -2800,6 +2805,26 @@ impl Vm {
         v
     }
 
+    /// [`Self::fast_tm`] as the slot holding the metamethod, `None` when it
+    /// is absent (nil).
+    #[inline]
+    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
+    pub(crate) fn fast_tm_slot(&self, mt: Gc<Table>, mm: Mm) -> Option<*const Value> {
+        let bit = 1u32 << mm as u32;
+        if mt.flags & bit != 0 {
+            return None;
+        }
+        // metamethod names are interned, so the pointer walk is exact
+        match mt.str_slot_by_ptr(self.mm_names[mm as usize]) {
+            Some(v) if !v.is_nil() => Some(v as *const Value),
+            _ => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                unsafe { mt.as_mut() }.flags |= bit;
+                None
+            }
+        }
+    }
+
     /// PUC 5.1 `get_compTM`: a comparison metamethod (`__eq` / `__lt` / `__le`)
     /// only fires when both operands carry a metatable that exposes the same
     /// implementation. Returns the metamethod to call, or `Nil` when no
@@ -2981,21 +3006,8 @@ impl Vm {
                     kind: ContKind::Xpcall { handler },
                     ..
                 }) => roots.push(*handler),
-                CallFrame::Cont(NativeCont {
-                    kind: ContKind::Close(cc),
-                    ..
-                }) => {
-                    // Root the error threaded through this close chain so a
-                    // `collectgarbage()` inside a sibling `__close` handler
-                    // does not free it before the next handler is invoked
-                    // (PUC L->ci->u.l.errfunc / the closing_err shadow).
-                    if let Some(e) = cc.pending {
-                        roots.push(e);
-                    }
-                    if let AfterClose::ResumeUnwind { err, .. } = cc.after {
-                        roots.push(err);
-                    }
-                }
+                // a close chain's threaded error sits on the stack below its
+                // handler's call, inside the live window
                 CallFrame::Cont(_) => {}
             }
         }
@@ -4479,86 +4491,8 @@ impl Vm {
                         self.running_natives.pop();
                         return Err(e);
                     }
-                    // Trap a Rust panic in the native and surface it as
-                    // a Lua error rather than letting it unwind through the
-                    // VM into the embedder. The VM's internal state may still
-                    // be inconsistent after a panic (half-pushed args,
-                    // dangling GC references), so embedders that catch this
-                    // class of error should drop and re-create the Vm — but
-                    // it's still better than tearing the host process down.
-                    // `AssertUnwindSafe` is sound because the caller is the
-                    // dispatch loop and any half-done state is fenced behind
-                    // the immediate Err return below.
-                    use std::panic::{AssertUnwindSafe, catch_unwind};
-                    let result =
-                        match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
-                            Ok(r) => r,
-                            Err(payload) => {
-                                let msg = panic_payload_str(&payload);
-                                let s = Value::Str(
-                                    self.heap.intern(format!("native panic: {msg}").as_bytes()),
-                                );
-                                Err(LuaError(s))
-                            }
-                        };
-                    let nret = match result {
-                        Ok(n) => n,
-                        Err(e) => {
-                            // PUC raises with the native still on the stack;
-                            // remember it for the handler and traceback of the
-                            // error (see `raise_to_handler`)
-                            let act = self.running_natives.pop().expect("pushed above");
-                            self.note_errored_native(act, e.0);
-                            return Err(e);
-                        }
-                    };
-                    // PUC `luaD_poscall` fires the return hook BEFORE moving
-                    // results into the function's slot — at that point args
-                    // sit at `[func_slot + 1, func_slot + 1 + nargs)` and
-                    // results above them at `[func_slot + 1 + nargs, …)`.
-                    // luna's `nat_return` has already written the results
-                    // into `[func_slot, func_slot + nret)`, so we replay PUC's
-                    // layout by copying the results up past the preserved
-                    // args, firing the hook (with ftransfer = nargs + 1, so
-                    // `getlocal(2, ftransfer..)` reads results), and then
-                    // copying back for `finish_results`. db.lua :541 reads
-                    // `getinfo("r").ftransfer` + `getlocal` to inspect a
-                    // returning native's results this way.
-                    if self.hook.ret
-                        && !self.in_hook
-                        && (self.hook.func.is_some() || self.hook.rust_func.is_some())
-                    {
-                        let res_dst = func_slot + nargs + 1;
-                        let need = (res_dst + nret) as usize;
-                        if self.stack.len() < need {
-                            self.stack.resize(need, Value::Nil);
-                        }
-                        for i in (0..nret).rev() {
-                            self.stack[(res_dst + i) as usize] =
-                                self.stack[(func_slot + i) as usize];
-                        }
-                        // widen the C-frame's argument window for getlocal
-                        if let Some(act) = self.running_natives.last_mut() {
-                            act.nargs = nargs + nret;
-                        }
-                        let hr = self.hook_return(true, nargs + 1, nret);
-                        if let Some(act) = self.running_natives.last_mut() {
-                            act.nargs = nargs;
-                        }
-                        // restore results into the slot finish_results expects
-                        for i in 0..nret {
-                            self.stack[(func_slot + i) as usize] =
-                                self.stack[(res_dst + i) as usize];
-                        }
-                        self.running_natives.pop();
-                        hr?;
-                    } else {
-                        self.running_natives.pop();
-                    }
-                    self.finish_results(func_slot, nret, nresults);
-                    // the native may have allocated; collect with the results as
-                    // the live boundary (PUC checks GC after a call returns).
-                    self.maybe_collect_garbage(self.top);
+                    let nret = self.invoke_native(nc, func_slot, nargs)?;
+                    self.finish_native_call(func_slot, nargs, nret, nresults)?;
                     return Ok(false);
                 }
                 v => {
@@ -4581,9 +4515,17 @@ impl Vm {
                     if chain > cap {
                         return Err(self.rt_err("'__call' chain too long"));
                     }
-                    // slots above shift by one; at a call site those are dead
-                    // temps of the current frame
-                    self.stack.insert(func_slot as usize, mm);
+                    // the callee and its arguments (and anything up to top)
+                    // shift up by one (PUC tryfuncTM); slots above them are
+                    // dead temps, and inserting into the whole stack would
+                    // move all of them and grow it on every hop
+                    let from = func_slot as usize;
+                    let end = (func_slot + 1 + nargs).max(self.top) as usize;
+                    if self.stack.len() <= end {
+                        self.stack.resize(end + 1, Value::Nil);
+                    }
+                    self.stack.copy_within(from..end, from + 1);
+                    self.stack[from] = mm;
                     if self.top > func_slot {
                         self.top += 1;
                     }
@@ -5112,32 +5054,38 @@ impl Vm {
             // A real handler: stage [mm, v, (err?)] above the current top,
             // record the close iteration state in a Cont::Close, and let the
             // interpreter dispatch the handler. On return the run() head
-            // re-enters this driver via the Cont::Close consumer.
+            // re-enters this driver via the Cont::Close consumer. A threaded
+            // error goes in the continuation's own slot first, below the
+            // call, where the collector and a suspended thread keep it.
             let func_slot = self.top;
             let error_close = pending.is_some();
-            let need = (func_slot + 3) as usize;
+            let call_slot = func_slot + error_close as u32;
+            let need = (call_slot + 3) as usize;
             if self.stack.len() < need {
                 self.stack.resize(need, Value::Nil);
             }
-            self.stack[func_slot as usize] = mm;
-            self.stack[func_slot as usize + 1] = v;
+            if let Some(e) = pending {
+                self.stack[func_slot as usize] = e;
+            }
+            self.stack[call_slot as usize] = mm;
+            self.stack[call_slot as usize + 1] = v;
             // PUC 5.4 always passes (obj, errobj=nil) on a normal close;
             // 5.5 drops the trailing nil. 5.4 locals.lua :875 vs 5.5 :314.
             let nargs = match pending {
                 Some(e) => {
-                    self.stack[func_slot as usize + 2] = e;
+                    self.stack[call_slot as usize + 2] = e;
                     2u32
                 }
                 None => {
                     if self.version >= LuaVersion::Lua55 {
                         1u32
                     } else {
-                        self.stack[func_slot as usize + 2] = Value::Nil;
+                        self.stack[call_slot as usize + 2] = Value::Nil;
                         2u32
                     }
                 }
             };
-            self.top = func_slot + 1 + nargs;
+            self.top = call_slot + 1 + nargs;
             // Root the pending error during the call (a handler may collect).
             let saved_err = self.closing_err;
             self.closing_err = pending;
@@ -5153,7 +5101,7 @@ impl Vm {
                 CallFrame::Cont(NativeCont {
                     kind: ContKind::Close(CloseCont {
                         from,
-                        pending,
+                        has_pending: error_close,
                         after,
                     }),
                     func_slot,
@@ -5164,7 +5112,7 @@ impl Vm {
             // function's activation (debug parent = that function); during an
             // error unwind the function's frame is already gone and the
             // handler sits at the C boundary instead.
-            let r = self.begin_call(func_slot, Some(nargs), 0, error_close);
+            let r = self.begin_call(call_slot, Some(nargs), 0, error_close);
             self.pending_tm = saved_tm;
             self.closing_err = saved_err;
             r?;
@@ -5199,15 +5147,18 @@ impl Vm {
                 Some(e) => Err(LuaError(e)),
                 None => self.complete_return(abs_a, nret, from_native, entry_depth),
             },
-            AfterClose::ResumeUnwind { func_slot, err } => {
+            AfterClose::ResumeUnwind { func_slot } => {
                 // The aborting Lua frame was popped before `begin_close`;
                 // restore the catcher's stack window down to `func_slot` and
-                // re-raise — preferring a handler-raised error over the
-                // original (PUC luaF_close).
+                // re-raise the threaded error, which started as the original
+                // one and is the last a handler raised (PUC luaF_close).
                 self.stack.truncate(func_slot as usize);
                 self.top = func_slot;
                 self.tbc.retain(|&s| s < func_slot);
-                Err(LuaError(pending.unwrap_or(err)))
+                let Some(e) = pending else {
+                    unreachable!("an unwinding close always threads an error")
+                };
+                Err(LuaError(e))
             }
         }
     }
@@ -5289,44 +5240,6 @@ impl Vm {
             self.finish_results(fr.func_slot, nret, fr.nresults);
         }
         Ok(None)
-    }
-
-    /// Return0 / Return1 without the close and hook machinery (PUC
-    /// `OP_RETURN0` / `OP_RETURN1`): when no return hook can fire, nothing
-    /// in this frame needs closing and the caller is a Lua frame or a
-    /// metamethod's continuation inside this activation, the return is the
-    /// pop, the result copy and the result count that `complete_return`
-    /// would do. Returns `false`, having done nothing, otherwise.
-    #[inline]
-    fn return_to_lua(&mut self, base: u32, abs_a: u32, nret: u32, entry_depth: usize) -> bool {
-        let n = self.frames.len();
-        if self.hook.ret && self.hook_armed()
-            || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
-            || self.tbc.last().is_some_and(|&s| s >= base)
-            || n <= entry_depth
-            || n < 2
-        {
-            return false;
-        }
-        let to_meta = match &self.frames[n - 2] {
-            CallFrame::Lua(_) => false,
-            CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => true,
-            CallFrame::Cont(_) => return false,
-        };
-        let Some(CallFrame::Lua(fr)) =
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap)
-        else {
-            unreachable!("returning from a non-Lua frame")
-        };
-        for i in 0..nret {
-            self.stack[(fr.func_slot + i) as usize] = self.stack[(abs_a + i) as usize];
-        }
-        if to_meta {
-            self.top = fr.func_slot + nret;
-        } else {
-            self.finish_results(fr.func_slot, nret, fr.nresults);
-        }
-        true
     }
 
     #[doc(hidden)]
@@ -6002,7 +5915,6 @@ impl Vm {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     let after = AfterClose::ResumeUnwind {
                         func_slot: f.func_slot,
-                        err,
                     };
                     match self.begin_close(f.base, Some(err), after, entry_depth) {
                         Ok(Some(_)) => {
@@ -6138,8 +6050,9 @@ impl Vm {
         // drive_close hands the results up to exec_with directly.
         if let ContKind::Close(cc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            let pending = cc.has_pending.then(|| self.stack[nc.func_slot as usize]);
             self.top = nc.func_slot;
-            if let Some(vals) = self.drive_close(cc.from, cc.pending, cc.after, entry_depth)? {
+            if let Some(vals) = self.drive_close(cc.from, pending, cc.after, entry_depth)? {
                 return Ok(Some(vals));
             }
             return Ok(None);
@@ -6191,6 +6104,7 @@ impl Vm {
         // the host may have set a budget, a cap or a hook since the last run
         self.trap = true;
         let pre53 = self.version() <= LuaVersion::Lua53;
+        let dbl = self.version() <= LuaVersion::Lua52;
         loop {
             if self.trap {
                 self.trap_step()?;
@@ -6227,8 +6141,6 @@ impl Vm {
             };
             let cl = f.closure;
             let base = f.base;
-            let func_slot = f.func_slot;
-            let n_varargs = f.n_varargs;
             let pc = f.pc;
             let oldpc = f.hook_oldpc;
 
@@ -6317,10 +6229,10 @@ impl Vm {
             // (cont frames drained above) so the and_then/Option layers are
             // dead weight.
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            let mut fpc: *mut u32 = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+            let mut fr: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
                 CallFrame::Lua(fmut) => {
                     fmut.pc = pc + 1;
-                    &mut fmut.pc
+                    fmut
                 }
                 _ => unreachable!("Cont frame at pc bump"),
             };
@@ -6332,95 +6244,55 @@ impl Vm {
                 self.exec_hooks(cl, pc, oldpc)?;
                 // a hook runs Lua code, which can move `self.frames`
                 // SAFETY: as above
-                fpc = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                    CallFrame::Lua(fmut) => &mut fmut.pc,
+                fr = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                    CallFrame::Lua(fmut) => fmut,
                     _ => unreachable!("Cont frame after a hook"),
                 };
             }
 
+            let mut heads = [crate::runtime::function::TRACE_HEADS_NONE; 2];
+            let stay = !self.trap
+                && (!trace_on
+                    || self.jit.active_trace.is_none() && {
+                        heads = cl.proto.trace_heads.get();
+                        heads[0] != crate::runtime::function::TRACE_HEADS_MANY
+                    });
             let fx = fast::Fast {
-                cl,
-                base,
-                func_slot,
-                n_varargs,
-                fpc,
+                fr,
                 trace_on,
                 pre53,
                 entry_depth,
+                stay,
+                heads,
             };
-            let inst = match self.run_fast(fx, inst, pc + 1)? {
+            let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
+            let out = match (watch, trace_on, dbl) {
+                (true, _, false) => self.run_fast::<true, true, false>(fx, inst, pc + 1)?,
+                (false, true, false) => self.run_fast::<false, true, false>(fx, inst, pc + 1)?,
+                (false, false, false) => self.run_fast::<false, false, false>(fx, inst, pc + 1)?,
+                (true, _, true) => self.run_fast::<true, true, true>(fx, inst, pc + 1)?,
+                (false, true, true) => self.run_fast::<false, true, true>(fx, inst, pc + 1)?,
+                (false, false, true) => self.run_fast::<false, false, true>(fx, inst, pc + 1)?,
+            };
+            let inst = match out {
                 fast::FastExit::Reload => continue,
                 fast::FastExit::Slow(inst) => inst,
             };
             // the fast loop may have called or returned into another frame
             let &Frame {
-                closure: cl,
-                base,
-                func_slot,
-                n_varargs,
-                ..
+                closure: cl, base, ..
             } = self.top_frame();
             match inst.op() {
-                Op::LoadKx => {
-                    let extra = cl.proto.code[self.pc_of_top() as usize];
-                    self.bump_pc();
-                    let v = cl.proto.consts[extra.ax() as usize];
-                    self.set_r(base, inst.a(), v);
-                }
-                Op::NewTable => {
-                    let t = self.heap.new_table();
-                    self.set_r(base, inst.a(), Value::Table(t));
-                    self.maybe_collect_garbage(base + inst.a() + 1);
-                }
-                Op::SetList => {
-                    let a = inst.a();
-                    let abs_a = base + a;
-                    // only `debug.setlocal` or crafted bytecode can put a
-                    // non-table here; PUC crashes, luna raises
-                    let t = match self.r(base, a) {
-                        Value::Table(t) => t,
-                        v => return Err(self.type_err("index", v)),
-                    };
-                    let n = if inst.b() == 0 {
-                        self.top - (abs_a + 1)
-                    } else {
-                        inst.b()
-                    };
-                    let offset = if inst.k() {
-                        let extra = cl.proto.code[self.pc_of_top() as usize];
-                        self.bump_pc();
-                        extra.ax() as i64
-                    } else {
-                        inst.c() as i64
-                    };
-                    for i in 1..=n {
-                        let v = self.r(base, a + i);
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        if let Err(TableError::Overflow) =
-                            unsafe { t.as_mut() }.set_int(&mut self.heap, offset + i as i64, v)
-                        {
-                            return Err(self.rt_err("table overflow"));
-                        }
-                    }
-                    // one barrier_back covers every store this op did — PUC's
-                    // `luaC_barrierback_` once-per-table optimisation
-                    self.heap
-                        .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                    // the element temps above the table are now consumed
-                    self.maybe_collect_garbage(base + a + 1);
-                }
-                Op::Pow => {
-                    let (l, r) = (self.r(base, inst.b()), self.r(base, inst.c()));
-                    self.arith_slow(inst.a(), base, ArithOp::Pow, l, r, false)?
-                }
-                Op::Concat => {
-                    // right-associative fold over operands at base+a .. base+a+n,
-                    // in place on the stack so a yielding __concat can suspend.
-                    let a = inst.a();
-                    let n = inst.b();
-                    self.top = base + a + n;
-                    self.concat_run(base + a)?;
-                }
+                Op::LoadKx
+                | Op::NewTable
+                | Op::SetList
+                | Op::Pow
+                | Op::Concat
+                | Op::ForPrep
+                | Op::TForPrep
+                | Op::Closure
+                | Op::Vararg
+                | Op::GetVarg => self.run_frame_op(inst)?,
                 Op::Close => {
                     // Yieldable: drive __close handlers through the
                     // interpreter loop so a coroutine.yield() inside a
@@ -6583,7 +6455,10 @@ impl Vm {
                     // otherwise clobber a result with the handler closure.
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
-                        && self.return_to_lua(base, abs_a, nret, entry_depth)
+                        && !matches!(
+                            self.return_fast(base, abs_a, nret, entry_depth),
+                            call_fast::Returned::No
+                        )
                     {
                         // done: the caller's frame is on top
                     } else if let Some(vals) = self.begin_close(
@@ -6599,12 +6474,6 @@ impl Vm {
                         return Ok(vals);
                     }
                 }
-                Op::ForPrep => self.for_prep(inst, base)?,
-                Op::TForPrep => {
-                    // the 4th control slot is the iterator's closing value
-                    self.register_tbc(base + inst.a() + 3)?;
-                    self.add_pc(inst.bx() as i32);
-                }
                 Op::TForCall => {
                     let abs = base + inst.a();
                     let need = (abs + 7) as usize;
@@ -6616,186 +6485,6 @@ impl Vm {
                     self.stack[(abs + 6) as usize] = self.stack[(abs + 2) as usize];
                     let nvars = inst.c() as i32;
                     self.begin_call(abs + 4, Some(2), nvars, false)?;
-                }
-                Op::Closure => {
-                    let proto = cl.proto.protos[inst.bx() as usize];
-                    let n_ups = proto.upvals.len();
-                    // Build upvals on the stack for small
-                    // closures, skipping the per-call Vec/Box alloc
-                    // that closure_alloc's 10k iters pay. INLINE_UPVALS_N
-                    // = 2 covers most Lua source (1 captured local, or
-                    // _ENV + a single capture). Beyond that, fall back
-                    // to a heap Vec.
-                    use crate::runtime::function::INLINE_UPVALS_N;
-                    let mut stack_buf: [std::mem::MaybeUninit<
-                        Gc<crate::runtime::function::Upvalue>,
-                    >; INLINE_UPVALS_N] = [std::mem::MaybeUninit::uninit(); INLINE_UPVALS_N];
-                    let mut heap_buf: Vec<Gc<crate::runtime::function::Upvalue>> = Vec::new();
-                    let use_inline = n_ups <= INLINE_UPVALS_N;
-                    if !use_inline {
-                        heap_buf.reserve_exact(n_ups);
-                    }
-                    for (i, d) in proto.upvals.iter().enumerate() {
-                        let uv = if d.in_stack {
-                            self.find_or_create_upval(base + d.index as u32)
-                        } else {
-                            cl.upvals()[d.index as usize]
-                        };
-                        if use_inline {
-                            stack_buf[i] = std::mem::MaybeUninit::new(uv);
-                        } else {
-                            heap_buf.push(uv);
-                        }
-                    }
-                    // Tiny shim around the two paths so the 5.1 _ENV
-                    // clone + cache check below see one uniform
-                    // `&mut [Gc<Upvalue>]`. The stack_buf slice points
-                    // into the local frame (still valid through the
-                    // rest of this Op::Closure handler).
-                    let ups: &mut [Gc<crate::runtime::function::Upvalue>] = if use_inline {
-                        // SAFETY: the first n_ups slots of stack_buf
-                        // were initialised above; we hand out a slice
-                        // covering exactly them.
-                        unsafe {
-                            std::slice::from_raw_parts_mut(
-                                stack_buf.as_mut_ptr()
-                                    as *mut Gc<crate::runtime::function::Upvalue>,
-                                n_ups,
-                            )
-                        }
-                    } else {
-                        &mut heap_buf[..]
-                    };
-                    // PUC 5.1 had per-function environments: every Lua
-                    // function carried its own `env` slot, snapshotted from
-                    // the creating function's env at closure time, so a
-                    // `setfenv` on one closure never bled into a sibling.
-                    // luna models that by giving the 5.1 closure a *fresh*
-                    // closed upvalue for whichever cell holds `_ENV`, seeded
-                    // from the parent's current env value. Only that cell is
-                    // cloned — every other upvalue keeps its open/shared
-                    // identity (so e.g. `local function range(...) ...
-                    // range(...) ... end` still sees its self-reference). 5.2+
-                    // keeps the shared-upval model (and the proto cache that
-                    // depends on it).
-                    let v51 = self.version() <= LuaVersion::Lua51;
-                    if v51 && proto.env_upval_idx != u8::MAX {
-                        let i = proto.env_upval_idx as usize;
-                        let cur = match ups[i].state() {
-                            UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
-                            UpvalState::Closed(v) => v,
-                        };
-                        ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
-                    }
-                    let ups_slice: &[Gc<crate::runtime::function::Upvalue>] = ups;
-                    // PUC 5.2+ `getcached`: a Proto remembers its last LClosure
-                    // and reuses it when every fresh-upvalue binding still
-                    // points to the same Upvalue object as the cached one.
-                    // That keeps `function() return outer end` repeated in a
-                    // loop comparing equal across iterations (the captured
-                    // outer is a shared open upvalue), while `function()
-                    // return loop_var end` gets a fresh closure each round
-                    // because the loop var is re-created per iteration. PUC
-                    // 5.1 predated the cache, and the per-closure `_ENV`
-                    // clone above would defeat it anyway, so skip it.
-                    let nc = if v51 {
-                        self.heap.new_closure_inline(proto, ups_slice)
-                    } else {
-                        let cached = proto.cache.get().filter(|c| {
-                            c.upvals().len() == ups_slice.len()
-                                && c.upvals()
-                                    .iter()
-                                    .zip(ups_slice.iter())
-                                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
-                        });
-                        match cached {
-                            Some(c) => c,
-                            None => {
-                                let n = self.heap.new_closure_inline(proto, ups_slice);
-                                proto.cache.set(Some(n));
-                                n
-                            }
-                        }
-                    };
-                    self.set_r(base, inst.a(), Value::Closure(nc));
-                    self.maybe_collect_garbage(base + inst.a() + 1);
-                }
-                Op::Vararg => {
-                    let abs_a = base + inst.a();
-                    let wanted = inst.c() as i32 - 1;
-                    // A materialized named vararg lives in func_slot (its writes
-                    // must be visible to `...`); otherwise spread the extra args
-                    // straight off the stack at func_slot+1 .. +n_varargs.
-                    let vt = match self.stack[func_slot as usize] {
-                        Value::Table(t) => Some(t),
-                        _ => None,
-                    };
-                    let n = match vt {
-                        Some(t) => {
-                            let n_key = Value::Str(self.heap.intern(b"n"));
-                            // PUC getnumargs: a named vararg `t.n` set out of the
-                            // integer range [0, INT_MAX/2] is rejected here
-                            match t.get(n_key) {
-                                Value::Int(n) if (n as u64) <= (i32::MAX as u64 / 2) => n as u32,
-                                _ => return Err(self.rt_err("vararg table has no proper 'n'")),
-                            }
-                        }
-                        None => n_varargs,
-                    };
-                    let count = if wanted < 0 { n } else { wanted as u32 };
-                    // a named vararg's `n` can be set to anything up to
-                    // INT_MAX/2; PUC's `luaD_checkstack` refuses what the
-                    // stack cannot hold
-                    if abs_a + count > MAX_LUA_STACK {
-                        return Err(self.rt_err("stack overflow"));
-                    }
-                    let need = (abs_a + count) as usize;
-                    if self.stack.len() < need {
-                        self.stack.resize(need, Value::Nil);
-                    }
-                    for i in 0..count {
-                        let v = if i >= n {
-                            Value::Nil
-                        } else if let Some(t) = vt {
-                            t.get_int(i as i64 + 1)
-                        } else {
-                            self.stack[(func_slot + 1 + i) as usize]
-                        };
-                        self.stack[(abs_a + i) as usize] = v;
-                    }
-                    if wanted < 0 {
-                        self.top = abs_a + count;
-                    }
-                }
-                Op::GetVarg => {
-                    // materialize the vararg table (PUC table.pack shape) from the
-                    // stack varargs — used when the named vararg is written /
-                    // escapes / is `_ENV`. It is kept BOTH in func_slot (so `...`
-                    // sees later writes) and in the local register R[A].
-                    let n = n_varargs;
-                    let t = self.heap.new_table();
-                    {
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        let tm = unsafe { t.as_mut() };
-                        for i in 0..n {
-                            let _ = tm.set_int(
-                                &mut self.heap,
-                                i as i64 + 1,
-                                self.stack[(func_slot + 1 + i) as usize],
-                            );
-                        }
-                    }
-                    let n_key = Value::Str(self.heap.intern(b"n"));
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                    unsafe { t.as_mut() }
-                        .set(&mut self.heap, n_key, Value::Int(n as i64))
-                        .expect("'n' is a valid key");
-                    // once-per-table barrier (mirror SETLIST): t is born BLACK
-                    // during Propagate; the bulk inserts above don't barrier.
-                    self.heap
-                        .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
-                    self.stack[func_slot as usize] = Value::Table(t);
-                    self.set_r(base, inst.a(), Value::Table(t));
                 }
                 Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
                 op => unreachable!("{op:?} is run by the fast loop"),

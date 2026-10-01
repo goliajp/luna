@@ -355,23 +355,23 @@ impl RawVal {
 }
 
 impl Value {
+    /// The array-part encoding of this value. Array tags are the value's
+    /// tag with `Bool` split in two (`FALSE`, `TRUE`), so every tag from
+    /// `Int` up is one more than the value's; the payload is kept for the
+    /// variants that have one and zeroed for `nil` and the booleans.
     #[doc(hidden)]
     #[inline]
     pub fn unpack(self) -> (u8, RawVal) {
-        match self {
-            Value::Nil => (raw::NIL, RawVal::NIL),
-            Value::Bool(false) => (raw::FALSE, RawVal::NIL),
-            Value::Bool(true) => (raw::TRUE, RawVal::NIL),
-            Value::Int(i) => (raw::INT, RawVal { i }),
-            Value::Float(f) => (raw::FLOAT, RawVal { f }),
-            Value::Str(s) => (raw::STR, RawVal { s: s.as_ptr() }),
-            Value::Table(t) => (raw::TABLE, RawVal { t: t.as_ptr() }),
-            Value::Closure(c) => (raw::CLOSURE, RawVal { c: c.as_ptr() }),
-            Value::Native(n) => (raw::NATIVE, RawVal { n: n.as_ptr() }),
-            Value::Coro(co) => (raw::CORO, RawVal { co: co.as_ptr() }),
-            Value::Userdata(u) => (raw::USERDATA, RawVal { u: u.as_ptr() }),
-            Value::LightUserdata(p) => (raw::LIGHTUSERDATA, RawVal { lu: p }),
+        let t = self.tag_byte();
+        if t <= tag::BOOL {
+            let truth = matches!(self, Value::Bool(true));
+            return (t + truth as u8, RawVal::NIL);
         }
+        // SAFETY: from `Int` on every variant has an initialised 8-byte
+        // payload at offset 8 (`#[repr(C, u8)]`); copying it as the union
+        // keeps a pointer's provenance
+        let v = unsafe { *((&self as *const Value as *const u8).add(8) as *const RawVal) };
+        (t + 1, v)
     }
 
     /// SAFETY: `(tag, v)` must come from a matching `unpack` of a value that
@@ -379,21 +379,37 @@ impl Value {
     #[doc(hidden)]
     #[inline]
     pub unsafe fn pack(tag: u8, v: RawVal) -> Value {
+        let mut out = std::mem::MaybeUninit::<Value>::uninit();
+        // SAFETY: the caller's contract is `pack_into`'s
         unsafe {
-            match tag {
-                raw::NIL => Value::Nil,
-                raw::FALSE => Value::Bool(false),
-                raw::TRUE => Value::Bool(true),
-                raw::INT => Value::Int(v.i),
-                raw::FLOAT => Value::Float(v.f),
-                raw::NATIVE => Value::Native(Gc::from_ptr(v.n)),
-                raw::STR => Value::Str(Gc::from_ptr(v.s)),
-                raw::TABLE => Value::Table(Gc::from_ptr(v.t)),
-                raw::CLOSURE => Value::Closure(Gc::from_ptr(v.c)),
-                raw::CORO => Value::Coro(Gc::from_ptr(v.co)),
-                raw::USERDATA => Value::Userdata(Gc::from_ptr(v.u)),
-                raw::LIGHTUSERDATA => Value::LightUserdata(v.lu),
-                _ => unreachable!("bad raw value tag"),
+            Value::pack_into(out.as_mut_ptr(), tag, v);
+            out.assume_init()
+        }
+    }
+
+    /// [`Self::pack`] written straight to `dst`, as a tag byte and a
+    /// payload word.
+    ///
+    /// # Safety
+    /// As for `pack`, and `dst` is writable.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub unsafe fn pack_into(dst: *mut Value, tag: u8, v: RawVal) {
+        debug_assert!(tag <= raw::LIGHTUSERDATA, "bad raw value tag");
+        // SAFETY: the tag is a valid `Value` tag (the array tag, or one
+        // less from `Int` up), and the payload is the one `unpack` took
+        // from a value of that variant, still alive by the caller's
+        // contract
+        unsafe {
+            if tag <= raw::TRUE {
+                dst.write(match tag {
+                    raw::NIL => Value::Nil,
+                    t => Value::Bool(t == raw::TRUE),
+                });
+            } else {
+                let p = dst as *mut u8;
+                *p = tag - 1;
+                *(p.add(8) as *mut RawVal) = v;
             }
         }
     }
