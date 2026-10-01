@@ -1,6 +1,9 @@
 //! The table reads and writes the dispatch loop finishes itself, and the
 //! hand-over to the metamethod chains for the rest.
 
+// gc-verify builds take every read and write through the probed paths
+#![cfg_attr(feature = "gc-verify", allow(dead_code))]
+
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
