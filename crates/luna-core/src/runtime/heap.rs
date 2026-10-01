@@ -126,6 +126,18 @@ impl<T> Gc<T> {
         }
     }
 
+    /// [`Self::from_ptr`] without the null check.
+    ///
+    /// # Safety
+    /// `p` is not null.
+    #[inline(always)]
+    pub(crate) unsafe fn from_ptr_unchecked(p: *mut T) -> Gc<T> {
+        // SAFETY: the caller's contract
+        Gc {
+            ptr: unsafe { NonNull::new_unchecked(p) },
+        }
+    }
+
     /// Raw pointer to the referent. Always non-null; valid for the lifetime
     /// of the [`Heap`] that allocated it as long as the object is reachable.
     pub fn as_ptr(self) -> *mut T {
