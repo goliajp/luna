@@ -192,3 +192,21 @@ fn sandbox_budget_clears_after_exhaustion() {
         other => panic!("expected 5050, got {other:?}"),
     }
 }
+
+/// A loop that is a jump to itself (`while true do end` compiles to one):
+/// no trace is recorded there, so the budget still stops it with the JIT on.
+#[test]
+fn sandbox_budget_halts_a_jump_to_itself() {
+    for src in [&b"while true do end"[..], b"::top:: goto top"] {
+        let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+        vm.open_base();
+        vm.set_instr_budget(Some(100_000));
+        let err = run(&mut vm, src).unwrap_err();
+        let msg = vm.error_text(&err);
+        assert!(
+            msg.contains("instruction budget exceeded"),
+            "{}: {msg}",
+            String::from_utf8_lossy(src)
+        );
+    }
+}

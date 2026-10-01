@@ -48,7 +48,7 @@ impl Compiler<'_> {
         // intentionally do not chase upvalues here because the elision only
         // covers snapshots for owner-level locals.
         let level = self.lr();
-        let local = match level.locals.iter().find(|l| &*l.name == name_text) {
+        let local = match level.locals.iter().find(|l| l.name == name_text) {
             Some(l) => l,
             None => return false,
         };
@@ -77,7 +77,7 @@ impl Compiler<'_> {
         let Expr::Name(n) = self.ast.expr(*key) else {
             return false;
         };
-        let Some(local) = self.lr().locals.iter().rev().find(|l| l.name == n.text) else {
+        let Some(local) = self.lr().locals.iter().rev().find(|l| l.name == &*n.text) else {
             return false;
         };
         !local.captured
