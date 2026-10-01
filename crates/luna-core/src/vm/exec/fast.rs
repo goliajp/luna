@@ -205,6 +205,17 @@ impl Vm {
                     next!()
                 }};
             }
+            // after a slow path that moves neither the pc nor the stack and
+            // pushes a frame only for a metamethod, which sets `trap`: a
+            // table read or write, an arithmetic or unary fallback
+            macro_rules! resume_same {
+                () => {{
+                    if self.trap {
+                        reenter!()
+                    }
+                    next!()
+                }};
+            }
             // `R[A] := R[B][*pk]` for a key in a register or a constant
             macro_rules! get_arm {
                 ($pk:expr) => {{
@@ -220,6 +231,7 @@ impl Vm {
                     // SAFETY: as above
                     let (t, key) = unsafe { (*pt, *pk) };
                     self.index_miss(t, key, base!() + inst.a())?;
+                    resume_same!()
                 }};
             }
             // `R[A][*pk] := R[C]` for a key in a register or a constant
@@ -237,6 +249,7 @@ impl Vm {
                     // SAFETY: as above
                     let (t, key) = unsafe { (*pt, *pk) };
                     self.newindex_miss(t, key, v)?;
+                    resume_same!()
                 }};
             }
             // `R[A] < R[B]` / `<=` (PUC `op_order`): two integers or two
@@ -372,6 +385,7 @@ impl Vm {
                         let key = konst!(inst.c());
                         save!();
                         self.index_miss(t, key, base!() + inst.a())?;
+                        resume_same!()
                     }
                     Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize)),
                     Op::GetField => get_arm!(kptr.wrapping_add(inst.c() as usize)),
@@ -385,6 +399,7 @@ impl Vm {
                         }
                         save!();
                         self.index_miss(t, key, dst)?;
+                        resume_same!()
                     }
                     Op::SetTabUp => {
                         let t = self.upval_get(cl!(), inst.a());
@@ -397,6 +412,7 @@ impl Vm {
                         let key = konst!(inst.b());
                         save!();
                         self.newindex_miss(t, key, v)?;
+                        resume_same!()
                     }
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize)),
                     Op::SetField => set_arm!(kptr.wrapping_add(inst.b() as usize)),
@@ -409,6 +425,7 @@ impl Vm {
                         }
                         save!();
                         self.newindex_miss(t, key, v)?;
+                        resume_same!()
                     }
                     Op::SelfOp => {
                         let pb = regs.wrapping_add(inst.b() as usize);
@@ -437,6 +454,7 @@ impl Vm {
                         let key = unsafe { *pk };
                         save!();
                         self.index_miss(o, key, base!() + inst.a())?;
+                        resume_same!()
                     }
                     Op::Add => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -445,6 +463,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::Sub => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -453,6 +472,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::Mul => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -461,6 +481,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     // a zero divisor takes the slow path for its error
                     Op::Mod => {
@@ -470,6 +491,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::IDiv => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -478,6 +500,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::Div => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -486,6 +509,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::BAnd => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -494,6 +518,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::BOr => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -502,6 +527,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::BXor => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -510,6 +536,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::Shl => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -518,6 +545,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::Shr => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
@@ -526,6 +554,7 @@ impl Vm {
                         {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::AddI => {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
@@ -537,6 +566,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::SubI => {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
@@ -548,6 +578,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::AddK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -559,6 +590,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::SubK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -570,6 +602,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::MulK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -581,6 +614,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     // a zero divisor takes the slow path for its error
                     Op::ModK => {
@@ -593,6 +627,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::IDivK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -604,6 +639,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::DivK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -615,6 +651,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::PowK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -626,6 +663,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::BAndK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -637,6 +675,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::BOrK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -648,6 +687,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::BXorK => {
                         if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
@@ -659,6 +699,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::ShrI => {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
@@ -670,6 +711,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::ShlI => {
                         if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
@@ -681,6 +723,7 @@ impl Vm {
                         }) {
                             next!()
                         }
+                        resume_same!()
                     }
                     Op::Unm => {
                         let v = reg!(inst.b());
@@ -701,6 +744,7 @@ impl Vm {
                                 }
                                 let dst = base!() + inst.a();
                                 self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst })?;
+                                resume_same!()
                             }
                         }
                     }
@@ -723,6 +767,7 @@ impl Vm {
                                 }
                                 let dst = base!() + inst.a();
                                 self.begin_meta_call(mm, &[v, v], MetaAction::Store { dst })?;
+                                resume_same!()
                             }
                         }
                     }
