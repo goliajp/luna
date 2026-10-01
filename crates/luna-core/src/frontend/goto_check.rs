@@ -49,7 +49,11 @@ struct Open {
 pub(crate) struct GotoCheck {
     v54: bool,
     v55: bool,
-    actvar: Vec<Box<str>>,
+    /// where each active variable's name starts in `names`
+    actvar: Vec<usize>,
+    /// the active variables' names back to back (they are needed only for an
+    /// error message, so one buffer instead of an allocation per variable)
+    names: String,
     labels: Vec<Label>,
     pending: Vec<Goto>,
     blocks: Vec<Block>,
@@ -65,6 +69,7 @@ impl GotoCheck {
             v54: version >= LuaVersion::Lua54,
             v55: version >= LuaVersion::Lua55,
             actvar: Vec::new(),
+            names: String::new(),
             labels: Vec::new(),
             pending: Vec::new(),
             blocks: Vec::new(),
@@ -90,7 +95,15 @@ impl GotoCheck {
     /// A variable comes into scope (a local, or a 5.5 global declaration;
     /// `global *` is named "*").
     pub(crate) fn declare(&mut self, name: &str) {
-        self.actvar.push(name.into());
+        self.actvar.push(self.names.len());
+        self.names.push_str(name);
+    }
+
+    fn truncate_actvar(&mut self, n: usize) {
+        if let Some(&end) = self.actvar.get(n) {
+            self.names.truncate(end);
+            self.actvar.truncate(n);
+        }
     }
 
     fn block(&self) -> &Block {
@@ -102,7 +115,14 @@ impl GotoCheck {
         let kind = if self.v55 { "" } else { "local " };
         format!(
             "<goto {}> at line {} jumps into the scope of {kind}'{}'",
-            g.name, g.line, self.actvar[g.nactvar]
+            g.name,
+            g.line,
+            &self.names[self.actvar[g.nactvar]
+                ..self
+                    .actvar
+                    .get(g.nactvar + 1)
+                    .copied()
+                    .unwrap_or(self.names.len())]
         )
     }
 
@@ -242,7 +262,7 @@ impl GotoCheck {
         // 5.2/5.3 after (a break moved out of the body block has the same
         // level either way).
         if self.v54 && !self.v55 {
-            self.actvar.truncate(nactvar);
+            self.truncate_actvar(nactvar);
         }
         if is_loop && !self.v55 {
             self.labels.push(Label {
@@ -269,7 +289,7 @@ impl GotoCheck {
                 }
             }
         }
-        self.actvar.truncate(nactvar);
+        self.truncate_actvar(nactvar);
         self.labels.truncate(first_label);
         let _ = self.blocks.pop();
         if self.funcs.last() == Some(&self.blocks.len()) {
