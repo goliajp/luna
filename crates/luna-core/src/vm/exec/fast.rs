@@ -238,6 +238,50 @@ impl Vm {
                     }
                 }};
             }
+            // `R[A] := R[B] op R[C]` (see `arith_arm`)
+            macro_rules! arith_rr {
+                ($aop:ident, int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
+                    if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
+                        int($ia, $ib) => $iv, float($fa, $fb) => $fv,
+                        slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::$aop, l, r, inst.k()) })
+                    {
+                        next!()
+                    }
+                    resume_same!()
+                }};
+            }
+            // `R[A] := R[B] op K[C]`; `k`: the constant was on the left
+            macro_rules! arith_rk {
+                ($aop:ident, int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
+                    if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
+                        int($ia, $ib) => $iv, float($fa, $fb) => $fv,
+                        slow(x, c) => {
+                            save!();
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base!(), ArithOp::$aop, l, r, false)
+                        })
+                    {
+                        next!()
+                    }
+                    resume_same!()
+                }};
+            }
+            // `R[A] := R[B] op sC`; `k`: the immediate was on the left
+            macro_rules! arith_ri {
+                ($aop:ident, int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr) => {{
+                    if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
+                        int($ia, $ib) => $iv, float($fa, $fb) => $fv,
+                        slow(x, c) => {
+                            save!();
+                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
+                            self.arith_slow(inst.a(), base!(), ArithOp::$aop, l, r, false)
+                        })
+                    {
+                        next!()
+                    }
+                    resume_same!()
+                }};
+            }
             // `R[A] := R[B][*pk]` for a key in a register or a constant
             macro_rules! get_arm {
                 ($pk:expr, $probe:ident) => {{
@@ -490,273 +534,81 @@ impl Vm {
                         resume_same!()
                     }
                     Op::Add => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Add, int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)))
                     }
                     Op::Sub => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Sub, int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)))
                     }
                     Op::Mul => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Mul, int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)))
                     }
                     // a zero divisor takes the slow path for its error
                     Op::Mod => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Mod, int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::IDiv => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::Div => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Div, int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)))
                     }
                     Op::BAnd => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(BAnd, int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::BOr => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(BOr, int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::BXor => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(BXor, int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::Shl => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Shl, int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::Shr => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), regs.wrapping_add(inst.c() as usize),
-                            int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
-                            slow(l, r) => { save!(); self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, inst.k()) })
-                        {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rr!(Shr, int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::AddI => {
-                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
-                            int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
-                            slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_ri!(Add, int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)))
                     }
                     Op::SubI => {
-                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
-                            int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
-                            slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_ri!(Sub, int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)))
                     }
                     Op::AddK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)),
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Add, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(Add, int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)))
                     }
                     Op::SubK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)),
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Sub, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(Sub, int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)))
                     }
                     Op::MulK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)),
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Mul, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(Mul, int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)))
                     }
                     // a zero divisor takes the slow path for its error
                     Op::ModK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None },
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Mod, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(Mod, int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::IDivK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None },
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::IDiv, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::DivK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)),
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Div, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(Div, int(a, b) => Some(Value::Float(a as f64 / b as f64)), float(a, b) => Some(Value::Float(a / b)))
                     }
                     Op::PowK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))),
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Pow, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(Pow, int(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a as f64, b as f64))), float(a, b) => Some(Value::Float(num_pow(self.version() >= LuaVersion::Lua54, a, b))))
                     }
                     Op::BAndK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None },
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::BAnd, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(BAnd, int(a, b) => Some(Value::Int(a & b)), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::BOrK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None },
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::BOr, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(BOr, int(a, b) => Some(Value::Int(a | b)), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::BXorK => {
-                        if arith_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), kptr.wrapping_add(inst.c() as usize),
-                        int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None },
-                        slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::BXor, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_rk!(BXor, int(a, b) => Some(Value::Int(a ^ b)), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::ShrI => {
-                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
-                            int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None },
-                            slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Shr, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_ri!(Shr, int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::ShlI => {
-                        if arith_imm_arm!(regs, inst, regs.wrapping_add(inst.b() as usize), inst.sc() as i64,
-                            int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None },
-                            slow(x, c) => {
-                            save!();
-                            let (l, r) = if inst.k() { (c, x) } else { (x, c) };
-                            self.arith_slow(inst.a(), base!(), ArithOp::Shl, l, r, false)
-                        }) {
-                            next!()
-                        }
-                        resume_same!()
+                        arith_ri!(Shl, int(a, b) => Some(Value::Int(shift_left(a, b))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::Unm => {
                         let v = reg!(inst.b());
