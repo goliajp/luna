@@ -36,6 +36,7 @@ mod codegen;
 mod operands;
 mod storage;
 mod trace;
+mod upval_roles;
 
 pub use storage::LlvmJitStorage;
 

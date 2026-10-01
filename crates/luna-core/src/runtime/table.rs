@@ -59,6 +59,8 @@ pub(crate) const MAX_ASIZE: usize = 1 << 27;
 #[path = "table_jit_layout.rs"]
 pub mod jit_layout;
 
+#[path = "table_array.rs"]
+mod array;
 #[path = "table_node.rs"]
 mod node;
 pub(crate) use node::meta_bits;
@@ -366,44 +368,6 @@ impl Table {
             *self.avals_mut().get_unchecked_mut(idx) = b;
         }
         self.note_atag_change(idx, old, t);
-    }
-
-    /// Keep `acount` / `aprefix` in step with one array-slot tag change.
-    #[inline]
-    fn note_atag_change(&mut self, idx: usize, old: u8, new: u8) {
-        if old == raw::NIL && new != raw::NIL {
-            self.acount += 1;
-            if idx == self.aprefix as usize {
-                // run over slots filled earlier, bounded so refilling a
-                // hole low in a long array stays O(1); a shorter prefix
-                // only disables the shortcut until the next `resize`
-                let asize = self.asize();
-                let atags = self.atags();
-                let stop = (idx + 64).min(asize);
-                let mut p = idx + 1;
-                while p < stop && atags[p] != raw::NIL {
-                    p += 1;
-                }
-                self.aprefix = p as u32;
-            }
-        } else if old != raw::NIL && new == raw::NIL {
-            self.acount -= 1;
-            if idx < self.aprefix as usize {
-                self.aprefix = idx as u32;
-            }
-        }
-    }
-
-    /// Recompute `acount` / `aprefix` from the tag bytes.
-    fn recount_array(&mut self) {
-        let atags = self.atags();
-        let count = atags.iter().filter(|&&t| t != raw::NIL).count();
-        let prefix = atags
-            .iter()
-            .position(|&t| t == raw::NIL)
-            .unwrap_or(atags.len());
-        self.acount = count as u32;
-        self.aprefix = prefix as u32;
     }
 
     // ---- reads ----

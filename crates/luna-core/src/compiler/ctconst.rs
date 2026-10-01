@@ -5,7 +5,8 @@
 //! function sees it without an upvalue). This module decides that value
 //! the way `luaK_exp2const` does after PUC parsed `e`.
 
-use crate::frontend::ast::{BinOp, Chunk, Expr, ExprId, UnOp};
+use super::{Chunk, Expr, SymName};
+use crate::frontend::ast::{BinOp, ExprId, UnOp};
 use crate::runtime::value::f2i_exact;
 
 /// The value of a compile-time constant.
@@ -29,7 +30,7 @@ impl CtConst {
 pub(super) fn ct_value(
     ast: &Chunk,
     id: ExprId,
-    named: &mut dyn FnMut(&str) -> Option<CtConst>,
+    named: &mut dyn FnMut(&SymName) -> Option<CtConst>,
 ) -> Option<CtConst> {
     match ast.expr(id) {
         Expr::Nil => Some(CtConst::Nil),
@@ -38,7 +39,7 @@ pub(super) fn ct_value(
         Expr::Int(i) => Some(CtConst::Int(*i)),
         Expr::Float(f) => Some(CtConst::Float(*f)),
         Expr::Str(s) => Some(CtConst::Str(s.clone().into_boxed_slice())),
-        Expr::Name(n) => named(&n.text),
+        Expr::Name(n) => named(n),
         Expr::Paren(inner) => ct_value(ast, *inner, named),
         Expr::UnOp { op, operand, .. } => {
             let v = ct_value(ast, *operand, named)?;

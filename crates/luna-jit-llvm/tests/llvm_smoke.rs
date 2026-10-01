@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! End-to-end smoke for the LLVM backend's
 //! simplest recognised chunk shape (`[Op::LoadNil(_, _), Op::Return0]`).
 //!
@@ -944,43 +945,5 @@ fn fib_shape_nested_branchy_chunk_deep_else() {
     assert_eq!(unsafe { entry_fn() }, 2);
 }
 
-/// `Move`-through-the-return-slot smoke.
-///
-/// `local x = 9; return x` compiles to `[LoadI(R0,9), Return1(R0)]`
-/// in luna's 5.4/5.5 parser (the return reads the local in place,
-/// no Move needed). But `local x = 9; local y = x; return y` exercises
-/// the Move emit — `[LoadI(R0,9), Move(R1,R0), Return1(R1)]`.
-#[test]
-fn move_then_return_propagates_through_reg() {
-    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua55);
-    let closure = vm
-        .load(b"local x = 9; local y = x; return y", b"=move_then_return")
-        .expect("compile");
-    let proto = closure.proto;
-    // Confirm the Move path is exercised; if the parser folds it away
-    // skip rather than assert.
-    let has_move = proto.code.iter().any(|i| i.op() == Op::Move);
-    if !has_move {
-        eprintln!(
-            "[move_then_return smoke] parser folded out the Move; \
-             chunk = {:?}",
-            proto.code
-        );
-        return;
-    }
-
-    let backend = LlvmBackend;
-    let mut storage = LlvmJitStorage::default();
-    let CompileResult::Compiled { entry, .. } =
-        backend.try_compile(&mut storage, proto, false, false)
-    else {
-        panic!("`local x = 9; local y = x; return y` must compile");
-    };
-    let entry_fn: unsafe extern "C" fn() -> i64 =
-        unsafe { std::mem::transmute::<*const u8, _>(entry) };
-    let returned = unsafe { entry_fn() };
-    assert_eq!(
-        returned, 9,
-        "Move must propagate the value to the return reg"
-    );
-}
+#[path = "llvm_smoke/moves_and_jumps.rs"]
+mod moves_and_jumps;
