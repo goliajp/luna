@@ -77,6 +77,12 @@ pub(super) unsafe fn raw_truthy(p: *const Value) -> bool {
     }
 }
 
+/// Marks the path it is called on as rare, so that the code around a fast
+/// path keeps that path straight.
+#[cold]
+#[inline(never)]
+pub(super) fn cold_path() {}
+
 /// True when the tag is a number's.
 #[inline(always)]
 pub(super) fn is_num_tag(t: u8) -> bool {
@@ -91,7 +97,7 @@ macro_rules! arith_arm {
     ($regs:ident, $inst:ident, $pl:expr, $pr:expr,
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr,
      slow($l:ident, $r:ident) => $sv:expr) => {{
-        use $crate::vm::exec::fast_arith::{is_num_tag, raw_int, raw_num, raw_tag};
+        use $crate::vm::exec::fast_arith::{cold_path, is_num_tag, raw_int, raw_num, raw_tag};
         let (pl, pr): (*const Value, *const Value) = ($pl, $pr);
         // SAFETY: both point at initialised values, a register of the
         // running frame or a constant of its proto
@@ -100,12 +106,15 @@ macro_rules! arith_arm {
             // SAFETY: both are integers
             let ($ia, $ib) = unsafe { (raw_int(pl), raw_int(pr)) };
             $iv
-        } else if is_num_tag(tl) && is_num_tag(tr) {
-            // SAFETY: both are numbers
-            let ($fa, $fb) = unsafe { (raw_num(pl, tl), raw_num(pr, tr)) };
-            $fv
         } else {
-            None
+            cold_path();
+            if is_num_tag(tl) && is_num_tag(tr) {
+                // SAFETY: both are numbers
+                let ($fa, $fb) = unsafe { (raw_num(pl, tl), raw_num(pr, tr)) };
+                $fv
+            } else {
+                None
+            }
         };
         match v {
             Some(v) => {
@@ -129,7 +138,7 @@ macro_rules! arith_imm_arm {
     ($regs:ident, $inst:ident, $pl:expr, $im:expr,
      int($ia:ident, $ib:ident) => $iv:expr, float($fa:ident, $fb:ident) => $fv:expr,
      slow($l:ident, $r:ident) => $sv:expr) => {{
-        use $crate::vm::exec::fast_arith::{raw_flt, raw_int, raw_tag};
+        use $crate::vm::exec::fast_arith::{cold_path, raw_flt, raw_int, raw_tag};
         let pl: *const Value = $pl;
         let im: i64 = $im;
         // SAFETY: a register of the running frame
@@ -138,12 +147,15 @@ macro_rules! arith_imm_arm {
             // SAFETY: an integer
             let ($ia, $ib) = (unsafe { raw_int(pl) }, im);
             $iv
-        } else if tl == tag::FLOAT {
-            // SAFETY: a float
-            let ($fa, $fb) = (unsafe { raw_flt(pl) }, im as f64);
-            $fv
         } else {
-            None
+            cold_path();
+            if tl == tag::FLOAT {
+                // SAFETY: a float
+                let ($fa, $fb) = (unsafe { raw_flt(pl) }, im as f64);
+                $fv
+            } else {
+                None
+            }
         };
         match v {
             Some(v) => {

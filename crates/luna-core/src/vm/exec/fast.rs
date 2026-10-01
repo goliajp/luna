@@ -6,7 +6,7 @@
 use super::*;
 use crate::runtime::value::tag;
 use fast_arith::{
-    arith_arm, arith_imm_arm, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
+    arith_arm, arith_imm_arm, cold_path, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
 };
 
 /// The running frame, as the loop head found it.
@@ -35,9 +35,10 @@ impl Vm {
     /// Run instructions from `inst` (at `npc - 1`) until one needs the loop
     /// head. The frame's pc is `npc` on entry and is kept current. `WATCH`
     /// is false when `fx.stay` holds and `fx.heads` is empty: that loop then
-    /// tests nothing per instruction.
+    /// tests nothing per instruction. Without `WATCH`, `TRACE` is
+    /// `fx.trace_on`, fixed for the loop so that it costs nothing.
     #[inline(never)]
-    pub(super) fn run_fast<const WATCH: bool>(
+    pub(super) fn run_fast<const WATCH: bool, const TRACE: bool>(
         &mut self,
         fx: Fast,
         mut inst: Inst,
@@ -45,12 +46,13 @@ impl Vm {
     ) -> Result<FastExit, LuaError> {
         let Fast {
             mut fr,
-            trace_on,
+            trace_on: trace_rt,
             pre53,
             entry_depth,
             stay,
             heads,
         } = fx;
+        let trace_on = if WATCH { trace_rt } else { TRACE };
         // From here the running frame's state lives in locals (PUC keeps
         // `pc`, `base` and `k` in registers the same way). An arm that only
         // reads and writes registers advances `npc` and stores it through
@@ -265,16 +267,19 @@ impl Vm {
                     let res = if tl == tag::INT && tr == tag::INT {
                         // SAFETY: two integers
                         (unsafe { raw_int(pl) }) $op (unsafe { raw_int(pr) })
-                    } else if tl == tag::FLOAT && tr == tag::FLOAT {
-                        // SAFETY: two floats
-                        (unsafe { raw_flt(pl) }) $op (unsafe { raw_flt(pr) })
                     } else {
-                        // SAFETY: as above
-                        let (l, r) = unsafe { (*pl, *pr) };
-                        save!();
-                        let step = self.less_step(l, r, $or_eq)?;
-                        self.op_compare(step, l, r, inst.k())?;
-                        resume!()
+                        cold_path();
+                        if tl == tag::FLOAT && tr == tag::FLOAT {
+                            // SAFETY: two floats
+                            (unsafe { raw_flt(pl) }) $op (unsafe { raw_flt(pr) })
+                        } else {
+                            // SAFETY: as above
+                            let (l, r) = unsafe { (*pl, *pr) };
+                            save!();
+                            let step = self.less_step(l, r, $or_eq)?;
+                            self.op_compare(step, l, r, inst.k())?;
+                            resume!()
+                        }
                     };
                     if res != inst.k() {
                         npc += 1;
@@ -294,22 +299,25 @@ impl Vm {
                     let res = if t == tag::INT {
                         // SAFETY: an integer
                         (unsafe { raw_int(px) }) $op (im as i64)
-                    } else if t == tag::FLOAT {
-                        // SAFETY: a float
-                        (unsafe { raw_flt(px) }) $op (im as f64)
                     } else {
-                        // SAFETY: as above
-                        let x = unsafe { *px };
-                        let imv = if inst.c() != 0 {
-                            Value::Float(im as f64)
+                        cold_path();
+                        if t == tag::FLOAT {
+                            // SAFETY: a float
+                            (unsafe { raw_flt(px) }) $op (im as f64)
                         } else {
-                            Value::Int(im as i64)
-                        };
-                        let (l, r) = if $swap { (imv, x) } else { (x, imv) };
-                        save!();
-                        let step = self.less_step(l, r, $or_eq)?;
-                        self.op_compare(step, l, r, inst.k())?;
-                        resume!()
+                            // SAFETY: as above
+                            let x = unsafe { *px };
+                            let imv = if inst.c() != 0 {
+                                Value::Float(im as f64)
+                            } else {
+                                Value::Int(im as i64)
+                            };
+                            let (l, r) = if $swap { (imv, x) } else { (x, imv) };
+                            save!();
+                            let step = self.less_step(l, r, $or_eq)?;
+                            self.op_compare(step, l, r, inst.k())?;
+                            resume!()
+                        }
                     };
                     if res != inst.k() {
                         npc += 1;
@@ -955,26 +963,29 @@ impl Vm {
                                     }
                                 }
                             }
-                        } else if t0 == tag::FLOAT && t1 == tag::FLOAT && t2 == tag::FLOAT {
-                            // SAFETY: three floats
-                            unsafe {
-                                let (cur, lim, st) =
-                                    (raw_flt(ra), raw_flt(ra.add(1)), raw_flt(ra.add(2)));
-                                let next = cur + st;
-                                if if st > 0.0 { next <= lim } else { next >= lim } {
-                                    ra.write(Value::Float(next));
-                                    ra.add(3).write(Value::Float(next));
-                                    npc = back;
-                                }
-                            }
                         } else {
-                            // `for_loop` is the reference: 5.1–5.3 step and
-                            // compare with the limit, 5.4+ count down; anything
-                            // else it raises on
-                            save!();
-                            self.for_loop(inst, base!())?;
-                            npc = self.top_frame().pc;
-                            slow = true;
+                            cold_path();
+                            if t0 == tag::FLOAT && t1 == tag::FLOAT && t2 == tag::FLOAT {
+                                // SAFETY: three floats
+                                unsafe {
+                                    let (cur, lim, st) =
+                                        (raw_flt(ra), raw_flt(ra.add(1)), raw_flt(ra.add(2)));
+                                    let next = cur + st;
+                                    if if st > 0.0 { next <= lim } else { next >= lim } {
+                                        ra.write(Value::Float(next));
+                                        ra.add(3).write(Value::Float(next));
+                                        npc = back;
+                                    }
+                                }
+                            } else {
+                                // `for_loop` is the reference: 5.1–5.3 step and
+                                // compare with the limit, 5.4+ count down;
+                                // anything else it raises on
+                                save!();
+                                self.for_loop(inst, base!())?;
+                                npc = self.top_frame().pc;
+                                slow = true;
+                            }
                         }
                         // The trace JIT counts the back-edges taken and starts
                         // recording at the body once the count reaches the
