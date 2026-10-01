@@ -151,7 +151,7 @@ impl Vm {
     /// drop and re-create the Vm — but that beats tearing the host process
     /// down. `AssertUnwindSafe` is sound because the caller is the dispatch
     /// loop and any half-done state is fenced behind the `Err` returned.
-    #[inline]
+    #[inline(always)]
     pub(super) fn invoke_native(
         &mut self,
         nc: Gc<crate::runtime::NativeClosure>,
@@ -212,6 +212,7 @@ impl Vm {
     /// The native on top of `running_natives` returned `nret` results at
     /// `func_slot`: fire the return hook, pop it, adjust the results and
     /// give the collector its chance.
+    #[inline(always)]
     pub(super) fn finish_native_call(
         &mut self,
         func_slot: u32,
