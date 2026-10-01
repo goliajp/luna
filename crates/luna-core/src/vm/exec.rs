@@ -2808,6 +2808,7 @@ impl Vm {
     /// [`Self::fast_tm`] as the slot holding the metamethod, `None` when it
     /// is absent (nil).
     #[inline]
+    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
     pub(crate) fn fast_tm_slot(&self, mt: Gc<Table>, mm: Mm) -> Option<*const Value> {
         let bit = 1u32 << mm as u32;
         if mt.flags & bit != 0 {
