@@ -704,7 +704,7 @@ impl Heap {
             ephemeron: Vec::new(),
             no_ephemeron: self.no_ephemeron,
             cached_protos: Vec::new(),
-            strings_black: true,
+            leaves_black: true,
         };
         for &r in roots {
             m.value(r);
@@ -901,7 +901,7 @@ impl Heap {
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
             cached_protos: std::mem::take(&mut prop.cached_protos),
-            strings_black: false,
+            leaves_black: false,
         }
     }
 
@@ -1438,11 +1438,12 @@ pub(crate) struct Marker {
     /// cleared so the sweep can collect it — the cache is a *weak* reference
     /// (PUC `traverseproto` checks `iswhite(cache)`). Seen via [`Proto::trace`].
     pub(crate) cached_protos: Vec<*mut crate::runtime::Proto>,
-    /// Mark strings BLACK on sight instead of queueing them (PUC
-    /// `reallymarkobject`). Only the stop-the-world mark sets it: the
-    /// incremental step budget counts queued objects, and strings leaving
-    /// the queue would change how far each step gets.
-    strings_black: bool,
+    /// Mark objects without children BLACK on sight instead of queueing
+    /// them (PUC `reallymarkobject` does so for strings; its library
+    /// functions are not objects at all). Only the stop-the-world mark sets
+    /// it: the incremental step budget counts queued objects, and leaves
+    /// leaving the queue would change how far each step gets.
+    leaves_black: bool,
 }
 
 /// Drain the gray stack: pop each marked object and trace its children until
@@ -1488,15 +1489,16 @@ impl Marker {
     /// Mark a bare header, returning true if it was newly marked (was white).
     /// Transitions white → gray (in PUC `reallymarkobject` terms): clears the
     /// current-white bit and pushes onto the gray stack. `drain_marker` later
-    /// pops it, traces children, and stamps it BLACK. Under `strings_black`
-    /// a string, which has no children, goes straight to BLACK instead.
+    /// pops it, traces children, and stamps it BLACK. Under `leaves_black`
+    /// an object without children (a string, a native function without
+    /// upvalues) goes straight to BLACK instead.
     #[inline(always)]
     pub(crate) fn header(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
             let f = (*h).flags;
             if is_white(f) {
-                if self.strings_black && (*h).tag == ObjTag::Str {
+                if self.leaves_black && is_leaf(h) {
                     (*h).flags = (f & !WHITE_BITS) | BLACK;
                 } else {
                     (*h).flags = f & !WHITE_BITS;
@@ -1506,6 +1508,22 @@ impl Marker {
             } else {
                 false
             }
+        }
+    }
+}
+
+/// True when the object has nothing to trace.
+///
+/// # Safety
+/// `h` is a live object.
+#[inline(always)]
+unsafe fn is_leaf(h: *mut GcHeader) -> bool {
+    // SAFETY: the caller's; the tag says which object `h` heads
+    unsafe {
+        match (*h).tag {
+            ObjTag::Str => true,
+            ObjTag::Native => (&(*(h as *const NativeClosure)).upvals).is_empty(),
+            _ => false,
         }
     }
 }
