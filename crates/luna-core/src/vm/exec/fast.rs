@@ -547,7 +547,7 @@ impl Vm {
                     }
                     // a zero divisor takes the slow path for its error
                     Op::Mod => {
-                        arith_rr!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { (b != 0).then(|| Value::Int(int_mod(a, b))) }, float(a, b) => { let _ = (a, b); None })
+                        arith_rr!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => { let _ = (a, b); None })
                     }
                     Op::IDiv => {
                         arith_rr!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
@@ -587,7 +587,7 @@ impl Vm {
                     }
                     // a zero divisor takes the slow path for its error
                     Op::ModK => {
-                        arith_rk!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { (b != 0).then(|| Value::Int(int_mod(a, b))) }, float(a, b) => { let _ = (a, b); None })
+                        arith_rk!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => { let _ = (a, b); None })
                     }
                     Op::IDivK => {
                         arith_rk!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })

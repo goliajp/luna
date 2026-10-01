@@ -162,6 +162,19 @@ pub(super) fn int_mod(a: i64, b: i64) -> i64 {
     if m != 0 && (m ^ b) < 0 { m + b } else { m }
 }
 
+/// [`int_mod`] for the interpreter's `%` handlers, `None` when `b == 0`.
+/// One unsigned compare sets aside both 0 and -1 ahead of the division,
+/// as PUC `luaV_mod` does; past it the remainder cannot trap or overflow.
+#[inline(always)]
+pub(super) fn int_mod_or_zero_div(a: i64, b: i64) -> Option<i64> {
+    if (b as u64).wrapping_add(1) <= 1 {
+        super::fast_arith::cold_path();
+        return (b != 0).then_some(0);
+    }
+    let m = a % b;
+    Some(if m != 0 && (m ^ b) < 0 { m + b } else { m })
+}
+
 /// A number's integer value, if it has one.
 pub(super) fn int_of(n: Num) -> Option<i64> {
     match n {
