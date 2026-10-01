@@ -207,6 +207,7 @@ pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: Ex
 
 /// True when evaluating `rhs_eid` calls no function other than the known
 /// pure builtins.
+#[doc(hidden)]
 pub fn rhs_calls_nothing_unknown(chunk: &Chunk, rhs_eid: ExprId) -> bool {
     matches!(
         walk_rhs_for_calls(chunk, rhs_eid),
