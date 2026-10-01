@@ -131,6 +131,30 @@ impl Vm {
                 continue;
             }};
         }
+        // The end of a comparison or a test: the `Jmp` after it runs when
+        // the outcome equals `k`, and is skipped otherwise. Without anything
+        // to watch the jump is taken here (PUC `donextjump`), which saves its
+        // dispatch and makes the two outcomes different code, so that the
+        // compiler branches on the outcome instead of computing the next pc
+        // from it. A back-edge is left to the `Jmp` arm when the trace JIT
+        // counts back-edges.
+        macro_rules! cond_jump {
+            ($taken:expr) => {{
+                if !$taken {
+                    npc += 1;
+                } else if !WATCH {
+                    // SAFETY: the compiler and the bytecode verifier put a
+                    // `Jmp` after every comparison and test
+                    let j = unsafe { *code.add(npc as usize) };
+                    debug_assert!(j.op() == Op::Jmp);
+                    let off = j.sj();
+                    if !(trace_on && off < 0) {
+                        npc = (npc as i64 + 1 + off as i64) as u32;
+                    }
+                }
+                next!()
+            }};
+        }
         // Without anything to watch the frame's pc is stored only before
         // whatever can read it: a call, a metamethod, an error, the loop
         // head (PUC `savepc`). Every slow path below starts with this.
@@ -348,10 +372,7 @@ impl Vm {
                             resume!()
                         }
                     };
-                    if res != inst.k() {
-                        npc += 1;
-                    }
-                    next!()
+                    cond_jump!(res == inst.k())
                 }};
             }
             // `R[A] op sB` (PUC `op_orderI`); `$swap`: the immediate is the
@@ -386,10 +407,7 @@ impl Vm {
                             resume!()
                         }
                     };
-                    if res != inst.k() {
-                        npc += 1;
-                    }
-                    next!()
+                    cond_jump!(res == inst.k())
                 }};
             }
             loop {
@@ -766,10 +784,7 @@ impl Vm {
                             self.op_compare(step, l, r, inst.k())?;
                             resume!()
                         };
-                        if eq != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        cond_jump!(eq == inst.k())
                     }
                     // a constant is never a table or a userdata: no `__eq`
                     Op::EqK => {
@@ -785,10 +800,7 @@ impl Vm {
                                 (*pl).raw_eq(*pk)
                             }
                         };
-                        if eq != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        cond_jump!(eq == inst.k())
                     }
                     Op::Lt => order_arm!(<, false),
                     Op::Le => order_arm!(<=, true),
@@ -804,10 +816,7 @@ impl Vm {
                                 _ => false,
                             }
                         };
-                        if eq != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        cond_jump!(eq == inst.k())
                     }
                     Op::LtI => order_imm_arm!(<, false, false),
                     Op::LeI => order_imm_arm!(<=, false, true),
@@ -816,21 +825,18 @@ impl Vm {
                     Op::Test => {
                         // the JMP that follows runs when the condition equals k
                         // SAFETY: a register of the running frame
-                        if unsafe { raw_truthy(regs.add(inst.a() as usize)) } != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        let t = unsafe { raw_truthy(regs.add(inst.a() as usize)) };
+                        cond_jump!(t == inst.k())
                     }
                     Op::TestSet => {
                         let pb = regs.wrapping_add(inst.b() as usize);
                         // SAFETY: a register of the running frame
-                        if unsafe { raw_truthy(pb) } == inst.k() {
+                        let t = unsafe { raw_truthy(pb) } == inst.k();
+                        if t {
                             // SAFETY: as above
                             unsafe { Value::copy_raw(regs.add(inst.a() as usize), pb) };
-                        } else {
-                            npc += 1;
                         }
-                        next!()
+                        cond_jump!(t)
                     }
                     Op::ForLoop => {
                         let ra = regs.wrapping_add(inst.a() as usize);
