@@ -518,6 +518,17 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    /// Point the jump at `pc` back to `target`, an earlier pc.
+    fn patch_back(&mut self, pc: usize, target: usize) -> Result<(), SyntaxError> {
+        let off = target as i64 - pc as i64 - 1;
+        if off.unsigned_abs() > self.jump_cap() {
+            return Err(self.err(self.last_line, "control structure too long"));
+        }
+        self.l().code[pc].set_sj(off as i32);
+        self.mark_target(target);
+        Ok(())
+    }
+
     fn jump_back(&mut self, target: usize) -> Result<(), SyntaxError> {
         let off = target as i64 - self.here() as i64 - 1;
         if off.unsigned_abs() > self.jump_cap() {
@@ -3129,37 +3140,27 @@ impl<'a> Compiler<'a> {
         let top = self.here();
         self.enter_block(true);
         self.stat_block_inner(body, true)?;
-        let e = self.expr(cond)?;
-        let saved = self.lr().freereg;
-        match e {
-            Exp::Cmp { op, l, r, c } => {
-                self.emit(Inst::iabc(op, l, r, c, false));
-            }
-            e => {
-                let r = self.exp_to_anyreg(e)?;
-                self.emit(Inst::iabc(Op::Test, r, 0, 0, false));
-            }
-        }
-        self.set_freereg(saved);
-        // The condition test above (k = false) lets the *following* jump run
-        // when the condition is FALSE (loop again) and skips it when TRUE
-        // (exit). With no captured body local we just jump straight back. When
-        // a body local is captured, the loop-back path must first CLOSE its
-        // upvalues, and the normal-exit path must jump over that close-and-loop
-        // tail (PUC `repeatstat`): emitting the CLOSE inline between the test
-        // and the back-jump would only skip the CLOSE on exit, not the jump —
-        // and so loop forever.
+        // the condition's jumps are taken when it is false (loop again) and
+        // the code falls through when it is true (exit), as for `while`. With
+        // no captured body local they go straight back. When a body local is
+        // captured, the loop-back path must first CLOSE its upvalues and the
+        // normal exit must jump over that close-and-loop tail (PUC
+        // `repeatstat`).
+        let (again, _) = self.cond_jump_false(cond)?;
         if self.block_captured() {
             let floor = self.block_floor();
-            let cont = self.emit_jump(); // cond FALSE -> close & loop
-            let exit = self.emit_jump(); // cond TRUE  -> normal exit
-            self.patch_to_here(cont)?;
+            let exit = self.emit_jump();
+            for pc in again {
+                self.patch_to_here(pc)?;
+            }
             let first = self.l().blocks.last().expect("repeat block").first_local;
             self.close_body(first, floor);
             self.jump_back(top)?;
             self.patch_to_here(exit)?;
         } else {
-            self.jump_back(top)?;
+            for pc in again {
+                self.patch_back(pc, top)?;
+            }
         }
         self.leave_block()?;
         Ok(())
