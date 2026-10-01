@@ -3,6 +3,7 @@
 //! run a metamethod execute here on locals, in a function of their own so
 //! that its register allocation does not depend on the rest of the loop.
 
+use super::num_double as dbl;
 use super::*;
 use crate::runtime::value::tag;
 use call_fast::Returned;
@@ -37,9 +38,11 @@ impl Vm {
     /// head. The frame's pc is `npc` on entry and is kept current. `WATCH`
     /// is false when `fx.stay` holds and `fx.heads` is empty: that loop then
     /// tests nothing per instruction. Without `WATCH`, `TRACE` is
-    /// `fx.trace_on`, fixed for the loop so that it costs nothing.
+    /// `fx.trace_on`, fixed for the loop so that it costs nothing. `DBL`
+    /// is true for 5.1/5.2, whose integers stand for doubles (see
+    /// [`super::num_double`]).
     #[inline(never)]
-    pub(super) fn run_fast<const WATCH: bool, const TRACE: bool>(
+    pub(super) fn run_fast<const WATCH: bool, const TRACE: bool, const DBL: bool>(
         &mut self,
         fx: Fast,
         mut inst: Inst,
@@ -534,17 +537,17 @@ impl Vm {
                         resume_same!()
                     }
                     Op::Add => {
-                        arith_rr!(Add, int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)))
+                        arith_rr!(Add, int(a, b) => Some(if DBL { dbl::add(a, b) } else { Value::Int(a.wrapping_add(b)) }), float(a, b) => Some(Value::Float(a + b)))
                     }
                     Op::Sub => {
-                        arith_rr!(Sub, int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)))
+                        arith_rr!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a - b)))
                     }
                     Op::Mul => {
-                        arith_rr!(Mul, int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)))
+                        arith_rr!(Mul, int(a, b) => Some(if DBL { dbl::mul(a, b) } else { Value::Int(a.wrapping_mul(b)) }), float(a, b) => Some(Value::Float(a * b)))
                     }
                     // a zero divisor takes the slow path for its error
                     Op::Mod => {
-                        arith_rr!(Mod, int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None })
+                        arith_rr!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { (b != 0).then(|| Value::Int(int_mod(a, b))) }, float(a, b) => { let _ = (a, b); None })
                     }
                     Op::IDiv => {
                         arith_rr!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
@@ -568,23 +571,23 @@ impl Vm {
                         arith_rr!(Shr, int(a, b) => Some(Value::Int(shift_left(a, b.wrapping_neg()))), float(a, b) => { let _ = (a, b); None })
                     }
                     Op::AddI => {
-                        arith_ri!(Add, int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)))
+                        arith_ri!(Add, int(a, b) => Some(if DBL { dbl::add(a, b) } else { Value::Int(a.wrapping_add(b)) }), float(a, b) => Some(Value::Float(a + b)))
                     }
                     Op::SubI => {
-                        arith_ri!(Sub, int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)))
+                        arith_ri!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a - b)))
                     }
                     Op::AddK => {
-                        arith_rk!(Add, int(a, b) => Some(Value::Int(a.wrapping_add(b))), float(a, b) => Some(Value::Float(a + b)))
+                        arith_rk!(Add, int(a, b) => Some(if DBL { dbl::add(a, b) } else { Value::Int(a.wrapping_add(b)) }), float(a, b) => Some(Value::Float(a + b)))
                     }
                     Op::SubK => {
-                        arith_rk!(Sub, int(a, b) => Some(Value::Int(a.wrapping_sub(b))), float(a, b) => Some(Value::Float(a - b)))
+                        arith_rk!(Sub, int(a, b) => Some(if DBL { dbl::sub(a, b) } else { Value::Int(a.wrapping_sub(b)) }), float(a, b) => Some(Value::Float(a - b)))
                     }
                     Op::MulK => {
-                        arith_rk!(Mul, int(a, b) => Some(Value::Int(a.wrapping_mul(b))), float(a, b) => Some(Value::Float(a * b)))
+                        arith_rk!(Mul, int(a, b) => Some(if DBL { dbl::mul(a, b) } else { Value::Int(a.wrapping_mul(b)) }), float(a, b) => Some(Value::Float(a * b)))
                     }
                     // a zero divisor takes the slow path for its error
                     Op::ModK => {
-                        arith_rk!(Mod, int(a, b) => (b != 0).then(|| Value::Int(int_mod(a, b))), float(a, b) => { let _ = (a, b); None })
+                        arith_rk!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { (b != 0).then(|| Value::Int(int_mod(a, b))) }, float(a, b) => { let _ = (a, b); None })
                     }
                     Op::IDivK => {
                         arith_rk!(IDiv, int(a, b) => (b != 0).then(|| Value::Int(int_idiv(a, b))), float(a, b) => { let _ = (a, b); None })
@@ -614,7 +617,14 @@ impl Vm {
                         let v = reg!(inst.b());
                         match self.unary_operand(v) {
                             Some(Num::Int(i)) => {
-                                set_reg!(inst.a(), Value::Int(i.wrapping_neg()));
+                                set_reg!(
+                                    inst.a(),
+                                    if DBL {
+                                        dbl::neg(i)
+                                    } else {
+                                        Value::Int(i.wrapping_neg())
+                                    }
+                                );
                                 next!()
                             }
                             Some(Num::Float(f)) => {

@@ -616,8 +616,32 @@ impl Table {
         key: Value,
         val: Value,
     ) -> Result<(), TableError> {
-        let k = normalize_set_key(key)?;
+        let k = match key {
+            Value::Float(f) if f == 0.0 && f.is_sign_negative() && heap.signed_zero_keys => {
+                return self.set_neg_zero(heap, val);
+            }
+            key => normalize_set_key(key)?,
+        };
         self.set_norm(heap, k, val)
+    }
+
+    /// `t[-0] = val` under 5.1/5.2: the key is 0, and a key that is new
+    /// keeps the sign it was given (PUC stores the key value as is).
+    #[cold]
+    #[inline(never)]
+    fn set_neg_zero(&mut self, heap: &mut Heap, val: Value) -> Result<(), TableError> {
+        let fresh = self.find_node(Value::Int(0)).is_none();
+        self.set_norm(heap, Value::Int(0), val)?;
+        if fresh {
+            self.mark_neg_zero();
+        }
+        Ok(())
+    }
+
+    fn mark_neg_zero(&mut self) {
+        if let Some(i) = self.find_node(Value::Int(0)) {
+            self.nodes[i].neg_zero = true;
+        }
     }
 
     /// PUC `luaV_fastset` / `luaV_finishfastset` analogue: single-walk
@@ -1016,6 +1040,9 @@ impl Table {
         for n in old_nodes.iter() {
             if !n.val.is_nil() {
                 let _ = self.set_norm(heap, n.key(), n.val);
+                if n.neg_zero {
+                    self.mark_neg_zero();
+                }
             }
         }
     }
@@ -1119,7 +1146,7 @@ impl Table {
         for (idx, n) in self.nodes.iter().enumerate().skip(hstart) {
             if !n.val.is_nil() {
                 let _ = idx;
-                return Ok(Some((n.key(), n.val)));
+                return Ok(Some((n.shown_key(), n.val)));
             }
         }
         Ok(None)

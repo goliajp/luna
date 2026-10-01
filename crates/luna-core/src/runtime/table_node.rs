@@ -17,6 +17,9 @@ pub(crate) struct Node {
     /// `insert_new` that the slot still sits in a chain (its `next` is
     /// kept) rather than being free.
     pub(super) dead_key: bool,
+    /// the key is integer 0 but was stored as -0 under 5.1/5.2, which
+    /// keep a new key as it was given; iteration hands it back that way
+    pub(super) neg_zero: bool,
     /// absolute index of the next node in this chain, or NONE
     pub(super) next: i32,
     pub(super) key_payload: std::mem::MaybeUninit<u64>,
@@ -29,6 +32,7 @@ impl Node {
     pub(super) const EMPTY: Node = Node {
         key_tag: crate::runtime::value::tag::NIL,
         dead_key: false,
+        neg_zero: false,
         next: NONE,
         key_payload: std::mem::MaybeUninit::uninit(),
         val: Value::Nil,
@@ -53,6 +57,16 @@ impl Node {
         // `Value` has its tag and payload, and `set_key` stores them as
         // a `Value` has them; the bytes between are a `Value`'s padding
         unsafe { *(self as *const Node as *const Value) }
+    }
+
+    /// The key as iteration hands it back.
+    #[inline]
+    pub(super) fn shown_key(&self) -> Value {
+        if self.neg_zero {
+            Value::Float(-0.0)
+        } else {
+            self.key()
+        }
     }
 
     /// Store `key`, leaving `dead_key` and `next` as they are.

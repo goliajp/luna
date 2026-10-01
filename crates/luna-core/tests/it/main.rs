@@ -19,6 +19,7 @@ mod compiler_stress_limits;
 mod coroutine_debug_hook;
 mod corrupt_register_state;
 mod diff_puc;
+mod double_dialect_int_arith;
 mod e2e_programs;
 mod eval_async;
 mod gc_finalizer_edges;

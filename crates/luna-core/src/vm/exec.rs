@@ -33,6 +33,7 @@ mod index_fast;
 mod limits;
 pub(crate) mod native_call;
 mod num;
+mod num_double;
 mod trace_close;
 mod trace_dispatch;
 mod trace_exit;
@@ -963,6 +964,7 @@ impl Vm {
         // PUC 5.1 had no ephemeron pass — `__mode='k'` tables marked their
         // values strongly. gc.lua's "weak tables" section relies on that.
         heap.no_ephemeron = version <= LuaVersion::Lua51;
+        heap.signed_zero_keys = version <= LuaVersion::Lua52;
         // PUC 5.3 needs two GC cycles to finalize a table caught in a
         // coroutine reference cycle (gc.lua :502); 5.4+ rewrote the GC and
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
@@ -6093,6 +6095,7 @@ impl Vm {
         // the host may have set a budget, a cap or a hook since the last run
         self.trap = true;
         let pre53 = self.version() <= LuaVersion::Lua53;
+        let dbl = self.version() <= LuaVersion::Lua52;
         loop {
             if self.trap {
                 self.trap_step()?;
@@ -6253,12 +6256,14 @@ impl Vm {
                 stay,
                 heads,
             };
-            let out = if !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE {
-                self.run_fast::<true, true>(fx, inst, pc + 1)?
-            } else if trace_on {
-                self.run_fast::<false, true>(fx, inst, pc + 1)?
-            } else {
-                self.run_fast::<false, false>(fx, inst, pc + 1)?
+            let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
+            let out = match (watch, trace_on, dbl) {
+                (true, _, false) => self.run_fast::<true, true, false>(fx, inst, pc + 1)?,
+                (false, true, false) => self.run_fast::<false, true, false>(fx, inst, pc + 1)?,
+                (false, false, false) => self.run_fast::<false, false, false>(fx, inst, pc + 1)?,
+                (true, _, true) => self.run_fast::<true, true, true>(fx, inst, pc + 1)?,
+                (false, true, true) => self.run_fast::<false, true, true>(fx, inst, pc + 1)?,
+                (false, false, true) => self.run_fast::<false, false, true>(fx, inst, pc + 1)?,
             };
             let inst = match out {
                 fast::FastExit::Reload => continue,
