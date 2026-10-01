@@ -535,7 +535,12 @@ impl<'a> ChunkPlan<'a> {
         let mut consumed_jmp = vec![false; n];
         for (pc, ins) in code.iter().enumerate() {
             match ins.op() {
-                Op::LoadI | Op::LoadNil | Op::Move | Op::Jmp | Op::Return0 | Op::Return1 => {}
+                Op::LoadI | Op::LoadNil | Op::Move | Op::Return0 | Op::Return1 => {}
+                // a jump to itself (`while true do end`, `::l:: goto l`)
+                // would spin in native code, where the interpreter's
+                // instruction budget and hooks never run
+                Op::Jmp if jmp_target(pc, *ins) == pc => return None,
+                Op::Jmp => {}
                 op if is_arith(op) => {
                     int_arith(*ins, consts)?;
                 }
