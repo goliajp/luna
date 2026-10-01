@@ -94,6 +94,7 @@ mod const_operands;
 mod getupval_roles;
 mod math_fold;
 mod send_jit_module;
+mod trace_backend;
 use getupval_roles::determine_getupval_roles;
 use math_fold::try_match_math_fold;
 #[allow(unused_imports)]
@@ -6363,33 +6364,5 @@ impl IntChunkCompiler for CraneliftBackend {
         // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
         let vm_ref: &mut luna_core::vm::Vm = unsafe { &mut *vm };
         enter_jit(vm_ref, cl)
-    }
-}
-
-impl TraceCompiler for CraneliftBackend {
-    // pass storage through so the compiled trace's `JITModule` is
-    // parked on the per-`Vm` `storage.trace_handles` Vec
-    fn try_compile_trace(
-        &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
-        record: &TraceRecord,
-        opts: CompileOptions,
-    ) -> Option<CompiledTrace> {
-        trace::compile_trace_for_vm(storage, record, opts, false)
-    }
-
-    fn try_compile_trace_for(
-        &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
-        record: &TraceRecord,
-        opts: CompileOptions,
-        version: luna_core::version::LuaVersion,
-    ) -> Option<CompiledTrace> {
-        let float_only = version <= luna_core::version::LuaVersion::Lua52;
-        trace::compile_trace_for_vm(storage, record, opts, float_only)
-    }
-
-    fn last_compile_checkpoint(&self) -> &'static str {
-        trace::last_compile_checkpoint()
     }
 }
