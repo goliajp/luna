@@ -79,3 +79,34 @@ fn integer_division_by_zero_raises() {
         assert!(got.ends_with("attempt to divide by zero"), "{v:?}: {got}");
     }
 }
+
+/// The constant-divisor form (`MODK`): -1 and 0 take the side exit ahead of
+/// the division.
+#[test]
+fn integer_mod_by_a_constant() {
+    let src = "local out = {}\n\
+               for _, a in ipairs({math.mininteger, -13, -1, 0, 1, 13, math.maxinteger}) do\n\
+                 out[#out + 1] = (a % -1) .. ',' .. (a % 7) .. ',' .. (a % -7) .. ',' .. (a % 1)\n\
+               end\n\
+               local err = tostring(select(2, pcall(function(a) return a % 0 end, 3)))\n\
+               return table.concat(out, ' ') .. '|' .. err";
+    let want: Vec<String> = [i64::MIN, -13, -1, 0, 1, 13, i64::MAX]
+        .iter()
+        .map(|&a| {
+            format!(
+                "{},{},{},{}",
+                floor_mod(a, -1),
+                floor_mod(a, 7),
+                floor_mod(a, -7),
+                floor_mod(a, 1)
+            )
+        })
+        .collect();
+    for v in [LuaVersion::Lua53, LuaVersion::Lua54, LuaVersion::Lua55] {
+        let mut vm = Vm::new(v);
+        let got = text(vm.eval(src).expect("run")[0]);
+        let (head, err) = got.split_once('|').expect("separator");
+        assert_eq!(head, want.join(" "), "{v:?}");
+        assert!(err.ends_with("attempt to perform 'n%0'"), "{v:?}: {err}");
+    }
+}
