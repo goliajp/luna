@@ -25,6 +25,7 @@ pub mod function;
 pub mod heap;
 pub mod string;
 pub mod table;
+mod upvalue;
 pub mod userdata;
 pub mod value;
 
