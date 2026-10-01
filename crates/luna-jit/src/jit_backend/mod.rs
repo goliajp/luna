@@ -1023,7 +1023,10 @@ pub fn lower_int_chunk_into<M: Module>(
             }
             Op::Jmp => {
                 let tgt = jmp_target(pc, ins);
-                if tgt >= n {
+                // a jump to itself (`while true do end`, `::l:: goto l`)
+                // would spin in native code, where the interpreter's
+                // instruction budget and hooks never run
+                if tgt >= n || tgt == pc {
                     return None;
                 }
                 bb_starts[tgt] = true;
