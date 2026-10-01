@@ -7,9 +7,7 @@
 //! valid until a `collect()` call that does not reach it from the given
 //! roots. Callers must root every value they keep across a collect.
 
-use std::fmt;
-use std::ops::Deref;
-use std::ptr::{self, NonNull};
+use std::ptr;
 
 use crate::runtime::function::{LuaClosure, NativeClosure, Proto, UpvalState, Upvalue};
 use crate::runtime::string::{self, LuaStr, StringTable};
@@ -104,67 +102,9 @@ impl GcHeader {
     }
 }
 
-/// `Copy` handle to a heap-allocated GC-managed object. Layout is a single
-/// `NonNull<T>`; the GC walks reachability via root scanning and intrusive
-/// linkage on [`GcHeader`], not via reference counts.
-pub struct Gc<T> {
-    ptr: NonNull<T>,
-}
-
-impl<T> Clone for Gc<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<T> Copy for Gc<T> {}
-
-impl<T> Gc<T> {
-    #[doc(hidden)]
-    pub fn from_ptr(p: *mut T) -> Gc<T> {
-        Gc {
-            ptr: NonNull::new(p).expect("gc pointer must be non-null"),
-        }
-    }
-
-    /// Raw pointer to the referent. Always non-null; valid for the lifetime
-    /// of the [`Heap`] that allocated it as long as the object is reachable.
-    pub fn as_ptr(self) -> *mut T {
-        self.ptr.as_ptr()
-    }
-
-    /// Pointer-identity equality (PUC `rawequal` for reference types).
-    pub fn ptr_eq(self, other: Gc<T>) -> bool {
-        self.ptr == other.ptr
-    }
-
-    /// SAFETY: caller must ensure no other live reference to the object and
-    /// no collect() while the borrow is held (single-threaded runtime).
-    ///
-    /// `#[doc(hidden)]` so the documented public surface needs no `unsafe`:
-    /// embedders should not see this in rustdoc. The safe path for mutating
-    /// freshly-allocated tables is the `TableBuilder` / `vm.table_of(...)` API.
-    /// Cross-crate access from `luna` (e.g. `jit_backend`, `capi`) keeps
-    /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
-    #[doc(hidden)]
-    pub unsafe fn as_mut<'a>(self) -> &'a mut T {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { &mut *self.ptr.as_ptr() }
-    }
-}
-
-impl<T> Deref for Gc<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
-impl<T> fmt::Debug for Gc<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Gc({:p})", self.ptr.as_ptr())
-    }
-}
+#[path = "gc_ptr.rs"]
+mod gc_ptr;
+pub use gc_ptr::Gc;
 
 /// Incremental GC phase.
 ///   * `Pause`     — no cycle in progress; all objects current-white.
@@ -248,6 +188,8 @@ pub struct Heap {
     /// section in 5.1 asserts 3*lim survivors, 5.4 only 2*lim — the loop2
     /// pair was retired from the newer test as a result.
     pub(crate) no_ephemeron: bool,
+    /// 5.1/5.2: a new table key -0 stays -0 (see `Table::set`)
+    pub(crate) signed_zero_keys: bool,
     /// PUC 5.3 finalizes a table caught in a cycle through an unreachable
     /// coroutine one GC round later than the unreachability is detected
     /// ("two collections are needed to break cycle", gc.lua :502). 5.4 and 5.5
@@ -301,6 +243,7 @@ impl Heap {
             finalize: Vec::new(),
             tobefnz: Vec::new(),
             no_ephemeron: false,
+            signed_zero_keys: false,
             defer_thread_cycle_finalize: false,
             mem_cap: None,
             table_pool: Vec::new(),
@@ -475,6 +418,8 @@ impl Heap {
         let mut boxed = Box::new(LuaClosure {
             hdr: GcHeader::new(ObjTag::Closure),
             proto,
+            code: proto.code.as_ptr(),
+            consts: proto.consts.as_ptr(),
             upvals_ptr: std::ptr::null_mut(),
             upvals_len,
             inline_storage: std::cell::UnsafeCell::new(

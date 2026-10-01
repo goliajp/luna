@@ -309,3 +309,65 @@ fn elision_preserves_present_key_in_place_update() {
     "#;
     assert_eq!(eval_int(src), 1);
 }
+
+// ---------------------------------------------------------------------
+// Key snapshot
+// ---------------------------------------------------------------------
+
+/// `t[k] = v` with `k` a plain local: the key stays in its register, as
+/// in PUC, instead of a copy into a temp.
+#[test]
+fn a_local_key_stays_in_its_register() {
+    let src = "local t = {} local k = 3 local v = 5 t[k] = v return t[3]";
+    let code = compile_main(src);
+    assert_eq!(count_moves_from_reg(&code, 1), 0, "key copied: {code:?}");
+    let set = code
+        .iter()
+        .find(|i| i.op() == Op::SetTable)
+        .expect("SetTable");
+    assert_eq!(
+        set.b(),
+        1,
+        "SetTable should take the key from `k`: {code:?}"
+    );
+    assert_eq!(eval_int(src), 5);
+}
+
+/// A captured key can change while the right side runs, so it is copied.
+#[test]
+fn a_captured_local_key_is_copied() {
+    let src = "local t = {} local k = 3 local f = function() return k end t[k] = 1 return t[3]";
+    let code = compile_main(src);
+    assert_eq!(
+        count_moves_from_reg(&code, 1),
+        1,
+        "captured key not copied: {code:?}"
+    );
+    assert_eq!(eval_int(src), 1);
+}
+
+/// An unknown call on the right side keeps the copy.
+#[test]
+fn a_key_with_an_unknown_call_on_the_right_is_copied() {
+    let src = "g = function() return 7 end local t = {} local k = 3 t[k] = g() return t[3]";
+    let code = compile_main(src);
+    assert_eq!(
+        count_moves_from_reg(&code, 1),
+        1,
+        "key not copied: {code:?}"
+    );
+    assert_eq!(eval_int(src), 7);
+}
+
+/// With several targets a later store may change the key: it is copied,
+/// and `t[k], k = 10, 2` stores at the old `k`.
+#[test]
+fn a_key_in_a_multiple_assignment_is_copied() {
+    let src = "local t = {} local k = 1 t[k], k = 10, 2 return t[1]";
+    let code = compile_main(src);
+    assert!(
+        count_moves_from_reg(&code, 1) >= 1,
+        "key not copied: {code:?}"
+    );
+    assert_eq!(eval_int(src), 10);
+}

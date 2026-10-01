@@ -67,6 +67,14 @@ impl crate::runtime::heap::Gc<LuaStr> {
         unsafe { bytes_of(self.as_ptr()) }
     }
 
+    /// The hash field as it stands: a short string's hash, a long string's
+    /// hash or, before [`Self::hash`] computed it, the heap seed.
+    #[inline(always)]
+    pub(crate) fn stored_hash(&self) -> u32 {
+        // SAFETY: `self.as_ptr()` is a live string header
+        unsafe { (*self.as_ptr()).hash.get() }
+    }
+
     /// Cached hash of the string (computed lazily for long strings).
     #[inline]
     pub fn hash(&self) -> u32 {
@@ -166,6 +174,7 @@ impl StringTable {
     }
 
     /// Find or create an interned short string. Returns `(ptr, newly_created)`.
+    #[inline]
     pub(crate) fn intern(&mut self, bytes: &[u8], seed: u32) -> (*mut LuaStr, bool) {
         debug_assert!(bytes.len() <= MAX_SHORT_LEN);
         let h = lua_hash(bytes, seed);
@@ -194,6 +203,8 @@ impl StringTable {
         (p, true)
     }
 
+    #[cold]
+    #[inline(never)]
     fn grow(&mut self) {
         let mut nb = vec![ptr::null_mut(); self.buckets.len() * 2];
         let mask = nb.len() - 1;

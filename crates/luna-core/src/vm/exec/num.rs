@@ -93,6 +93,18 @@ pub(crate) fn arith_num(
     rn: Num,
 ) -> Result<Value, &'static str> {
     use ArithOp::*;
+    if version <= LuaVersion::Lua52
+        && let (Num::Int(a), Num::Int(b)) = (ln, rn)
+    {
+        use super::num_double as d;
+        match op {
+            Add => return Ok(d::add(a, b)),
+            Sub => return Ok(d::sub(a, b)),
+            Mul => return Ok(d::mul(a, b)),
+            Mod => return Ok(d::rem(a, b)),
+            _ => {}
+        }
+    }
     Ok(match (op, ln, rn) {
         (Add, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_add(b)),
         (Sub, Num::Int(a), Num::Int(b)) => Value::Int(a.wrapping_sub(b)),

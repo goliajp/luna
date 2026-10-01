@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+mod assign_gate;
 mod binop;
 mod ctconst;
 mod fold;
@@ -2872,7 +2873,14 @@ impl<'a> Compiler<'a> {
                         Expr::Int(i) if (0..=255).contains(i) => SetKey::Int(*i as u32),
                         _ => {
                             let ke = self.expr(key)?;
-                            let kr = self.exp_to_nextreg(ke)?;
+                            let kr = match ke {
+                                Exp::Reg(r)
+                                    if self.assign_stat_can_skip_key_snapshot(targets, exprs) =>
+                                {
+                                    r
+                                }
+                                ke => self.exp_to_nextreg(ke)?,
+                            };
                             SetKey::Reg(kr)
                         }
                     };
@@ -3524,61 +3532,6 @@ impl<'a> Compiler<'a> {
             }
         }
         Ok(())
-    }
-
-    /// Compiler-side metamethod-safety gate for the Index-LHS object
-    /// snapshot elision.
-    ///
-    /// Returns `true` when, for a single-target Index-LHS assignment
-    /// `obj.key = rhs` (or `obj[key] = rhs`), the otherwise unconditional
-    /// `exp_to_nextreg(oe)` snapshot in `assign_stat` is provably
-    /// redundant.
-    ///
-    /// The four conditions enforced:
-    ///
-    /// 1. `targets.len() == 1` and `exprs.len() == 1` — no inter-target
-    ///    or multi-RHS conflict possible.
-    /// 2. The single target is `Expr::Index { obj: Name(local), .. }`
-    ///    where the name resolves to a real local in the current level
-    ///    (not an upvalue / global / read-only / vararg-virtual).
-    /// 3. `locals[reg].captured == false` — no closure has captured
-    ///    this local's slot, so no metatable-stored Lua closure can
-    ///    rebind it through the upvalue.
-    /// 4. AST-side
-    ///    [`ast::metamethod_safe_for_index_lhs`][crate::frontend::ast::metamethod_safe_for_index_lhs]
-    ///    over `(obj, exprs[0])` returns true (no UserOrUnknown RHS
-    ///    calls; obj is a bare Name).
-    ///
-    /// Called from the Index-LHS branch of `assign_stat`.
-    pub(crate) fn assign_stat_can_skip_obj_snapshot(
-        &self,
-        targets: &[ExprId],
-        exprs: &[ExprId],
-    ) -> bool {
-        if targets.len() != 1 || exprs.len() != 1 {
-            return false;
-        }
-        let (obj_eid, _key_eid) = match self.ast.expr(targets[0]) {
-            Expr::Index { obj, key } => (*obj, *key),
-            _ => return false,
-        };
-        let name_text = match self.ast.expr(obj_eid) {
-            Expr::Name(n) => &*n.text,
-            _ => return false,
-        };
-        // Resolve the name against the *current* level only — we
-        // intentionally do not chase upvalues here because the elision only
-        // covers snapshots for owner-level locals.
-        let level = self.lr();
-        let local = match level.locals.iter().find(|l| &*l.name == name_text) {
-            Some(l) => l,
-            None => return false,
-        };
-        if local.captured || local.vararg_virtual || local.konst.is_some() {
-            return false;
-        }
-        // AST-side gate (call walker + obj-is-name check).
-        ast::metamethod_safe_for_index_lhs(self.ast, obj_eid, exprs[0])
     }
 }
 
