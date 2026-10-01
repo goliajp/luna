@@ -121,3 +121,128 @@ impl Vm {
         true
     }
 }
+
+impl Vm {
+    /// Run the native on top of `running_natives`, popping it on an error.
+    /// A Rust panic in the native surfaces as a Lua error rather than
+    /// unwinding through the VM into the embedder. The VM's state may still
+    /// be inconsistent after a panic (half-pushed args, dangling GC
+    /// references), so an embedder that catches this class of error should
+    /// drop and re-create the Vm — but that beats tearing the host process
+    /// down. `AssertUnwindSafe` is sound because the caller is the dispatch
+    /// loop and any half-done state is fenced behind the `Err` returned.
+    pub(super) fn invoke_native(
+        &mut self,
+        nc: Gc<crate::runtime::NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+    ) -> Result<u32, LuaError> {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let result = match catch_unwind(AssertUnwindSafe(|| (nc.f)(self, func_slot, nargs))) {
+            Ok(r) => r,
+            Err(payload) => {
+                let msg = panic_payload_str(&payload);
+                let s = Value::Str(self.heap.intern(format!("native panic: {msg}").as_bytes()));
+                Err(LuaError(s))
+            }
+        };
+        match result {
+            Ok(n) => Ok(n),
+            Err(e) => {
+                // PUC raises with the native still on the stack; remember it
+                // for the handler and traceback of the error (see
+                // `raise_to_handler`)
+                let act = self.running_natives.pop().expect("pushed by the caller");
+                self.note_errored_native(act, e.0);
+                Err(e)
+            }
+        }
+    }
+
+    /// A plain native called from the fast loop (PUC `precallC`): what
+    /// `begin_call` does for one, without the call and return hooks, which
+    /// the fast loop runs without, and staying in the calling frame.
+    #[inline(never)]
+    pub(super) fn call_native_plain(
+        &mut self,
+        nc: Gc<crate::runtime::NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<(), LuaError> {
+        self.pending_tailcalls = 0;
+        let ccmt = std::mem::take(&mut self.pending_ccmt);
+        self.native_nresults = nresults;
+        // the caller's registers sit below `func_slot`; the native's own
+        // arguments stay rooted too (see `begin_call`)
+        self.gc_top = func_slot + nargs + 1;
+        self.running_natives.push(crate::vm::callstack::NativeAct {
+            nc,
+            func_slot,
+            nargs,
+            depth: self.frames.len() as u32,
+            ccmt,
+        });
+        let nret = self.invoke_native(nc, func_slot, nargs)?;
+        // the native may have armed a hook, whose return event it gets
+        self.finish_native_call(func_slot, nargs, nret, nresults)
+    }
+
+    /// The native on top of `running_natives` returned `nret` results at
+    /// `func_slot`: fire the return hook, pop it, adjust the results and
+    /// give the collector its chance.
+    pub(super) fn finish_native_call(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nret: u32,
+        nresults: i32,
+    ) -> Result<(), LuaError> {
+        // PUC `luaD_poscall` fires the return hook BEFORE moving
+        // results into the function's slot — at that point args
+        // sit at `[func_slot + 1, func_slot + 1 + nargs)` and
+        // results above them at `[func_slot + 1 + nargs, …)`.
+        // luna's `nat_return` has already written the results
+        // into `[func_slot, func_slot + nret)`, so we replay PUC's
+        // layout by copying the results up past the preserved
+        // args, firing the hook (with ftransfer = nargs + 1, so
+        // `getlocal(2, ftransfer..)` reads results), and then
+        // copying back for `finish_results`. db.lua :541 reads
+        // `getinfo("r").ftransfer` + `getlocal` to inspect a
+        // returning native's results this way.
+        if self.hook.ret
+            && !self.in_hook
+            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+        {
+            let res_dst = func_slot + nargs + 1;
+            let need = (res_dst + nret) as usize;
+            if self.stack.len() < need {
+                self.stack.resize(need, Value::Nil);
+            }
+            for i in (0..nret).rev() {
+                self.stack[(res_dst + i) as usize] = self.stack[(func_slot + i) as usize];
+            }
+            // widen the C-frame's argument window for getlocal
+            if let Some(act) = self.running_natives.last_mut() {
+                act.nargs = nargs + nret;
+            }
+            let hr = self.hook_return(true, nargs + 1, nret);
+            if let Some(act) = self.running_natives.last_mut() {
+                act.nargs = nargs;
+            }
+            // restore results into the slot finish_results expects
+            for i in 0..nret {
+                self.stack[(func_slot + i) as usize] = self.stack[(res_dst + i) as usize];
+            }
+            self.running_natives.pop();
+            hr?;
+        } else {
+            self.running_natives.pop();
+        }
+        self.finish_results(func_slot, nret, nresults);
+        // the native may have allocated; collect with the results as
+        // the live boundary (PUC checks GC after a call returns).
+        self.maybe_collect_garbage(self.top);
+        Ok(())
+    }
+}
