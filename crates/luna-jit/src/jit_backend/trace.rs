@@ -1,3 +1,4 @@
+// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Trace JIT data structures and lowering.
 //!
 //! Where `src/jit/mod.rs` is the *method* JIT (compiles one Proto's
