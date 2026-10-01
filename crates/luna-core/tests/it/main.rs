@@ -56,6 +56,7 @@ mod stack_window_gc;
 mod string_pattern_matching;
 mod syntax;
 mod table_builder;
+mod table_grow_lagging_prefix;
 mod table_newindex_fast_path;
 mod table_str_key_fast_path;
 mod toomanyidx_memory_cap;
