@@ -6253,10 +6253,12 @@ impl Vm {
                 stay,
                 heads,
             };
-            let out = if stay && heads[0] == crate::runtime::function::TRACE_HEADS_NONE {
-                self.run_fast::<false>(fx, inst, pc + 1)?
+            let out = if !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE {
+                self.run_fast::<true, true>(fx, inst, pc + 1)?
+            } else if trace_on {
+                self.run_fast::<false, true>(fx, inst, pc + 1)?
             } else {
-                self.run_fast::<true>(fx, inst, pc + 1)?
+                self.run_fast::<false, false>(fx, inst, pc + 1)?
             };
             let inst = match out {
                 fast::FastExit::Reload => continue,
