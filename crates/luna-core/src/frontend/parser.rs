@@ -6,6 +6,7 @@ use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
 use crate::frontend::goto_check::GotoCheck;
 use crate::frontend::lexer::{Lexed, Lexer};
+use crate::frontend::names::{Names, Sym, SymName};
 use crate::frontend::span::Span;
 use crate::frontend::token::{Near, Token, TokenInfo, near_text};
 use crate::version::LuaVersion;
@@ -19,6 +20,15 @@ const MAX_DEPTH: u32 = 200;
 
 /// PUC `MAXVARS`: active locals per function.
 const MAXVARS: u32 = 200;
+
+// the parser builds the tree with interned names (see `names`)
+type Expr = crate::frontend::ast::Expr<SymName>;
+type Stat = crate::frontend::ast::Stat<SymName>;
+type FuncBody = crate::frontend::ast::FuncBody<SymName>;
+type AttribName = crate::frontend::ast::AttribName<SymName>;
+type Vararg = crate::frontend::ast::Vararg<SymName>;
+type TableField = crate::frontend::ast::TableField<SymName>;
+type FuncName = crate::frontend::ast::FuncName<SymName>;
 
 /// `(collective attrib, declared names, initializer exprs)` of a declaration.
 type DeclList = (Option<Attrib>, Vec<AttribName>, Vec<ExprId>);
@@ -95,6 +105,8 @@ pub(crate) enum TokenSource<'s> {
         tokens: Vec<TokenInfo>,
         cursor: usize,
         src: &'s [u8],
+        /// the names of the tokens read so far
+        names: Names,
     },
 }
 
@@ -105,18 +117,25 @@ pub(crate) enum TokenSource<'s> {
 struct Cur {
     info: TokenInfo,
     char: Option<u8>,
+    /// the interned name of a `Token::Name`, whose text is left empty
+    sym: Sym,
 }
 
 impl<'s> TokenSource<'s> {
     fn next_token(&mut self) -> Result<Cur, SyntaxError> {
         match self {
             TokenSource::Lexer(l) => Ok(match l.next_lexed()? {
-                Lexed::Tok(info) => Cur { info, char: None },
+                Lexed::Tok(info) => Cur {
+                    info,
+                    char: None,
+                    sym: l.last_sym,
+                },
                 Lexed::Char(c, mut info) => {
                     info.tok = Token::At;
                     Cur {
                         info,
                         char: Some(c),
+                        sym: Sym(0),
                     }
                 }
             }),
@@ -124,6 +143,7 @@ impl<'s> TokenSource<'s> {
                 tokens,
                 cursor,
                 src,
+                names,
             } => {
                 if *cursor >= tokens.len() {
                     let line = tokens.last().map(|t| t.line).unwrap_or(1);
@@ -135,16 +155,36 @@ impl<'s> TokenSource<'s> {
                             line,
                         },
                         char: None,
+                        sym: Sym(0),
                     })
                 } else {
                     let t = tokens[*cursor].clone();
                     *cursor += 1;
+                    let sym = match &t.tok {
+                        Token::Name(text) => names.intern(text),
+                        _ => Sym(0),
+                    };
                     Ok(Cur {
                         info: t,
                         char: None,
+                        sym,
                     })
                 }
             }
+        }
+    }
+
+    fn names(&self) -> &Names {
+        match self {
+            TokenSource::Lexer(l) => l.names(),
+            TokenSource::PreExpanded { names, .. } => names,
+        }
+    }
+
+    fn take_names(&mut self) -> Names {
+        match self {
+            TokenSource::Lexer(l) => l.take_names(),
+            TokenSource::PreExpanded { names, .. } => std::mem::take(names),
         }
     }
 
@@ -177,16 +217,29 @@ impl<'s> TokenSource<'s> {
 /// transparently for MacroLua; direct callers feed expanded tokens via
 /// [`parse_tokens`].
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
-    parse_at_depth(src, version, 0).map(|p| p.chunk)
+    parse_at_depth(src, version, 0).map(Parsed::into_chunk)
 }
 
 /// A parsed chunk with what the public [`Chunk`] has no place for.
 pub(crate) struct Parsed {
-    pub(crate) chunk: Chunk,
+    pub(crate) chunk: Chunk<SymName>,
+    /// the text of the chunk's names
+    pub(crate) names: Names,
     /// the line of the closing `end` of each `while` / `for` statement, by
     /// `StatId` (0 for other statements): PUC attributes the code it emits
     /// after reading that `end` to its line
     pub(crate) end_lines: Vec<u32>,
+}
+
+impl Parsed {
+    /// The public tree, every name with its own text.
+    pub(crate) fn into_chunk(self) -> Chunk {
+        let names = &self.names;
+        self.chunk.map_names(&mut |n: &SymName| Name {
+            text: names.text(n.sym).into(),
+            line: n.line,
+        })
+    }
 }
 
 /// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
@@ -198,7 +251,7 @@ pub(crate) fn parse_at_depth(
     version: LuaVersion,
     c_depth: u32,
 ) -> Result<Parsed, SyntaxError> {
-    let lex = Lexer::new(src, version);
+    let lex = Lexer::interning(src, version);
     parse_from_source(TokenSource::Lexer(lex), version, c_depth, src.len())
 }
 
@@ -211,7 +264,7 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
-    parse_tokens_at_depth(tokens, src, version, 0).map(|p| p.chunk)
+    parse_tokens_at_depth(tokens, src, version, 0).map(Parsed::into_chunk)
 }
 
 /// [`parse_tokens`] at a C depth (see [`parse_at_depth`]).
@@ -226,6 +279,7 @@ pub(crate) fn parse_tokens_at_depth(
             tokens,
             cursor: 0,
             src,
+            names: Names::with_capacity(src.len()),
         },
         version,
         c_depth,
@@ -247,6 +301,7 @@ fn parse_from_source<'s>(
         lex,
         tok: cur.info,
         tok_char: cur.char,
+        tok_sym: cur.sym,
         peeked: None,
         prev_line: 1,
         exprs: Vec::with_capacity(n_exprs),
@@ -282,6 +337,7 @@ fn parse_from_source<'s>(
     p.close_function()?;
     let end_line = p.prev_line;
     Ok(Parsed {
+        names: p.lex.take_names(),
         chunk: Chunk {
             exprs: p.exprs,
             stats: p.stats,
@@ -298,6 +354,8 @@ struct Parser<'s> {
     tok: TokenInfo,
     /// The byte behind a placeholder `tok` (see [`Cur`]).
     tok_char: Option<u8>,
+    /// the interned name when `tok` is a `Token::Name`
+    tok_sym: Sym,
     peeked: Option<Cur>,
     /// Per open function (main chunk first): what `...` and `break` are
     /// checked against while parsing, as PUC does.
@@ -348,8 +406,8 @@ struct FnFlow {
 
 #[derive(Default)]
 struct FnUvSlot {
-    locals: Vec<Box<str>>,
-    upvalues: std::collections::HashSet<Box<str>>,
+    locals: Vec<Sym>,
+    upvalues: std::collections::HashSet<Sym>,
     line_defined: u32,
 }
 
@@ -364,6 +422,7 @@ impl<'s> Parser<'s> {
         };
         self.prev_line = self.tok.line;
         self.tok_char = next.char;
+        self.tok_sym = next.sym;
         Ok(std::mem::replace(&mut self.tok, next.info))
     }
 
@@ -453,18 +512,31 @@ impl<'s> Parser<'s> {
         Ok(())
     }
 
-    fn expect_name(&mut self) -> Result<Name, SyntaxError> {
+    fn expect_name(&mut self) -> Result<SymName, SyntaxError> {
         if !matches!(self.tok.tok, Token::Name(_)) {
             return Err(self.error_expected("<name>"));
         }
+        let sym = self.tok_sym;
         let info = self.advance()?;
-        let Token::Name(text) = info.tok else {
-            unreachable!()
-        };
-        Ok(Name {
-            text,
+        Ok(SymName {
+            sym,
             line: info.line,
         })
+    }
+
+    /// The text of an interned name.
+    fn text(&self, s: Sym) -> &str {
+        self.lex.names().text(s)
+    }
+
+    /// Declare locals to the goto checker.
+    fn declare(&mut self, syms: impl IntoIterator<Item = Sym>) {
+        let Parser { gotos, lex, .. } = self;
+        if let Some(g) = gotos {
+            for s in syms {
+                g.declare(lex.names().text(s));
+            }
+        }
     }
 
     fn enter(&mut self) -> Result<(), SyntaxError> {
@@ -618,7 +690,8 @@ impl<'s> Parser<'s> {
         // function / attribute '<'). Otherwise it is an ordinary identifier
         // (e.g. `global = 1`, `global()`, `return global`).
         if self.version.has_global_decl()
-            && matches!(&self.tok.tok, Token::Name(n) if &**n == "global")
+            && matches!(&self.tok.tok, Token::Name(_))
+            && self.text(self.tok_sym) == "global"
             && matches!(
                 self.peek()?,
                 Token::Name(_) | Token::Star | Token::Function | Token::Lt
@@ -652,7 +725,7 @@ impl<'s> Parser<'s> {
             Token::DColon => {
                 self.advance()?;
                 let name = self.expect_name()?;
-                let text = name.text.clone();
+                let text = self.text(name.sym).to_owned();
                 self.goto_step(|g| g.label_before_close(&text, start_line))?;
                 self.expect(Token::DColon, "::")?;
                 Some(self.push_stat(Stat::Label(name)))
@@ -673,7 +746,7 @@ impl<'s> Parser<'s> {
                     line = self.lex.line();
                 }
                 let name = self.expect_name()?;
-                let text = name.text.clone();
+                let text = self.text(name.sym).to_owned();
                 self.goto_step(|g| g.goto_stat(&text, line))?;
                 Some(self.push_stat(Stat::Goto(name)))
             }
@@ -716,16 +789,14 @@ impl<'s> Parser<'s> {
     /// A loop body with the loop's own variables (`vars`) in scope: PUC's
     /// loop block, which places the "break" label, around a block for the
     /// declared variables.
-    fn loop_block(&mut self, vars: &[Name]) -> Result<Block, SyntaxError> {
+    fn loop_block(&mut self, vars: &[SymName]) -> Result<Block, SyntaxError> {
         self.funcs.last_mut().expect("func ctx").loops += 1;
         self.goto_step(|g| {
             g.enter_block(true);
             g.enter_block(false);
-            for v in vars {
-                g.declare(&v.text);
-            }
             Ok(())
         })?;
+        self.declare(vars.iter().map(|v| v.sym));
         let body = self.block()?;
         self.goto_step(|g| {
             g.leave_block()?;
@@ -820,7 +891,7 @@ impl<'s> Parser<'s> {
                     None
                 };
                 self.expect(Token::Do, "do")?;
-                self.add_local_51(&first.text);
+                self.add_local_51(first.sym);
                 let body = self.loop_block(std::slice::from_ref(&first))?;
                 self.expect_match(Token::End, "end", "for", line)?;
                 Ok(self.push_ended_stat(Stat::NumericFor {
@@ -841,7 +912,7 @@ impl<'s> Parser<'s> {
                 let exprs = self.exprlist()?;
                 self.expect(Token::Do, "do")?;
                 for v in &vars {
-                    self.add_local_51(&v.text);
+                    self.add_local_51(v.sym);
                 }
                 let body = self.loop_block(&vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
@@ -882,7 +953,7 @@ impl<'s> Parser<'s> {
         }
         self.advance()?;
         let name = self.expect_name()?;
-        let attrib = match &*name.text {
+        let attrib = match self.text(name.sym) {
             "const" => Attrib::Const,
             "close" => Attrib::Close,
             other => {
@@ -931,25 +1002,17 @@ impl<'s> Parser<'s> {
             // the body is parsed (PUC `localfunc`'s pre-declare); count it.
             self.new_local()?;
             self.activate_locals()?;
-            self.add_local_51(&name.text);
-            let text = name.text.clone();
-            self.goto_step(|g| {
-                g.declare(&text);
-                Ok(())
-            })?;
+            self.add_local_51(name.sym);
+            self.declare([name.sym]);
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::LocalFunction { name, body }));
         }
         let (collective, names, exprs) = self.attnamelist()?;
         self.activate_locals()?;
-        self.goto_step(|g| {
-            for an in &names {
-                g.declare(&an.name.text);
-            }
-            Ok(())
-        })?;
-        for an in &names {
-            self.add_local_51(&an.name.text);
+        let syms: Vec<Sym> = names.iter().map(|an| an.name.sym).collect();
+        self.declare(syms.iter().copied());
+        for s in syms {
+            self.add_local_51(s);
         }
         Ok(self.push_stat(Stat::Local {
             collective,
@@ -963,11 +1026,7 @@ impl<'s> Parser<'s> {
         if self.accept(Token::Function)? {
             let line = self.prev_line;
             let name = self.expect_name()?;
-            let text = name.text.clone();
-            self.goto_step(|g| {
-                g.declare(&text);
-                Ok(())
-            })?;
+            self.declare([name.sym]);
             let body = self.func_body(line)?;
             return Ok(self.push_stat(Stat::GlobalFunction { name, body }));
         }
@@ -995,12 +1054,8 @@ impl<'s> Parser<'s> {
             Vec::new()
         };
         // the declared names come into scope after their initializers
-        self.goto_step(|g| {
-            for an in &names {
-                g.declare(&an.name.text);
-            }
-            Ok(())
-        })?;
+        let syms: Vec<Sym> = names.iter().map(|an| an.name.sym).collect();
+        self.declare(syms);
         Ok(self.push_stat(Stat::Global {
             collective: leading,
             names,
@@ -1174,7 +1229,7 @@ impl<'s> Parser<'s> {
         match &self.tok.tok {
             Token::Name(_) => {
                 let name = self.expect_name()?;
-                self.ident_lookup_51(&name.text)?;
+                self.ident_lookup_51(name.sym)?;
                 Ok(self.push_expr(Expr::Name(name)))
             }
             Token::LParen => {
@@ -1210,7 +1265,8 @@ impl<'s> Parser<'s> {
                 Token::Dot => {
                     self.advance()?;
                     let name = self.expect_name()?;
-                    let key = self.push_expr(Expr::Str(name.text.into_boxed_bytes().into_vec()));
+                    let key = self.text(name.sym).as_bytes().to_vec();
+                    let key = self.push_expr(Expr::Str(key));
                     e = self.push_expr(Expr::Index { obj: e, key });
                 }
                 Token::LBracket => {
@@ -1335,14 +1391,14 @@ impl<'s> Parser<'s> {
                         };
                         if let Vararg::Named(ref n) = vararg {
                             self.new_local()?;
-                            self.add_local_51(&n.text);
+                            self.add_local_51(n.sym);
                         }
                         break;
                     }
                     Token::Name(_) => {
                         let p = self.expect_name()?;
                         self.new_local()?;
-                        self.add_local_51(&p.text);
+                        self.add_local_51(p.sym);
                         params.push(p);
                     }
                     _ => return Err(self.error("<name> or '...' expected")),
@@ -1355,11 +1411,10 @@ impl<'s> Parser<'s> {
         self.activate_locals()?;
         self.goto_step(|g| {
             g.enter_function();
-            for p in &params {
-                g.declare(&p.text);
-            }
             Ok(())
         })?;
+        let syms: Vec<Sym> = params.iter().map(|p| p.sym).collect();
+        self.declare(syms);
         self.expect(Token::RParen, ")")?;
         self.funcs.push(FnFlow {
             vararg: !matches!(vararg, Vararg::None),
@@ -1384,13 +1439,13 @@ impl<'s> Parser<'s> {
         !self.upval_chain_51.is_empty()
     }
 
-    fn add_local_51(&mut self, name: &str) {
+    fn add_local_51(&mut self, name: Sym) {
         if self.track_uv_51() {
             self.upval_chain_51
                 .last_mut()
                 .expect("fn ctx")
                 .locals
-                .push(name.into());
+                .push(name);
         }
     }
 
@@ -1432,7 +1487,7 @@ impl<'s> Parser<'s> {
     /// in every intermediate function between the referencing site and the
     /// owning scope. Returns PUC 5.1's "has more than 60 upvalues" error the
     /// moment a link's upvalue set crosses 60. No-op for non-5.1 dialects.
-    fn ident_lookup_51(&mut self, name: &str) -> Result<(), SyntaxError> {
+    fn ident_lookup_51(&mut self, name: Sym) -> Result<(), SyntaxError> {
         if !self.track_uv_51() {
             return Ok(());
         }
@@ -1440,11 +1495,7 @@ impl<'s> Parser<'s> {
         let n = self.upval_chain_51.len();
         let mut owner: Option<usize> = None;
         for k in (0..n).rev() {
-            if self.upval_chain_51[k]
-                .locals
-                .iter()
-                .any(|s| s.as_ref() == name)
-            {
+            if self.upval_chain_51[k].locals.contains(&name) {
                 owner = Some(k);
                 break;
             }
@@ -1456,7 +1507,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         for k in (owner_idx + 1)..n {
-            let inserted = self.upval_chain_51[k].upvalues.insert(name.into());
+            let inserted = self.upval_chain_51[k].upvalues.insert(name);
             if inserted && self.upval_chain_51[k].upvalues.len() > MAXUPVAL {
                 let line_defined = self.upval_chain_51[k].line_defined;
                 let where_ = if k == 0 {

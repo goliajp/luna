@@ -60,7 +60,7 @@ impl RhsCallScan {
 ///
 /// Left small intentionally; `select` (top-level builtin), `tostring`,
 /// `tonumber`, etc. could be added via a flat names list.
-fn is_known_pure_stdlib_root(text: &str) -> bool {
+pub(crate) fn is_known_pure_stdlib_root(text: &str) -> bool {
     matches!(text, "math" | "string" | "table")
 }
 
@@ -75,6 +75,16 @@ fn is_known_pure_stdlib_root(text: &str) -> bool {
 #[doc(hidden)]
 #[allow(dead_code)]
 pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
+    walk_with(chunk, eid, &|n: &Name| is_known_pure_stdlib_root(&n.text))
+}
+
+/// [`walk_rhs_for_calls`] for any representation of names; `pure_root`
+/// tells a known pure stdlib module.
+pub(crate) fn walk_with<N>(
+    chunk: &Chunk<N>,
+    eid: ExprId,
+    pure_root: &dyn Fn(&N) -> bool,
+) -> RhsCallScan {
     use RhsCallScan::*;
     match chunk.expr(eid) {
         // Leaves — no calls.
@@ -96,20 +106,22 @@ pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
         Expr::Function(_) => None,
 
         Expr::Index { obj, key } => {
-            walk_rhs_for_calls(chunk, *obj).join(walk_rhs_for_calls(chunk, *key))
+            walk_with(chunk, *obj, pure_root).join(walk_with(chunk, *key, pure_root))
         }
-        Expr::Paren(inner) => walk_rhs_for_calls(chunk, *inner),
-        Expr::UnOp { operand, .. } => walk_rhs_for_calls(chunk, *operand),
+        Expr::Paren(inner) => walk_with(chunk, *inner, pure_root),
+        Expr::UnOp { operand, .. } => walk_with(chunk, *operand, pure_root),
         Expr::BinOp { lhs, rhs, .. } => {
-            walk_rhs_for_calls(chunk, *lhs).join(walk_rhs_for_calls(chunk, *rhs))
+            walk_with(chunk, *lhs, pure_root).join(walk_with(chunk, *rhs, pure_root))
         }
         Expr::Table { fields, .. } => {
             let mut acc = None;
             for f in fields {
                 let part = match f {
-                    TableField::Item(e) | TableField::Named(_, e) => walk_rhs_for_calls(chunk, *e),
+                    TableField::Item(e) | TableField::Named(_, e) => {
+                        walk_with(chunk, *e, pure_root)
+                    }
                     TableField::Keyed(k, v) => {
-                        walk_rhs_for_calls(chunk, *k).join(walk_rhs_for_calls(chunk, *v))
+                        walk_with(chunk, *k, pure_root).join(walk_with(chunk, *v, pure_root))
                     }
                 };
                 acc = acc.join(part);
@@ -121,10 +133,10 @@ pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
         }
 
         Expr::Call { func, args, .. } => {
-            let here = classify_callee(chunk, *func);
+            let here = classify_callee(chunk, *func, pure_root);
             let mut acc = here;
             for &a in args {
-                acc = acc.join(walk_rhs_for_calls(chunk, a));
+                acc = acc.join(walk_with(chunk, a, pure_root));
                 if acc == UserOrUnknown {
                     return acc;
                 }
@@ -140,9 +152,9 @@ pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
             let mut acc = UserOrUnknown;
             // Still walk for diagnostics / future relaxation, but the result
             // can only go up from UserOrUnknown.
-            acc = acc.join(walk_rhs_for_calls(chunk, *obj));
+            acc = acc.join(walk_with(chunk, *obj, pure_root));
             for &a in args {
-                acc = acc.join(walk_rhs_for_calls(chunk, a));
+                acc = acc.join(walk_with(chunk, a, pure_root));
             }
             acc
         }
@@ -151,13 +163,17 @@ pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
 
 /// Classifies the callee of a `Call` node in isolation (does NOT recurse
 /// into the args, which is the caller's job).
-fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
+fn classify_callee<N>(
+    chunk: &Chunk<N>,
+    callee: ExprId,
+    pure_root: &dyn Fn(&N) -> bool,
+) -> RhsCallScan {
     match chunk.expr(callee) {
         // `math.min(...)` shape: callee is Index{ Name(known_root), Str(field) }.
         Expr::Index { obj, key } => {
             let root_ok = matches!(
                 chunk.expr(*obj),
-                Expr::Name(n) if is_known_pure_stdlib_root(&n.text)
+                Expr::Name(n) if pure_root(n)
             );
             let key_is_str = matches!(chunk.expr(*key), Expr::Str(_));
             if root_ok && key_is_str {
@@ -209,8 +225,20 @@ pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: Ex
 /// pure builtins.
 #[doc(hidden)]
 pub fn rhs_calls_nothing_unknown(chunk: &Chunk, rhs_eid: ExprId) -> bool {
+    rhs_calls_nothing_unknown_with(chunk, rhs_eid, &|n: &Name| {
+        is_known_pure_stdlib_root(&n.text)
+    })
+}
+
+/// [`rhs_calls_nothing_unknown`] for any representation of names (see
+/// [`walk_with`]).
+pub(crate) fn rhs_calls_nothing_unknown_with<N>(
+    chunk: &Chunk<N>,
+    rhs_eid: ExprId,
+    pure_root: &dyn Fn(&N) -> bool,
+) -> bool {
     matches!(
-        walk_rhs_for_calls(chunk, rhs_eid),
+        walk_with(chunk, rhs_eid, pure_root),
         RhsCallScan::None | RhsCallScan::OnlyKnownPure
     )
 }

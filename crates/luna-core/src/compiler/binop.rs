@@ -105,7 +105,7 @@ impl Compiler<'_> {
         let sub_zero = op == BinOp::Sub && self.version >= LuaVersion::Lua54 && {
             let ast = self.ast;
             matches!(
-                ct_value(ast, rhs, &mut |name| self.ct_const_named(name)),
+                ct_value(ast, rhs, &mut |name| self.ct_const_named(self.nm(name))),
                 Some(CtConst::Int(0))
             )
         };

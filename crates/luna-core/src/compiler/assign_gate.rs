@@ -41,7 +41,7 @@ impl Compiler<'_> {
             _ => return false,
         };
         let name_text = match self.ast.expr(obj_eid) {
-            Expr::Name(n) => &*n.text,
+            Expr::Name(n) => self.nm(n),
             _ => return false,
         };
         // Resolve the name against the *current* level only — we
@@ -56,7 +56,7 @@ impl Compiler<'_> {
             return false;
         }
         // AST-side gate (call walker + obj-is-name check).
-        ast::metamethod_safe_for_index_lhs(self.ast, obj_eid, exprs[0])
+        self.rhs_calls_nothing_unknown(exprs[0])
     }
 
     /// The key of a single `t[k] = e` can stay in its local's register (as
@@ -77,12 +77,21 @@ impl Compiler<'_> {
         let Expr::Name(n) = self.ast.expr(*key) else {
             return false;
         };
-        let Some(local) = self.lr().locals.iter().rev().find(|l| l.name == &*n.text) else {
+        let name = self.nm(n);
+        let Some(local) = self.lr().locals.iter().rev().find(|l| l.name == name) else {
             return false;
         };
         !local.captured
             && !local.vararg_virtual
             && local.konst.is_none()
-            && ast::rhs_calls_nothing_unknown(self.ast, exprs[0])
+            && self.rhs_calls_nothing_unknown(exprs[0])
+    }
+
+    /// [`ast::rhs_calls_nothing_unknown`] on the interned tree.
+    fn rhs_calls_nothing_unknown(&self, rhs: ExprId) -> bool {
+        let names = self.names;
+        ast::rhs_calls_nothing_unknown_with(self.ast, rhs, &|n: &SymName| {
+            ast::is_known_pure_stdlib_root(names.text(n.sym))
+        })
     }
 }
