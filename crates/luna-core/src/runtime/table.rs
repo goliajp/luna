@@ -368,6 +368,33 @@ impl Table {
         self.note_atag_change(idx, old, t);
     }
 
+    /// [`Self::aset`] with the value read in place, as its tag byte and its
+    /// payload word (see [`Value::copy_raw`]).
+    ///
+    /// # Safety
+    /// `idx < asize`, and `pv` points at an initialised `Value`.
+    #[inline(always)]
+    pub(crate) unsafe fn aset_at(&mut self, idx: usize, pv: *const Value) {
+        let p = pv as *const u8;
+        // SAFETY: the caller's contract; a `Bool`'s byte and, from `Int`
+        // on, the payload word are initialised (see `Value::unpack`)
+        let (t, b) = unsafe {
+            let t = *p;
+            if t <= crate::runtime::value::tag::BOOL {
+                (t + (t != 0 && *p.add(8) != 0) as u8, RawVal::NIL)
+            } else {
+                (t + 1, *(p.add(8) as *const RawVal))
+            }
+        };
+        // SAFETY: as for `aset`
+        let old = unsafe { *self.atags().get_unchecked(idx) };
+        unsafe {
+            *self.atags_mut().get_unchecked_mut(idx) = t;
+            *self.avals_mut().get_unchecked_mut(idx) = b;
+        }
+        self.note_atag_change(idx, old, t);
+    }
+
     /// Keep `acount` / `aprefix` in step with one array-slot tag change.
     #[inline]
     fn note_atag_change(&mut self, idx: usize, old: u8, new: u8) {

@@ -43,7 +43,7 @@ impl Vm {
                 match next.str_slot_by_ptr(key) {
                     Some(slot) if raw_tag(slot) != tag::NIL || mt.is_none() => {
                         // `dst` is a register of the running frame
-                        std::ptr::copy_nonoverlapping(slot, out, 1);
+                        Value::copy_raw(out, slot);
                         return Ok(());
                     }
                     Some(_) => {}

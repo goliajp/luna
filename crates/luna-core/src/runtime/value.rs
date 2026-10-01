@@ -387,6 +387,28 @@ impl Value {
         }
     }
 
+    /// Copy the value at `src` to `dst` as its tag byte and its payload
+    /// word (PUC `setobj`), never as one 16-byte access. A 16-byte load
+    /// cannot take its data from the byte-and-word stores that write a
+    /// value, and waits for them to reach the cache (8 cycles on a
+    /// Cortex-A76); a whole-value copy is compiled to exactly that load.
+    ///
+    /// # Safety
+    /// `src` points at an initialised `Value` and `dst` is writable; they
+    /// may be the same.
+    #[inline(always)]
+    pub(crate) unsafe fn copy_raw(dst: *mut Value, src: *const Value) {
+        let (s, d) = (src as *const u8, dst as *mut u8);
+        // SAFETY: the caller's contract; the tag is the first byte and the
+        // payload (padding for `Nil`, a byte for `Bool`) the second word
+        unsafe {
+            let t = *s;
+            let w = *(s.add(8) as *const std::mem::MaybeUninit<u64>);
+            *d = t;
+            *(d.add(8) as *mut std::mem::MaybeUninit<u64>) = w;
+        }
+    }
+
     /// [`Self::pack`] written straight to `dst`, as a tag byte and a
     /// payload word.
     ///
