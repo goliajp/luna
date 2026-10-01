@@ -103,13 +103,6 @@ impl Vm {
                 unsafe { *regs.add(($i) as usize) = $v }
             };
         }
-        macro_rules! konst {
-            ($i:expr) => {
-                // SAFETY: the compiler and the bytecode verifier keep
-                // constant indices below the proto's constant count
-                unsafe { *kptr.add(($i) as usize) }
-            };
-        }
         macro_rules! next {
             () => {{
                 // nothing in a fast arm sets `trap`, so `stay` holds for the
@@ -129,6 +122,30 @@ impl Vm {
                     unsafe { (*fr).pc = npc };
                 }
                 continue;
+            }};
+        }
+        // The end of a comparison or a test: the `Jmp` after it runs when
+        // the outcome equals `k`, and is skipped otherwise. Without anything
+        // to watch the jump is taken here (PUC `donextjump`), which saves its
+        // dispatch and makes the two outcomes different code, so that the
+        // compiler branches on the outcome instead of computing the next pc
+        // from it. A back-edge is left to the `Jmp` arm when the trace JIT
+        // counts back-edges.
+        macro_rules! cond_jump {
+            ($taken:expr) => {{
+                if !$taken {
+                    npc += 1;
+                } else if !WATCH {
+                    // SAFETY: the compiler and the bytecode verifier put a
+                    // `Jmp` after every comparison and test
+                    let j = unsafe { *code.add(npc as usize) };
+                    debug_assert!(j.op() == Op::Jmp);
+                    let off = j.sj();
+                    if !(trace_on && off < 0) {
+                        npc = (npc as i64 + 1 + off as i64) as u32;
+                    }
+                }
+                next!()
             }};
         }
         // Without anything to watch the frame's pc is stored only before
@@ -296,9 +313,10 @@ impl Vm {
                         next!()
                     }
                     save!();
-                    // SAFETY: as above
-                    let (t, key) = unsafe { (*pt, *pk) };
-                    self.index_miss(t, key, base!() + inst.a())?;
+                    let dst = base!() + inst.a();
+                    // SAFETY: as above; the pointers are worked out again
+                    // here so that none of them stays live across the probe
+                    unsafe { self.index_miss_at(regs.wrapping_add(inst.b() as usize), $pk, dst) }?;
                     resume_same!()
                 }};
             }
@@ -307,16 +325,14 @@ impl Vm {
                 ($pk:expr, $probe:ident) => {{
                     let pt = regs.wrapping_add(inst.a() as usize);
                     let pk: *const Value = $pk;
-                    let v = reg!(inst.c());
-                    // SAFETY: a register and a register or constant of the
-                    // running frame
-                    if unsafe { self.$probe(pt, pk, v) } {
+                    let pv = regs.wrapping_add(inst.c() as usize);
+                    // SAFETY: registers and a constant of the running frame;
+                    // the value is read where it is (see `Value::copy_raw`)
+                    if unsafe { self.$probe(pt, pk, pv) } {
                         next!()
                     }
                     save!();
-                    // SAFETY: as above
-                    let (t, key) = unsafe { (*pt, *pk) };
-                    self.newindex_miss(t, key, v)?;
+                    self.newindex_op_miss(inst, fr)?;
                     resume_same!()
                 }};
             }
@@ -348,10 +364,7 @@ impl Vm {
                             resume!()
                         }
                     };
-                    if res != inst.k() {
-                        npc += 1;
-                    }
-                    next!()
+                    cond_jump!(res == inst.k())
                 }};
             }
             // `R[A] op sB` (PUC `op_orderI`); `$swap`: the immediate is the
@@ -386,10 +399,7 @@ impl Vm {
                             resume!()
                         }
                     };
-                    if res != inst.k() {
-                        npc += 1;
-                    }
-                    next!()
+                    cond_jump!(res == inst.k())
                 }};
             }
             loop {
@@ -397,8 +407,13 @@ impl Vm {
                 let pc = npc - 1;
                 match inst.op() {
                     Op::Move => {
-                        let v = reg!(inst.b());
-                        set_reg!(inst.a(), v);
+                        // SAFETY: registers of the running frame
+                        unsafe {
+                            Value::copy_raw(
+                                regs.add(inst.a() as usize),
+                                regs.add(inst.b() as usize),
+                            )
+                        };
                         next!()
                     }
                     Op::LoadI => {
@@ -410,8 +425,14 @@ impl Vm {
                         next!()
                     }
                     Op::LoadK => {
-                        let v = konst!(inst.bx());
-                        set_reg!(inst.a(), v);
+                        // SAFETY: a register and a constant of the running
+                        // frame (see `konst!`)
+                        unsafe {
+                            Value::copy_raw(
+                                regs.add(inst.a() as usize),
+                                kptr.add(inst.bx() as usize),
+                            )
+                        };
                         next!()
                     }
                     Op::LoadFalse => {
@@ -456,9 +477,8 @@ impl Vm {
                         {
                             next!()
                         }
-                        let key = konst!(inst.c());
                         save!();
-                        self.index_miss(t, key, base!() + inst.a())?;
+                        self.index_op_miss(inst, regs, kptr, fr)?;
                         resume_same!()
                     }
                     Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize), index_raw_at),
@@ -468,28 +488,24 @@ impl Vm {
                     Op::GetI => {
                         let pt = regs.wrapping_add(inst.b() as usize);
                         let key = Value::Int(inst.c() as i64);
-                        let dst = base!() + inst.a();
                         // SAFETY: registers of the running frame
                         if unsafe { Vm::index_raw_at(pt, &key, regs.add(inst.a() as usize)) } {
                             next!()
                         }
-                        // SAFETY: as above
-                        let t = unsafe { *pt };
                         save!();
-                        self.index_miss(t, key, dst)?;
+                        self.index_op_miss(inst, regs, kptr, fr)?;
                         resume_same!()
                     }
                     Op::SetTabUp => {
                         let t = self.upval_get(cl!(), inst.a());
                         let pk = kptr.wrapping_add(inst.b() as usize);
-                        let v = reg!(inst.c());
-                        // SAFETY: a constant of the running proto
-                        if unsafe { self.newindex_raw_key_at(t, pk, v) } {
+                        let pv = regs.wrapping_add(inst.c() as usize);
+                        // SAFETY: a constant and a register of the running frame
+                        if unsafe { self.newindex_raw_key_at(t, pk, pv) } {
                             next!()
                         }
-                        let key = konst!(inst.b());
                         save!();
-                        self.newindex_miss(t, key, v)?;
+                        self.newindex_op_miss(inst, fr)?;
                         resume_same!()
                     }
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize), newindex_raw_at),
@@ -497,21 +513,22 @@ impl Vm {
                         set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_kstr_at)
                     }
                     Op::SetI => {
-                        let t = reg!(inst.a());
+                        let pt = regs.wrapping_add(inst.a() as usize);
                         let key = Value::Int(inst.b() as i64);
-                        let v = reg!(inst.c());
-                        if self.newindex_raw(t, key, v) {
+                        let pv = regs.wrapping_add(inst.c() as usize);
+                        // SAFETY: registers of the running frame
+                        if unsafe { self.newindex_raw_at(pt, &key, pv) } {
                             next!()
                         }
                         save!();
-                        self.newindex_miss(t, key, v)?;
+                        self.newindex_op_miss(inst, fr)?;
                         resume_same!()
                     }
                     Op::SelfOp => {
                         let pb = regs.wrapping_add(inst.b() as usize);
-                        // SAFETY: a register of the running frame
-                        let o = unsafe { *pb };
-                        set_reg!(inst.a() + 1, o);
+                        let po = regs.wrapping_add(inst.a() as usize + 1);
+                        // SAFETY: registers of the running frame
+                        unsafe { Value::copy_raw(po, pb) };
                         // PUC OP_SELF's C is a constant index when the k-flag is
                         // set; otherwise it points to a register that holds the
                         // (constant-loaded) key. luna's compiler falls back to the
@@ -525,15 +542,22 @@ impl Vm {
                             regs.wrapping_add(inst.c() as usize)
                         };
                         // SAFETY: a register or constant of the running frame;
-                        // the object is read from its copy, `R[A]` may be `R[C]`
-                        if unsafe { Vm::index_raw_kstr_key_at(o, pk, regs.add(inst.a() as usize)) }
-                        {
+                        // the object is read from its copy, `R[A]` may be `R[B]`
+                        // or `R[C]`, and is written last
+                        if unsafe { Vm::index_raw_kstr_at(po, pk, regs.add(inst.a() as usize)) } {
                             next!()
                         }
-                        // SAFETY: as above
-                        let key = unsafe { *pk };
                         save!();
-                        self.index_miss(o, key, base!() + inst.a())?;
+                        let dst = base!() + inst.a();
+                        // SAFETY: as above, worked out again (see `get_arm!`)
+                        unsafe {
+                            let pk = if inst.k() {
+                                kptr.wrapping_add(inst.c() as usize)
+                            } else {
+                                regs.wrapping_add(inst.c() as usize)
+                            };
+                            self.index_miss_at(regs.wrapping_add(inst.a() as usize + 1), pk, dst)
+                        }?;
                         resume_same!()
                     }
                     Op::Add => {
@@ -752,10 +776,7 @@ impl Vm {
                             self.op_compare(step, l, r, inst.k())?;
                             resume!()
                         };
-                        if eq != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        cond_jump!(eq == inst.k())
                     }
                     // a constant is never a table or a userdata: no `__eq`
                     Op::EqK => {
@@ -771,10 +792,7 @@ impl Vm {
                                 (*pl).raw_eq(*pk)
                             }
                         };
-                        if eq != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        cond_jump!(eq == inst.k())
                     }
                     Op::Lt => order_arm!(<, false),
                     Op::Le => order_arm!(<=, true),
@@ -790,10 +808,7 @@ impl Vm {
                                 _ => false,
                             }
                         };
-                        if eq != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        cond_jump!(eq == inst.k())
                     }
                     Op::LtI => order_imm_arm!(<, false, false),
                     Op::LeI => order_imm_arm!(<=, false, true),
@@ -802,22 +817,18 @@ impl Vm {
                     Op::Test => {
                         // the JMP that follows runs when the condition equals k
                         // SAFETY: a register of the running frame
-                        if unsafe { raw_truthy(regs.add(inst.a() as usize)) } != inst.k() {
-                            npc += 1;
-                        }
-                        next!()
+                        let t = unsafe { raw_truthy(regs.add(inst.a() as usize)) };
+                        cond_jump!(t == inst.k())
                     }
                     Op::TestSet => {
                         let pb = regs.wrapping_add(inst.b() as usize);
                         // SAFETY: a register of the running frame
-                        if unsafe { raw_truthy(pb) } == inst.k() {
+                        let t = unsafe { raw_truthy(pb) } == inst.k();
+                        if t {
                             // SAFETY: as above
-                            let v = unsafe { *pb };
-                            set_reg!(inst.a(), v);
-                        } else {
-                            npc += 1;
+                            unsafe { Value::copy_raw(regs.add(inst.a() as usize), pb) };
                         }
-                        next!()
+                        cond_jump!(t)
                     }
                     Op::ForLoop => {
                         let ra = regs.wrapping_add(inst.a() as usize);
@@ -902,8 +913,9 @@ impl Vm {
                     }
                     Op::TForLoop => {
                         let a = inst.a();
-                        let ctrl = reg!(a + 4);
-                        if !ctrl.is_nil() {
+                        let pc4 = regs.wrapping_add(a as usize + 4);
+                        // SAFETY: the loop's registers are in the frame
+                        if unsafe { raw_tag(pc4) } != tag::NIL {
                             // the generic-for's back-edge, counted like a
                             // numeric one; an iterator that returned nothing
                             // takes no back-edge
@@ -922,7 +934,8 @@ impl Vm {
                                     self.trace_start_at_loop(cl!(), base!(), target, Some(a));
                                 }
                             }
-                            set_reg!(a + 2, ctrl);
+                            // SAFETY: as above
+                            unsafe { Value::copy_raw(regs.add(a as usize + 2), pc4) };
                             npc = npc.wrapping_sub(inst.bx());
                             // a recording that just started must see the next
                             // instruction from the loop head
@@ -1018,12 +1031,12 @@ impl Vm {
                     // does the rest
                     Op::Return0 => {
                         let base = base!();
-                        let done = self.return_fast(base, base, 0, entry_depth);
+                        let done = self.return_fast::<WATCH>(base, base, 0, entry_depth);
                         returned!(done)
                     }
                     Op::Return1 => {
                         let base = base!();
-                        let done = self.return_fast(base, base + inst.a(), 1, entry_depth);
+                        let done = self.return_fast::<WATCH>(base, base + inst.a(), 1, entry_depth);
                         returned!(done)
                     }
                     // they stay in this frame: run out of line, then go on
@@ -1054,33 +1067,6 @@ impl Vm {
                 }
                 // a fast arm's slow path
                 resume!()
-            }
-        }
-    }
-
-    /// `trap` is set after a call or return: when that is only because a
-    /// metamethod call pushed its continuation, or a metamethod returned to
-    /// one, finish what the loop head would and report whether a Lua frame
-    /// with nothing to watch is now on top. Anything else (a hook, a budget,
-    /// a memory cap, another kind of continuation) is left to the loop head.
-    #[inline(never)]
-    fn settle_frames(&mut self, entry_depth: usize) -> Result<bool, LuaError> {
-        if self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed() {
-            return Ok(false);
-        }
-        loop {
-            match self.frames.last() {
-                Some(CallFrame::Lua(_)) => {
-                    self.trap = false;
-                    return Ok(true);
-                }
-                Some(&CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Meta(_)) => {
-                    // a metamethod's result completes the instruction; this
-                    // kind never hands results out of the activation
-                    let out = self.finish_cont(nc, entry_depth)?;
-                    debug_assert!(out.is_none());
-                }
-                _ => return Ok(false),
             }
         }
     }

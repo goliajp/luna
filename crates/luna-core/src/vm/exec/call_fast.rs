@@ -89,8 +89,10 @@ impl Vm {
     /// metamethod's continuation inside this activation, the return is the
     /// pop, the move of the (at most one) result and the result count that
     /// `complete_return` would do. `false`, having done nothing, otherwise.
+    /// Without `WATCH` no hook is armed: arming one sets `trap`, which the
+    /// fast loop leaves for its head before running anything else.
     #[inline(always)]
-    pub(super) fn return_fast(
+    pub(super) fn return_fast<const WATCH: bool>(
         &mut self,
         base: u32,
         abs_a: u32,
@@ -100,7 +102,7 @@ impl Vm {
         let n = self.frames.len();
         if n <= entry_depth
             || n < 2
-            || self.hook.ret && self.hook_armed()
+            || WATCH && self.hook.ret && self.hook_armed()
             || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
             || self.tbc.last().is_some_and(|&s| s >= base)
         {
@@ -119,13 +121,18 @@ impl Vm {
             // SAFETY: see above
             CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
         };
-        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        frames_pop_known(
+            &mut self.frames,
+            &mut self.frames_top,
+            &mut self.trap,
+            to_meta,
+        );
         if nret == 1 {
             // SAFETY: both slots are in the returning frame's window or the
             // caller's, which the stack holds
             unsafe {
                 let s = self.stack.as_mut_ptr();
-                *s.add(func_slot as usize) = *s.add(abs_a as usize);
+                Value::copy_raw(s.add(func_slot as usize), s.add(abs_a as usize));
             }
         }
         if to_meta || wanted < 0 {

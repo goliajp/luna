@@ -1,7 +1,8 @@
 //! Constant folding and literal tests over the AST.
 
 use super::Exp;
-use crate::frontend::ast::{BinOp, Chunk, Expr, ExprId, UnOp};
+use super::{Chunk, Expr};
+use crate::frontend::ast::{BinOp, ExprId, UnOp};
 use crate::numeric::Num;
 use crate::version::LuaVersion;
 

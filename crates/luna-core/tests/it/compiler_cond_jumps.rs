@@ -165,3 +165,23 @@ fn numeric_conditions_follow_their_value() {
         }
     }
 }
+
+/// `repeat ... until` conditions jump back from each test like `while`
+/// conditions: nothing is materialized into a register and tested again.
+#[test]
+fn repeat_conditions_jump_without_a_value() {
+    for src in [
+        "local i, n = 0, ... repeat i = i + 1 until i >= n or i > 9 return i",
+        "local i, a = 0, ... repeat i = i + 1 until not (i < 3) and a ~= i return i",
+        "local i = 0 repeat local x = i i = i + 1 local f = function() return x end until i > 2 and i ~= 7 return i",
+    ] {
+        for v in VERSIONS {
+            let code = compile_main(src, v);
+            assert_eq!(
+                count(&code, &[Op::LFalseSkip, Op::LoadTrue, Op::Not, Op::Test]),
+                0,
+                "{v:?} {src}: {code:?}"
+            );
+        }
+    }
+}

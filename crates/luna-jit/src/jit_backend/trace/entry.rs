@@ -14,8 +14,8 @@
 //! out where those exits resume and whether the register is dead there
 //! cost more compile time than the check saves.)
 
+use super::slots::rw_ranges;
 use super::*;
-use luna_core::runtime::function::Proto;
 
 /// For each of the head frame's `max_stack` registers, whether the trace
 /// takes its value (and so its tag) from the entry. Only the ops the
@@ -35,50 +35,64 @@ pub(super) fn entry_live(
     }
     let ops = &record.ops[..(end + 1).min(record.ops.len())];
     let mut live = vec![false; max_stack];
+    // what the lowering writes on every path, so a later read sees the
+    // trace's own value
     let mut defined = vec![false; max_stack];
-    // the last op that may leave a register with a value the stack does
-    // not have
-    let mut last_write: Vec<Option<usize>> = vec![None; max_stack];
+    // what some op may leave with a value the stack does not have
+    let mut written = vec![false; max_stack];
     for (i, rop) in ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0) as usize;
-        let inlined_call = matches!(rop.inst.op(), Op::Call)
+        let inst = rop.inst;
+        let op = inst.op();
+        let (reads, writes) = rw_ranges(inst);
+        // register `max_stack` is the lowerer's virtual constant register
+        // (see `split_const_operands`), not a slot
+        let frame = rop.proto.max_stack as u32;
+        let mut read = |r: u32| {
+            let s = off + r as usize;
+            if r < frame && s < max_stack && !defined[s] {
+                live[s] = true;
+            }
+        };
+        for &(lo, n) in &reads {
+            (lo..lo + n).for_each(&mut read);
+        }
+        match op {
+            // spilled for the closure to capture
+            Op::Closure => rop.proto.protos[inst.bx() as usize]
+                .upvals
+                .iter()
+                .filter(|d| d.in_stack)
+                .for_each(|d| read(u32::from(d.index))),
+            // the ipairs path keeps the previous value. Close needs none:
+            // it spills the registers it has a kind for and the helper
+            // reads the others off the stack, which holds them
+            Op::TForCall => read(inst.a() + 5),
+            _ => {}
+        }
+        let inlined_call = matches!(op, Op::Call)
             && ops
                 .get(i + 1)
                 .is_some_and(|n| n.inline_depth > rop.inline_depth);
-        for r in trace_reads(rop) {
-            let s = off + r as usize;
-            if s < max_stack && !defined[s] {
-                live[s] = true;
+        let sure =
+            !matches!(op, Op::TestSet | Op::ForLoop | Op::TForLoop | Op::TForCall) && !inlined_call;
+        let mut write = |s: usize| {
+            if s < max_stack {
+                written[s] = true;
+                defined[s] |= sure;
             }
+        };
+        for &(lo, n) in &writes {
+            (lo..lo + n).for_each(|w| write(off + w as usize));
         }
-        let (_, writes) = op_reads_writes(rop.inst);
-        let mut may_write: Vec<usize> = writes.iter().map(|&w| off + w as usize).collect();
         // the value of a call inlined into the trace lands in the caller's
         // R[A] at the callee's Return1, one below the callee's window
-        let returned = (matches!(rop.inst.op(), Op::Return1) && rop.inline_depth > 0 && off > 0)
-            .then(|| off - 1);
-        may_write.extend(returned);
-        if matches!(rop.inst.op(), Op::TForCall) {
-            let a = off + rop.inst.a() as usize;
-            may_write.extend([a + 2, a + 4, a + 5]);
+        if matches!(op, Op::Return1) && rop.inline_depth > 0 && off > 0 {
+            write(off - 1);
         }
-        for &s in &may_write {
-            if s < max_stack {
-                last_write[s] = Some(i);
-            }
-        }
-        // what the lowering writes on every path, so a later read sees
-        // the trace's own value
-        let sure: &[usize] = match rop.inst.op() {
-            Op::TestSet | Op::ForLoop | Op::TForLoop | Op::TForCall => &[],
-            Op::Call if inlined_call => &[],
-            Op::Return1 => returned.as_slice(),
-            _ => &may_write,
-        };
-        for &s in sure {
-            if s < max_stack {
-                defined[s] = true;
-            }
+        if matches!(op, Op::TForCall) {
+            let a = off + inst.a() as usize;
+            [a + 2, a + 4, a + 5].into_iter().for_each(write);
         }
     }
     if let Some(tags) = parent_exit {
@@ -91,41 +105,10 @@ pub(super) fn entry_live(
     if may_loop {
         // the body leaves its own value behind; checked on entry instead
         for (s, l) in live.iter_mut().enumerate() {
-            *l |= last_write[s].is_some();
+            *l |= written[s];
         }
     }
     live
-}
-
-/// The registers the lowering of `rop` reads, in the op's own frame.
-fn trace_reads(rop: &RecordedOp) -> Vec<u32> {
-    let inst = rop.inst;
-    let a = inst.a();
-    let frame = rop.proto.max_stack as u32;
-    let (mut r, _) = op_reads_writes(inst);
-    match inst.op() {
-        // spilled for the closure to capture
-        Op::Closure => r.extend(captured_sources(rop.proto, inst.bx() as usize)),
-        // Close needs none: it spills the registers it has a kind for and
-        // the helper reads the others off the stack, which holds them
-        // the ipairs path keeps the previous value
-        Op::TForCall => r.push(a + 5),
-        _ => {}
-    }
-    // register `max_stack` is the lowerer's virtual constant register
-    // (see `split_const_operands`), not a slot
-    r.retain(|&s| s < frame);
-    r
-}
-
-fn captured_sources(proto: Gc<Proto>, bx: usize) -> impl Iterator<Item = u32> {
-    proto.protos[bx]
-        .upvals
-        .iter()
-        .filter(|d| d.in_stack)
-        .map(|d| u32::from(d.index))
-        .collect::<Vec<_>>()
-        .into_iter()
 }
 
 /// The exit tags of the parent trace's exit a side trace starts from

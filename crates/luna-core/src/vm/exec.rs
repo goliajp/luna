@@ -28,8 +28,11 @@ mod cont_trap_tests;
 mod fast;
 mod fast_arith;
 mod frame_ops;
+mod frames_sync;
+use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod index;
 mod index_fast;
+mod index_miss;
 mod limits;
 pub(crate) mod native_call;
 mod num;
@@ -771,74 +774,6 @@ impl Drop for Vm {
     }
 }
 
-// Split-borrow free fn helpers for frames push/pop with shadow counter
-// `frames_top: u32`. Free fns (not Vm methods) so callers can pass
-// `&mut self.frames` + `&mut self.frames_top` as split borrows, allowing
-// other `&mut self.field` reads inside the CallFrame construction (e.g.
-// `std::mem::take(&mut self.pending_tm)`).
-//
-// The shadow has no readers yet; it just stays in sync + asserts.
-//
-// `trap` is the dispatch loop's slow-path flag: a continuation frame on top
-// of the stack must be seen by the loop head, which tests nothing else
-// unless `trap` is set. So pushing a continuation sets it (the protected
-// call may finish without a frame of its own), and so does a pop that
-// leaves one on top.
-#[inline(always)]
-fn frames_push_sync(
-    frames: &mut Vec<CallFrame>,
-    frames_top: &mut u32,
-    trap: &mut bool,
-    cf: CallFrame,
-) {
-    if matches!(cf, CallFrame::Cont(_)) {
-        *trap = true;
-    }
-    frames.push(cf);
-    // Shadow maintenance is debug-only: release builds skip the
-    // increment + assertion entirely. While nothing reads the shadow,
-    // its purpose is to VERIFY the assumed invariant
-    // (frames_top == frames.len()) across all push/pop sites; once readers
-    // consume it, release must run the increment unconditionally.
-    #[cfg(debug_assertions)]
-    {
-        *frames_top += 1;
-        debug_assert_eq!(
-            *frames_top as usize,
-            frames.len(),
-            "P17-D frames_top out of sync after push",
-        );
-    }
-    #[cfg(not(debug_assertions))]
-    let _ = frames_top;
-}
-
-#[inline(always)]
-fn frames_pop_sync(
-    frames: &mut Vec<CallFrame>,
-    frames_top: &mut u32,
-    trap: &mut bool,
-) -> Option<CallFrame> {
-    let r = frames.pop();
-    if matches!(frames.last(), Some(CallFrame::Cont(_))) {
-        *trap = true;
-    }
-    #[cfg(debug_assertions)]
-    {
-        if r.is_some() {
-            *frames_top = frames_top.saturating_sub(1);
-        }
-        debug_assert_eq!(
-            *frames_top as usize,
-            frames.len(),
-            "P17-D frames_top out of sync after pop",
-        );
-    }
-    #[cfg(not(debug_assertions))]
-    let _ = frames_top;
-    r
-}
-
 /// One-time env-var read for
 /// `LUNA_AOT_PROBE`. Returns `true` iff the env var is set to any
 /// non-empty value. The result is cached in a `OnceLock` so the
@@ -1491,6 +1426,7 @@ impl Vm {
                 crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
             crate::compiler::compile_parsed(
                 &parsed.chunk,
+                &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
@@ -1502,6 +1438,7 @@ impl Vm {
             let parsed = crate::frontend::parser::parse_at_depth(src, self.version, depth)?;
             crate::compiler::compile_parsed(
                 &parsed.chunk,
+                &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
@@ -6455,7 +6392,7 @@ impl Vm {
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
                         && !matches!(
-                            self.return_fast(base, abs_a, nret, entry_depth),
+                            self.return_fast::<true>(base, abs_a, nret, entry_depth),
                             call_fast::Returned::No
                         )
                     {
