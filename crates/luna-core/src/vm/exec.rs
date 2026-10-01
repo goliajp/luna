@@ -839,6 +839,34 @@ fn frames_pop_sync(
     r
 }
 
+/// [`frames_pop_sync`] when the caller knows the frame below the top one
+/// and whether it is a continuation: `frames.len() >= 2`.
+#[inline(always)]
+fn frames_pop_known(
+    frames: &mut Vec<CallFrame>,
+    frames_top: &mut u32,
+    trap: &mut bool,
+    cont_below: bool,
+) {
+    debug_assert!(frames.len() >= 2);
+    debug_assert_eq!(
+        cont_below,
+        matches!(frames[frames.len() - 2], CallFrame::Cont(_))
+    );
+    // SAFETY: the caller's contract; `CallFrame` is `Copy`, so nothing drops
+    unsafe { frames.set_len(frames.len() - 1) };
+    if cont_below {
+        *trap = true;
+    }
+    #[cfg(debug_assertions)]
+    {
+        *frames_top = frames_top.saturating_sub(1);
+        debug_assert_eq!(*frames_top as usize, frames.len());
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = frames_top;
+}
+
 /// One-time env-var read for
 /// `LUNA_AOT_PROBE`. Returns `true` iff the env var is set to any
 /// non-empty value. The result is cached in a `OnceLock` so the
@@ -6455,7 +6483,7 @@ impl Vm {
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
                         && !matches!(
-                            self.return_fast(base, abs_a, nret, entry_depth),
+                            self.return_fast::<true>(base, abs_a, nret, entry_depth),
                             call_fast::Returned::No
                         )
                     {
