@@ -1017,12 +1017,17 @@ impl Table {
                 );
             }
             drop(old_slab);
-            // growing appends nil slots, which leaves both counts as they were
+            // growing appends nil slots: the count stays, and a lagging
+            // prefix may stay behind (a full old part is all prefix)
+            if self.acount as usize == old_asize {
+                self.aprefix = self.acount;
+            }
             #[cfg(debug_assertions)]
             {
                 let kept = (self.acount, self.aprefix);
                 self.recount_array();
-                debug_assert_eq!(kept, (self.acount, self.aprefix));
+                debug_assert!(kept.0 == self.acount && kept.1 <= self.aprefix);
+                (self.acount, self.aprefix) = kept;
             }
         } else {
             self.recount_array();
@@ -1942,6 +1947,23 @@ mod tests {
         assert_eq!(t.acount, count);
         assert!(t.aprefix <= run, "aprefix {} past the run {run}", t.aprefix);
         assert_eq!(t.len(), len_by_search(t));
+    }
+
+    // the prefix may lag behind the run (the method JIT's inline stores
+    // leave it so); growing the array part must accept that
+    #[test]
+    fn growing_accepts_a_lagging_prefix() {
+        with_table(|heap, t| {
+            for i in 1..=8 {
+                let _ = t.set_int(heap, i, Value::Int(i));
+            }
+            let asize = t.asize();
+            assert_eq!(t.acount as usize, asize);
+            t.aprefix = 1;
+            t.resize(heap, asize * 2, 0);
+            check_counts(t);
+            assert_eq!(t.aprefix as usize, asize);
+        });
     }
 
     #[test]
