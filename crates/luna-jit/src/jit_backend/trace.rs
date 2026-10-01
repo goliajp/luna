@@ -7228,9 +7228,7 @@ fn lower_trace_into_inner<M: Module>(
                     let src_idx = d.index as usize;
                     let src_kind = current_kinds[off + src_idx];
                     // an untyped source cannot be packed to a Value
-                    let Some(tag_byte) = known_tag(src_kind) else {
-                        return None;
-                    };
+                    let tag_byte = known_tag(src_kind)?;
                     let slot_arg = bcx.ins().iconst(types::I64, d.index as i64);
                     let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
                     let raw_arg = bcx.use_var(regs[src_idx]);
