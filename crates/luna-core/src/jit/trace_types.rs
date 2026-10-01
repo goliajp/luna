@@ -30,6 +30,11 @@ pub const CALL_HOT_THRESHOLD: u32 = 64;
 /// usefully). PUC LuaJIT's default is 1024; luna starts conservative.
 pub const MAX_TRACE_LEN: usize = 256;
 
+/// `CompiledTrace::entry_tags` of a head-frame register the trace does not
+/// read before writing it: not checked on entry, and an exit that has not
+/// written it leaves the stack slot alone. No value tag uses this byte.
+pub const ENTRY_TAG_ANY: u8 = 0xFF;
+
 /// Max inline depth for self-recursive `Op::Call` during recording.
 /// Beyond this, the trace emits a real cranelift `call` to itself.
 pub const MAX_INLINE_DEPTH: u8 = 16;
@@ -1191,20 +1196,11 @@ pub enum CompileOutcome {
     BackendError,
 }
 
-/// Return `true` iff `child_entry_tags` is
-/// compatible with `parent_exit_tags` (the parent's per-exit tag
-/// snapshot at the slot the side trace was wired to). Used by
-/// the close handler to gate the side-trace ptr write: only write
-/// when shapes match so the `call_indirect` into the child
-/// is guaranteed to feed the child reg_state values whose tags
-/// agree with the child's `compile_entry_tags`.
-///
-/// `Untouched` slots in `parent_exit_tags` mean the parent didn't
-/// override that slot during execution — its tag at parent's
-/// exit equals its tag at parent's entry. The child's recorder
-/// snapshotted from the same vm.stack at parent's exit, so for
-/// those slots `child_entry_tags[i] == parent_compile_entry_tags
-/// [i]` should hold.
+/// Whether a side trace compiled for `child_entry_tags` may run from the
+/// parent exit whose tags are `parent_exit_tags` (the close handler wires
+/// it only then). An `Untouched` slot still holds what the parent was
+/// entered with, which `parent_compile_entry_tags` names; a child that
+/// does not read it ([`ENTRY_TAG_ANY`]) takes it whatever it holds.
 pub fn exit_tags_match_entry_tags(
     child_entry_tags: &[u8],
     parent_exit_tags: &[ExitTag],
@@ -1215,17 +1211,18 @@ pub fn exit_tags_match_entry_tags(
         return false;
     }
     for i in 0..n {
+        let child = child_entry_tags[i];
         let expected = match parent_exit_tags[i] {
-            ExitTag::Untouched => {
-                if i < parent_compile_entry_tags.len() {
-                    parent_compile_entry_tags[i]
-                } else {
-                    // Parent didn't capture an entry tag here
-                    // (inlined-frame scratch slot). Child can't
-                    // safely consume — bail.
-                    return false;
-                }
-            }
+            // the parent left the slot as it found it: a child that does
+            // not read it takes it as it is
+            ExitTag::Untouched if child == ENTRY_TAG_ANY => continue,
+            ExitTag::Untouched => match parent_compile_entry_tags.get(i) {
+                // Parent didn't capture an entry tag here (inlined-frame
+                // scratch slot), or did not check it on entry: the child
+                // cannot know the value's tag.
+                None | Some(&ENTRY_TAG_ANY) => return false,
+                Some(&t) => t,
+            },
             ExitTag::Int => crate::runtime::value::raw::INT,
             ExitTag::Float => crate::runtime::value::raw::FLOAT,
             ExitTag::Table => crate::runtime::value::raw::TABLE,
@@ -1233,7 +1230,7 @@ pub fn exit_tags_match_entry_tags(
             ExitTag::Nil => crate::runtime::value::raw::NIL,
             ExitTag::Str => crate::runtime::value::raw::STR,
         };
-        if child_entry_tags[i] != expected {
+        if child != expected {
             return false;
         }
     }

@@ -15,6 +15,8 @@ impl Vm {
         ct: &CompiledTrace,
         raw_ret: u64,
         reg_state: &mut [i64],
+        base_us: usize,
+        entry_tags: &[u8],
     ) -> ExitSource {
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
@@ -119,11 +121,14 @@ impl Vm {
                                         child.per_exit_tags.clone(),
                                         child.exit_tags.clone(),
                                         child.exit_hit_counts.clone(),
+                                        child.entry_tags.clone(),
                                     )
                                 })
                         })
                 };
-                if let Some((cent, cpi, cpt, cet, chc)) = child_invoke {
+                if let Some((cent, cpi, cpt, cet, chc, cent_tags)) = child_invoke
+                    && self.child_reads_stack_held_ok(base_us, entry_tags, &cent_tags)
+                {
                     let child_raw_ret = {
                         // chunk_compiler.enter
                         // (side-trace entry).
@@ -145,6 +150,27 @@ impl Vm {
                 }
             }
         }
+    }
+
+    /// Whether a side trace may run on the registers as they are: a slot
+    /// the parent took unchecked (its runtime entry tag is ANY) but the
+    /// child reads holds, on the stack, a value of the tag the child was
+    /// compiled for.
+    fn child_reads_stack_held_ok(
+        &self,
+        base_us: usize,
+        entry_tags: &[u8],
+        child_entry: &[u8],
+    ) -> bool {
+        entry_tags
+            .iter()
+            .zip(child_entry)
+            .enumerate()
+            .all(|(i, (&p, &c))| {
+                p != crate::jit::trace::ENTRY_TAG_ANY
+                    || c == crate::jit::trace::ENTRY_TAG_ANY
+                    || self.stack[base_us + i].unpack().0 == c
+            })
     }
 
     /// Write the trace's registers back to the frame with the tags its exit
@@ -241,13 +267,15 @@ impl Vm {
                     continue;
                 }
                 let tag = match exit_tags_for_pc[i] {
-                    crate::jit::trace::ExitTag::Untouched => {
-                        if i < max_stack {
-                            entry_tags[i]
-                        } else {
-                            crate::runtime::value::raw::NIL
+                    crate::jit::trace::ExitTag::Untouched if i < max_stack => {
+                        match entry_tags[i] {
+                            // not checked on entry and not written since:
+                            // the stack still holds the value
+                            crate::jit::trace::ENTRY_TAG_ANY => continue,
+                            t => t,
                         }
                     }
+                    crate::jit::trace::ExitTag::Untouched => crate::runtime::value::raw::NIL,
                     crate::jit::trace::ExitTag::Int => crate::runtime::value::raw::INT,
                     crate::jit::trace::ExitTag::Float => crate::runtime::value::raw::FLOAT,
                     crate::jit::trace::ExitTag::Table => crate::runtime::value::raw::TABLE,
