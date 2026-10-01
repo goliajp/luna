@@ -475,6 +475,8 @@ impl Heap {
         let mut boxed = Box::new(LuaClosure {
             hdr: GcHeader::new(ObjTag::Closure),
             proto,
+            code: proto.code.as_ptr(),
+            consts: proto.consts.as_ptr(),
             upvals_ptr: std::ptr::null_mut(),
             upvals_len,
             inline_storage: std::cell::UnsafeCell::new(
