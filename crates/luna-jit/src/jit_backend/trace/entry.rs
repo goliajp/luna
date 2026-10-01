@@ -217,8 +217,25 @@ impl Set {
         }
         self
     }
+    /// Registers `lo .. lo + n` (clipped to the 256 a frame can have).
     fn range(lo: u32, n: u32) -> Set {
-        (lo..lo.saturating_add(n).min(256)).fold(Set::default(), Set::with)
+        let hi = lo.saturating_add(n).min(256);
+        let lo = lo.min(hi);
+        // bits below `x`, word by word
+        let below = |x: u32| -> [u64; 4] {
+            std::array::from_fn(|i| {
+                let base = i as u32 * 64;
+                if x >= base + 64 {
+                    u64::MAX
+                } else if x <= base {
+                    0
+                } else {
+                    (1u64 << (x - base)) - 1
+                }
+            })
+        };
+        let (h, l) = (below(hi), below(lo));
+        Set(std::array::from_fn(|i| h[i] & !l[i]))
     }
     fn from(lo: u32) -> Set {
         Set::range(lo, 256)
@@ -426,4 +443,23 @@ pub(super) fn side_parent_exit_tags(record: &TraceRecord) -> Option<Vec<ExitTag>
         &parent.exit_tags
     };
     Some(tags.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Set;
+
+    #[test]
+    fn range_holds_exactly_its_registers() {
+        for lo in [0u32, 1, 5, 63, 64, 65, 127, 128, 200, 255, 256, 300] {
+            for n in [0u32, 1, 2, 3, 63, 64, 65, 128, 256, u32::MAX] {
+                let r = Set::range(lo, n);
+                for s in 0..256usize {
+                    let want =
+                        (s as u64) >= u64::from(lo) && (s as u64) < u64::from(lo) + u64::from(n);
+                    assert_eq!(r.has(s), want, "lo {lo} n {n} s {s}");
+                }
+            }
+        }
+    }
 }
