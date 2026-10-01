@@ -77,10 +77,9 @@ pub(super) fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
 }
 
 /// Whether a loop's back-edge may run the body again with the registers
-/// of kinds `tail`: the body was lowered for `head`. A register the
-/// body does not read before writing (`StackHeld` at the head) takes
-/// any kind; the trace's entry analysis checked that no exit before
-/// its write needs its value.
+/// of kinds `tail`: the body was lowered for `head`. A register held on
+/// the stack at the head is one the looping body never writes (see
+/// `entry_live`), so it takes whatever kind the tail reports.
 pub(super) fn loop_kinds_match(tail: &[RegKind], head: &[RegKind]) -> bool {
     tail.len() == head.len()
         && tail
