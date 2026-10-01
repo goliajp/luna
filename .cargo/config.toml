@@ -1,0 +1,10 @@
+# Builds made from this checkout (the luna CLI that is benchmarked, CI, tests).
+# Cargo reads this file only for builds started inside the repository: a crate
+# that depends on luna-core, and `cargo install luna-jit`, do not see it.
+
+[target.aarch64-unknown-linux-gnu]
+# Align every block that is entered only by a branch to 32 bytes. Each
+# bytecode handler of the interpreter loop is such a block; without this its
+# placement relative to the core's fetch boundaries follows wherever the
+# linker happens to put the loop, which moved the `%` benchmark by 4%.
+rustflags = ["-C", "llvm-args=-align-all-nofallthru-blocks=5"]
