@@ -1039,13 +1039,26 @@ impl Vm {
                         };
                         let wanted = inst.c() as i32 - 1;
                         let pf = regs.wrapping_add(inst.a() as usize);
-                        // SAFETY: the called register is in the frame
-                        if !WATCH && !trace_on && unsafe { raw_tag(pf) } == tag::CLOSURE {
-                            // SAFETY: a closure tag means a live closure
-                            let callee = Gc::from_ptr(unsafe { raw_gc(pf) } as *mut LuaClosure);
-                            let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
-                            if self.push_lua_frame_fast(callee, abs, n, wanted) {
-                                continue 'frames;
+                        if !WATCH {
+                            // SAFETY: the called register is in the frame
+                            let t = unsafe { raw_tag(pf) };
+                            if t == tag::CLOSURE && !trace_on {
+                                // SAFETY: a closure tag means a live closure
+                                let callee = Gc::from_ptr(unsafe { raw_gc(pf) } as *mut LuaClosure);
+                                let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
+                                if self.push_lua_frame_fast(callee, abs, n, wanted) {
+                                    continue 'frames;
+                                }
+                            } else if t == tag::NATIVE {
+                                // SAFETY: a native tag means a live native closure
+                                let nc = Gc::from_ptr(
+                                    unsafe { raw_gc(pf) } as *mut crate::runtime::NativeClosure
+                                );
+                                if nc.kind == NativeKind::Plain {
+                                    let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
+                                    self.call_native_plain(nc, abs, n, wanted)?;
+                                    resume!()
+                                }
                             }
                         }
                         self.begin_call(abs, nargs, wanted, false)?;
