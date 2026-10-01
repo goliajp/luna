@@ -132,31 +132,49 @@ unsafe fn table_set_existing_at(tb: &mut Table, pk: *const Value, v: Value) -> b
                     None => table_set_existing_cold(tb, *pk, v),
                 }
             }
-            tag::INT => tb.try_set_existing(Value::Int(raw_int(pk)), v),
+            tag::INT => {
+                let i = raw_int(pk);
+                if i >= 1 && i as u64 <= tb.asize {
+                    let idx = i as usize - 1;
+                    if *tb.atags().get_unchecked(idx) == crate::runtime::value::raw::NIL {
+                        return false;
+                    }
+                    tb.aset(idx, v);
+                    return true;
+                }
+                table_set_existing_cold(tb, Value::Int(i), v)
+            }
             _ => table_set_existing_cold(tb, *pk, v),
         }
     }
 }
 
-/// Write `tb[*pk] := v` when `*pk` is an integer in the array part, as
-/// a raw set does; `false`, having done nothing, otherwise.
+/// `tb[*pk] := v` as a raw set (PUC `luaH_finishset` with no `__newindex`
+/// to call): an integer in the array part in place, anything else through
+/// [`Table::set`] out of line. `false` when that refuses the key (nil, NaN,
+/// overflow), having done nothing; the miss path then raises the error.
 ///
 /// # Safety
 /// `pk` points at an initialised value.
 #[inline(always)]
-unsafe fn table_set_array_at(tb: &mut Table, pk: *const Value, v: Value) -> bool {
+unsafe fn table_raw_set_at(tb: &mut Table, heap: &mut Heap, pk: *const Value, v: Value) -> bool {
     // SAFETY: the caller's contract; the payload is read after the tag
     unsafe {
-        if raw_tag(pk) != tag::INT {
-            return false;
+        if raw_tag(pk) == tag::INT {
+            let i = raw_int(pk);
+            if i >= 1 && i as u64 <= tb.asize {
+                tb.aset(i as usize - 1, v);
+                return true;
+            }
         }
-        let i = raw_int(pk);
-        if i < 1 || i as u64 > tb.asize {
-            return false;
-        }
-        tb.aset(i as usize - 1, v);
+        table_raw_set_cold(tb, heap, *pk, v)
     }
-    true
+}
+
+#[cold]
+#[inline(never)]
+fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> bool {
+    tb.set(heap, key, v).is_ok()
 }
 
 #[cold]
@@ -246,7 +264,8 @@ impl Vm {
             if raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
                 if table_set_existing_at(&mut *tb, pk, v)
-                    || (*tb).metatable().is_none() && table_set_array_at(&mut *tb, pk, v)
+                    || (*tb).metatable().is_none()
+                        && table_raw_set_at(&mut *tb, &mut self.heap, pk, v)
                 {
                     self.heap
                         .barrier_back(tb as *mut crate::runtime::heap::GcHeader);
