@@ -158,7 +158,7 @@ pub use chunk_cache::{cache_clear, cache_entry_count, cache_lookup_or_compile};
 /// `math.max(...)` use a different bytecode window (B≠2) so the
 /// pattern matcher rejects them.
 ///
-/// On 5.3+ `floor`/`ceil` return integers ([`is_rounding`]) and
+/// On 5.3+ `floor`/`ceil` return integers ([`math_fold::is_rounding`]) and
 /// `atan(y)` is `atan2(y, 1)`, rounded differently from libm `atan`;
 /// the emit handles both.
 const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
@@ -174,13 +174,6 @@ const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
     (b"floor", "floor"),
     (b"ceil", "ceil"),
 ];
-
-/// `math.floor` / `math.ceil`: floats on 5.1/5.2; from 5.3 an integer
-/// stays itself and a float becomes an integer when the result fits
-/// (`luaV_flttointns`), a float otherwise.
-fn is_rounding(fn_name: &str) -> bool {
-    matches!(fn_name, "floor" | "ceil")
-}
 
 /// `Table` layout constants used by the inline-aset
 /// fast path. Cranelift IR walks past the helper call ABI by
@@ -2864,6 +2857,11 @@ pub fn lower_int_chunk_into<M: Module>(
                 // result tag would be wrong, so leave the function to the
                 // interpreter
                 if k == RegKind::Table {
+                    return None;
+                }
+                // 5.1/5.2 integers stand for doubles, whose sums round and
+                // whose products can be -0: the interpreter's to compute
+                if float_only && k != RegKind::Float {
                     return None;
                 }
                 // A float result converts an integer operand first

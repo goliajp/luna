@@ -212,6 +212,13 @@ impl Vm {
         base: u32,
         cur_depth: usize,
     ) {
+        if self.version <= LuaVersion::Lua52 && self.int_operand(inst, base) {
+            // 5.1/5.2 integers stand for doubles; the trace lowering does
+            // integer arithmetic in machine integers, without the rounding
+            // and the -0 those need
+            self.abort_recording("int-arith-on-doubles");
+            return;
+        }
         let rec = self.jit.active_trace.as_mut().expect("recording");
         // Depth-aware push at the
         // current `cur_depth`. The `depth_cap_hit` /
@@ -331,18 +338,31 @@ impl Vm {
             }
         }
         if !rec.push(op) {
-            // Recorder overflow (MAX_TRACE_LEN). Tag it
-            // explicitly under the close-cause bucket so
-            // probes can tally overflow vs other abort
-            // causes in O(1).
-            let (head_proto, head_pc) = (rec.head_proto, rec.head_pc);
-            self.jit.active_trace = None;
-            self.jit.counters.aborted += 1;
-            self.jit.counters.bump_close_cause("trace-overflow");
-            // counted like a failed compile: a head whose
-            // recordings keep overflowing is given up instead
-            // of being recorded again on every hot crossing
-            note_trace_compile_failure(head_proto, head_pc);
+            // recorder overflow (MAX_TRACE_LEN)
+            self.abort_recording("trace-overflow");
+        }
+    }
+
+    /// Drop the recording, tallied under `cause`. Counted like a failed
+    /// compile: a head whose recordings keep aborting is given up instead
+    /// of being recorded again on every hot crossing.
+    fn abort_recording(&mut self, cause: &'static str) {
+        let rec = self.jit.active_trace.take().expect("recording");
+        self.jit.counters.aborted += 1;
+        self.jit.counters.bump_close_cause(cause);
+        note_trace_compile_failure(rec.head_proto, rec.head_pc);
+    }
+
+    /// True when `inst` is arithmetic that can take an integer operand.
+    fn int_operand(&self, inst: Inst, base: u32) -> bool {
+        use crate::vm::isa::Op;
+        let is_int = |r: u32| matches!(self.stack[(base + r) as usize], Value::Int(_));
+        match inst.op() {
+            Op::Add | Op::Sub | Op::Mul | Op::Mod => is_int(inst.b()) || is_int(inst.c()),
+            Op::Unm | Op::AddI | Op::SubI | Op::AddK | Op::SubK | Op::MulK | Op::ModK => {
+                is_int(inst.b())
+            }
+            _ => false,
         }
     }
 
