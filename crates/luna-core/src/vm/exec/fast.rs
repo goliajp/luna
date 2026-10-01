@@ -103,13 +103,6 @@ impl Vm {
                 unsafe { *regs.add(($i) as usize) = $v }
             };
         }
-        macro_rules! konst {
-            ($i:expr) => {
-                // SAFETY: the compiler and the bytecode verifier keep
-                // constant indices below the proto's constant count
-                unsafe { *kptr.add(($i) as usize) }
-            };
-        }
         macro_rules! next {
             () => {{
                 // nothing in a fast arm sets `trap`, so `stay` holds for the
@@ -320,9 +313,10 @@ impl Vm {
                         next!()
                     }
                     save!();
-                    // SAFETY: as above
-                    let (t, key) = unsafe { (*pt, *pk) };
-                    self.index_miss(t, key, base!() + inst.a())?;
+                    let dst = base!() + inst.a();
+                    // SAFETY: as above; the pointers are worked out again
+                    // here so that none of them stays live across the probe
+                    unsafe { self.index_miss_at(regs.wrapping_add(inst.b() as usize), $pk, dst) }?;
                     resume_same!()
                 }};
             }
@@ -338,9 +332,7 @@ impl Vm {
                         next!()
                     }
                     save!();
-                    // SAFETY: as above
-                    let (t, key, v) = unsafe { (*pt, *pk, *pv) };
-                    self.newindex_miss(t, key, v)?;
+                    self.newindex_op_miss(inst, fr)?;
                     resume_same!()
                 }};
             }
@@ -485,9 +477,8 @@ impl Vm {
                         {
                             next!()
                         }
-                        let key = konst!(inst.c());
                         save!();
-                        self.index_miss(t, key, base!() + inst.a())?;
+                        self.index_op_miss(inst, regs, kptr, fr)?;
                         resume_same!()
                     }
                     Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize), index_raw_at),
@@ -497,15 +488,12 @@ impl Vm {
                     Op::GetI => {
                         let pt = regs.wrapping_add(inst.b() as usize);
                         let key = Value::Int(inst.c() as i64);
-                        let dst = base!() + inst.a();
                         // SAFETY: registers of the running frame
                         if unsafe { Vm::index_raw_at(pt, &key, regs.add(inst.a() as usize)) } {
                             next!()
                         }
-                        // SAFETY: as above
-                        let t = unsafe { *pt };
                         save!();
-                        self.index_miss(t, key, dst)?;
+                        self.index_op_miss(inst, regs, kptr, fr)?;
                         resume_same!()
                     }
                     Op::SetTabUp => {
@@ -516,9 +504,8 @@ impl Vm {
                         if unsafe { self.newindex_raw_key_at(t, pk, pv) } {
                             next!()
                         }
-                        let key = konst!(inst.b());
                         save!();
-                        self.newindex_miss(t, key, reg!(inst.c()))?;
+                        self.newindex_op_miss(inst, fr)?;
                         resume_same!()
                     }
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize), newindex_raw_at),
@@ -534,9 +521,7 @@ impl Vm {
                             next!()
                         }
                         save!();
-                        // SAFETY: as above
-                        let (t, v) = unsafe { (*pt, *pv) };
-                        self.newindex_miss(t, key, v)?;
+                        self.newindex_op_miss(inst, fr)?;
                         resume_same!()
                     }
                     Op::SelfOp => {
@@ -562,10 +547,17 @@ impl Vm {
                         if unsafe { Vm::index_raw_kstr_at(po, pk, regs.add(inst.a() as usize)) } {
                             next!()
                         }
-                        // SAFETY: as above
-                        let (o, key) = unsafe { (*po, *pk) };
                         save!();
-                        self.index_miss(o, key, base!() + inst.a())?;
+                        let dst = base!() + inst.a();
+                        // SAFETY: as above, worked out again (see `get_arm!`)
+                        unsafe {
+                            let pk = if inst.k() {
+                                kptr.wrapping_add(inst.c() as usize)
+                            } else {
+                                regs.wrapping_add(inst.c() as usize)
+                            };
+                            self.index_miss_at(regs.wrapping_add(inst.a() as usize + 1), pk, dst)
+                        }?;
                         resume_same!()
                     }
                     Op::Add => {

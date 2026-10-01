@@ -8,17 +8,24 @@ impl Vm {
     /// `t[key]` is nil, or not a table: follows up to four table-valued
     /// `__index` links with the pointer-chain lookup (PUC `luaV_finishget`
     /// with `fasttm`). Anything else restarts the full chain from `t`, so
-    /// the loop limit and errors are those of `index_step`.
+    /// the loop limit and errors are those of `index_step`. `pt` points at
+    /// the object, read before anything else, so that the fast loop can
+    /// hand its register over and jump here.
+    ///
+    /// # Safety
+    /// `pt` points at an initialised value.
     #[cfg(not(feature = "gc-verify"))]
     #[inline(never)]
-    pub(super) fn index_str_miss(
+    pub(super) unsafe fn index_str_miss(
         &mut self,
-        t: Value,
+        pt: *const Value,
         key: Gc<crate::runtime::string::LuaStr>,
         dst: u32,
     ) -> Result<(), LuaError> {
         use super::fast_arith::{raw_gc, raw_tag};
         use crate::runtime::value::tag;
+        // SAFETY: the caller's contract
+        let t = unsafe { *pt };
         let mut on_table = matches!(t, Value::Table(_));
         let mut mt = self.metatable_of(t);
         // the slots are read in place and the value copied to its register
