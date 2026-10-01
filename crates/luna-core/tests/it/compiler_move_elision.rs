@@ -15,8 +15,8 @@
 //! is forwarded to the store as the value register, skipping the
 //! materialization Move.
 //!
-//! Both peepholes are gated on `prev_emit_is_safe_peephole_site` so a
-//! jump landing at the modified pc is preserved.
+//! Both peepholes are gated on `no_jump_lands_here`: a jump landing at the
+//! modified instruction is fine, one landing after it keeps the Move.
 //!
 //! Each test compiles a focused snippet, inspects the main proto's
 //! bytecode for the expected shape, and cross-checks observable
@@ -249,21 +249,10 @@ fn retarget_closure_is_not_retargeted_to_preserve_gc_live_top() {
 }
 
 #[test]
-fn retarget_jump_target_blocks_retarget() {
-    // When the just-emitted instruction at here()-1 is itself a jump
-    // destination, the peephole must NOT retarget — a jump landing there
-    // could be patched by something that depends on the original A
-    // field. Construct a shape
-    // where the previous emit IS a jump target.
-    //
-    // The cleanest minimal pattern: a comparison materialization (Cmp +
-    // Jmp + LFalseSkip + LoadTrue) marks the LoadTrue pc as a target.
-    // If we then chain `x = <bool_expr>` after such a comparison emit,
-    // the prev_emit_is_safe_peephole_site check should keep the Move.
-    //
-    // PUC `x = a < b` already exercises comparison materialization; we
-    // verify that the assertion paths still see correct values rather
-    // than verifying bytecode shape (which is fragile).
+fn retarget_comparison_value_keeps_its_pads() {
+    // `x = a < b` materializes through `LFalseSkip` / `LoadTrue`, both
+    // jump destinations writing the temporary; neither is retargetable, so
+    // the Move into `x` stays.
     let src = r#"
         local a, b = 1, 2
         local x = false
@@ -271,6 +260,85 @@ fn retarget_jump_target_blocks_retarget() {
         if x then return 1 else return 0 end
     "#;
     assert_eq!(eval_int(src), 1);
+}
+
+/// All five dialects: the value `src` returns, as an integer.
+fn eval_int_all(src: &str) -> Vec<i64> {
+    [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ]
+    .into_iter()
+    .map(|v| {
+        let mut vm = Vm::new(v);
+        vm.open_base();
+        let r = vm
+            .eval(src)
+            .unwrap_or_else(|e| panic!("{v:?}: {}", vm.error_text(&e)));
+        match r.first() {
+            Some(Value::Int(i)) => *i,
+            Some(Value::Float(f)) => *f as i64,
+            other => panic!("{v:?}: {other:?}"),
+        }
+    })
+    .collect()
+}
+
+/// The statement after an `if ... end` starts at the `if`'s skip target;
+/// PUC still writes its result straight into the local (`discharge2reg`
+/// does not look at `fs->lasttarget`).
+#[test]
+fn retarget_at_a_jump_target_after_if() {
+    let src = "local n, c = 0, ... if c then n = n + 5 end n = n + 1 return n";
+    let code = compile_main(src);
+    assert_eq!(count_moves(&code), 0, "{code:?}");
+    assert!(
+        code.iter()
+            .filter(|i| i.op() == Op::AddI)
+            .all(|i| i.a() == 0)
+    );
+    for (c, want) in [("true", 6), ("false", 1)] {
+        let src = format!("local n, c = 0, {c} if c then n = n + 5 end n = n + 1 return n");
+        assert_eq!(eval_int_all(&src), [want; 5], "{src}");
+    }
+}
+
+/// `k = #t` right after an `if ... end`: the `Len` lands in `k`.
+#[test]
+fn retarget_len_at_a_jump_target() {
+    let src = "local t, k = {1, 2, 3}, 0 if k == 0 then k = k + 1 end k = #t return k";
+    let code = compile_main(src);
+    assert_eq!(count_moves(&code), 0, "{code:?}");
+    assert_eq!(eval_int_all(src), [3; 5]);
+}
+
+/// `w = v` right after a numeric `for`: the loop's exit lands on the
+/// temporary Move, which is dropped; the store reads `v` directly.
+#[test]
+fn rhs_elision_at_a_loop_exit() {
+    let src = "local w, v = 0, 7 for i = 1, 3 do v = v + i end w = v return w * 100 + v";
+    let code = compile_main(src);
+    assert_eq!(count_moves(&code), 1, "{code:?}");
+    assert_eq!(eval_int_all(src), [1313; 5]);
+}
+
+/// A jump landing right after the instruction (here: `and`'s short circuit
+/// past the right operand) still needs the Move: that path skips it.
+#[test]
+fn jump_past_the_producer_keeps_the_move() {
+    let src = "local x, a, b, c = 0, ... x = a and b + c return x";
+    let code = compile_main(src);
+    assert!(
+        code.iter().any(|i| i.op() == Op::Move && i.a() == 0),
+        "{code:?}"
+    );
+    for (a, want) in [("false", 0), ("1", 5)] {
+        let src = format!("local x, a, b, c = 9, {a}, 2, 3 x = a and b + c return x or 0");
+        assert_eq!(eval_int_all(&src), [want; 5], "{src}");
+    }
 }
 
 // =====================================================================
