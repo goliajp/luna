@@ -181,8 +181,8 @@ enum SetKey {
     Reg(u32),
 }
 
-struct LocalVar {
-    name: Box<str>,
+struct LocalVar<'a> {
+    name: &'a str,
     reg: u32,
     read_only: bool,
     captured: bool,
@@ -203,8 +203,8 @@ struct LocalVar {
 /// "into its scope". `reg` is `Some` only for real locals (used to compute the
 /// CLOSE register floor); `name` is `None` for a `global *` marker (reported as
 /// `'*'` in scope errors).
-struct AVar {
-    name: Option<Box<str>>,
+struct AVar<'a> {
+    name: Option<&'a str>,
     reg: Option<u32>,
     /// a `global` declaration (otherwise a local, which a compile-time
     /// constant is too, without a register)
@@ -306,14 +306,14 @@ enum Exp {
     },
 }
 
-struct Level {
+struct Level<'a> {
     code: Vec<Inst>,
     lines: Vec<u32>,
     consts: Vec<Value>,
     const_map: HashMap<ConstKey, u32>,
-    locals: Vec<LocalVar>,
+    locals: Vec<LocalVar<'a>>,
     /// ordered active-variable sequence (locals + global decls) for goto scope
-    avars: Vec<AVar>,
+    avars: Vec<AVar<'a>>,
     blocks: Vec<BlockCx>,
     freereg: u32,
     max_stack: u32,
@@ -353,16 +353,17 @@ struct Level {
     zero_51: Option<f64>,
 }
 
-impl Level {
-    fn new(num_params: u8, is_vararg: bool, line_defined: u32) -> Level {
+impl<'a> Level<'a> {
+    fn new(num_params: u8, is_vararg: bool, line_defined: u32) -> Level<'a> {
+        // sized for a small function, past most of the regrowth steps
         Level {
-            code: Vec::new(),
-            lines: Vec::new(),
-            consts: Vec::new(),
-            const_map: HashMap::new(),
-            locals: Vec::new(),
-            avars: Vec::new(),
-            blocks: Vec::new(),
+            code: Vec::with_capacity(32),
+            lines: Vec::with_capacity(32),
+            consts: Vec::with_capacity(8),
+            const_map: HashMap::with_capacity(8),
+            locals: Vec::with_capacity(8),
+            avars: Vec::with_capacity(8),
+            blocks: Vec::with_capacity(4),
             freereg: num_params as u32,
             max_stack: (num_params as u32).max(2),
             upvals: Vec::new(),
@@ -424,7 +425,7 @@ struct Compiler<'a> {
     heap: &'a mut Heap,
     version: LuaVersion,
     source: Gc<LuaStr>,
-    levels: Vec<Level>,
+    levels: Vec<Level<'a>>,
     last_line: u32,
     /// When `Some(line)`, every `emit` ignores `last_line` and attributes the
     /// new instruction to `line` instead. PUC infix discharges its left
@@ -436,7 +437,8 @@ struct Compiler<'a> {
     /// Compile-time literal interning (PUC's `luaX_newstring` cache): identical
     /// string literals anywhere in the chunk — short *or* long — share one
     /// object, so e.g. `string.format("%p", ...)` reports equal addresses for
-    /// equal constants. The runtime interner only dedups short strings.
+    /// equal constants. The runtime interner only dedups short strings, so
+    /// only long ones are kept here.
     str_cache: HashMap<Box<[u8]>, Gc<LuaStr>>,
 }
 
@@ -451,11 +453,11 @@ impl<'a> Compiler<'a> {
             .filter(|&l| l != 0)
     }
 
-    fn l(&mut self) -> &mut Level {
+    fn l(&mut self) -> &mut Level<'a> {
         self.levels.last_mut().expect("no level")
     }
 
-    fn lr(&self) -> &Level {
+    fn lr(&self) -> &Level<'a> {
         self.levels.last().expect("no level")
     }
 
@@ -701,16 +703,25 @@ impl<'a> Compiler<'a> {
 
     fn str_const(&mut self, bytes: &[u8]) -> u32 {
         // intern the literal once per chunk so identical constants share an
-        // object (heap.intern alone only dedups short strings)
-        let s = match self.str_cache.get(bytes) {
+        // object; heap.intern already dedups short strings, the cache only
+        // has to hold long ones
+        let s = if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
+            self.heap.intern(bytes)
+        } else {
+            self.long_str(bytes)
+        };
+        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+    }
+
+    fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
+        match self.str_cache.get(bytes) {
             Some(s) => *s,
             None => {
                 let s = self.heap.intern(bytes);
                 self.str_cache.insert(bytes.into(), s);
                 s
             }
-        };
-        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+        }
     }
 
     fn load_const(&mut self, reg: u32, c: u32) {
@@ -812,7 +823,7 @@ impl<'a> Compiler<'a> {
             .enumerate()
             .filter(|(_, l)| l.konst.is_none())
             .map(|(i, l)| crate::runtime::LocVar {
-                name: l.name.clone(),
+                name: l.name.into(),
                 reg: l.reg,
                 start_pc: l.start_pc,
                 end_pc: match b.body_end {
@@ -1127,7 +1138,12 @@ impl<'a> Compiler<'a> {
         self.lr().blocks.last().expect("no block").reg_floor
     }
 
-    fn declare_local(&mut self, name: &str, reg: u32, read_only: bool) -> Result<(), SyntaxError> {
+    fn declare_local(
+        &mut self,
+        name: &'a str,
+        reg: u32,
+        read_only: bool,
+    ) -> Result<(), SyntaxError> {
         // PUC `new_localvar` calls `checklimit(fs, …, MAXVARS, "local variables")`
         // before recording the slot — luna counts active avars (skip global
         // markers and any pending vararg pseudo) to model the same cap.
@@ -1137,7 +1153,7 @@ impl<'a> Compiler<'a> {
         }
         let start_pc = self.lr().code.len() as u32;
         self.l().locals.push(LocalVar {
-            name: name.into(),
+            name,
             reg,
             read_only,
             captured: false,
@@ -1146,7 +1162,7 @@ impl<'a> Compiler<'a> {
             konst: None,
         });
         self.l().avars.push(AVar {
-            name: Some(name.into()),
+            name: Some(name),
             reg: Some(reg),
             global: false,
         });
@@ -1154,10 +1170,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// Declare a compile-time constant local (PUC `RDKCTC`).
-    fn declare_ct_const(&mut self, name: &str, value: CtConst) {
+    fn declare_ct_const(&mut self, name: &'a str, value: CtConst) {
         let start_pc = self.lr().code.len() as u32;
         self.l().locals.push(LocalVar {
-            name: name.into(),
+            name,
             reg: u32::MAX,
             read_only: true,
             captured: false,
@@ -1166,7 +1182,7 @@ impl<'a> Compiler<'a> {
             konst: Some(value),
         });
         self.l().avars.push(AVar {
-            name: Some(name.into()),
+            name: Some(name),
             reg: None,
             global: false,
         });
@@ -1181,12 +1197,12 @@ impl<'a> Compiler<'a> {
                 .avars
                 .iter()
                 .rev()
-                .find(|a| a.name.as_deref() == Some(name))
+                .find(|a| a.name == Some(name))
                 .is_some_and(|a| a.global)
             {
                 return None;
             }
-            if let Some(l) = lvl.locals.iter().rev().find(|l| &*l.name == name) {
+            if let Some(l) = lvl.locals.iter().rev().find(|l| l.name == name) {
                 return l.konst.clone();
             }
             if lvl.upvals.iter().any(|u| &*u.name == name) {
@@ -1212,9 +1228,9 @@ impl<'a> Compiler<'a> {
     /// Append a `global` declaration marker to the active-variable sequence so
     /// a goto jumping over it lands "into its scope" (PUC's `new_varkind` +
     /// `nactvar++`). `name` is `None` for a `global *` collective marker.
-    fn declare_global_marker(&mut self, name: Option<&str>) {
+    fn declare_global_marker(&mut self, name: Option<&'a str>) {
         self.l().avars.push(AVar {
-            name: name.map(|n| n.into()),
+            name,
             reg: None,
             global: true,
         });
@@ -1241,16 +1257,12 @@ impl<'a> Compiler<'a> {
             .avars
             .iter()
             .rev()
-            .find(|a| a.name.as_deref() == Some(name))
+            .find(|a| a.name == Some(name))
             && av.global
         {
             return Ok(VarKind::Global { read_only: false });
         }
-        if let Some(idx) = self.levels[li]
-            .locals
-            .iter()
-            .rposition(|l| &*l.name == name)
-        {
+        if let Some(idx) = self.levels[li].locals.iter().rposition(|l| l.name == name) {
             let local = &self.levels[li].locals[idx];
             return Ok(match &local.konst {
                 Some(v) => VarKind::Const(v.clone()),
@@ -1277,7 +1289,7 @@ impl<'a> Compiler<'a> {
                 if let Some(idx) = self.levels[li - 1]
                     .locals
                     .iter()
-                    .rposition(|l| l.reg == reg && &*l.name == name)
+                    .rposition(|l| l.reg == reg && l.name == name)
                 {
                     self.levels[li - 1].locals[idx].captured = true;
                     read_only = self.levels[li - 1].locals[idx].read_only;
@@ -1318,26 +1330,23 @@ impl<'a> Compiler<'a> {
             .rev()
             .find(|l| l.reg == reg)
             .filter(|l| l.read_only)
-            .map(|l| &*l.name)
+            .map(|l| l.name)
     }
 
     // ---- expressions ----
 
     fn expr(&mut self, id: ExprId) -> Result<Exp, SyntaxError> {
-        match self.ast.expr(id) {
+        let ast = self.ast;
+        match ast.expr(id) {
             Expr::Nil => Ok(Exp::Nil),
             Expr::True => Ok(Exp::True),
             Expr::False => Ok(Exp::False),
             Expr::Int(i) => Ok(Exp::Int(*i)),
             Expr::Float(f) => Ok(Exp::Float(*f)),
-            Expr::Str(s) => {
-                let s = s.clone();
-                Ok(Exp::Const(self.str_const(&s)))
-            }
+            Expr::Str(s) => Ok(Exp::Const(self.str_const(s))),
             Expr::Name(n) => {
                 self.last_line = n.line;
-                let text = n.text.clone();
-                self.name_expr(&text)
+                self.name_expr(&n.text)
             }
             Expr::Paren(inner) => {
                 // parentheses truncate multiple results to exactly one
@@ -1363,10 +1372,7 @@ impl<'a> Compiler<'a> {
             }
             Expr::Vararg => self.vararg_expr(),
             Expr::Call { .. } | Expr::MethodCall { .. } => self.call_expr(id),
-            Expr::Function(body) => {
-                let body = body.clone();
-                self.function_exp(&body, false)
-            }
+            Expr::Function(body) => self.function_exp(body, false),
         }
     }
 
@@ -1490,15 +1496,16 @@ impl<'a> Compiler<'a> {
     }
 
     fn call_expr(&mut self, id: ExprId) -> Result<Exp, SyntaxError> {
-        match self.ast.expr(id) {
+        let ast = self.ast;
+        match ast.expr(id) {
             Expr::Call { func, args, line } => {
-                let (func, args, line) = (*func, args.clone(), *line);
+                let (func, line) = (*func, *line);
                 let base = self.lr().freereg;
                 let fe = self.expr(func)?;
                 self.set_freereg(base);
                 let r = self.exp_to_nextreg(fe)?;
                 debug_assert_eq!(r, base);
-                let (nfixed, open) = self.args_onto_stack(&args, base + 1)?;
+                let (nfixed, open) = self.args_onto_stack(args, base + 1)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 1 };
                 let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
@@ -1511,7 +1518,7 @@ impl<'a> Compiler<'a> {
                 args,
                 line,
             } => {
-                let (obj, method, args, line) = (*obj, method.clone(), args.clone(), *line);
+                let (obj, line) = (*obj, *line);
                 let base = self.lr().freereg;
                 let oe = self.expr(obj)?;
                 let o = self.exp_to_anyreg(oe)?;
@@ -1543,7 +1550,7 @@ impl<'a> Compiler<'a> {
                     self.reserve(2)?;
                     self.emit(Inst::iabc(Op::SelfOp, base, o, kr, false));
                 }
-                let (nfixed, open) = self.args_onto_stack(&args, base + 2)?;
+                let (nfixed, open) = self.args_onto_stack(args, base + 2)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 2 };
                 let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
@@ -1784,7 +1791,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn function_exp(&mut self, body: &FuncBody, is_method: bool) -> Result<Exp, SyntaxError> {
+    fn function_exp(&mut self, body: &'a FuncBody, is_method: bool) -> Result<Exp, SyntaxError> {
         let line = body.line;
         let nparams = body.params.len() + is_method as usize;
         if nparams > 200 {
@@ -1843,15 +1850,15 @@ impl<'a> Compiler<'a> {
             self.declare_local(&p.text, (i + is_method as usize) as u32, false)?;
         }
         if let ast::Vararg::Named(n) = &body.vararg {
-            let name = n.text.clone();
+            let name: &str = &n.text;
             let r = self.reserve(1)?;
             // 5.5: the named vararg table is a read-only local. If the pre-scan
             // proves it is only ever read as `t[k]`/`t.n` (never written, never
             // escaping, not `_ENV`) it stays *virtual* — indexed straight off the
             // stack varargs with no heap table. Otherwise materialize it now.
-            let virtual_ok = &*name != "_ENV" && !self.vararg_forced(&body.block, &name);
+            let virtual_ok = name != "_ENV" && !self.vararg_forced(&body.block, name);
             if virtual_ok {
-                self.declare_local(&name, r, true)?;
+                self.declare_local(name, r, true)?;
                 self.l()
                     .locals
                     .last_mut()
@@ -1859,7 +1866,7 @@ impl<'a> Compiler<'a> {
                     .vararg_virtual = true;
             } else {
                 self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
-                self.declare_local(&name, r, true)?;
+                self.declare_local(name, r, true)?;
             }
         }
         // PUC 5.1's `LUA_COMPAT_VARARG` reserves the *name* `arg` as a hidden
@@ -2182,42 +2189,37 @@ impl<'a> Compiler<'a> {
     fn vararg_virtual_local(&self, name: &str) -> bool {
         let lvl = self.lr();
         // a more-recent `global name` marker shadows the local
-        if let Some(av) = lvl
-            .avars
-            .iter()
-            .rev()
-            .find(|a| a.name.as_deref() == Some(name))
+        if let Some(av) = lvl.avars.iter().rev().find(|a| a.name == Some(name))
             && av.global
         {
             return false;
         }
         lvl.locals
             .iter()
-            .rposition(|l| &*l.name == name)
+            .rposition(|l| l.name == name)
             .is_some_and(|idx| lvl.locals[idx].vararg_virtual)
     }
 
     fn index_expr(&mut self, obj: ExprId, key: ExprId) -> Result<Exp, SyntaxError> {
+        let ast = self.ast;
         // a read `t[k]` / `t.n` of a virtual named vararg: index the stack
         // varargs directly (OP_VARGIDX), allocating no table.
-        if let Expr::Name(n) = self.ast.expr(obj) {
-            let n = n.text.clone();
-            if self.vararg_virtual_local(&n) {
-                let saved = self.lr().freereg;
-                let ke = self.expr(key)?;
-                let k = self.exp_to_anyreg(ke)?;
-                let e = Exp::Reloc(self.emit(Inst::iabc(Op::VargIdx, 0, 0, k, false)));
-                self.set_freereg(saved);
-                return Ok(e);
-            }
+        if let Expr::Name(n) = ast.expr(obj)
+            && self.vararg_virtual_local(&n.text)
+        {
+            let saved = self.lr().freereg;
+            let ke = self.expr(key)?;
+            let k = self.exp_to_anyreg(ke)?;
+            let e = Exp::Reloc(self.emit(Inst::iabc(Op::VargIdx, 0, 0, k, false)));
+            self.set_freereg(saved);
+            return Ok(e);
         }
         let saved = self.lr().freereg;
         let oe = self.expr(obj)?;
         let o = self.exp_to_anyreg(oe)?;
-        let e = match self.ast.expr(key) {
+        let e = match ast.expr(key) {
             Expr::Str(s) if s.len() <= 255 => {
-                let s = s.clone();
-                let c = self.str_const(&s);
+                let c = self.str_const(s);
                 if c <= 0xFF {
                     Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
                 } else {
@@ -2241,7 +2243,8 @@ impl<'a> Compiler<'a> {
     }
 
     fn table_ctor(&mut self, id: ExprId, line: u32) -> Result<Exp, SyntaxError> {
-        let Expr::Table { fields, .. } = self.ast.expr(id) else {
+        let ast = self.ast;
+        let Expr::Table { fields, .. } = ast.expr(id) else {
             unreachable!()
         };
         self.last_line = line;
@@ -2263,13 +2266,12 @@ impl<'a> Compiler<'a> {
         const FIELDS_PER_FLUSH: u32 = 50;
         let mut pending = 0u32;
         let mut flushed = 0u32;
-        let fields: Vec<TableField> = fields.clone();
         let n_items = fields
             .iter()
             .filter(|f| matches!(f, TableField::Item(_)))
             .count();
         let mut item_idx = 0usize;
-        for f in &fields {
+        for f in fields {
             match f {
                 TableField::Item(v) => {
                     item_idx += 1;
@@ -2300,7 +2302,6 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 TableField::Named(name, v) => {
-                    let name = name.clone();
                     let saved = self.lr().freereg;
                     let ve = self.expr(*v)?;
                     let vr = self.exp_to_anyreg(ve)?;
@@ -2365,7 +2366,8 @@ impl<'a> Compiler<'a> {
     /// label with `block_follow(ls, 0)`, which excludes `until`).
     fn stat_block_inner(&mut self, b: &Block, until_follows: bool) -> Result<(), SyntaxError> {
         for (i, &sid) in b.stats.iter().enumerate() {
-            if let Stat::Label(n) = self.ast.stat(sid) {
+            let ast = self.ast;
+            if let Stat::Label(n) = ast.stat(sid) {
                 // a trailing label (only labels after it) does not enter the
                 // scope of the block's locals (continue-style jumps); in a
                 // repeat body the trailing `until` keeps the locals alive.
@@ -2373,9 +2375,8 @@ impl<'a> Compiler<'a> {
                     && b.stats[i + 1..]
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
-                let (name, line) = (n.text.clone(), n.line);
-                self.last_line = line;
-                self.define_label(&name, line, trailing)?;
+                self.last_line = n.line;
+                self.define_label(&n.text, n.line, trailing)?;
                 continue;
             }
             self.stat(sid)?;
@@ -2398,39 +2399,18 @@ impl<'a> Compiler<'a> {
         if sline != 0 {
             self.last_line = sline;
         }
-        match self.ast.stat(sid) {
-            Stat::Do(b) => {
-                let b = b.clone();
-                self.block_scoped(&b)
-            }
+        let ast = self.ast;
+        match ast.stat(sid) {
+            Stat::Do(b) => self.block_scoped(b),
             Stat::Local {
                 collective,
                 names,
                 exprs,
-            } => {
-                let collective = *collective;
-                let names: Vec<AttribName> = names.clone();
-                let exprs: Vec<ExprId> = exprs.clone();
-                self.local_stat(collective, &names, &exprs)
-            }
-            Stat::Assign { targets, exprs } => {
-                let targets: Vec<ExprId> = targets.clone();
-                let exprs: Vec<ExprId> = exprs.clone();
-                self.assign_stat(&targets, &exprs)
-            }
-            Stat::If { arms, else_body } => {
-                let arms: Vec<(ExprId, u32, Block)> = arms.clone();
-                let else_body: Option<Block> = else_body.clone();
-                self.if_stat(&arms, else_body.as_ref())
-            }
-            Stat::While { cond, body } => {
-                let (cond, body) = (*cond, body.clone());
-                self.while_stat(cond, &body, self.stat_end_line(sid))
-            }
-            Stat::Repeat { body, cond } => {
-                let (body, cond) = (body.clone(), *cond);
-                self.repeat_stat(&body, cond)
-            }
+            } => self.local_stat(*collective, names, exprs),
+            Stat::Assign { targets, exprs } => self.assign_stat(targets, exprs),
+            Stat::If { arms, else_body } => self.if_stat(arms, else_body.as_ref()),
+            Stat::While { cond, body } => self.while_stat(*cond, body, self.stat_end_line(sid)),
+            Stat::Repeat { body, cond } => self.repeat_stat(body, *cond),
             Stat::NumericFor {
                 var,
                 start,
@@ -2438,24 +2418,15 @@ impl<'a> Compiler<'a> {
                 step,
                 body,
             } => {
-                let var = var.clone();
-                let (start, limit, step) = (*start, *limit, *step);
-                let body = body.clone();
                 let end = self.stat_end_line(sid);
-                self.numeric_for(&var.text, var.line, (start, limit, step), &body, end)
+                self.numeric_for(&var.text, var.line, (*start, *limit, *step), body, end)
             }
             Stat::GenericFor {
                 vars,
                 exprs,
                 body,
                 expr_line,
-            } => {
-                let vars = vars.clone();
-                let exprs: Vec<ExprId> = exprs.clone();
-                let body = body.clone();
-                let expr_line = *expr_line;
-                self.generic_for(&vars, &exprs, &body, expr_line, self.stat_end_line(sid))
-            }
+            } => self.generic_for(vars, exprs, body, *expr_line, self.stat_end_line(sid)),
             Stat::Break { line } => {
                 self.last_line = *line;
                 let Some(loop_floor) = self
@@ -2487,9 +2458,8 @@ impl<'a> Compiler<'a> {
                 Ok(())
             }
             Stat::Return { exprs, line } => {
-                let exprs: Vec<ExprId> = exprs.clone();
                 self.last_line = *line;
-                self.return_stat(&exprs)
+                self.return_stat(exprs)
             }
             Stat::Call(e) => {
                 let e = *e;
@@ -2505,24 +2475,19 @@ impl<'a> Compiler<'a> {
                 self.set_freereg(base);
                 Ok(())
             }
-            Stat::Function { name, body } => {
-                let (name, body) = (name.clone(), body.clone());
-                self.function_stat(&name, &body)
-            }
+            Stat::Function { name, body } => self.function_stat(name, body),
             Stat::LocalFunction { name, body } => {
-                let (name, body) = (name.clone(), body.clone());
                 self.last_line = name.line;
                 let reg = self.reserve(1)?;
                 // declared before the body: the function can call itself
                 self.declare_local(&name.text, reg, false)?;
-                let f = self.function_exp(&body, false)?;
+                let f = self.function_exp(body, false)?;
                 self.exp_to_reg(f, reg)?;
                 self.set_freereg(reg + 1);
                 Ok(())
             }
             Stat::GlobalFunction { name, body } => {
                 // `global function f` declares f, then assigns the closure
-                let (name, body) = (name.clone(), body.clone());
                 self.last_line = name.line;
                 self.l()
                     .blocks
@@ -2532,7 +2497,7 @@ impl<'a> Compiler<'a> {
                     .push((name.text.clone(), false));
                 self.declare_global_marker(Some(&name.text));
                 let saved = self.lr().freereg;
-                let f = self.function_exp(&body, false)?;
+                let f = self.function_exp(body, false)?;
                 let r = self.exp_to_anyreg(f)?;
                 // `global function f` is a defining write: f must not already
                 // exist in the environment (runtime "already defined" check).
@@ -2554,10 +2519,7 @@ impl<'a> Compiler<'a> {
                 collective,
                 names,
                 exprs,
-            } => {
-                let (collective, names, exprs) = (*collective, names.clone(), exprs.clone());
-                self.global_decl_stat(collective, &names, &exprs)
-            }
+            } => self.global_decl_stat(*collective, names, exprs),
             Stat::GlobalAll { attrib } => {
                 let attrib = *attrib;
                 if attrib == Some(ast::Attrib::Close) {
@@ -2569,10 +2531,7 @@ impl<'a> Compiler<'a> {
                 self.declare_global_marker(None);
                 Ok(())
             }
-            Stat::Goto(n) => {
-                let (name, line) = (n.text.clone(), n.line);
-                self.goto_stat(&name, line)
-            }
+            Stat::Goto(n) => self.goto_stat(&n.text, n.line),
             Stat::Label(_) => unreachable!("labels handled in stat_block"),
         }
     }
@@ -2581,7 +2540,7 @@ impl<'a> Compiler<'a> {
     fn global_decl_stat(
         &mut self,
         collective: Option<ast::Attrib>,
-        names: &[AttribName],
+        names: &'a [AttribName],
         exprs: &[ExprId],
     ) -> Result<(), SyntaxError> {
         // attribute validation happens before any evaluation
@@ -2615,23 +2574,25 @@ impl<'a> Compiler<'a> {
         declare(self);
         // defining write: each target must not already exist (OP_ERRNNIL).
         for (i, an) in names.iter().enumerate() {
-            let text = an.name.text.clone();
-            self.emit_global_redef_check(&text)?;
-            self.assign_global(&text, base + i as u32)?;
+            self.emit_global_redef_check(&an.name.text)?;
+            self.assign_global(&an.name.text, base + i as u32)?;
         }
         self.set_freereg(saved);
         Ok(())
     }
 
-    fn function_stat(&mut self, name: &ast::FuncName, body: &FuncBody) -> Result<(), SyntaxError> {
+    fn function_stat(
+        &mut self,
+        name: &ast::FuncName,
+        body: &'a FuncBody,
+    ) -> Result<(), SyntaxError> {
         self.last_line = name.base.line;
         let is_method = name.method.is_some();
         let saved = self.lr().freereg;
         let f = self.function_exp(body, is_method)?;
         let freg = self.exp_to_anyreg(f)?;
         if name.path.is_empty() && name.method.is_none() {
-            let text = name.base.text.clone();
-            self.assign_name(&text, name.base.line, freg)?;
+            self.assign_name(&name.base.text, name.base.line, freg)?;
             self.set_freereg(saved);
             return Ok(());
         }
@@ -2643,12 +2604,11 @@ impl<'a> Compiler<'a> {
         // error on the right source line (errors.lua :430).
         let saved_force = self.force_line.replace(name.base.line);
         let res = (|| -> Result<(), SyntaxError> {
-            let base_text = name.base.text.clone();
-            let be = self.name_expr(&base_text)?;
+            let be = self.name_expr(&name.base.text)?;
             let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<Box<str>> = name.path.iter().map(|n| n.text.clone()).collect();
+            let mut fields: Vec<&str> = name.path.iter().map(|n| &*n.text).collect();
             if let Some(m) = &name.method {
-                fields.push(m.text.clone());
+                fields.push(&m.text);
             }
             for f_name in &fields[..fields.len() - 1] {
                 let c = self.str_const(f_name.as_bytes());
@@ -2685,7 +2645,7 @@ impl<'a> Compiler<'a> {
     fn local_stat(
         &mut self,
         collective: Option<ast::Attrib>,
-        names: &[AttribName],
+        names: &'a [AttribName],
         exprs: &[ExprId],
     ) -> Result<(), SyntaxError> {
         let n = names.len() as u32;
@@ -2803,6 +2763,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn assign_stat(&mut self, targets: &[ExprId], exprs: &[ExprId]) -> Result<(), SyntaxError> {
+        let ast = self.ast;
         let saved = self.lr().freereg;
         let want = targets.len() as u32;
         // PUC parses every LHS target (left-to-right) before the RHS explist, so
@@ -2849,10 +2810,9 @@ impl<'a> Compiler<'a> {
                     // OP_SetI (so it never depends on a register that could
                     // be mutated by an intervening store), everything else
                     // gets pinned to a fresh register too.
-                    let key_kind = match self.ast.expr(key) {
+                    let key_kind = match ast.expr(key) {
                         Expr::Str(s) if s.len() <= 255 => {
-                            let s = s.clone();
-                            let c = self.str_const(&s);
+                            let c = self.str_const(s);
                             if c <= 0xFF {
                                 SetKey::Field(c)
                             } else {
@@ -2934,10 +2894,10 @@ impl<'a> Compiler<'a> {
     /// in source order, so they precede the RHS's (PUC restassign ordering). Only
     /// the lvalue prefix (`Name`, and the object/key of an `Index`) is walked.
     fn preresolve_target_upvals(&mut self, id: ExprId) -> Result<(), SyntaxError> {
-        match self.ast.expr(id) {
+        let ast = self.ast;
+        match ast.expr(id) {
             Expr::Name(n) => {
-                let text = n.text.clone();
-                self.resolve_name(&text)?;
+                self.resolve_name(&n.text)?;
             }
             Expr::Index { obj, key } => {
                 let (obj, key) = (*obj, *key);
@@ -3049,20 +3009,17 @@ impl<'a> Compiler<'a> {
     }
 
     fn assign_to(&mut self, target: ExprId, vreg: u32) -> Result<(), SyntaxError> {
-        match self.ast.expr(target) {
-            Expr::Name(n) => {
-                let (text, line) = (n.text.clone(), n.line);
-                self.assign_name(&text, line, vreg)
-            }
+        let ast = self.ast;
+        match ast.expr(target) {
+            Expr::Name(n) => self.assign_name(&n.text, n.line, vreg),
             Expr::Index { obj, key } => {
                 let (obj, key) = (*obj, *key);
                 let saved = self.lr().freereg;
                 let oe = self.expr(obj)?;
                 let o = self.exp_to_anyreg(oe)?;
-                match self.ast.expr(key) {
+                match ast.expr(key) {
                     Expr::Str(s) if s.len() <= 255 => {
-                        let s = s.clone();
-                        let c = self.str_const(&s);
+                        let c = self.str_const(s);
                         if c <= 0xFF {
                             self.emit(Inst::iabc(Op::SetField, o, c, vreg, true));
                         } else {
@@ -3210,7 +3167,7 @@ impl<'a> Compiler<'a> {
 
     fn numeric_for(
         &mut self,
-        var: &str,
+        var: &'a str,
         line: u32,
         (start, limit, step): (ExprId, ExprId, Option<ExprId>),
         body: &Block,
@@ -3310,7 +3267,7 @@ impl<'a> Compiler<'a> {
 
     fn generic_for(
         &mut self,
-        vars: &[ast::Name],
+        vars: &'a [ast::Name],
         exprs: &[ExprId],
         body: &Block,
         expr_line: u32,

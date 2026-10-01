@@ -199,7 +199,7 @@ pub(crate) fn parse_at_depth(
     c_depth: u32,
 ) -> Result<Parsed, SyntaxError> {
     let lex = Lexer::new(src, version);
-    parse_from_source(TokenSource::Lexer(lex), version, c_depth)
+    parse_from_source(TokenSource::Lexer(lex), version, c_depth, src.len())
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua
@@ -229,6 +229,7 @@ pub(crate) fn parse_tokens_at_depth(
         },
         version,
         c_depth,
+        src.len(),
     )
 }
 
@@ -236,18 +237,22 @@ fn parse_from_source<'s>(
     mut lex: TokenSource<'s>,
     version: LuaVersion,
     c_depth: u32,
+    src_len: usize,
 ) -> Result<Parsed, SyntaxError> {
     let cur = lex.next_token()?;
+    // typical source has an expression node per dozen bytes or so and a
+    // statement per few dozen; starting near that skips most regrowth
+    let (n_exprs, n_stats) = (src_len / 16, src_len / 64);
     let mut p = Parser {
         lex,
         tok: cur.info,
         tok_char: cur.char,
         peeked: None,
         prev_line: 1,
-        exprs: Vec::new(),
-        stats: Vec::new(),
-        stat_lines: Vec::new(),
-        end_lines: Vec::new(),
+        exprs: Vec::with_capacity(n_exprs),
+        stats: Vec::with_capacity(n_stats),
+        stat_lines: Vec::with_capacity(n_stats),
+        end_lines: Vec::with_capacity(n_stats),
         depth: c_depth,
         version,
         // the main chunk is the bottom-most function context (line 0 → main)
