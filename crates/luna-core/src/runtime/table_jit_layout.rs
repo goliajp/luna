@@ -14,14 +14,14 @@ pub const TABLE_ACOUNT_OFFSET: usize = std::mem::offset_of!(Table, acount);
 /// See [`TABLE_ACOUNT_OFFSET`].
 pub const TABLE_APREFIX_OFFSET: usize = std::mem::offset_of!(Table, aprefix);
 
-/// Byte offset of `key: Value` within `Node` (= 0).
-pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key);
+/// Byte offset of the key within `Node` (= 0): its tag here, its payload
+/// 8 bytes on.
+pub const NODE_KEY_OFFSET: usize = std::mem::offset_of!(Node, key_tag);
 
-/// Byte offset of `val: Value` within `Node` (= 16 — `key` is 16-byte
-/// `Value`, no inner padding).
+/// Byte offset of `val: Value` within `Node` (= 16).
 pub const NODE_VAL_OFFSET: usize = std::mem::offset_of!(Node, val);
 
-/// Total `Node` size in bytes (= 40 on 64-bit). Used as the stride
+/// Total `Node` size in bytes (= 32). Used as the stride
 /// in `node_addr = nodes_ptr + slot_idx * SIZEOF_NODE`.
 pub const SIZEOF_NODE: usize = std::mem::size_of::<Node>();
 
@@ -38,6 +38,7 @@ pub const SIZEOF_NODE: usize = std::mem::size_of::<Node>();
 const _: () = {
     assert!(std::mem::size_of::<Box<[Node]>>() == 2 * std::mem::size_of::<usize>());
     assert!(NODE_KEY_OFFSET == 0);
+    assert!(std::mem::offset_of!(Node, key_payload) == 8);
     assert!(NODE_VAL_OFFSET == 16);
-    assert!(SIZEOF_NODE >= 32);
+    assert!(SIZEOF_NODE == 32);
 };
