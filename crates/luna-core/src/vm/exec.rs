@@ -4514,9 +4514,17 @@ impl Vm {
                     if chain > cap {
                         return Err(self.rt_err("'__call' chain too long"));
                     }
-                    // slots above shift by one; at a call site those are dead
-                    // temps of the current frame
-                    self.stack.insert(func_slot as usize, mm);
+                    // the callee and its arguments (and anything up to top)
+                    // shift up by one (PUC tryfuncTM); slots above them are
+                    // dead temps, and inserting into the whole stack would
+                    // move all of them and grow it on every hop
+                    let from = func_slot as usize;
+                    let end = (func_slot + 1 + nargs).max(self.top) as usize;
+                    if self.stack.len() <= end {
+                        self.stack.resize(end + 1, Value::Nil);
+                    }
+                    self.stack.copy_within(from..end, from + 1);
+                    self.stack[from] = mm;
                     if self.top > func_slot {
                         self.top += 1;
                     }
