@@ -78,7 +78,8 @@ fn const_return_only() {
 
 #[test]
 fn if_then_end_records_forward_jump_target() {
-    let (code, lt) = compile_last_target("if true then return 1 end return 2");
+    // a constant condition emits no test, so the condition is a vararg
+    let (code, lt) = compile_last_target("local c = ... if c then return 1 end return 2");
     let lt = lt.expect("if-stat must record at least one jump target");
     // The forward-skip jump for the `if` cond patches to the post-then
     // pc (just before `return 2`). Must be inside the code, never

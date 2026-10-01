@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 mod assign_gate;
 mod binop;
+mod cond;
 mod ctconst;
 mod fold;
 use ctconst::{CtConst, ct_value};
@@ -335,12 +336,12 @@ struct Level {
     /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
     /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
     ///
-    /// Read by peephole passes (see `prev_emit_is_safe_peephole_site`) that
-    /// want to know whether the just-emitted instruction at pc `here() - 1`
-    /// can be modified in place: it is safe only when that pc is NOT itself a
-    /// jump destination, i.e. `last_target < here() - 1` or `last_target ==
-    /// None`. Consumed by the Reloc-landing peephole at `assign_name` and
-    /// the trailing-Move elision at `assign_stat`.
+    /// Read by peephole passes (see `no_jump_lands_here`) that rewrite the
+    /// just-emitted instruction at pc `here() - 1` in place of emitting a
+    /// Move at `here()`: that is safe only when no jump lands at `here()`,
+    /// i.e. `last_target < here()` or `last_target == None`. Consumed by the
+    /// Reloc-landing peephole at `assign_name` and the trailing-Move elision
+    /// at `assign_stat`.
     ///
     /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
     /// called from every code path that turns some `pc` into a jump landing
@@ -540,27 +541,34 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// PUC-equivalent query for "is the instruction at `here() - 1` safe to
-    /// peephole-retarget?". Returns `false` either when no instruction has
-    /// been emitted yet (vacuous), or when the just-emitted pc is itself a
-    /// recorded jump destination.
+    /// Whether the instruction at `here() - 1` may take the place of a Move
+    /// that would otherwise be emitted at `here()`: every path that would
+    /// reach the Move then runs that instruction last. `false` when nothing
+    /// has been emitted yet, or when a jump lands at `here()` (such a path
+    /// skips the instruction and needs the Move).
+    ///
+    /// A jump landing at `here() - 1` itself is fine (PUC `discharge2reg`
+    /// rewrites the A field without looking at `fs->lasttarget`): the paths
+    /// arriving there run the rewritten instruction like the fall-through
+    /// path does, and the temporary register it wrote is read only by the
+    /// Move being dropped.
     ///
     /// Consumed by the Reloc-landing peephole at `assign_name` and the
     /// RHS materialization elision at `assign_stat`.
-    fn prev_emit_is_safe_peephole_site(&self) -> bool {
+    fn no_jump_lands_here(&self) -> bool {
         let here = self.here();
         if here == 0 {
             return false;
         }
         match self.lr().last_target {
             None => true,
-            Some(t) => t < here - 1,
+            Some(t) => t < here,
         }
     }
 
     /// Reloc-landing peephole gate. Returns `Some(prev_pc)` when the
     /// instruction at `here() - 1` is a retargetable producer whose A field
-    /// equals `vreg` AND that pc is NOT a jump destination. The caller can
+    /// equals `vreg` AND no jump lands right after it. The caller can
     /// then `patch_dest(prev_pc, local_reg)` to retarget the A field
     /// directly and skip the otherwise-required `Move local_reg, vreg`.
     ///
@@ -573,7 +581,7 @@ impl<'a> Compiler<'a> {
     /// no Reloc landing happens through assign_name for them.
     ///
     fn assign_name_can_retarget_reloc(&self, vreg: u32) -> Option<usize> {
-        if !self.prev_emit_is_safe_peephole_site() {
+        if !self.no_jump_lands_here() {
             return None;
         }
         let prev_pc = self.here() - 1;
@@ -1981,23 +1989,6 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Compile a condition; the returned JMP pc is taken when it is FALSE.
-    fn cond_jump_false(&mut self, id: ExprId) -> Result<usize, SyntaxError> {
-        let saved = self.lr().freereg;
-        let e = self.expr(id)?;
-        match e {
-            Exp::Cmp { op, l, r, c } => {
-                self.emit(Inst::iabc(op, l, r, c, false));
-            }
-            e => {
-                let r = self.exp_to_anyreg(e)?;
-                self.emit(Inst::iabc(Op::Test, r, 0, 0, false));
-            }
-        }
-        self.set_freereg(saved);
-        Ok(self.emit_jump())
-    }
-
     /// 5.1: zeros of a condition the parser folded away still entered the
     /// constant table (see `Level::zero_51`).
     fn note_zeros(&mut self, zeros: &[f64]) {
@@ -2898,23 +2889,23 @@ impl<'a> Compiler<'a> {
         // store, the store can take `src` directly and the Move is dead.
         // Only catches `Exp::Reg(r)` RHS — Reloc RHS is already handled by
         // the Reloc-landing peephole inside assign_name, literal/Open RHS
-        // never emit a tail Move. The pop is guarded by `prev_emit_is_safe_peephole_site`
-        // so a jump landing at the Move's pc is preserved.
-        let alt_vreg =
-            if targets.len() == 1 && exprs.len() == 1 && self.prev_emit_is_safe_peephole_site() {
-                let last_pc = self.here() - 1;
-                let last = self.lr().code[last_pc];
-                if last.op() == Op::Move && last.a() == base {
-                    let src = last.b();
-                    self.l().code.pop();
-                    self.l().lines.pop();
-                    Some(src)
-                } else {
-                    None
-                }
+        // never emit a tail Move. The pop is guarded by `no_jump_lands_here`:
+        // a jump landing at the Move itself is fine (the store popped into its
+        // pc reads `src` on every path), one landing after it is not.
+        let alt_vreg = if targets.len() == 1 && exprs.len() == 1 && self.no_jump_lands_here() {
+            let last_pc = self.here() - 1;
+            let last = self.lr().code[last_pc];
+            if last.op() == Op::Move && last.a() == base {
+                let src = last.b();
+                self.l().code.pop();
+                self.l().lines.pop();
+                Some(src)
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
         // PUC `restassign` stores on the way back out of its recursion: the
         // last target first. The order is visible through `__newindex` and
         // when a target repeats (`a, a = 1, 2` leaves 1).
@@ -2981,8 +2972,8 @@ impl<'a> Compiler<'a> {
                 if reg != vreg {
                     // Reloc-landing peephole: when the just-emitted
                     // instruction is a retargetable producer (Add / GetField
-                    // / Unm / Len / etc.) that wrote into `vreg` and is not
-                    // itself a jump destination, retarget its A field to
+                    // / Unm / Len / etc.) that wrote into `vreg` and no jump
+                    // lands right after it, retarget its A field to
                     // `reg` and skip the Move. Mirrors PUC `discharge2reg`'s
                     // A-field rewrite at lcode.c:luaK_dischargevars / setoneret.
                     if let Some(prev_pc) = self.assign_name_can_retarget_reloc(vreg) {
@@ -3104,7 +3095,7 @@ impl<'a> Compiler<'a> {
     ) -> Result<(), SyntaxError> {
         let mut end_jumps = Vec::new();
         for (i, (cond, then_line, body)) in arms.iter().enumerate() {
-            let skip = self.cond_jump_false(*cond)?;
+            let (skips, last) = self.cond_jump_false(*cond)?;
             // PUC 5.2/5.3/5.4 attribute BOTH the TEST and the conditional-skip
             // JMP to the `then` keyword's line, because `luaK_goiftrue`
             // emits them after `checknext(TK_THEN)` has advanced
@@ -3113,21 +3104,26 @@ impl<'a> Compiler<'a> {
             // the condition's last instruction and the body's first
             // (5.2/5.3/5.4 db.lua first `test` baselines {2,3,4,7}). PUC
             // 5.5 reorders luaK_goiftrue so the test/jmp keep the condition
-            // line (5.5 db.lua expects {2,4,7}).
-            if self.version >= LuaVersion::Lua52 && self.version <= LuaVersion::Lua54 {
-                self.l().lines[skip] = *then_line;
-                // The TEST (or TestSet) instruction sits one slot before the
-                // JMP; the same line attribution applies to it.
-                if skip > 0 {
-                    self.l().lines[skip - 1] = *then_line;
-                }
+            // line (5.5 db.lua expects {2,4,7}). Only a `TEST` of the
+            // condition's last operand is emitted there: a comparison was
+            // emitted where it was read, and the left operand of an `and` /
+            // `or` was tested at its operator.
+            if self.version >= LuaVersion::Lua52
+                && self.version <= LuaVersion::Lua54
+                && last == cond::LastTest::Test
+            {
+                let jmp = self.here() - 1;
+                self.l().lines[jmp] = *then_line;
+                self.l().lines[jmp - 1] = *then_line;
             }
             self.block_scoped(body)?;
             let is_last = i == arms.len() - 1 && else_body.is_none();
             if !is_last {
                 end_jumps.push(self.emit_jump());
             }
-            self.patch_to_here(skip)?;
+            for skip in skips {
+                self.patch_to_here(skip)?;
+            }
         }
         if let Some(eb) = else_body {
             self.block_scoped(eb)?;
@@ -3155,7 +3151,7 @@ impl<'a> Compiler<'a> {
         end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         let top = self.here();
-        let exit = self.cond_jump_false(cond)?;
+        let (exits, _) = self.cond_jump_false(cond)?;
         self.enter_block(true);
         self.stat_block(body)?;
         if self.block_captured() {
@@ -3166,7 +3162,9 @@ impl<'a> Compiler<'a> {
         self.jump_back(top)?;
         self.l().blocks.last_mut().expect("while block").end_line = end_line;
         self.leave_block()?;
-        self.patch_to_here(exit)?;
+        for exit in exits {
+            self.patch_to_here(exit)?;
+        }
         Ok(())
     }
 
