@@ -133,6 +133,22 @@ pub trait TraceCompiler {
         opts: CompileOptions,
     ) -> Option<CompiledTrace>;
 
+    /// [`TraceCompiler::try_compile_trace`] for a record of dialect
+    /// `version`, which decides how some library calls fold (5.1 / 5.2
+    /// `math.min` returns a float). The interpreter calls this one; the
+    /// default ignores `version`.
+    #[doc(hidden)]
+    fn try_compile_trace_for(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: crate::version::LuaVersion,
+    ) -> Option<CompiledTrace> {
+        let _ = version;
+        self.try_compile_trace(storage, record, opts)
+    }
+
     /// Name of the lowerer's last-reached checkpoint (diagnostic; lets
     /// the recorder bucket failures by phase).
     fn last_compile_checkpoint(&self) -> &'static str;

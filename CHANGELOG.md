@@ -136,6 +136,38 @@ optimization.
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
   are not part of the supported API.
 
+---
+
+## [4.0.1] — 2026-10-01
+
+Two trace JIT fixes. With the JIT on (the default for `luna_jit` VMs and
+the `luna` binary), a loop that has run hot could compute a wrong value,
+and in one case crash. Turning the JIT off (`--no-jit`) was not affected.
+No public API changes.
+
+### Fixed
+
+- A loop variable that holds a different type on different iterations
+  could come out of the loop with the wrong value, in every dialect. For
+  example, a `while` loop that sets `x = 7` on odd iterations and
+  `x = 0.5` on even ones returned `4602678819172646912` (the bits of
+  `0.5` read as an integer) instead of `0.5`. When the variable switched
+  between a table and a number, the table could be lost or an integer
+  could be handed to the garbage collector as a table, which crashed the
+  process (segmentation fault) at the next collection. A compiled loop
+  now repeats only while every variable keeps the type it was compiled
+  for, and otherwise returns to the interpreter for that iteration.
+- In Lua 5.1 and 5.2, `math.min` and `math.max` inside a hot loop
+  returned an integer where these dialects return a float. The result
+  could print as a tiny float such as `4.4465908125712e-321` (an integer
+  `900` read as a float), and `1 / -math.min(#t, 5)` with an empty `t`
+  gave `inf` instead of `-inf`. They now return a float, as the
+  interpreter does.
+- AOT builds of Lua 5.3 code lowered traces with some of the 5.4 rules;
+  they now use the 5.3 rules, as the JIT does.
+
+---
+
 ## [4.0.0] — 2026-09-29
 
 A major version for three reasons: luna-jit and luna-aot expose a few
