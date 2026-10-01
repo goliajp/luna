@@ -460,6 +460,8 @@ impl LuaClosure {
         }
     }
 
+    // kept inline in the drain loop, which visits every closure
+    #[inline(always)]
     pub(crate) fn trace(&self, m: &mut Marker) {
         m.header(self.proto.as_ptr() as *mut GcHeader);
         for &uv in self.upvals().iter() {
