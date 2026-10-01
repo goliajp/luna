@@ -1678,6 +1678,17 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Capture a cloneable image of the record so we can re-lower at AOT
+/// emit time. TraceRecord is Clone since every field is Clone
+/// (Gc<Proto> = NonNull copy; Vec<RecordedOp> is Clone).
+fn capture_record(record: &TraceRecord) {
+    let hash = record.head_proto.stable_hash();
+    AOT_CAPTURED_RECORDS.with(|cell| {
+        cell.borrow_mut()
+            .push((hash, record.head_pc, record.clone()));
+    });
+}
+
 impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
     // `storage` is passed through to the inner backend.
     fn try_compile_trace(
@@ -1686,15 +1697,20 @@ impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        // Capture a cloneable image of the record so we can re-lower at
-        // AOT emit time. TraceRecord is Clone since every field is
-        // Clone (Gc<Proto> = NonNull copy; Vec<RecordedOp> is Clone).
-        let hash = record.head_proto.stable_hash();
-        AOT_CAPTURED_RECORDS.with(|cell| {
-            cell.borrow_mut()
-                .push((hash, record.head_pc, record.clone()));
-        });
+        capture_record(record);
         self.inner.try_compile_trace(storage, record, opts)
+    }
+
+    fn try_compile_trace_for(
+        &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: LuaVersion,
+    ) -> Option<CompiledTrace> {
+        capture_record(record);
+        self.inner
+            .try_compile_trace_for(storage, record, opts, version)
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
@@ -1892,7 +1908,8 @@ fn harvest_and_emit_aot_traces(
         let fn_name = format!("luna_aot_trace_{idx:08x}");
         let opts = CompileOptions {
             internal_loop: true,
-            pre53: matches!(version, LuaVersion::Lua51 | LuaVersion::Lua52),
+            // the same dialect flag the JIT compiled these records with
+            pre53: version <= LuaVersion::Lua53,
             aot: true,
         };
         // Re-lower this record into the ObjectModule under a unique
@@ -1902,11 +1919,12 @@ fn harvest_and_emit_aot_traces(
         // most likely a relocation path that fails for some opcode the
         // AOT lowerer's strkey resolver doesn't cover. Skip + continue;
         // the trace will fall back to JIT at deploy time.
-        let lower_res = luna_jit::jit_backend::trace::lower_trace_into_named(
+        let lower_res = luna_jit::jit_backend::trace::lower_trace_into_named_for(
             &mut module,
             record,
             opts,
             Some(&fn_name),
+            version,
         );
         if lower_res.is_none() {
             if probe_on {
