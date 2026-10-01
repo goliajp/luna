@@ -36,37 +36,14 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         Op::GetTable => (vec![b, c], vec![a]),
         Op::GetI => (vec![b], vec![a]),
         Op::GetField => (vec![b], vec![a]),
-        Op::SetTabUp => {
-            // upval[b][const_b_or_R[B]] = R[C] / K[C]
-            let mut r = Vec::new();
-            if !k {
-                r.push(c);
-            }
-            (r, vec![])
-        }
-        Op::SetTable => {
-            let mut r = vec![a, b];
-            if !k {
-                r.push(c);
-            }
-            (r, vec![])
-        }
-        Op::SetI => {
-            let mut r = vec![a];
-            if !k {
-                r.push(c);
-            }
-            (r, vec![])
-        }
-        Op::SetField => {
-            let mut r = vec![a];
-            if !k {
-                r.push(c);
-            }
-            (r, vec![])
-        }
+        // luna's set ops always take the value from R[C] (the k flag of
+        // SetField / SetTabUp marks B as a constant key)
+        Op::SetTabUp => (vec![c], vec![]),
+        Op::SetTable => (vec![a, b, c], vec![]),
+        Op::SetI | Op::SetField => (vec![a, c], vec![]),
         Op::NewTable => (vec![], vec![a]),
-        Op::SelfOp => (vec![b], vec![a, a + 1]),
+        // a key too far for the constant field sits in R[C]
+        Op::SelfOp => (if k { vec![b] } else { vec![b, c] }, vec![a, a + 1]),
         Op::Add
         | Op::Sub
         | Op::Mul
