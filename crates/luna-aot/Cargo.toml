@@ -27,7 +27,7 @@ workspace = true
 # Runtime + bytecode-format upstream. Pinned to the matching luna-core
 # release so `cargo publish` lookups still resolve when the path
 # fallback isn't in play.
-luna-core = { path = "../luna-core", version = "= 4.0.0" }
+luna-core = { path = "../luna-core", version = "= 4.0.1" }
 
 # Object-file emission for the embedded bytecode section.
 # `default-features = false` + the selected formats keeps the crate
@@ -43,7 +43,7 @@ clap = { version = "4", features = ["derive"] }
 # JIT backend installed) used by `compile_and_link` to harvest closed
 # traces from a warmup script run; cranelift_object's `ObjectModule`
 # is what `lower_trace_into_named` emits into per-trace .o bytes.
-luna-jit = { path = "../luna-jit", version = "= 4.0.0" }
+luna-jit = { path = "../luna-jit", version = "= 4.0.1" }
 # Cross-compile AOT traces: the `all-arch` feature pulls in every Cranelift backend (x86_64, arm64,
 # s390x, riscv64) so the offline trace lowerer can codegen for any
 # `TargetSpec` the caller passes, not just the build host. Without

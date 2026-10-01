@@ -16,7 +16,10 @@ let v = vm.eval("return 6 * 7")?;   // [Int(42)]
 
 ## Status
 
-**v4.0.0** (2026-09-29) moves the JIT and AOT to Cranelift 0.136,
+**v4.0.1** (2026-10-01) fixes hot loops that could compute a wrong
+value, or crash, when a variable changed type between iterations, and
+`math.min` / `math.max` returning integers in Lua 5.1 and 5.2 with the
+JIT on. **v4.0.0** (2026-09-29) moves the JIT and AOT to Cranelift 0.136,
 declares Rust 1.96 as the minimum, and fixes trace JIT comparisons that
 could treat `0` as `nil` or compare tables and strings by address. **v3.2.2** (2026-09-29) fixes JIT code on aarch64 that could run a
 freed function's instructions after a `Vm` was dropped. **v3.2.1**
