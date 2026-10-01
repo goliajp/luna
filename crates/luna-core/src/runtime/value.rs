@@ -379,22 +379,38 @@ impl Value {
     #[doc(hidden)]
     #[inline]
     pub unsafe fn pack(tag: u8, v: RawVal) -> Value {
-        debug_assert!(tag <= raw::LIGHTUSERDATA, "bad raw value tag");
-        if tag <= raw::TRUE {
-            return match tag {
-                raw::NIL => Value::Nil,
-                t => Value::Bool(t == raw::TRUE),
-            };
-        }
         let mut out = std::mem::MaybeUninit::<Value>::uninit();
-        // SAFETY: the tag is a valid `Value` tag (one less than the array
-        // tag), and the payload is the one `unpack` took from a value of
-        // that variant, still alive by the caller's contract
+        // SAFETY: the caller's contract is `pack_into`'s
         unsafe {
-            let p = out.as_mut_ptr() as *mut u8;
-            *p = tag - 1;
-            *(p.add(8) as *mut RawVal) = v;
+            Value::pack_into(out.as_mut_ptr(), tag, v);
             out.assume_init()
+        }
+    }
+
+    /// [`Self::pack`] written straight to `dst`, as a tag byte and a
+    /// payload word.
+    ///
+    /// # Safety
+    /// As for `pack`, and `dst` is writable.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub unsafe fn pack_into(dst: *mut Value, tag: u8, v: RawVal) {
+        debug_assert!(tag <= raw::LIGHTUSERDATA, "bad raw value tag");
+        // SAFETY: the tag is a valid `Value` tag (the array tag, or one
+        // less from `Int` up), and the payload is the one `unpack` took
+        // from a value of that variant, still alive by the caller's
+        // contract
+        unsafe {
+            if tag <= raw::TRUE {
+                dst.write(match tag {
+                    raw::NIL => Value::Nil,
+                    t => Value::Bool(t == raw::TRUE),
+                });
+            } else {
+                let p = dst as *mut u8;
+                *p = tag - 1;
+                *(p.add(8) as *mut RawVal) = v;
+            }
         }
     }
 }

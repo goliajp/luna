@@ -223,8 +223,7 @@ impl Vm {
                     let pk: *const Value = $pk;
                     // SAFETY: a register and a register or constant of the
                     // running frame
-                    if let Some(v) = unsafe { Vm::index_raw_at(pt, pk) } {
-                        set_reg!(inst.a(), v);
+                    if unsafe { Vm::index_raw_at(pt, pk, regs.add(inst.a() as usize)) } {
                         next!()
                     }
                     save!();
@@ -377,9 +376,8 @@ impl Vm {
                     Op::GetTabUp => {
                         let t = self.upval_get(cl!(), inst.b());
                         let pk = kptr.wrapping_add(inst.c() as usize);
-                        // SAFETY: a constant of the running proto
-                        if let Some(v) = unsafe { Vm::index_raw_key_at(t, pk) } {
-                            set_reg!(inst.a(), v);
+                        // SAFETY: a constant and a register of the running frame
+                        if unsafe { Vm::index_raw_key_at(t, pk, regs.add(inst.a() as usize)) } {
                             next!()
                         }
                         let key = konst!(inst.c());
@@ -390,13 +388,15 @@ impl Vm {
                     Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize)),
                     Op::GetField => get_arm!(kptr.wrapping_add(inst.c() as usize)),
                     Op::GetI => {
-                        let t = reg!(inst.b());
+                        let pt = regs.wrapping_add(inst.b() as usize);
                         let key = Value::Int(inst.c() as i64);
                         let dst = base!() + inst.a();
-                        if let Some(v) = self.index_raw(t, key) {
-                            set_reg!(inst.a(), v);
+                        // SAFETY: registers of the running frame
+                        if unsafe { Vm::index_raw_at(pt, &key, regs.add(inst.a() as usize)) } {
                             next!()
                         }
+                        // SAFETY: as above
+                        let t = unsafe { *pt };
                         save!();
                         self.index_miss(t, key, dst)?;
                         resume_same!()
@@ -446,8 +446,7 @@ impl Vm {
                         };
                         // SAFETY: a register or constant of the running frame;
                         // the object is read from its copy, `R[A]` may be `R[C]`
-                        if let Some(v) = unsafe { Vm::index_raw_key_at(o, pk) } {
-                            set_reg!(inst.a(), v);
+                        if unsafe { Vm::index_raw_key_at(o, pk, regs.add(inst.a() as usize)) } {
                             next!()
                         }
                         // SAFETY: as above
