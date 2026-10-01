@@ -6441,7 +6441,10 @@ impl Vm {
                     // otherwise clobber a result with the handler closure.
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
-                        && self.return_fast(base, abs_a, nret, entry_depth)
+                        && !matches!(
+                            self.return_fast(base, abs_a, nret, entry_depth),
+                            call_fast::Returned::No
+                        )
                     {
                         // done: the caller's frame is on top
                     } else if let Some(vals) = self.begin_close(
