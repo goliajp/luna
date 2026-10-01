@@ -694,16 +694,17 @@ impl Heap {
     /// reachable objects are BLACK and `current_white` has flipped, so the
     /// caller's sweep tests `other-white` for dead. Does NOT change `phase`.
     fn mark_all(&mut self, roots: &[Value], extra: &[*mut GcHeader]) {
+        // The gray queue starts as any barrier-grayed objects carried over
+        // (each demoted from BLACK by a write barrier and awaiting re-trace),
+        // and its buffer goes back to `gray` afterwards, so a collection
+        // does not regrow a fresh stack
         let mut m = Marker {
-            stack: Vec::new(),
+            stack: std::mem::take(&mut self.gray),
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: self.no_ephemeron,
             cached_protos: Vec::new(),
         };
-        // Drain any barrier-grayed objects carried over: each was demoted from
-        // BLACK back to gray by a write barrier and is awaiting (re-)trace.
-        m.stack.append(&mut self.gray);
         for &r in roots {
             m.value(r);
         }
@@ -734,6 +735,8 @@ impl Heap {
             }
         }
         self.atomic_tail(&mut m);
+        debug_assert!(m.stack.is_empty());
+        self.gray = m.stack;
     }
 
     /// PUC `atomic()` tail: weak-table value-clear, finalizer resurrection,
@@ -1229,32 +1232,27 @@ impl Heap {
         let new_white = self.current_white;
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
-            let mut cur = std::mem::replace(&mut self.all, ptr::null_mut());
-            let mut kept_head: *mut GcHeader = ptr::null_mut();
-            let mut kept_tail: *mut GcHeader = ptr::null_mut();
-            while !cur.is_null() {
-                let next = (*cur).next;
+            // PUC `sweeplist`: `link` is the field that points at `cur`, so
+            // a survivor costs one store (its color) and only a freed object
+            // relinks its predecessor
+            let mut head = std::mem::replace(&mut self.all, ptr::null_mut());
+            let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(head);
+            while !(*link).is_null() {
+                let cur = *link;
                 let f = (*cur).flags;
                 // dead = other-white (i.e. white but not current-white).
                 // Survivors are BLACK (just-marked) or current-white (born
                 // during the sweep itself).
-                let dead = is_white(f) && (f & new_white) == 0;
-                if !dead {
-                    (*cur).flags = (f & !COLOR_BITS) | new_white;
-                    (*cur).next = ptr::null_mut();
-                    if kept_tail.is_null() {
-                        kept_head = cur;
-                    } else {
-                        (*kept_tail).next = cur;
-                    }
-                    kept_tail = cur;
-                } else {
+                if is_white(f) && (f & new_white) == 0 {
+                    *link = (*cur).next;
                     self.free_obj(cur);
                     freed += 1;
+                } else {
+                    (*cur).flags = (f & !COLOR_BITS) | new_white;
+                    link = ptr::addr_of_mut!((*cur).next);
                 }
-                cur = next;
             }
-            self.all = kept_head;
+            self.all = head;
         }
         self.live -= freed;
         #[cfg(feature = "gc-verify")]
