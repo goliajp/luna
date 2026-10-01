@@ -136,3 +136,19 @@ fn ephemeron_table_marks_values_of_live_keys_only() {
         assert!(matches!(t.get(k), Value::Table(_)));
     }
 }
+
+#[test]
+fn native_upvalues_are_marked_through_a_table() {
+    let mut heap = Heap::new();
+    let t = heap.new_table();
+    let up = heap.new_table();
+    let s = heap.intern(b"an upvalue string long enough not to be interned at all");
+    let f = heap.new_native(noop, Box::new([Value::Table(up), Value::Str(s)]));
+    let bare = heap.new_native(noop, Box::new([]));
+    set(&mut heap, t, Value::Int(1), Value::Native(f));
+    set(&mut heap, t, Value::Int(2), Value::Native(bare));
+    let live = heap.live_objects();
+    assert_eq!(heap.collect(&[Value::Table(t)]), 0);
+    assert_eq!(heap.live_objects(), live);
+    assert_eq!(heap.collect(&[]), live);
+}
