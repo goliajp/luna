@@ -240,12 +240,12 @@ impl Vm {
             }
             // `R[A] := R[B][*pk]` for a key in a register or a constant
             macro_rules! get_arm {
-                ($pk:expr) => {{
+                ($pk:expr, $probe:ident) => {{
                     let pt = regs.wrapping_add(inst.b() as usize);
                     let pk: *const Value = $pk;
                     // SAFETY: a register and a register or constant of the
                     // running frame
-                    if unsafe { Vm::index_raw_at(pt, pk, regs.add(inst.a() as usize)) } {
+                    if unsafe { Vm::$probe(pt, pk, regs.add(inst.a() as usize)) } {
                         next!()
                     }
                     save!();
@@ -405,7 +405,8 @@ impl Vm {
                         let t = self.upval_get(cl!(), inst.b());
                         let pk = kptr.wrapping_add(inst.c() as usize);
                         // SAFETY: a constant and a register of the running frame
-                        if unsafe { Vm::index_raw_key_at(t, pk, regs.add(inst.a() as usize)) } {
+                        if unsafe { Vm::index_raw_kstr_key_at(t, pk, regs.add(inst.a() as usize)) }
+                        {
                             next!()
                         }
                         let key = konst!(inst.c());
@@ -413,8 +414,10 @@ impl Vm {
                         self.index_miss(t, key, base!() + inst.a())?;
                         resume_same!()
                     }
-                    Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize)),
-                    Op::GetField => get_arm!(kptr.wrapping_add(inst.c() as usize)),
+                    Op::GetTable => get_arm!(regs.wrapping_add(inst.c() as usize), index_raw_at),
+                    Op::GetField => {
+                        get_arm!(kptr.wrapping_add(inst.c() as usize), index_raw_kstr_at)
+                    }
                     Op::GetI => {
                         let pt = regs.wrapping_add(inst.b() as usize);
                         let key = Value::Int(inst.c() as i64);
@@ -474,7 +477,8 @@ impl Vm {
                         };
                         // SAFETY: a register or constant of the running frame;
                         // the object is read from its copy, `R[A]` may be `R[C]`
-                        if unsafe { Vm::index_raw_key_at(o, pk, regs.add(inst.a() as usize)) } {
+                        if unsafe { Vm::index_raw_kstr_key_at(o, pk, regs.add(inst.a() as usize)) }
+                        {
                             next!()
                         }
                         // SAFETY: as above
@@ -1119,7 +1123,9 @@ impl Vm {
                             let t = unsafe { raw_tag(pf) };
                             if t == tag::CLOSURE && !trace_on {
                                 // SAFETY: a closure tag means a live closure
-                                let callee = Gc::from_ptr(unsafe { raw_gc(pf) } as *mut LuaClosure);
+                                let callee = unsafe {
+                                    Gc::from_ptr_unchecked(raw_gc(pf) as *mut LuaClosure)
+                                };
                                 let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
                                 if let Some(nf) = self.push_lua_frame_fast(callee, abs, n, wanted) {
                                     fr = nf;
@@ -1127,9 +1133,11 @@ impl Vm {
                                 }
                             } else if t == tag::NATIVE {
                                 // SAFETY: a native tag means a live native closure
-                                let nc = Gc::from_ptr(
-                                    unsafe { raw_gc(pf) } as *mut crate::runtime::NativeClosure
-                                );
+                                let nc = unsafe {
+                                    Gc::from_ptr_unchecked(
+                                        raw_gc(pf) as *mut crate::runtime::NativeClosure
+                                    )
+                                };
                                 if nc.kind == NativeKind::Plain {
                                     let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
                                     self.call_native_plain(nc, abs, n, wanted)?;

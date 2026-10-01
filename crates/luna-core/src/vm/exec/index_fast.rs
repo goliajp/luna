@@ -24,7 +24,7 @@ unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool 
     unsafe {
         match raw_tag(pk) {
             tag::STR => {
-                let key = Gc::from_ptr(raw_gc(pk) as *mut LuaStr);
+                let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
                 match tb.str_slot_by_ptr(key) {
                     Some(slot) => {
                         if !plain && raw_tag(slot) == tag::NIL {
@@ -60,6 +60,39 @@ unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool 
     }
 }
 
+/// [`table_get_into`] for a constant key (`GetField`, `GetTabUp`, `SelfOp`),
+/// which is nearly always a string: that case first, the rest out of line.
+///
+/// # Safety
+/// As for `table_get_into`.
+#[inline(always)]
+unsafe fn table_get_kstr_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool {
+    // SAFETY: the caller's contract; payloads are read after their tags
+    unsafe {
+        if raw_tag(pk) != tag::STR {
+            return table_get_cold(tb, *pk, dst, tb.metatable().is_none());
+        }
+        let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
+        match tb.str_slot_by_ptr(key) {
+            Some(slot) => {
+                if raw_tag(slot) == tag::NIL && tb.metatable().is_some() {
+                    return false;
+                }
+                std::ptr::copy_nonoverlapping(slot, dst, 1);
+                true
+            }
+            None if key.is_short() => {
+                let plain = tb.metatable().is_none();
+                if plain {
+                    dst.write(Value::Nil);
+                }
+                plain
+            }
+            None => table_get_cold(tb, *pk, dst, tb.metatable().is_none()),
+        }
+    }
+}
+
 /// [`table_get_into`] for the keys it does not look up inline.
 ///
 /// # Safety
@@ -87,7 +120,7 @@ unsafe fn table_set_existing_at(tb: &mut Table, pk: *const Value, v: Value) -> b
     unsafe {
         match raw_tag(pk) {
             tag::STR => {
-                let key = Gc::from_ptr(raw_gc(pk) as *mut LuaStr);
+                let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
                 match tb.str_slot_by_ptr_mut(key) {
                     // a nil value in a node is how a removed key is kept
                     Some(slot) if !slot.is_nil() => {
@@ -153,17 +186,43 @@ impl Vm {
         false
     }
 
-    /// [`Self::index_raw_at`] on a table value.
+    /// [`Self::index_raw_at`] for a constant key (see
+    /// [`table_get_kstr_into`]).
+    ///
+    /// # Safety
+    /// As for `index_raw_at`.
+    #[inline(always)]
+    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
+    pub(super) unsafe fn index_raw_kstr_at(
+        pt: *const Value,
+        pk: *const Value,
+        dst: *mut Value,
+    ) -> bool {
+        #[cfg(not(feature = "gc-verify"))]
+        // SAFETY: the caller's contract; a table tag means a live table
+        unsafe {
+            if raw_tag(pt) == tag::TABLE {
+                return table_get_kstr_into(&*(raw_gc(pt) as *const Table), pk, dst);
+            }
+        }
+        false
+    }
+
+    /// [`Self::index_raw_kstr_at`] on a table value.
     ///
     /// # Safety
     /// `pk` points at an initialised value and `dst` at a register.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
-    pub(super) unsafe fn index_raw_key_at(t: Value, pk: *const Value, dst: *mut Value) -> bool {
+    pub(super) unsafe fn index_raw_kstr_key_at(
+        t: Value,
+        pk: *const Value,
+        dst: *mut Value,
+    ) -> bool {
         #[cfg(not(feature = "gc-verify"))]
         if let Value::Table(tb) = t {
             // SAFETY: the caller's contract
-            return unsafe { table_get_into(&tb, pk, dst) };
+            return unsafe { table_get_kstr_into(&tb, pk, dst) };
         }
         false
     }
