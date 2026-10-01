@@ -25,7 +25,7 @@ impl Table {
             if n.dead_key {
                 continue;
             }
-            if let Some(p) = hdr(n.key)
+            if let Some(p) = hdr(n.key())
                 && crate::runtime::gc_verify_probe::is_freed(p)
             {
                 panic!(

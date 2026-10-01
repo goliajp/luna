@@ -52,38 +52,89 @@ pub(crate) const MAX_ASIZE: usize = 1 << 27;
 ///   offset 0 and the payload starts at offset 8 (after 7 bytes of
 ///   alignment padding). Total size 16 bytes per the existing
 ///   `value_is_16_bytes` test in `runtime/value.rs`.
-/// - `Node` is `#[derive(Clone, Copy)]` with field order
-///   `(key: Value, val: Value, next: i32, dead_key: bool)`, so
-///   `key` lives at offset 0 and `val` at offset 16. The trailing
-///   `next + dead_key` fields are not read by the IC.
+/// - `Node` is `#[repr(C)]`: the key's tag at offset 0 and its payload
+///   at 8, where a `Value` keeps them, `dead_key` and `next` in the
+///   bytes between (a `Value`'s padding), and `val` at offset 16; 32
+///   bytes in all. `dead_key` and `next` are not read by the IC.
 #[path = "table_jit_layout.rs"]
 pub mod jit_layout;
 
+/// A hash-part entry (PUC `Node`): the key is kept as its tag and its
+/// payload at the offsets a `Value` has them, so the first 16 bytes read
+/// as the key ([`Node::key`]), and `dead_key` and `next` live in what is a
+/// `Value`'s padding (PUC `NodeKey`). 32 bytes, so a chain step is a shift.
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub(crate) struct Node {
-    key: Value,
-    val: Value,
+    key_tag: u8,
+    /// PUC `setdeadkey` analogue: the key was a collectable that got swept
+    /// out of a weak table; the key is now nil, and this flag tells
+    /// `insert_new` that the slot still sits in a chain (its `next` is
+    /// kept) rather than being free.
+    dead_key: bool,
     /// absolute index of the next node in this chain, or NONE
     next: i32,
-    /// PUC `setdeadkey` analogue: the key was a collectable that got swept
-    /// out of a weak table. The Gc pointer in `key` is now dangling — its
-    /// memory may have been reused for a new allocation with potentially
-    /// equal content. Marking the node "dead-key" lets `find_node` skip the
-    /// raw_eq probe (which could spuriously match a reallocated object) and
-    /// `insert_new` treat the slot as available for a fresh main-position
-    /// owner while leaving chain back-links intact for traversal.
-    dead_key: bool,
+    key_payload: std::mem::MaybeUninit<u64>,
+    val: Value,
 }
 
 const NONE: i32 = -1;
 
 impl Node {
     const EMPTY: Node = Node {
-        key: Value::Nil,
-        val: Value::Nil,
-        next: NONE,
+        key_tag: crate::runtime::value::tag::NIL,
         dead_key: false,
+        next: NONE,
+        key_payload: std::mem::MaybeUninit::uninit(),
+        val: Value::Nil,
     };
+
+    /// A live entry.
+    #[inline]
+    fn new(key: Value, val: Value, next: i32) -> Node {
+        let mut n = Node {
+            val,
+            next,
+            ..Node::EMPTY
+        };
+        n.set_key(key);
+        n
+    }
+
+    /// The key.
+    #[inline(always)]
+    fn key(&self) -> Value {
+        // SAFETY: `#[repr(C)]` puts `key_tag` and `key_payload` where a
+        // `Value` has its tag and payload, and `set_key` stores them as
+        // a `Value` has them; the bytes between are a `Value`'s padding
+        unsafe { *(self as *const Node as *const Value) }
+    }
+
+    /// Store `key`, leaving `dead_key` and `next` as they are.
+    #[inline(always)]
+    fn set_key(&mut self, key: Value) {
+        let src = &key as *const Value as *const u8;
+        // SAFETY: a `Value`'s tag is its first byte and its payload (which
+        // may be padding, hence `MaybeUninit`) its second word
+        unsafe {
+            self.key_tag = *src;
+            self.key_payload = *(src.add(8) as *const std::mem::MaybeUninit<u64>);
+        }
+    }
+
+    /// True when the key is the string `key` (the same object).
+    #[inline(always)]
+    fn key_is_str(&self, key: Gc<crate::runtime::string::LuaStr>) -> bool {
+        self.key_tag == crate::runtime::value::tag::STR
+            // SAFETY: a string key's payload is its pointer
+            && unsafe { self.key_payload.assume_init() } == key.as_ptr() as usize as u64
+    }
+
+    /// True when the slot holds no key and sits in no chain.
+    #[inline(always)]
+    fn is_free(&self) -> bool {
+        self.key_tag == crate::runtime::value::tag::NIL && !self.dead_key
+    }
 }
 
 /// SoA Robin Hood meta-word layout.
@@ -597,7 +648,7 @@ impl Table {
             // flaky on this exact path — a swept B-string's slot kept
             // chaining into A's slot, so `a[k] = nil` (k = A_string) hit
             // the dead slot and wrote nil there, leaving A's val untouched.
-            if !n.dead_key && n.key.raw_eq(k) {
+            if n.key().raw_eq(k) {
                 return Some(idx);
             }
             if n.next == NONE {
@@ -618,10 +669,7 @@ impl Table {
             // SAFETY: the main position is masked to the node count and
             // every `next` link is a node index written by `insert_new`.
             let n = unsafe { self.nodes.get_unchecked(idx) };
-            if !n.dead_key
-                && let Value::Str(s) = n.key
-                && s.ptr_eq(key)
-            {
+            if n.key_is_str(key) {
                 return Some(idx);
             }
             if n.next == NONE {
@@ -649,10 +697,7 @@ impl Table {
             // SAFETY: the main position is masked to the node count and
             // every `next` link is a node index written by `insert_new`
             let node = unsafe { self.nodes.get_unchecked(idx) };
-            if let Value::Str(s) = node.key
-                && s.ptr_eq(key)
-                && !node.dead_key
-            {
+            if node.key_is_str(key) {
                 return Some(idx);
             }
             if node.next == NONE {
@@ -850,13 +895,8 @@ impl Table {
         // live entry the chain reaches), so we treat it as occupied here and
         // route the new key through the collision path below — that preserves
         // the back-links into this slot from other nodes' `next` fields.
-        if self.nodes[mp].key.is_nil() && !self.nodes[mp].dead_key {
-            self.nodes[mp] = Node {
-                key: k,
-                val: v,
-                next: NONE,
-                dead_key: false,
-            };
+        if self.nodes[mp].is_free() {
+            self.nodes[mp] = Node::new(k, v, NONE);
             return Ok(());
         }
         let Some(free) = self.free_pos() else {
@@ -869,15 +909,10 @@ impl Table {
         // reaches its downstream entries.
         if self.nodes[mp].dead_key {
             let preserved_next = self.nodes[mp].next;
-            self.nodes[mp] = Node {
-                key: k,
-                val: v,
-                next: preserved_next,
-                dead_key: false,
-            };
+            self.nodes[mp] = Node::new(k, v, preserved_next);
             return Ok(());
         }
-        let other_mp = self.main_position(self.nodes[mp].key);
+        let other_mp = self.main_position(self.nodes[mp].key());
         if other_mp != mp {
             // colliding node is out of its main position: relocate it to the
             // free slot and take its place
@@ -887,20 +922,10 @@ impl Table {
             }
             self.nodes[prev].next = free as i32;
             self.nodes[free] = self.nodes[mp];
-            self.nodes[mp] = Node {
-                key: k,
-                val: v,
-                next: NONE,
-                dead_key: false,
-            };
+            self.nodes[mp] = Node::new(k, v, NONE);
         } else {
             // colliding node owns this position: chain the new node behind it
-            self.nodes[free] = Node {
-                key: k,
-                val: v,
-                next: self.nodes[mp].next,
-                dead_key: false,
-            };
+            self.nodes[free] = Node::new(k, v, self.nodes[mp].next);
             self.nodes[mp].next = free as i32;
         }
         Ok(())
@@ -913,7 +938,7 @@ impl Table {
             // Dead-key slots are still occupied for chain purposes (their
             // `next` may be the only path to a downstream entry) — don't
             // hand them out as free.
-            if n.key.is_nil() && !n.dead_key {
+            if n.is_free() {
                 return Some(self.lastfree as usize);
             }
         }
@@ -943,7 +968,7 @@ impl Table {
         for n in self.nodes.iter() {
             if !n.val.is_nil() {
                 total += 1;
-                if let Value::Int(i) = n.key
+                if let Value::Int(i) = n.key()
                     && i >= 1
                 {
                     nums[ceil_log2(i as u64)] += 1;
@@ -1097,7 +1122,7 @@ impl Table {
         }
         for n in old_nodes.iter() {
             if !n.val.is_nil() {
-                let _ = self.set_norm(heap, n.key, n.val);
+                let _ = self.set_norm(heap, n.key(), n.val);
             }
         }
     }
@@ -1201,7 +1226,7 @@ impl Table {
         for (idx, n) in self.nodes.iter().enumerate().skip(hstart) {
             if !n.val.is_nil() {
                 let _ = idx;
-                return Ok(Some((n.key, n.val)));
+                return Ok(Some((n.key(), n.val)));
             }
         }
         Ok(None)
@@ -1215,7 +1240,7 @@ impl Table {
             return (false, false);
         };
         for n in mt.nodes.iter() {
-            if let (Value::Str(k), Value::Str(mode)) = (n.key, n.val)
+            if let (Value::Str(k), Value::Str(mode)) = (n.key(), n.val)
                 && k.as_bytes() == b"__mode"
             {
                 let b = mode.as_bytes();
@@ -1244,7 +1269,7 @@ impl Table {
             }
         }
         for n in self.nodes.iter() {
-            if let Value::Coro(co) = n.key
+            if let Value::Coro(co) = n.key()
                 && !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader)
             {
                 return true;
@@ -1285,8 +1310,8 @@ impl Table {
             if n.val.is_nil() {
                 continue;
             }
-            if !n.dead_key && !is_live(n.key) {
-                report("node key", i, n.key);
+            if !n.dead_key && !is_live(n.key()) {
+                report("node key", i, n.key());
             }
             if !is_live(n.val) {
                 report("node value", i, n.val);
@@ -1327,7 +1352,7 @@ impl Table {
         }
         for n in self.nodes.iter() {
             if !wk {
-                m.value(n.key);
+                m.value(n.key());
             }
             // ephemeron hash values are deferred; otherwise mark strong values
             if !wv && !ephemeron {
@@ -1346,7 +1371,7 @@ impl Table {
     pub(crate) fn converge_ephemeron(&self, alive: &dyn Fn(Value) -> bool, m: &mut Marker) -> bool {
         let mut changed = false;
         for n in self.nodes.iter() {
-            if !n.val.is_nil() && alive(n.key) {
+            if !n.val.is_nil() && alive(n.key()) {
                 changed |= m.value(n.val);
             }
         }
@@ -1397,7 +1422,7 @@ impl Table {
                 // chain (a use-after-free ASAN reports on Linux).
                 if !n.dead_key
                     && matches!(
-                        n.key,
+                        n.key(),
                         Value::Table(_)
                             | Value::Closure(_)
                             | Value::Native(_)
@@ -1406,12 +1431,12 @@ impl Table {
                             | Value::Str(_)
                     )
                 {
-                    n.key = Value::Nil;
+                    n.key_tag = crate::runtime::value::tag::NIL;
                     n.dead_key = true;
                 }
                 continue;
             }
-            let key_dead = wk && is_dead(n.key);
+            let key_dead = wk && is_dead(n.key());
             let val_dead = wv && is_dead(n.val);
             if key_dead || val_dead {
                 // entry removed. PUC `setdeadkey`: when the key was a
@@ -1424,7 +1449,7 @@ impl Table {
                 // main-position owner that may inherit the chain.
                 n.val = Value::Nil;
                 if matches!(
-                    n.key,
+                    n.key(),
                     Value::Table(_)
                         | Value::Closure(_)
                         | Value::Native(_)
@@ -1432,13 +1457,13 @@ impl Table {
                         | Value::Userdata(_)
                         | Value::Str(_)
                 ) {
-                    n.key = Value::Nil;
+                    n.key_tag = crate::runtime::value::tag::NIL;
                     n.dead_key = true;
                 }
             } else {
                 // entry survives — resurrect any string reachable through it
                 if wk {
-                    mark_string(n.key);
+                    mark_string(n.key());
                 }
                 if wv {
                     mark_string(n.val);
