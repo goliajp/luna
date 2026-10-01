@@ -3,6 +3,13 @@
 
 use super::*;
 
+/// `math.floor` / `math.ceil`: floats on 5.1/5.2; from 5.3 an integer
+/// stays itself and a float becomes an integer when the result fits
+/// (`luaV_flttointns`), a float otherwise.
+pub(super) fn is_rounding(fn_name: &str) -> bool {
+    matches!(fn_name, "floor" | "ceil")
+}
+
 /// try to recognize the 4-op `<env>.math.<fn>(R[arg])` window
 /// starting at `start_pc`. Returns `Some(MathFold)` on match, `None`
 /// otherwise. Pure inspection — no side effects, no whitelist
