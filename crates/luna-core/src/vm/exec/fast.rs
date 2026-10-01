@@ -1070,31 +1070,4 @@ impl Vm {
             }
         }
     }
-
-    /// `trap` is set after a call or return: when that is only because a
-    /// metamethod call pushed its continuation, or a metamethod returned to
-    /// one, finish what the loop head would and report whether a Lua frame
-    /// with nothing to watch is now on top. Anything else (a hook, a budget,
-    /// a memory cap, another kind of continuation) is left to the loop head.
-    #[inline(never)]
-    fn settle_frames(&mut self, entry_depth: usize) -> Result<bool, LuaError> {
-        if self.instr_budget.is_some() || self.heap.mem_cap.is_some() || self.hook_armed() {
-            return Ok(false);
-        }
-        loop {
-            match self.frames.last() {
-                Some(CallFrame::Lua(_)) => {
-                    self.trap = false;
-                    return Ok(true);
-                }
-                Some(&CallFrame::Cont(nc)) if matches!(nc.kind, ContKind::Meta(_)) => {
-                    // a metamethod's result completes the instruction; this
-                    // kind never hands results out of the activation
-                    let out = self.finish_cont(nc, entry_depth)?;
-                    debug_assert!(out.is_none());
-                }
-                _ => return Ok(false),
-            }
-        }
-    }
 }
