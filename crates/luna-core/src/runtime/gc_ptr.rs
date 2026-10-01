@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 /// `Copy` handle to a heap-allocated GC-managed object. Layout is a single
 /// `NonNull<T>`; the GC walks reachability via root scanning and intrusive
-/// linkage on [`GcHeader`], not via reference counts.
+/// linkage on [`GcHeader`](super::GcHeader), not via reference counts.
 pub struct Gc<T> {
     ptr: NonNull<T>,
 }
@@ -39,7 +39,7 @@ impl<T> Gc<T> {
     }
 
     /// Raw pointer to the referent. Always non-null; valid for the lifetime
-    /// of the [`Heap`] that allocated it as long as the object is reachable.
+    /// of the [`Heap`](super::Heap) that allocated it as long as the object is reachable.
     pub fn as_ptr(self) -> *mut T {
         self.ptr.as_ptr()
     }
