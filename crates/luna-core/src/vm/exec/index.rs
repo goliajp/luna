@@ -17,26 +17,51 @@ impl Vm {
         key: Gc<crate::runtime::string::LuaStr>,
         dst: u32,
     ) -> Result<(), LuaError> {
+        use super::fast_arith::{raw_gc, raw_tag};
+        use crate::runtime::value::tag;
         let mut on_table = matches!(t, Value::Table(_));
         let mut mt = self.metatable_of(t);
+        // the slots are read in place and the value copied to its register
+        // directly (see `table_get_into`)
+        let out = self.stack.as_mut_ptr().wrapping_add(dst as usize);
         for _ in 0..4 {
             let Some(m) = mt else { break };
-            match self.fast_tm(m, Mm::Index) {
-                Value::Nil if on_table => {
+            let Some(link) = self.fast_tm_slot(m, Mm::Index) else {
+                if on_table {
                     self.stack[dst as usize] = Value::Nil;
                     return Ok(());
                 }
-                Value::Table(next) => {
-                    let v = next.get_str(key);
-                    mt = next.metatable();
-                    if !v.is_nil() || mt.is_none() {
-                        self.stack[dst as usize] = v;
+                break;
+            };
+            // SAFETY: a slot of a live table; a table tag means a live table
+            unsafe {
+                if raw_tag(link) != tag::TABLE {
+                    break;
+                }
+                let next = &*(raw_gc(link) as *const Table);
+                mt = next.metatable();
+                match next.str_slot_by_ptr(key) {
+                    Some(slot) if raw_tag(slot) != tag::NIL || mt.is_none() => {
+                        // `dst` is a register of the running frame
+                        std::ptr::copy_nonoverlapping(slot, out, 1);
                         return Ok(());
                     }
-                    on_table = true;
+                    Some(_) => {}
+                    None if !key.is_short() => {
+                        let v = next.get_str(key);
+                        if !v.is_nil() || mt.is_none() {
+                            self.stack[dst as usize] = v;
+                            return Ok(());
+                        }
+                    }
+                    None if mt.is_none() => {
+                        self.stack[dst as usize] = Value::Nil;
+                        return Ok(());
+                    }
+                    None => {}
                 }
-                _ => break,
             }
+            on_table = true;
         }
         self.op_index_from(t, Value::Str(key), dst, matches!(t, Value::Table(_)))
     }
