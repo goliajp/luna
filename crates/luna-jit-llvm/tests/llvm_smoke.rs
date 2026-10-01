@@ -984,3 +984,26 @@ fn move_then_return_propagates_through_reg() {
         "Move must propagate the value to the return reg"
     );
 }
+
+/// A function whose only loop is a jump to itself stays in the
+/// interpreter: compiled, it would spin in native code where the
+/// instruction budget and hooks never run.
+#[test]
+fn jump_to_itself_is_not_compiled() {
+    for src in ["while true do end", "::top:: goto top"] {
+        let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+        let closure = vm.load(src.as_bytes(), b"=self_jump").expect("compile");
+        let proto = closure.proto;
+        assert!(
+            proto.code.iter().any(|i| i.op() == Op::Jmp && i.sj() == -1),
+            "{src}: expected a JMP -1, got {:?}",
+            proto.code
+        );
+        let mut storage = LlvmJitStorage::default();
+        let result = LlvmBackend.try_compile(&mut storage, proto, false, false);
+        assert!(
+            matches!(result, CompileResult::Skipped),
+            "{src}: a jump to itself was compiled"
+        );
+    }
+}
