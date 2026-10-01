@@ -29,6 +29,8 @@ mod math_fold;
 mod op_helpers;
 use math_fold::*;
 use op_helpers::*;
+mod entry;
+mod kinds;
 mod slots;
 use const_operands::{VConst, split_const_operands};
 use cranelift::prelude::*;
@@ -37,6 +39,8 @@ use cranelift_codegen::settings;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+use entry::{entry_live, side_parent_exit_tags};
+use kinds::*;
 use slots::op_writes_at_offset;
 pub use slots::{compute_body_writes, compute_live_in_slots, op_reads_writes};
 
@@ -391,47 +395,6 @@ fn emit_lt_float_int(bcx: &mut FunctionBuilder<'_>, f: Value, i: Value) -> Value
     bcx.ins().select(in_range, lt, below)
 }
 
-/// Per-register *current* kind tracked during the lowerer's forward
-/// sweep. Initial values come from the trace's `entry_tags`
-/// snapshot, then arith / Move / GetX / NewTable writers refine
-/// them. Used by arith / cmp emit to pick the right IR (iadd vs
-/// fadd; icmp vs fcmp).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RegKind {
-    Unset,
-    Int,
-    Float,
-    Table,
-    /// Lua closure pointer (raw payload is a
-    /// `Gc<LuaClosure>` ptr). Produced today only by `Op::GetUpval`
-    /// when `infer_upval_exit` pins the use site as Op::Call's
-    /// target.
-    Closure,
-    Nil,
-    /// interned string pointer (raw payload is a
-    /// `Gc<LuaStr>` ptr). Produced by an entry slot tagged STR
-    /// (via `from_entry_tag`), `LoadK` of a Str constant, or
-    /// `Op::Move` propagation from a Str slot. Lets `Op::Concat`
-    /// emit's operand spill pick `raw::STR` instead of going
-    /// through the tag-preserving `update_raw` helper which can't
-    /// handle a stale vm.stack tag.
-    Str,
-}
-
-impl RegKind {
-    fn from_entry_tag(tag: u8) -> Option<Self> {
-        match tag {
-            luna_core::runtime::value::raw::INT => Some(RegKind::Int),
-            luna_core::runtime::value::raw::FLOAT => Some(RegKind::Float),
-            luna_core::runtime::value::raw::TABLE => Some(RegKind::Table),
-            luna_core::runtime::value::raw::CLOSURE => Some(RegKind::Closure),
-            luna_core::runtime::value::raw::NIL => Some(RegKind::Nil),
-            luna_core::runtime::value::raw::STR => Some(RegKind::Str),
-            _ => None,
-        }
-    }
-}
-
 /// per-op register window offset.
 ///
 /// For a recorded trace with inline self-recursive `Op::Call`s, each
@@ -625,21 +588,6 @@ fn compute_op_offsets(record: &TraceRecord) -> (Vec<u32>, Vec<Option<u8>>) {
 // `pub enum TagResKind` + `pub(crate) fn classify_exit_tags` moved to
 // `trace_types.rs`; re-exported via `pub use super::trace_types::*;`.
 
-fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
-    kinds
-        .iter()
-        .map(|k| match k {
-            RegKind::Unset => ExitTag::Untouched,
-            RegKind::Int => ExitTag::Int,
-            RegKind::Float => ExitTag::Float,
-            RegKind::Table => ExitTag::Table,
-            RegKind::Closure => ExitTag::Closure,
-            RegKind::Nil => ExitTag::Nil,
-            RegKind::Str => ExitTag::Str,
-        })
-        .collect()
-}
-
 /// Escape state per NewTable site recorded in a trace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EscapeState {
@@ -812,23 +760,6 @@ impl EscapeAnalysis {
             .iter()
             .filter(|s| s.state == EscapeState::Sinkable)
             .count() as u32
-    }
-}
-
-/// map a [`RegKind`] to its matching
-/// [`luna_core::runtime::value::raw`] tag byte for the materialise
-/// helper's per-slot kind array. `Unset` slots become `NIL` so the
-/// helper writes Nil into the corresponding array index — matches
-/// Lua's "table created with array part, slot unwritten" semantics.
-fn kind_to_raw_tag(k: RegKind) -> u8 {
-    use luna_core::runtime::value::raw;
-    match k {
-        RegKind::Int => raw::INT,
-        RegKind::Float => raw::FLOAT,
-        RegKind::Table => raw::TABLE,
-        RegKind::Closure => raw::CLOSURE,
-        RegKind::Str => raw::STR,
-        RegKind::Unset | RegKind::Nil => raw::NIL,
     }
 }
 
@@ -2178,13 +2109,6 @@ fn is_whitelisted_op(op: Op) -> bool {
     )
 }
 
-/// Find a register's kind by walking back from `idx-1` through the
-/// already-emitted writers in `current_kinds`. Avoids re-deriving
-/// the kind from scratch on every operand access.
-fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
-    *current_kinds.get(reg as usize).unwrap_or(&RegKind::Unset)
-}
-
 /// How a trace lowers `==` of two registers of the given kinds, neither
 /// of them Float (those take the fcmp path).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2203,7 +2127,7 @@ enum EqLowering {
 fn eq_lowering(a: RegKind, b: RegKind) -> EqLowering {
     use RegKind::*;
     match (a, b) {
-        (Unset, _) | (_, Unset) => EqLowering::Unknown,
+        (Unset | Unknown | StackHeld, _) | (_, Unset | Unknown | StackHeld) => EqLowering::Unknown,
         (Int, Int) | (Nil, Nil) | (Closure, Closure) => EqLowering::Payload,
         (Table, Table) | (Str, Str) => EqLowering::Identity(a),
         _ => EqLowering::Unequal,
@@ -2278,20 +2202,6 @@ fn emit_table_set<M: Module>(
         }
     };
     bcx.inst_results(call)[0]
-}
-
-/// The value tag (`runtime::value::raw`) of a register of kind `k`.
-fn kind_tag(k: RegKind) -> u8 {
-    use luna_core::runtime::value::raw;
-    match k {
-        RegKind::Int => raw::INT,
-        RegKind::Float => raw::FLOAT,
-        RegKind::Table => raw::TABLE,
-        RegKind::Closure => raw::CLOSURE,
-        RegKind::Str => raw::STR,
-        RegKind::Nil => raw::NIL,
-        RegKind::Unset => unreachable!("callers do not lower a store of an unknown kind"),
-    }
 }
 
 /// flush context for the buffered string
@@ -3706,18 +3616,6 @@ fn lower_trace_into_inner<M: Module>(
         concat_idx: usize,
         post_idx: usize,
     }
-    let active_accum: Option<BufferedAccum> = escape
-        .accum_sites
-        .iter()
-        .find(|s| s.state == BufferState::Bufferable)
-        .map(|s| BufferedAccum {
-            accum_slot: s.accum_slot,
-            piece_slot: s.piece_slot,
-            pre1_idx: s.op_idx - 2,
-            pre2_idx: s.op_idx - 1,
-            concat_idx: s.op_idx,
-            post_idx: s.op_idx + 1,
-        });
     // Keep the old names working for the per-tail paths below.
     let call_idx_opt = match end_idx_opt {
         Some((i, TraceEnd::Call)) => Some(i),
@@ -3755,6 +3653,50 @@ fn lower_trace_into_inner<M: Module>(
         )) => Some((i, return_pc, target_proto_id, depth_delta)),
         _ => None,
     };
+
+    let has_cmp = record.ops[..effective_end]
+        .iter()
+        .any(|r| matches!(r.inst.op(), Op::Lt | Op::Le | Op::Eq));
+    // SelfLink close ALSO permits internal loop (in fact it
+    // REQUIRES it — the whole point of the trace is to loop with
+    // bump-base + branch-to-self). Treat self_link_idx_opt the same as
+    // the cmp/ForLoop loop-permission predicates, and (critically)
+    // don't trip on inline_abort_idx_opt — the SelfLink close path
+    // doesn't go through that arm.
+    // `downrec_idx_opt` does NOT permit internal loop: its tail
+    // either stitches through the dispatcher or deopts, so DownRec
+    // is a hard truncation marker that forces one-shot dispatch.
+    let do_internal_loop = opts.internal_loop
+        && (has_cmp || for_loop_idx_opt.is_some() || self_link_idx_opt.is_some())
+        && call_idx_opt.is_none()
+        && return_idx_opt.is_none()
+        && inline_abort_idx_opt.is_none()
+        && downrec_idx_opt.is_none();
+    // The head-frame registers the dispatcher checks on entry (see
+    // `entry_live`); the others start held on the stack.
+    let parent_exit_tags = side_parent_exit_tags(record);
+    let head_live = entry_live(
+        record,
+        &op_offsets,
+        effective_end,
+        max_stack,
+        do_internal_loop,
+        parent_exit_tags.as_deref(),
+    );
+    let active_accum: Option<BufferedAccum> = escape
+        .accum_sites
+        .iter()
+        .find(|s| s.state == BufferState::Bufferable)
+        // the buffer reads both as strings on the entry check's word
+        .filter(|s| head_live[s.accum_slot as usize] && head_live[s.piece_slot as usize])
+        .map(|s| BufferedAccum {
+            accum_slot: s.accum_slot,
+            piece_slot: s.piece_slot,
+            pre1_idx: s.op_idx - 2,
+            pre2_idx: s.op_idx - 1,
+            concat_idx: s.op_idx,
+            post_idx: s.op_idx + 1,
+        });
 
     // Pre-emit verification. Any op outside the whitelist contract
     // bails so the trace becomes a no-op (the recorder counts it
@@ -5166,26 +5108,26 @@ fn lower_trace_into_inner<M: Module>(
     // `sync_reg_state` wrote before the jump. Read at the loop head below.
     let mut stored: Vec<Option<Value>> = Vec::new();
 
-    // Per-reg current kind. Initialise from the recorder's
-    // entry-tag snapshot; writers below refine. Unset slots fall
-    // back to Int semantics in the arith / cmp emit — that
-    // matches the legacy all-Int behavior for traces built from
-    // test harnesses that pass an empty entry_tags vec.
-    // sized to `window_size_us` (mirrors `regs_full`).
-    // [0..max_stack) seeded from entry_tags; [max_stack..) start Unset
-    // because the dispatcher zero-initialises the corresponding
-    // reg_state slots and trace IR fills them via writers.
+    // Per-reg current kind: the recorded entry tag for a head-frame
+    // register the trace reads before writing (the dispatcher checks
+    // it), held on the stack for the other head-frame registers, and
+    // Unset past the head frame (the dispatcher zero-initialises those
+    // reg_state slots and trace IR fills them via writers). Sized to
+    // `window_size_us` (mirrors `regs_full`).
     let mut current_kinds: Vec<RegKind> = (0..window_size_us)
-        .map(|i| {
-            if i < max_stack && i < record.entry_tags.len() {
-                RegKind::from_entry_tag(record.entry_tags[i]).unwrap_or(RegKind::Unset)
-            } else {
-                RegKind::Unset
-            }
+        .map(|i| match head_live.get(i) {
+            Some(true) => record
+                .entry_tags
+                .get(i)
+                .and_then(|&t| RegKind::from_entry_tag(t))
+                .unwrap_or(RegKind::Unset),
+            Some(false) => RegKind::StackHeld,
+            None => RegKind::Unset,
         })
         .collect();
     // The kinds the body is lowered for. A back-edge may run it again
-    // only when the caller window holds these same kinds; otherwise
+    // only when the caller window holds these same kinds (see
+    // `loop_kinds_match`); otherwise
     // the next pass would read (and hand to an exit) a register with
     // bits of one kind as another, e.g. an Int as a Float.
     let head_kinds: Vec<RegKind> = current_kinds[..max_stack].to_vec();
@@ -5280,22 +5222,12 @@ fn lower_trace_into_inner<M: Module>(
     // No iconst memoization: the arm64 backend folds
     // `iconst+isub`/`iconst+icmp` into immediate-form instructions
     // at codegen, so it would add little.
-    // An exit that redoes the trace's head op in the interpreter has made
-    // no progress: without this the dispatcher enters the trace again at
-    // once and the two hand the same pc back and forth forever. The
-    // tagged exits (`emit_tagged_exit`) do the same.
-    macro_rules! suppress_at_head {
-        ($pc:expr) => {{
-            if $pc == record.head_pc {
-                let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
-                bcx.ins().call(r, &[]);
-            }
-        }};
-    }
     // A guard that fails leaves the trace at `$pc` (the op being
     // guarded, re-executed by the interpreter) exactly as a cmp side
     // exit does: live sunk tables are materialised and, when the op sits
-    // in an inlined frame, the frames are rebuilt first.
+    // in an inlined frame, the frames are rebuilt first. An exit to the
+    // head also stops the dispatcher from entering the trace again before
+    // the interpreter has run the head op (see `emit_tagged_exit`).
     macro_rules! guard_exit {
         ($pc:expr, $i:expr) => {{
             let side_exit_pc: u32 = $pc;
@@ -5591,18 +5523,8 @@ fn lower_trace_into_inner<M: Module>(
                 // Deopt path: flush buffer + store back + return pc.
                 bcx.switch_to_block(deopt_blk);
                 bcx.seal_block(deopt_blk);
-                suppress_at_head!(rop.pc);
-                emit_store_back_and_return_pc(
-                    &mut bcx,
-                    &regs_full[..max_stack],
-                    &stored,
-                    reg_state,
-                    rop.pc,
-                    flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                    encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                );
+                // restored with the kinds the registers have here
+                guard_exit!(rop.pc, i);
                 bcx.switch_to_block(continue_blk);
                 bcx.seal_block(continue_blk);
                 continue;
@@ -6296,7 +6218,9 @@ fn lower_trace_into_inner<M: Module>(
                     | RegKind::Closure
                     | RegKind::Str => Some(true),
                     RegKind::Nil => Some(false),
-                    RegKind::Unset => None,
+                    RegKind::Unset | RegKind::Unknown => None,
+                    // the trace reads it, so it is never held on the stack
+                    RegKind::StackHeld => return None,
                 };
                 let k_bit = ins.k();
                 let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::SkippedJmp));
@@ -6330,18 +6254,8 @@ fn lower_trace_into_inner<M: Module>(
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
                     bcx.switch_to_block(deopt);
                     bcx.seal_block(deopt);
-                    suppress_at_head!(rop.pc);
-                    emit_store_back_and_return_pc(
-                        &mut bcx,
-                        &regs_full[..max_stack],
-                        &stored,
-                        reg_state,
-                        rop.pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                    );
+                    // restored with the kinds the registers have here
+                    guard_exit!(rop.pc, i);
                     bcx.switch_to_block(cont);
                     bcx.seal_block(cont);
                 }
@@ -6363,7 +6277,9 @@ fn lower_trace_into_inner<M: Module>(
                     | RegKind::Closure
                     | RegKind::Str => Some(true),
                     RegKind::Nil => Some(false),
-                    RegKind::Unset => None,
+                    RegKind::Unset | RegKind::Unknown => None,
+                    // the trace reads it, so it is never held on the stack
+                    RegKind::StackHeld => return None,
                 };
                 let k_bit = ins.k();
                 let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::TookJmp));
@@ -6397,18 +6313,8 @@ fn lower_trace_into_inner<M: Module>(
                     bcx.ins().brif(ok, cont, &[], deopt, &[]);
                     bcx.switch_to_block(deopt);
                     bcx.seal_block(deopt);
-                    suppress_at_head!(rop.pc);
-                    emit_store_back_and_return_pc(
-                        &mut bcx,
-                        &regs_full[..max_stack],
-                        &stored,
-                        reg_state,
-                        rop.pc,
-                        flush_ctx.as_ref(),
-                        0i64,
-                        trace_fn_sig_ref,
-                        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                    );
+                    // restored with the kinds the registers have here
+                    guard_exit!(rop.pc, i);
                     bcx.switch_to_block(cont);
                     bcx.seal_block(cont);
                     if recorded_passed {
@@ -6514,8 +6420,11 @@ fn lower_trace_into_inner<M: Module>(
                     // only integers order by their payload
                     match (ka, kb) {
                         (RegKind::Int, RegKind::Int) => {}
-                        (RegKind::Unset, RegKind::Int | RegKind::Unset)
-                        | (RegKind::Int, RegKind::Unset) => {
+                        (
+                            RegKind::Unset | RegKind::Unknown,
+                            RegKind::Int | RegKind::Unset | RegKind::Unknown,
+                        )
+                        | (RegKind::Int, RegKind::Unset | RegKind::Unknown) => {
                             dispatchable = false;
                             dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
                         }
@@ -6709,7 +6618,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -6736,7 +6645,7 @@ fn lower_trace_into_inner<M: Module>(
                     bcx.def_var(regs[ins.a() as usize], v);
                     // the value's type is not known: the register's
                     // earlier kind no longer describes it
-                    current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                    current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                     dispatchable = false;
                     dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
                 }
@@ -6748,7 +6657,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -6775,7 +6684,7 @@ fn lower_trace_into_inner<M: Module>(
                         let v = bcx.inst_results(call)[0];
                         bcx.def_var(regs[ins.a() as usize], v);
                         // as for GetI
-                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetTable:inference-fail"));
@@ -6815,7 +6724,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.a()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -6830,7 +6739,7 @@ fn lower_trace_into_inner<M: Module>(
                     emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
                 // a value of unknown kind cannot be tagged for the table
-                if matches!(val_kind, RegKind::Unset) {
+                if val_kind.untyped() {
                     return None;
                 }
                 let val = bcx.use_var(regs[ins.c() as usize]);
@@ -6873,7 +6782,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -7037,7 +6946,7 @@ fn lower_trace_into_inner<M: Module>(
                     Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
                     _ => {
                         // as for GetI
-                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetField:inference-fail"));
@@ -7077,7 +6986,7 @@ fn lower_trace_into_inner<M: Module>(
                     Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
                     _ => {
                         // as for GetI
-                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetTabUp:inference-fail"));
@@ -7115,7 +7024,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.a()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -7125,7 +7034,7 @@ fn lower_trace_into_inner<M: Module>(
                 let k_imm = bcx.ins().iconst(types::I64, ins.b() as i64);
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
                 // a value of unknown kind cannot be tagged for the table
-                if matches!(val_kind, RegKind::Unset) {
+                if val_kind.untyped() {
                     return None;
                 }
                 let val = bcx.use_var(regs[ins.c() as usize]);
@@ -7171,7 +7080,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.a()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -7182,7 +7091,7 @@ fn lower_trace_into_inner<M: Module>(
                 let key_kind = k_op(&current_kinds, off as u32 + ins.b());
                 let val_kind = k_op(&current_kinds, off as u32 + ins.c());
                 // a key or value of unknown kind cannot be tagged for the table
-                if matches!(key_kind, RegKind::Unset) || matches!(val_kind, RegKind::Unset) {
+                if key_kind.untyped() || val_kind.untyped() {
                     return None;
                 }
                 let val = bcx.use_var(regs[ins.c() as usize]);
@@ -7247,7 +7156,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + a as u32) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -7258,7 +7167,7 @@ fn lower_trace_into_inner<M: Module>(
                     let key = bcx.ins().iconst(types::I64, c_off + ii as i64);
                     let src_kind = k_op(&current_kinds, (off + a + ii) as u32);
                     // a value of unknown kind cannot be tagged for the table
-                    if matches!(src_kind, RegKind::Unset) {
+                    if src_kind.untyped() {
                         return None;
                     }
                     let val = bcx.use_var(regs[a + ii]);
@@ -7284,7 +7193,7 @@ fn lower_trace_into_inner<M: Module>(
                 // for a value the recording indexed, so it stays
                 match k_op(&current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
-                    RegKind::Unset => {
+                    RegKind::Unset | RegKind::Unknown => {
                         dispatchable = false;
                         dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
@@ -7318,20 +7227,9 @@ fn lower_trace_into_inner<M: Module>(
                     }
                     let src_idx = d.index as usize;
                     let src_kind = current_kinds[off + src_idx];
-                    let tag_byte = match src_kind {
-                        RegKind::Int => luna_core::runtime::value::raw::INT,
-                        RegKind::Float => luna_core::runtime::value::raw::FLOAT,
-                        RegKind::Table => luna_core::runtime::value::raw::TABLE,
-                        RegKind::Closure => luna_core::runtime::value::raw::CLOSURE,
-                        RegKind::Str => luna_core::runtime::value::raw::STR,
-                        RegKind::Nil => luna_core::runtime::value::raw::NIL,
-                        RegKind::Unset => {
-                            // Unknown tag for this slot — can't safely
-                            // pack to a Value. Bail compile; future
-                            // sweep extension could recover from
-                            // entry_tags but isn't done here.
-                            return None;
-                        }
+                    // an untyped source cannot be packed to a Value
+                    let Some(tag_byte) = known_tag(src_kind) else {
+                        return None;
                     };
                     let slot_arg = bcx.ins().iconst(types::I64, d.index as i64);
                     let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
@@ -7369,14 +7267,8 @@ fn lower_trace_into_inner<M: Module>(
                 let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
                 for slot in a_us..max_stack {
                     let k = current_kinds[off + slot];
-                    let tag_byte = match k {
-                        RegKind::Int => luna_core::runtime::value::raw::INT,
-                        RegKind::Float => luna_core::runtime::value::raw::FLOAT,
-                        RegKind::Table => luna_core::runtime::value::raw::TABLE,
-                        RegKind::Closure => luna_core::runtime::value::raw::CLOSURE,
-                        RegKind::Str => luna_core::runtime::value::raw::STR,
-                        RegKind::Nil => luna_core::runtime::value::raw::NIL,
-                        RegKind::Unset => continue,
+                    let Some(tag_byte) = known_tag(k) else {
+                        continue;
                     };
                     let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
                     let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
@@ -7431,7 +7323,7 @@ fn lower_trace_into_inner<M: Module>(
                         current_kinds[off + ins.a() as usize] = RegKind::Closure;
                     }
                     _ => {
-                        current_kinds[off + ins.a() as usize] = RegKind::Unset;
+                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                         dispatchable = false;
                         dispatch_off_reason =
                             dispatch_off_reason.or(Some("GetUpval:not-Closure-use"));
@@ -7582,14 +7474,8 @@ fn lower_trace_into_inner<M: Module>(
                 let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
                 let spill_slot = |bcx: &mut FunctionBuilder<'_>, slot: usize| {
                     let k = current_kinds[off + slot];
-                    let tag_byte = match k {
-                        RegKind::Int => luna_core::runtime::value::raw::INT,
-                        RegKind::Float => luna_core::runtime::value::raw::FLOAT,
-                        RegKind::Table => luna_core::runtime::value::raw::TABLE,
-                        RegKind::Closure => luna_core::runtime::value::raw::CLOSURE,
-                        RegKind::Str => luna_core::runtime::value::raw::STR,
-                        RegKind::Nil => luna_core::runtime::value::raw::NIL,
-                        RegKind::Unset => return,
+                    let Some(tag_byte) = known_tag(k) else {
+                        return;
                     };
                     let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
                     let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
@@ -7742,18 +7628,8 @@ fn lower_trace_into_inner<M: Module>(
                         bcx.ins().brif(ok, guard_continue, &[], guard_deopt, &[]);
                         bcx.switch_to_block(guard_deopt);
                         bcx.seal_block(guard_deopt);
-                        suppress_at_head!(rop.pc);
-                        emit_store_back_and_return_pc(
-                            &mut bcx,
-                            &regs_full[..max_stack],
-                            &stored,
-                            reg_state,
-                            rop.pc,
-                            flush_ctx.as_ref(),
-                            0i64,
-                            trace_fn_sig_ref,
-                            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
-                        );
+                        // restored with the kinds the registers have here
+                        guard_exit!(rop.pc, i);
                         bcx.switch_to_block(guard_continue);
                         bcx.seal_block(guard_continue);
                     }
@@ -7801,10 +7677,10 @@ fn lower_trace_into_inner<M: Module>(
                     emit_helper_call!();
                 }
 
-                current_kinds[off + a_us + 2] = RegKind::Unset;
-                current_kinds[off + a_us + 4] = RegKind::Unset;
+                current_kinds[off + a_us + 2] = RegKind::Unknown;
+                current_kinds[off + a_us + 4] = RegKind::Unknown;
                 if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                    current_kinds[off + a_us + 5] = RegKind::Unset;
+                    current_kinds[off + a_us + 5] = RegKind::Unknown;
                 }
             }
             // N-operand concat via helper.
@@ -7823,13 +7699,9 @@ fn lower_trace_into_inner<M: Module>(
                     let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
                     let raw_arg = bcx.use_var(regs[slot]);
                     let tag_byte_opt = match k {
-                        RegKind::Int => Some(luna_core::runtime::value::raw::INT),
-                        RegKind::Float => Some(luna_core::runtime::value::raw::FLOAT),
-                        RegKind::Table => Some(luna_core::runtime::value::raw::TABLE),
-                        RegKind::Closure => Some(luna_core::runtime::value::raw::CLOSURE),
-                        RegKind::Str => Some(luna_core::runtime::value::raw::STR),
-                        RegKind::Nil => Some(luna_core::runtime::value::raw::NIL),
-                        RegKind::Unset => None,
+                        // an operand is read, so never held on the stack
+                        RegKind::StackHeld => return None,
+                        k => known_tag(k),
                     };
                     if let Some(tag_byte) = tag_byte_opt {
                         let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
@@ -7891,24 +7763,6 @@ fn lower_trace_into_inner<M: Module>(
     //   + return `head_pc`. The dispatcher re-enters per
     //   iteration; an internal loop with no side-exit would
     //   spin forever.
-    let has_cmp = record.ops[..effective_end]
-        .iter()
-        .any(|r| matches!(r.inst.op(), Op::Lt | Op::Le | Op::Eq));
-    // SelfLink close ALSO permits internal loop (in fact it
-    // REQUIRES it — the whole point of the trace is to loop with
-    // bump-base + branch-to-self). Treat self_link_idx_opt the same as
-    // the cmp/ForLoop loop-permission predicates, and (critically)
-    // don't trip on inline_abort_idx_opt — the SelfLink close path
-    // doesn't go through that arm.
-    // `downrec_idx_opt` does NOT permit internal loop: its tail
-    // either stitches through the dispatcher or deopts, so DownRec
-    // is a hard truncation marker that forces one-shot dispatch.
-    let do_internal_loop = opts.internal_loop
-        && (has_cmp || for_loop_idx_opt.is_some() || self_link_idx_opt.is_some())
-        && call_idx_opt.is_none()
-        && return_idx_opt.is_none()
-        && inline_abort_idx_opt.is_none()
-        && downrec_idx_opt.is_none();
     // every tail `emit_store_back_and_return_pc`
     // passes `&regs_full[..max_stack]` so the store-back ONLY writes
     // the caller's window back to interp stack. Slots at
@@ -8030,9 +7884,13 @@ fn lower_trace_into_inner<M: Module>(
         let stitch_ret = bcx.ins().iconst(types::I64, raw_ret as i64);
         bcx.ins().return_(&[stitch_ret]);
 
-        // Miss: safe deopt-tail.
+        // Miss: safe deopt-tail. The interpreter runs the head op before
+        // anything enters the trace again: entered at once with the same
+        // registers it would miss the same way forever.
         bcx.switch_to_block(deopt_blk);
         bcx.seal_block(deopt_blk);
+        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+        bcx.ins().call(r, &[]);
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
@@ -8110,7 +7968,10 @@ fn lower_trace_into_inner<M: Module>(
         // The `window_size_us` extension above (`record.self_link
         // _kind.is_some()` arm) stays intact — body emit still writes
         // depth>0 slots into the extended buffer; the writes are
-        // simply dead here.
+        // simply dead here. As for the downrec miss, the interpreter runs
+        // the head op before the trace is entered again.
+        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
+        bcx.ins().call(r, &[]);
         emit_store_back_and_return_pc(
             &mut bcx,
             caller_regs,
@@ -8243,7 +8104,10 @@ fn lower_trace_into_inner<M: Module>(
                 for k in [a, a + 1, a + 3] {
                     tail_kinds[k] = RegKind::Int;
                 }
-                if do_internal_loop && body_pc == record.head_pc && tail_kinds == head_kinds {
+                if do_internal_loop
+                    && body_pc == record.head_pc
+                    && loop_kinds_match(&tail_kinds, &head_kinds)
+                {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
@@ -8380,7 +8244,10 @@ fn lower_trace_into_inner<M: Module>(
                 let vars = (a + 4)..(a + 4 + nvars.min(2)).min(max_stack);
                 tail_kinds[vars.clone()].copy_from_slice(&head_kinds[vars]);
                 tail_kinds[a + 2] = head_kinds[a + 4];
-                if do_internal_loop && body_pc == record.head_pc && tail_kinds == head_kinds {
+                if do_internal_loop
+                    && body_pc == record.head_pc
+                    && loop_kinds_match(&tail_kinds, &head_kinds)
+                {
                     sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
                     bcx.ins().jump(body_loop, &[]);
                 } else {
@@ -8399,7 +8266,7 @@ fn lower_trace_into_inner<M: Module>(
             }
             _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
         }
-    } else if do_internal_loop && current_kinds[..max_stack] == head_kinds[..] {
+    } else if do_internal_loop && loop_kinds_match(&current_kinds[..max_stack], &head_kinds) {
         sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
         bcx.ins().jump(body_loop, &[]);
     } else {
@@ -8641,7 +8508,16 @@ fn lower_trace_into_inner<M: Module>(
         } else {
             dispatch_off_reason
         },
-        entry_tags: record.entry_tags.clone().into(),
+        entry_tags: record
+            .entry_tags
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| match head_live.get(i) {
+                Some(false) => ENTRY_TAG_ANY,
+                _ => t,
+            })
+            .collect::<Vec<u8>>()
+            .into(),
         per_exit_tags,
         // populated by the cmp@d>0 emit sites
         // above; the IR encodes `(site_idx + 1)` in the upper 32

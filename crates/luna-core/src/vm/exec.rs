@@ -4568,34 +4568,36 @@ impl Vm {
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table. Rotate `[p1..pn][e1..em]` to
         // `[e1..em][p1..pn]` so the fixed params land at the new base.
-        let n_varargs = if proto.is_vararg {
-            nargs.saturating_sub(nparams)
-        } else {
-            0
-        };
+        let n_varargs = nargs.saturating_sub(nparams) * u32::from(proto.is_vararg);
         if n_varargs > 0 {
             let s = (func_slot + 1) as usize;
             self.stack[s..s + nargs as usize].rotate_left(nparams as usize);
         }
         let base = func_slot + 1 + n_varargs;
-        let need = (base + proto.max_stack as u32) as usize;
+        let max = proto.max_stack as u32;
+        let need = (base + max) as usize;
         if self.stack.len() < need {
             self.stack.resize(need, Value::Nil);
         }
-        // the whole window past the kept parameters is cleared: the trace
-        // dispatcher compares every register's tag in the window with the
-        // trace's entry tags, so a stale value where the recording saw nil
-        // would turn the trace away (and 5.1's compiler drops a leading
-        // `local x` LoadNil on this promise, as PUC 5.1 does)
+        // Only missing parameters become nil (PUC `luaD_precall`): the code
+        // writes the rest before reading it, the collector keeps it valid
+        // (`clear_dead_stack`) and a trace checks only what it reads first.
+        // 5.1 clears the whole window as PUC 5.1 does (its compiler drops a
+        // leading `local x` LoadNil on that promise).
         let kept = nargs.saturating_sub(n_varargs).min(nparams);
-        // SAFETY: just resized above so `need <= stack.len()`; `base + kept <=
-        // need` since `base + nparams <= base + max_stack = need` and `kept <=
-        // nparams`. `slice::fill` lowers to a single memset on Copy types.
+        let window = if self.version == LuaVersion::Lua51 {
+            max
+        } else {
+            nparams
+        };
+        let end = (base + window) as usize;
+        // SAFETY: `need <= stack.len()` (resized above) and `base + kept <=
+        // end <= need` since `kept <= nparams <= max_stack`.
         unsafe {
             self.stack
-                .get_unchecked_mut((base + kept) as usize..need)
-                .fill(Value::Nil);
-        }
+                .get_unchecked_mut((base + kept) as usize..end)
+                .fill(Value::Nil)
+        };
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
@@ -4619,12 +4621,9 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
-        // PUC 5.1 `LUAI_COMPAT_VARARG`: populate the hidden `arg` local with
-        // `{ n = n_varargs, [1] = e1, [2] = e2, … }`. The compiler reserved
-        // the slot at `base + nparams`; the extras sit just below `base` from
-        // the vararg rotate above. 5.1 db.lua :279 reads `arg.n` from a line
-        // hook; vararg.lua's contradictory expectations were already going to
-        // fail either way (some asserts want `arg == nil`).
+        // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
+        // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
+        // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
             let arg_slot = (base + nparams) as usize;
             let t = self.heap.new_table();

@@ -368,10 +368,18 @@ impl Vm {
                     } else {
                         &parent_ct.exit_tags
                     };
+                // A child that reads a slot the parent neither checked on
+                // entry nor writes finds its value on the stack: the
+                // dispatcher checks that slot's tag before running the child
+                // (`child_reads_stack_held_ok`).
                 let shape_matches = crate::jit::trace::exit_tags_match_entry_tags(
                     &ct.entry_tags,
                     parent_exit_tags_slice,
-                    &parent_ct.entry_tags,
+                    &stack_held_as_child(
+                        &parent_ct.entry_tags,
+                        &parent_ct.body_writes,
+                        &ct.entry_tags,
+                    ),
                 );
                 if !shape_matches {
                     self.jit.counters.side_trace_shape_mismatch += 1;
@@ -450,4 +458,21 @@ impl Vm {
             drop(parent_traces);
         }
     }
+}
+
+/// The parent's entry tags as the shape gate compares them: a slot the
+/// parent does not check on entry and never writes takes the child's tag,
+/// which the dispatcher checks against the stack before it runs the child.
+fn stack_held_as_child(parent_entry: &[u8], parent_writes: &[u32], child_entry: &[u8]) -> Vec<u8> {
+    parent_entry
+        .iter()
+        .enumerate()
+        .map(|(i, &t)| {
+            if t == crate::jit::trace::ENTRY_TAG_ANY && !parent_writes.contains(&(i as u32)) {
+                child_entry.get(i).copied().unwrap_or(t)
+            } else {
+                t
+            }
+        })
+        .collect()
 }
