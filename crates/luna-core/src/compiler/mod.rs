@@ -19,10 +19,17 @@ mod fold;
 use ctconst::{CtConst, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 
-use crate::frontend::ast::{
-    self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, Stat, StatId, TableField, UnOp,
-    block_uses_vararg,
-};
+use crate::frontend::ast::{self, BinOp, Block, ExprId, StatId, UnOp, block_uses_vararg};
+use crate::frontend::names::{Names, SymName};
+
+// the compiler works on the tree with interned names (see `frontend::names`)
+type Chunk = ast::Chunk<SymName>;
+type Expr = ast::Expr<SymName>;
+type Stat = ast::Stat<SymName>;
+type FuncBody = ast::FuncBody<SymName>;
+type AttribName = ast::AttribName<SymName>;
+type TableField = ast::TableField<SymName>;
+type FuncName = ast::FuncName<SymName>;
 use crate::frontend::error::SyntaxError;
 use crate::numeric::Num;
 use crate::runtime::heap::{GcHeader, ObjTag};
@@ -30,24 +37,36 @@ use crate::runtime::{Gc, Heap, LuaStr, Proto, UpvalDesc, Value};
 use crate::version::LuaVersion;
 use crate::vm::isa::{Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MIN_SC, OFFSET_SC, Op};
 
-/// Lower an [`Chunk`] into a [`Proto`] (luna bytecode) for the
+/// Lower an [`ast::Chunk`] into a [`Proto`] (luna bytecode) for the
 /// given dialect. The interned source name is attached to the proto for
 /// error messages and `debug.getinfo`.
 pub fn compile_chunk(
-    ast: &Chunk,
+    ast: &ast::Chunk,
     version: LuaVersion,
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    compile_parsed(ast, &[], version, source_name, heap)
+    let (chunk, names) = intern_chunk(ast);
+    compile_parsed(&chunk, &names, &[], version, source_name, heap)
+}
+
+/// The tree the compiler works on, from the public one.
+fn intern_chunk(ast: &ast::Chunk) -> (Chunk, Names) {
+    let mut names = Names::with_capacity(0);
+    let chunk = ast.map_names(&mut |n: &ast::Name| SymName {
+        sym: names.intern(&n.text),
+        line: n.line,
+    });
+    (chunk, names)
 }
 
 /// [`compile_chunk`] with the `end` lines the parser recorded for loops
-/// ([`crate::frontend::parser::Parsed::end_lines`]); a [`Chunk`] carries no
+/// ([`crate::frontend::parser::Parsed::end_lines`]); a [`ast::Chunk`] carries no
 /// such lines, so code PUC emits after a loop's `end` is placed on that
 /// line only when they are given.
 pub(crate) fn compile_parsed(
     ast: &Chunk,
+    names: &Names,
     end_lines: &[u32],
     version: LuaVersion,
     source_name: &[u8],
@@ -56,6 +75,7 @@ pub(crate) fn compile_parsed(
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
+        names,
         end_lines,
         heap,
         version,
@@ -94,14 +114,18 @@ pub(crate) fn compile_parsed(
 /// production callers do not pay the destructure cost; it exists purely
 /// to expose the tracker subsystem for verification.
 pub fn compile_chunk_with_last_target(
-    ast: &Chunk,
+    ast: &ast::Chunk,
     version: LuaVersion,
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
+    let (chunk, names) = intern_chunk(ast);
+    let ast = &chunk;
+    let names = &names;
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
+        names,
         end_lines: &[],
         heap,
         version,
@@ -420,6 +444,8 @@ impl<'a> Level<'a> {
 
 struct Compiler<'a> {
     ast: &'a Chunk,
+    /// the text of the tree's names
+    names: &'a Names,
     /// see [`compile_parsed`]
     end_lines: &'a [u32],
     heap: &'a mut Heap,
@@ -443,6 +469,11 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
+    /// The text of a name in the tree.
+    fn nm(&self, n: &SymName) -> &'a str {
+        self.names.text(n.sym)
+    }
+
     // ---- infrastructure ----
 
     /// The `end` line the parser recorded for statement `sid`.
@@ -1357,7 +1388,7 @@ impl<'a> Compiler<'a> {
             Expr::Str(s) => Ok(Exp::Const(self.str_const(s))),
             Expr::Name(n) => {
                 self.last_line = n.line;
-                self.name_expr(&n.text)
+                self.name_expr(self.nm(n))
             }
             Expr::Paren(inner) => {
                 // parentheses truncate multiple results to exactly one
@@ -1535,7 +1566,7 @@ impl<'a> Compiler<'a> {
                 let o = self.exp_to_anyreg(oe)?;
                 self.set_freereg(base);
                 self.reserve(2)?;
-                let c = self.str_const(method.text.as_bytes());
+                let c = self.str_const(self.nm(method).as_bytes());
                 self.last_line = line;
                 if c <= 0xFF {
                     self.emit(Inst::iabc(Op::SelfOp, base, o, c, true));
@@ -1673,10 +1704,10 @@ impl<'a> Compiler<'a> {
     /// name itself) forces materialization.
     fn target_forces(&self, t: ExprId, name: &str) -> bool {
         match self.ast.expr(t) {
-            ast::Expr::Index { obj, key } => {
+            Expr::Index { obj, key } => {
                 self.expr_forces(*obj, name, false) || self.expr_forces(*key, name, false)
             }
-            ast::Expr::Name(n) => &*n.text == name,
+            Expr::Name(n) => self.nm(n) == name,
             _ => self.expr_forces(t, name, false),
         }
     }
@@ -1687,7 +1718,7 @@ impl<'a> Compiler<'a> {
     fn expr_forces(&self, e: ExprId, name: &str, is_index_obj: bool) -> bool {
         use ast::Expr::*;
         match self.ast.expr(e) {
-            Name(n) => &*n.text == name && !is_index_obj,
+            Name(n) => self.nm(n) == name && !is_index_obj,
             Index { obj, key } => {
                 self.expr_forces(*obj, name, true) || self.expr_forces(*key, name, false)
             }
@@ -1710,7 +1741,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn field_forces(&self, f: &ast::TableField, name: &str) -> bool {
+    fn field_forces(&self, f: &TableField, name: &str) -> bool {
         match f {
             ast::TableField::Item(e) => self.expr_forces(*e, name, false),
             ast::TableField::Named(_, e) => self.expr_forces(*e, name, false),
@@ -1777,7 +1808,7 @@ impl<'a> Compiler<'a> {
     fn mentions_expr(&self, e: ExprId, name: &str) -> bool {
         use ast::Expr::*;
         match self.ast.expr(e) {
-            Name(n) => &*n.text == name,
+            Name(n) => self.nm(n) == name,
             Index { obj, key } => self.mentions_expr(*obj, name) || self.mentions_expr(*key, name),
             Call { func, args, .. } => {
                 self.mentions_expr(*func, name) || args.iter().any(|&a| self.mentions_expr(a, name))
@@ -1858,10 +1889,10 @@ impl<'a> Compiler<'a> {
             self.declare_local("self", 0, false)?;
         }
         for (i, p) in body.params.iter().enumerate() {
-            self.declare_local(&p.text, (i + is_method as usize) as u32, false)?;
+            self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
         }
         if let ast::Vararg::Named(n) = &body.vararg {
-            let name: &str = &n.text;
+            let name: &str = self.nm(n);
             let r = self.reserve(1)?;
             // 5.5: the named vararg table is a read-only local. If the pre-scan
             // proves it is only ever read as `t[k]`/`t.n` (never written, never
@@ -2216,7 +2247,7 @@ impl<'a> Compiler<'a> {
         // a read `t[k]` / `t.n` of a virtual named vararg: index the stack
         // varargs directly (OP_VARGIDX), allocating no table.
         if let Expr::Name(n) = ast.expr(obj)
-            && self.vararg_virtual_local(&n.text)
+            && self.vararg_virtual_local(self.nm(n))
         {
             let saved = self.lr().freereg;
             let ke = self.expr(key)?;
@@ -2316,7 +2347,7 @@ impl<'a> Compiler<'a> {
                     let saved = self.lr().freereg;
                     let ve = self.expr(*v)?;
                     let vr = self.exp_to_anyreg(ve)?;
-                    let c = self.str_const(name.text.as_bytes());
+                    let c = self.str_const(self.nm(name).as_bytes());
                     if c <= 0xFF {
                         self.emit(Inst::iabc(Op::SetField, treg, c, vr, true));
                     } else {
@@ -2387,7 +2418,7 @@ impl<'a> Compiler<'a> {
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
                 self.last_line = n.line;
-                self.define_label(&n.text, n.line, trailing)?;
+                self.define_label(self.nm(n), n.line, trailing)?;
                 continue;
             }
             self.stat(sid)?;
@@ -2430,7 +2461,7 @@ impl<'a> Compiler<'a> {
                 body,
             } => {
                 let end = self.stat_end_line(sid);
-                self.numeric_for(&var.text, var.line, (*start, *limit, *step), body, end)
+                self.numeric_for(self.nm(var), var.line, (*start, *limit, *step), body, end)
             }
             Stat::GenericFor {
                 vars,
@@ -2491,7 +2522,7 @@ impl<'a> Compiler<'a> {
                 self.last_line = name.line;
                 let reg = self.reserve(1)?;
                 // declared before the body: the function can call itself
-                self.declare_local(&name.text, reg, false)?;
+                self.declare_local(self.nm(name), reg, false)?;
                 let f = self.function_exp(body, false)?;
                 self.exp_to_reg(f, reg)?;
                 self.set_freereg(reg + 1);
@@ -2500,13 +2531,14 @@ impl<'a> Compiler<'a> {
             Stat::GlobalFunction { name, body } => {
                 // `global function f` declares f, then assigns the closure
                 self.last_line = name.line;
+                let text = self.nm(name);
                 self.l()
                     .blocks
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((name.text.clone(), false));
-                self.declare_global_marker(Some(&name.text));
+                    .push((text.into(), false));
+                self.declare_global_marker(Some(text));
                 let saved = self.lr().freereg;
                 let f = self.function_exp(body, false)?;
                 let r = self.exp_to_anyreg(f)?;
@@ -2518,8 +2550,8 @@ impl<'a> Compiler<'a> {
                 // raise on the name's line (errors.lua :521).
                 let saved_force = self.force_line.replace(name.line);
                 let res = (|| -> Result<(), SyntaxError> {
-                    self.emit_global_redef_check(&name.text)?;
-                    self.assign_global(&name.text, r)
+                    self.emit_global_redef_check(self.nm(name))?;
+                    self.assign_global(self.nm(name), r)
                 })();
                 self.force_line = saved_force;
                 res?;
@@ -2542,7 +2574,7 @@ impl<'a> Compiler<'a> {
                 self.declare_global_marker(None);
                 Ok(())
             }
-            Stat::Goto(n) => self.goto_stat(&n.text, n.line),
+            Stat::Goto(n) => self.goto_stat(self.nm(n), n.line),
             Stat::Label(_) => unreachable!("labels handled in stat_block"),
         }
     }
@@ -2562,6 +2594,7 @@ impl<'a> Compiler<'a> {
             }
         }
         let declare = |c: &mut Self| {
+            let text = c.names;
             for an in names {
                 let ro = an.attrib.or(collective) == Some(ast::Attrib::Const);
                 c.l()
@@ -2569,8 +2602,8 @@ impl<'a> Compiler<'a> {
                     .last_mut()
                     .expect("no block")
                     .gdecls
-                    .push((an.name.text.clone(), ro));
-                c.declare_global_marker(Some(&an.name.text));
+                    .push((Box::<str>::from(text.text(an.name.sym)), ro));
+                c.declare_global_marker(Some(text.text(an.name.sym)));
             }
         };
         if exprs.is_empty() {
@@ -2585,25 +2618,21 @@ impl<'a> Compiler<'a> {
         declare(self);
         // defining write: each target must not already exist (OP_ERRNNIL).
         for (i, an) in names.iter().enumerate() {
-            self.emit_global_redef_check(&an.name.text)?;
-            self.assign_global(&an.name.text, base + i as u32)?;
+            self.emit_global_redef_check(self.nm(&an.name))?;
+            self.assign_global(self.nm(&an.name), base + i as u32)?;
         }
         self.set_freereg(saved);
         Ok(())
     }
 
-    fn function_stat(
-        &mut self,
-        name: &ast::FuncName,
-        body: &'a FuncBody,
-    ) -> Result<(), SyntaxError> {
+    fn function_stat(&mut self, name: &FuncName, body: &'a FuncBody) -> Result<(), SyntaxError> {
         self.last_line = name.base.line;
         let is_method = name.method.is_some();
         let saved = self.lr().freereg;
         let f = self.function_exp(body, is_method)?;
         let freg = self.exp_to_anyreg(f)?;
         if name.path.is_empty() && name.method.is_none() {
-            self.assign_name(&name.base.text, name.base.line, freg)?;
+            self.assign_name(self.nm(&name.base), name.base.line, freg)?;
             self.set_freereg(saved);
             return Ok(());
         }
@@ -2615,11 +2644,11 @@ impl<'a> Compiler<'a> {
         // error on the right source line (errors.lua :430).
         let saved_force = self.force_line.replace(name.base.line);
         let res = (|| -> Result<(), SyntaxError> {
-            let be = self.name_expr(&name.base.text)?;
+            let be = self.name_expr(self.nm(&name.base))?;
             let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<&str> = name.path.iter().map(|n| &*n.text).collect();
+            let mut fields: Vec<&str> = name.path.iter().map(|n| self.nm(n)).collect();
             if let Some(m) = &name.method {
-                fields.push(&m.text);
+                fields.push(self.nm(m));
             }
             for f_name in &fields[..fields.len() - 1] {
                 let c = self.str_const(f_name.as_bytes());
@@ -2674,7 +2703,7 @@ impl<'a> Compiler<'a> {
         let ct = if self.version >= LuaVersion::Lua54 && last_const && exprs.len() == n as usize {
             let ast = self.ast;
             ct_value(ast, exprs[exprs.len() - 1], &mut |name| {
-                self.ct_const_named(name)
+                self.ct_const_named(self.nm(name))
             })
         } else {
             None
@@ -2700,10 +2729,10 @@ impl<'a> Compiler<'a> {
                 }
                 tbc = Some(reg);
             }
-            self.declare_local(&an.name.text, reg, read_only)?;
+            self.declare_local(self.nm(&an.name), reg, read_only)?;
         }
         if let (Some(v), Some(last)) = (ct, all_names.last()) {
-            self.declare_ct_const(&last.name.text, v);
+            self.declare_ct_const(self.nm(&last.name), v);
         }
         if let Some(reg) = tbc {
             self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false));
@@ -2908,7 +2937,7 @@ impl<'a> Compiler<'a> {
         let ast = self.ast;
         match ast.expr(id) {
             Expr::Name(n) => {
-                self.resolve_name(&n.text)?;
+                self.resolve_name(self.nm(n))?;
             }
             Expr::Index { obj, key } => {
                 let (obj, key) = (*obj, *key);
@@ -3022,7 +3051,7 @@ impl<'a> Compiler<'a> {
     fn assign_to(&mut self, target: ExprId, vreg: u32) -> Result<(), SyntaxError> {
         let ast = self.ast;
         match ast.expr(target) {
-            Expr::Name(n) => self.assign_name(&n.text, n.line, vreg),
+            Expr::Name(n) => self.assign_name(self.nm(n), n.line, vreg),
             Expr::Index { obj, key } => {
                 let (obj, key) = (*obj, *key);
                 let saved = self.lr().freereg;
@@ -3268,7 +3297,7 @@ impl<'a> Compiler<'a> {
 
     fn generic_for(
         &mut self,
-        vars: &'a [ast::Name],
+        vars: &'a [SymName],
         exprs: &[ExprId],
         body: &Block,
         expr_line: u32,
@@ -3308,7 +3337,7 @@ impl<'a> Compiler<'a> {
         for (i, v) in vars.iter().enumerate() {
             // 5.5: the control (first) variable is read-only
             self.declare_local(
-                &v.text,
+                self.nm(v),
                 vbase + i as u32,
                 i == 0 && self.version >= LuaVersion::Lua55,
             )?;

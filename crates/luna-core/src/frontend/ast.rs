@@ -1,9 +1,11 @@
-// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Arena AST: nodes live in flat vectors inside [`Chunk`], referenced by
 //! typed 4-byte ids. Dense storage, no per-node boxing.
 
+mod map_names;
 mod rhs_calls;
+mod vararg;
 pub use rhs_calls::*;
+pub use vararg::block_uses_vararg;
 
 /// Typed index into [`Chunk::exprs`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -40,9 +42,9 @@ pub enum Attrib {
 
 /// One declared name with its optional `<attrib>`.
 #[derive(Clone, Debug)]
-pub struct AttribName {
+pub struct AttribName<N = Name> {
     /// Identifier being declared.
-    pub name: Name,
+    pub name: N,
     /// Optional attribute (`<const>` / `<close>`).
     pub attrib: Option<Attrib>,
 }
@@ -56,18 +58,18 @@ pub struct Block {
 
 /// `function a.b.c:m() ...` target path.
 #[derive(Clone, Debug)]
-pub struct FuncName {
+pub struct FuncName<N = Name> {
     /// First identifier in the path (`a` in `a.b.c:m`).
-    pub base: Name,
+    pub base: N,
     /// Dotted sub-keys after the base, in left-to-right order.
-    pub path: Vec<Name>,
+    pub path: Vec<N>,
     /// Method name after `:`, if any (adds an implicit `self` parameter).
-    pub method: Option<Name>,
+    pub method: Option<N>,
 }
 
 /// Vararg form for a function definition.
 #[derive(Clone, Debug)]
-pub enum Vararg {
+pub enum Vararg<N = Name> {
     /// No vararg in the parameter list.
     None,
     /// Anonymous `...`; accessible via `...` in the body.
@@ -75,17 +77,17 @@ pub enum Vararg {
     /// 5.5 named vararg table: `function f(...t)`.
     Named(
         /// Bound name receiving the captured varargs as a sequence.
-        Name,
+        N,
     ),
 }
 
 /// A function literal's body — parameters plus the contained block.
 #[derive(Clone, Debug)]
-pub struct FuncBody {
+pub struct FuncBody<N = Name> {
     /// Fixed parameter list, in declaration order.
-    pub params: Vec<Name>,
+    pub params: Vec<N>,
     /// Vararg form, if any.
-    pub vararg: Vararg,
+    pub vararg: Vararg<N>,
     /// Body block.
     pub block: Block,
     /// Source line of the opening `function` / `(` token.
@@ -96,7 +98,7 @@ pub struct FuncBody {
 
 /// Top-level statement kinds — every Lua syntactic form except expressions.
 #[derive(Clone, Debug)]
-pub enum Stat {
+pub enum Stat<N = Name> {
     /// `do ... end` block.
     Do(
         /// Inner block.
@@ -132,7 +134,7 @@ pub enum Stat {
     /// `for var = start, limit [, step] do ... end`.
     NumericFor {
         /// Induction variable.
-        var: Name,
+        var: N,
         /// Starting value expression.
         start: ExprId,
         /// Upper bound expression.
@@ -145,7 +147,7 @@ pub enum Stat {
     /// `for v1, v2, ... in exprs do ... end`.
     GenericFor {
         /// Loop variables receiving each iterator call's results.
-        vars: Vec<Name>,
+        vars: Vec<N>,
         /// Expression list yielding iterator, state, control, and (5.4)
         /// to-be-closed value.
         exprs: Vec<ExprId>,
@@ -162,7 +164,7 @@ pub enum Stat {
         /// Single attribute applied to every name (5.4 `local <const>`).
         collective: Option<Attrib>,
         /// Names being introduced, each with its optional per-name attribute.
-        names: Vec<AttribName>,
+        names: Vec<AttribName<N>>,
         /// Initializer expressions; missing names get `nil`.
         exprs: Vec<ExprId>,
     },
@@ -171,7 +173,7 @@ pub enum Stat {
         /// Attribute applied to every name.
         collective: Option<Attrib>,
         /// Declared global names.
-        names: Vec<AttribName>,
+        names: Vec<AttribName<N>>,
         /// Initializer expressions.
         exprs: Vec<ExprId>,
     },
@@ -196,23 +198,23 @@ pub enum Stat {
     /// `function a.b.c:m() ... end`.
     Function {
         /// Target path of the assignment.
-        name: FuncName,
+        name: FuncName<N>,
         /// Function body.
-        body: FuncBody,
+        body: FuncBody<N>,
     },
     /// `local function name() ... end`.
     LocalFunction {
         /// Local name being bound.
-        name: Name,
+        name: N,
         /// Function body.
-        body: FuncBody,
+        body: FuncBody<N>,
     },
     /// 5.5 `global function f() ...`.
     GlobalFunction {
         /// Global name being bound.
-        name: Name,
+        name: N,
         /// Function body.
-        body: FuncBody,
+        body: FuncBody<N>,
     },
     /// `return exprs`.
     Return {
@@ -229,12 +231,12 @@ pub enum Stat {
     /// `goto label`.
     Goto(
         /// Target label.
-        Name,
+        N,
     ),
     /// `::label::` declaration.
     Label(
         /// Label name.
-        Name,
+        N,
     ),
 }
 
@@ -300,7 +302,7 @@ pub enum UnOp {
 
 /// One field in a table constructor literal.
 #[derive(Clone, Debug)]
-pub enum TableField {
+pub enum TableField<N = Name> {
     /// positional `expr`
     Item(
         /// Value expression.
@@ -309,7 +311,7 @@ pub enum TableField {
     /// `name = expr`
     Named(
         /// Field name used as a string key.
-        Name,
+        N,
         /// Value expression.
         ExprId,
     ),
@@ -324,7 +326,7 @@ pub enum TableField {
 
 /// Expression kinds — produces a Lua value when evaluated.
 #[derive(Clone, Debug)]
-pub enum Expr {
+pub enum Expr<N = Name> {
     /// `nil` literal.
     Nil,
     /// `true` literal.
@@ -351,7 +353,7 @@ pub enum Expr {
     /// Identifier reference (resolved later to local / upvalue / global).
     Name(
         /// The identifier.
-        Name,
+        N,
     ),
     /// `obj.key` and `obj[key]` (dot keys become string-literal keys).
     Index {
@@ -374,7 +376,7 @@ pub enum Expr {
         /// Receiver expression.
         obj: ExprId,
         /// Method name (looked up on `obj`).
-        method: Name,
+        method: N,
         /// Argument expressions after the implicit receiver.
         args: Vec<ExprId>,
         /// Source line of the call site.
@@ -383,12 +385,12 @@ pub enum Expr {
     /// `function ... end` function literal.
     Function(
         /// Function body.
-        FuncBody,
+        FuncBody<N>,
     ),
     /// `{ ... }` table constructor.
     Table {
         /// Fields in source order.
-        fields: Vec<TableField>,
+        fields: Vec<TableField<N>>,
         /// Source line of the opening `{`.
         line: u32,
     },
@@ -421,11 +423,11 @@ pub enum Expr {
 
 /// A parsed chunk: the top-level block plus the node arenas.
 #[derive(Clone, Debug)]
-pub struct Chunk {
+pub struct Chunk<N = Name> {
     /// Arena of all expression nodes; index with [`ExprId`].
-    pub exprs: Vec<Expr>,
+    pub exprs: Vec<Expr<N>>,
     /// Arena of all statement nodes; index with [`StatId`].
-    pub stats: Vec<Stat>,
+    pub stats: Vec<Stat<N>>,
     /// starting source line of each statement, indexed by `StatId`
     pub stat_lines: Vec<u32>,
     /// Top-level block (the script body).
@@ -435,115 +437,19 @@ pub struct Chunk {
     pub end_line: u32,
 }
 
-impl Chunk {
+impl<N> Chunk<N> {
     /// Borrow an expression node by id.
-    pub fn expr(&self, id: ExprId) -> &Expr {
+    pub fn expr(&self, id: ExprId) -> &Expr<N> {
         &self.exprs[id.0 as usize]
     }
 
     /// Borrow a statement node by id.
-    pub fn stat(&self, id: StatId) -> &Stat {
+    pub fn stat(&self, id: StatId) -> &Stat<N> {
         &self.stats[id.0 as usize]
     }
 
     /// Starting source line of statement `id` (0 if unrecorded).
     pub fn stat_line(&self, id: StatId) -> u32 {
         self.stat_lines.get(id.0 as usize).copied().unwrap_or(0)
-    }
-}
-
-/// Does any expression in `block` (and nested control-flow,
-/// but NOT nested `Expr::Function` bodies) use `Expr::Vararg`?
-///
-/// PUC 5.1 `LUAI_COMPAT_VARARG` heuristic: a `(...)` function gets a
-/// hidden `arg` local UNLESS the body references `...`. The clear of
-/// `VARARG_NEEDSARG` in lparser.c happens at `simpleexp`'s TK_DOTS
-/// branch, which is a body-level decision. luna's compiler now runs
-/// this AST walk before declaring the auto-`arg` local.
-pub fn block_uses_vararg(chunk: &Chunk, block: &Block) -> bool {
-    block
-        .stats
-        .iter()
-        .any(|&sid| stat_uses_vararg(chunk, chunk.stat(sid)))
-}
-
-fn stat_uses_vararg(chunk: &Chunk, stat: &Stat) -> bool {
-    use Stat::*;
-    match stat {
-        Do(b) => block_uses_vararg(chunk, b),
-        While { cond, body } => expr_uses_vararg(chunk, *cond) || block_uses_vararg(chunk, body),
-        Repeat { body, cond } => block_uses_vararg(chunk, body) || expr_uses_vararg(chunk, *cond),
-        If { arms, else_body } => {
-            arms.iter()
-                .any(|(c, _, b)| expr_uses_vararg(chunk, *c) || block_uses_vararg(chunk, b))
-                || else_body
-                    .as_ref()
-                    .is_some_and(|b| block_uses_vararg(chunk, b))
-        }
-        NumericFor {
-            start,
-            limit,
-            step,
-            body,
-            ..
-        } => {
-            expr_uses_vararg(chunk, *start)
-                || expr_uses_vararg(chunk, *limit)
-                || step.is_some_and(|s| expr_uses_vararg(chunk, s))
-                || block_uses_vararg(chunk, body)
-        }
-        GenericFor { exprs, body, .. } => {
-            exprs.iter().any(|&e| expr_uses_vararg(chunk, e)) || block_uses_vararg(chunk, body)
-        }
-        Local { exprs, .. } | Global { exprs, .. } => {
-            exprs.iter().any(|&e| expr_uses_vararg(chunk, e))
-        }
-        GlobalAll { .. } => false,
-        Assign { targets, exprs } => {
-            targets.iter().any(|&e| expr_uses_vararg(chunk, e))
-                || exprs.iter().any(|&e| expr_uses_vararg(chunk, e))
-        }
-        Call(e) => expr_uses_vararg(chunk, *e),
-        // Nested functions own their own vararg context — don't peek
-        // inside them. (PUC's `simpleexp` only clears NEEDSARG on
-        // direct `...` use in the current function's source.)
-        Function { .. } | LocalFunction { .. } | GlobalFunction { .. } => false,
-        Return { exprs, .. } => exprs.iter().any(|&e| expr_uses_vararg(chunk, e)),
-        Break { .. } | Goto(_) | Label(_) => false,
-    }
-}
-
-fn expr_uses_vararg(chunk: &Chunk, eid: ExprId) -> bool {
-    match chunk.expr(eid) {
-        Expr::Vararg => true,
-        // Stop at function literals — their `...` is scoped to them.
-        Expr::Function(_) => false,
-        Expr::Index { obj, key } => expr_uses_vararg(chunk, *obj) || expr_uses_vararg(chunk, *key),
-        Expr::Call { func, args, .. } => {
-            expr_uses_vararg(chunk, *func) || args.iter().any(|&a| expr_uses_vararg(chunk, a))
-        }
-        Expr::MethodCall { obj, args, .. } => {
-            expr_uses_vararg(chunk, *obj) || args.iter().any(|&a| expr_uses_vararg(chunk, a))
-        }
-        Expr::Table { fields, .. } => fields.iter().any(|f| table_field_uses_vararg(chunk, f)),
-        Expr::BinOp { lhs, rhs, .. } => {
-            expr_uses_vararg(chunk, *lhs) || expr_uses_vararg(chunk, *rhs)
-        }
-        Expr::UnOp { operand, .. } => expr_uses_vararg(chunk, *operand),
-        Expr::Paren(inner) => expr_uses_vararg(chunk, *inner),
-        Expr::Nil
-        | Expr::True
-        | Expr::False
-        | Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Str(_)
-        | Expr::Name(_) => false,
-    }
-}
-
-fn table_field_uses_vararg(chunk: &Chunk, f: &TableField) -> bool {
-    match f {
-        TableField::Item(e) | TableField::Named(_, e) => expr_uses_vararg(chunk, *e),
-        TableField::Keyed(k, v) => expr_uses_vararg(chunk, *k) || expr_uses_vararg(chunk, *v),
     }
 }

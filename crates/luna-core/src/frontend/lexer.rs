@@ -3,6 +3,7 @@
 //! produce UTF-8 output.
 
 use crate::frontend::error::SyntaxError;
+use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
 use crate::frontend::token::{Near, Token, TokenInfo, near_text};
 use crate::numeric::{self, Num, hex_digit};
@@ -21,6 +22,11 @@ pub struct Lexer<'s> {
     /// dialect's scanner leaves it in (escapes half-decoded, delimiters
     /// kept, and so on).
     buf: Vec<u8>,
+    /// set for the load path: identifiers are interned here and handed out
+    /// as `last_sym` with an empty `Token::Name`
+    names: Option<Names>,
+    /// the number of the identifier just read, when interning
+    pub(crate) last_sym: Sym,
 }
 
 /// One lexed item as the parser sees it: either a token, or a byte PUC's
@@ -41,7 +47,28 @@ impl<'s> Lexer<'s> {
             line: 1,
             version,
             buf: Vec::new(),
+            names: None,
+            last_sym: Sym(0),
         }
+    }
+
+    /// A lexer that interns identifiers instead of handing out their text
+    /// (see [`Lexer::last_sym`]).
+    pub(crate) fn interning(src: &'s [u8], version: LuaVersion) -> Lexer<'s> {
+        Lexer {
+            names: Some(Names::with_capacity(src.len())),
+            ..Lexer::new(src, version)
+        }
+    }
+
+    /// The identifiers an interning lexer has read so far.
+    pub(crate) fn names(&self) -> &Names {
+        self.names.as_ref().expect("an interning lexer")
+    }
+
+    /// The identifiers an interning lexer has read.
+    pub(crate) fn take_names(&mut self) -> Names {
+        self.names.take().unwrap_or_default()
     }
 
     /// Borrow the source bytes the lexer is iterating.
@@ -310,7 +337,16 @@ impl<'s> Lexer<'s> {
             b"true" => Token::True,
             b"until" => Token::Until,
             b"while" => Token::While,
-            _ => Token::Name(str::from_utf8(text).expect("ascii identifier").into()),
+            _ => {
+                let text = str::from_utf8(text).expect("ascii identifier");
+                match &mut self.names {
+                    Some(names) => {
+                        self.last_sym = names.intern(text);
+                        Token::Name(Box::default())
+                    }
+                    None => Token::Name(text.into()),
+                }
+            }
         }
     }
 

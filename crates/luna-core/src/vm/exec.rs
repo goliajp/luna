@@ -1519,6 +1519,7 @@ impl Vm {
                 crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
             crate::compiler::compile_parsed(
                 &parsed.chunk,
+                &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
@@ -1530,6 +1531,7 @@ impl Vm {
             let parsed = crate::frontend::parser::parse_at_depth(src, self.version, depth)?;
             crate::compiler::compile_parsed(
                 &parsed.chunk,
+                &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
