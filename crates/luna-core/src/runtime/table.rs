@@ -588,6 +588,7 @@ impl Table {
 
     /// [`Self::str_slot_by_ptr`] for a write.
     #[inline(always)]
+    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
     pub(crate) fn str_slot_by_ptr_mut(
         &mut self,
         key: Gc<crate::runtime::string::LuaStr>,
@@ -1017,17 +1018,20 @@ impl Table {
                 );
             }
             drop(old_slab);
-            // growing appends nil slots: the count stays, and a lagging
-            // prefix may stay behind (a full old part is all prefix)
-            if self.acount as usize == old_asize {
-                self.aprefix = self.acount;
+            // growing appends nil slots, so the count stays; the prefix
+            // may lag behind the run (a refill scans only 64 slots ahead,
+            // a method-JIT store extends it by one) and catches up here
+            let atags = self.atags();
+            let mut p = self.aprefix as usize;
+            while p < old_asize && atags[p] != raw::NIL {
+                p += 1;
             }
+            self.aprefix = p as u32;
             #[cfg(debug_assertions)]
             {
                 let kept = (self.acount, self.aprefix);
                 self.recount_array();
-                debug_assert!(kept.0 == self.acount && kept.1 <= self.aprefix);
-                (self.acount, self.aprefix) = kept;
+                debug_assert_eq!(kept, (self.acount, self.aprefix));
             }
         } else {
             self.recount_array();
@@ -1206,47 +1210,6 @@ impl Table {
             }
         }
         false
-    }
-
-    /// `gc-verify`: after a completed sweep, every collectable
-    /// reference this table still holds (array values, node keys/values,
-    /// metatable) must point at a live heap object. Nodes flagged
-    /// `dead_key` are the sanctioned exception — their key pointer is
-    /// documented-dangling and never dereferenced. `describe` receives
-    /// (what, node-index, tag-byte, ptr) on violation.
-    #[cfg(feature = "gc-verify")]
-    pub(crate) fn verify_refs(
-        &self,
-        is_live: &dyn Fn(Value) -> bool,
-        report: &dyn Fn(&str, usize, Value),
-    ) {
-        let atags = self.atags();
-        let avals = self.avals();
-        for (i, &tag) in atags.iter().enumerate() {
-            if raw::is_gc(tag) {
-                // SAFETY: tags/vals parallel arrays kept in sync by all table writers.
-                let v = unsafe { Value::pack(tag, avals[i]) };
-                if !is_live(v) {
-                    report("array value", i, v);
-                }
-            }
-        }
-        for (i, n) in self.nodes.iter().enumerate() {
-            if n.val.is_nil() {
-                continue;
-            }
-            if !n.dead_key && !is_live(n.key()) {
-                report("node key", i, n.key());
-            }
-            if !is_live(n.val) {
-                report("node value", i, n.val);
-            }
-        }
-        if let Some(mt) = self.metatable
-            && !is_live(Value::Table(mt))
-        {
-            report("metatable", 0, Value::Table(mt));
-        }
     }
 
     pub(crate) fn trace(&self, m: &mut Marker) {
@@ -1949,10 +1912,11 @@ mod tests {
         assert_eq!(t.len(), len_by_search(t));
     }
 
-    // the prefix may lag behind the run (the method JIT's inline stores
-    // leave it so); growing the array part must accept that
+    // the prefix may lag behind the run (a refill scans only 64 slots
+    // ahead, a method-JIT inline store extends it by one slot); growing
+    // the array part brings it up to the run again
     #[test]
-    fn growing_accepts_a_lagging_prefix() {
+    fn growing_catches_up_a_lagging_prefix() {
         with_table(|heap, t| {
             for i in 1..=8 {
                 let _ = t.set_int(heap, i, Value::Int(i));
@@ -1963,6 +1927,17 @@ mod tests {
             t.resize(heap, asize * 2, 0);
             check_counts(t);
             assert_eq!(t.aprefix as usize, asize);
+        });
+        with_table(|heap, t| {
+            for i in 1..=8 {
+                let _ = t.set_int(heap, i, Value::Int(i));
+            }
+            let _ = t.set_int(heap, 6, Value::Nil);
+            let asize = t.asize();
+            t.aprefix = 1;
+            t.resize(heap, asize * 2, 0);
+            check_counts(t);
+            assert_eq!(t.aprefix, 5);
         });
     }
 
