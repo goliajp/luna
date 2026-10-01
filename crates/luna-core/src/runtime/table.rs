@@ -7,7 +7,7 @@
 //! (Brent's variation), capacity a power of two, rehash sizing per
 //! luaH_rehash/computesizes.
 
-use crate::runtime::heap::{Gc, GcHeader, Heap, Marker};
+use crate::runtime::heap::{Gc, GcHeader, Heap};
 use crate::runtime::value::{RawVal, Value, f2i_exact, raw};
 
 /// Errors that table mutation can raise back to the interpreter.
@@ -63,6 +63,8 @@ pub mod jit_layout;
 mod array;
 #[path = "table_node.rs"]
 mod node;
+#[path = "table_trace.rs"]
+mod trace;
 pub(crate) use node::meta_bits;
 use node::{NONE, Node};
 
@@ -1174,60 +1176,6 @@ impl Table {
             }
         }
         false
-    }
-
-    pub(crate) fn trace(&self, m: &mut Marker) {
-        let (wk, wv) = self.weak_mode();
-        if wk || wv {
-            m.weak.push(self as *const Table as *mut Table);
-        }
-        // weak keys + strong values = an ephemeron table: its hash values are
-        // marked only if the key proves reachable (deferred to the convergence
-        // pass), not here. PUC 5.1 predates ephemerons — under `no_ephemeron`
-        // a weak-key table marks its values strongly during this pass, which
-        // is what gc.lua's "weak tables" section requires.
-        let ephemeron = wk && !wv && !m.no_ephemeron;
-        if ephemeron {
-            m.ephemeron.push(self as *const Table as *mut Table);
-        }
-        // array keys are integers (never weakly collected); skip values only
-        // when the table has weak values
-        if !wv {
-            let atags = self.atags();
-            let avals = self.avals();
-            for (i, &tag) in atags.iter().enumerate() {
-                if raw::is_gc(tag) {
-                    // SAFETY: `tag` and the raw value come from this table's parallel `atags` / `avals` arrays, which the table writers always keep in sync — the tag byte matches the raw payload's discriminator (see `runtime::value` `raw` module).
-                    m.value(unsafe { Value::pack(tag, avals[i]) });
-                }
-            }
-        }
-        for n in self.nodes.iter() {
-            if !wk {
-                m.value(n.key());
-            }
-            // ephemeron hash values are deferred; otherwise mark strong values
-            if !wv && !ephemeron {
-                m.value(n.val);
-            }
-        }
-        if let Some(mt) = self.metatable {
-            m.value(Value::Table(mt));
-        }
-    }
-
-    /// Ephemeron pass: mark the value of every hash entry whose key is alive
-    /// (`alive` decides — strong/marked keys, plus strings/numbers which are
-    /// never weakly collected). Returns true if any value was newly marked, so
-    /// the caller can iterate to a fixpoint (PUC `traverseephemeron`).
-    pub(crate) fn converge_ephemeron(&self, alive: &dyn Fn(Value) -> bool, m: &mut Marker) -> bool {
-        let mut changed = false;
-        for n in self.nodes.iter() {
-            if !n.val.is_nil() && alive(n.key()) {
-                changed |= m.value(n.val);
-            }
-        }
-        changed
     }
 
     /// Clear entries whose weak key/value did not survive marking. `is_dead`

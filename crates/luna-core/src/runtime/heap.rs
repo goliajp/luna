@@ -1484,6 +1484,7 @@ impl Marker {
     /// Transitions white → gray (in PUC `reallymarkobject` terms): clears the
     /// current-white bit and pushes onto the gray stack. `drain_marker` later
     /// pops it, traces children, and stamps it BLACK.
+    #[inline(always)]
     pub(crate) fn header(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
