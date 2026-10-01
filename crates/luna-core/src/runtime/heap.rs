@@ -52,6 +52,7 @@ pub struct GcHeader {
     ///   bit 3 FIN    — registered for `__gc` (tracked in `finalize`)
     ///   bit 4 FINALIZED — already enqueued or finalized once this lifetime
     ///   bit 5 DEFERRED  — 5.3 cycle-finalize deferral marker (gc.lua :502)
+    ///   bit 6 LEAF   — nothing to trace (a string, a native without upvalues)
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
     flags: u8,
@@ -73,6 +74,8 @@ const FINALIZED: u8 = 16;
 /// break cycle"). The next time the object is found unreachable it is moved
 /// to `tobefnz` without re-deferring.
 const DEFERRED: u8 = 32;
+/// the object has no children; fixed at creation
+const LEAF: u8 = 64;
 
 #[inline(always)]
 fn is_white(flags: u8) -> bool {
@@ -97,7 +100,15 @@ impl GcHeader {
         GcHeader {
             next: ptr::null_mut(),
             tag,
-            flags: 0,
+            flags: if tag == ObjTag::Str { LEAF } else { 0 },
+        }
+    }
+
+    /// A native function's header; one without upvalues has nothing to trace.
+    fn native(upvals: &[Value]) -> GcHeader {
+        GcHeader {
+            flags: if upvals.is_empty() { LEAF } else { 0 },
+            ..GcHeader::new(ObjTag::Native)
         }
     }
 }
@@ -445,7 +456,7 @@ impl Heap {
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
         self.adopt(Box::new(NativeClosure {
-            hdr: GcHeader::new(ObjTag::Native),
+            hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: false,
@@ -466,7 +477,7 @@ impl Heap {
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
         self.adopt(Box::new(NativeClosure {
-            hdr: GcHeader::new(ObjTag::Native),
+            hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: true,
@@ -704,7 +715,7 @@ impl Heap {
             ephemeron: Vec::new(),
             no_ephemeron: self.no_ephemeron,
             cached_protos: Vec::new(),
-            leaves_black: true,
+            leaf_black: LEAF,
         };
         for &r in roots {
             m.value(r);
@@ -901,7 +912,7 @@ impl Heap {
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
             cached_protos: std::mem::take(&mut prop.cached_protos),
-            leaves_black: false,
+            leaf_black: 0,
         }
     }
 
@@ -1442,8 +1453,9 @@ pub(crate) struct Marker {
     /// them (PUC `reallymarkobject` does so for strings; its library
     /// functions are not objects at all). Only the stop-the-world mark sets
     /// it: the incremental step budget counts queued objects, and leaves
-    /// leaving the queue would change how far each step gets.
-    leaves_black: bool,
+    /// leaving the queue would change how far each step gets. `LEAF` or 0,
+    /// tested against an object's flags.
+    leaf_black: u8,
 }
 
 /// Drain the gray stack: pop each marked object and trace its children until
@@ -1489,7 +1501,7 @@ impl Marker {
     /// Mark a bare header, returning true if it was newly marked (was white).
     /// Transitions white → gray (in PUC `reallymarkobject` terms): clears the
     /// current-white bit and pushes onto the gray stack. `drain_marker` later
-    /// pops it, traces children, and stamps it BLACK. Under `leaves_black`
+    /// pops it, traces children, and stamps it BLACK. With `leaf_black` set
     /// an object without children (a string, a native function without
     /// upvalues) goes straight to BLACK instead.
     #[inline(always)]
@@ -1498,7 +1510,7 @@ impl Marker {
         unsafe {
             let f = (*h).flags;
             if is_white(f) {
-                if self.leaves_black && is_leaf(h) {
+                if f & self.leaf_black != 0 {
                     (*h).flags = (f & !WHITE_BITS) | BLACK;
                 } else {
                     (*h).flags = f & !WHITE_BITS;
@@ -1508,22 +1520,6 @@ impl Marker {
             } else {
                 false
             }
-        }
-    }
-}
-
-/// True when the object has nothing to trace.
-///
-/// # Safety
-/// `h` is a live object.
-#[inline(always)]
-unsafe fn is_leaf(h: *mut GcHeader) -> bool {
-    // SAFETY: the caller's; the tag says which object `h` heads
-    unsafe {
-        match (*h).tag {
-            ObjTag::Str => true,
-            ObjTag::Native => (&(*(h as *const NativeClosure)).upvals).is_empty(),
-            _ => false,
         }
     }
 }
