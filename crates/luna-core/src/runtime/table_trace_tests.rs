@@ -8,7 +8,8 @@ fn noop(_: &mut crate::vm::Vm, _: u32, _: u32) -> Result<u32, crate::vm::LuaErro
 /// One fresh object of every collectable kind, from the lowest tag
 /// (string) to the highest (userdata). The coroutine also keeps `globals`.
 fn one_of_each(heap: &mut Heap, globals: Gc<Table>, n: usize) -> Vec<Value> {
-    let s = heap.intern(format!("a string long enough not to be interned, number {n:04}").as_bytes());
+    let s =
+        heap.intern(format!("a string long enough not to be interned, number {n:04}").as_bytes());
     vec![
         Value::Str(s),
         Value::Table(heap.new_table()),
