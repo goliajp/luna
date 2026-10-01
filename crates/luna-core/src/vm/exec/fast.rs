@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::runtime::value::tag;
+use call_fast::Returned;
 use fast_arith::{
     arith_arm, arith_imm_arm, cold_path, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
 };
@@ -156,7 +157,9 @@ impl Vm {
         let mut switched = false;
         'frames: loop {
             if switched {
-                let f = top_lua!();
+                // whoever continued here set `fr` to the frame now on top
+                // SAFETY: `fr` points at that frame
+                let f = unsafe { &mut *fr };
                 let cl = f.closure;
                 npc = f.pc;
                 let base = f.base;
@@ -187,6 +190,7 @@ impl Vm {
                     if self.trap && !self.settle_frames(entry_depth)? {
                         return Ok(FastExit::Reload);
                     }
+                    fr = top_lua!();
                     continue 'frames;
                 }};
             }
@@ -216,6 +220,22 @@ impl Vm {
                         reenter!()
                     }
                     next!()
+                }};
+            }
+            // after `return_fast`: a Lua caller is taken up from its frame
+            macro_rules! returned {
+                ($done:expr) => {{
+                    match $done {
+                        Returned::ToLua(f) => {
+                            fr = f;
+                            continue 'frames;
+                        }
+                        Returned::No => {
+                            save!();
+                            return Ok(FastExit::Slow(inst));
+                        }
+                        _ => reenter!(),
+                    }
                 }};
             }
             // `R[A] := R[B][*pk]` for a key in a register or a constant
@@ -1101,7 +1121,8 @@ impl Vm {
                                 // SAFETY: a closure tag means a live closure
                                 let callee = Gc::from_ptr(unsafe { raw_gc(pf) } as *mut LuaClosure);
                                 let n = nargs.unwrap_or_else(|| self.top - (abs + 1));
-                                if self.push_lua_frame_fast(callee, abs, n, wanted) {
+                                if let Some(nf) = self.push_lua_frame_fast(callee, abs, n, wanted) {
+                                    fr = nf;
                                     continue 'frames;
                                 }
                             } else if t == tag::NATIVE {
@@ -1125,19 +1146,13 @@ impl Vm {
                     // does the rest
                     Op::Return0 => {
                         let base = base!();
-                        if self.return_fast(base, base, 0, entry_depth) {
-                            reenter!()
-                        }
-                        save!();
-                        return Ok(FastExit::Slow(inst));
+                        let done = self.return_fast(base, base, 0, entry_depth);
+                        returned!(done)
                     }
                     Op::Return1 => {
                         let base = base!();
-                        if self.return_fast(base, base + inst.a(), 1, entry_depth) {
-                            reenter!()
-                        }
-                        save!();
-                        return Ok(FastExit::Slow(inst));
+                        let done = self.return_fast(base, base + inst.a(), 1, entry_depth);
+                        returned!(done)
                     }
                     // they stay in this frame: run out of line, then go on
                     Op::LoadKx

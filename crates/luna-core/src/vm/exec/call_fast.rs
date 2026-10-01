@@ -7,8 +7,9 @@ impl Vm {
     /// `luaD_precall` for a Lua function) when the frame is all the call
     /// needs: no method JIT to try, a function with fixed parameters and
     /// the stack already big enough. The caller runs with no hook and no
-    /// trace JIT, so neither has anything to see. `false`, having done
-    /// nothing, leaves the call to `begin_call`.
+    /// trace JIT, so neither has anything to see. The new frame, which the
+    /// caller then runs; `None`, having done nothing, leaves the call to
+    /// `begin_call`.
     #[inline(always)]
     pub(super) fn push_lua_frame_fast(
         &mut self,
@@ -16,7 +17,7 @@ impl Vm {
         func_slot: u32,
         nargs: u32,
         nresults: i32,
-    ) -> bool {
+    ) -> Option<*mut Frame> {
         let p = cl.proto;
         let base = func_slot + 1;
         let need = base as usize + p.max_stack as usize;
@@ -26,7 +27,7 @@ impl Vm {
             || func_slot + 256 > MAX_LUA_STACK
             || self.stack.len() < need
         {
-            return false;
+            return None;
         }
         // as `push_frame`: the window past the parameters starts out nil
         let kept = nargs.min(p.num_params as u32);
@@ -57,8 +58,23 @@ impl Vm {
                 ccmt: std::mem::take(&mut self.pending_ccmt),
             }),
         );
-        true
+        // SAFETY: a Lua frame was just pushed
+        match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+            CallFrame::Lua(f) => Some(f),
+            // SAFETY: see above
+            CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
+        }
     }
+}
+
+/// What [`Vm::return_fast`] did.
+pub(super) enum Returned {
+    /// nothing: the loop head's `Return` arm takes over
+    No,
+    /// to a metamethod's continuation, which sets `trap`
+    ToMeta,
+    /// to this Lua frame, now on top
+    ToLua(*mut Frame),
 }
 
 impl Vm {
@@ -75,7 +91,7 @@ impl Vm {
         abs_a: u32,
         nret: u32,
         entry_depth: usize,
-    ) -> bool {
+    ) -> Returned {
         let n = self.frames.len();
         if n <= entry_depth
             || n < 2
@@ -83,14 +99,15 @@ impl Vm {
             || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
             || self.tbc.last().is_some_and(|&s| s >= base)
         {
-            return false;
+            return Returned::No;
         }
-        // SAFETY: `n >= 2`
-        let to_meta = match unsafe { self.frames.get_unchecked(n - 2) } {
-            CallFrame::Lua(_) => false,
-            CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => true,
-            CallFrame::Cont(_) => return false,
+        // SAFETY: `n >= 2`; popping the top frame leaves this one in place
+        let caller: Option<*mut Frame> = match unsafe { self.frames.get_unchecked_mut(n - 2) } {
+            CallFrame::Lua(f) => Some(f),
+            CallFrame::Cont(c) if matches!(c.kind, ContKind::Meta(_)) => None,
+            CallFrame::Cont(_) => return Returned::No,
         };
+        let to_meta = caller.is_none();
         // SAFETY: the running frame is on top, and it is a Lua frame
         let (func_slot, wanted) = match unsafe { self.frames.get_unchecked(n - 1) } {
             CallFrame::Lua(f) => (f.func_slot, f.nresults),
@@ -118,7 +135,10 @@ impl Vm {
             }
             self.top = func_slot + w;
         }
-        true
+        match caller {
+            Some(f) => Returned::ToLua(f),
+            None => Returned::ToMeta,
+        }
     }
 }
 
