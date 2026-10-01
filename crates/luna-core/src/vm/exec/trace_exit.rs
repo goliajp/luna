@@ -59,7 +59,7 @@ impl Vm {
             decode_hit_counts,
             decode_body,
             child_ran,
-        ) = self.trace_exit_source(cl, pc, ct, raw_ret, &mut reg_state);
+        ) = self.trace_exit_source(cl, pc, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
         let decoded = crate::jit::trace::decode_exit_shape(
             decode_body,
             &decode_inline,

@@ -23,6 +23,12 @@ optimization.
 
 ### Changed
 
+- Calling a Lua function on 5.2–5.5 sets only the missing parameters to
+  nil, as PUC `luaD_precall` does, instead of clearing the function's
+  whole register window (5.1 still clears it, as PUC 5.1 does). A
+  compiled trace checks on entry only the registers it reads before
+  writing them, so whatever the rest of the window holds no longer
+  keeps it from running.
 - `Vm::install_null_jit` now also switches the JIT off
   (`set_jit_enabled(false)` and `set_trace_jit_enabled(false)`), and so
   does the CLI's `--no-jit`, with or without `--sandbox`: before, hot

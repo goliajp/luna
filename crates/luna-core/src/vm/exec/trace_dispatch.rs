@@ -204,8 +204,8 @@ impl Vm {
     }
 
     /// Copy the frame's registers into the trace's entry buffer. `false` when a
-    /// register's tag differs from the one the trace was compiled for, or
-    /// cannot be passed as a raw payload.
+    /// register the trace checks has a tag other than the one the trace was
+    /// compiled for, or one that cannot be passed as a raw payload.
     fn trace_marshal_in(
         &self,
         base_us: usize,
@@ -217,6 +217,16 @@ impl Vm {
         for i in 0..max_stack {
             let v = self.stack[base_us + i];
             let (tag, raw) = v.unpack();
+            let want = compile_entry_tags.get(i).copied();
+            if want == Some(crate::jit::trace::ENTRY_TAG_ANY) {
+                // not read before the trace writes it: any value enters,
+                // and an exit that has not written it leaves it as it is
+                // (the restore skips a slot whose entry tag is ANY)
+                entry_tags.push(crate::jit::trace::ENTRY_TAG_ANY);
+                // SAFETY: the raw payload of the slot's own value.
+                reg_state[i] = unsafe { raw.zero as i64 };
+                continue;
+            }
             entry_tags.push(tag);
             // Entry tag guard. The trace's IR
             // is specialised to the compile-time entry tags
@@ -227,7 +237,7 @@ impl Vm {
             // Skip dispatch on mismatch so interp handles
             // this entry shape; the trace stays cached for
             // future entries that match.
-            if i < compile_entry_tags.len() && tag != compile_entry_tags[i] {
+            if want.is_some_and(|w| tag != w) {
                 return false;
             }
             match tag {
