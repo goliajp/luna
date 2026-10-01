@@ -13,37 +13,46 @@ use super::*;
 /// Caller is responsible for applying `inline_depth` offsets if
 /// the op lives in a depth>0 inlined frame.
 pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
+    let (reads, writes) = rw_ranges(inst);
+    let runs = |v: &[(u32, u32)]| v.iter().flat_map(|&(s, n)| s..s + n).collect();
+    (runs(&reads), runs(&writes))
+}
+
+/// [`op_reads_writes`] without allocating: up to three read runs and two
+/// write runs, each `(first register, count)`.
+pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u32, u32); 2]) {
     use luna_core::vm::isa::Op;
     let a = inst.a();
     let b = inst.b();
     let c = inst.c();
-    let k = inst.k();
+    let none = (0, 0);
+    let one = |r: u32| (r, 1);
+    let r1 = |x: u32| [one(x), none, none];
+    let r2 = |x: u32, y: u32| [one(x), one(y), none];
+    let r0 = [none; 3];
+    let w1 = |x: u32| [one(x), none];
+    let w0 = [none; 2];
     match inst.op() {
-        Op::Move => (vec![b], vec![a]),
-        Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadKx => (vec![], vec![a]),
-        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => (vec![], vec![a]),
-        Op::LoadNil => {
-            // R[A..=A+B] := nil
-            let mut w = Vec::with_capacity((b + 1) as usize);
-            for i in 0..=b {
-                w.push(a + i);
-            }
-            (vec![], w)
-        }
-        Op::GetUpval => (vec![], vec![a]),
-        Op::SetUpval => (vec![a], vec![]),
-        Op::GetTabUp => (vec![], vec![a]),
-        Op::GetTable => (vec![b, c], vec![a]),
-        Op::GetI => (vec![b], vec![a]),
-        Op::GetField => (vec![b], vec![a]),
+        Op::Move => (r1(b), w1(a)),
+        Op::LoadI | Op::LoadF | Op::LoadK | Op::LoadKx => (r0, w1(a)),
+        Op::LoadFalse | Op::LoadTrue | Op::LFalseSkip => (r0, w1(a)),
+        // R[A..=A+B] := nil
+        Op::LoadNil => (r0, [(a, b + 1), none]),
+        Op::GetUpval => (r0, w1(a)),
+        Op::SetUpval => (r1(a), w0),
+        Op::GetTabUp => (r0, w1(a)),
+        Op::GetTable => (r2(b, c), w1(a)),
+        Op::GetI => (r1(b), w1(a)),
+        Op::GetField => (r1(b), w1(a)),
         // luna's set ops always take the value from R[C] (the k flag of
         // SetField / SetTabUp marks B as a constant key)
-        Op::SetTabUp => (vec![c], vec![]),
-        Op::SetTable => (vec![a, b, c], vec![]),
-        Op::SetI | Op::SetField => (vec![a, c], vec![]),
-        Op::NewTable => (vec![], vec![a]),
+        Op::SetTabUp => (r1(c), w0),
+        Op::SetTable => ([one(a), one(b), one(c)], w0),
+        Op::SetI | Op::SetField => (r2(a, c), w0),
+        Op::NewTable => (r0, w1(a)),
         // a key too far for the constant field sits in R[C]
-        Op::SelfOp => (if k { vec![b] } else { vec![b, c] }, vec![a, a + 1]),
+        Op::SelfOp if inst.k() => (r1(b), [(a, 2), none]),
+        Op::SelfOp => (r2(b, c), [(a, 2), none]),
         Op::Add
         | Op::Sub
         | Op::Mul
@@ -55,7 +64,7 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         | Op::BOr
         | Op::BXor
         | Op::Shl
-        | Op::Shr => (vec![b, c], vec![a]),
+        | Op::Shr => (r2(b, c), w1(a)),
         // constant and immediate operands are not registers (a recording
         // holds these opcodes split into a load and the register form)
         Op::AddI
@@ -71,96 +80,43 @@ pub fn op_reads_writes(inst: luna_core::vm::isa::Inst) -> (Vec<u32>, Vec<u32>) {
         | Op::BOrK
         | Op::BXorK
         | Op::ShrI
-        | Op::ShlI => (vec![b], vec![a]),
-        Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => (vec![a], vec![]),
-        Op::Unm | Op::BNot | Op::Not | Op::Len => (vec![b], vec![a]),
-        Op::Concat => {
-            // R[A] := concat(R[A..A+B-1])
-            let mut r = Vec::with_capacity(b as usize);
-            for i in 0..b {
-                r.push(a + i);
-            }
-            (r, vec![a])
-        }
-        Op::Close | Op::Tbc => (vec![], vec![]),
-        Op::Jmp | Op::ExtraArg => (vec![], vec![]),
-        Op::Eq | Op::Lt | Op::Le => (vec![a, b], vec![]),
-        Op::EqK => (vec![a], vec![]),
-        Op::Test => (vec![a], vec![]),
-        Op::TestSet => (vec![b], vec![a]),
-        Op::Call => {
-            // R[A..A+B-1] are args (incl. fn at R[A]); writes R[A..A+C-1]
-            // B=0 means variable (top); C=0 means variable. Conservative:
-            // assume B,C up to a reasonable cap (use observed values).
-            let nargs = if b == 0 { 0 } else { b - 1 };
-            let nres = if c == 0 { 0 } else { c - 1 };
-            let mut r = vec![a];
-            for i in 1..=nargs {
-                r.push(a + i);
-            }
-            let mut w = Vec::with_capacity(nres as usize);
-            for i in 0..nres {
-                w.push(a + i);
-            }
-            (r, w)
-        }
-        Op::TailCall => {
-            let nargs = if b == 0 { 0 } else { b - 1 };
-            let mut r = vec![a];
-            for i in 1..=nargs {
-                r.push(a + i);
-            }
-            (r, vec![])
-        }
-        Op::Return => {
-            // R[A..A+B-2] returned
-            let n = if b == 0 { 1 } else { b - 1 };
-            let mut r = Vec::with_capacity(n as usize);
-            for i in 0..n {
-                r.push(a + i);
-            }
-            (r, vec![])
-        }
-        Op::Return0 => (vec![], vec![]),
-        Op::Return1 => (vec![a], vec![]),
-        Op::ForLoop => {
-            // R[A+1] = count, R[A] = idx, R[A+2] = step, R[A+3] = ctrl
-            // Reads R[A], R[A+1], R[A+2]; writes R[A], R[A+1], R[A+3].
-            (vec![a, a + 1, a + 2], vec![a, a + 1, a + 3])
-        }
-        Op::ForPrep => {
-            // Sets up the for loop: reads init/limit/step, writes idx/count/ctrl.
-            (vec![a, a + 1, a + 2], vec![a, a + 1, a + 3])
-        }
-        Op::TForPrep => (vec![], vec![]),
-        Op::TForCall => {
-            // R[A+4], R[A+5], ..., R[A+3+C] := R[A](R[A+1], R[A+2])
-            let mut w = Vec::with_capacity(c as usize);
-            for i in 0..c {
-                w.push(a + 4 + i);
-            }
-            (vec![a, a + 1, a + 2], w)
-        }
-        Op::TForLoop => {
-            // If R[A+4] ~= nil: R[A+2] = R[A+4]; pc -= Bx
-            (vec![a + 4], vec![a + 2])
-        }
-        Op::SetList => {
-            // R[A] is the table; R[A+1..A+B] are values to set.
-            let n = if b == 0 { 0 } else { b };
-            let mut r = vec![a];
-            for i in 1..=n {
-                r.push(a + i);
-            }
-            (r, vec![])
-        }
-        Op::Closure => (vec![], vec![a]),
-        Op::Vararg | Op::GetVarg => {
-            // Writes a variable count starting at R[A]. Conservative: just write R[A].
-            (vec![], vec![a])
-        }
-        Op::VargIdx => (vec![c], vec![a]),
-        Op::ErrNNil => (vec![a], vec![]),
+        | Op::ShlI => (r1(b), w1(a)),
+        Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => (r1(a), w0),
+        Op::Unm | Op::BNot | Op::Not | Op::Len => (r1(b), w1(a)),
+        // R[A] := concat(R[A..A+B-1])
+        Op::Concat => ([(a, b), none, none], w1(a)),
+        Op::Close | Op::Tbc => (r0, w0),
+        Op::Jmp | Op::ExtraArg => (r0, w0),
+        Op::Eq | Op::Lt | Op::Le => (r2(a, b), w0),
+        Op::EqK => (r1(a), w0),
+        Op::Test => (r1(a), w0),
+        Op::TestSet => (r1(b), w1(a)),
+        // R[A..A+B-1] are args (incl. fn at R[A]); writes R[A..A+C-2].
+        // B=0 / C=0 mean "up to top": only R[A] is counted then.
+        Op::Call => (
+            [(a, b.max(1)), none, none],
+            [(a, c.saturating_sub(1)), none],
+        ),
+        Op::TailCall => ([(a, b.max(1)), none, none], w0),
+        // R[A..A+B-2] returned
+        Op::Return => ([(a, if b == 0 { 1 } else { b - 1 }), none, none], w0),
+        Op::Return0 => (r0, w0),
+        Op::Return1 => (r1(a), w0),
+        // R[A+1] = count, R[A] = idx, R[A+2] = step, R[A+3] = ctrl
+        // Reads R[A], R[A+1], R[A+2]; writes R[A], R[A+1], R[A+3].
+        Op::ForLoop | Op::ForPrep => ([(a, 3), none, none], [(a, 2), (a + 3, 1)]),
+        Op::TForPrep => (r0, w0),
+        // R[A+4], R[A+5], ..., R[A+3+C] := R[A](R[A+1], R[A+2])
+        Op::TForCall => ([(a, 3), none, none], [(a + 4, c), none]),
+        // If R[A+4] ~= nil: R[A+2] = R[A+4]; pc -= Bx
+        Op::TForLoop => (r1(a + 4), w1(a + 2)),
+        // R[A] is the table; R[A+1..A+B] are values to set
+        Op::SetList => ([(a, b + 1), none, none], w0),
+        Op::Closure => (r0, w1(a)),
+        // Writes a variable count starting at R[A]. Conservative: just write R[A].
+        Op::Vararg | Op::GetVarg => (r0, w1(a)),
+        Op::VargIdx => (r1(c), w1(a)),
+        Op::ErrNNil => (r1(a), w0),
     }
 }
 

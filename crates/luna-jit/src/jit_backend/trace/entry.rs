@@ -15,6 +15,7 @@
 //! register is checked on entry instead unless it is dead at every place
 //! those exits resume.
 
+use super::slots::rw_ranges;
 use super::*;
 use luna_core::runtime::function::Proto;
 
@@ -93,17 +94,31 @@ pub(super) fn entry_live(
         .filter(|&s| !live[s] && last_write[s].is_some())
         .collect();
     if may_loop && !pending.is_empty() {
-        let lv = Liveness::of(record.head_proto);
+        let resume: Vec<Vec<u32>> = ops
+            .iter()
+            .map(|rop| {
+                if rop.inline_depth == 0 {
+                    resume_pcs(rop.proto, rop.pc)
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        let roots: Vec<u32> = resume
+            .iter()
+            .flatten()
+            .copied()
+            .chain([record.head_pc])
+            .collect();
+        let lv = Liveness::of(record.head_proto, &roots);
         // what is live where an exit taken at or before each op can resume
         let mut at_exit = lv.at(record.head_pc);
         let mut inlined = false;
         let mut upto: Vec<(Set, bool)> = Vec::with_capacity(ops.len());
-        for rop in ops {
+        for (rop, pcs) in ops.iter().zip(&resume) {
             inlined |= rop.inline_depth > 0;
-            if rop.inline_depth == 0 {
-                for pc in resume_pcs(rop.proto, rop.pc) {
-                    at_exit = at_exit.union(lv.at(pc));
-                }
+            for &pc in pcs {
+                at_exit = at_exit.union(lv.at(pc));
             }
             upto.push((at_exit, inlined));
         }
@@ -231,7 +246,9 @@ struct Liveness {
 }
 
 impl Liveness {
-    fn of(proto: Gc<Proto>) -> Liveness {
+    /// Computed for the instructions reachable from `roots` only: those
+    /// are all that liveness at `roots` depends on.
+    fn of(proto: Gc<Proto>, roots: &[u32]) -> Liveness {
         let code = &proto.code;
         let captured = proto
             .protos
@@ -245,20 +262,36 @@ impl Liveness {
                 captured,
             };
         }
+        let mut reach = vec![false; code.len()];
+        let mut todo: Vec<i64> = roots.iter().map(|&p| i64::from(p)).collect();
+        while let Some(p) = todo.pop() {
+            if p < 0 || p as usize >= code.len() || std::mem::replace(&mut reach[p as usize], true)
+            {
+                continue;
+            }
+            todo.extend(
+                successors(code[p as usize])
+                    .into_iter()
+                    .flatten()
+                    .map(|d| p + d),
+            );
+        }
+        let order: Vec<usize> = (0..code.len()).rev().filter(|&p| reach[p]).collect();
         let rw: Vec<(Set, Set)> = code
             .iter()
-            .map(|&inst| {
-                let (r, w) = op_reads_writes(inst);
-                (
-                    r.into_iter().fold(Set::default(), Set::with),
-                    w.into_iter().fold(Set::default(), Set::with),
-                )
+            .enumerate()
+            .map(|(p, &inst)| {
+                if !reach[p] {
+                    return (Set::default(), Set::default());
+                }
+                let (r, w) = rw_ranges(inst);
+                (runs(&r), runs(&w))
             })
             .collect();
         let mut live_in = vec![Set::default(); code.len()];
         loop {
             let mut changed = false;
-            for p in (0..code.len()).rev() {
+            for &p in &order {
                 let new = transfer(proto, code[p], p as i64, rw[p], |q| {
                     if q < 0 || q as usize >= code.len() {
                         Set::ALL
@@ -284,6 +317,38 @@ impl Liveness {
             .copied()
             .unwrap_or(Set::ALL)
             .union(self.captured)
+    }
+}
+
+fn runs(v: &[(u32, u32)]) -> Set {
+    v.iter()
+        .fold(Set::default(), |acc, &(lo, n)| acc.union(Set::range(lo, n)))
+}
+
+/// Where control goes after `inst`, as offsets from its pc (`transfer`
+/// reads the live sets there); `None` past an op that ends the frame or
+/// whose result does not depend on what follows.
+fn successors(inst: Inst) -> [Option<i64>; 2] {
+    match inst.op() {
+        Op::Jmp => [Some(1 + inst.sj() as i64), None],
+        Op::Eq
+        | Op::Lt
+        | Op::Le
+        | Op::EqK
+        | Op::EqI
+        | Op::LtI
+        | Op::LeI
+        | Op::GtI
+        | Op::GeI
+        | Op::Test
+        | Op::TestSet => [Some(1), Some(2)],
+        Op::LFalseSkip => [Some(2), None],
+        Op::ForLoop | Op::TForLoop => [Some(1), Some(1 - inst.bx() as i64)],
+        Op::TForPrep => [Some(1 + inst.bx() as i64), None],
+        Op::ForPrep | Op::TailCall | Op::Return | Op::Return0 | Op::Return1 => [None, None],
+        Op::Call if inst.b() == 0 || inst.c() == 0 => [None, None],
+        Op::SetList if inst.b() == 0 => [None, None],
+        _ => [Some(1), None],
     }
 }
 
