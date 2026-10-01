@@ -276,6 +276,47 @@ impl Vm {
         false
     }
 
+    /// [`Self::newindex_raw_at`] for a constant key (`SetField`), nearly
+    /// always a string: an existing string key is overwritten here, the
+    /// rest goes through [`Self::newindex_raw_at`] out of line.
+    ///
+    /// # Safety
+    /// As for `newindex_raw_at`.
+    #[inline(always)]
+    #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
+    pub(super) unsafe fn newindex_raw_kstr_at(
+        &mut self,
+        pt: *const Value,
+        pk: *const Value,
+        v: Value,
+    ) -> bool {
+        #[cfg(not(feature = "gc-verify"))]
+        // SAFETY: the caller's contract; a table tag means a live table
+        unsafe {
+            if raw_tag(pt) == tag::TABLE && raw_tag(pk) == tag::STR {
+                let tb = raw_gc(pt) as *mut Table;
+                let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
+                // a nil value in a node is how a removed key is kept
+                if let Some(slot) = (*tb).str_slot_by_ptr_mut(key)
+                    && !slot.is_nil()
+                {
+                    *slot = v;
+                    self.heap
+                        .barrier_back(tb as *mut crate::runtime::heap::GcHeader);
+                    return true;
+                }
+            }
+        }
+        self.newindex_raw_at_cold(pt, pk, v)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn newindex_raw_at_cold(&mut self, pt: *const Value, pk: *const Value, v: Value) -> bool {
+        // SAFETY: as for `newindex_raw_kstr_at`
+        unsafe { self.newindex_raw_at(pt, pk, v) }
+    }
+
     /// [`Self::newindex_raw_at`] on a table value.
     ///
     /// # Safety

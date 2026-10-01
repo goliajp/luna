@@ -257,13 +257,13 @@ impl Vm {
             }
             // `R[A][*pk] := R[C]` for a key in a register or a constant
             macro_rules! set_arm {
-                ($pk:expr) => {{
+                ($pk:expr, $probe:ident) => {{
                     let pt = regs.wrapping_add(inst.a() as usize);
                     let pk: *const Value = $pk;
                     let v = reg!(inst.c());
                     // SAFETY: a register and a register or constant of the
                     // running frame
-                    if unsafe { self.newindex_raw_at(pt, pk, v) } {
+                    if unsafe { self.$probe(pt, pk, v) } {
                         next!()
                     }
                     save!();
@@ -445,8 +445,10 @@ impl Vm {
                         self.newindex_miss(t, key, v)?;
                         resume_same!()
                     }
-                    Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize)),
-                    Op::SetField => set_arm!(kptr.wrapping_add(inst.b() as usize)),
+                    Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize), newindex_raw_at),
+                    Op::SetField => {
+                        set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_kstr_at)
+                    }
                     Op::SetI => {
                         let t = reg!(inst.a());
                         let key = Value::Int(inst.b() as i64);
