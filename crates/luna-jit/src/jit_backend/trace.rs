@@ -2816,164 +2816,79 @@ pub fn reset_base_var_scaffold_declared_count() {
 /// invokes the entry directly — it resolves the trace symbol at
 /// static-link time and dispatches through its own table.
 fn build_trace_jit_module() -> Option<JITModule> {
-    let mut flag_builder = settings::builder();
-    flag_builder.set("use_colocated_libcalls", "false").ok()?;
-    flag_builder.set("is_pic", "false").ok()?;
-    // The egraph optimizer costs a fifth of a trace's compile time and
-    // buys nothing on the code the lowerer emits. The single-pass register
-    // allocator would halve compile time again, but its spills made a
-    // numeric loop trace run 1.9x the instructions; traces keep the
-    // backtracking one.
-    flag_builder.set("opt_level", "none").ok()?;
-    // The IR verifier is a quarter of a trace's compile time (token_bucket:
-    // 175 of 720 us of Cranelift passes). Release builds leave it out, as
-    // wasmtime does; debug builds, which the lib tests run, keep it.
-    if !cfg!(debug_assertions) {
-        flag_builder.set("enable_verifier", "false").ok()?;
-    }
-    let isa = cranelift_native::builder()
-        .ok()?
-        .finish(settings::Flags::new(flag_builder))
-        .ok()?;
-    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    let mut builder = JITBuilder::with_isa(trace_isa()?, cranelift_module::default_libcall_names());
     builder.memory_provider(Box::new(super::code_memory::CodeMemory::new()));
-    // The lowerer emits `Op::NewTable / SetI / GetI / Len` as calls to
-    // the method JIT's `luna_jit_*` helpers — register the symbols
-    // so cranelift's `Linkage::Import` resolver finds them at
-    // finalize time. (rlib link strips `#[no_mangle]` for executables
-    // like `cargo test`, so the default `dlsym(RTLD_DEFAULT)` resolver
-    // misses them without an explicit `builder.symbol(...)`.)
-    builder.symbol("luna_jit_new_table", super::luna_jit_new_table as *const u8);
-    // SetI / SetTable / SetList / SetField
-    builder.symbol(
-        "luna_jit_table_set_int_checked",
-        super::luna_jit_table_set_int_checked as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_set_field_checked",
-        super::luna_jit_table_set_field_checked as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_set_checked",
-        super::luna_jit_table_set_checked as *const u8,
-    );
-    // GetField helper (string key from Proto.consts; raw pointer baked
-    // into IR at emit time).
-    builder.symbol(
-        "luna_jit_table_get_field",
-        super::luna_jit_table_get_field as *const u8,
-    );
-    // standalone GetTabUp helper.
-    builder.symbol(
-        "luna_jit_op_get_tab_up",
-        super::luna_jit_op_get_tab_up as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_get_int",
-        super::luna_jit_table_get_int as *const u8,
-    );
-    // Checked reads: the typed GetI / GetTable / GetField / GetTabUp.
-    builder.symbol(
-        "luna_jit_table_get_int_checked",
-        super::luna_jit_table_get_int_checked as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_get_field_checked",
-        super::luna_jit_table_get_field_checked as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_op_get_tab_up_checked",
-        super::luna_jit_op_get_tab_up_checked as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_table_len_checked",
-        super::luna_jit_table_len_checked as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_math_fn_is_library",
-        super::luna_jit_math_fn_is_library as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_suppress_trace_admit",
-        super::luna_jit_suppress_trace_admit as *const u8,
-    );
-    // `Op::GetUpval` reads `cl.upvals[idx]` via this
-    // helper. Reuses the method JIT helper; the trace dispatcher's
-    // `enter_jit(vm, Some(cl))` pins `JIT_CL` so the helper can find
-    // the closure at runtime.
-    builder.symbol("luna_jit_upval_get", super::luna_jit_upval_get as *const u8);
-    builder.symbol(
-        "luna_jit_head_closure",
-        super::luna_jit_head_closure as *const u8,
-    );
-    // frame materialization helper, called from the cmp@d>0
-    // side-exit path. Register the
-    // symbol unconditionally so the lowerer can declare the import
-    // without needing per-trace gating; cranelift's dead-symbol
-    // elimination drops the import if no IR references it.
-    builder.symbol(
-        "luna_jit_trace_materialize_frames",
-        super::luna_jit_trace_materialize_frames as *const u8,
-    );
-    // sunk-table materialise helper. Emit calls it at
-    // each cmp side-exit (depth=0 today) for every live Sinkable
-    // site whose virt slots must reach interp via the heap path.
-    builder.symbol(
-        "luna_jit_materialize_sunk_table",
-        super::luna_jit_materialize_sunk_table as *const u8,
-    );
-    // Op::Closure shared-upval helper.
-    builder.symbol(
-        "luna_jit_op_closure",
-        super::luna_jit_op_closure as *const u8,
-    );
-    // pre-Closure spill helper. Emit calls this once
-    // per in_stack upval just before luna_jit_op_closure so
-    // find_or_create_upval sees a live vm.stack slot.
-    builder.symbol(
-        "luna_jit_spill_to_stack",
-        super::luna_jit_spill_to_stack as *const u8,
-    );
-    // Op::Close predict-and-deopt helper.
-    builder.symbol("luna_jit_op_close", super::luna_jit_op_close as *const u8);
-    // generic-for helpers. `op_tforcall` runs the
-    // iterator function via vm.begin_call (Native iters only — Lua
-    // closure iters deopt); `stack_load` / `stack_tag` read vm.stack
-    // back into trace IR `Variable`s after the helper has mutated
-    // R[A+2] (control) and R[A+4..] (returned key/value).
-    builder.symbol(
-        "luna_jit_op_tforcall",
-        super::luna_jit_op_tforcall as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_stack_load",
-        super::luna_jit_stack_load as *const u8,
-    );
-    builder.symbol("luna_jit_stack_tag", super::luna_jit_stack_tag as *const u8);
-    // Op::Concat helpers.
-    builder.symbol("luna_jit_op_concat", super::luna_jit_op_concat as *const u8);
-    builder.symbol(
-        "luna_jit_stack_update_raw",
-        super::luna_jit_stack_update_raw as *const u8,
-    );
-    // string accumulator buffer pool helpers.
-    builder.symbol(
-        "luna_jit_str_buf_acquire",
-        super::luna_jit_str_buf_acquire as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_str_buf_release",
-        super::luna_jit_str_buf_release as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_str_buf_extend",
-        super::luna_jit_str_buf_extend as *const u8,
-    );
-    builder.symbol(
-        "luna_jit_str_buf_intern",
-        super::luna_jit_str_buf_intern as *const u8,
-    );
+    // the lowerer's code calls the `luna_jit_*` helpers (see
+    // `super::build_jit_module_with_helpers` for why they are looked up
+    // here rather than by dlsym)
+    builder.symbol_lookup_fn(Box::new(trace_helper));
     Some(JITModule::new(builder))
+}
+
+/// The trace JIT's target, built once (see [`super::method_isa`]).
+fn trace_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
+    static ISA: std::sync::OnceLock<Option<cranelift_codegen::isa::OwnedTargetIsa>> =
+        std::sync::OnceLock::new();
+    ISA.get_or_init(|| {
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false").ok()?;
+        flag_builder.set("is_pic", "false").ok()?;
+        // The egraph optimizer costs a fifth of a trace's compile time and
+        // buys nothing on the code the lowerer emits. The single-pass register
+        // allocator would halve compile time again, but its spills made a
+        // numeric loop trace run 1.9x the instructions; traces keep the
+        // backtracking one.
+        flag_builder.set("opt_level", "none").ok()?;
+        // The IR verifier is a quarter of a trace's compile time (token_bucket:
+        // 175 of 720 us of Cranelift passes). Release builds leave it out, as
+        // wasmtime does; debug builds, which the lib tests run, keep it.
+        if !cfg!(debug_assertions) {
+            flag_builder.set("enable_verifier", "false").ok()?;
+        }
+        cranelift_native::builder()
+            .ok()?
+            .finish(settings::Flags::new(flag_builder))
+            .ok()
+    })
+    .clone()
+}
+
+/// The address of a Rust helper trace code calls.
+fn trace_helper(name: &str) -> Option<*const u8> {
+    Some(match name {
+        "luna_jit_new_table" => super::luna_jit_new_table as *const u8,
+        "luna_jit_table_set_int_checked" => super::luna_jit_table_set_int_checked as *const u8,
+        "luna_jit_table_set_field_checked" => super::luna_jit_table_set_field_checked as *const u8,
+        "luna_jit_table_set_checked" => super::luna_jit_table_set_checked as *const u8,
+        "luna_jit_table_get_field" => super::luna_jit_table_get_field as *const u8,
+        "luna_jit_op_get_tab_up" => super::luna_jit_op_get_tab_up as *const u8,
+        "luna_jit_table_get_int" => super::luna_jit_table_get_int as *const u8,
+        "luna_jit_table_get_int_checked" => super::luna_jit_table_get_int_checked as *const u8,
+        "luna_jit_table_get_field_checked" => super::luna_jit_table_get_field_checked as *const u8,
+        "luna_jit_op_get_tab_up_checked" => super::luna_jit_op_get_tab_up_checked as *const u8,
+        "luna_jit_table_len_checked" => super::luna_jit_table_len_checked as *const u8,
+        "luna_jit_math_fn_is_library" => super::luna_jit_math_fn_is_library as *const u8,
+        "luna_jit_suppress_trace_admit" => super::luna_jit_suppress_trace_admit as *const u8,
+        "luna_jit_upval_get" => super::luna_jit_upval_get as *const u8,
+        "luna_jit_head_closure" => super::luna_jit_head_closure as *const u8,
+        "luna_jit_trace_materialize_frames" => {
+            super::luna_jit_trace_materialize_frames as *const u8
+        }
+        "luna_jit_materialize_sunk_table" => super::luna_jit_materialize_sunk_table as *const u8,
+        "luna_jit_op_closure" => super::luna_jit_op_closure as *const u8,
+        "luna_jit_spill_to_stack" => super::luna_jit_spill_to_stack as *const u8,
+        "luna_jit_op_close" => super::luna_jit_op_close as *const u8,
+        "luna_jit_op_tforcall" => super::luna_jit_op_tforcall as *const u8,
+        "luna_jit_stack_load" => super::luna_jit_stack_load as *const u8,
+        "luna_jit_stack_tag" => super::luna_jit_stack_tag as *const u8,
+        "luna_jit_op_concat" => super::luna_jit_op_concat as *const u8,
+        "luna_jit_stack_update_raw" => super::luna_jit_stack_update_raw as *const u8,
+        "luna_jit_str_buf_acquire" => super::luna_jit_str_buf_acquire as *const u8,
+        "luna_jit_str_buf_release" => super::luna_jit_str_buf_release as *const u8,
+        "luna_jit_str_buf_extend" => super::luna_jit_str_buf_extend as *const u8,
+        "luna_jit_str_buf_intern" => super::luna_jit_str_buf_intern as *const u8,
+        _ => return None,
+    })
 }
 
 /// Placeholder `TraceFn` — installed in
