@@ -1031,12 +1031,12 @@ impl Vm {
                     // does the rest
                     Op::Return0 => {
                         let base = base!();
-                        let done = self.return_fast(base, base, 0, entry_depth);
+                        let done = self.return_fast::<WATCH>(base, base, 0, entry_depth);
                         returned!(done)
                     }
                     Op::Return1 => {
                         let base = base!();
-                        let done = self.return_fast(base, base + inst.a(), 1, entry_depth);
+                        let done = self.return_fast::<WATCH>(base, base + inst.a(), 1, entry_depth);
                         returned!(done)
                     }
                     // they stay in this frame: run out of line, then go on
