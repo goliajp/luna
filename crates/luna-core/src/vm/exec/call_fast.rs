@@ -125,7 +125,7 @@ impl Vm {
             // caller's, which the stack holds
             unsafe {
                 let s = self.stack.as_mut_ptr();
-                *s.add(func_slot as usize) = *s.add(abs_a as usize);
+                Value::copy_raw(s.add(func_slot as usize), s.add(abs_a as usize));
             }
         }
         if to_meta || wanted < 0 {

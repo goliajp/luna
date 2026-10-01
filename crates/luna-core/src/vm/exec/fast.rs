@@ -307,15 +307,15 @@ impl Vm {
                 ($pk:expr, $probe:ident) => {{
                     let pt = regs.wrapping_add(inst.a() as usize);
                     let pk: *const Value = $pk;
-                    let v = reg!(inst.c());
-                    // SAFETY: a register and a register or constant of the
-                    // running frame
-                    if unsafe { self.$probe(pt, pk, v) } {
+                    let pv = regs.wrapping_add(inst.c() as usize);
+                    // SAFETY: registers and a constant of the running frame;
+                    // the value is read where it is (see `Value::copy_raw`)
+                    if unsafe { self.$probe(pt, pk, pv) } {
                         next!()
                     }
                     save!();
                     // SAFETY: as above
-                    let (t, key) = unsafe { (*pt, *pk) };
+                    let (t, key, v) = unsafe { (*pt, *pk, *pv) };
                     self.newindex_miss(t, key, v)?;
                     resume_same!()
                 }};
@@ -397,8 +397,13 @@ impl Vm {
                 let pc = npc - 1;
                 match inst.op() {
                     Op::Move => {
-                        let v = reg!(inst.b());
-                        set_reg!(inst.a(), v);
+                        // SAFETY: registers of the running frame
+                        unsafe {
+                            Value::copy_raw(
+                                regs.add(inst.a() as usize),
+                                regs.add(inst.b() as usize),
+                            )
+                        };
                         next!()
                     }
                     Op::LoadI => {
@@ -410,8 +415,14 @@ impl Vm {
                         next!()
                     }
                     Op::LoadK => {
-                        let v = konst!(inst.bx());
-                        set_reg!(inst.a(), v);
+                        // SAFETY: a register and a constant of the running
+                        // frame (see `konst!`)
+                        unsafe {
+                            Value::copy_raw(
+                                regs.add(inst.a() as usize),
+                                kptr.add(inst.bx() as usize),
+                            )
+                        };
                         next!()
                     }
                     Op::LoadFalse => {
@@ -482,14 +493,14 @@ impl Vm {
                     Op::SetTabUp => {
                         let t = self.upval_get(cl!(), inst.a());
                         let pk = kptr.wrapping_add(inst.b() as usize);
-                        let v = reg!(inst.c());
-                        // SAFETY: a constant of the running proto
-                        if unsafe { self.newindex_raw_key_at(t, pk, v) } {
+                        let pv = regs.wrapping_add(inst.c() as usize);
+                        // SAFETY: a constant and a register of the running frame
+                        if unsafe { self.newindex_raw_key_at(t, pk, pv) } {
                             next!()
                         }
                         let key = konst!(inst.b());
                         save!();
-                        self.newindex_miss(t, key, v)?;
+                        self.newindex_miss(t, key, reg!(inst.c()))?;
                         resume_same!()
                     }
                     Op::SetTable => set_arm!(regs.wrapping_add(inst.b() as usize), newindex_raw_at),
@@ -497,21 +508,24 @@ impl Vm {
                         set_arm!(kptr.wrapping_add(inst.b() as usize), newindex_raw_kstr_at)
                     }
                     Op::SetI => {
-                        let t = reg!(inst.a());
+                        let pt = regs.wrapping_add(inst.a() as usize);
                         let key = Value::Int(inst.b() as i64);
-                        let v = reg!(inst.c());
-                        if self.newindex_raw(t, key, v) {
+                        let pv = regs.wrapping_add(inst.c() as usize);
+                        // SAFETY: registers of the running frame
+                        if unsafe { self.newindex_raw_at(pt, &key, pv) } {
                             next!()
                         }
                         save!();
+                        // SAFETY: as above
+                        let (t, v) = unsafe { (*pt, *pv) };
                         self.newindex_miss(t, key, v)?;
                         resume_same!()
                     }
                     Op::SelfOp => {
                         let pb = regs.wrapping_add(inst.b() as usize);
-                        // SAFETY: a register of the running frame
-                        let o = unsafe { *pb };
-                        set_reg!(inst.a() + 1, o);
+                        let po = regs.wrapping_add(inst.a() as usize + 1);
+                        // SAFETY: registers of the running frame
+                        unsafe { Value::copy_raw(po, pb) };
                         // PUC OP_SELF's C is a constant index when the k-flag is
                         // set; otherwise it points to a register that holds the
                         // (constant-loaded) key. luna's compiler falls back to the
@@ -525,13 +539,13 @@ impl Vm {
                             regs.wrapping_add(inst.c() as usize)
                         };
                         // SAFETY: a register or constant of the running frame;
-                        // the object is read from its copy, `R[A]` may be `R[C]`
-                        if unsafe { Vm::index_raw_kstr_key_at(o, pk, regs.add(inst.a() as usize)) }
-                        {
+                        // the object is read from its copy, `R[A]` may be `R[B]`
+                        // or `R[C]`, and is written last
+                        if unsafe { Vm::index_raw_kstr_at(po, pk, regs.add(inst.a() as usize)) } {
                             next!()
                         }
                         // SAFETY: as above
-                        let key = unsafe { *pk };
+                        let (o, key) = unsafe { (*po, *pk) };
                         save!();
                         self.index_miss(o, key, base!() + inst.a())?;
                         resume_same!()
@@ -812,8 +826,7 @@ impl Vm {
                         // SAFETY: a register of the running frame
                         if unsafe { raw_truthy(pb) } == inst.k() {
                             // SAFETY: as above
-                            let v = unsafe { *pb };
-                            set_reg!(inst.a(), v);
+                            unsafe { Value::copy_raw(regs.add(inst.a() as usize), pb) };
                         } else {
                             npc += 1;
                         }
@@ -902,8 +915,9 @@ impl Vm {
                     }
                     Op::TForLoop => {
                         let a = inst.a();
-                        let ctrl = reg!(a + 4);
-                        if !ctrl.is_nil() {
+                        let pc4 = regs.wrapping_add(a as usize + 4);
+                        // SAFETY: the loop's registers are in the frame
+                        if unsafe { raw_tag(pc4) } != tag::NIL {
                             // the generic-for's back-edge, counted like a
                             // numeric one; an iterator that returned nothing
                             // takes no back-edge
@@ -922,7 +936,8 @@ impl Vm {
                                     self.trace_start_at_loop(cl!(), base!(), target, Some(a));
                                 }
                             }
-                            set_reg!(a + 2, ctrl);
+                            // SAFETY: as above
+                            unsafe { Value::copy_raw(regs.add(a as usize + 2), pc4) };
                             npc = npc.wrapping_sub(inst.bx());
                             // a recording that just started must see the next
                             // instruction from the loop head
