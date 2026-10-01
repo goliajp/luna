@@ -6649,11 +6649,16 @@ impl Vm {
                             // Route through trace_compiler; split-borrow JitState
                             // so the trait method can take `&mut dyn JitStorage`.
                             let result = {
+                                let version = self.version();
                                 let jit = &mut self.jit;
                                 jit.storage.claim(self.jit_owner_id);
                                 let storage: &mut dyn crate::jit::JitStorage = jit.storage.as_mut();
-                                jit.trace_compiler
-                                    .try_compile_trace(storage, &closed_record, opts)
+                                jit.trace_compiler.try_compile_trace_for(
+                                    storage,
+                                    &closed_record,
+                                    opts,
+                                    version,
+                                )
                             };
                             match result {
                                 Some(mut ct) => {

@@ -6741,6 +6741,16 @@ impl TraceCompiler for CraneliftBackend {
         trace::try_compile_trace_with_options(storage, record, opts)
     }
 
+    fn try_compile_trace_for(
+        &self,
+        storage: &mut dyn luna_core::jit::JitStorage,
+        record: &TraceRecord,
+        opts: CompileOptions,
+        version: luna_core::version::LuaVersion,
+    ) -> Option<CompiledTrace> {
+        trace::try_compile_trace_for(storage, record, opts, version)
+    }
+
     fn last_compile_checkpoint(&self) -> &'static str {
         trace::last_compile_checkpoint()
     }

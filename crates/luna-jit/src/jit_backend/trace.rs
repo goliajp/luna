@@ -2684,6 +2684,21 @@ fn use_var_f64(bcx: &mut FunctionBuilder<'_>, regs: &[Variable], reg: u32) -> Va
     bcx.ins().bitcast(types::F64, MemFlagsData::new(), raw)
 }
 
+/// Read a number register of kind `kind` (Int or Float) as an f64.
+fn use_var_as_f64(
+    bcx: &mut FunctionBuilder<'_>,
+    regs: &[Variable],
+    reg: u32,
+    kind: RegKind,
+) -> Value {
+    if matches!(kind, RegKind::Float) {
+        use_var_f64(bcx, regs, reg)
+    } else {
+        let raw = bcx.use_var(regs[reg as usize]);
+        bcx.ins().fcvt_from_sint(types::F64, raw)
+    }
+}
+
 /// Store an f64 SSA value into a Variable as i64 bits.
 fn def_var_f64(bcx: &mut FunctionBuilder<'_>, var: Variable, val_f64: Value) {
     let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), val_f64);
@@ -3529,13 +3544,44 @@ unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
 /// into the returned [`CompiledTrace`], and stashes the module in
 /// `storage.trace_handles` so the entry stays callable for the
 /// lifetime of the owning `Vm`.
+///
+/// Library calls fold by the 5.3+ rules; the interpreter goes through
+/// [`try_compile_trace_for`], which knows the record's dialect.
 pub fn try_compile_trace_with_options(
     storage: &mut dyn luna_core::jit::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
+    compile_trace(storage, record, opts, false)
+}
+
+/// [`try_compile_trace_with_options`] for a record of dialect `version`.
+#[doc(hidden)]
+pub fn try_compile_trace_for(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    version: luna_core::version::LuaVersion,
+) -> Option<CompiledTrace> {
+    compile_trace(
+        storage,
+        record,
+        opts,
+        version <= luna_core::version::LuaVersion::Lua52,
+    )
+}
+
+/// `float_only`: the record's dialect is 5.1 / 5.2, where the math
+/// library converts its number arguments to floats and returns floats
+/// (`math.min(1, 2)` is the float `1`).
+fn compile_trace(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    float_only: bool,
+) -> Option<CompiledTrace> {
     let mut module = super::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let (fn_id, mut compiled) = lower_trace_into(&mut *module, record, opts)?;
+    let (fn_id, mut compiled) = lower_trace(&mut *module, record, opts, None, float_only)?;
     module.finalize_definitions().ok()?;
     let ptr = module.get_finalized_function(fn_id);
     // SAFETY: the cranelift fn signature declared by `lower_trace_into`
@@ -3597,12 +3643,41 @@ pub fn lower_trace_into<M: Module>(
 /// with `Linkage::Export`, surfacing in the produced `.o`'s symbol
 /// table for the deploy-side `dlsym`/linker to resolve.
 // cranelift types in the signature: internal to luna crates, not covered by semver
+///
+/// Library calls fold by the 5.3+ rules; [`lower_trace_into_named_for`]
+/// takes the record's dialect.
 #[doc(hidden)]
 pub fn lower_trace_into_named<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    aot_fn_name: Option<&str>,
+) -> Option<(FuncId, CompiledTrace)> {
+    lower_trace(module, record, opts, aot_fn_name, false)
+}
+
+/// [`lower_trace_into_named`] for a record of dialect `version`.
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
+pub fn lower_trace_into_named_for<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    aot_fn_name: Option<&str>,
+    version: luna_core::version::LuaVersion,
+) -> Option<(FuncId, CompiledTrace)> {
+    let float_only = version <= luna_core::version::LuaVersion::Lua52;
+    lower_trace(module, record, opts, aot_fn_name, float_only)
+}
+
+/// The body of [`lower_trace_into_named`]; `float_only` as in
+/// [`compile_trace`].
+fn lower_trace<M: Module>(
     mut module: &mut M,
     record: &TraceRecord,
     opts: CompileOptions,
     aot_fn_name: Option<&str>,
+    float_only: bool,
 ) -> Option<(FuncId, CompiledTrace)> {
     checkpoint("enter");
     if !record.closed {
@@ -6064,10 +6139,11 @@ pub fn lower_trace_into_named<M: Module>(
                         // away, no IR.
                     }
                     FoldKind::Min2 | FoldKind::Max2 if fold.call_idx == i => {
-                        // 2-arg min/max. PUC's `math.min(a, b)` returns
-                        // one of its operands as it is, so the lowering
-                        // follows the recorded operand kinds:
+                        // 2-arg min/max. From 5.3 PUC's `math.min(a, b)`
+                        // returns one of its operands as it is, so the
+                        // lowering follows the recorded operand kinds:
                         //
+                        //   5.1 / 5.2    → `fcmp` + `select`, as floats
                         //   Int  / Int   → cranelift `smin` / `smax`
                         //   Float/ Float → `fcmp` + `select`
                         //   otherwise    → not compiled
@@ -6080,6 +6156,14 @@ pub fn lower_trace_into_named<M: Module>(
                         // Anything but two numbers of one kind (strings
                         // compare too, from 5.3) is not compiled either.
                         let result_kind = match (k1, k2) {
+                            // 5.1 / 5.2 convert every argument to a
+                            // float (`luaL_checknumber`) and return
+                            // that float, whatever the argument kinds
+                            (RegKind::Int | RegKind::Float, RegKind::Int | RegKind::Float)
+                                if float_only =>
+                            {
+                                RegKind::Float
+                            }
                             (RegKind::Float, RegKind::Float) => RegKind::Float,
                             (RegKind::Int, RegKind::Int) => RegKind::Int,
                             (RegKind::Int, RegKind::Float) | (RegKind::Float, RegKind::Int) => {
@@ -6119,8 +6203,8 @@ pub fn lower_trace_into_named<M: Module>(
                             _ => return None,
                         };
                         if matches!(result_kind, RegKind::Float) {
-                            let a1 = use_var_f64(&mut bcx, regs, fold.arg1_reg);
-                            let a2 = use_var_f64(&mut bcx, regs, fold.arg2_reg);
+                            let a1 = use_var_as_f64(&mut bcx, regs, fold.arg1_reg, k1);
+                            let a2 = use_var_as_f64(&mut bcx, regs, fold.arg2_reg, k2);
                             // PUC keeps the first argument unless the
                             // second compares strictly better — not
                             // IEEE fmin/fmax, which differ on NaN and
