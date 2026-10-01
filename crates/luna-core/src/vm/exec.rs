@@ -2984,21 +2984,8 @@ impl Vm {
                     kind: ContKind::Xpcall { handler },
                     ..
                 }) => roots.push(*handler),
-                CallFrame::Cont(NativeCont {
-                    kind: ContKind::Close(cc),
-                    ..
-                }) => {
-                    // Root the error threaded through this close chain so a
-                    // `collectgarbage()` inside a sibling `__close` handler
-                    // does not free it before the next handler is invoked
-                    // (PUC L->ci->u.l.errfunc / the closing_err shadow).
-                    if let Some(e) = cc.pending {
-                        roots.push(e);
-                    }
-                    if let AfterClose::ResumeUnwind { err, .. } = cc.after {
-                        roots.push(err);
-                    }
-                }
+                // a close chain's threaded error sits on the stack below its
+                // handler's call, inside the live window
                 CallFrame::Cont(_) => {}
             }
         }
@@ -5037,32 +5024,38 @@ impl Vm {
             // A real handler: stage [mm, v, (err?)] above the current top,
             // record the close iteration state in a Cont::Close, and let the
             // interpreter dispatch the handler. On return the run() head
-            // re-enters this driver via the Cont::Close consumer.
+            // re-enters this driver via the Cont::Close consumer. A threaded
+            // error goes in the continuation's own slot first, below the
+            // call, where the collector and a suspended thread keep it.
             let func_slot = self.top;
             let error_close = pending.is_some();
-            let need = (func_slot + 3) as usize;
+            let call_slot = func_slot + error_close as u32;
+            let need = (call_slot + 3) as usize;
             if self.stack.len() < need {
                 self.stack.resize(need, Value::Nil);
             }
-            self.stack[func_slot as usize] = mm;
-            self.stack[func_slot as usize + 1] = v;
+            if let Some(e) = pending {
+                self.stack[func_slot as usize] = e;
+            }
+            self.stack[call_slot as usize] = mm;
+            self.stack[call_slot as usize + 1] = v;
             // PUC 5.4 always passes (obj, errobj=nil) on a normal close;
             // 5.5 drops the trailing nil. 5.4 locals.lua :875 vs 5.5 :314.
             let nargs = match pending {
                 Some(e) => {
-                    self.stack[func_slot as usize + 2] = e;
+                    self.stack[call_slot as usize + 2] = e;
                     2u32
                 }
                 None => {
                     if self.version >= LuaVersion::Lua55 {
                         1u32
                     } else {
-                        self.stack[func_slot as usize + 2] = Value::Nil;
+                        self.stack[call_slot as usize + 2] = Value::Nil;
                         2u32
                     }
                 }
             };
-            self.top = func_slot + 1 + nargs;
+            self.top = call_slot + 1 + nargs;
             // Root the pending error during the call (a handler may collect).
             let saved_err = self.closing_err;
             self.closing_err = pending;
@@ -5078,7 +5071,7 @@ impl Vm {
                 CallFrame::Cont(NativeCont {
                     kind: ContKind::Close(CloseCont {
                         from,
-                        pending,
+                        has_pending: error_close,
                         after,
                     }),
                     func_slot,
@@ -5089,7 +5082,7 @@ impl Vm {
             // function's activation (debug parent = that function); during an
             // error unwind the function's frame is already gone and the
             // handler sits at the C boundary instead.
-            let r = self.begin_call(func_slot, Some(nargs), 0, error_close);
+            let r = self.begin_call(call_slot, Some(nargs), 0, error_close);
             self.pending_tm = saved_tm;
             self.closing_err = saved_err;
             r?;
@@ -5124,15 +5117,18 @@ impl Vm {
                 Some(e) => Err(LuaError(e)),
                 None => self.complete_return(abs_a, nret, from_native, entry_depth),
             },
-            AfterClose::ResumeUnwind { func_slot, err } => {
+            AfterClose::ResumeUnwind { func_slot } => {
                 // The aborting Lua frame was popped before `begin_close`;
                 // restore the catcher's stack window down to `func_slot` and
-                // re-raise — preferring a handler-raised error over the
-                // original (PUC luaF_close).
+                // re-raise the threaded error, which started as the original
+                // one and is the last a handler raised (PUC luaF_close).
                 self.stack.truncate(func_slot as usize);
                 self.top = func_slot;
                 self.tbc.retain(|&s| s < func_slot);
-                Err(LuaError(pending.unwrap_or(err)))
+                let Some(e) = pending else {
+                    unreachable!("an unwinding close always threads an error")
+                };
+                Err(LuaError(e))
             }
         }
     }
@@ -5889,7 +5885,6 @@ impl Vm {
                     frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
                     let after = AfterClose::ResumeUnwind {
                         func_slot: f.func_slot,
-                        err,
                     };
                     match self.begin_close(f.base, Some(err), after, entry_depth) {
                         Ok(Some(_)) => {
@@ -6025,8 +6020,9 @@ impl Vm {
         // drive_close hands the results up to exec_with directly.
         if let ContKind::Close(cc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+            let pending = cc.has_pending.then(|| self.stack[nc.func_slot as usize]);
             self.top = nc.func_slot;
-            if let Some(vals) = self.drive_close(cc.from, cc.pending, cc.after, entry_depth)? {
+            if let Some(vals) = self.drive_close(cc.from, pending, cc.after, entry_depth)? {
                 return Ok(Some(vals));
             }
             return Ok(None);

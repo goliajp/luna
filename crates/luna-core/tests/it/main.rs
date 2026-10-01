@@ -10,6 +10,7 @@ mod async_hook_composition;
 mod async_native;
 mod binary_load_errors;
 mod bytecode_verify;
+mod close_error_gc;
 mod compiler_const_operands;
 mod compiler_index_lhs_snapshot_elision;
 mod compiler_jump_target_tracker;
