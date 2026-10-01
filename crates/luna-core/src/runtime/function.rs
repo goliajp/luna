@@ -380,6 +380,11 @@ pub struct LuaClosure {
     pub(crate) hdr: GcHeader,
     /// The compiled function body this closure binds.
     pub proto: Gc<Proto>,
+    /// `proto.code` and `proto.consts`, which never change after the proto
+    /// is built: the interpreter takes up a frame from its closure without
+    /// going through the proto.
+    pub(crate) code: *const crate::vm::isa::Inst,
+    pub(crate) consts: *const Value,
     /// Single source of truth for "where are the upvals?". Points to
     /// either `inline_storage` (when `upvals_len <= INLINE_UPVALS_N`)
     /// or `overflow.as_mut_ptr()` (otherwise). Set up by

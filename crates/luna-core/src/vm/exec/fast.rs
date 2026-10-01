@@ -80,8 +80,8 @@ impl Vm {
                 unsafe { (*fr).base }
             };
         }
-        let mut code = cl!().proto.code.as_ptr();
-        let mut kptr = cl!().proto.consts.as_ptr();
+        let mut code = cl!().code;
+        let mut kptr = cl!().consts;
         // the register window, valid while `self.stack` neither moves nor
         // is written through a reference
         // SAFETY: `push_frame` sized the stack to `base + max_stack`
@@ -161,8 +161,8 @@ impl Vm {
                 npc = f.pc;
                 let base = f.base;
                 fr = f;
-                code = cl.proto.code.as_ptr();
-                kptr = cl.proto.consts.as_ptr();
+                code = cl.code;
+                kptr = cl.consts;
                 // stay only between frames with nothing to watch, so that
                 // `stay` and `heads` hold for the whole loop
                 if WATCH
