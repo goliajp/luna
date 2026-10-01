@@ -188,6 +188,8 @@ pub struct Heap {
     /// section in 5.1 asserts 3*lim survivors, 5.4 only 2*lim — the loop2
     /// pair was retired from the newer test as a result.
     pub(crate) no_ephemeron: bool,
+    /// 5.1/5.2: a new table key -0 stays -0 (see `Table::set`)
+    pub(crate) signed_zero_keys: bool,
     /// PUC 5.3 finalizes a table caught in a cycle through an unreachable
     /// coroutine one GC round later than the unreachability is detected
     /// ("two collections are needed to break cycle", gc.lua :502). 5.4 and 5.5
@@ -241,6 +243,7 @@ impl Heap {
             finalize: Vec::new(),
             tobefnz: Vec::new(),
             no_ephemeron: false,
+            signed_zero_keys: false,
             defer_thread_cycle_finalize: false,
             mem_cap: None,
             table_pool: Vec::new(),
