@@ -74,34 +74,28 @@ pub(super) fn emit_get_field_op<M: Module>(
 
             // table-field IC scaffold.
             //
-            // When `LUNA_JIT_FIELD_IC=1` and this op is the
-            // recorder-captured snapshot site, emit an inline
+            // When this op is the recorder-captured snapshot site
+            // (the recording Vm had its field IC on), emit an inline
             // cache: 4 guards (mt None, nodes.len() == cached,
             // node[slot].key.raw == cached_key_bits,
             // node[slot].val.tag == cached_val_tag) + 1 load
             // of node[slot].val.raw. Guard miss falls through
             // to the existing helper-call path so no new deopt
             // edge is introduced (scaffold-safe rollout).
-            //
-            // env-OFF default short-circuits on the cached
-            // atomic load inside `field_ic_enabled()`; the IC
-            // emission produces zero additional IR when the
-            // gate is off.
             // The IC's tag guard only stands in for the checked read
             // when the cached tag is the one the trace types it as.
-            let ic_active = luna_core::jit::trace_types::field_ic_enabled()
-                && record.field_ic_snapshot.as_ref().is_some_and(|s| {
-                    s.op_idx as usize == i
-                        && want.is_none_or(|(k, _)| {
-                            use luna_core::runtime::value::tag;
-                            let enum_tag = match k {
-                                RegKind::Int => tag::INT,
-                                RegKind::Float => tag::FLOAT,
-                                _ => tag::TABLE,
-                            };
-                            enum_tag == s.cached_val_tag
-                        })
-                });
+            let ic_active = record.field_ic_snapshot.as_ref().is_some_and(|s| {
+                s.op_idx as usize == i
+                    && want.is_none_or(|(k, _)| {
+                        use luna_core::runtime::value::tag;
+                        let enum_tag = match k {
+                            RegKind::Int => tag::INT,
+                            RegKind::Float => tag::FLOAT,
+                            _ => tag::TABLE,
+                        };
+                        enum_tag == s.cached_val_tag
+                    })
+            });
 
             let v = if ic_active {
                 emit_field_ic_read(lw, pl, oc, t, key_arg, want)
