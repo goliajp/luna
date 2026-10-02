@@ -115,7 +115,7 @@ pub struct CompileOptions {
 }
 
 /// Default for [`CompileOptions::tier_up_at`].
-pub const TIER_UP_THRESHOLD: u32 = 8192;
+pub const TIER_UP_THRESHOLD: u32 = 16384;
 
 /// The code generator a trace is compiled with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
