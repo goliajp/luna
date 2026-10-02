@@ -104,17 +104,16 @@ impl super::Table {
         #[cfg(feature = "gc-verify")]
         self.verify_find_node_keys(Value::Str(key));
         let mask = self.node_mask;
-        if mask >> 63 != 0 {
+        if mask >> 31 != 0 {
             return None;
         }
-        debug_assert_eq!(mask as usize + 1, self.nodes.len());
         // a short string's hash is set when it is interned; a long one's
         // may still be the seed, which only makes a hit unlikely
-        let mut idx = (u64::from(key.stored_hash()) & mask) as usize;
+        let mut idx = (key.stored_hash() & mask) as usize;
         loop {
             // SAFETY: the main position is masked to the node count and
             // every `next` link is a node index written by `insert_new`
-            let node = unsafe { self.nodes.get_unchecked(idx) };
+            let node = unsafe { &*self.nodes.add(idx) };
             if node.key_is_str(key) {
                 return Some(idx);
             }
@@ -133,7 +132,7 @@ impl super::Table {
     ) -> Option<&Value> {
         let i = self.str_node_by_ptr(key)?;
         // SAFETY: a node index found above
-        Some(unsafe { &self.nodes.get_unchecked(i).val })
+        Some(unsafe { &(*self.nodes.add(i)).val })
     }
 
     /// [`Self::str_slot_by_ptr`] for a write.
@@ -145,12 +144,49 @@ impl super::Table {
     ) -> Option<&mut Value> {
         let i = self.str_node_by_ptr(key)?;
         // SAFETY: a node index found above
-        Some(unsafe { &mut self.nodes.get_unchecked_mut(i).val })
+        Some(unsafe { &mut (*self.nodes.add(i)).val })
+    }
+
+    /// The hash part.
+    #[inline(always)]
+    pub(crate) fn nodes(&self) -> &[Node] {
+        // SAFETY: `nodes` holds `node_mask + 1` nodes (0 when the mask is
+        // `u32::MAX`; the pointer is then dangling, which a zero-length
+        // slice allows)
+        unsafe { std::slice::from_raw_parts(self.nodes, self.node_mask.wrapping_add(1) as usize) }
+    }
+
+    /// The hash part, for a write.
+    #[inline(always)]
+    pub(crate) fn nodes_mut(&mut self) -> &mut [Node] {
+        // SAFETY: as in `nodes`; `&mut self` makes the access exclusive
+        unsafe {
+            std::slice::from_raw_parts_mut(self.nodes, self.node_mask.wrapping_add(1) as usize)
+        }
+    }
+
+    /// Install `nodes` (empty or a power-of-two length) as the hash part.
+    /// The previous one must have been taken already.
+    pub(super) fn set_hash_part(&mut self, nodes: Box<[Node]>) {
+        debug_assert!(nodes.len().is_power_of_two() || nodes.is_empty());
+        self.node_mask = (nodes.len() as u32).wrapping_sub(1);
+        self.nodes = Box::into_raw(nodes) as *mut Node;
+    }
+
+    /// Take the hash part out, leaving an empty one.
+    pub(super) fn take_hash_part(&mut self) -> Box<[Node]> {
+        let len = self.node_mask.wrapping_add(1) as usize;
+        let p = std::ptr::slice_from_raw_parts_mut(self.nodes, len);
+        self.nodes = std::ptr::NonNull::dangling().as_ptr();
+        self.node_mask = u32::MAX;
+        // SAFETY: `nodes` came from `Box::into_raw` of a slice of `len`
+        // (or is dangling with `len` 0, which is how an empty boxed slice
+        // is represented); it is not used again
+        unsafe { Box::from_raw(p) }
     }
 
     /// Give the hash part back (a pooled table's reset).
     pub(crate) fn drop_hash_part(&mut self) {
-        self.nodes = Box::new([]);
-        self.node_mask = u64::MAX;
+        drop(self.take_hash_part());
     }
 }

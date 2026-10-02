@@ -42,12 +42,9 @@ pub(crate) const MAX_ASIZE: usize = 1 << 27;
 /// the offsets cross the crate boundary.
 ///
 /// Layout assumptions:
-/// - `Box<[Node]>` is a fat pointer `(data_ptr, len)` on 64-bit
-///   targets (16 bytes total). The data pointer occupies the low 8
-///   bytes, length the high 8. This is the de-facto Rust ABI for
-///   `Box<[T]>` / `&[T]` but isn't formally guaranteed; the unit
-///   test `node_layout_pinned` and the const assertion
-///   on `size_of::<Box<[Node]>>()` catch drift.
+/// - the hash part is a node pointer plus a `u32` mask (node count - 1,
+///   `u64::MAX` when empty); the unit test `node_layout_pinned` reads
+///   both at their offsets.
 /// - `Value` is `#[repr(C, u8)]` so the discriminant byte sits at
 ///   offset 0 and the payload starts at offset 8 (after 7 bytes of
 ///   alignment padding). Total size 16 bytes per the existing
@@ -82,26 +79,52 @@ pub(crate) const INLINE_U64S: usize = INLINE_ASIZE as usize + INLINE_ASIZE.div_c
 /// weak-mode flags.
 #[repr(C)]
 pub struct Table {
-    /// read through raw casts by the GC, not by field access
-    #[allow(dead_code)]
+    /// read through raw casts by the GC; its `aux`
+    /// word holds the absent-metamethod bits (PUC `flags`): bit `1 << Mm`
+    /// set means this table, used as a metatable, has no such field. Set
+    /// by the lookup on a miss; cleared whenever a hash key gains a value
+    /// (`set_norm`, `insert_new`)
     pub(crate) hdr: GcHeader,
-    /// Single backing pointer for the array part. Points
-    /// to `inline_storage` (asize <= INLINE_ASIZE) or `slab.as_ptr()`
-    /// (asize > INLINE_ASIZE). The JIT inline aset reads this with one
-    /// `load i64`, no branch — the choice between inline and slab is
-    /// already encoded in the pointer. Initialised in `Heap::new_table`
-    /// AFTER the Table reaches its final heap address (so that
-    /// `&mut self.inline_storage` is the stable heap pointer, not a
-    /// stack-local one). Updated by `Table::resize`.
+    /// Single backing pointer for the array part. Points to
+    /// `inline_storage` (asize <= INLINE_ASIZE) or to an external slab
+    /// this table owns (asize > INLINE_ASIZE, freed by `Drop`). The JIT
+    /// inline aset reads this with one `load i64`, no branch — the choice
+    /// between inline and slab is already encoded in the pointer.
+    /// Initialised in `Heap::new_table` AFTER the Table reaches its final
+    /// heap address (so that `&mut self.inline_storage` is the stable heap
+    /// pointer, not a stack-local one). Updated by `Table::resize`.
     pub array_ptr: *mut u8,
-    /// External backing for the array part when
-    /// `asize > INLINE_ASIZE`. Layout: `[avals: asize × 8 bytes][atags:
-    /// asize bytes]`. Empty box (dangling, no alloc) when the inline
-    /// path is in use.
-    pub(crate) slab: Box<[u64]>,
     /// Length of the array part in slots. u64 (rather than `usize` or
     /// `u32`) so the JIT can load it with a single `load i64`.
     pub asize: u64,
+    /// hash part: `node_mask + 1` nodes (a power of two), or none. Owned:
+    /// it is a leaked `Box<[Node]>` of that length (dangling when empty),
+    /// taken back by `take_hash_part`; the length lives in `node_mask` only
+    nodes: *mut Node,
+    /// Visible outside the module so the JIT can
+    /// take its field offset at compile time and emit an inline
+    /// "metatable.is_none()" guard before the inline aget fast path.
+    /// `Option<Gc<Table>>` is 8 bytes via the NonNull-pointer-opt: 0
+    /// ⇔ None, non-zero ⇔ Some.
+    pub metatable: Option<Gc<Table>>,
+    /// node count - 1, or `u32::MAX` (top bit set) when there are no
+    /// nodes: a string probe masks with it and tests its top bit, without
+    /// first deriving the mask from the length
+    pub(crate) node_mask: u32,
+    /// free-slot search position, counts down (PUC lastfree).
+    /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
+    pub(crate) lastfree: u32,
+    /// Non-nil slots in the array part. With `aprefix` it answers `#t`
+    /// without a search when the array holds exactly a leading run
+    /// (`acount == aprefix < asize`: then `aprefix` is the only border
+    /// there, the one the binary search in `len` finds). Kept by `aset`,
+    /// `clear_weak` and `resize`; the method JIT's inline array stores
+    /// keep it too.
+    pub(crate) acount: u32,
+    /// A length whose leading slots `[0, aprefix)` are all non-nil; it may
+    /// lag behind the real run (that only disables the `#t` shortcut)
+    /// but never exceeds it.
+    pub(crate) aprefix: u32,
     /// Inline backing used when `asize <= INLINE_ASIZE`.
     /// Same layout as the slab: avals at low addresses (`asize * 8`
     /// bytes from offset 0), atags at the trailing `asize` bytes.
@@ -118,48 +141,32 @@ pub struct Table {
     /// go through `array_ptr` / `.get()` — never through a direct
     /// `&`/`&mut` borrow of the array contents.
     pub(crate) inline_storage: std::cell::UnsafeCell<[u64; INLINE_U64S]>,
-    /// hash part: power-of-two length (or empty)
-    /// `pub(crate)` so `Heap::free_obj` (pool recycle path) can reset.
-    pub(crate) nodes: Box<[Node]>,
-    /// `nodes.len() - 1`, or `u64::MAX` (top bit set) when there are no
-    /// nodes: a string probe masks with it and tests its top bit, without
-    /// first deriving the mask from the length
-    pub(crate) node_mask: u64,
-    /// free-slot search position, counts down (PUC lastfree).
-    /// `pub(crate)` so `Heap::new_table` can reset on pool recycle.
-    pub(crate) lastfree: u32,
-    /// Non-nil slots in the array part. With `aprefix` it answers `#t`
-    /// without a search when the array holds exactly a leading run
-    /// (`acount == aprefix < asize`: then `aprefix` is the only border
-    /// there, the one the binary search in `len` finds). Kept by `aset`,
-    /// `clear_weak` and `resize`; the method JIT's inline array stores
-    /// keep it too. Sits in padding, so `Table` does not grow.
-    pub(crate) acount: u32,
-    /// Visible outside the module so the JIT can
-    /// take its field offset at compile time and emit an inline
-    /// "metatable.is_none()" guard before the inline aget fast path.
-    /// `Option<Gc<Table>>` is 8 bytes via the NonNull-pointer-opt: 0
-    /// ⇔ None, non-zero ⇔ Some.
-    pub metatable: Option<Gc<Table>>,
-    /// Absent-metamethod cache (PUC `flags`): bit `1 << Mm` set means this
-    /// table, used as a metatable, has no such field. Set by the lookup on a
-    /// miss; cleared whenever a hash key gains a value (`set_norm`,
-    /// `insert_new`). A u32 in what was padding, so `Table` does not grow.
-    pub(crate) flags: u32,
-    /// A length whose leading slots `[0, aprefix)` are all non-nil; it may
-    /// lag behind the real run (that only disables the `#t` shortcut)
-    /// but never exceeds it.
-    pub(crate) aprefix: u32,
 }
 
 // SAFETY: `array_ptr` looks like an unprotected raw pointer field, but
 // it always refers to memory the same Table owns (either its own inline
-// storage or its `slab` Box). The Table is heap-allocated and never
+// storage or the slab it owns). The Table is heap-allocated and never
 // moved post-adoption, so the pointer stays valid for the table's
 // lifetime. No thread-unsafety concern: tables are accessed only
 // through the Vm, single-threaded.
 unsafe impl Send for Table {}
 unsafe impl Sync for Table {}
+
+// the sweep and the mark walk every table; keep it within a 96-byte
+// allocation (PUC 5.4 `Table` is 56)
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<Table>() == 88);
+
+impl Drop for Table {
+    fn drop(&mut self) {
+        drop(self.take_hash_part());
+        if self.asize > INLINE_ASIZE {
+            // SAFETY: an array part larger than the inline storage lives in
+            // a slab from `alloc_slab(asize)`, owned by this table
+            unsafe { Self::free_slab(self.array_ptr, self.asize as usize) };
+        }
+    }
+}
 
 impl Table {
     pub(crate) fn new(hdr: GcHeader) -> Table {
@@ -171,15 +178,13 @@ impl Table {
             // not a stack-local one). Null sentinel here so a
             // bug-detection invariant flags any pre-fixup read.
             array_ptr: std::ptr::null_mut(),
-            slab: Box::new([]),
             asize: 0,
             inline_storage: std::cell::UnsafeCell::new([0; INLINE_U64S]),
-            nodes: Box::new([]),
-            node_mask: u64::MAX,
+            nodes: std::ptr::NonNull::dangling().as_ptr(),
+            node_mask: u32::MAX,
             lastfree: 0,
             acount: 0,
             metatable: None,
-            flags: 0,
             aprefix: 0,
         }
     }
@@ -273,18 +278,60 @@ impl Table {
         unsafe { std::slice::from_raw_parts_mut(self.array_base() as *mut RawVal, n) }
     }
 
-    /// Allocate a fresh external `[avals: asize × 8 bytes][atags: asize
-    /// bytes]` slab. Only used when `asize > INLINE_ASIZE`. The buffer
-    /// is u64-aligned via `Box<[u64]>` and zeroed (avals = `RawVal::
-    /// NIL` aka `0`; atags = `raw::NIL` aka `0`).
-    fn alloc_slab(asize: usize) -> Box<[u64]> {
-        if asize == 0 {
-            return Box::new([]);
+    /// Layout of the external `[avals: asize × 8 bytes][atags: asize
+    /// bytes]` slab, rounded up to whole u64s. Only used when
+    /// `asize > INLINE_ASIZE`.
+    fn slab_layout(asize: usize) -> std::alloc::Layout {
+        std::alloc::Layout::array::<u64>(asize + asize.div_ceil(8))
+            .expect("array part within MAX_ASIZE")
+    }
+
+    /// Allocate a zeroed slab (avals = `RawVal::NIL` aka `0`; atags =
+    /// `raw::NIL` aka `0`) for `asize > INLINE_ASIZE` slots.
+    fn alloc_slab(asize: usize) -> *mut u8 {
+        let layout = Self::slab_layout(asize);
+        // SAFETY: the layout is non-zero-sized (asize > INLINE_ASIZE > 0)
+        let p = unsafe { std::alloc::alloc_zeroed(layout) };
+        if p.is_null() {
+            std::alloc::handle_alloc_error(layout);
         }
-        let avals_u64s = asize;
-        let atags_u64s = asize.div_ceil(8);
-        let total = avals_u64s + atags_u64s;
-        vec![0u64; total].into_boxed_slice()
+        p
+    }
+
+    /// Free the slab behind `ptr`, which `alloc_slab(asize)` returned.
+    ///
+    /// # Safety
+    /// `ptr` came from `alloc_slab(asize)` with this same `asize` and is
+    /// not used afterwards.
+    unsafe fn free_slab(ptr: *mut u8, asize: usize) {
+        // SAFETY: per the contract, same pointer and layout as the allocation
+        unsafe { std::alloc::dealloc(ptr, Self::slab_layout(asize)) }
+    }
+
+    /// Release the array part and leave an empty one on the inline storage
+    /// (the pool recycles a freed table this way).
+    pub(crate) fn drop_array_part(&mut self) {
+        if self.asize > INLINE_ASIZE {
+            // SAFETY: an array part larger than the inline storage lives in
+            // a slab from `alloc_slab(asize)`
+            unsafe { Self::free_slab(self.array_ptr, self.asize as usize) };
+        }
+        self.asize = 0;
+        self.acount = 0;
+        self.aprefix = 0;
+        self.array_ptr = self.inline_storage.get() as *mut u8;
+    }
+
+    /// The absent-metamethod bits (see `hdr`).
+    #[inline(always)]
+    pub(crate) fn absent_mm(&self) -> u32 {
+        self.hdr.aux
+    }
+
+    /// Record that the metamethod behind `bit` is absent.
+    #[inline(always)]
+    pub(crate) fn note_absent_mm(&mut self, bit: u32) {
+        self.hdr.aux |= bit;
     }
 
     /// This table's metatable, if any.
@@ -314,7 +361,7 @@ impl Table {
         } else {
             0
         };
-        array_external + self.nodes.len() * std::mem::size_of::<Node>()
+        array_external + self.nodes().len() * std::mem::size_of::<Node>()
     }
 
     fn asize(&self) -> usize {
@@ -396,7 +443,7 @@ impl Table {
 
     fn get_hash(&self, k: Value) -> Value {
         match self.find_node(k) {
-            Some(idx) => self.nodes[idx].val,
+            Some(idx) => self.nodes()[idx].val,
             None => Value::Nil,
         }
     }
@@ -418,7 +465,7 @@ impl Table {
     /// `idx >= nodes.len()`.
     #[allow(dead_code)]
     pub(crate) fn node_val_at(&self, idx: usize) -> Option<Value> {
-        self.nodes.get(idx).map(|n| n.val)
+        self.nodes().get(idx).map(|n| n.val)
     }
 
     /// Accessor for `nodes.len()` so the recorder
@@ -426,7 +473,7 @@ impl Table {
     /// reaching into the private `nodes` member.
     #[allow(dead_code)]
     pub(crate) fn nodes_capacity(&self) -> usize {
-        self.nodes.len()
+        self.nodes().len()
     }
 
     /// The node holding key `k`. Interned strings take the pointer-compare
@@ -436,7 +483,7 @@ impl Table {
     fn find_node(&self, k: Value) -> Option<usize> {
         #[cfg(feature = "gc-verify")]
         self.verify_find_node_keys(k);
-        if self.nodes.is_empty() {
+        if self.nodes().is_empty() {
             return None;
         }
         if let Value::Str(s) = k
@@ -452,7 +499,7 @@ impl Table {
     fn find_node_chain(&self, k: Value) -> Option<usize> {
         let mut idx = self.main_position(k);
         loop {
-            let n = &self.nodes[idx];
+            let n = &self.nodes()[idx];
             // Dead-key slots carry a dangling Gc pointer whose memory may
             // have been reallocated to a different live object; raw_eq on
             // such a key can spuriously match the freshly-reused address.
@@ -476,12 +523,12 @@ impl Table {
     /// walk compares pointers (PUC `luaH_getshortstr`). `nodes` is non-empty.
     #[inline]
     fn find_short_str(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
-        let mut idx = key.hash() as usize & (self.nodes.len() - 1);
+        let mut idx = key.hash() as usize & (self.nodes().len() - 1);
         loop {
-            debug_assert!(idx < self.nodes.len());
+            debug_assert!(idx < self.nodes().len());
             // SAFETY: the main position is masked to the node count and
             // every `next` link is a node index written by `insert_new`.
-            let n = unsafe { self.nodes.get_unchecked(idx) };
+            let n = unsafe { self.nodes().get_unchecked(idx) };
             if n.key_is_str(key) {
                 return Some(idx);
             }
@@ -535,7 +582,7 @@ impl Table {
 
     fn mark_neg_zero(&mut self) {
         if let Some(i) = self.find_node(Value::Int(0)) {
-            self.nodes[i].neg_zero = true;
+            self.nodes_mut()[i].neg_zero = true;
         }
     }
 
@@ -588,12 +635,12 @@ impl Table {
             return false;
         }
         if let Some(idx) = self.find_node(k)
-            && !self.nodes[idx].val.is_nil()
+            && !self.nodes()[idx].val.is_nil()
         {
             if val.is_nil() {
                 self.clear_existing_slot(k);
             } else {
-                self.nodes[idx].val = val;
+                self.nodes_mut()[idx].val = val;
             }
             return true;
         }
@@ -624,7 +671,7 @@ impl Table {
             return;
         }
         if let Some(idx) = self.find_node(k) {
-            self.nodes[idx].val = Value::Nil;
+            self.nodes_mut()[idx].val = Value::Nil;
         }
     }
 
@@ -654,8 +701,8 @@ impl Table {
                 self.clear_existing_slot(k);
             } else {
                 // may revive a tombstone: a metamethod can appear
-                self.flags = 0;
-                self.nodes[idx].val = v;
+                self.hdr.aux = 0;
+                self.nodes_mut()[idx].val = v;
             }
             return Ok(());
         }
@@ -666,8 +713,8 @@ impl Table {
     }
 
     fn insert_new(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
-        self.flags = 0;
-        if self.nodes.is_empty() {
+        self.hdr.aux = 0;
+        if self.nodes().is_empty() {
             self.rehash(heap, k)?;
             return self.set_norm(heap, k, v);
         }
@@ -677,8 +724,8 @@ impl Table {
         // live entry the chain reaches), so we treat it as occupied here and
         // route the new key through the collision path below — that preserves
         // the back-links into this slot from other nodes' `next` fields.
-        if self.nodes[mp].is_free() {
-            self.nodes[mp] = Node::new(k, v, NONE);
+        if self.nodes()[mp].is_free() {
+            self.nodes_mut()[mp] = Node::new(k, v, NONE);
             return Ok(());
         }
         let Some(free) = self.free_pos() else {
@@ -689,26 +736,28 @@ impl Table {
         // counts it as "their main position owner". We give it directly to
         // the new key but preserve `next` so the chain it sits inside still
         // reaches its downstream entries.
-        if self.nodes[mp].dead_key {
-            let preserved_next = self.nodes[mp].next;
-            self.nodes[mp] = Node::new(k, v, preserved_next);
+        if self.nodes()[mp].dead_key {
+            let preserved_next = self.nodes()[mp].next;
+            self.nodes_mut()[mp] = Node::new(k, v, preserved_next);
             return Ok(());
         }
-        let other_mp = self.main_position(self.nodes[mp].key());
+        let other_mp = self.main_position(self.nodes()[mp].key());
         if other_mp != mp {
             // colliding node is out of its main position: relocate it to the
             // free slot and take its place
             let mut prev = other_mp;
-            while self.nodes[prev].next != mp as i32 {
-                prev = self.nodes[prev].next as usize;
+            while self.nodes()[prev].next != mp as i32 {
+                prev = self.nodes()[prev].next as usize;
             }
-            self.nodes[prev].next = free as i32;
-            self.nodes[free] = self.nodes[mp];
-            self.nodes[mp] = Node::new(k, v, NONE);
+            self.nodes_mut()[prev].next = free as i32;
+            let moved = self.nodes()[mp];
+            self.nodes_mut()[free] = moved;
+            self.nodes_mut()[mp] = Node::new(k, v, NONE);
         } else {
             // colliding node owns this position: chain the new node behind it
-            self.nodes[free] = Node::new(k, v, self.nodes[mp].next);
-            self.nodes[mp].next = free as i32;
+            let next = self.nodes()[mp].next;
+            self.nodes_mut()[free] = Node::new(k, v, next);
+            self.nodes_mut()[mp].next = free as i32;
         }
         Ok(())
     }
@@ -716,7 +765,7 @@ impl Table {
     fn free_pos(&mut self) -> Option<usize> {
         while self.lastfree > 0 {
             self.lastfree -= 1;
-            let n = &self.nodes[self.lastfree as usize];
+            let n = &self.nodes()[self.lastfree as usize];
             // Dead-key slots are still occupied for chain purposes (their
             // `next` may be the only path to a downstream entry) — don't
             // hand them out as free.
@@ -764,7 +813,7 @@ impl Table {
                 }
             }
         }
-        for n in self.nodes.iter() {
+        for n in self.nodes().iter() {
             if !n.val.is_nil() {
                 total += 1;
                 if let Value::Int(i) = n.key()
@@ -826,19 +875,20 @@ impl Table {
         // slab; `array_ptr` already points to whichever it is, so
         // walking via raw offsets works the same for either case.
         let old_asize = self.asize as usize;
+        let old_array = self.array_ptr;
         // growing keeps every array entry at its index, so the old backing
         // is copied as is (PUC `luaH_resize` reallocates in place);
         // shrinking re-inserts entry by entry below
         let grow = new_asize >= old_asize && old_asize > 0;
         let mut old_pairs: Vec<(u8, RawVal)> = Vec::with_capacity(if grow { 0 } else { old_asize });
-        let mut old_slab: Box<[u64]> = Box::new([]);
+        let mut old_slab: *mut u8 = std::ptr::null_mut();
         let mut old_inline = [0u64; INLINE_U64S];
         if grow {
             if old_asize as u64 <= INLINE_ASIZE {
                 // SAFETY: exclusive &mut self; the inline bytes are read through the cell
                 old_inline = unsafe { *self.inline_storage.get() };
             } else {
-                old_slab = std::mem::take(&mut self.slab);
+                old_slab = self.array_ptr;
             }
         } else if old_asize > 0 {
             // SAFETY: `array_ptr` was set up by `Heap::new_table` or
@@ -854,7 +904,7 @@ impl Table {
                 old_pairs.push((tag, val));
             }
         }
-        let old_nodes = std::mem::take(&mut self.nodes);
+        let old_nodes = self.take_hash_part();
 
         // Install the new array backing first, then update `array_ptr`
         // (before potentially dropping the old slab via the assignment
@@ -870,11 +920,13 @@ impl Table {
                 *self.inline_storage.get() = [0; INLINE_U64S];
             }
             self.array_ptr = self.inline_storage.get() as *mut u8;
-            self.slab = Box::new([]);
         } else {
-            // External slab — allocate, then re-point `array_ptr`.
-            self.slab = Self::alloc_slab(new_asize);
-            self.array_ptr = self.slab.as_mut_ptr() as *mut u8;
+            self.array_ptr = Self::alloc_slab(new_asize);
+        }
+        if !grow && old_asize as u64 > INLINE_ASIZE {
+            // shrinking or rebuilding: the old entries were copied out above
+            // SAFETY: the old array part lived in a slab of `old_asize`
+            unsafe { Self::free_slab(old_array, old_asize) };
         }
 
         let hsize = if hash_entries == 0 {
@@ -882,8 +934,7 @@ impl Table {
         } else {
             hash_entries.next_power_of_two()
         };
-        self.nodes = vec![Node::EMPTY; hsize].into_boxed_slice();
-        self.node_mask = (hsize as u64).wrapping_sub(1);
+        self.set_hash_part(vec![Node::EMPTY; hsize].into_boxed_slice());
         self.lastfree = hsize as u32;
         // PUC `g->GCtotalbytes` analogue: credit (or debit) the box-size
         // delta so `Heap.bytes` reflects this table's actual internal
@@ -894,7 +945,7 @@ impl Table {
             let src: *const u8 = if old_asize as u64 <= INLINE_ASIZE {
                 old_inline.as_ptr() as *const u8
             } else {
-                old_slab.as_ptr() as *const u8
+                old_slab as *const u8
             };
             // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;
             // the new one holds `new_asize >= old_asize` zero (nil) slots
@@ -907,7 +958,10 @@ impl Table {
                     old_asize,
                 );
             }
-            drop(old_slab);
+            if !old_slab.is_null() {
+                // SAFETY: the old array part lived in a slab of `old_asize`
+                unsafe { Self::free_slab(old_slab, old_asize) };
+            }
             // growing appends nil slots, so the count stays; the prefix
             // may lag behind the run (a refill scans only 64 slots ahead,
             // a method-JIT store extends it by one) and catches up here
@@ -947,8 +1001,8 @@ impl Table {
     }
 
     fn main_position(&self, k: Value) -> usize {
-        debug_assert!(!self.nodes.is_empty());
-        hash_key(k) as usize & (self.nodes.len() - 1)
+        debug_assert!(!self.nodes().is_empty());
+        hash_key(k) as usize & (self.nodes().len() - 1)
     }
 
     // ---- length / iteration ----
@@ -976,7 +1030,7 @@ impl Table {
             }
             return lo as i64;
         }
-        if self.nodes.is_empty() {
+        if self.nodes().is_empty() {
             return asize as i64;
         }
         // array is full (or absent): unbound search through the hash part
@@ -1042,7 +1096,7 @@ impl Table {
             }
         }
         let hstart = start.saturating_sub(self.asize());
-        for (idx, n) in self.nodes.iter().enumerate().skip(hstart) {
+        for (idx, n) in self.nodes().iter().enumerate().skip(hstart) {
             if !n.val.is_nil() {
                 let _ = idx;
                 return Ok(Some((n.shown_key(), n.val)));
@@ -1058,7 +1112,7 @@ impl Table {
         let Some(mt) = self.metatable else {
             return (false, false);
         };
-        for n in mt.nodes.iter() {
+        for n in mt.nodes().iter() {
             if let (Value::Str(k), Value::Str(mode)) = (n.key(), n.val)
                 && k.as_bytes() == b"__mode"
             {
@@ -1087,7 +1141,7 @@ impl Table {
                 }
             }
         }
-        for n in self.nodes.iter() {
+        for n in self.nodes().iter() {
             if let Value::Coro(co) = n.key()
                 && !header_is_marked(co.as_ptr() as *mut crate::runtime::heap::GcHeader)
             {
@@ -1134,7 +1188,7 @@ impl Table {
                 }
             }
         }
-        for n in self.nodes.iter_mut() {
+        for n in self.nodes_mut().iter_mut() {
             if n.val.is_nil() {
                 // PUC `clearbykeys`/`clearbyvalues` end with
                 // `if (isempty(gval(n))) clearkey(n)`: an EMPTY entry's
@@ -1249,7 +1303,7 @@ impl Table {
     /// preserved.
     pub fn ensure_array(&mut self, heap: &mut Heap, n: usize) {
         if n > self.asize() {
-            let hash_entries = self.nodes.iter().filter(|nd| !nd.val.is_nil()).count();
+            let hash_entries = self.nodes().iter().filter(|nd| !nd.val.is_nil()).count();
             self.resize(heap, n, hash_entries);
         }
     }
@@ -1258,8 +1312,8 @@ impl Table {
 impl Table {
     /// Preallocate hash-part capacity (table.create's second size).
     pub fn ensure_hash(&mut self, heap: &mut Heap, n: usize) {
-        let entries = self.nodes.iter().filter(|nd| !nd.val.is_nil()).count();
-        if n > self.nodes.len() {
+        let entries = self.nodes().iter().filter(|nd| !nd.val.is_nil()).count();
+        if n > self.nodes().len() {
             self.resize(heap, self.asize(), n.max(entries));
         }
     }
@@ -1289,37 +1343,33 @@ mod tests {
         }
     }
 
-    /// Pin `Box<[Node]>` fat-ptr layout at runtime.
-    /// The luna-jit table-field IC reads `(ptr, len)` directly out of
-    /// the `nodes` field assuming the data pointer occupies the low 8
-    /// bytes and the length the high 8 bytes (de-facto Rust ABI on
-    /// 64-bit targets but not formally guaranteed). If a future Rust
-    /// release reorders the fat-ptr, this test fails before IC fires
-    /// at runtime.
+    /// The words the luna-jit table-field IC loads: the node pointer and
+    /// the node mask, at the offsets `jit_layout` gives.
     #[test]
-    #[allow(clippy::assertions_on_constants)]
-    #[cfg(target_pointer_width = "64")]
     fn node_layout_pinned() {
         use jit_layout::*;
-        assert_eq!(std::mem::size_of::<Box<[Node]>>(), 16);
         assert_eq!(NODE_KEY_OFFSET, 0);
         assert_eq!(NODE_VAL_OFFSET, 16);
-        assert!(SIZEOF_NODE >= 32);
-
-        // Construct a real Box<[Node]> with a known length, then
-        // peek at the fat-pointer's two halves to confirm the
-        // (data_ptr, len) order. Use a 4-slot box so the length is
-        // non-zero and the data pointer is heap-allocated.
-        let b: Box<[Node]> = vec![Node::EMPTY; 4].into_boxed_slice();
-        let raw_ptr = b.as_ptr();
-        let raw_len = b.len();
-        // SAFETY: reading the fat pointer's two words is exactly the
-        // layout luna-jit's IR assumes; it's the safest possible test
-        // of that assumption.
-        let words: [usize; 2] = unsafe { std::mem::transmute_copy(&b) };
-        assert_eq!(words[0], raw_ptr as usize, "fat-ptr low word = data ptr");
-        assert_eq!(words[1], raw_len, "fat-ptr high word = len");
-        drop(b);
+        assert_eq!(SIZEOF_NODE, 32);
+        with_table(|heap, t| {
+            // SAFETY: both offsets are fields of `Table`, read as the IC reads them
+            let words = |t: &Table| unsafe {
+                let base = t as *const Table as *const u8;
+                (
+                    *(base.add(TABLE_NODES_OFFSET) as *const usize),
+                    *(base.add(TABLE_NODE_MASK_OFFSET) as *const u32),
+                )
+            };
+            assert_eq!(words(t).1, u32::MAX, "empty hash part");
+            for i in 0..3 {
+                let k = Value::Str(heap.intern(format!("k{i}").as_bytes()));
+                t.set(heap, k, Value::Int(i)).unwrap();
+            }
+            let (ptr, mask) = words(t);
+            assert_eq!(ptr, t.nodes().as_ptr() as usize);
+            assert_eq!(mask, t.nodes().len() as u32 - 1);
+            assert_eq!(t.nodes().len(), 4);
+        });
     }
 
     #[test]

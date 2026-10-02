@@ -210,24 +210,18 @@ const TABLE_APREFIX_OFFSET: i32 =
 
 /// table-field IC scaffold.
 ///
-/// Byte offset of the `nodes: Box<[Node]>` field's low fat-pointer
-/// word (the data pointer). luna-core's `runtime::table::jit_layout`
-/// module computes this against the live `Table` struct, then we
-/// re-export it here so trace.rs can refer to it locally.
-///
-/// Fat-pointer layout: `(data_ptr, len)` — the data ptr is at
-/// `TABLE_NODES_PTR_OFFSET`, length at `TABLE_NODES_LEN_OFFSET`
-/// (= `..PTR_OFFSET + 8`). See
-/// `runtime/table.rs::node_layout_pinned` for the runtime
-/// assertion that pins this ABI.
+/// Byte offset of the hash part's node pointer. luna-core's
+/// `runtime::table::jit_layout` module computes this against the live
+/// `Table` struct, then we re-export it here so trace.rs can refer to
+/// it locally.
 #[allow(dead_code)]
 pub(crate) const TABLE_NODES_PTR_OFFSET: usize =
     luna_core::runtime::table::jit_layout::TABLE_NODES_OFFSET;
-/// High fat-pointer word — the `len` (in `Node` slots) of the
-/// `nodes: Box<[Node]>`. The IC's shape-stability guard compares
-/// this load against the recorder's cached length.
-#[allow(dead_code)]
-pub(crate) const TABLE_NODES_LEN_OFFSET: usize = TABLE_NODES_PTR_OFFSET + 8;
+/// The `u32` node mask (node count - 1, `u32::MAX` when empty). The IC's
+/// shape-stability guard compares it against the recorder's node count
+/// less one.
+pub(crate) const TABLE_NODE_MASK_OFFSET: usize =
+    luna_core::runtime::table::jit_layout::TABLE_NODE_MASK_OFFSET;
 /// Within one `Node`, the byte offset of `key: Value`. Value's tag
 /// byte (`#[repr(C, u8)]`) lives at offset 0 of the Value, so the
 /// key's tag is at `NODE_KEY_OFFSET` (= 0) and the key's raw

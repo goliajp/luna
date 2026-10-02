@@ -101,7 +101,7 @@ impl Table {
 
     #[inline(always)]
     fn mark_nodes<const KEYS: bool, const VALS: bool>(&self, m: &mut Marker) {
-        for n in self.nodes.iter() {
+        for n in self.nodes().iter() {
             // a dead key's tag is nil, so it is skipped here
             if KEYS && value_tag_is_gc(n.key_tag) {
                 // SAFETY: the tag was just checked
@@ -120,7 +120,7 @@ impl Table {
     /// the caller can iterate to a fixpoint (PUC `traverseephemeron`).
     pub(crate) fn converge_ephemeron(&self, alive: &dyn Fn(Value) -> bool, m: &mut Marker) -> bool {
         let mut changed = false;
-        for n in self.nodes.iter() {
+        for n in self.nodes().iter() {
             if !n.val.is_nil() && alive(n.key()) {
                 changed |= m.value(n.val);
             }

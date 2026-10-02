@@ -56,6 +56,9 @@ pub struct GcHeader {
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
     flags: u8,
+    /// Per-type word in what would otherwise be padding: a table keeps its
+    /// absent-metamethod bits here. Zero for a new object.
+    pub(crate) aux: u32,
 }
 
 const WHITE0: u8 = 1;
@@ -101,6 +104,7 @@ impl GcHeader {
             next: ptr::null_mut(),
             tag,
             flags: if tag == ObjTag::Str { LEAF } else { 0 },
+            aux: 0,
         }
     }
 
@@ -320,12 +324,9 @@ impl Heap {
                 // metatable were already cleared in `free_obj` before
                 // pool push, so we only reset stack-resident fields here.
                 (*t).hdr = GcHeader::new(ObjTag::Table);
-                (*t).array_ptr = std::ptr::null_mut();
-                (*t).asize = 0;
                 (*t).inline_storage =
                     std::cell::UnsafeCell::new([0; crate::runtime::table::INLINE_U64S]);
                 (*t).lastfree = 0;
-                (*t).flags = 0;
             }
             t
         } else {
@@ -1338,7 +1339,7 @@ impl Heap {
                     if self.table_pool.len() < TABLE_POOL_CAP {
                         // Free interior heap allocations now; an empty Box is
                         // dangling, so reassigning is just a pointer move.
-                        (*t).slab = Box::new([]);
+                        (*t).drop_array_part();
                         (*t).drop_hash_part();
                         (*t).metatable = None;
                         // Stash the raw pointer for future reuse.

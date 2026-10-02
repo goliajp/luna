@@ -1,12 +1,12 @@
 use super::Node;
 use crate::runtime::Table;
 
-/// Byte offset of the `nodes: Box<[Node]>` field within `Table`.
-/// The fat-ptr low word (data ptr) lives at this offset; the
-/// high word (length) at `TABLE_NODES_OFFSET + 8`. luna-jit
-/// adds `TABLE_NODES_PTR_OFFSET` / `TABLE_NODES_LEN_OFFSET`
-/// constants in `jit_backend/mod.rs` to express that split.
+/// Byte offset of the hash part's node pointer within `Table`.
 pub const TABLE_NODES_OFFSET: usize = std::mem::offset_of!(Table, nodes);
+
+/// Byte offset of the `u32` node mask: node count - 1, or `u32::MAX`
+/// when the hash part is empty.
+pub const TABLE_NODE_MASK_OFFSET: usize = std::mem::offset_of!(Table, node_mask);
 
 /// Byte offsets of the `u32` array-part counters `acount` and
 /// `aprefix`, which the method JIT's inline array stores keep in step.
@@ -28,15 +28,7 @@ pub const SIZEOF_NODE: usize = std::mem::size_of::<Node>();
 /// Static guard: pin the assumptions luna-jit relies on at compile
 /// time. Layout drift here breaks IR emit, so trap it at compile
 /// time rather than at trace-fire time.
-///
-/// `Box<[T]>` is a fat pointer of `2 * usize` — 16 bytes on 64-bit
-/// targets, 8 bytes on 32-bit (e.g. `wasm32`). Use a width-aware
-/// expected size so the wasm32-unknown-unknown CI build does not
-/// trip the assertion. The runtime layout still matters for luna-jit
-/// IR emit on 64-bit hosts (the only platforms where Cranelift JIT
-/// runs); the 32-bit branch documents the size in passing.
 const _: () = {
-    assert!(std::mem::size_of::<Box<[Node]>>() == 2 * std::mem::size_of::<usize>());
     assert!(NODE_KEY_OFFSET == 0);
     assert!(std::mem::offset_of!(Node, key_payload) == 8);
     assert!(NODE_VAL_OFFSET == 16);
