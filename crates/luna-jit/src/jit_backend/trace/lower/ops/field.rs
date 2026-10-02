@@ -108,103 +108,7 @@ pub(super) fn emit_get_field_op<M: Module>(
                 });
 
             let v = if ic_active {
-                let snap = record
-                    .field_ic_snapshot
-                    .as_ref()
-                    .expect("ic_active implies snapshot present");
-
-                // --- Guards 1 & 2: metatable + node count ---
-                let mt = lw.bcx.ins().load(
-                    types::I64,
-                    cranelift_codegen::ir::MemFlagsData::trusted(),
-                    t,
-                    crate::jit_backend::TABLE_METATABLE_OFFSET as i32,
-                );
-                let zero = lw.bcx.ins().iconst(types::I64, 0);
-                let mt_ok = lw.bcx.ins().icmp(IntCC::Equal, mt, zero);
-                let node_mask = lw.bcx.ins().load(
-                    types::I32,
-                    cranelift_codegen::ir::MemFlagsData::trusted(),
-                    t,
-                    crate::jit_backend::TABLE_NODE_MASK_OFFSET as i32,
-                );
-                let mask = i64::from((snap.nodes_len as u32).wrapping_sub(1));
-                let len_ok = lw.bcx.ins().icmp_imm_u(IntCC::Equal, node_mask, mask);
-                let guards_12 = lw.bcx.ins().band(mt_ok, len_ok);
-
-                // 3 blocks: fast (guards 3+4 + load), slow
-                // (helper), merge (def_var dst). slow_blk has 2
-                // predecessors (mt/len fail + key/tag fail); we
-                // seal it only after both edges are emitted.
-                let fast_blk = lw.bcx.create_block();
-                let slow_blk = lw.bcx.create_block();
-                let merge_blk = lw.bcx.create_block();
-                lw.bcx.append_block_param(merge_blk, types::I64);
-
-                lw.bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
-
-                // --- fast: load nodes_ptr, compute node_addr,
-                //     guards 3 & 4, load val_raw ---
-                lw.bcx.switch_to_block(fast_blk);
-                lw.bcx.seal_block(fast_blk);
-                let nodes_ptr = lw.bcx.ins().load(
-                    types::I64,
-                    cranelift_codegen::ir::MemFlagsData::trusted(),
-                    t,
-                    crate::jit_backend::TABLE_NODES_PTR_OFFSET as i32,
-                );
-                let node_offset = (snap.slot_idx as usize * crate::jit_backend::SIZEOF_NODE) as i64;
-                let node_addr = lw.bcx.ins().iadd_imm_u(nodes_ptr, node_offset);
-
-                let key_raw = lw.bcx.ins().load(
-                    types::I64,
-                    cranelift_codegen::ir::MemFlagsData::trusted(),
-                    node_addr,
-                    crate::jit_backend::NODE_KEY_RAW_OFFSET as i32,
-                );
-                let key_imm = lw.bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
-                let key_ok = lw.bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
-
-                let val_tag_i8 = lw.bcx.ins().load(
-                    types::I8,
-                    cranelift_codegen::ir::MemFlagsData::trusted(),
-                    node_addr,
-                    crate::jit_backend::NODE_VAL_TAG_OFFSET as i32,
-                );
-                let val_tag = lw.bcx.ins().uextend(types::I64, val_tag_i8);
-                let tag_imm = lw.bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
-                let tag_ok = lw.bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
-                let guards_34 = lw.bcx.ins().band(key_ok, tag_ok);
-
-                let load_blk = lw.bcx.create_block();
-                lw.bcx.ins().brif(guards_34, load_blk, &[], slow_blk, &[]);
-
-                lw.bcx.switch_to_block(load_blk);
-                lw.bcx.seal_block(load_blk);
-                let val_raw = lw.bcx.ins().load(
-                    types::I64,
-                    cranelift_codegen::ir::MemFlagsData::trusted(),
-                    node_addr,
-                    crate::jit_backend::NODE_VAL_RAW_OFFSET as i32,
-                );
-                lw.bcx.ins().jump(merge_blk, &[val_raw.into()]);
-
-                // --- slow: fall back to the helper ---
-                lw.bcx.switch_to_block(slow_blk);
-                lw.bcx.seal_block(slow_blk);
-                let v_slow = if let Some((_, w)) = want {
-                    checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
-                } else {
-                    let func_ref = lw.module.declare_func_in_func(get_field_id, lw.bcx.func);
-                    let call = lw.bcx.ins().call(func_ref, &[t, key_arg]);
-                    lw.bcx.inst_results(call)[0]
-                };
-                lw.bcx.ins().jump(merge_blk, &[v_slow.into()]);
-
-                // --- merge ---
-                lw.bcx.switch_to_block(merge_blk);
-                lw.bcx.seal_block(merge_blk);
-                lw.bcx.block_params(merge_blk)[0]
+                emit_field_ic_read(lw, pl, oc, t, key_arg, want)
             } else if let Some((_, w)) = want {
                 checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
             } else {
@@ -312,4 +216,119 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
+}
+
+/// The inline-cached read of `t[key]`: guarded load from the cached node, helper on a miss.
+pub(super) fn emit_field_ic_read<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    t: Value,
+    key_arg: Value,
+    want: Option<(RegKind, u8)>,
+) -> Value {
+    let Plan { record, .. } = *pl;
+    let OpHelpers {
+        get_field_id,
+        get_field_checked_id,
+        ..
+    } = lw.h.op;
+    let OpCx { i, rop, .. } = *oc;
+    let snap = record
+        .field_ic_snapshot
+        .as_ref()
+        .expect("ic_active implies snapshot present");
+
+    // --- Guards 1 & 2: metatable + node count ---
+    let mt = lw.bcx.ins().load(
+        types::I64,
+        cranelift_codegen::ir::MemFlagsData::trusted(),
+        t,
+        crate::jit_backend::TABLE_METATABLE_OFFSET as i32,
+    );
+    let zero = lw.bcx.ins().iconst(types::I64, 0);
+    let mt_ok = lw.bcx.ins().icmp(IntCC::Equal, mt, zero);
+    let node_mask = lw.bcx.ins().load(
+        types::I32,
+        cranelift_codegen::ir::MemFlagsData::trusted(),
+        t,
+        crate::jit_backend::TABLE_NODE_MASK_OFFSET as i32,
+    );
+    let mask = i64::from((snap.nodes_len as u32).wrapping_sub(1));
+    let len_ok = lw.bcx.ins().icmp_imm_u(IntCC::Equal, node_mask, mask);
+    let guards_12 = lw.bcx.ins().band(mt_ok, len_ok);
+
+    // 3 blocks: fast (guards 3+4 + load), slow
+    // (helper), merge (def_var dst). slow_blk has 2
+    // predecessors (mt/len fail + key/tag fail); we
+    // seal it only after both edges are emitted.
+    let fast_blk = lw.bcx.create_block();
+    let slow_blk = lw.bcx.create_block();
+    let merge_blk = lw.bcx.create_block();
+    lw.bcx.append_block_param(merge_blk, types::I64);
+
+    lw.bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
+
+    // --- fast: load nodes_ptr, compute node_addr,
+    //     guards 3 & 4, load val_raw ---
+    lw.bcx.switch_to_block(fast_blk);
+    lw.bcx.seal_block(fast_blk);
+    let nodes_ptr = lw.bcx.ins().load(
+        types::I64,
+        cranelift_codegen::ir::MemFlagsData::trusted(),
+        t,
+        crate::jit_backend::TABLE_NODES_PTR_OFFSET as i32,
+    );
+    let node_offset = (snap.slot_idx as usize * crate::jit_backend::SIZEOF_NODE) as i64;
+    let node_addr = lw.bcx.ins().iadd_imm_u(nodes_ptr, node_offset);
+
+    let key_raw = lw.bcx.ins().load(
+        types::I64,
+        cranelift_codegen::ir::MemFlagsData::trusted(),
+        node_addr,
+        crate::jit_backend::NODE_KEY_RAW_OFFSET as i32,
+    );
+    let key_imm = lw.bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
+    let key_ok = lw.bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
+
+    let val_tag_i8 = lw.bcx.ins().load(
+        types::I8,
+        cranelift_codegen::ir::MemFlagsData::trusted(),
+        node_addr,
+        crate::jit_backend::NODE_VAL_TAG_OFFSET as i32,
+    );
+    let val_tag = lw.bcx.ins().uextend(types::I64, val_tag_i8);
+    let tag_imm = lw.bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
+    let tag_ok = lw.bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
+    let guards_34 = lw.bcx.ins().band(key_ok, tag_ok);
+
+    let load_blk = lw.bcx.create_block();
+    lw.bcx.ins().brif(guards_34, load_blk, &[], slow_blk, &[]);
+
+    lw.bcx.switch_to_block(load_blk);
+    lw.bcx.seal_block(load_blk);
+    let val_raw = lw.bcx.ins().load(
+        types::I64,
+        cranelift_codegen::ir::MemFlagsData::trusted(),
+        node_addr,
+        crate::jit_backend::NODE_VAL_RAW_OFFSET as i32,
+    );
+    lw.bcx.ins().jump(merge_blk, &[val_raw.into()]);
+
+    // --- slow: fall back to the helper ---
+    lw.bcx.switch_to_block(slow_blk);
+    lw.bcx.seal_block(slow_blk);
+    let v_slow = if let Some((_, w)) = want {
+        checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
+    } else {
+        let func_ref = lw.module.declare_func_in_func(get_field_id, lw.bcx.func);
+        let call = lw.bcx.ins().call(func_ref, &[t, key_arg]);
+        lw.bcx.inst_results(call)[0]
+    };
+    lw.bcx.ins().jump(merge_blk, &[v_slow.into()]);
+
+    // --- merge ---
+    lw.bcx.switch_to_block(merge_blk);
+    lw.bcx.seal_block(merge_blk);
+    lw.bcx.block_params(merge_blk)[0]
 }

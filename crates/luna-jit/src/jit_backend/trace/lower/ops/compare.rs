@@ -6,28 +6,8 @@ pub(super) fn emit_eqk_op<M: Module>(
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
-    let Plan {
-        record,
-        head_proto,
-        max_stack,
-        opts,
-        window_size_us,
-        ..
-    } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        ..
-    } = *lw;
-    let RuntimeHelpers {
-        suppress_admit_id,
-        materialize_id,
-        mat_sunk_id,
-        ..
-    } = lw.h.rt;
-    let OpCx {
-        i, rop, off, ins, ..
-    } = *oc;
+    let Plan { head_proto, .. } = *pl;
+    let OpCx { rop, off, ins, .. } = *oc;
     let regs: &[Variable] = &oc.regs;
     match oc.op {
         Op::EqK => {
@@ -91,119 +71,7 @@ pub(super) fn emit_eqk_op<M: Module>(
             // materialise the inlined frames before the interp can
             // resume at the cmp's PC. See the matching Lt/Le/Eq
             // arm below for the chain-build details.
-            if !lw.call_chain.is_empty() {
-                // Capture head's resume pc BEFORE the innermost
-                // override — `call_chain[0].pc` is the outermost
-                // self-rec Call's `pc + 1` (= trace head's
-                // post-Call resume).
-                let head_resume_pc = lw.call_chain[0].pc;
-                let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
-                if let Some(last) = snapshot.last_mut() {
-                    last.pc = side_exit_pc;
-                }
-                let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-                let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
-                let chain_len = chain_rc.len() as i64;
-                let site_idx = lw.per_exit_inline_vec.len() as u32;
-                // materialise live Sinkable sites
-                // BEFORE the frame_materialize_frames helper
-                // pushes the inline frames. The window-sized
-                // snapshot updates in-place so per_exit_inline's
-                // kinds entry reflects materialised slots.
-                let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
-                let mat_count = emit_materialize_live_sunk(
-                    &mut lw.bcx,
-                    &mut lw.module,
-                    mat_sunk_id,
-                    &lw.escape,
-                    &lw.virt_vars,
-                    &lw.virt_kinds,
-                    &lw.regs_full,
-                    &pl.op_offsets,
-                    i,
-                    &mut kinds_snapshot,
-                    head_proto,
-                    opts.aot,
-                    &mut lw.defined_aot_data,
-                );
-                lw.materialize_emit_count += mat_count;
-                let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
-                let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
-                let chain_for_helper = chain_rc.clone();
-                lw.per_exit_inline_vec.push((
-                    side_exit_pc,
-                    head_resume_pc,
-                    kinds_snapshot,
-                    chain_rc,
-                    inline_side_box_0,
-                ));
-                let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
-                let ptr_arg = emit_chain_ptr_arg(
-                    &mut lw.module,
-                    &mut lw.bcx,
-                    &chain_for_helper,
-                    chain_ptr,
-                    opts.aot,
-                    &mut lw.defined_aot_data,
-                );
-                let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
-                let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
-                emit_store_back_and_return_site(
-                    &mut lw.bcx,
-                    &lw.regs_full[..window_size_us],
-                    &lw.stored,
-                    reg_state,
-                    site_idx,
-                    side_exit_pc,
-                    lw.flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                );
-            } else {
-                // materialise every live
-                // Sinkable site at this depth=0 cmp side-exit.
-                // The snapshot carries `RegKind::Table` for each
-                // materialised caller-window slot so the
-                // dispatcher unpacks the heap pointer correctly
-                // on deopt.
-                let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
-                let mat_count = emit_materialize_live_sunk(
-                    &mut lw.bcx,
-                    &mut lw.module,
-                    mat_sunk_id,
-                    &lw.escape,
-                    &lw.virt_vars,
-                    &lw.virt_kinds,
-                    &lw.regs_full,
-                    &pl.op_offsets,
-                    i,
-                    &mut snapshot,
-                    head_proto,
-                    opts.aot,
-                    &mut lw.defined_aot_data,
-                );
-                lw.materialize_emit_count += mat_count;
-                let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
-                let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
-                let tag_side_local_0 = lw.per_exit_kinds.len() as u32;
-                lw.per_exit_kinds
-                    .push((side_exit_pc, snapshot, tag_side_box_0));
-                // store_back only writes caller window — depth>0 scratch
-                // slots stay out of the dispatcher's reg_state restore.
-                emit_tagged_exit(
-                    &mut lw.bcx,
-                    &mut lw.module,
-                    suppress_admit_id,
-                    &lw.regs_full[..max_stack],
-                    &lw.stored,
-                    reg_state,
-                    side_exit_pc,
-                    record.head_pc,
-                    tag_side_local_0,
-                    lw.flush_ctx.as_ref(),
-                    trace_fn_sig_ref,
-                );
-            }
+            emit_eqk_side_exit(lw, pl, oc, side_exit_pc);
 
             lw.bcx.switch_to_block(continue_blk);
             lw.bcx.seal_block(continue_blk);
@@ -355,4 +223,146 @@ pub(super) fn emit_test_op<M: Module>(
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
+}
+
+/// The side exit of `EqK`, at `side_exit_pc`.
+pub(super) fn emit_eqk_side_exit<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    side_exit_pc: u32,
+) {
+    let Plan {
+        record,
+        head_proto,
+        max_stack,
+        opts,
+        window_size_us,
+        ..
+    } = *pl;
+    let Lower {
+        reg_state,
+        trace_fn_sig_ref,
+        ..
+    } = *lw;
+    let RuntimeHelpers {
+        suppress_admit_id,
+        materialize_id,
+        mat_sunk_id,
+        ..
+    } = lw.h.rt;
+    let OpCx { i, .. } = *oc;
+    if !lw.call_chain.is_empty() {
+        // Capture head's resume pc BEFORE the innermost
+        // override — `call_chain[0].pc` is the outermost
+        // self-rec Call's `pc + 1` (= trace head's
+        // post-Call resume).
+        let head_resume_pc = lw.call_chain[0].pc;
+        let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
+        if let Some(last) = snapshot.last_mut() {
+            last.pc = side_exit_pc;
+        }
+        let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
+        let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
+        let chain_len = chain_rc.len() as i64;
+        let site_idx = lw.per_exit_inline_vec.len() as u32;
+        // materialise live Sinkable sites
+        // BEFORE the frame_materialize_frames helper
+        // pushes the inline frames. The window-sized
+        // snapshot updates in-place so per_exit_inline's
+        // kinds entry reflects materialised slots.
+        let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
+        let mat_count = emit_materialize_live_sunk(
+            &mut lw.bcx,
+            &mut lw.module,
+            mat_sunk_id,
+            &lw.escape,
+            &lw.virt_vars,
+            &lw.virt_kinds,
+            &lw.regs_full,
+            &pl.op_offsets,
+            i,
+            &mut kinds_snapshot,
+            head_proto,
+            opts.aot,
+            &mut lw.defined_aot_data,
+        );
+        lw.materialize_emit_count += mat_count;
+        let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+        let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
+        let chain_for_helper = chain_rc.clone();
+        lw.per_exit_inline_vec.push((
+            side_exit_pc,
+            head_resume_pc,
+            kinds_snapshot,
+            chain_rc,
+            inline_side_box_0,
+        ));
+        let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
+        let ptr_arg = emit_chain_ptr_arg(
+            &mut lw.module,
+            &mut lw.bcx,
+            &chain_for_helper,
+            chain_ptr,
+            opts.aot,
+            &mut lw.defined_aot_data,
+        );
+        let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
+        let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+        emit_store_back_and_return_site(
+            &mut lw.bcx,
+            &lw.regs_full[..window_size_us],
+            &lw.stored,
+            reg_state,
+            site_idx,
+            side_exit_pc,
+            lw.flush_ctx.as_ref(),
+            0i64,
+            trace_fn_sig_ref,
+        );
+    } else {
+        // materialise every live
+        // Sinkable site at this depth=0 cmp side-exit.
+        // The snapshot carries `RegKind::Table` for each
+        // materialised caller-window slot so the
+        // dispatcher unpacks the heap pointer correctly
+        // on deopt.
+        let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
+        let mat_count = emit_materialize_live_sunk(
+            &mut lw.bcx,
+            &mut lw.module,
+            mat_sunk_id,
+            &lw.escape,
+            &lw.virt_vars,
+            &lw.virt_kinds,
+            &lw.regs_full,
+            &pl.op_offsets,
+            i,
+            &mut snapshot,
+            head_proto,
+            opts.aot,
+            &mut lw.defined_aot_data,
+        );
+        lw.materialize_emit_count += mat_count;
+        let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
+        let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
+        let tag_side_local_0 = lw.per_exit_kinds.len() as u32;
+        lw.per_exit_kinds
+            .push((side_exit_pc, snapshot, tag_side_box_0));
+        // store_back only writes caller window — depth>0 scratch
+        // slots stay out of the dispatcher's reg_state restore.
+        emit_tagged_exit(
+            &mut lw.bcx,
+            &mut lw.module,
+            suppress_admit_id,
+            &lw.regs_full[..max_stack],
+            &lw.stored,
+            reg_state,
+            side_exit_pc,
+            record.head_pc,
+            tag_side_local_0,
+            lw.flush_ctx.as_ref(),
+            trace_fn_sig_ref,
+        );
+    }
 }
