@@ -216,6 +216,9 @@ optimization.
   `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
   are not part of the supported API.
+- `Vm::set_field_ic_enabled` / `Vm::field_ic_enabled`: turn the trace
+  JIT's table-field inline cache on or off for one Vm. A new Vm starts
+  from `LUNA_JIT_FIELD_IC` as before.
 
 ---
 
