@@ -13,6 +13,9 @@
 //! `inputs compiled dispatched errored skipped` (counts since the last
 //! line) so a campaign can report how many inputs reached a trace.
 //! `$LUNA_FUZZ_SHOW=1` prints each program and both results.
+//! `$LUNA_FUZZ_JIT=<tiers>,<trace hot>,<call hot>` (tiers `both`, `trace`
+//! or `method`) replaces the JIT setup read from the input, so one saved
+//! input can be replayed under every setup; the program stays the same.
 //!
 //! Run:
 //!     cd crates/luna-fuzz
@@ -133,6 +136,27 @@ fn hit_memory_cap(o: &Outcome) -> bool {
     o.out.contains(cap) || o.err.as_deref().is_some_and(|e| e.contains(cap))
 }
 
+/// `$LUNA_FUZZ_JIT`, parsed once.
+fn jit_override() -> Option<(Tiers, u32, u32)> {
+    static PARSED: std::sync::OnceLock<Option<(Tiers, u32, u32)>> = std::sync::OnceLock::new();
+    *PARSED.get_or_init(|| {
+        let v = std::env::var("LUNA_FUZZ_JIT").ok()?;
+        let parts: Vec<&str> = v.split(',').collect();
+        let bad = || panic!("LUNA_FUZZ_JIT={v:?}: want <both|trace|method>,<trace hot>,<call hot>");
+        let [tiers, trace, call] = parts[..] else {
+            bad()
+        };
+        let tiers = match tiers {
+            "both" => Tiers::Both,
+            "trace" => Tiers::TraceOnly,
+            "method" => Tiers::MethodOnly,
+            _ => bad(),
+        };
+        let hot = |s: &str| s.parse::<u32>().unwrap_or_else(|_| bad());
+        Some((tiers, hot(trace), hot(call)))
+    })
+}
+
 static INPUTS: AtomicU64 = AtomicU64::new(0);
 static COMPILED: AtomicU64 = AtomicU64::new(0);
 static DISPATCHED: AtomicU64 = AtomicU64::new(0);
@@ -184,6 +208,7 @@ fuzz_target!(|data: &[u8]| {
         _ => Tiers::MethodOnly,
     };
     let src = jit_program::Gen::new(&mut u, program::dialect()).program();
+    let (tiers, trace, call) = jit_override().unwrap_or((tiers, trace, call));
 
     let show = std::env::var_os("LUNA_FUZZ_SHOW").is_some();
     if show {
