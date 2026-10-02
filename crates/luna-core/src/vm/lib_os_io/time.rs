@@ -79,27 +79,52 @@ fn setfield(vm: &mut Vm, t: Gc<Table>, key: &str, v: Value) -> Result<(), LuaErr
 /// `setallfields`: write a broken-down time into `t` in the dialect's
 /// order (the order is observable through `__newindex`).
 pub(super) fn setallfields(vm: &mut Vm, t: Gc<Table>, tm: &Tm) -> Result<(), LuaError> {
-    let fields = [
-        ("year", tm.year),
-        ("month", tm.month as i64),
-        ("day", tm.day as i64),
-        ("hour", tm.hour as i64),
-        ("min", tm.min as i64),
-        ("sec", tm.sec as i64),
-        ("yday", tm.yday as i64 + 1),
-        ("wday", tm.wday as i64 + 1),
+    let civil = [
+        tm.year,
+        tm.month as i64,
+        tm.day as i64,
+        tm.hour as i64,
+        tm.min as i64,
+        tm.sec as i64,
     ];
-    // ≤5.3 set them from seconds upwards
-    let order: [usize; 8] = if vm.version() <= LuaVersion::Lua53 {
-        [5, 4, 3, 2, 1, 0, 7, 6]
+    let days = (tm.yday as i64 + 1, tm.wday as i64 + 1);
+    // UTC has no daylight saving time
+    setfields(vm, t, civil, Some(days), Some(false))
+}
+
+/// Write year, month, day, hour, min, sec, then yday and wday when known
+/// and isdst when known. ≤5.3 set them from seconds upwards, wday first.
+fn setfields(
+    vm: &mut Vm,
+    t: Gc<Table>,
+    civil: [i64; 6],
+    days: Option<(i64, i64)>,
+    isdst: Option<bool>,
+) -> Result<(), LuaError> {
+    const KEYS: [&str; 6] = ["year", "month", "day", "hour", "min", "sec"];
+    let old = vm.version() <= LuaVersion::Lua53;
+    let order: [usize; 6] = if old {
+        [5, 4, 3, 2, 1, 0]
     } else {
-        [0, 1, 2, 3, 4, 5, 6, 7]
+        [0, 1, 2, 3, 4, 5]
     };
     for i in order {
-        setfield(vm, t, fields[i].0, Value::Int(fields[i].1))?;
+        setfield(vm, t, KEYS[i], Value::Int(civil[i]))?;
     }
-    // UTC has no daylight saving time
-    setfield(vm, t, "isdst", Value::Bool(false))
+    if let Some((yday, wday)) = days {
+        let pairs = if old {
+            [("wday", wday), ("yday", yday)]
+        } else {
+            [("yday", yday), ("wday", wday)]
+        };
+        for (k, v) in pairs {
+            setfield(vm, t, k, Value::Int(v))?;
+        }
+    }
+    match isdst {
+        Some(b) => setfield(vm, t, "isdst", Value::Bool(b)),
+        None => Ok(()),
+    }
 }
 
 pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -142,8 +167,8 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     }
     // isdst is read (with its metamethods) but UTC has no DST to apply
     let k = Value::Str(vm.heap.intern(b"isdst"));
-    vm.index_value(Value::Table(t), k)?;
-    let r = mktime(
+    let isdst = vm.index_value(Value::Table(t), k)?;
+    let secs = mktime(
         year as i64 + 1900,
         mon as i64,
         mday as i64,
@@ -151,22 +176,41 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         min as i64,
         sec as i64,
     );
-    let Some(secs) = r else {
-        if v <= LuaVersion::Lua52 {
-            return Ok(vm.nat_return(fs, &[Value::Nil]));
+    // 5.3+ write the fields back before checking the result, as PUC does:
+    // normalised when the time exists, as given when it overflows (yday and
+    // wday are then left alone: PUC writes whatever its `struct tm` held)
+    if v >= LuaVersion::Lua53 {
+        match secs {
+            Some(s) => {
+                let tm = gmtime(s).expect("mktime checked the year fits");
+                setallfields(vm, t, &tm)?;
+            }
+            None => {
+                let given = [
+                    year as i64 + 1900,
+                    mon as i64 + 1,
+                    mday as i64,
+                    hour as i64,
+                    min as i64,
+                    sec as i64,
+                ];
+                let dst = (!isdst.is_nil()).then(|| isdst.truthy());
+                setfields(vm, t, given, None, dst)?;
+            }
         }
-        return Err(raise_str(
+    }
+    // -1 is `mktime`'s failure value, so a time of exactly -1 fails too
+    match secs.filter(|&s| s != -1) {
+        Some(s) => {
+            let r = time_value(vm, s);
+            Ok(vm.nat_return(fs, &[r]))
+        }
+        None if v <= LuaVersion::Lua52 => Ok(vm.nat_return(fs, &[Value::Nil])),
+        None => Err(raise_str(
             vm,
             "time result cannot be represented in this installation",
-        ));
-    };
-    // 5.3+ write the normalised fields back
-    if v >= LuaVersion::Lua53 {
-        let tm = gmtime(secs).expect("mktime checked the year fits");
-        setallfields(vm, t, &tm)?;
+        )),
     }
-    let r = time_value(vm, secs);
-    Ok(vm.nat_return(fs, &[r]))
 }
 
 /// `l_checktime` (5.3+) or ≤5.2's `(time_t)luaL_checknumber`.
