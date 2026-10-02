@@ -21,11 +21,8 @@ pub(super) enum LastTest {
 
 impl Compiler<'_> {
     /// Compile a condition; the returned jumps are taken when it is FALSE.
-    pub(super) fn cond_jump_false(
-        &mut self,
-        id: ExprId,
-    ) -> Result<(Vec<usize>, LastTest), SyntaxError> {
-        let mut jumps = Vec::new();
+    pub(super) fn cond_jump_false(&mut self, id: ExprId) -> Result<(Jumps, LastTest), SyntaxError> {
+        let mut jumps = Jumps::new();
         let last = self.cond_jumps(id, false, &mut jumps)?;
         Ok((jumps, last))
     }
@@ -36,7 +33,7 @@ impl Compiler<'_> {
         &mut self,
         id: ExprId,
         jump_if: bool,
-        out: &mut Vec<usize>,
+        out: &mut Jumps,
     ) -> Result<LastTest, SyntaxError> {
         match *self.ast.expr(id) {
             Expr::BinOp {
@@ -53,10 +50,10 @@ impl Compiler<'_> {
                     self.cond_leaf_or_tree(lhs, decides, out, line)?;
                     self.cond_jumps(rhs, jump_if, out)
                 } else {
-                    let mut past = Vec::new();
+                    let mut past = Jumps::new();
                     self.cond_leaf_or_tree(lhs, decides, &mut past, line)?;
                     let last = self.cond_jumps(rhs, jump_if, out)?;
-                    for pc in past {
+                    for pc in past.iter() {
                         self.patch_to_here(pc)?;
                     }
                     Ok(last)
@@ -94,7 +91,7 @@ impl Compiler<'_> {
         &mut self,
         id: ExprId,
         jump_if: bool,
-        out: &mut Vec<usize>,
+        out: &mut Jumps,
         op_line: u32,
     ) -> Result<(), SyntaxError> {
         if self.cond_jumps(id, jump_if, out)? == LastTest::Test {
@@ -112,7 +109,7 @@ impl Compiler<'_> {
         e: Exp,
         saved: u32,
         jump_if: bool,
-        out: &mut Vec<usize>,
+        out: &mut Jumps,
     ) -> Result<LastTest, SyntaxError> {
         let last = match e {
             Exp::Cmp { op, l, r, c } => {

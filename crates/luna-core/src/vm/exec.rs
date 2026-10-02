@@ -99,6 +99,8 @@ pub struct Vm {
     mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
     /// the parser's vectors, kept from one `load` to the next
     parse_scratch: crate::frontend::parser::ParseScratch,
+    /// the compiler's vectors, kept from one load to the next
+    compile_scratch: crate::compiler::CompileScratch,
     /// native↔Lua nesting depth (PUC C-stack guard analogue)
     c_depth: u32,
     /// number of live pcall/xpcall continuation frames on the running thread
@@ -922,6 +924,7 @@ impl Vm {
             type_mt: [None; 5],
             mm_names,
             parse_scratch: Default::default(),
+            compile_scratch: Default::default(),
             c_depth: 0,
             pcall_depth: 0,
             nny: 0,
@@ -1434,6 +1437,7 @@ impl Vm {
                 self.version,
                 chunkname,
                 &mut self.heap,
+                &mut self.compile_scratch,
             )?
         } else {
             // PUC's `nCcalls` counts protected calls as well
@@ -1446,6 +1450,7 @@ impl Vm {
                 self.version,
                 chunkname,
                 &mut self.heap,
+                &mut self.compile_scratch,
             )?;
             self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
             proto
