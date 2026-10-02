@@ -22,8 +22,11 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
     lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
-    lw.stored
-        .extend(lw.regs_full.iter().map(|&v| Some(lw.bcx.use_var(v))));
+    lw.stored.extend(
+        lw.regs_full
+            .iter()
+            .map(|&v| Some(use_var_resolved(&mut lw.bcx, v))),
+    );
     // the virtual register of a constant-operand op (see `vconsts`)
     let kvar = lw.bcx.declare_var(types::I64);
     checkpoint("pre:main-emit-loop");
