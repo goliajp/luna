@@ -154,3 +154,63 @@ pub(crate) mod meta_bits {
         m
     }
 }
+
+impl super::Table {
+    /// The node holding the string key `key`, found by pointer (PUC
+    /// `luaH_getshortstr`). Exact for a short (interned) string; for a long
+    /// one a hit is exact and a miss proves nothing.
+    #[inline(always)]
+    fn str_node_by_ptr(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
+        #[cfg(feature = "gc-verify")]
+        self.verify_find_node_keys(Value::Str(key));
+        let mask = self.node_mask;
+        if mask >> 63 != 0 {
+            return None;
+        }
+        debug_assert_eq!(mask as usize + 1, self.nodes.len());
+        // a short string's hash is set when it is interned; a long one's
+        // may still be the seed, which only makes a hit unlikely
+        let mut idx = (u64::from(key.stored_hash()) & mask) as usize;
+        loop {
+            // SAFETY: the main position is masked to the node count and
+            // every `next` link is a node index written by `insert_new`
+            let node = unsafe { self.nodes.get_unchecked(idx) };
+            if node.key_is_str(key) {
+                return Some(idx);
+            }
+            if node.next == NONE {
+                return None;
+            }
+            idx = node.next as usize;
+        }
+    }
+
+    /// The value slot of string key `key`; see [`Self::str_node_by_ptr`].
+    #[inline(always)]
+    pub(crate) fn str_slot_by_ptr(
+        &self,
+        key: Gc<crate::runtime::string::LuaStr>,
+    ) -> Option<&Value> {
+        let i = self.str_node_by_ptr(key)?;
+        // SAFETY: a node index found above
+        Some(unsafe { &self.nodes.get_unchecked(i).val })
+    }
+
+    /// [`Self::str_slot_by_ptr`] for a write.
+    #[inline(always)]
+    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
+    pub(crate) fn str_slot_by_ptr_mut(
+        &mut self,
+        key: Gc<crate::runtime::string::LuaStr>,
+    ) -> Option<&mut Value> {
+        let i = self.str_node_by_ptr(key)?;
+        // SAFETY: a node index found above
+        Some(unsafe { &mut self.nodes.get_unchecked_mut(i).val })
+    }
+
+    /// Give the hash part back (a pooled table's reset).
+    pub(crate) fn drop_hash_part(&mut self) {
+        self.nodes = Box::new([]);
+        self.node_mask = u64::MAX;
+    }
+}
