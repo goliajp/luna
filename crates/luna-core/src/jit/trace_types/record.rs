@@ -304,11 +304,6 @@ pub struct TraceRecord {
     /// [`FIELD_SLOT_UNKNOWN`]. The lowerer reads and writes that slot
     /// directly once it checks the slot still holds the key.
     pub field_slots: Vec<u32>,
-    /// For a trace recorded from a loop's back-edge, the pc of that
-    /// back-edge: the loop's body is `head_pc..=loop_end`, and a recording
-    /// that leaves it on the way back is dropped (LuaJIT's "leaving loop in
-    /// root trace"), the loop around it then being the one to record.
-    pub loop_end: Option<u32>,
 }
 
 /// [`TraceRecord::field_slots`] for an op with no slot.
@@ -362,7 +357,6 @@ impl TraceRecord {
             field_ic_snapshot: None,
             result_tags: Vec::with_capacity(MAX_TRACE_LEN),
             field_slots: Vec::with_capacity(MAX_TRACE_LEN),
-            loop_end: None,
         }
     }
 
@@ -401,7 +395,6 @@ impl TraceRecord {
             field_ic_snapshot: None,
             result_tags: Vec::with_capacity(MAX_TRACE_LEN),
             field_slots: Vec::with_capacity(MAX_TRACE_LEN),
-            loop_end: None,
         }
     }
 

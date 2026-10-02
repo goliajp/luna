@@ -7,8 +7,7 @@ impl Vm {
     /// `JitState::loop_hot_tick`): start recording there unless a
     /// recording is running, the function gave up, or `target` already
     /// has a trace or was abandoned. `tfor` is the base register of a
-    /// generic `for`, `back_edge` the pc of the jump back. `true` when a
-    /// recording started.
+    /// generic `for`. `true` when a recording started.
     #[inline(never)]
     pub(super) fn trace_start_at_back_edge(
         &mut self,
@@ -16,7 +15,6 @@ impl Vm {
         base: u32,
         target: u32,
         tfor: Option<u32>,
-        back_edge: u32,
     ) -> bool {
         let proto = cl.proto;
         // the cheap tests first, then the borrow and scan of the traces
@@ -28,9 +26,6 @@ impl Vm {
             return false;
         }
         self.trace_start_at_loop(cl, base, target, tfor);
-        if let Some(rec) = self.jit.active_trace.as_mut() {
-            rec.loop_end = Some(back_edge);
-        }
         true
     }
 
