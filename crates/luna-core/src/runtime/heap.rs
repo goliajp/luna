@@ -385,11 +385,8 @@ impl Heap {
             drop(upvals);
             g
         } else {
-            // Large closure — store the input Box directly in
-            // `overflow`, no copy.
-            self.adopt_closure_with(proto, n as u32, |c| {
-                c.overflow = upvals;
-            })
+            // large closure: the input Box becomes its storage, no copy
+            self.adopt_closure_with(proto, n as u32, |c| c.set_overflow(upvals))
         }
     }
 
@@ -416,7 +413,7 @@ impl Heap {
                     }
                 }
             } else {
-                c.overflow = upvals.to_vec().into_boxed_slice();
+                c.set_overflow(upvals.to_vec().into_boxed_slice());
             }
         })
     }
@@ -438,7 +435,6 @@ impl Heap {
                 [std::mem::MaybeUninit::<Gc<Upvalue>>::uninit();
                     crate::runtime::function::INLINE_UPVALS_N],
             ),
-            overflow: Box::new([]),
         });
         // Box is heap-stable now — populate storage at the final
         // address so `upvals_ptr` will be valid.
