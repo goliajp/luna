@@ -106,4 +106,19 @@ pub struct CompileOptions {
     /// any AOT trace dispatches. JIT path is unaffected — same
     /// `iconst` it always emitted.
     pub aot: bool,
+    /// Which code generator compiles the trace.
+    pub tier: TraceTier,
+}
+
+/// The code generator a trace is compiled with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TraceTier {
+    /// The baseline tier first, the optimizing one once the trace is hot.
+    #[default]
+    Auto,
+    /// Only the baseline code generator (the optimizing one still takes a
+    /// trace the baseline cannot handle).
+    Baseline,
+    /// Only the optimizing code generator (Cranelift).
+    Optimizing,
 }
