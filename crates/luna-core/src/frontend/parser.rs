@@ -193,7 +193,18 @@ fn parse_from_source<'s>(
     src_len: usize,
     vecs: (Chunk, Vec<u32>, ListStacks),
 ) -> Result<Parsed, SyntaxError> {
-    let (mut chunk, mut end_lines, stacks) = vecs;
+    let (mut chunk, mut end_lines, mut stacks) = vecs;
+    let mut func_local_count = std::mem::take(&mut stacks.func_local_count);
+    func_local_count.clear();
+    // the main chunk is the bottom-most function context (line 0 → main)
+    func_local_count.push((0, 0, 0));
+    let mut funcs = std::mem::take(&mut stacks.funcs);
+    funcs.clear();
+    funcs.push(FnFlow {
+        vararg: true,
+        loops: 0,
+    });
+    let gotos = GotoCheck::new(version, stacks.gotos.take());
     let cur = lex.next_token()?;
     // typical source has an expression node per dozen bytes or so and a
     // statement per few dozen; starting near that skips most regrowth
@@ -214,13 +225,9 @@ fn parse_from_source<'s>(
         end_lines,
         depth: c_depth,
         version,
-        // the main chunk is the bottom-most function context (line 0 → main)
-        func_local_count: vec![(0, 0, 0)],
-        funcs: vec![FnFlow {
-            vararg: true,
-            loops: 0,
-        }],
-        gotos: GotoCheck::new(version),
+        func_local_count,
+        funcs,
+        gotos,
         last_line: 1,
         upval_chain_51: if version <= LuaVersion::Lua51 {
             vec![FnUvSlot {
@@ -242,13 +249,17 @@ fn parse_from_source<'s>(
     let end_line = p.prev_line;
     let mut chunk = p.chunk;
     chunk.names = p.lex.take_names();
+    let mut stacks = p.stk;
+    stacks.func_local_count = p.func_local_count;
+    stacks.funcs = p.funcs;
+    stacks.gotos = p.gotos;
     chunk.block = block;
     chunk.end_line = end_line;
     Ok(Parsed {
         lex_buf: p.lex.take_buf(),
         chunk,
         end_lines: p.end_lines,
-        stacks: p.stk,
+        stacks,
     })
 }
 
@@ -300,7 +311,7 @@ struct Parser<'s> {
     upval_chain_51: Vec<FnUvSlot>,
 }
 
-struct FnFlow {
+pub(crate) struct FnFlow {
     vararg: bool,
     /// Loops enclosing the current position inside this function.
     loops: u32,
