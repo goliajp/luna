@@ -25,37 +25,17 @@ impl<'a> Compiler<'a> {
             self.version >= LuaVersion::Lua55 && matches!(body.vararg, ast::Vararg::Anonymous);
         // PUC 5.1 attached an `env` slot to *every* Lua function so
         // `setfenv` always had something to rewrite, even for bodies that
-        // never touched a global. luna's `_ENV`-upvalue model only captures
-        // it on first global access — to keep `setfenv` semantics intact in
-        // 5.1, pre-seed the upvalue list with `_ENV` so it inherits the
-        // enclosing function's `_ENV` cell (resolve_at will reuse this slot
-        // when the body does end up reading a global). 5.2+ keeps the
-        // lazy-capture model.
+        // never touched a global. luna keeps it as a hidden `_ENV` upvalue,
+        // seeded eagerly as upvalue 0 of every 5.1 function (the main chunk's
+        // upvalue 0 too), so it inherits the creator's upvalue 0. 5.2+ keeps
+        // the lazy-capture model.
         if self.version == LuaVersion::Lua51 {
-            let parent_idx = self.levels.len() - 1;
-            let parent_env = self.levels[parent_idx]
-                .upvals
-                .iter()
-                .enumerate()
-                .find(|(_, d)| &*d.name == "_ENV")
-                .map(|(i, _)| i);
-            let env_desc = if let Some(pi) = parent_env {
-                let parent_ro = self.levels[parent_idx].upvals[pi].read_only;
-                UpvalDesc {
-                    in_stack: false,
-                    index: pi as u8,
-                    name: "_ENV".into(),
-                    read_only: parent_ro,
-                }
-            } else {
-                UpvalDesc {
-                    in_stack: false,
-                    index: 0,
-                    name: "_ENV".into(),
-                    read_only: false,
-                }
-            };
-            level.upvals.push(env_desc);
+            level.upvals.push(UpvalDesc {
+                in_stack: false,
+                index: 0,
+                name: "_ENV".into(),
+                read_only: false,
+            });
         }
         self.levels.push(level);
         self.enter_block(false);

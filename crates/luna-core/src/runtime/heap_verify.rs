@@ -15,15 +15,11 @@ impl Heap {
         // SAFETY: heap-owned intrusive lists; all elements are live
         // allocations.
         unsafe {
-            let mut cur = self.all;
-            while !cur.is_null() {
-                live.insert(cur as usize);
-                cur = (*cur).next;
-            }
-            let mut cur = self.sweep_cur;
-            while !cur.is_null() {
-                live.insert(cur as usize);
-                cur = (*cur).next;
+            for mut cur in [self.all, self.sweep_cur, self.fixed] {
+                while !cur.is_null() {
+                    live.insert(cur as usize);
+                    cur = (*cur).next;
+                }
             }
         }
         for &h in &self.finalize {
@@ -127,15 +123,11 @@ impl Heap {
         // heap's own intrusive lists; every element is a live allocation
         // until free_obj unlinks it.
         unsafe {
-            let mut cur = self.all;
-            while !cur.is_null() {
-                live.insert(cur as usize);
-                cur = (*cur).next;
-            }
-            let mut cur = self.sweep_cur;
-            while !cur.is_null() {
-                live.insert(cur as usize);
-                cur = (*cur).next;
+            for mut cur in [self.all, self.sweep_cur, self.fixed] {
+                while !cur.is_null() {
+                    live.insert(cur as usize);
+                    cur = (*cur).next;
+                }
             }
             for &h in &self.finalize {
                 live.insert(h as usize);

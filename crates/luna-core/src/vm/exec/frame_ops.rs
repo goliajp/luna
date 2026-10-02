@@ -220,48 +220,46 @@ impl Vm {
         // copying it: `setfenv` never writes a cell in place but gives
         // the target a new one (`set_closure_env`), so sharing reads
         // the same as a snapshot. An open cell can change under the
-        // child, so that one is still snapshotted. 5.2+ keeps the
-        // shared-upval model (and the proto cache that depends on it).
-        let v51 = self.version() <= LuaVersion::Lua51;
-        if v51 && proto.env_upval_idx != u8::MAX {
+        // child, so that one is still snapshotted.
+        if self.version() <= LuaVersion::Lua51 && proto.env_upval_idx != u8::MAX {
             let i = proto.env_upval_idx as usize;
             if let UpvalState::Open { slot, thread } = ups[i].state() {
                 let cur = self.read_slot(slot, thread);
                 ups[i] = self.heap.new_upvalue(UpvalState::Closed(cur));
             }
         }
-        let ups_slice: &[Gc<crate::runtime::function::Upvalue>] = ups;
-        // PUC 5.2+ `getcached`: a Proto remembers its last LClosure
-        // and reuses it when every fresh-upvalue binding still
-        // points to the same Upvalue object as the cached one.
-        // That keeps `function() return outer end` repeated in a
-        // loop comparing equal across iterations (the captured
-        // outer is a shared open upvalue), while `function()
-        // return loop_var end` gets a fresh closure each round
-        // because the loop var is re-created per iteration. PUC
-        // 5.1 predated the cache, and the per-closure `_ENV`
-        // clone above would defeat it anyway, so skip it.
-        let nc = if v51 {
-            self.heap.new_closure_inline(proto, ups_slice)
-        } else {
-            let cached = proto.cache.get().filter(|c| {
-                c.upvals().len() == ups_slice.len()
-                    && c.upvals()
-                        .iter()
-                        .zip(ups_slice.iter())
-                        .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
-            });
-            match cached {
-                Some(c) => c,
-                None => {
-                    let n = self.heap.new_closure_inline(proto, ups_slice);
-                    proto.cache.set(Some(n));
-                    n
-                }
-            }
-        };
+        let nc = self.closure_from_proto(proto, ups);
         self.set_r(base, inst.a(), Value::Closure(nc));
         self.maybe_collect_garbage(base + inst.a() + 1);
+    }
+
+    /// A closure of `proto` over `ups`. PUC 5.2 / 5.3 `getcached`: the
+    /// Proto remembers its last closure and reuses it when every upvalue is
+    /// the same Upvalue object, so `function() return outer end` built twice
+    /// compares equal while a per-iteration loop variable defeats it. 5.1
+    /// and 5.4+ always build a new one.
+    #[doc(hidden)]
+    pub fn closure_from_proto(
+        &mut self,
+        proto: Gc<crate::runtime::function::Proto>,
+        ups: &[Gc<crate::runtime::function::Upvalue>],
+    ) -> Gc<LuaClosure> {
+        let cached = self.version().has_closure_cache();
+        if let Some(c) = proto.cache.get().filter(|c| {
+            cached
+                && c.upvals().len() == ups.len()
+                && c.upvals()
+                    .iter()
+                    .zip(ups)
+                    .all(|(a, b)| a.as_ptr() == b.as_ptr())
+        }) {
+            return c;
+        }
+        let n = self.heap.new_closure_inline(proto, ups);
+        if cached {
+            proto.cache.set(Some(n));
+        }
+        n
     }
 
     /// 5.1 `setfenv` on a Lua function: give `cl` a new `_ENV` cell (slot

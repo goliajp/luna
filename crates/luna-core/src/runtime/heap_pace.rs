@@ -29,11 +29,11 @@ impl Heap {
     /// loop. Safe to call between dispatch ticks (the only allocs
     /// happen in the caller's bookkeeping).
     ///
-    /// The walk visits both the live `all` list and the
-    /// `sweep_cur` detached list so a mid-cycle invocation reports
-    /// the same total as [`Heap::live_objects`].
+    /// The walk visits the live `all` list, the `sweep_cur` detached
+    /// list and the never-swept fixed list, so a mid-cycle invocation
+    /// reports the same total as [`Heap::live_objects`].
     pub fn walk_objects(&self, mut visit: impl FnMut(ObjTag)) {
-        for head in [self.all, self.sweep_cur] {
+        for head in [self.all, self.sweep_cur, self.fixed] {
             let mut cur = head;
             while !cur.is_null() {
                 // SAFETY: pointers come from the runtime's

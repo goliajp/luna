@@ -148,8 +148,8 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
 /// the trace head closure's `upvals()` slice (`in_stack=false`)
 /// or from the caller frame's stack via `find_or_create_upval`
 /// (`in_stack=true`). v51 dialect clones the `_ENV` cell
-/// to match interp semantics (per-closure `_ENV`). v52+ honours
-/// the Proto cache.
+/// to match interp semantics (per-closure `_ENV`); 5.2 / 5.3 reuse
+/// the Proto's cached closure as the interpreter does.
 ///
 /// **Pre-condition for in_stack upvals**: the trace IR has already
 /// emitted `luna_jit_spill_to_stack(d.index, tag, raw)` for every
@@ -236,30 +236,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
         };
         ups[i] = vm.heap.new_upvalue(UpvalState::Closed(cur));
     }
-    let ups_slice: &[luna_core::runtime::Gc<Upvalue>] = ups;
-    let nc = if v51 {
-        vm.heap.new_closure_inline(inner, ups_slice)
-    } else {
-        // PUC 5.2+ getcached: reuse the last LuaClosure built for
-        // this Proto if every upval slot points to the same
-        // Upvalue object (typical for `function() return outer end`
-        // captured inside a hot loop).
-        let cached = inner.cache.get().filter(|c| {
-            c.upvals().len() == ups_slice.len()
-                && c.upvals()
-                    .iter()
-                    .zip(ups_slice.iter())
-                    .all(|(a, b)| std::ptr::eq(a.as_ptr(), b.as_ptr()))
-        });
-        match cached {
-            Some(c) => c,
-            None => {
-                let n = vm.heap.new_closure_inline(inner, ups_slice);
-                inner.cache.set(Some(n));
-                n
-            }
-        }
-    };
+    let nc = vm.closure_from_proto(inner, ups);
     let (_tag, raw) = luna_core::runtime::Value::Closure(nc).unpack();
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }

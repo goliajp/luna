@@ -177,13 +177,12 @@ impl<'a> Compiler<'a> {
                 None => VarKind::Local(local.reg),
             });
         }
-        if li < self.levels.len() - 1 || li == 0 {
-            // upvalue cache applies at every level; main level has _ENV
-            if let Some(ui) = self.levels[li].upvals.iter().position(|u| &*u.name == name) {
-                return Ok(VarKind::Upval(ui as u32));
-            }
-        } else if let Some(ui) = self.levels[li].upvals.iter().position(|u| &*u.name == name) {
-            return Ok(VarKind::Upval(ui as u32));
+        // in 5.1 `_ENV` is an ordinary name: a user's `_ENV` never resolves to
+        // the hidden environment cell, which is every 5.1 function's upvalue 0
+        let skip = usize::from(self.version == LuaVersion::Lua51 && name == "_ENV");
+        let ups = &self.levels[li].upvals;
+        if let Some(ui) = ups.iter().skip(skip).position(|u| &*u.name == name) {
+            return Ok(VarKind::Upval((ui + skip) as u32));
         }
         if li == 0 {
             return Ok(VarKind::Global { read_only: false });

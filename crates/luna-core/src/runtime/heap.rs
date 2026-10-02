@@ -159,6 +159,11 @@ struct PropagateState {
 /// the auto-GC pacing state.
 pub struct Heap {
     all: *mut GcHeader,
+    /// PUC `fixedgc`: objects never swept, freed with the heap
+    fixed: *mut GcHeader,
+    /// natives without upvalues allocated while set go on `fixed` (the
+    /// standard library's functions, PUC's light C functions)
+    pub(crate) fix_natives: bool,
     strings: StringTable,
     seed: u32,
     live: usize,
@@ -247,6 +252,8 @@ impl Heap {
     pub fn new() -> Heap {
         Heap {
             all: ptr::null_mut(),
+            fixed: ptr::null_mut(),
+            fix_natives: false,
             strings: StringTable::new(),
             seed: make_seed(),
             live: 0,
@@ -314,7 +321,7 @@ impl Drop for Heap {
         // detached for an in-flight incremental sweep
         // SAFETY: `h` is a GcHeader pointer drawn from the runtime's all-objects intrusive list (or from a live `Gc<T>` cast above); it is non-null and remains live for the duration of this GC step (heap.rs:5-7).
         unsafe {
-            for mut cur in [self.all, self.sweep_cur] {
+            for mut cur in [self.all, self.sweep_cur, self.fixed] {
                 while !cur.is_null() {
                     let next = (*cur).next;
                     self.free_obj(cur);

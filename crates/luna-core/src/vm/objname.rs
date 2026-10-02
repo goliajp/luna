@@ -135,8 +135,22 @@ fn rname(proto: &Proto, pc: usize, c: u32) -> String {
 /// real `_ENV`, else a "field". `isup` distinguishes GETTABUP (table is an
 /// upvalue) from GETFIELD. The table only counts as `_ENV` when it is reached
 /// as a local or an upvalue — not as some other field named `_ENV`.
-fn gxf(proto: &Proto, pc: usize, i: Inst, isup: bool) -> &'static str {
+fn gxf(proto: &Proto, pc: usize, i: Inst, isup: bool, version: LuaVersion) -> &'static str {
     let t = i.b();
+    if version <= LuaVersion::Lua51 {
+        // `_ENV` is an ordinary name in 5.1: only the hidden environment cell
+        // makes a global, read directly or loaded by GETUPVAL (a global whose
+        // constant index is past the operand limit)
+        let env = u32::from(proto.env_upval_idx);
+        let global = if isup {
+            t == env
+        } else {
+            getlocalname(proto, t, pc).is_none()
+                && find_setreg(proto, pc, t)
+                    .is_some_and(|s| proto.code[s].op() == Op::GetUpval && proto.code[s].b() == env)
+        };
+        return if global { "global" } else { "field" };
+    }
     let tname = if isup {
         upvalname(proto, t)
     } else {
@@ -204,11 +218,11 @@ pub fn getobjname_in(
         Op::LoadK | Op::LoadKx if version >= LuaVersion::Lua52 => {
             basicgetobjname(proto, lastpc, reg)
         }
-        Op::GetTabUp => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, true), n)),
-        Op::GetField => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, false), n)),
+        Op::GetTabUp => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, true, version), n)),
+        Op::GetField => kname(proto, i.c()).map(|n| (gxf(proto, setpc, i, false, version), n)),
         // a register-keyed read (global with a constant index past the GETFIELD
         // C-operand limit, or an explicit `t[k]`): name from the key register.
-        Op::GetTable => match gxf(proto, setpc, i, false) {
+        Op::GetTable => match gxf(proto, setpc, i, false, version) {
             // 5.1 reads a global with GETGLOBAL, which takes any constant;
             // its GETTABLE only names an RK string constant key
             "field" if version <= LuaVersion::Lua51 => Some(("field", unknown())),

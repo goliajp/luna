@@ -198,7 +198,7 @@ impl Vm {
         // 5.1 functions keep their environment outside the upvalues, so
         // `_ENV` (which luna keeps in a cell) is not counted.
         let nups = if self.version() <= LuaVersion::Lua51 {
-            proto.upvals.iter().filter(|u| &*u.name != "_ENV").count() as i64
+            (proto.upvals.len() - usize::from(proto.env_upval_idx != u8::MAX)) as i64
         } else {
             cl.upvals().len() as i64
         };
