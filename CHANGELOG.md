@@ -202,6 +202,13 @@ optimization.
   other than nil and false) now moves the result one hour back, as PUC
   5.1–5.5 on glibc do in UTC, which has no daylight saving time; the
   fields written back (5.3 and later) are those of the shifted time.
+- On Windows the machine code the JIT compiled for a `Vm` is now returned
+  to the system when the `Vm` drops, as on the other platforms. 3.2.1 kept
+  it there because Cranelift 0.124 allocated the pages with `VirtualAlloc`
+  and never released them; Cranelift 0.136, which 4.0.0 moved to, maps
+  them as a section that freeing unmaps. A Windows test checks that the
+  memory committed to the process stays flat while `Vm`s that compile
+  code are created and dropped.
 
 ### Added
 

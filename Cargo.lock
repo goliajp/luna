@@ -1025,6 +1025,7 @@ dependencies = [
  "luna-jit-llvm",
  "rustyline",
  "target-lexicon",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
