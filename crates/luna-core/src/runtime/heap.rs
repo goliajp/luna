@@ -1341,6 +1341,7 @@ impl Heap {
                         // slice, so reassigning is just a pointer move.
                         (*t).slab = Box::new([]);
                         (*t).nodes = Box::new([]);
+                        (*t).node_mask = u64::MAX;
                         // drop the SoA Robin Hood parallel arrays too
                         // (usually Box::new([]) dangling stubs).
                         (*t).keys = Box::new([]);
