@@ -1339,6 +1339,18 @@ impl Vm {
             .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, child);
     }
 
+    /// 5.1 `setfenv` on a Lua function: give `cl` a new `_ENV` cell (slot
+    /// `idx`) holding `env`. A 5.1 env cell is never written in place —
+    /// closures share their creator's cell, and replacing it here is what
+    /// keeps the change to this one function.
+    pub(crate) fn set_closure_env(&mut self, cl: Gc<LuaClosure>, idx: usize, env: Gc<Table>) {
+        let uv = self.heap.new_upvalue(UpvalState::Closed(Value::Table(env)));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;
+        // a cell born during propagation is black: its value needs the barrier
+        self.barrier_forward_upvalue(uv, Value::Table(env));
+    }
+
     /// Register a MacroLua macro under `name`. Inert
     /// under non-MacroLua dialects (the macro is stored but the load
     /// path only consults the registry when
