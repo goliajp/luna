@@ -16,7 +16,8 @@ pub struct Sym(
 pub struct Names {
     /// every entry back to back
     text: Vec<u8>,
-    /// where each entry starts in `text`; the last element is the end
+    /// where each entry starts in `text`; the last element is the end.
+    /// The top bit of an entry's end is set when the entry is not UTF-8
     ends: Vec<u32>,
     /// open addressing over entry numbers plus one (0 is empty); its length
     /// is a power of two, at most half full. Long literals are not entered:
@@ -28,6 +29,9 @@ pub struct Names {
 
 /// Literals longer than this are stored without looking for an equal one.
 const MAX_HASHED_LEN: usize = 40;
+
+/// The flag on an entry's end that marks it as not UTF-8.
+const NOT_TEXT: u32 = 1 << 31;
 
 impl Names {
     /// An empty set sized for a chunk of `src_len` source bytes.
@@ -104,7 +108,16 @@ impl Names {
     fn append(&mut self, s: &[u8]) -> Sym {
         let sym = Sym(self.ends.len() as u32 - 1);
         self.text.extend_from_slice(s);
-        self.ends.push(self.text.len() as u32);
+        assert!(
+            self.text.len() < NOT_TEXT as usize,
+            "names of a chunk past 2 GiB"
+        );
+        let flag = if std::str::from_utf8(s).is_ok() {
+            0
+        } else {
+            NOT_TEXT
+        };
+        self.ends.push(self.text.len() as u32 | flag);
         sym
     }
 
@@ -128,13 +141,18 @@ impl Names {
     /// The bytes of an entry.
     pub fn bytes(&self, s: Sym) -> &[u8] {
         let i = s.0 as usize;
-        &self.text[self.ends[i] as usize..self.ends[i + 1] as usize]
+        &self.text[(self.ends[i] & !NOT_TEXT) as usize..(self.ends[i + 1] & !NOT_TEXT) as usize]
     }
 
     /// The text of an identifier. Identifiers are ASCII; an entry that is
     /// not UTF-8 (a string literal) reads as the empty string.
     pub fn text(&self, s: Sym) -> &str {
-        std::str::from_utf8(self.bytes(s)).unwrap_or_default()
+        if self.ends[s.0 as usize + 1] & NOT_TEXT != 0 {
+            return "";
+        }
+        // SAFETY: an entry without the flag was checked to be UTF-8 when it
+        // was added
+        unsafe { std::str::from_utf8_unchecked(self.bytes(s)) }
     }
 
     /// The number of entries.
