@@ -106,6 +106,12 @@ impl LuaVersion {
         self == LuaVersion::Lua51
     }
 
+    /// 5.2 / 5.3 reuse a prototype's last closure when its upvalues match
+    /// (`getcached`); 5.1 has no such cache and 5.4 removed it.
+    pub fn has_closure_cache(self) -> bool {
+        matches!(self, LuaVersion::Lua52 | LuaVersion::Lua53)
+    }
+
     /// MacroLua dialect — compile-time macros enabled in lexer/parser.
     /// Base semantics = Lua 5.4.
     pub fn is_macro_lua(self) -> bool {

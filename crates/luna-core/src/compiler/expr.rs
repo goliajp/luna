@@ -145,6 +145,9 @@ impl<'a> Compiler<'a> {
     /// `_ENV` as the table a global access indexes. A compile-time constant
     /// `_ENV` is loaded into a register first (PUC `luaK_exp2anyregup`).
     pub(super) fn resolve_env(&mut self) -> Result<VarKind, SyntaxError> {
+        if self.version == LuaVersion::Lua51 {
+            return Ok(VarKind::Upval(0));
+        }
         match self.resolve_name("_ENV")? {
             VarKind::Const(v) => {
                 let e = self.ct_exp(v);

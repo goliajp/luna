@@ -15,14 +15,10 @@ fn visible_upvalue_index(vm: &Vm, cl: Gc<LuaClosure>, n: i64) -> Option<usize> {
         return None;
     }
     if vm.version() <= LuaVersion::Lua51 {
-        return cl
-            .proto
-            .upvals
-            .iter()
-            .enumerate()
-            .filter(|(_, u)| &*u.name != "_ENV")
-            .nth((n - 1) as usize)
-            .map(|(idx, _)| idx);
+        let env = cl.proto.env_upval_idx as usize;
+        return (0..cl.proto.upvals.len())
+            .filter(|&i| i != env)
+            .nth((n - 1) as usize);
     }
     // `load` gives a chunk without upvalues a closure with one cell for
     // `_ENV` anyway; the prototype is what says which upvalues exist

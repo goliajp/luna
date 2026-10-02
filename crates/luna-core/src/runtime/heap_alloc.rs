@@ -153,13 +153,26 @@ impl Heap {
         f: crate::runtime::value::NativeFn,
         upvals: Box<[Value]>,
     ) -> Gc<NativeClosure> {
-        self.adopt(Box::new(NativeClosure {
+        let fix = self.fix_natives && upvals.is_empty();
+        let g = self.adopt(Box::new(NativeClosure {
             hdr: GcHeader::native(&upvals),
             f,
             upvals,
             is_async: false,
             kind: crate::vm::exec::native_call::NativeKind::of(f),
-        }))
+        }));
+        if fix {
+            // SAFETY: `adopt` just linked `g` at the head of `all`. PUC `luaC_fix`:
+            // onto `fixed`, gray, so marking, barriers and weak tables skip it
+            unsafe {
+                let h = g.as_ptr() as *mut GcHeader;
+                self.all = (*h).next;
+                (*h).next = self.fixed;
+                (*h).flags &= !COLOR_BITS;
+                self.fixed = h;
+            }
+        }
+        g
     }
 
     /// Like [`Heap::new_native`] but tags the

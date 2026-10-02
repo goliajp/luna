@@ -149,6 +149,24 @@ optimization.
   byte) instead of `Option<&'static str>`: the frame records whether it
   runs a finalizer, a `__close` handler or another metamethod, not the
   event's name. `Frame` shrinks from 56 to 40 bytes.
+- 5.4 and 5.5 build a new closure every time a function expression is
+  evaluated, as PUC 5.4 and 5.5 do. luna used to reuse a prototype's last
+  closure when its upvalues matched, which only PUC 5.2 / 5.3 do: two
+  closures from one expression compared equal and collapsed into one table
+  key on 5.4 / 5.5. 5.2 and 5.3 keep the cache.
+- In 5.1, `_ENV` is an ordinary name, as in PUC 5.1, which has no `_ENV`:
+  `_ENV = x` assigns the global `_ENV`, and a local named `_ENV` does not
+  change where global names are looked up. luna used to bind the name to
+  the hidden environment of the function, so `_ENV = x` replaced the
+  environment of every function sharing it. `setfenv`, `getfenv` and
+  `module` are unchanged.
+- On 5.2–5.5 the functions of the standard library are never collected,
+  as PUC's light C functions are not: the collector no longer visits them,
+  and a weak table keeps one even after it was removed from its library.
+  The memory of a library function a script deletes is released only when
+  the Vm is dropped; the most this holds is the library's own functions,
+  so it does not grow with run time. 5.1 still collects them, as PUC 5.1
+  does: its library functions are ordinary collectable C closures.
 - A table lookup by a short string key no longer goes through the
   general key-comparison walk, which saved and restored a dozen
   registers on every lookup: field reads and writes such as `t.x` run
@@ -177,6 +195,10 @@ optimization.
 - `luna_core::runtime::table::jit_layout::{TABLE_ACOUNT_OFFSET,
   TABLE_APREFIX_OFFSET}`: offsets of the two array-part counters behind
   `#t`, which the method JIT's inline array stores keep up to date.
+- `LuaVersion::has_closure_cache`: whether the dialect reuses a
+  prototype's last closure (5.2 / 5.3).
+- `Vm::closure_from_proto`, hidden from the documentation: the closure
+  constructor the JIT helpers share with the interpreter.
 - `Proto::has_dispatchable_trace`, `Proto::trace_call_head_settled` and
   `luna_jit::jit_backend::trace::trace_codegen_count`: hidden from the
   documentation (`#[doc(hidden)]`); they exist for luna's own tests and
