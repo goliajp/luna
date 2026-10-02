@@ -1,15 +1,103 @@
 use super::*;
 
+// Call a checked read helper; on failure leave the trace at `$pc`,
+// otherwise evaluate to the payload it wrote.
+macro_rules! checked_read {
+    ($lw:ident, $pl:ident, $id:expr, $a0:expr, $a1:expr, $want:expr, $pc:expr, $i:expr) => {{
+        let out_ss = $lw
+            .bcx
+            .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ));
+        let out_addr = $lw.bcx.ins().stack_addr(types::I64, out_ss, 0);
+        let want = $lw.bcx.ins().iconst(types::I64, $want as i64);
+        let fref = $lw.module.declare_func_in_func($id, $lw.bcx.func);
+        let call = $lw.bcx.ins().call(fref, &[$a0, $a1, want, out_addr]);
+        let ok = $lw.bcx.inst_results(call)[0];
+        let cont_blk = $lw.bcx.create_block();
+        let exit_blk = $lw.bcx.create_block();
+        $lw.bcx.ins().brif(ok, cont_blk, &[], exit_blk, &[]);
+        $lw.bcx.switch_to_block(exit_blk);
+        $lw.bcx.seal_block(exit_blk);
+        guard_exit($lw, $pl, $pc, $i);
+        $lw.bcx.switch_to_block(cont_blk);
+        $lw.bcx.seal_block(cont_blk);
+        $lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 0)
+    }};
+}
+// Continue in a new block when `$cond` holds, else take a
+// `guard_exit!` to `$pc`.
+macro_rules! guard {
+    ($lw:ident, $pl:ident, $cond:expr, $i:expr, $pc:expr) => {{
+        let continue_blk = $lw.bcx.create_block();
+        let exit_blk = $lw.bcx.create_block();
+        $lw.bcx.ins().brif($cond, continue_blk, &[], exit_blk, &[]);
+        $lw.bcx.switch_to_block(exit_blk);
+        $lw.bcx.seal_block(exit_blk);
+        guard_exit($lw, $pl, $pc, $i);
+        $lw.bcx.switch_to_block(continue_blk);
+        $lw.bcx.seal_block(continue_blk);
+    }};
+}
+
+mod exit;
 mod helpers;
 mod plan;
+mod prologue;
+use exit::*;
 use helpers::*;
 use plan::*;
+use prologue::*;
+
+/// The trace function under construction and everything the emit pass
+/// tracks while lowering it; the fields keep the names the single
+/// lowering function used for its locals.
+struct Lower<'f, 'm, M: Module> {
+    module: &'m mut M,
+    bcx: FunctionBuilder<'f>,
+    h: Helpers,
+    reg_state: Value,
+    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
+    global_side_trace_box: Box<TCellPtr>,
+    regs_full: Vec<Variable>,
+    tforcall_tag_var: Variable,
+    tforcall_val_tag_var: Variable,
+    precheck: Option<Block>,
+    body_loop: Block,
+    head_kinds: Vec<RegKind>,
+    defined_aot_data: std::collections::HashSet<DataId>,
+    escape: EscapeAnalysis,
+    flush_ctx: Option<FlushCtx>,
+    virt_vars: Vec<Option<Vec<Variable>>>,
+    virt_kinds: Vec<Option<Vec<RegKind>>>,
+    sunk_alloc_seen: u32,
+    materialize_emit_count: u32,
+    closure_seen: u32,
+    stored: Vec<Option<Value>>,
+    current_kinds: Vec<RegKind>,
+    dispatchable: bool,
+    dispatch_off_reason: Option<&'static str>,
+    per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)>,
+    per_exit_inline_vec: Vec<(
+        u32,
+        u32,
+        Vec<RegKind>,
+        TArc<[FrameMaterializeInfo]>,
+        Box<TCellPtr>,
+    )>,
+    call_chain: Vec<FrameMaterializeInfo>,
+    upval_cache: std::collections::HashMap<u32, Variable>,
+    head_closure_var: Option<Variable>,
+    known_int: Vec<Option<i64>>,
+}
 
 /// `always_codegen = false` leaves the function undefined in `module`
 /// when [`trace_is_enterable`] says nothing will run it; `float_only` as
 /// in [`compile_trace_jit`].
 pub(super) fn lower_trace_into_inner<M: Module>(
-    mut module: &mut M,
+    module: &mut M,
     record: &TraceRecord,
     opts: CompileOptions,
     aot_fn_name: Option<&str>,
@@ -29,7 +117,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     // interning), but `define_data` rejects redefinition with
     // `ModuleError::DuplicateDefinition` — so the dedupe guard sits
     // around `define_data`, not `declare_data`.
-    let mut defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
+    let defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
 
     let head_proto = record.head_proto;
     let max_stack = head_proto.max_stack as usize;
@@ -45,78 +133,10 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         }
         None => (record, Vec::new()),
     };
-    let (pl, mut escape) = plan_trace(record, vconsts, head_proto, max_stack, opts, float_only)?;
-    let Plan {
-        record,
-        head_proto,
-        max_stack,
-        vconsts,
-        opts,
-        float_only,
-        op_offsets,
-        enclosing_call_a,
-        window_size,
-        window_size_us,
-        folded_ops,
-        math_folds,
-        end_idx_opt,
-        effective_end,
-        call_idx_opt,
-        for_loop_idx_opt,
-        inline_abort_idx_opt,
-        return_idx_opt,
-        self_link_idx_opt,
-        downrec_idx_opt,
-        do_internal_loop,
-        head_live,
-        active_accum,
-        consumed_by_cmp,
-        cmp_dirs,
-    } = pl;
-    let vconst = |i: usize| vconsts.get(i).copied().flatten();
-
-    // `flush_ctx` is declared mut here so
-    // the entry-block setup below can populate it with
-    // `Some(FlushCtx { ... })` when an active_accum is detected.
-    // The 19 `emit_store_back_and_return_*` call sites all read
-    // `flush_ctx.as_ref()`; the helpers no-op when it's None.
-    let mut flush_ctx: Option<FlushCtx> = None;
-
-    let Helpers {
-        op:
-            OpHelpers {
-                new_table_id,
-                set_ids,
-                get_field_id,
-                get_tab_up_id,
-                get_int_checked_id,
-                get_field_checked_id,
-                get_tab_up_checked_id,
-                op_closure_id,
-                spill_id,
-                op_close_id,
-                op_tforcall_id,
-                stack_load_id,
-                stack_tag_id,
-                op_concat_id,
-            },
-        rt:
-            RuntimeHelpers {
-                str_buf_acquire_id,
-                str_buf_release_id,
-                str_buf_extend_id,
-                str_buf_intern_id,
-                update_raw_id,
-                get_int_id,
-                suppress_admit_id,
-                math_fn_check_id,
-                len_checked_id,
-                upval_get_id,
-                head_closure_id,
-                materialize_id,
-                mat_sunk_id,
-            },
-    } = declare_helpers(module)?;
+    let (plan, escape) = plan_trace(record, vconsts, head_proto, max_stack, opts, float_only)?;
+    let pl = &plan;
+    let vconst = |i: usize| pl.vconsts.get(i).copied().flatten();
+    let h = declare_helpers(module)?;
 
     let mut sig = module.make_signature();
     // Param 0 — reg_state ptr (caller-owned, lives across the call).
@@ -142,569 +162,95 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     let mut fbc = FunctionBuilderContext::new();
     let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
 
-    // Two-block layout for the trace body:
-    //
-    // - `entry` is the function entry — receives the `reg_state`
-    //   pointer as block param 0, loads each Lua reg from memory
-    //   into a cranelift Variable, then unconditionally jumps to
-    //   `body_loop`. The reg-load prelude runs *once* per
-    //   dispatcher entry.
-    // - `body_loop` is the loop head. The recorded op IR emits
-    //   into it (or into successor blocks split off by cmp brifs).
-    //   At the trace's clean close — when no `Op::Call` has
-    //   truncated it — the tail emits a jump *back* to `body_loop`,
-    //   so subsequent iterations stay inside the JIT'd code until
-    //   a cmp side-exits. The dispatcher's per-iter marshal
-    //   overhead amortizes across however many iterations the
-    //   trace runs internally.
-    //
-    // Cranelift `FunctionBuilder` handles the back-edge phis
-    // automatically: every reg's Variable gets a phi at
-    // `body_loop`'s entry merging the entry-from-`entry` def
-    // (initial load) with the loop-back def (the previous
-    // iteration's writes). We delay sealing `body_loop` until
-    // after the tail emits its back-edge so cranelift knows both
-    // predecessors.
-    let entry = bcx.create_block();
-    bcx.append_block_params_for_function_params(entry);
-    bcx.switch_to_block(entry);
-    bcx.seal_block(entry);
-    let reg_state = bcx.block_params(entry)[0];
-
-    // import the `TraceFn` ABI signature once so
-    // every side-exit emit can `call_indirect` into a child side
-    // trace. Matches the parent's own signature (`(I64) -> I64`).
-    let trace_fn_sig_ref: cranelift_codegen::ir::SigRef = {
-        let mut sig = module.make_signature();
-        sig.params.push(AbiParam::new(types::I64));
-        sig.returns.push(AbiParam::new(types::I64));
-        bcx.func.import_signature(sig)
-    };
-    // singleton GLOBAL side-trace cell shared by
-    // every non-INLINE / non-TAG callsite (clean-tail, Call
-    // truncation, ForLoop / TForLoop exits, generic deopts). Each
-    // such callsite bakes this Box's heap address into its IR.
-    // Transported into [`CompiledTrace::global_side_trace_ptr`] at
-    // emit end without moving (Box's heap allocation stays put).
-    let global_side_trace_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-    let _global_side_trace_cell_addr = (&*global_side_trace_box) as *const TCellPtr as i64;
-
-    // `regs_full` is sized to `window_size_us`, big
-    // enough for every inlined frame's register window. Slots
-    // [0..max_stack) are loaded from reg_state (caller-marshalled);
-    // [max_stack..window_size_us) start as `iconst(0)` so the
-    // callee's `GetUpval` / arith fills them. The emit loop below
-    // shadows `regs` to the per-op window slice so existing
-    // `regs[ins.X()]` indexing automatically shifts across inlined
-    // frames without rewriting every access.
-    let mut regs_full: Vec<Variable> = Vec::with_capacity(window_size_us);
-    for i in 0..window_size_us {
-        let v = bcx.declare_var(types::I64);
-        if i < max_stack {
-            let offset = (i as i32) * 8;
-            let v0 = bcx
-                .ins()
-                .load(types::I64, MemFlagsData::new(), reg_state, offset);
-            bcx.def_var(v, v0);
-        } else {
-            let z = bcx.ins().iconst(types::I64, 0);
-            bcx.def_var(v, z);
-            // Exits store only what changed since (see `sync_reg_state`),
-            // so reg_state must hold the zero too: a side trace entered
-            // from its parent's exit finds the parent's values here.
-            bcx.ins()
-                .store(MemFlagsData::new(), z, reg_state, (i as i32) * 8);
-        }
-        regs_full.push(v);
-    }
-    // Variable carrying R[A+4]'s tag byte across the
-    // TForCall body emit → TForLoop tail emit boundary. TForCall's
-    // batched helper returns the tag on success; tail emit reads
-    // it via use_var to dispatch on Nil / Int / other instead of
-    // calling the `luna_jit_stack_tag` helper. Declared
-    // unconditionally — only def_var'd if the trace actually has a
-    // TForCall (otherwise unused, cranelift tree-shakes).
-    let tforcall_tag_var = bcx.declare_var(types::I64);
-    // The tag of the value TForCall produced (R[A+5]), for the TForLoop
-    // back-edge check.
-    let tforcall_val_tag_var = bcx.declare_var(types::I64);
-    {
-        let z = bcx.ins().iconst(types::I64, 0);
-        bcx.def_var(tforcall_tag_var, z);
-        bcx.def_var(tforcall_val_tag_var, z);
-    }
-
-    // depth-relative `base_var` scaffold.
-    //
-    // The Variable is declared at trace head (here, in the entry
-    // block immediately after the reg_state load prelude) and
-    // initialised to `iconst(0)` as the depth-0 sentinel
-    // placeholder. No op-arm reads it yet; they still index
-    // `regs_full[off + slot]`.
-    //
-    // An unused Variable initialized via a single iconst gets DCE'd
-    // by Cranelift's mid-end, so the scaffold is overhead-neutral.
-    //
-    // Probe: `BASE_VAR_SCAFFOLD_DECLARED` bumps exactly once at the
-    // post-def_var point so the regression test
-    // `base_var_scaffold.rs` can assert "scaffold ran" on
-    // an arbitrary fixture trace without scraping IR text. Bump
-    // happens after `def_var` so a `declare_var` panic earlier leaves
-    // the counter unchanged.
-    let base_var = bcx.declare_var(types::I64);
-    {
-        let z = bcx.ins().iconst(types::I64, 0);
-        bcx.def_var(base_var, z);
-        // Mirror the tforcall_tag_var declaration pattern exactly
-        // (declare + iconst init + def_var, no anchor use). Cranelift
-        // tree-shakes the unused Variable in optimized builds, so the
-        // scaffold adds zero machine-code residue.
-        BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(c.get().wrapping_add(1)));
-    }
-
-    // allocate virtual `Variable`s for each Sinkable
-    // site that meets the sunk-emit criteria. Sites that don't
-    // meet the criteria are demoted to Escaped right here so the
-    // body emit's site-state check naturally falls through to the
-    // existing heap-alloc helper path. Criteria:
-    //   - `inline_depth == 0` (trace head's frame only — inline
-    //     sinking requires extra plumbing for
-    //     the materialize helper to address inlined windows)
-    //   - `array_cap` in `1..=MAX_SUNK_CAP` (cap = 0 means the
-    //     site didn't decode an array part; cap > MAX is a
-    //     Cranelift Variable budget guard)
-    //   - the site's slot is NOT the trace-terminator `Op::Return1`
-    //     R[A] — sinking that case needs the materialize helper
-    //     to repack the array into a heap `Gc<Table>` on the way
-    //     out
-    //   - the trace's body has NO cmp ops (`Lt`/`Le`/`Eq`/`EqK`) —
-    //     a cmp emits a side-exit and the interp resume needs the
-    //     heap table; the sweep escapes all live bindings on
-    //     a cmp, but we ALSO need to bail on body cmps that fire
-    //     AFTER the site dies (no live binding to escape, but the
-    //     trace still has a back-edge candidate).
-    //
-    // Note: looping traces (`opts.internal_loop = true`) that have
-    // any cmp in body are already excluded by the sweep escape
-    // rule. ForLoop terminators escape via the terminator rule
-    // (TraceEnd::ForLoop → all live). So we don't need an explicit
-    // `internal_loop` check here.
-    const MAX_SUNK_CAP: u32 = 8;
-    let return_a_for_sunk_check: Option<u32> = match end_idx_opt {
-        Some((idx, TraceEnd::Return)) if idx < record.ops.len() => {
-            let term = &record.ops[idx];
-            if matches!(term.inst.op(), Op::Return1) && term.inline_depth == 0 {
-                Some(term.inst.a())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    // There is no inline-cmp gate: inline cmp
-    // side-exits (per_exit_inline arm) call
-    // `emit_materialize_live_sunk` to reconstruct live sunk sites
-    // before the frame-mat helper pushes inline frames, so a
-    // depth>0 cmp doesn't demote sites.
-    let mut virt_vars: Vec<Option<Vec<Variable>>> = vec![None; escape.sites.len()];
-    let mut virt_kinds: Vec<Option<Vec<RegKind>>> = vec![None; escape.sites.len()];
-    let mut sunk_alloc_seen: u32 = 0;
-    // incremented at each cmp side-exit emit point that
-    // materialises ≥1 live Sinkable site. Telemetry only; the
-    // dispatcher's runtime materialise calls are not counted here
-    // (this is a per-trace static count of emit sites that emit
-    // the helper call).
-    let mut materialize_emit_count: u32 = 0;
-    let mut closure_seen: u32 = 0;
-    for (idx, site) in escape.sites.iter_mut().enumerate() {
-        if site.state != EscapeState::Sinkable {
-            continue;
-        }
-        // depth>0 sites are sunk-eligible. Materialise
-        // (`emit_materialize_live_sunk`) handles BOTH depth=0 and
-        // depth>0 sites at depth=0 cmp arm AND inline cmp
-        // (per_exit_inline) arm, since inline cmp side-exits
-        // reconstruct live sunk sites. `return_a` check only matters for depth=0
-        // (TraceEnd::Return applies at the trace-head frame).
-        // total virt slot count = array_cap + hash_keys.
-        // - array-only site:    cap = array_cap,           hash = 0
-        // - hash-only site:     cap = 0,                   hash = hash_keys.len()
-        // - mixed array+hash:   cap = array_cap > 0,       hash > 0
-        // - empty (no ops):     cap = 0,                   hash = 0 → demoted below
-        let array_cap = site.array_cap as usize;
-        let n_hash = site.hash_keys.len();
-        let total_slots = array_cap + n_hash;
-        if total_slots == 0
-            || array_cap > MAX_SUNK_CAP as usize
-            || (site.inline_depth == 0 && return_a_for_sunk_check == Some(site.a))
-        {
-            site.state = EscapeState::Escaped;
-            continue;
-        }
-        // hash slot materialise is plumbed into
-        // emit_materialize_live_sunk (extended helper signature
-        // carries hash_keys + hash_raws + hash_kinds buffers), so no
-        // has_any_cmp gate is needed. Hash sites survive cmp side-exits via
-        // table.set(Value::Str(key), ...) at materialise time.
-        let mut vars = Vec::with_capacity(total_slots);
-        for _ in 0..total_slots {
-            let v = bcx.declare_var(types::I64);
-            let z = bcx.ins().iconst(types::I64, 0);
-            bcx.def_var(v, z);
-            vars.push(v);
-        }
-        virt_vars[idx] = Some(vars);
-        virt_kinds[idx] = Some(vec![RegKind::Unset; total_slots]);
-        sunk_alloc_seen += 1;
-    }
-
-    // if an active_accum is in play,
-    // declare buf_var, emit acquire IR, and populate flush_ctx
-    // with Some(FlushCtx { ... }). All 19 existing
-    // emit_store_back_and_return_* call sites then auto-flush
-    // (intern → def_var(accum_slot) → release) before storing
-    // back to reg_state.
-    if let Some(ref ba) = active_accum {
-        let buf_var = bcx.declare_var(types::I64);
-        let acquire_ref = module.declare_func_in_func(str_buf_acquire_id, bcx.func);
-        let intern_ref = module.declare_func_in_func(str_buf_intern_id, bcx.func);
-        let release_ref = module.declare_func_in_func(str_buf_release_id, bcx.func);
-        let extend_ref = module.declare_func_in_func(str_buf_extend_id, bcx.func);
-        let call_inst = bcx.ins().call(acquire_ref, &[]);
-        let ptr = bcx.inst_results(call_inst)[0];
-        bcx.def_var(buf_var, ptr);
-        // prepend the accumulator slot's current
-        // bytes into the buffer. The dispatcher always fires on
-        // iter 2+ (interp's TForLoop trigger fires AFTER iter 1's
-        // body has run), so by the time the trace fn entry
-        // executes, `R[accum_slot]` already holds the result of
-        // `s` after iter 1 (= entry_s_initial + piece_1). Without
-        // this prepend, the flush at exit produces only iter 2..N
-        // bytes; the test workload `s = '[' .. iter1 .. ...` loses
-        // the leading `[piece_1`. Net effect: buf = accum_slot's
-        // entry bytes + iter 2..N piece bytes; flush intern's all
-        // bytes; correct result.
-        let accum_raw = bcx.use_var(regs_full[ba.accum_slot as usize]);
-        let buf_ptr = bcx.use_var(buf_var);
-        let _ = bcx.ins().call(extend_ref, &[buf_ptr, accum_raw]);
-        flush_ctx = Some(FlushCtx {
-            buf_var,
-            accum_slot: ba.accum_slot,
-            intern_ref,
-            release_ref,
-        });
-    }
-
-    // Nothing in the trace can reassign `math.<fn>` unless it stores a
-    // field of that name or `math` itself, or stores under a key it does
-    // not know (SetTable); calls end the trace and the table helpers
-    // deopt on `__newindex`. Without such a store the math folds are
-    // checked once, in `precheck` before the loop head, rather than on
-    // every iteration.
-    let fold_check_once = !record.ops[..effective_end].iter().any(|rop| {
-        let key = |k: u32| match head_proto.consts.get(k as usize) {
-            Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
-            _ => None,
-        };
-        match rop.inst.op() {
-            Op::SetTable => true,
-            // the key is K[B] for both
-            Op::SetField | Op::SetTabUp => match key(rop.inst.b()) {
-                Some(name) => {
-                    name == b"math" || math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
-                }
-                None => true,
-            },
-            _ => false,
-        }
-    });
-    // Filled in below, once the exit bookkeeping exists.
-    let precheck = (fold_check_once && !math_folds.is_empty()).then(|| bcx.create_block());
-
-    let body_loop = bcx.create_block();
-    bcx.ins().jump(precheck.unwrap_or(body_loop), &[]);
-    // `body_loop` is entered after the precheck block is emitted (below):
-    // reading a register there first would leave it half-built while
-    // another block is emitted, which the builder rejects.
-
-    // What reg_state holds for each register at the loop head: on entry
-    // the values the prelude loaded (caller window) or the zeroes the
-    // dispatcher filled it with (inline frames); on the back-edge what
-    // `sync_reg_state` wrote before the jump. Read at the loop head below.
-    let mut stored: Vec<Option<Value>> = Vec::new();
-
-    // Per-reg current kind: the recorded entry tag for a head-frame
-    // register the trace reads before writing (the dispatcher checks
-    // it), held on the stack for the other head-frame registers, and
-    // Unset past the head frame (the dispatcher zero-initialises those
-    // reg_state slots and trace IR fills them via writers). Sized to
-    // `window_size_us` (mirrors `regs_full`).
-    let mut current_kinds: Vec<RegKind> = (0..window_size_us)
-        .map(|i| match head_live.get(i) {
-            Some(true) => record
-                .entry_tags
-                .get(i)
-                .and_then(|&t| RegKind::from_entry_tag(t))
-                .unwrap_or(RegKind::Unset),
-            Some(false) => RegKind::StackHeld,
-            None => RegKind::Unset,
-        })
-        .collect();
-    // The kinds the body is lowered for. A back-edge may run it again
-    // only when the caller window holds these same kinds (see
-    // `loop_kinds_match`); otherwise
-    // the next pass would read (and hand to an exit) a register with
-    // bits of one kind as another, e.g. an Int as a Float.
-    let head_kinds: Vec<RegKind> = current_kinds[..max_stack].to_vec();
-    let mut dispatchable: bool = true;
-    // the first emit-pass site that flips
-    // dispatchable to false wins this label; CompiledTrace
-    // exposes it via `dispatch_off_reason` for probe diagnostics.
-    let mut dispatch_off_reason: Option<&'static str> = None;
-    // per-side-exit RegKind snapshot. Pushed at each
-    // true side-exit emit site (Lt/Le/Eq + Jmp) so later writers
-    // (e.g. `Op::GetUpval` whose result we infer as `Closure`) don't
-    // pollute the side-exit's restore with a tag the slot hasn't
-    // actually become at that exit. The clean-tail and call-truncation
-    // paths reuse the final `current_kinds` via `ct.exit_tags`.
-    // 3rd element is the per-entry `Box<Cell<*const
-    // u8>>` whose heap address is baked into the corresponding
-    // emit_store_back_and_return_pc callsite. Allocated at each push
-    // site BEFORE the helper call so the IR's `iconst`-baked address
-    // exists. Transported through into `tags_side_trace_ptrs` at the
-    // end of emit (the cell never moves).
-    let mut per_exit_kinds: Vec<(u32, Vec<RegKind>, Box<TCellPtr>)> = Vec::new();
-    // per inline cmp@d>0 side-exit. Each entry
-    // is built at the cmp emit site and includes the side-exit PC,
-    // a window-sized exit-tag snapshot, and the frame-mat chain. The
-    // IR encodes `(site_idx + 1)` in the upper 32 bits of the
-    // returned i64 so the dispatcher can pick the right entry
-    // without colliding on shared cont_pc values (fib's cmp@d=0
-    // through cmp@d=4 all side-exit to the same PC).
-    // 5th element is the per-site `Box<Cell<*const
-    // u8>>` whose heap address is baked into the IR's
-    // `emit_store_back_and_return_site` gate. Allocated at each push
-    // site BEFORE the helper call (address is
-    // stable across `Vec → Rc<[]>` moves because Box transfers
-    // ownership without moving the heap cell).
-    let mut per_exit_inline_vec: Vec<(
-        u32,
-        u32,
-        Vec<RegKind>,
-        TArc<[FrameMaterializeInfo]>,
-        Box<TCellPtr>,
-    )> = Vec::new();
-    // Live call stack mirror — push on self-recursive `Op::Call`,
-    // pop on `Op::Return0/1` at depth>0. Each frame's `base_offset`
-    // and `pc` (= caller's Call.pc + 1) are stamped at push time;
-    // when snapshotting at a cmp@d>0 site, the innermost frame's
-    // `pc` is overwritten with the actual side-exit PC so the helper
-    // pushes the right resume point without needing a dispatcher
-    // post-hoc fix-up.
-    let mut call_chain: Vec<FrameMaterializeInfo> = Vec::new();
-
-    // --- emit body
-    //
-    // Cranelift's `FunctionBuilder` tracks the "current" block
-    // internally; every `bcx.ins()` emits into whichever block was
-    // last `switch_to_block`'d. A cmp's `brif` forks the current
-    // block to a `continue_blk` and a `side_exit_blk`; after
-    // emitting the side-exit and switching back to `continue_blk`,
-    // subsequent ops land there. By the end of the loop the
-    // "current" block is whatever the last cmp's continue branch
-    // pointed at (or the entry block if no cmps fired).
-    //
-    // Only the *normal* range (`record.ops[..effective_end]`) is
-    // emitted. If `Op::Call` truncates the trace, the tail emits
-    // a side-exit at the Call's PC instead of the head_pc close.
-    // Memoize GetUpval(idx) per dispatch.
-    // For self-recursive traces (fib, factorial, etc.), the trace head
-    // is entered with one closure and `JIT_CL` stays pinned to it for
-    // the entire dispatch; all inlined-depth GetUpval(idx) calls return
-    // the same value. Hoist the helper call to the first occurrence and
-    // reuse the cached SSA value at later sites (in cranelift-dominated
-    // blocks). For fib's 3-deep inline trace, this cuts 4 helper calls
-    // to 1 per dispatch (~60 cycles saved × 163k dispatches ≈ 3-5 ms,
-    // ~10-15% win).
-    //
-    // SAFETY of memoization:
-    // - Cache invalidation: none required within a single trace
-    //   dispatch — `JIT_CL` is pinned at entry and unchanged through
-    //   the entire trace body. The first GetUpval(idx) call materializes
-    //   the value; subsequent reads of the same idx are exact duplicates.
-    // - Cross-block validity: cached values are stored in a Variable
-    //   (via def_var / use_var); cranelift's FunctionBuilder inserts
-    //   phis as needed for cross-block reads.
-    // - Side-exit safety: the first occurrence may be in a block reached
-    //   only on the recursive path (e.g. block2 in fib). If a side-exit
-    //   fires BEFORE that block (e.g. head-fail base case in block3),
-    //   the cache is never populated and reuse never happens — correct.
-    let mut upval_cache: std::collections::HashMap<u32, Variable> =
-        std::collections::HashMap::new();
-    // the entry closure, fetched at the first inlined call; the trace
-    // is linear, so that fetch dominates every later call
-    let mut head_closure_var: Option<Variable> = None;
-    // No iconst memoization: the arm64 backend folds
-    // `iconst+isub`/`iconst+icmp` into immediate-form instructions
-    // at codegen, so it would add little.
-    // A guard that fails leaves the trace at `$pc` (the op being
-    // guarded, re-executed by the interpreter) exactly as a cmp side
-    // exit does: live sunk tables are materialised and, when the op sits
-    // in an inlined frame, the frames are rebuilt first. An exit to the
-    // head also stops the dispatcher from entering the trace again before
-    // the interpreter has run the head op (see `emit_tagged_exit`).
-    macro_rules! guard_exit {
-        ($pc:expr, $i:expr) => {{
-            let side_exit_pc: u32 = $pc;
-            if !call_chain.is_empty() {
-                let head_resume_pc = call_chain[0].pc;
-                let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
-                if let Some(last) = snapshot.last_mut() {
-                    last.pc = side_exit_pc;
-                }
-                let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
-                let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
-                let chain_len = chain_rc.len() as i64;
-                let site_idx = per_exit_inline_vec.len() as u32;
-                let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
-                let mat_count = emit_materialize_live_sunk(
-                    &mut bcx,
-                    &mut module,
-                    mat_sunk_id,
-                    &escape,
-                    &virt_vars,
-                    &virt_kinds,
-                    &regs_full,
-                    &op_offsets,
-                    $i,
-                    &mut kinds_snapshot,
-                    head_proto,
-                    opts.aot,
-                    &mut defined_aot_data,
-                );
-                materialize_emit_count += mat_count;
-                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-                let chain_for_helper = chain_rc.clone();
-                per_exit_inline_vec.push((
-                    side_exit_pc,
-                    head_resume_pc,
-                    kinds_snapshot,
-                    chain_rc,
-                    side_box,
-                ));
-                let n_arg = bcx.ins().iconst(types::I64, chain_len);
-                let ptr_arg = emit_chain_ptr_arg(
-                    &mut module,
-                    &mut bcx,
-                    &chain_for_helper,
-                    chain_ptr,
-                    opts.aot,
-                    &mut defined_aot_data,
-                );
-                let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
-                let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
-                emit_store_back_and_return_site(
-                    &mut bcx,
-                    &regs_full[..window_size_us],
-                    &stored,
-                    reg_state,
-                    site_idx,
-                    side_exit_pc,
-                    flush_ctx.as_ref(),
-                    0i64,
-                    trace_fn_sig_ref,
-                );
-            } else {
-                let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
-                let mat_count = emit_materialize_live_sunk(
-                    &mut bcx,
-                    &mut module,
-                    mat_sunk_id,
-                    &escape,
-                    &virt_vars,
-                    &virt_kinds,
-                    &regs_full,
-                    &op_offsets,
-                    $i,
-                    &mut snapshot,
-                    head_proto,
-                    opts.aot,
-                    &mut defined_aot_data,
-                );
-                materialize_emit_count += mat_count;
-                let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-                let tag_side_local = per_exit_kinds.len() as u32;
-                per_exit_kinds.push((side_exit_pc, snapshot, side_box));
-                emit_tagged_exit(
-                    &mut bcx,
-                    &mut module,
-                    suppress_admit_id,
-                    &regs_full[..max_stack],
-                    &stored,
-                    reg_state,
-                    side_exit_pc,
-                    record.head_pc,
-                    tag_side_local,
-                    flush_ctx.as_ref(),
-                    trace_fn_sig_ref,
-                );
-            }
-        }};
-    }
-    // Call a checked read helper; on failure leave the trace at `$pc`,
-    // otherwise evaluate to the payload it wrote.
-    macro_rules! checked_read {
-        ($id:expr, $a0:expr, $a1:expr, $want:expr, $pc:expr, $i:expr) => {{
-            let out_ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                8,
-                3,
-            ));
-            let out_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
-            let want = bcx.ins().iconst(types::I64, $want as i64);
-            let fref = module.declare_func_in_func($id, bcx.func);
-            let call = bcx.ins().call(fref, &[$a0, $a1, want, out_addr]);
-            let ok = bcx.inst_results(call)[0];
-            let cont_blk = bcx.create_block();
-            let exit_blk = bcx.create_block();
-            bcx.ins().brif(ok, cont_blk, &[], exit_blk, &[]);
-            bcx.switch_to_block(exit_blk);
-            bcx.seal_block(exit_blk);
-            guard_exit!($pc, $i);
-            bcx.switch_to_block(cont_blk);
-            bcx.seal_block(cont_blk);
-            bcx.ins().stack_load(types::I64, types::I64, out_ss, 0)
-        }};
-    }
-    // Continue in a new block when `$cond` holds, else take a
-    // `guard_exit!` to `$pc`.
-    macro_rules! guard {
-        ($cond:expr, $i:expr, $pc:expr) => {{
-            let continue_blk = bcx.create_block();
-            let exit_blk = bcx.create_block();
-            bcx.ins().brif($cond, continue_blk, &[], exit_blk, &[]);
-            bcx.switch_to_block(exit_blk);
-            bcx.seal_block(exit_blk);
-            guard_exit!($pc, $i);
-            bcx.switch_to_block(continue_blk);
-            bcx.seal_block(continue_blk);
-        }};
-    }
-    // Integer constants the registers hold at this point of the trace
-    // (from LoadI / LoadK earlier in the same pass), so a `//`, `%` or shift
-    // by a constant needs no runtime guard.
-    let mut known_int: Vec<Option<i64>> = vec![None; window_size_us];
+    let head = emit_entry(&mut bcx, module, pl);
+    let mut escape = escape;
+    let sunk = alloc_sunk_sites(&mut bcx, pl, &mut escape);
+    let flush_ctx = start_accum(&mut bcx, module, pl, h, &head.regs_full);
+    let blocks = open_body_loop(&mut bcx, pl);
+    let mut lower = begin_body(
+        module,
+        bcx,
+        pl,
+        h,
+        head,
+        escape,
+        defined_aot_data,
+        sunk,
+        flush_ctx,
+        blocks,
+    );
+    let lw = &mut lower;
+    let Plan {
+        record,
+        head_proto,
+        max_stack,
+        opts,
+        float_only,
+        window_size_us,
+        effective_end,
+        call_idx_opt,
+        for_loop_idx_opt,
+        inline_abort_idx_opt,
+        return_idx_opt,
+        self_link_idx_opt,
+        downrec_idx_opt,
+        do_internal_loop,
+        active_accum,
+        ..
+    } = *pl;
+    let Lower {
+        reg_state,
+        trace_fn_sig_ref,
+        tforcall_tag_var,
+        tforcall_val_tag_var,
+        precheck,
+        body_loop,
+        ..
+    } = *lw;
+    let OpHelpers {
+        new_table_id,
+        set_ids,
+        get_field_id,
+        get_tab_up_id,
+        get_int_checked_id,
+        get_field_checked_id,
+        get_tab_up_checked_id,
+        op_closure_id,
+        spill_id,
+        op_close_id,
+        op_tforcall_id,
+        stack_load_id,
+        stack_tag_id,
+        op_concat_id,
+        ..
+    } = lw.h.op;
+    let RuntimeHelpers {
+        str_buf_extend_id,
+        update_raw_id,
+        get_int_id,
+        suppress_admit_id,
+        math_fn_check_id,
+        len_checked_id,
+        upval_get_id,
+        head_closure_id,
+        materialize_id,
+        mat_sunk_id,
+        ..
+    } = lw.h.rt;
     if let Some(precheck) = precheck {
         // Nothing has run yet: a failed check leaves at the head with the
         // entry kinds, and the interpreter makes the calls.
-        bcx.switch_to_block(precheck);
-        bcx.seal_block(precheck);
+        lw.bcx.switch_to_block(precheck);
+        lw.bcx.seal_block(precheck);
         // Before the loop head reg_state holds what the prelude loaded.
-        let entry_stored: Vec<Option<Value>> =
-            regs_full.iter().map(|&v| Some(bcx.use_var(v))).collect();
+        let entry_stored: Vec<Option<Value>> = lw
+            .regs_full
+            .iter()
+            .map(|&v| Some(lw.bcx.use_var(v)))
+            .collect();
         // interned, so one pointer per name
         let mut checked: Vec<*const u8> = Vec::new();
-        for fold in &math_folds {
+        for fold in &pl.math_folds {
             let math_key = head_proto.consts[record.ops[fold.start_idx].inst.c() as usize];
             let name_key = head_proto.consts[record.ops[fold.start_idx + 1].inst.c() as usize];
             let (
@@ -719,51 +265,66 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 continue;
             }
             checked.push(name_ptr);
-            let m = emit_str_key_arg(module, &mut bcx, math_key, opts.aot, &mut defined_aot_data);
-            let k = emit_str_key_arg(module, &mut bcx, name_key, opts.aot, &mut defined_aot_data);
-            let check_ref = module.declare_func_in_func(math_fn_check_id, bcx.func);
-            let call = bcx.ins().call(check_ref, &[m, k]);
-            let is_library = bcx.inst_results(call)[0];
-            let ok_blk = bcx.create_block();
-            let exit_blk = bcx.create_block();
-            bcx.ins().brif(is_library, ok_blk, &[], exit_blk, &[]);
-            bcx.switch_to_block(exit_blk);
-            bcx.seal_block(exit_blk);
+            let m = emit_str_key_arg(
+                lw.module,
+                &mut lw.bcx,
+                math_key,
+                opts.aot,
+                &mut lw.defined_aot_data,
+            );
+            let k = emit_str_key_arg(
+                lw.module,
+                &mut lw.bcx,
+                name_key,
+                opts.aot,
+                &mut lw.defined_aot_data,
+            );
+            let check_ref = lw
+                .module
+                .declare_func_in_func(math_fn_check_id, lw.bcx.func);
+            let call = lw.bcx.ins().call(check_ref, &[m, k]);
+            let is_library = lw.bcx.inst_results(call)[0];
+            let ok_blk = lw.bcx.create_block();
+            let exit_blk = lw.bcx.create_block();
+            lw.bcx.ins().brif(is_library, ok_blk, &[], exit_blk, &[]);
+            lw.bcx.switch_to_block(exit_blk);
+            lw.bcx.seal_block(exit_blk);
             let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-            let tags_idx = per_exit_kinds.len() as u32;
-            per_exit_kinds.push((
+            let tags_idx = lw.per_exit_kinds.len() as u32;
+            lw.per_exit_kinds.push((
                 record.head_pc,
-                current_kinds[..max_stack].to_vec(),
+                lw.current_kinds[..max_stack].to_vec(),
                 side_box,
             ));
             emit_tagged_exit(
-                &mut bcx,
-                &mut module,
+                &mut lw.bcx,
+                &mut lw.module,
                 suppress_admit_id,
-                &regs_full[..max_stack],
+                &lw.regs_full[..max_stack],
                 &entry_stored,
                 reg_state,
                 record.head_pc,
                 record.head_pc,
                 tags_idx,
-                flush_ctx.as_ref(),
+                lw.flush_ctx.as_ref(),
                 trace_fn_sig_ref,
             );
-            bcx.switch_to_block(ok_blk);
-            bcx.seal_block(ok_blk);
+            lw.bcx.switch_to_block(ok_blk);
+            lw.bcx.seal_block(ok_blk);
         }
-        bcx.ins().jump(body_loop, &[]);
+        lw.bcx.ins().jump(body_loop, &[]);
     }
-    bcx.switch_to_block(body_loop);
+    lw.bcx.switch_to_block(body_loop);
     // Intentionally NOT sealed: the tail's clean-close back-edge
     // adds a second predecessor below.
-    stored.extend(regs_full.iter().map(|&v| Some(bcx.use_var(v))));
+    lw.stored
+        .extend(lw.regs_full.iter().map(|&v| Some(lw.bcx.use_var(v))));
     // the virtual register of a constant-operand op (see `vconsts`)
-    let kvar = bcx.declare_var(types::I64);
+    let kvar = lw.bcx.declare_var(types::I64);
     checkpoint("pre:main-emit-loop");
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.
-        sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
         let vk = vconst(i);
         // R[C] of a register-operand op, read before this op's own write
         // forgets it (`x = x % 7` divides by the old value)
@@ -772,13 +333,14 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 VConst::Int(n) => Some(n),
                 VConst::Float(_) => None,
             },
-            _ => known_int
-                .get(op_offsets[i] as usize + rop.inst.c() as usize)
+            _ => lw
+                .known_int
+                .get(pl.op_offsets[i] as usize + rop.inst.c() as usize)
                 .copied()
                 .flatten(),
         };
-        for w in op_writes_at_offset(rop, op_offsets[i]) {
-            if let Some(slot) = known_int.get_mut(w as usize) {
+        for w in op_writes_at_offset(rop, pl.op_offsets[i]) {
+            if let Some(slot) = lw.known_int.get_mut(w as usize) {
                 *slot = None;
             }
         }
@@ -789,21 +351,23 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // is NOT shadowed (mut sub-slice would block Return1's
         // cross-window write) — emit code reads/writes via the full
         // Vec with explicit `off + X` indexing.
-        let off = op_offsets[i] as usize;
-        let regs: &[Variable] = &regs_full[off..off + max_stack];
+        let off = pl.op_offsets[i] as usize;
+        // a copy, so the emit code can take `lw` mutably while it reads `regs`
+        let regs_w: Vec<Variable> = lw.regs_full[off..off + max_stack].to_vec();
+        let regs: &[Variable] = &regs_w;
         // a constant operand: its value in `kvar`, which `regs` gets as
         // register `max_stack`
         let regs_v: Vec<Variable>;
         let regs: &[Variable] = match vk {
             Some(k) => {
                 let v = match k {
-                    VConst::Int(n) => bcx.ins().iconst(types::I64, n),
+                    VConst::Int(n) => lw.bcx.ins().iconst(types::I64, n),
                     VConst::Float(f) => {
-                        let fv = bcx.ins().f64const(f);
-                        bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
+                        let fv = lw.bcx.ins().f64const(f);
+                        lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv)
                     }
                 };
-                bcx.def_var(kvar, v);
+                lw.bcx.def_var(kvar, v);
                 regs_v = regs.iter().copied().chain([kvar]).collect();
                 &regs_v
             }
@@ -816,7 +380,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 match vk {
                     Some(VConst::Int(_)) if r as usize == max_stack => RegKind::Int,
                     Some(VConst::Float(_)) if r as usize == max_stack => RegKind::Float,
-                    _ => k_op(&current_kinds, off as u32 + r),
+                    _ => k_op(&lw.current_kinds, off as u32 + r),
                 }
             }};
         }
@@ -827,35 +391,37 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // piece_raw)` + a deopt branch on -1 (piece wasn't Str
         // → existing __concat metamethod path takes over).
         if let Some(ref ba) = active_accum
-            && let Some(ref fctx) = flush_ctx
+            && let Some(ref fctx) = lw.flush_ctx
         {
             if i == ba.pre1_idx || i == ba.pre2_idx || i == ba.post_idx {
                 continue;
             }
             if i == ba.concat_idx {
                 // Read piece slot raw bits + buf ptr.
-                let piece_raw = bcx.use_var(regs[ba.piece_slot as usize]);
-                let buf_ptr = bcx.use_var(fctx.buf_var);
-                let extend_ref = module.declare_func_in_func(str_buf_extend_id, bcx.func);
-                let call_inst = bcx.ins().call(extend_ref, &[buf_ptr, piece_raw]);
-                let status = bcx.inst_results(call_inst)[0];
+                let piece_raw = lw.bcx.use_var(regs[ba.piece_slot as usize]);
+                let buf_ptr = lw.bcx.use_var(fctx.buf_var);
+                let extend_ref = lw
+                    .module
+                    .declare_func_in_func(str_buf_extend_id, lw.bcx.func);
+                let call_inst = lw.bcx.ins().call(extend_ref, &[buf_ptr, piece_raw]);
+                let status = lw.bcx.inst_results(call_inst)[0];
                 // Branch on -1 (signed less than 0) → deopt.
-                let zero = bcx.ins().iconst(types::I64, 0);
-                let is_err = bcx.ins().icmp(IntCC::SignedLessThan, status, zero);
-                let continue_blk = bcx.create_block();
-                let deopt_blk = bcx.create_block();
-                bcx.ins().brif(is_err, deopt_blk, &[], continue_blk, &[]);
+                let zero = lw.bcx.ins().iconst(types::I64, 0);
+                let is_err = lw.bcx.ins().icmp(IntCC::SignedLessThan, status, zero);
+                let continue_blk = lw.bcx.create_block();
+                let deopt_blk = lw.bcx.create_block();
+                lw.bcx.ins().brif(is_err, deopt_blk, &[], continue_blk, &[]);
                 // Deopt path: flush buffer + store back + return pc.
-                bcx.switch_to_block(deopt_blk);
-                bcx.seal_block(deopt_blk);
+                lw.bcx.switch_to_block(deopt_blk);
+                lw.bcx.seal_block(deopt_blk);
                 // restored with the kinds the registers have here
-                guard_exit!(rop.pc, i);
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                guard_exit(lw, pl, rop.pc, i);
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
                 continue;
             }
         }
-        if consumed_by_cmp[i] {
+        if pl.consumed_by_cmp[i] {
             // The cmp at i-1 already accounted for this Jmp via
             // its `brif`'s continue edge; emitting jump IR here
             // would double-jump.
@@ -877,12 +443,12 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         //     resolved `math.<fn>` callable in R[A]) is known
         //     statically and never consumed by anything except
         //     the Call we're collapsing.
-        if folded_ops[i] {
+        if pl.folded_ops[i] {
             // Resolve which fold this index belongs to: the start
             // (Libm1 emit site or Min2/Max2 silent GetTabUp), the
             // GetField mid-op (Min2/Max2 silent), or the Call
             // (Min2/Max2 emit site).
-            let fold = math_folds.iter().find(|f| {
+            let fold = pl.math_folds.iter().find(|f| {
                 f.start_idx == i
                     || (matches!(f.kind, FoldKind::Min2 | FoldKind::Max2)
                         && (f.start_idx + 1 == i || f.call_idx == i))
@@ -904,41 +470,44 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         unreachable!("the fold matcher took both keys as strings");
                     };
                     let m = emit_str_key_arg(
-                        module,
-                        &mut bcx,
+                        lw.module,
+                        &mut lw.bcx,
                         math_key,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
                     let k = emit_str_key_arg(
-                        module,
-                        &mut bcx,
+                        lw.module,
+                        &mut lw.bcx,
                         name_key,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    let check_ref = module.declare_func_in_func(math_fn_check_id, bcx.func);
-                    let call = bcx.ins().call(check_ref, &[m, k]);
-                    let is_library = bcx.inst_results(call)[0];
-                    guard!(is_library, i, rop.pc);
+                    let check_ref = lw
+                        .module
+                        .declare_func_in_func(math_fn_check_id, lw.bcx.func);
+                    let call = lw.bcx.ins().call(check_ref, &[m, k]);
+                    let is_library = lw.bcx.inst_results(call)[0];
+                    guard!(lw, pl, is_library, i, rop.pc);
                 }
                 match fold.kind {
                     FoldKind::Libm1 if fold.start_idx == i => {
                         // Declare libm fn fresh per fold (cranelift
                         // dedups by name in the same module).
-                        let mut libm_sig = module.make_signature();
+                        let mut libm_sig = lw.module.make_signature();
                         libm_sig.params.push(AbiParam::new(types::F64));
                         libm_sig.returns.push(AbiParam::new(types::F64));
-                        let libm_id = module
+                        let libm_id = lw
+                            .module
                             .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
                             .ok()?;
-                        let libm_ref = module.declare_func_in_func(libm_id, bcx.func);
+                        let libm_ref = lw.module.declare_func_in_func(libm_id, lw.bcx.func);
                         // Libm1 always has a Reg arg_src — coerce
                         // to f64 via the existing Int→f64 / bitcast
                         // ladder based on current_kinds.
                         let arg_src = fold.arg_src.expect("Libm1 has arg_src");
                         let FoldArgSrc::Reg { reg: arg_reg } = arg_src;
-                        let arg_kind = k_op(&current_kinds, off as u32 + arg_reg);
+                        let arg_kind = k_op(&lw.current_kinds, off as u32 + arg_reg);
                         // The argument must be a number the trace knows as
                         // one: a numeric string is valid Lua here, and its
                         // payload is a pointer.
@@ -952,48 +521,49 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                             // beyond ±2^63) the result is a float, and
                             // the trace leaves at the GetTabUp — nothing
                             // of the call has run — for the interpreter.
-                            let raw = bcx.use_var(regs[arg_reg as usize]);
+                            let raw = lw.bcx.use_var(regs[arg_reg as usize]);
                             let r = if matches!(arg_kind, RegKind::Float) {
-                                let x = use_var_f64(&mut bcx, regs, arg_reg);
+                                let x = use_var_f64(&mut lw.bcx, regs, arg_reg);
                                 let r = if fold.fn_name == "floor" {
-                                    bcx.ins().floor(x)
+                                    lw.bcx.ins().floor(x)
                                 } else {
-                                    bcx.ins().ceil(x)
+                                    lw.bcx.ins().ceil(x)
                                 };
-                                let fits = emit_f64_fits_i64(&mut bcx, r);
-                                guard!(fits, i, rop.pc);
-                                bcx.ins().fcvt_to_sint(types::I64, r)
+                                let fits = emit_f64_fits_i64(&mut lw.bcx, r);
+                                guard!(lw, pl, fits, i, rop.pc);
+                                lw.bcx.ins().fcvt_to_sint(types::I64, r)
                             } else {
                                 raw
                             };
-                            bcx.def_var(regs[fold.dst_reg as usize], r);
-                            current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
+                            lw.bcx.def_var(regs[fold.dst_reg as usize], r);
+                            lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
                             continue;
                         }
                         let arg_f64 = if matches!(arg_kind, RegKind::Float) {
-                            use_var_f64(&mut bcx, regs, arg_reg)
+                            use_var_f64(&mut lw.bcx, regs, arg_reg)
                         } else {
-                            let raw = bcx.use_var(regs[arg_reg as usize]);
-                            bcx.ins().fcvt_from_sint(types::F64, raw)
+                            let raw = lw.bcx.use_var(regs[arg_reg as usize]);
+                            lw.bcx.ins().fcvt_from_sint(types::F64, raw)
                         };
                         let call = if fold.fn_name == "atan" {
                             // Only on 5.4+ (see the matcher): atan2(y, 1).
-                            let mut atan2_sig = module.make_signature();
+                            let mut atan2_sig = lw.module.make_signature();
                             atan2_sig.params.push(AbiParam::new(types::F64));
                             atan2_sig.params.push(AbiParam::new(types::F64));
                             atan2_sig.returns.push(AbiParam::new(types::F64));
-                            let atan2_id = module
+                            let atan2_id = lw
+                                .module
                                 .declare_function("atan2", Linkage::Import, &atan2_sig)
                                 .ok()?;
-                            let atan2_ref = module.declare_func_in_func(atan2_id, bcx.func);
-                            let one = bcx.ins().f64const(1.0);
-                            bcx.ins().call(atan2_ref, &[arg_f64, one])
+                            let atan2_ref = lw.module.declare_func_in_func(atan2_id, lw.bcx.func);
+                            let one = lw.bcx.ins().f64const(1.0);
+                            lw.bcx.ins().call(atan2_ref, &[arg_f64, one])
                         } else {
-                            bcx.ins().call(libm_ref, &[arg_f64])
+                            lw.bcx.ins().call(libm_ref, &[arg_f64])
                         };
-                        let r = bcx.inst_results(call)[0];
-                        def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
-                        current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
+                        let r = lw.bcx.inst_results(call)[0];
+                        def_var_f64(&mut lw.bcx, regs[fold.dst_reg as usize], r);
+                        lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
                     }
                     FoldKind::Libm1 => {
                         // Libm1 silent trailer (Move / Call) — folded
@@ -1008,8 +578,8 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         //   Int  / Int   → cranelift `smin` / `smax`
                         //   Float/ Float → `fcmp` + `select`
                         //   otherwise    → not compiled
-                        let k1 = k_op(&current_kinds, off as u32 + fold.arg1_reg);
-                        let k2 = k_op(&current_kinds, off as u32 + fold.arg2_reg);
+                        let k1 = k_op(&lw.current_kinds, off as u32 + fold.arg1_reg);
+                        let k2 = k_op(&lw.current_kinds, off as u32 + fold.arg2_reg);
                         // `math.max` returns whichever argument wins,
                         // unconverted (5.3+), so an Int/Float pair has no
                         // static result kind: such a trace is not
@@ -1039,59 +609,59 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                                 // and the argument set-up in between
                                 // only writes the call's argument slots,
                                 // so running it again is harmless.
-                                let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
-                                let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
-                                let f1 = bcx.ins().bitcast(types::F64, MemFlagsData::new(), a1);
-                                let f2 = bcx.ins().bitcast(types::F64, MemFlagsData::new(), a2);
+                                let a1 = lw.bcx.use_var(regs[fold.arg1_reg as usize]);
+                                let a2 = lw.bcx.use_var(regs[fold.arg2_reg as usize]);
+                                let f1 = lw.bcx.ins().bitcast(types::F64, MemFlagsData::new(), a1);
+                                let f2 = lw.bcx.ins().bitcast(types::F64, MemFlagsData::new(), a2);
                                 // max: second wins iff a1 < a2; min: iff a2 < a1.
                                 let second_wins = match (fold.kind, k1) {
                                     (FoldKind::Max2, RegKind::Int) => {
-                                        emit_lt_int_float(&mut bcx, a1, f2)
+                                        emit_lt_int_float(&mut lw.bcx, a1, f2)
                                     }
-                                    (FoldKind::Max2, _) => emit_lt_float_int(&mut bcx, f1, a2),
+                                    (FoldKind::Max2, _) => emit_lt_float_int(&mut lw.bcx, f1, a2),
                                     (FoldKind::Min2, RegKind::Int) => {
-                                        emit_lt_float_int(&mut bcx, f2, a1)
+                                        emit_lt_float_int(&mut lw.bcx, f2, a1)
                                     }
-                                    (FoldKind::Min2, _) => emit_lt_int_float(&mut bcx, a2, f1),
+                                    (FoldKind::Min2, _) => emit_lt_int_float(&mut lw.bcx, a2, f1),
                                     (FoldKind::Libm1, _) => unreachable!(),
                                 };
-                                let first_wins = bcx.ins().bxor_imm_u(second_wins, 1);
-                                guard!(first_wins, i, record.ops[fold.start_idx].pc);
-                                bcx.def_var(regs[fold.dst_reg as usize], a1);
-                                current_kinds[off + fold.dst_reg as usize] = k1;
+                                let first_wins = lw.bcx.ins().bxor_imm_u(second_wins, 1);
+                                guard!(lw, pl, first_wins, i, record.ops[fold.start_idx].pc);
+                                lw.bcx.def_var(regs[fold.dst_reg as usize], a1);
+                                lw.current_kinds[off + fold.dst_reg as usize] = k1;
                                 continue;
                             }
                             _ => return None,
                         };
                         if matches!(result_kind, RegKind::Float) {
-                            let a1 = use_var_as_f64(&mut bcx, regs, fold.arg1_reg, k1);
-                            let a2 = use_var_as_f64(&mut bcx, regs, fold.arg2_reg, k2);
+                            let a1 = use_var_as_f64(&mut lw.bcx, regs, fold.arg1_reg, k1);
+                            let a2 = use_var_as_f64(&mut lw.bcx, regs, fold.arg2_reg, k2);
                             // PUC keeps the first argument unless the
                             // second compares strictly better — not
                             // IEEE fmin/fmax, which differ on NaN and
                             // on -0.0 vs 0.0.
                             let second_wins = match fold.kind {
-                                FoldKind::Min2 => bcx.ins().fcmp(FloatCC::LessThan, a2, a1),
-                                FoldKind::Max2 => bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
+                                FoldKind::Min2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a2, a1),
+                                FoldKind::Max2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
                                 FoldKind::Libm1 => unreachable!(),
                             };
-                            let r = bcx.ins().select(second_wins, a2, a1);
-                            def_var_f64(&mut bcx, regs[fold.dst_reg as usize], r);
-                            current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
+                            let r = lw.bcx.ins().select(second_wins, a2, a1);
+                            def_var_f64(&mut lw.bcx, regs[fold.dst_reg as usize], r);
+                            lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Float;
                         } else {
                             // Int / Int — both operands are i64
                             // payloads holding Int values. Use
                             // signed integer min/max so the result
                             // stays Int-tagged.
-                            let a1 = bcx.use_var(regs[fold.arg1_reg as usize]);
-                            let a2 = bcx.use_var(regs[fold.arg2_reg as usize]);
+                            let a1 = lw.bcx.use_var(regs[fold.arg1_reg as usize]);
+                            let a2 = lw.bcx.use_var(regs[fold.arg2_reg as usize]);
                             let r = match fold.kind {
-                                FoldKind::Min2 => bcx.ins().smin(a1, a2),
-                                FoldKind::Max2 => bcx.ins().smax(a1, a2),
+                                FoldKind::Min2 => lw.bcx.ins().smin(a1, a2),
+                                FoldKind::Max2 => lw.bcx.ins().smax(a1, a2),
                                 FoldKind::Libm1 => unreachable!(),
                             };
-                            bcx.def_var(regs[fold.dst_reg as usize], r);
-                            current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
+                            lw.bcx.def_var(regs[fold.dst_reg as usize], r);
+                            lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Int;
                         }
                     }
                     FoldKind::Min2 | FoldKind::Max2 => {
@@ -1113,24 +683,25 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // carries the control transfer.
             }
             Op::Move => {
-                let src = bcx.use_var(regs[ins.b() as usize]);
-                bcx.def_var(regs[ins.a() as usize], src);
-                current_kinds[off + ins.a() as usize] = k_op(&current_kinds, off as u32 + ins.b());
+                let src = lw.bcx.use_var(regs[ins.b() as usize]);
+                lw.bcx.def_var(regs[ins.a() as usize], src);
+                lw.current_kinds[off + ins.a() as usize] =
+                    k_op(&lw.current_kinds, off as u32 + ins.b());
             }
             Op::LoadI => {
                 let imm = ins.sbx() as i64;
-                let v = bcx.ins().iconst(types::I64, imm);
-                bcx.def_var(regs[ins.a() as usize], v);
-                current_kinds[off + ins.a() as usize] = RegKind::Int;
-                known_int[off + ins.a() as usize] = Some(imm);
+                let v = lw.bcx.ins().iconst(types::I64, imm);
+                lw.bcx.def_var(regs[ins.a() as usize], v);
+                lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
+                lw.known_int[off + ins.a() as usize] = Some(imm);
             }
             Op::LoadF => {
                 // R[A] := sBx as f64. Bitcast result to i64
                 // bit-pattern so the reg's storage stays uniform.
                 let f = ins.sbx() as f64;
-                let v = bcx.ins().f64const(f);
-                def_var_f64(&mut bcx, regs[ins.a() as usize], v);
-                current_kinds[off + ins.a() as usize] = RegKind::Float;
+                let v = lw.bcx.ins().f64const(f);
+                def_var_f64(&mut lw.bcx, regs[ins.a() as usize], v);
+                lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
             }
             Op::LoadNil => {
                 // R[A..=A+B] := nil. NIL raw payload bits
@@ -1140,28 +711,28 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // produces ExitTag::Nil for slots the trace touched.
                 let a_us = ins.a() as usize;
                 let b_us = ins.b() as usize;
-                let zero = bcx.ins().iconst(types::I64, 0);
+                let zero = lw.bcx.ins().iconst(types::I64, 0);
                 for k in 0..=b_us {
-                    bcx.def_var(regs[a_us + k], zero);
-                    current_kinds[off + a_us + k] = RegKind::Nil;
+                    lw.bcx.def_var(regs[a_us + k], zero);
+                    lw.current_kinds[off + a_us + k] = RegKind::Nil;
                 }
             }
             Op::LoadK => {
                 let bx = ins.bx() as usize;
                 let (v, k) = match head_proto.consts[bx] {
                     luna_core::runtime::Value::Int(n) => {
-                        known_int[off + ins.a() as usize] = Some(n);
-                        (bcx.ins().iconst(types::I64, n), RegKind::Int)
+                        lw.known_int[off + ins.a() as usize] = Some(n);
+                        (lw.bcx.ins().iconst(types::I64, n), RegKind::Int)
                     }
                     luna_core::runtime::Value::Float(f) => {
-                        let fv = bcx.ins().f64const(f);
-                        let bits = bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv);
+                        let fv = lw.bcx.ins().f64const(f);
+                        let bits = lw.bcx.ins().bitcast(types::I64, MemFlagsData::new(), fv);
                         (bits, RegKind::Float)
                     }
                     _ => unreachable!("pre-emit gates Int / Float consts"),
                 };
-                bcx.def_var(regs[ins.a() as usize], v);
-                current_kinds[off + ins.a() as usize] = k;
+                lw.bcx.def_var(regs[ins.a() as usize], v);
+                lw.current_kinds[off + ins.a() as usize] = k;
             }
             Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow => {
                 let kb = kind!(ins.b());
@@ -1178,39 +749,40 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // Float via fcvt_from_sint.
                 if matches!(op, Op::Pow) {
                     let lhs = match kb {
-                        RegKind::Float => use_var_f64(&mut bcx, regs, ins.b()),
+                        RegKind::Float => use_var_f64(&mut lw.bcx, regs, ins.b()),
                         _ => {
-                            let raw = bcx.use_var(regs[ins.b() as usize]);
-                            bcx.ins().fcvt_from_sint(types::F64, raw)
+                            let raw = lw.bcx.use_var(regs[ins.b() as usize]);
+                            lw.bcx.ins().fcvt_from_sint(types::F64, raw)
                         }
                     };
                     let rhs = match kc {
-                        RegKind::Float => use_var_f64(&mut bcx, regs, ins.c()),
+                        RegKind::Float => use_var_f64(&mut lw.bcx, regs, ins.c()),
                         _ => {
-                            let raw = bcx.use_var(regs[ins.c() as usize]);
-                            bcx.ins().fcvt_from_sint(types::F64, raw)
+                            let raw = lw.bcx.use_var(regs[ins.c() as usize]);
+                            lw.bcx.ins().fcvt_from_sint(types::F64, raw)
                         }
                     };
-                    let mut pow_sig = module.make_signature();
+                    let mut pow_sig = lw.module.make_signature();
                     pow_sig.params.push(AbiParam::new(types::F64));
                     pow_sig.params.push(AbiParam::new(types::F64));
                     pow_sig.returns.push(AbiParam::new(types::F64));
-                    let pow_id = module
+                    let pow_id = lw
+                        .module
                         .declare_function("pow", Linkage::Import, &pow_sig)
                         .ok()?;
-                    let pow_ref = module.declare_func_in_func(pow_id, bcx.func);
-                    let call = bcx.ins().call(pow_ref, &[lhs, rhs]);
-                    let mut r = bcx.inst_results(call)[0];
+                    let pow_ref = lw.module.declare_func_in_func(pow_id, lw.bcx.func);
+                    let call = lw.bcx.ins().call(pow_ref, &[lhs, rhs]);
+                    let mut r = lw.bcx.inst_results(call)[0];
                     // 5.4+ `luai_numpow` squares by multiplying, which can
                     // differ from `pow` in the last bit
                     if !opts.pre53 {
-                        let two = bcx.ins().f64const(2.0);
-                        let is_two = bcx.ins().fcmp(FloatCC::Equal, rhs, two);
-                        let sq = bcx.ins().fmul(lhs, lhs);
-                        r = bcx.ins().select(is_two, sq, r);
+                        let two = lw.bcx.ins().f64const(2.0);
+                        let is_two = lw.bcx.ins().fcmp(FloatCC::Equal, rhs, two);
+                        let sq = lw.bcx.ins().fmul(lhs, lhs);
+                        r = lw.bcx.ins().select(is_two, sq, r);
                     }
-                    def_var_f64(&mut bcx, regs[ins.a() as usize], r);
-                    current_kinds[off + ins.a() as usize] = RegKind::Float;
+                    def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
+                    lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
                     continue;
                 }
                 // Float path when either operand is known-Float.
@@ -1223,33 +795,33 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     if !matches!(kb, RegKind::Float) || !matches!(kc, RegKind::Float) {
                         return None;
                     }
-                    let lhs = use_var_f64(&mut bcx, regs, ins.b());
-                    let rhs = use_var_f64(&mut bcx, regs, ins.c());
+                    let lhs = use_var_f64(&mut lw.bcx, regs, ins.b());
+                    let rhs = use_var_f64(&mut lw.bcx, regs, ins.c());
                     let r = match op {
-                        Op::Add => bcx.ins().fadd(lhs, rhs),
-                        Op::Sub => bcx.ins().fsub(lhs, rhs),
-                        Op::Mul => bcx.ins().fmul(lhs, rhs),
-                        Op::Div => bcx.ins().fdiv(lhs, rhs),
+                        Op::Add => lw.bcx.ins().fadd(lhs, rhs),
+                        Op::Sub => lw.bcx.ins().fsub(lhs, rhs),
+                        Op::Mul => lw.bcx.ins().fmul(lhs, rhs),
+                        Op::Div => lw.bcx.ins().fdiv(lhs, rhs),
                         _ => unreachable!(),
                     };
-                    def_var_f64(&mut bcx, regs[ins.a() as usize], r);
-                    current_kinds[off + ins.a() as usize] = RegKind::Float;
+                    def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
+                    lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
                 } else {
                     // Op::Div on Int operands would still coerce
                     // to Float in Lua 5.4+. Bail to be safe.
                     if matches!(op, Op::Div) {
                         return None;
                     }
-                    let lhs = bcx.use_var(regs[ins.b() as usize]);
-                    let rhs = bcx.use_var(regs[ins.c() as usize]);
+                    let lhs = lw.bcx.use_var(regs[ins.b() as usize]);
+                    let rhs = lw.bcx.use_var(regs[ins.c() as usize]);
                     let r = match op {
-                        Op::Add => bcx.ins().iadd(lhs, rhs),
-                        Op::Sub => bcx.ins().isub(lhs, rhs),
-                        Op::Mul => bcx.ins().imul(lhs, rhs),
+                        Op::Add => lw.bcx.ins().iadd(lhs, rhs),
+                        Op::Sub => lw.bcx.ins().isub(lhs, rhs),
+                        Op::Mul => lw.bcx.ins().imul(lhs, rhs),
                         _ => unreachable!(),
                     };
-                    bcx.def_var(regs[ins.a() as usize], r);
-                    current_kinds[off + ins.a() as usize] = RegKind::Int;
+                    lw.bcx.def_var(regs[ins.a() as usize], r);
+                    lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
                 }
             }
             // 3-reg Int ops. The cases the machine instruction gets
@@ -1266,68 +838,68 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 if !matches!(kb, RegKind::Int) || !matches!(kc, RegKind::Int) {
                     return None;
                 }
-                let lhs = bcx.use_var(regs[ins.b() as usize]);
-                let rhs = bcx.use_var(regs[ins.c() as usize]);
+                let lhs = lw.bcx.use_var(regs[ins.b() as usize]);
+                let rhs = lw.bcx.use_var(regs[ins.c() as usize]);
                 let r = match (op, rc_const) {
                     // a constant divisor needs neither guard (and the
                     // machine division by a constant is strength-reduced)
                     (Op::IDiv | Op::Mod, Some(k)) if k != 0 && k != -1 => {
-                        emit_floor_divmod_by(&mut bcx, op, lhs, k)
+                        emit_floor_divmod_by(&mut lw.bcx, op, lhs, k)
                     }
                     // a constant shift count is a single machine shift
                     (Op::Shl | Op::Shr, Some(k)) => {
                         let n = if op == Op::Shr { k.wrapping_neg() } else { k };
                         if n <= -64 || n >= 64 {
-                            bcx.ins().iconst(types::I64, 0)
+                            lw.bcx.ins().iconst(types::I64, 0)
                         } else if n >= 0 {
-                            bcx.ins().ishl_imm_u(lhs, n)
+                            lw.bcx.ins().ishl_imm_u(lhs, n)
                         } else {
-                            bcx.ins().ushr_imm_u(lhs, -n)
+                            lw.bcx.ins().ushr_imm_u(lhs, -n)
                         }
                     }
                     _ => match op {
                         Op::IDiv | Op::Mod => {
                             // A zero divisor is the interpreter's error to
                             // raise: leave the trace at this op.
-                            let zero = bcx.ins().iconst(types::I64, 0);
-                            let is_zero = bcx.ins().icmp(IntCC::Equal, rhs, zero);
-                            let cont_blk = bcx.create_block();
-                            let exit_blk = bcx.create_block();
-                            bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
-                            bcx.switch_to_block(exit_blk);
-                            bcx.seal_block(exit_blk);
-                            guard_exit!(rop.pc, i);
-                            bcx.switch_to_block(cont_blk);
-                            bcx.seal_block(cont_blk);
-                            emit_floor_divmod(&mut bcx, op, lhs, rhs)
+                            let zero = lw.bcx.ins().iconst(types::I64, 0);
+                            let is_zero = lw.bcx.ins().icmp(IntCC::Equal, rhs, zero);
+                            let cont_blk = lw.bcx.create_block();
+                            let exit_blk = lw.bcx.create_block();
+                            lw.bcx.ins().brif(is_zero, exit_blk, &[], cont_blk, &[]);
+                            lw.bcx.switch_to_block(exit_blk);
+                            lw.bcx.seal_block(exit_blk);
+                            guard_exit(lw, pl, rop.pc, i);
+                            lw.bcx.switch_to_block(cont_blk);
+                            lw.bcx.seal_block(cont_blk);
+                            emit_floor_divmod(&mut lw.bcx, op, lhs, rhs)
                         }
-                        Op::BAnd => bcx.ins().band(lhs, rhs),
-                        Op::BOr => bcx.ins().bor(lhs, rhs),
-                        Op::BXor => bcx.ins().bxor(lhs, rhs),
+                        Op::BAnd => lw.bcx.ins().band(lhs, rhs),
+                        Op::BOr => lw.bcx.ins().bor(lhs, rhs),
+                        Op::BXor => lw.bcx.ins().bxor(lhs, rhs),
                         Op::Shl | Op::Shr => {
-                            let wide = bcx.ins().icmp_imm_u(IntCC::UnsignedGreaterThan, rhs, 63);
-                            let cont_blk = bcx.create_block();
-                            let exit_blk = bcx.create_block();
-                            bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
-                            bcx.switch_to_block(exit_blk);
-                            bcx.seal_block(exit_blk);
-                            guard_exit!(rop.pc, i);
-                            bcx.switch_to_block(cont_blk);
-                            bcx.seal_block(cont_blk);
+                            let wide = lw.bcx.ins().icmp_imm_u(IntCC::UnsignedGreaterThan, rhs, 63);
+                            let cont_blk = lw.bcx.create_block();
+                            let exit_blk = lw.bcx.create_block();
+                            lw.bcx.ins().brif(wide, exit_blk, &[], cont_blk, &[]);
+                            lw.bcx.switch_to_block(exit_blk);
+                            lw.bcx.seal_block(exit_blk);
+                            guard_exit(lw, pl, rop.pc, i);
+                            lw.bcx.switch_to_block(cont_blk);
+                            lw.bcx.seal_block(cont_blk);
                             if op == Op::Shl {
-                                bcx.ins().ishl(lhs, rhs)
+                                lw.bcx.ins().ishl(lhs, rhs)
                             } else {
-                                bcx.ins().ushr(lhs, rhs)
+                                lw.bcx.ins().ushr(lhs, rhs)
                             }
                         }
                         _ => unreachable!("whitelist gated above"),
                     },
                 };
-                bcx.def_var(regs[ins.a() as usize], r);
-                current_kinds[off + ins.a() as usize] = RegKind::Int;
+                lw.bcx.def_var(regs[ins.a() as usize], r);
+                lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
             }
             Op::Unm | Op::BNot => {
-                let kb = k_op(&current_kinds, off as u32 + ins.b());
+                let kb = k_op(&lw.current_kinds, off as u32 + ins.b());
                 if !matches!(kb, RegKind::Int)
                     && !(matches!(op, Op::Unm) && matches!(kb, RegKind::Float))
                 {
@@ -1335,19 +907,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 }
                 if matches!(op, Op::Unm) && matches!(kb, RegKind::Float) {
                     // Float negation.
-                    let src = use_var_f64(&mut bcx, regs, ins.b());
-                    let r = bcx.ins().fneg(src);
-                    def_var_f64(&mut bcx, regs[ins.a() as usize], r);
-                    current_kinds[off + ins.a() as usize] = RegKind::Float;
+                    let src = use_var_f64(&mut lw.bcx, regs, ins.b());
+                    let r = lw.bcx.ins().fneg(src);
+                    def_var_f64(&mut lw.bcx, regs[ins.a() as usize], r);
+                    lw.current_kinds[off + ins.a() as usize] = RegKind::Float;
                 } else {
-                    let src = bcx.use_var(regs[ins.b() as usize]);
+                    let src = lw.bcx.use_var(regs[ins.b() as usize]);
                     let r = match op {
-                        Op::Unm => bcx.ins().ineg(src),
-                        Op::BNot => bcx.ins().bnot(src),
+                        Op::Unm => lw.bcx.ins().ineg(src),
+                        Op::BNot => lw.bcx.ins().bnot(src),
                         _ => unreachable!("whitelist gated above"),
                     };
-                    bcx.def_var(regs[ins.a() as usize], r);
-                    current_kinds[off + ins.a() as usize] = RegKind::Int;
+                    lw.bcx.def_var(regs[ins.a() as usize], r);
+                    lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
                 }
             }
             Op::EqK => {
@@ -1357,28 +929,30 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // against the other number kind bails, against a
                 // non-number is never equal.
                 let bx = ins.b() as usize;
-                let ka = k_op(&current_kinds, off as u32 + ins.a());
+                let ka = k_op(&lw.current_kinds, off as u32 + ins.a());
                 let cond = match head_proto.consts[bx] {
                     luna_core::runtime::Value::Int(n) => {
                         if matches!(ka, RegKind::Float) {
                             return None;
                         }
                         match eq_lowering(ka, RegKind::Int) {
-                            EqLowering::Unequal => bcx.ins().iconst(types::I8, i64::from(!ins.k())),
+                            EqLowering::Unequal => {
+                                lw.bcx.ins().iconst(types::I8, i64::from(!ins.k()))
+                            }
                             lowering => {
                                 if lowering == EqLowering::Unknown {
-                                    dispatchable = false;
-                                    dispatch_off_reason =
-                                        dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                                    lw.dispatchable = false;
+                                    lw.dispatch_off_reason =
+                                        lw.dispatch_off_reason.or(Some("cmp:unknown-kind"));
                                 }
-                                let lhs = bcx.use_var(regs[ins.a() as usize]);
-                                let rhs = bcx.ins().iconst(types::I64, n);
+                                let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
+                                let rhs = lw.bcx.ins().iconst(types::I64, n);
                                 let int_cc = if ins.k() {
                                     IntCC::Equal
                                 } else {
                                     IntCC::NotEqual
                                 };
-                                bcx.ins().icmp(int_cc, lhs, rhs)
+                                lw.bcx.ins().icmp(int_cc, lhs, rhs)
                             }
                         }
                     }
@@ -1386,94 +960,96 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         if !matches!(ka, RegKind::Float) {
                             return None;
                         }
-                        let lhs = use_var_f64(&mut bcx, regs, ins.a());
-                        let rhs = bcx.ins().f64const(f);
+                        let lhs = use_var_f64(&mut lw.bcx, regs, ins.a());
+                        let rhs = lw.bcx.ins().f64const(f);
                         let float_cc = if ins.k() {
                             FloatCC::Equal
                         } else {
                             FloatCC::NotEqual
                         };
-                        bcx.ins().fcmp(float_cc, lhs, rhs)
+                        lw.bcx.ins().fcmp(float_cc, lhs, rhs)
                     }
                     _ => unreachable!("pre-emit gates Int / Float const only"),
                 };
 
-                let continue_blk = bcx.create_block();
-                let side_exit_blk = bcx.create_block();
-                bcx.ins().brif(cond, continue_blk, &[], side_exit_blk, &[]);
+                let continue_blk = lw.bcx.create_block();
+                let side_exit_blk = lw.bcx.create_block();
+                lw.bcx
+                    .ins()
+                    .brif(cond, continue_blk, &[], side_exit_blk, &[]);
 
-                bcx.switch_to_block(side_exit_blk);
-                bcx.seal_block(side_exit_blk);
+                lw.bcx.switch_to_block(side_exit_blk);
+                lw.bcx.seal_block(side_exit_blk);
                 let side_exit_pc = rop.pc + 2;
                 // at depth>0, the side-exit must
                 // materialise the inlined frames before the interp can
                 // resume at the cmp's PC. See the matching Lt/Le/Eq
                 // arm below for the chain-build details.
-                if !call_chain.is_empty() {
+                if !lw.call_chain.is_empty() {
                     // Capture head's resume pc BEFORE the innermost
                     // override — `call_chain[0].pc` is the outermost
                     // self-rec Call's `pc + 1` (= trace head's
                     // post-Call resume).
-                    let head_resume_pc = call_chain[0].pc;
-                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                    let head_resume_pc = lw.call_chain[0].pc;
+                    let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
                     if let Some(last) = snapshot.last_mut() {
                         last.pc = side_exit_pc;
                     }
                     let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
                     let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
-                    let site_idx = per_exit_inline_vec.len() as u32;
+                    let site_idx = lw.per_exit_inline_vec.len() as u32;
                     // materialise live Sinkable sites
                     // BEFORE the frame_materialize_frames helper
                     // pushes the inline frames. The window-sized
                     // snapshot updates in-place so per_exit_inline's
                     // kinds entry reflects materialised slots.
-                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                    let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
                     let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
+                        &lw.escape,
+                        &lw.virt_vars,
+                        &lw.virt_kinds,
+                        &lw.regs_full,
+                        &pl.op_offsets,
                         i,
                         &mut kinds_snapshot,
                         head_proto,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    materialize_emit_count += mat_count;
+                    lw.materialize_emit_count += mat_count;
                     let inline_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
                     let _inline_side_cell_addr_0 = (&*inline_side_box_0) as *const TCellPtr as i64;
                     let chain_for_helper = chain_rc.clone();
-                    per_exit_inline_vec.push((
+                    lw.per_exit_inline_vec.push((
                         side_exit_pc,
                         head_resume_pc,
                         kinds_snapshot,
                         chain_rc,
                         inline_side_box_0,
                     ));
-                    let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                    let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
                     let ptr_arg = emit_chain_ptr_arg(
-                        &mut module,
-                        &mut bcx,
+                        &mut lw.module,
+                        &mut lw.bcx,
                         &chain_for_helper,
                         chain_ptr,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
-                    let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                    let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
+                    let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
                     emit_store_back_and_return_site(
-                        &mut bcx,
-                        &regs_full[..window_size_us],
-                        &stored,
+                        &mut lw.bcx,
+                        &lw.regs_full[..window_size_us],
+                        &lw.stored,
                         reg_state,
                         site_idx,
                         side_exit_pc,
-                        flush_ctx.as_ref(),
+                        lw.flush_ctx.as_ref(),
                         0i64,
                         trace_fn_sig_ref,
                     );
@@ -1484,46 +1060,47 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     // materialised caller-window slot so the
                     // dispatcher unpacks the heap pointer correctly
                     // on deopt.
-                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                    let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
                     let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
+                        &lw.escape,
+                        &lw.virt_vars,
+                        &lw.virt_kinds,
+                        &lw.regs_full,
+                        &pl.op_offsets,
                         i,
                         &mut snapshot,
                         head_proto,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    materialize_emit_count += mat_count;
+                    lw.materialize_emit_count += mat_count;
                     let tag_side_box_0: Box<TCellPtr> = Box::new(TCellPtr::null());
                     let _tag_side_cell_addr_0 = (&*tag_side_box_0) as *const TCellPtr as i64;
-                    let tag_side_local_0 = per_exit_kinds.len() as u32;
-                    per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_0));
+                    let tag_side_local_0 = lw.per_exit_kinds.len() as u32;
+                    lw.per_exit_kinds
+                        .push((side_exit_pc, snapshot, tag_side_box_0));
                     // store_back only writes caller window — depth>0 scratch
                     // slots stay out of the dispatcher's reg_state restore.
                     emit_tagged_exit(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         suppress_admit_id,
-                        &regs_full[..max_stack],
-                        &stored,
+                        &lw.regs_full[..max_stack],
+                        &lw.stored,
                         reg_state,
                         side_exit_pc,
                         record.head_pc,
                         tag_side_local_0,
-                        flush_ctx.as_ref(),
+                        lw.flush_ctx.as_ref(),
                         trace_fn_sig_ref,
                     );
                 }
 
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
             }
             Op::Test => {
                 // `if (not R[A] == K) then pc++`.
@@ -1535,7 +1112,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // check; runtime mismatch → deopt store_back +
                 // return test.pc. The Subsequent Jmp (if TookJmp)
                 // is consumed_by_cmp by the pre-emit pass.
-                let a_kind = k_op(&current_kinds, off as u32 + ins.a());
+                let a_kind = k_op(&lw.current_kinds, off as u32 + ins.a());
                 let truthy_known: Option<bool> = match a_kind {
                     RegKind::Int
                     | RegKind::Float
@@ -1548,7 +1125,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     RegKind::StackHeld => return None,
                 };
                 let k_bit = ins.k();
-                let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::SkippedJmp));
+                let recorded_passed = matches!(pl.cmp_dirs[i], Some(CmpDir::SkippedJmp));
                 if let Some(truthy) = truthy_known {
                     let test_passed = truthy != k_bit;
                     if test_passed != recorded_passed {
@@ -1560,29 +1137,31 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     // compile time.
                 } else {
                     // Runtime tag-based truthy guard.
-                    let slot_arg = bcx.ins().iconst(types::I64, ins.a() as i64);
-                    let stack_tag_ref = module.declare_func_in_func(stack_tag_id, bcx.func);
-                    let tag_call = bcx.ins().call(stack_tag_ref, &[slot_arg]);
-                    let tag = bcx.inst_results(tag_call)[0];
-                    let one = bcx.ins().iconst(types::I64, 1);
-                    let is_truthy = bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
+                    let slot_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
+                    let stack_tag_ref = lw.module.declare_func_in_func(stack_tag_id, lw.bcx.func);
+                    let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
+                    let tag = lw.bcx.inst_results(tag_call)[0];
+                    let one = lw.bcx.ins().iconst(types::I64, 1);
+                    let is_truthy = lw.bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
                     // Op::Test: test_passed_runtime = !is_truthy == k_bit
-                    let not_truthy = bcx.ins().bxor_imm_u(is_truthy, 1);
-                    let k_bit_const = bcx.ins().iconst(types::I8, k_bit as i64);
-                    let test_passed_runtime = bcx.ins().icmp(IntCC::Equal, not_truthy, k_bit_const);
-                    let recorded_const = bcx.ins().iconst(types::I8, recorded_passed as i64);
-                    let ok = bcx
+                    let not_truthy = lw.bcx.ins().bxor_imm_u(is_truthy, 1);
+                    let k_bit_const = lw.bcx.ins().iconst(types::I8, k_bit as i64);
+                    let test_passed_runtime =
+                        lw.bcx.ins().icmp(IntCC::Equal, not_truthy, k_bit_const);
+                    let recorded_const = lw.bcx.ins().iconst(types::I8, recorded_passed as i64);
+                    let ok = lw
+                        .bcx
                         .ins()
                         .icmp(IntCC::Equal, test_passed_runtime, recorded_const);
-                    let cont = bcx.create_block();
-                    let deopt = bcx.create_block();
-                    bcx.ins().brif(ok, cont, &[], deopt, &[]);
-                    bcx.switch_to_block(deopt);
-                    bcx.seal_block(deopt);
+                    let cont = lw.bcx.create_block();
+                    let deopt = lw.bcx.create_block();
+                    lw.bcx.ins().brif(ok, cont, &[], deopt, &[]);
+                    lw.bcx.switch_to_block(deopt);
+                    lw.bcx.seal_block(deopt);
                     // restored with the kinds the registers have here
-                    guard_exit!(rop.pc, i);
-                    bcx.switch_to_block(cont);
-                    bcx.seal_block(cont);
+                    guard_exit(lw, pl, rop.pc, i);
+                    lw.bcx.switch_to_block(cont);
+                    lw.bcx.seal_block(cont);
                 }
             }
             Op::TestSet => {
@@ -1594,7 +1173,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // Unset → emit runtime guard via stack_tag;
                 // when match + TookJmp recorded, emit Move under
                 // the `cont` block (so deopt path skips the Move).
-                let b_kind = k_op(&current_kinds, off as u32 + ins.b());
+                let b_kind = k_op(&lw.current_kinds, off as u32 + ins.b());
                 let truthy_known: Option<bool> = match b_kind {
                     RegKind::Int
                     | RegKind::Float
@@ -1607,46 +1186,48 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     RegKind::StackHeld => return None,
                 };
                 let k_bit = ins.k();
-                let recorded_passed = matches!(cmp_dirs[i], Some(CmpDir::TookJmp));
+                let recorded_passed = matches!(pl.cmp_dirs[i], Some(CmpDir::TookJmp));
                 if let Some(truthy) = truthy_known {
                     let test_passed = truthy == k_bit;
                     if test_passed != recorded_passed {
                         return None;
                     }
                     if test_passed {
-                        let v = bcx.use_var(regs[ins.b() as usize]);
-                        bcx.def_var(regs[ins.a() as usize], v);
-                        current_kinds[off + ins.a() as usize] = b_kind;
+                        let v = lw.bcx.use_var(regs[ins.b() as usize]);
+                        lw.bcx.def_var(regs[ins.a() as usize], v);
+                        lw.current_kinds[off + ins.a() as usize] = b_kind;
                     }
                 } else {
                     // Runtime guard. Same shape as Op::Test
                     // but the basis is `is_truthy` (not `!is_truthy`).
-                    let slot_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
-                    let stack_tag_ref = module.declare_func_in_func(stack_tag_id, bcx.func);
-                    let tag_call = bcx.ins().call(stack_tag_ref, &[slot_arg]);
-                    let tag = bcx.inst_results(tag_call)[0];
-                    let one = bcx.ins().iconst(types::I64, 1);
-                    let is_truthy = bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
-                    let k_bit_const = bcx.ins().iconst(types::I8, k_bit as i64);
-                    let test_passed_runtime = bcx.ins().icmp(IntCC::Equal, is_truthy, k_bit_const);
-                    let recorded_const = bcx.ins().iconst(types::I8, recorded_passed as i64);
-                    let ok = bcx
+                    let slot_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
+                    let stack_tag_ref = lw.module.declare_func_in_func(stack_tag_id, lw.bcx.func);
+                    let tag_call = lw.bcx.ins().call(stack_tag_ref, &[slot_arg]);
+                    let tag = lw.bcx.inst_results(tag_call)[0];
+                    let one = lw.bcx.ins().iconst(types::I64, 1);
+                    let is_truthy = lw.bcx.ins().icmp(IntCC::UnsignedGreaterThan, tag, one);
+                    let k_bit_const = lw.bcx.ins().iconst(types::I8, k_bit as i64);
+                    let test_passed_runtime =
+                        lw.bcx.ins().icmp(IntCC::Equal, is_truthy, k_bit_const);
+                    let recorded_const = lw.bcx.ins().iconst(types::I8, recorded_passed as i64);
+                    let ok = lw
+                        .bcx
                         .ins()
                         .icmp(IntCC::Equal, test_passed_runtime, recorded_const);
-                    let cont = bcx.create_block();
-                    let deopt = bcx.create_block();
-                    bcx.ins().brif(ok, cont, &[], deopt, &[]);
-                    bcx.switch_to_block(deopt);
-                    bcx.seal_block(deopt);
+                    let cont = lw.bcx.create_block();
+                    let deopt = lw.bcx.create_block();
+                    lw.bcx.ins().brif(ok, cont, &[], deopt, &[]);
+                    lw.bcx.switch_to_block(deopt);
+                    lw.bcx.seal_block(deopt);
                     // restored with the kinds the registers have here
-                    guard_exit!(rop.pc, i);
-                    bcx.switch_to_block(cont);
-                    bcx.seal_block(cont);
+                    guard_exit(lw, pl, rop.pc, i);
+                    lw.bcx.switch_to_block(cont);
+                    lw.bcx.seal_block(cont);
                     if recorded_passed {
-                        let v = bcx.use_var(regs[ins.b() as usize]);
-                        bcx.def_var(regs[ins.a() as usize], v);
-                        current_kinds[off + ins.a() as usize] =
-                            k_op(&current_kinds, off as u32 + ins.b());
+                        let v = lw.bcx.use_var(regs[ins.b() as usize]);
+                        lw.bcx.def_var(regs[ins.a() as usize], v);
+                        lw.current_kinds[off + ins.a() as usize] =
+                            k_op(&lw.current_kinds, off as u32 + ins.b());
                     }
                 }
             }
@@ -1661,7 +1242,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // true ⇒ skipped Jmp → continue; side-exit goes
                 // to the Jmp's target). The pre-emit pass already
                 // validated `i+1 < effective_end`.
-                let dir = cmp_dirs[i].expect("cmp dir set in pre-emit");
+                let dir = pl.cmp_dirs[i].expect("cmp dir set in pre-emit");
                 let invert = matches!(dir, CmpDir::SkippedJmp);
                 let k_effective = if invert { !ins.k() } else { ins.k() };
                 let ka = kind!(ins.a());
@@ -1671,15 +1252,15 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     if !matches!(ka, RegKind::Float) || !matches!(kb, RegKind::Float) {
                         return None;
                     }
-                    let lhs = use_var_f64(&mut bcx, regs, ins.a());
-                    let rhs = use_var_f64(&mut bcx, regs, ins.b());
+                    let lhs = use_var_f64(&mut lw.bcx, regs, ins.a());
+                    let rhs = use_var_f64(&mut lw.bcx, regs, ins.b());
                     let float_cc = match op {
                         Op::Lt => FloatCC::LessThan,
                         Op::Le => FloatCC::LessThanOrEqual,
                         Op::Eq => FloatCC::Equal,
                         _ => unreachable!("whitelist gated above"),
                     };
-                    let c = bcx.ins().fcmp(float_cc, lhs, rhs);
+                    let c = lw.bcx.ins().fcmp(float_cc, lhs, rhs);
                     // negate the ordered compare rather than flip the
                     // condition: `not (a < b)` holds for NaN, `a >= b`
                     // does not, and the aarch64 backend lowers no
@@ -1687,23 +1268,25 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     if k_effective {
                         c
                     } else {
-                        bcx.ins().icmp_imm_u(IntCC::Equal, c, 0)
+                        lw.bcx.ins().icmp_imm_u(IntCC::Equal, c, 0)
                     }
                 } else if op == Op::Eq {
-                    let lhs = bcx.use_var(regs[ins.a() as usize]);
-                    let rhs = bcx.use_var(regs[ins.b() as usize]);
+                    let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
+                    let rhs = lw.bcx.use_var(regs[ins.b() as usize]);
                     let int_cc = if k_effective {
                         IntCC::Equal
                     } else {
                         IntCC::NotEqual
                     };
                     match eq_lowering(ka, kb) {
-                        EqLowering::Payload => bcx.ins().icmp(int_cc, lhs, rhs),
-                        EqLowering::Unequal => bcx.ins().iconst(types::I8, i64::from(!k_effective)),
+                        EqLowering::Payload => lw.bcx.ins().icmp(int_cc, lhs, rhs),
+                        EqLowering::Unequal => {
+                            lw.bcx.ins().iconst(types::I8, i64::from(!k_effective))
+                        }
                         EqLowering::Identity(kind) => {
                             // two distinct objects can still be equal (`__eq`,
                             // equal long strings); the interpreter decides those
-                            let same = bcx.ins().icmp(IntCC::Equal, lhs, rhs);
+                            let same = lw.bcx.ins().icmp(IntCC::Equal, lhs, rhs);
                             let decided = if kind == RegKind::Table {
                                 let no_mt = |bcx: &mut FunctionBuilder<'_>, t| {
                                     let mt = bcx.ins().load(
@@ -1714,9 +1297,9 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                                     );
                                     bcx.ins().icmp_imm_u(IntCC::Equal, mt, 0)
                                 };
-                                let l = no_mt(&mut bcx, lhs);
-                                let r = no_mt(&mut bcx, rhs);
-                                bcx.ins().band(l, r)
+                                let l = no_mt(&mut lw.bcx, lhs);
+                                let r = no_mt(&mut lw.bcx, rhs);
+                                lw.bcx.ins().band(l, r)
                             } else {
                                 let short = |bcx: &mut FunctionBuilder<'_>, s| {
                                     let b = bcx.ins().load(
@@ -1727,18 +1310,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                                     );
                                     bcx.ins().icmp_imm_u(IntCC::NotEqual, b, 0)
                                 };
-                                let l = short(&mut bcx, lhs);
-                                let r = short(&mut bcx, rhs);
-                                bcx.ins().band(l, r)
+                                let l = short(&mut lw.bcx, lhs);
+                                let r = short(&mut lw.bcx, rhs);
+                                lw.bcx.ins().band(l, r)
                             };
-                            let ok = bcx.ins().bor(same, decided);
-                            guard!(ok, i, rop.pc);
-                            bcx.ins().icmp(int_cc, lhs, rhs)
+                            let ok = lw.bcx.ins().bor(same, decided);
+                            guard!(lw, pl, ok, i, rop.pc);
+                            lw.bcx.ins().icmp(int_cc, lhs, rhs)
                         }
                         EqLowering::Unknown => {
-                            dispatchable = false;
-                            dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
-                            bcx.ins().icmp(int_cc, lhs, rhs)
+                            lw.dispatchable = false;
+                            lw.dispatch_off_reason =
+                                lw.dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                            lw.bcx.ins().icmp(int_cc, lhs, rhs)
                         }
                     }
                 } else {
@@ -1750,13 +1334,14 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                             RegKind::Int | RegKind::Unset | RegKind::Unknown,
                         )
                         | (RegKind::Int, RegKind::Unset | RegKind::Unknown) => {
-                            dispatchable = false;
-                            dispatch_off_reason = dispatch_off_reason.or(Some("cmp:unknown-kind"));
+                            lw.dispatchable = false;
+                            lw.dispatch_off_reason =
+                                lw.dispatch_off_reason.or(Some("cmp:unknown-kind"));
                         }
                         _ => return None,
                     }
-                    let lhs = bcx.use_var(regs[ins.a() as usize]);
-                    let rhs = bcx.use_var(regs[ins.b() as usize]);
+                    let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
+                    let rhs = lw.bcx.use_var(regs[ins.b() as usize]);
                     let int_cc = match (op, k_effective) {
                         (Op::Lt, true) => IntCC::SignedLessThan,
                         (Op::Lt, false) => IntCC::SignedGreaterThanOrEqual,
@@ -1764,12 +1349,14 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         (Op::Le, false) => IntCC::SignedGreaterThan,
                         _ => unreachable!("whitelist gated above"),
                     };
-                    bcx.ins().icmp(int_cc, lhs, rhs)
+                    lw.bcx.ins().icmp(int_cc, lhs, rhs)
                 };
 
-                let continue_blk = bcx.create_block();
-                let side_exit_blk = bcx.create_block();
-                bcx.ins().brif(cond, continue_blk, &[], side_exit_blk, &[]);
+                let continue_blk = lw.bcx.create_block();
+                let side_exit_blk = lw.bcx.create_block();
+                lw.bcx
+                    .ins()
+                    .brif(cond, continue_blk, &[], side_exit_blk, &[]);
 
                 // Side-exit PC depends on the recorded direction:
                 //   TookJmp    → interp's `pc++` lands at cmp_pc + 2.
@@ -1784,8 +1371,8 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         (pc_after_jmp + jmp_inst.sj() as i64) as u32
                     }
                 };
-                bcx.switch_to_block(side_exit_blk);
-                bcx.seal_block(side_exit_blk);
+                lw.bcx.switch_to_block(side_exit_blk);
+                lw.bcx.seal_block(side_exit_blk);
                 // at depth>0, snapshot the live
                 // `call_chain` (each cmp@d>0 site has its OWN chain;
                 // a single global depth-indexed array loops fib
@@ -1795,110 +1382,111 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // site's side-exit PC so the materialize helper
                 // stays PC-agnostic — it just pushes whatever
                 // metadata says.
-                if !call_chain.is_empty() {
-                    let head_resume_pc = call_chain[0].pc;
-                    let mut snapshot: Vec<FrameMaterializeInfo> = call_chain.clone();
+                if !lw.call_chain.is_empty() {
+                    let head_resume_pc = lw.call_chain[0].pc;
+                    let mut snapshot: Vec<FrameMaterializeInfo> = lw.call_chain.clone();
                     if let Some(last) = snapshot.last_mut() {
                         last.pc = side_exit_pc;
                     }
                     let chain_rc: TArc<[FrameMaterializeInfo]> = snapshot.into();
                     let chain_ptr = TArc::as_ptr(&chain_rc) as *const FrameMaterializeInfo as i64;
                     let chain_len = chain_rc.len() as i64;
-                    let site_idx = per_exit_inline_vec.len() as u32;
+                    let site_idx = lw.per_exit_inline_vec.len() as u32;
                     // materialise live Sinkable sites
                     // (depth=0 + depth>0) before frame-mat helper
                     // pushes the inline frames.
-                    let mut kinds_snapshot: Vec<RegKind> = current_kinds.clone();
+                    let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
                     let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
+                        &lw.escape,
+                        &lw.virt_vars,
+                        &lw.virt_kinds,
+                        &lw.regs_full,
+                        &pl.op_offsets,
                         i,
                         &mut kinds_snapshot,
                         head_proto,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    materialize_emit_count += mat_count;
+                    lw.materialize_emit_count += mat_count;
                     let inline_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
                     let _inline_side_cell_addr_1 = (&*inline_side_box_1) as *const TCellPtr as i64;
                     let chain_for_helper = chain_rc.clone();
-                    per_exit_inline_vec.push((
+                    lw.per_exit_inline_vec.push((
                         side_exit_pc,
                         head_resume_pc,
                         kinds_snapshot,
                         chain_rc,
                         inline_side_box_1,
                     ));
-                    let n_arg = bcx.ins().iconst(types::I64, chain_len);
+                    let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
                     let ptr_arg = emit_chain_ptr_arg(
-                        &mut module,
-                        &mut bcx,
+                        &mut lw.module,
+                        &mut lw.bcx,
                         &chain_for_helper,
                         chain_ptr,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    let mat_ref = module.declare_func_in_func(materialize_id, bcx.func);
-                    let _ = bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
+                    let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
+                    let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
                     emit_store_back_and_return_site(
-                        &mut bcx,
-                        &regs_full[..window_size_us],
-                        &stored,
+                        &mut lw.bcx,
+                        &lw.regs_full[..window_size_us],
+                        &lw.stored,
                         reg_state,
                         site_idx,
                         side_exit_pc,
-                        flush_ctx.as_ref(),
+                        lw.flush_ctx.as_ref(),
                         0i64,
                         trace_fn_sig_ref,
                     );
                 } else {
                     // materialise-on-deopt for
                     // depth=0 cmp's live Sinkable sites.
-                    let mut snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                    let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
                     let mat_count = emit_materialize_live_sunk(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         mat_sunk_id,
-                        &escape,
-                        &virt_vars,
-                        &virt_kinds,
-                        &regs_full,
-                        &op_offsets,
+                        &lw.escape,
+                        &lw.virt_vars,
+                        &lw.virt_kinds,
+                        &lw.regs_full,
+                        &pl.op_offsets,
                         i,
                         &mut snapshot,
                         head_proto,
                         opts.aot,
-                        &mut defined_aot_data,
+                        &mut lw.defined_aot_data,
                     );
-                    materialize_emit_count += mat_count;
+                    lw.materialize_emit_count += mat_count;
                     let tag_side_box_1: Box<TCellPtr> = Box::new(TCellPtr::null());
                     let _tag_side_cell_addr_1 = (&*tag_side_box_1) as *const TCellPtr as i64;
-                    let tag_side_local_1 = per_exit_kinds.len() as u32;
-                    per_exit_kinds.push((side_exit_pc, snapshot, tag_side_box_1));
+                    let tag_side_local_1 = lw.per_exit_kinds.len() as u32;
+                    lw.per_exit_kinds
+                        .push((side_exit_pc, snapshot, tag_side_box_1));
                     emit_tagged_exit(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         suppress_admit_id,
-                        &regs_full[..max_stack],
-                        &stored,
+                        &lw.regs_full[..max_stack],
+                        &lw.stored,
                         reg_state,
                         side_exit_pc,
                         record.head_pc,
                         tag_side_local_1,
-                        flush_ctx.as_ref(),
+                        lw.flush_ctx.as_ref(),
                         trace_fn_sig_ref,
                     );
                 }
 
                 // Continue: subsequent ops emit here.
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
             }
             Op::NewTable => {
                 // sunk path: skip the heap alloc helper.
@@ -1907,50 +1495,51 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // for the site's slot stays at its entry value
                 // (Unset → maps to ExitTag::Untouched, so the
                 // dispatcher carries the entry tag in the restore).
-                if let Some(OpAction::NewTableSite { site_idx }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && virt_vars[site_idx as usize].is_some()
+                if let Some(OpAction::NewTableSite { site_idx }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && lw.virt_vars[site_idx as usize].is_some()
                 {
                     continue;
                 }
-                let func_ref = module.declare_func_in_func(new_table_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[]);
-                let t = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], t);
-                current_kinds[off + ins.a() as usize] = RegKind::Table;
+                let func_ref = lw.module.declare_func_in_func(new_table_id, lw.bcx.func);
+                let call = lw.bcx.ins().call(func_ref, &[]);
+                let t = lw.bcx.inst_results(call)[0];
+                lw.bcx.def_var(regs[ins.a() as usize], t);
+                lw.current_kinds[off + ins.a() as usize] = RegKind::Table;
             }
             Op::GetI => {
                 // sunk path: a GetI from a Sinkable site
                 // at a key in `1..=cap` becomes a `use_var` of the
                 // matching virt slot Variable, with kind carried
                 // from `virt_kinds`.
-                if let Some(OpAction::GetIRead { site_idx, key }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && let Some(vars) = virt_vars[site_idx as usize].as_ref()
+                if let Some(OpAction::GetIRead { site_idx, key }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && let Some(vars) = lw.virt_vars[site_idx as usize].as_ref()
                 {
                     let slot = (key as usize) - 1;
-                    let v = bcx.use_var(vars[slot]);
-                    bcx.def_var(regs[ins.a() as usize], v);
-                    let k = virt_kinds[site_idx as usize]
+                    let v = lw.bcx.use_var(vars[slot]);
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
+                    let k = lw.virt_kinds[site_idx as usize]
                         .as_ref()
                         .expect("Sinkable site has virt_kinds")[slot];
-                    current_kinds[off + ins.a() as usize] = k;
+                    lw.current_kinds[off + ins.a() as usize] = k;
                     continue;
                 }
                 // the helpers read the operand as a table. A number,
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.b()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.b() as usize]);
-                let k_imm = bcx.ins().iconst(types::I64, ins.c() as i64);
+                let t = lw.bcx.use_var(regs[ins.b() as usize]);
+                let k_imm = lw.bcx.ins().iconst(types::I64, ins.c() as i64);
                 // GetX inference: look at the immediate next op. The read
                 // is checked against it, so a value of another type (or
                 // a table with a metatable) leaves the trace here.
@@ -1960,19 +1549,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     None
                 };
                 if let Some((kind, want)) = getx_want(inferred) {
-                    let v = checked_read!(get_int_checked_id, t, k_imm, want, rop.pc, i);
-                    bcx.def_var(regs[ins.a() as usize], v);
-                    current_kinds[off + ins.a() as usize] = kind;
+                    let v = checked_read!(lw, pl, get_int_checked_id, t, k_imm, want, rop.pc, i);
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
+                    lw.current_kinds[off + ins.a() as usize] = kind;
                 } else {
-                    let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, k_imm]);
-                    let v = bcx.inst_results(call)[0];
-                    bcx.def_var(regs[ins.a() as usize], v);
+                    let func_ref = lw.module.declare_func_in_func(get_int_id, lw.bcx.func);
+                    let call = lw.bcx.ins().call(func_ref, &[t, k_imm]);
+                    let v = lw.bcx.inst_results(call)[0];
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
                     // the value's type is not known: the register's
                     // earlier kind no longer describes it
-                    current_kinds[off + ins.a() as usize] = RegKind::Unknown;
-                    dispatchable = false;
-                    dispatch_off_reason = dispatch_off_reason.or(Some("GetI:inference-fail"));
+                    lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
+                    lw.dispatchable = false;
+                    lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("GetI:inference-fail"));
                 }
             }
             Op::GetTable => {
@@ -1980,39 +1569,41 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.b()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.b() as usize]);
-                let key = bcx.use_var(regs[ins.c() as usize]);
+                let t = lw.bcx.use_var(regs[ins.b() as usize]);
+                let key = lw.bcx.use_var(regs[ins.c() as usize]);
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
                 // the helper reads the key as an integer
-                let key_is_int = matches!(k_op(&current_kinds, off as u32 + ins.c()), RegKind::Int);
+                let key_is_int =
+                    matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
                 match getx_want(inferred) {
                     Some((kind, want)) if key_is_int => {
-                        let v = checked_read!(get_int_checked_id, t, key, want, rop.pc, i);
-                        bcx.def_var(regs[ins.a() as usize], v);
-                        current_kinds[off + ins.a() as usize] = kind;
+                        let v = checked_read!(lw, pl, get_int_checked_id, t, key, want, rop.pc, i);
+                        lw.bcx.def_var(regs[ins.a() as usize], v);
+                        lw.current_kinds[off + ins.a() as usize] = kind;
                     }
                     _ => {
-                        let func_ref = module.declare_func_in_func(get_int_id, bcx.func);
-                        let call = bcx.ins().call(func_ref, &[t, key]);
-                        let v = bcx.inst_results(call)[0];
-                        bcx.def_var(regs[ins.a() as usize], v);
+                        let func_ref = lw.module.declare_func_in_func(get_int_id, lw.bcx.func);
+                        let call = lw.bcx.ins().call(func_ref, &[t, key]);
+                        let v = lw.bcx.inst_results(call)[0];
+                        lw.bcx.def_var(regs[ins.a() as usize], v);
                         // as for GetI
-                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetTable:inference-fail"));
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("GetTable:inference-fail"));
                     }
                 }
             }
@@ -2024,19 +1615,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 if let Some(OpAction::SetFieldSunkWrite {
                     site_idx,
                     hash_slot,
-                }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && virt_vars[site_idx as usize].is_some()
+                }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && lw.virt_vars[site_idx as usize].is_some()
                 {
-                    let array_cap = escape.sites[site_idx as usize].array_cap as usize;
+                    let array_cap = lw.escape.sites[site_idx as usize].array_cap as usize;
                     let slot = array_cap + hash_slot as usize;
-                    let src_kind = current_kinds[off + ins.c() as usize];
-                    let v = bcx.use_var(regs[ins.c() as usize]);
-                    let vars = virt_vars[site_idx as usize]
+                    let src_kind = lw.current_kinds[off + ins.c() as usize];
+                    let v = lw.bcx.use_var(regs[ins.c() as usize]);
+                    let vars = lw.virt_vars[site_idx as usize]
                         .as_ref()
                         .expect("Sinkable site has virt_vars");
-                    bcx.def_var(vars[slot], v);
-                    let kinds_vec = virt_kinds[site_idx as usize]
+                    lw.bcx.def_var(vars[slot], v);
+                    let kinds_vec = lw.virt_kinds[site_idx as usize]
                         .as_mut()
                         .expect("Sinkable site has virt_kinds");
                     kinds_vec[slot] = src_kind;
@@ -2047,30 +1638,36 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.a()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.a()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.a() as usize]);
+                let t = lw.bcx.use_var(regs[ins.a() as usize]);
                 let key_v = match head_proto.consts[ins.b() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
                     _ => unreachable!("pre-emit gates Str const at K[B]"),
                 };
-                let key_arg =
-                    emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
-                let val_kind = k_op(&current_kinds, off as u32 + ins.c());
+                let key_arg = emit_str_key_arg(
+                    lw.module,
+                    &mut lw.bcx,
+                    key_v,
+                    opts.aot,
+                    &mut lw.defined_aot_data,
+                );
+                let val_kind = k_op(&lw.current_kinds, off as u32 + ins.c());
                 // a value of unknown kind cannot be tagged for the table
                 if val_kind.untyped() {
                     return None;
                 }
-                let val = bcx.use_var(regs[ins.c() as usize]);
+                let val = lw.bcx.use_var(regs[ins.c() as usize]);
                 let done = emit_table_set(
-                    &mut bcx,
-                    &mut module,
+                    &mut lw.bcx,
+                    &mut lw.module,
                     &set_ids,
                     t,
                     key_arg,
@@ -2078,7 +1675,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     val,
                     val_kind,
                 );
-                guard!(done, i, rop.pc);
+                guard!(lw, pl, done, i, rop.pc);
             }
             Op::GetField => {
                 // sunk path: use_var the virt slot
@@ -2086,18 +1683,18 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 if let Some(OpAction::GetFieldSunkRead {
                     site_idx,
                     hash_slot,
-                }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && let Some(vars) = virt_vars[site_idx as usize].as_ref()
+                }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && let Some(vars) = lw.virt_vars[site_idx as usize].as_ref()
                 {
-                    let array_cap = escape.sites[site_idx as usize].array_cap as usize;
+                    let array_cap = lw.escape.sites[site_idx as usize].array_cap as usize;
                     let slot = array_cap + hash_slot as usize;
-                    let v = bcx.use_var(vars[slot]);
-                    bcx.def_var(regs[ins.a() as usize], v);
-                    let k = virt_kinds[site_idx as usize]
+                    let v = lw.bcx.use_var(vars[slot]);
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
+                    let k = lw.virt_kinds[site_idx as usize]
                         .as_ref()
                         .expect("Sinkable site has virt_kinds")[slot];
-                    current_kinds[off + ins.a() as usize] = k;
+                    lw.current_kinds[off + ins.a() as usize] = k;
                     continue;
                 }
                 // helper path.
@@ -2105,21 +1702,27 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.b()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.b() as usize]);
+                let t = lw.bcx.use_var(regs[ins.b() as usize]);
                 let key_v = match head_proto.consts[ins.c() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
                     _ => unreachable!("pre-emit gates Str const at K[C]"),
                 };
-                let key_arg =
-                    emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
+                let key_arg = emit_str_key_arg(
+                    lw.module,
+                    &mut lw.bcx,
+                    key_v,
+                    opts.aot,
+                    &mut lw.defined_aot_data,
+                );
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
@@ -2165,40 +1768,40 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         .expect("ic_active implies snapshot present");
 
                     // --- Guards 1 & 2: metatable + node count ---
-                    let mt = bcx.ins().load(
+                    let mt = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         crate::jit_backend::TABLE_METATABLE_OFFSET as i32,
                     );
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
-                    let node_mask = bcx.ins().load(
+                    let zero = lw.bcx.ins().iconst(types::I64, 0);
+                    let mt_ok = lw.bcx.ins().icmp(IntCC::Equal, mt, zero);
+                    let node_mask = lw.bcx.ins().load(
                         types::I32,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
                         crate::jit_backend::TABLE_NODE_MASK_OFFSET as i32,
                     );
                     let mask = i64::from((snap.nodes_len as u32).wrapping_sub(1));
-                    let len_ok = bcx.ins().icmp_imm_u(IntCC::Equal, node_mask, mask);
-                    let guards_12 = bcx.ins().band(mt_ok, len_ok);
+                    let len_ok = lw.bcx.ins().icmp_imm_u(IntCC::Equal, node_mask, mask);
+                    let guards_12 = lw.bcx.ins().band(mt_ok, len_ok);
 
                     // 3 blocks: fast (guards 3+4 + load), slow
                     // (helper), merge (def_var dst). slow_blk has 2
                     // predecessors (mt/len fail + key/tag fail); we
                     // seal it only after both edges are emitted.
-                    let fast_blk = bcx.create_block();
-                    let slow_blk = bcx.create_block();
-                    let merge_blk = bcx.create_block();
-                    bcx.append_block_param(merge_blk, types::I64);
+                    let fast_blk = lw.bcx.create_block();
+                    let slow_blk = lw.bcx.create_block();
+                    let merge_blk = lw.bcx.create_block();
+                    lw.bcx.append_block_param(merge_blk, types::I64);
 
-                    bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
+                    lw.bcx.ins().brif(guards_12, fast_blk, &[], slow_blk, &[]);
 
                     // --- fast: load nodes_ptr, compute node_addr,
                     //     guards 3 & 4, load val_raw ---
-                    bcx.switch_to_block(fast_blk);
-                    bcx.seal_block(fast_blk);
-                    let nodes_ptr = bcx.ins().load(
+                    lw.bcx.switch_to_block(fast_blk);
+                    lw.bcx.seal_block(fast_blk);
+                    let nodes_ptr = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
@@ -2206,76 +1809,80 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     );
                     let node_offset =
                         (snap.slot_idx as usize * crate::jit_backend::SIZEOF_NODE) as i64;
-                    let node_addr = bcx.ins().iadd_imm_u(nodes_ptr, node_offset);
+                    let node_addr = lw.bcx.ins().iadd_imm_u(nodes_ptr, node_offset);
 
-                    let key_raw = bcx.ins().load(
+                    let key_raw = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         crate::jit_backend::NODE_KEY_RAW_OFFSET as i32,
                     );
-                    let key_imm = bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
-                    let key_ok = bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
+                    let key_imm = lw.bcx.ins().iconst(types::I64, snap.key_ptr_bits as i64);
+                    let key_ok = lw.bcx.ins().icmp(IntCC::Equal, key_raw, key_imm);
 
-                    let val_tag_i8 = bcx.ins().load(
+                    let val_tag_i8 = lw.bcx.ins().load(
                         types::I8,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         crate::jit_backend::NODE_VAL_TAG_OFFSET as i32,
                     );
-                    let val_tag = bcx.ins().uextend(types::I64, val_tag_i8);
-                    let tag_imm = bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
-                    let tag_ok = bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
-                    let guards_34 = bcx.ins().band(key_ok, tag_ok);
+                    let val_tag = lw.bcx.ins().uextend(types::I64, val_tag_i8);
+                    let tag_imm = lw.bcx.ins().iconst(types::I64, snap.cached_val_tag as i64);
+                    let tag_ok = lw.bcx.ins().icmp(IntCC::Equal, val_tag, tag_imm);
+                    let guards_34 = lw.bcx.ins().band(key_ok, tag_ok);
 
-                    let load_blk = bcx.create_block();
-                    bcx.ins().brif(guards_34, load_blk, &[], slow_blk, &[]);
+                    let load_blk = lw.bcx.create_block();
+                    lw.bcx.ins().brif(guards_34, load_blk, &[], slow_blk, &[]);
 
-                    bcx.switch_to_block(load_blk);
-                    bcx.seal_block(load_blk);
-                    let val_raw = bcx.ins().load(
+                    lw.bcx.switch_to_block(load_blk);
+                    lw.bcx.seal_block(load_blk);
+                    let val_raw = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         node_addr,
                         crate::jit_backend::NODE_VAL_RAW_OFFSET as i32,
                     );
-                    bcx.ins().jump(merge_blk, &[val_raw.into()]);
+                    lw.bcx.ins().jump(merge_blk, &[val_raw.into()]);
 
                     // --- slow: fall back to the helper ---
-                    bcx.switch_to_block(slow_blk);
-                    bcx.seal_block(slow_blk);
+                    lw.bcx.switch_to_block(slow_blk);
+                    lw.bcx.seal_block(slow_blk);
                     let v_slow = if let Some((_, w)) = want {
-                        checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
+                        checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
                     } else {
-                        let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                        let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                        bcx.inst_results(call)[0]
+                        let func_ref = lw.module.declare_func_in_func(get_field_id, lw.bcx.func);
+                        let call = lw.bcx.ins().call(func_ref, &[t, key_arg]);
+                        lw.bcx.inst_results(call)[0]
                     };
-                    bcx.ins().jump(merge_blk, &[v_slow.into()]);
+                    lw.bcx.ins().jump(merge_blk, &[v_slow.into()]);
 
                     // --- merge ---
-                    bcx.switch_to_block(merge_blk);
-                    bcx.seal_block(merge_blk);
-                    bcx.block_params(merge_blk)[0]
+                    lw.bcx.switch_to_block(merge_blk);
+                    lw.bcx.seal_block(merge_blk);
+                    lw.bcx.block_params(merge_blk)[0]
                 } else if let Some((_, w)) = want {
-                    checked_read!(get_field_checked_id, t, key_arg, w, rop.pc, i)
+                    checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
                 } else {
-                    let func_ref = module.declare_func_in_func(get_field_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[t, key_arg]);
-                    bcx.inst_results(call)[0]
+                    let func_ref = lw.module.declare_func_in_func(get_field_id, lw.bcx.func);
+                    let call = lw.bcx.ins().call(func_ref, &[t, key_arg]);
+                    lw.bcx.inst_results(call)[0]
                 };
-                bcx.def_var(regs[ins.a() as usize], v);
+                lw.bcx.def_var(regs[ins.a() as usize], v);
 
                 match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                    Some(ExitTag::Int) => lw.current_kinds[off + ins.a() as usize] = RegKind::Int,
+                    Some(ExitTag::Table) => {
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Table
+                    }
+                    Some(ExitTag::Float) => {
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Float
+                    }
                     _ => {
                         // as for GetI
-                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetField:inference-fail"));
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("GetField:inference-fail"));
                     }
                 }
             }
@@ -2286,36 +1893,54 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // the global env, not trace-internal alloc). Exit-tag
                 // inference identical to GetField — peek next op via
                 // `infer_getx_exit`.
-                let upval_idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
+                let upval_idx_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
                 let key_v = match head_proto.consts[ins.c() as usize] {
                     luna_core::runtime::Value::Str(s) => s,
                     _ => unreachable!("pre-emit gates Str const at K[C]"),
                 };
-                let key_arg =
-                    emit_str_key_arg(module, &mut bcx, key_v, opts.aot, &mut defined_aot_data);
+                let key_arg = emit_str_key_arg(
+                    lw.module,
+                    &mut lw.bcx,
+                    key_v,
+                    opts.aot,
+                    &mut lw.defined_aot_data,
+                );
                 let inferred = if i + 1 < effective_end {
                     infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
                 } else {
                     None
                 };
                 let v = if let Some((_, w)) = getx_want(inferred) {
-                    checked_read!(get_tab_up_checked_id, upval_idx_arg, key_arg, w, rop.pc, i)
+                    checked_read!(
+                        lw,
+                        pl,
+                        get_tab_up_checked_id,
+                        upval_idx_arg,
+                        key_arg,
+                        w,
+                        rop.pc,
+                        i
+                    )
                 } else {
-                    let func_ref = module.declare_func_in_func(get_tab_up_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
-                    bcx.inst_results(call)[0]
+                    let func_ref = lw.module.declare_func_in_func(get_tab_up_id, lw.bcx.func);
+                    let call = lw.bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
+                    lw.bcx.inst_results(call)[0]
                 };
-                bcx.def_var(regs[ins.a() as usize], v);
+                lw.bcx.def_var(regs[ins.a() as usize], v);
                 match inferred {
-                    Some(ExitTag::Int) => current_kinds[off + ins.a() as usize] = RegKind::Int,
-                    Some(ExitTag::Table) => current_kinds[off + ins.a() as usize] = RegKind::Table,
-                    Some(ExitTag::Float) => current_kinds[off + ins.a() as usize] = RegKind::Float,
+                    Some(ExitTag::Int) => lw.current_kinds[off + ins.a() as usize] = RegKind::Int,
+                    Some(ExitTag::Table) => {
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Table
+                    }
+                    Some(ExitTag::Float) => {
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Float
+                    }
                     _ => {
                         // as for GetI
-                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetTabUp:inference-fail"));
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("GetTabUp:inference-fail"));
                     }
                 }
             }
@@ -2325,18 +1950,18 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // the matching virt slot Variable + propagate the
                 // source RegKind into virt_kinds so the next
                 // GetIRead restores the right kind into current_kinds.
-                if let Some(OpAction::SetISunkWrite { site_idx, key }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && virt_vars[site_idx as usize].is_some()
+                if let Some(OpAction::SetISunkWrite { site_idx, key }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && lw.virt_vars[site_idx as usize].is_some()
                 {
                     let slot = (key as usize) - 1;
-                    let src_kind = current_kinds[off + ins.c() as usize];
-                    let v = bcx.use_var(regs[ins.c() as usize]);
-                    let vars = virt_vars[site_idx as usize]
+                    let src_kind = lw.current_kinds[off + ins.c() as usize];
+                    let v = lw.bcx.use_var(regs[ins.c() as usize]);
+                    let vars = lw.virt_vars[site_idx as usize]
                         .as_ref()
                         .expect("Sinkable site has virt_vars");
-                    bcx.def_var(vars[slot], v);
-                    let kinds_vec = virt_kinds[site_idx as usize]
+                    lw.bcx.def_var(vars[slot], v);
+                    let kinds_vec = lw.virt_kinds[site_idx as usize]
                         .as_mut()
                         .expect("Sinkable site has virt_kinds");
                     kinds_vec[slot] = src_kind;
@@ -2348,25 +1973,26 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.a()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.a()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.a() as usize]);
-                let k_imm = bcx.ins().iconst(types::I64, ins.b() as i64);
-                let val_kind = k_op(&current_kinds, off as u32 + ins.c());
+                let t = lw.bcx.use_var(regs[ins.a() as usize]);
+                let k_imm = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
+                let val_kind = k_op(&lw.current_kinds, off as u32 + ins.c());
                 // a value of unknown kind cannot be tagged for the table
                 if val_kind.untyped() {
                     return None;
                 }
-                let val = bcx.use_var(regs[ins.c() as usize]);
+                let val = lw.bcx.use_var(regs[ins.c() as usize]);
                 let done = emit_table_set(
-                    &mut bcx,
-                    &mut module,
+                    &mut lw.bcx,
+                    &mut lw.module,
                     &set_ids,
                     t,
                     k_imm,
@@ -2374,25 +2000,25 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     val,
                     val_kind,
                 );
-                guard!(done, i, rop.pc);
+                guard!(lw, pl, done, i, rop.pc);
             }
             Op::SetTable => {
                 // sunk path: escape sweep tagged
                 // SetTableSunkWrite when the key reg was const-folded
                 // to a 1..=cap literal. Emit shape mirrors SetI sunk
                 // (def_var virt slot + propagate kind into virt_kinds).
-                if let Some(OpAction::SetTableSunkWrite { site_idx, key }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && virt_vars[site_idx as usize].is_some()
+                if let Some(OpAction::SetTableSunkWrite { site_idx, key }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && lw.virt_vars[site_idx as usize].is_some()
                 {
                     let slot = (key as usize) - 1;
-                    let src_kind = current_kinds[off + ins.c() as usize];
-                    let v = bcx.use_var(regs[ins.c() as usize]);
-                    let vars = virt_vars[site_idx as usize]
+                    let src_kind = lw.current_kinds[off + ins.c() as usize];
+                    let v = lw.bcx.use_var(regs[ins.c() as usize]);
+                    let vars = lw.virt_vars[site_idx as usize]
                         .as_ref()
                         .expect("Sinkable site has virt_vars");
-                    bcx.def_var(vars[slot], v);
-                    let kinds_vec = virt_kinds[site_idx as usize]
+                    lw.bcx.def_var(vars[slot], v);
+                    let kinds_vec = lw.virt_kinds[site_idx as usize]
                         .as_mut()
                         .expect("Sinkable site has virt_kinds");
                     kinds_vec[slot] = src_kind;
@@ -2404,26 +2030,27 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.a()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.a()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.a() as usize]);
-                let key = bcx.use_var(regs[ins.b() as usize]);
-                let key_kind = k_op(&current_kinds, off as u32 + ins.b());
-                let val_kind = k_op(&current_kinds, off as u32 + ins.c());
+                let t = lw.bcx.use_var(regs[ins.a() as usize]);
+                let key = lw.bcx.use_var(regs[ins.b() as usize]);
+                let key_kind = k_op(&lw.current_kinds, off as u32 + ins.b());
+                let val_kind = k_op(&lw.current_kinds, off as u32 + ins.c());
                 // a key or value of unknown kind cannot be tagged for the table
                 if key_kind.untyped() || val_kind.untyped() {
                     return None;
                 }
-                let val = bcx.use_var(regs[ins.c() as usize]);
+                let val = lw.bcx.use_var(regs[ins.c() as usize]);
                 let done = emit_table_set(
-                    &mut bcx,
-                    &mut module,
+                    &mut lw.bcx,
+                    &mut lw.module,
                     &set_ids,
                     t,
                     key,
@@ -2431,7 +2058,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     val,
                     val_kind,
                 );
-                guard!(done, i, rop.pc);
+                guard!(lw, pl, done, i, rop.pc);
             }
             Op::SetList => {
                 // `R[A][C+i] := R[A+i]` for i in
@@ -2448,24 +2075,24 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 } else {
                     b_bytecode
                 };
-                if let Some(OpAction::SetListWrite { site_idx }) = escape.op_actions[i]
-                    && escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                    && virt_vars[site_idx as usize].is_some()
+                if let Some(OpAction::SetListWrite { site_idx }) = lw.escape.op_actions[i]
+                    && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+                    && lw.virt_vars[site_idx as usize].is_some()
                 {
                     let a = ins.a() as usize;
                     let mut src_vals: Vec<Value> = Vec::with_capacity(effective_b);
                     let mut src_kinds: Vec<RegKind> = Vec::with_capacity(effective_b);
                     for vi in 1..=effective_b {
-                        src_vals.push(bcx.use_var(regs[a + vi]));
-                        src_kinds.push(current_kinds[off + a + vi]);
+                        src_vals.push(lw.bcx.use_var(regs[a + vi]));
+                        src_kinds.push(lw.current_kinds[off + a + vi]);
                     }
-                    let vars = virt_vars[site_idx as usize]
+                    let vars = lw.virt_vars[site_idx as usize]
                         .as_ref()
                         .expect("Sinkable site has virt_vars");
                     for (vi, &v) in src_vals.iter().enumerate() {
-                        bcx.def_var(vars[vi], v);
+                        lw.bcx.def_var(vars[vi], v);
                     }
-                    let kinds_vec = virt_kinds[site_idx as usize]
+                    let kinds_vec = lw.virt_kinds[site_idx as usize]
                         .as_mut()
                         .expect("Sinkable site has virt_kinds");
                     for (vi, &k) in src_kinds.iter().enumerate() {
@@ -2480,28 +2107,29 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + a as u32) {
+                match k_op(&lw.current_kinds, off as u32 + a as u32) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[a]);
+                let t = lw.bcx.use_var(regs[a]);
                 for ii in 1..=effective_b {
-                    let key = bcx.ins().iconst(types::I64, c_off + ii as i64);
-                    let src_kind = k_op(&current_kinds, (off + a + ii) as u32);
+                    let key = lw.bcx.ins().iconst(types::I64, c_off + ii as i64);
+                    let src_kind = k_op(&lw.current_kinds, (off + a + ii) as u32);
                     // a value of unknown kind cannot be tagged for the table
                     if src_kind.untyped() {
                         return None;
                     }
-                    let val = bcx.use_var(regs[a + ii]);
+                    let val = lw.bcx.use_var(regs[a + ii]);
                     // Always stored: SetList fills the fresh table of a
                     // constructor, which has no metatable, at integer keys.
                     let _ = emit_table_set(
-                        &mut bcx,
-                        &mut module,
+                        &mut lw.bcx,
+                        &mut lw.module,
                         &set_ids,
                         t,
                         key,
@@ -2517,23 +2145,27 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // string or closure (entry-guarded or computed here) leaves
                 // the op to the interpreter; Nil can be a lookahead guess
                 // for a value the recording indexed, so it stays
-                match k_op(&current_kinds, off as u32 + ins.b()) {
+                match k_op(&lw.current_kinds, off as u32 + ins.b()) {
                     RegKind::Table | RegKind::Nil => {}
                     RegKind::Unset | RegKind::Unknown => {
-                        dispatchable = false;
-                        dispatch_off_reason = dispatch_off_reason.or(Some("table-op:unknown-kind"));
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
                     }
                     _ => return None,
                 }
-                let t = bcx.use_var(regs[ins.b() as usize]);
-                let func_ref = module.declare_func_in_func(len_checked_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[t]);
-                let v = bcx.inst_results(call)[0];
+                let t = lw.bcx.use_var(regs[ins.b() as usize]);
+                let func_ref = lw.module.declare_func_in_func(len_checked_id, lw.bcx.func);
+                let call = lw.bcx.ins().call(func_ref, &[t]);
+                let v = lw.bcx.inst_results(call)[0];
                 // -1: the table has a metatable
-                let ok = bcx.ins().icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
-                guard!(ok, i, rop.pc);
-                bcx.def_var(regs[ins.a() as usize], v);
-                current_kinds[off + ins.a() as usize] = RegKind::Int;
+                let ok = lw
+                    .bcx
+                    .ins()
+                    .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
+                guard!(lw, pl, ok, i, rop.pc);
+                lw.bcx.def_var(regs[ins.a() as usize], v);
+                lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
             }
             Op::Closure => {
                 // R[A] := closure(proto.protos[Bx]).
@@ -2546,27 +2178,27 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // bounds. RegKind::Unset src → bail (no known tag).
                 let bx = ins.bx() as usize;
                 let inner = head_proto.protos[bx];
-                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
+                let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
                 for d in inner.upvals.iter() {
                     if !d.in_stack {
                         continue;
                     }
                     let src_idx = d.index as usize;
-                    let src_kind = current_kinds[off + src_idx];
+                    let src_kind = lw.current_kinds[off + src_idx];
                     // an untyped source cannot be packed to a Value
                     let tag_byte = known_tag(src_kind)?;
-                    let slot_arg = bcx.ins().iconst(types::I64, d.index as i64);
-                    let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
-                    let raw_arg = bcx.use_var(regs[src_idx]);
-                    bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+                    let slot_arg = lw.bcx.ins().iconst(types::I64, d.index as i64);
+                    let tag_arg = lw.bcx.ins().iconst(types::I64, tag_byte as i64);
+                    let raw_arg = lw.bcx.use_var(regs[src_idx]);
+                    lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                 }
-                let bx_arg = bcx.ins().iconst(types::I64, ins.bx() as i64);
-                let func_ref = module.declare_func_in_func(op_closure_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[bx_arg]);
-                let v = bcx.inst_results(call)[0];
-                bcx.def_var(regs[ins.a() as usize], v);
-                current_kinds[off + ins.a() as usize] = RegKind::Closure;
-                closure_seen += 1;
+                let bx_arg = lw.bcx.ins().iconst(types::I64, ins.bx() as i64);
+                let func_ref = lw.module.declare_func_in_func(op_closure_id, lw.bcx.func);
+                let call = lw.bcx.ins().call(func_ref, &[bx_arg]);
+                let v = lw.bcx.inst_results(call)[0];
+                lw.bcx.def_var(regs[ins.a() as usize], v);
+                lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
+                lw.closure_seen += 1;
             }
             Op::Close => {
                 // close open upvals at slot ≥ A.
@@ -2588,25 +2220,25 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // first call), so a deopt that re-fires interp's
                 // Op::Close → begin_close → close_from sees no work.
                 let a_us = ins.a() as usize;
-                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
+                let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
                 for slot in a_us..max_stack {
-                    let k = current_kinds[off + slot];
+                    let k = lw.current_kinds[off + slot];
                     let Some(tag_byte) = known_tag(k) else {
                         continue;
                     };
-                    let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
-                    let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
-                    let raw_arg = bcx.use_var(regs[slot]);
-                    bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+                    let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
+                    let tag_arg = lw.bcx.ins().iconst(types::I64, tag_byte as i64);
+                    let raw_arg = lw.bcx.use_var(regs[slot]);
+                    lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                 }
-                let a_arg = bcx.ins().iconst(types::I64, ins.a() as i64);
-                let func_ref = module.declare_func_in_func(op_close_id, bcx.func);
-                let call = bcx.ins().call(func_ref, &[a_arg]);
-                let status = bcx.inst_results(call)[0];
+                let a_arg = lw.bcx.ins().iconst(types::I64, ins.a() as i64);
+                let func_ref = lw.module.declare_func_in_func(op_close_id, lw.bcx.func);
+                let call = lw.bcx.ins().call(func_ref, &[a_arg]);
+                let status = lw.bcx.inst_results(call)[0];
                 // 1: a `__close` handler would run; the interpreter
                 // redoes the op and runs it
-                let ok = bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
-                guard!(ok, i, rop.pc);
+                let ok = lw.bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
+                guard!(lw, pl, ok, i, rop.pc);
             }
             Op::GetUpval => {
                 // R[A] := UpVal[B]. The helper reads JIT_CL's
@@ -2621,19 +2253,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 //
                 // memoize per upval idx via `upval_cache`.
                 let idx_b = ins.b();
-                let v = if let Some(&cached_var) = upval_cache.get(&idx_b) {
-                    bcx.use_var(cached_var)
+                let v = if let Some(&cached_var) = lw.upval_cache.get(&idx_b) {
+                    lw.bcx.use_var(cached_var)
                 } else {
-                    let idx_arg = bcx.ins().iconst(types::I64, ins.b() as i64);
-                    let func_ref = module.declare_func_in_func(upval_get_id, bcx.func);
-                    let call = bcx.ins().call(func_ref, &[idx_arg]);
-                    let new_v = bcx.inst_results(call)[0];
-                    let cache_var = bcx.declare_var(types::I64);
-                    bcx.def_var(cache_var, new_v);
-                    upval_cache.insert(idx_b, cache_var);
+                    let idx_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
+                    let func_ref = lw.module.declare_func_in_func(upval_get_id, lw.bcx.func);
+                    let call = lw.bcx.ins().call(func_ref, &[idx_arg]);
+                    let new_v = lw.bcx.inst_results(call)[0];
+                    let cache_var = lw.bcx.declare_var(types::I64);
+                    lw.bcx.def_var(cache_var, new_v);
+                    lw.upval_cache.insert(idx_b, cache_var);
                     new_v
                 };
-                bcx.def_var(regs[ins.a() as usize], v);
+                lw.bcx.def_var(regs[ins.a() as usize], v);
                 // Look forward including the terminator (effective_end
                 // is the Op::Call's index when truncation applies).
                 let upper = effective_end.min(record.ops.len() - 1) + 1;
@@ -2644,13 +2276,13 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 };
                 match inferred {
                     Some(ExitTag::Closure) => {
-                        current_kinds[off + ins.a() as usize] = RegKind::Closure;
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
                     }
                     _ => {
-                        current_kinds[off + ins.a() as usize] = RegKind::Unknown;
-                        dispatchable = false;
-                        dispatch_off_reason =
-                            dispatch_off_reason.or(Some("GetUpval:not-Closure-use"));
+                        lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
+                        lw.dispatchable = false;
+                        lw.dispatch_off_reason =
+                            lw.dispatch_off_reason.or(Some("GetUpval:not-Closure-use"));
                     }
                 }
             }
@@ -2671,25 +2303,25 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // closure of the proto, a reassigned upvalue, another
                 // function) leaves here and the interpreter makes the call.
                 let callee_reg = ins.a() as usize;
-                if !matches!(current_kinds[off + callee_reg], RegKind::Closure) {
+                if !matches!(lw.current_kinds[off + callee_reg], RegKind::Closure) {
                     checkpoint("bail:inline-callee-not-closure");
                     return None;
                 }
-                let head_cl = match head_closure_var {
-                    Some(var) => bcx.use_var(var),
+                let head_cl = match lw.head_closure_var {
+                    Some(var) => lw.bcx.use_var(var),
                     None => {
-                        let func_ref = module.declare_func_in_func(head_closure_id, bcx.func);
-                        let call = bcx.ins().call(func_ref, &[]);
-                        let v = bcx.inst_results(call)[0];
-                        let var = bcx.declare_var(types::I64);
-                        bcx.def_var(var, v);
-                        head_closure_var = Some(var);
+                        let func_ref = lw.module.declare_func_in_func(head_closure_id, lw.bcx.func);
+                        let call = lw.bcx.ins().call(func_ref, &[]);
+                        let v = lw.bcx.inst_results(call)[0];
+                        let var = lw.bcx.declare_var(types::I64);
+                        lw.bcx.def_var(var, v);
+                        lw.head_closure_var = Some(var);
                         v
                     }
                 };
-                let callee = bcx.use_var(regs[callee_reg]);
-                let same = bcx.ins().icmp(IntCC::Equal, callee, head_cl);
-                guard!(same, i, rop.pc);
+                let callee = lw.bcx.use_var(regs[callee_reg]);
+                let same = lw.bcx.ins().icmp(IntCC::Equal, callee, head_cl);
+                guard!(lw, pl, same, i, rop.pc);
                 // SelfLink close: the LAST recorded op is the
                 // Op::Call whose "next" op (the tripping deepest-depth
                 // entry) was never captured. Skip the call_chain push
@@ -2708,8 +2340,8 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     i + 1 < effective_end,
                     "self-rec Call must be followed by callee op in effective_end"
                 );
-                let callee_base = op_offsets[i + 1];
-                call_chain.push(FrameMaterializeInfo {
+                let callee_base = pl.op_offsets[i + 1];
+                lw.call_chain.push(FrameMaterializeInfo {
                     base_offset: callee_base,
                     pc: rop.pc + 1,
                     nresults: 1,
@@ -2724,10 +2356,10 @@ pub(super) fn lower_trace_into_inner<M: Module>(
             // pop the matching call_chain frame.
             Op::Return0 => {
                 debug_assert!(
-                    !call_chain.is_empty(),
+                    !lw.call_chain.is_empty(),
                     "Return0 at depth>0 has a matching frame"
                 );
-                call_chain.pop();
+                lw.call_chain.pop();
             }
             // inline Return1: copy callee's R[A]
             // into the caller's R[call_a]. `op_offsets` for the
@@ -2736,7 +2368,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
             // ready for the caller's continuation to read it.
             Op::Return1 => {
                 let a_callee = ins.a() as usize;
-                let call_a = enclosing_call_a[i]
+                let call_a = pl.enclosing_call_a[i]
                     .expect("Return1 at depth>0 has an enclosing Op::Call")
                     as usize;
                 // Caller window's offset is below ours by call_a+1
@@ -2744,19 +2376,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 let caller_off = off
                     .checked_sub(call_a + 1)
                     .expect("op_offsets invariant: callee window > caller window");
-                let src_var = regs_full[off + a_callee];
-                let dst_var = regs_full[caller_off + call_a];
-                let v = bcx.use_var(src_var);
-                bcx.def_var(dst_var, v);
+                let src_var = lw.regs_full[off + a_callee];
+                let dst_var = lw.regs_full[caller_off + call_a];
+                let v = lw.bcx.use_var(src_var);
+                lw.bcx.def_var(dst_var, v);
                 // Propagate the kind so the caller's continuation
                 // sees the right type.
-                current_kinds[caller_off + call_a] = current_kinds[off + a_callee];
+                lw.current_kinds[caller_off + call_a] = lw.current_kinds[off + a_callee];
                 // pop matching call_chain frame.
                 debug_assert!(
-                    !call_chain.is_empty(),
+                    !lw.call_chain.is_empty(),
                     "Return1 at depth>0 has a matching frame"
                 );
-                call_chain.pop();
+                lw.call_chain.pop();
             }
             // generic-for body tail. Sequence:
             //   1. Spill regs[A..=A+2] (iter / state / control) to
@@ -2795,9 +2427,12 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 //   is what the slow_blk helper reads). R[A+2] is
                 //   spilled INSIDE slow_blk only, so fast iters pay
                 //   nothing.
-                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
+                let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
+                // a copy: the guard exits below take `lw` whole while this
+                // closure lives, and nothing changes the kinds meanwhile
+                let spill_kinds = lw.current_kinds.clone();
                 let spill_slot = |bcx: &mut FunctionBuilder<'_>, slot: usize| {
-                    let k = current_kinds[off + slot];
+                    let k = spill_kinds[off + slot];
                     let Some(tag_byte) = known_tag(k) else {
                         return;
                     };
@@ -2808,7 +2443,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 };
                 if !is_ipairs_trace {
                     for slot in a_us..=(a_us + 2) {
-                        spill_slot(&mut bcx, slot);
+                        spill_slot(&mut lw.bcx, slot);
                     }
                 }
 
@@ -2819,40 +2454,44 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // the buffer.
                 macro_rules! emit_helper_call {
                     () => {{
-                        let out_ss =
-                            bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                        let out_ss = lw.bcx.create_sized_stack_slot(
+                            cranelift_codegen::ir::StackSlotData::new(
                                 cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                                 24,
                                 3,
-                            ));
-                        let ctrl_addr = bcx.ins().stack_addr(types::I64, out_ss, 0);
-                        let key_addr = bcx.ins().stack_addr(types::I64, out_ss, 8);
-                        let val_addr = bcx.ins().stack_addr(types::I64, out_ss, 16);
-                        let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
-                        let nvars_arg = bcx.ins().iconst(types::I64, nvars);
-                        let func_ref = module.declare_func_in_func(op_tforcall_id, bcx.func);
-                        let call_inst = bcx
+                            ),
+                        );
+                        let ctrl_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 0);
+                        let key_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 8);
+                        let val_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 16);
+                        let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
+                        let nvars_arg = lw.bcx.ins().iconst(types::I64, nvars);
+                        let func_ref = lw.module.declare_func_in_func(op_tforcall_id, lw.bcx.func);
+                        let call_inst = lw
+                            .bcx
                             .ins()
                             .call(func_ref, &[a_arg, nvars_arg, ctrl_addr, key_addr, val_addr]);
-                        let status_or_tag = bcx.inst_results(call_inst)[0];
+                        let status_or_tag = lw.bcx.inst_results(call_inst)[0];
                         // -1: not a native iterator, or it raised; the
                         // interpreter redoes the op
-                        let ok =
-                            bcx.ins()
-                                .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
-                        guard!(ok, i, rop.pc);
+                        let ok = lw.bcx.ins().icmp_imm_s(
+                            IntCC::SignedGreaterThanOrEqual,
+                            status_or_tag,
+                            0,
+                        );
+                        guard!(lw, pl, ok, i, rop.pc);
                         // key tag | value tag << 8 (Vm::jit_op_tforcall)
-                        let key_tag = bcx.ins().band_imm_u(status_or_tag, 0xff);
-                        let val_tag = bcx.ins().ushr_imm_u(status_or_tag, 8);
-                        bcx.def_var(tforcall_tag_var, key_tag);
-                        bcx.def_var(tforcall_val_tag_var, val_tag);
-                        let ctrl_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 0);
-                        let key_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 8);
-                        let val_raw = bcx.ins().stack_load(types::I64, types::I64, out_ss, 16);
-                        bcx.def_var(regs[a_us + 2], ctrl_raw);
-                        bcx.def_var(regs[a_us + 4], key_raw);
+                        let key_tag = lw.bcx.ins().band_imm_u(status_or_tag, 0xff);
+                        let val_tag = lw.bcx.ins().ushr_imm_u(status_or_tag, 8);
+                        lw.bcx.def_var(tforcall_tag_var, key_tag);
+                        lw.bcx.def_var(tforcall_val_tag_var, val_tag);
+                        let ctrl_raw = lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 0);
+                        let key_raw = lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 8);
+                        let val_raw = lw.bcx.ins().stack_load(types::I64, types::I64, out_ss, 16);
+                        lw.bcx.def_var(regs[a_us + 2], ctrl_raw);
+                        lw.bcx.def_var(regs[a_us + 4], key_raw);
                         if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                            bcx.def_var(regs[a_us + 5], val_raw);
+                            lw.bcx.def_var(regs[a_us + 5], val_raw);
                         }
                     }};
                 }
@@ -2865,69 +2504,71 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     // Per iter: next_i = ctrl + 1; val = t[next_i].
                     // If val is Nil → loop ends; else key = next_i,
                     // val_raw = val's payload.
-                    let ctrl = bcx.use_var(regs[a_us + 2]);
-                    let t_raw = bcx.use_var(regs[a_us + 1]);
-                    let one = bcx.ins().iconst(types::I64, 1);
-                    let next_i = bcx.ins().iadd(ctrl, one);
+                    let ctrl = lw.bcx.use_var(regs[a_us + 2]);
+                    let t_raw = lw.bcx.use_var(regs[a_us + 1]);
+                    let one = lw.bcx.ins().iconst(types::I64, 1);
+                    let next_i = lw.bcx.ins().iadd(ctrl, one);
                     let key_m1 = ctrl;
 
-                    let asize = bcx.ins().load(
+                    let asize = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         crate::jit_backend::TABLE_ASIZE_OFFSET as i32,
                     );
-                    let in_range = bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, asize);
-                    let metatable = bcx.ins().load(
+                    let in_range = lw.bcx.ins().icmp(IntCC::UnsignedLessThan, key_m1, asize);
+                    let metatable = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         crate::jit_backend::TABLE_METATABLE_OFFSET as i32,
                     );
-                    let zero = bcx.ins().iconst(types::I64, 0);
-                    let no_meta = bcx.ins().icmp(IntCC::Equal, metatable, zero);
-                    let fast_ok = bcx.ins().band(in_range, no_meta);
+                    let zero = lw.bcx.ins().iconst(types::I64, 0);
+                    let no_meta = lw.bcx.ins().icmp(IntCC::Equal, metatable, zero);
+                    let fast_ok = lw.bcx.ins().band(in_range, no_meta);
 
-                    let fast_blk = bcx.create_block();
-                    let slow_blk = bcx.create_block();
-                    let merge_blk = bcx.create_block();
-                    bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
+                    let fast_blk = lw.bcx.create_block();
+                    let slow_blk = lw.bcx.create_block();
+                    let merge_blk = lw.bcx.create_block();
+                    lw.bcx.ins().brif(fast_ok, fast_blk, &[], slow_blk, &[]);
 
                     // ----- fast_blk: inline aget + populate -----
-                    bcx.switch_to_block(fast_blk);
-                    bcx.seal_block(fast_blk);
-                    let avals_ptr = bcx.ins().load(
+                    lw.bcx.switch_to_block(fast_blk);
+                    lw.bcx.seal_block(fast_blk);
+                    let avals_ptr = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t_raw,
                         crate::jit_backend::TABLE_ARRAY_PTR_OFFSET as i32,
                     );
-                    let three = bcx.ins().iconst(types::I64, 3);
-                    let val_off = bcx.ins().ishl(key_m1, three);
-                    let val_addr_fast = bcx.ins().iadd(avals_ptr, val_off);
-                    let val_raw_fast = bcx.ins().load(
+                    let three = lw.bcx.ins().iconst(types::I64, 3);
+                    let val_off = lw.bcx.ins().ishl(key_m1, three);
+                    let val_addr_fast = lw.bcx.ins().iadd(avals_ptr, val_off);
+                    let val_raw_fast = lw.bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         val_addr_fast,
                         0,
                     );
-                    let avals_bytes = bcx.ins().ishl(asize, three);
-                    let tag_base = bcx.ins().iadd(avals_ptr, avals_bytes);
-                    let tag_addr = bcx.ins().iadd(tag_base, key_m1);
-                    let val_tag_i8 = bcx.ins().load(
+                    let avals_bytes = lw.bcx.ins().ishl(asize, three);
+                    let tag_base = lw.bcx.ins().iadd(avals_ptr, avals_bytes);
+                    let tag_addr = lw.bcx.ins().iadd(tag_base, key_m1);
+                    let val_tag_i8 = lw.bcx.ins().load(
                         types::I8,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         tag_addr,
                         0,
                     );
-                    let val_tag = bcx.ins().uextend(types::I64, val_tag_i8);
-                    let nil_const = bcx
+                    let val_tag = lw.bcx.ins().uextend(types::I64, val_tag_i8);
+                    let nil_const = lw
+                        .bcx
                         .ins()
                         .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
-                    let int_const = bcx
+                    let int_const = lw
+                        .bcx
                         .ins()
                         .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
-                    let is_nil = bcx.ins().icmp(IntCC::Equal, val_tag, nil_const);
+                    let is_nil = lw.bcx.ins().icmp(IntCC::Equal, val_tag, nil_const);
                     // runtime val_tag guard. Snapshot
                     // at recorder fire (R[A+5]'s tag) is the
                     // *expected* iter val tag. The trace's
@@ -2944,25 +2585,25 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     if let Some(expected_tag) = record.tfor_val_tag
                         && expected_tag != luna_core::runtime::value::raw::NIL
                     {
-                        let exp_const = bcx.ins().iconst(types::I64, expected_tag as i64);
-                        let is_exp = bcx.ins().icmp(IntCC::Equal, val_tag, exp_const);
-                        let ok = bcx.ins().bor(is_nil, is_exp);
-                        let guard_continue = bcx.create_block();
-                        let guard_deopt = bcx.create_block();
-                        bcx.ins().brif(ok, guard_continue, &[], guard_deopt, &[]);
-                        bcx.switch_to_block(guard_deopt);
-                        bcx.seal_block(guard_deopt);
+                        let exp_const = lw.bcx.ins().iconst(types::I64, expected_tag as i64);
+                        let is_exp = lw.bcx.ins().icmp(IntCC::Equal, val_tag, exp_const);
+                        let ok = lw.bcx.ins().bor(is_nil, is_exp);
+                        let guard_continue = lw.bcx.create_block();
+                        let guard_deopt = lw.bcx.create_block();
+                        lw.bcx.ins().brif(ok, guard_continue, &[], guard_deopt, &[]);
+                        lw.bcx.switch_to_block(guard_deopt);
+                        lw.bcx.seal_block(guard_deopt);
                         // restored with the kinds the registers have here
-                        guard_exit!(rop.pc, i);
-                        bcx.switch_to_block(guard_continue);
-                        bcx.seal_block(guard_continue);
+                        guard_exit(lw, pl, rop.pc, i);
+                        lw.bcx.switch_to_block(guard_continue);
+                        lw.bcx.seal_block(guard_continue);
                     }
-                    let zero_raw = bcx.ins().iconst(types::I64, 0);
+                    let zero_raw = lw.bcx.ins().iconst(types::I64, 0);
                     // R[A+4] = is_nil ? Nil(raw=0) : Int(raw=next_i)
-                    let r4_raw = bcx.ins().select(is_nil, zero_raw, next_i);
-                    let r4_tag = bcx.ins().select(is_nil, nil_const, int_const);
-                    bcx.def_var(regs[a_us + 2], next_i);
-                    bcx.def_var(regs[a_us + 4], r4_raw);
+                    let r4_raw = lw.bcx.ins().select(is_nil, zero_raw, next_i);
+                    let r4_tag = lw.bcx.ins().select(is_nil, nil_const, int_const);
+                    lw.bcx.def_var(regs[a_us + 2], next_i);
+                    lw.bcx.def_var(regs[a_us + 4], r4_raw);
                     if a_us + 5 < max_stack {
                         // On the Nil branch, exit_tag[A+5] stays
                         // `Untouched` (no per-side-exit override
@@ -2974,37 +2615,37 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                         // (= the last non-Nil iter's value) on the
                         // Nil branch so the trace exit restore
                         // sees a real GC pointer.
-                        let prev_v5 = bcx.use_var(regs[a_us + 5]);
-                        let chosen_v5 = bcx.ins().select(is_nil, prev_v5, val_raw_fast);
-                        bcx.def_var(regs[a_us + 5], chosen_v5);
+                        let prev_v5 = lw.bcx.use_var(regs[a_us + 5]);
+                        let chosen_v5 = lw.bcx.ins().select(is_nil, prev_v5, val_raw_fast);
+                        lw.bcx.def_var(regs[a_us + 5], chosen_v5);
                     }
-                    bcx.def_var(tforcall_tag_var, r4_tag);
-                    bcx.def_var(tforcall_val_tag_var, val_tag);
-                    bcx.ins().jump(merge_blk, &[]);
+                    lw.bcx.def_var(tforcall_tag_var, r4_tag);
+                    lw.bcx.def_var(tforcall_val_tag_var, val_tag);
+                    lw.bcx.ins().jump(merge_blk, &[]);
 
                     // ----- slow_blk: helper fallback -----
-                    bcx.switch_to_block(slow_blk);
-                    bcx.seal_block(slow_blk);
+                    lw.bcx.switch_to_block(slow_blk);
+                    lw.bcx.seal_block(slow_blk);
                     // Spill R[A+2] (ctrl, the only slot that
                     // changes per iter via TForLoop's writeback)
                     // so the helper sees the trace's current
                     // value. R[A]/R[A+1] still hold their entry
                     // values in vm.stack.
-                    spill_slot(&mut bcx, a_us + 2);
+                    spill_slot(&mut lw.bcx, a_us + 2);
                     emit_helper_call!();
-                    bcx.ins().jump(merge_blk, &[]);
+                    lw.bcx.ins().jump(merge_blk, &[]);
 
                     // ----- merge_blk -----
-                    bcx.switch_to_block(merge_blk);
-                    bcx.seal_block(merge_blk);
+                    lw.bcx.switch_to_block(merge_blk);
+                    lw.bcx.seal_block(merge_blk);
                 } else {
                     emit_helper_call!();
                 }
 
-                current_kinds[off + a_us + 2] = RegKind::Unknown;
-                current_kinds[off + a_us + 4] = RegKind::Unknown;
+                lw.current_kinds[off + a_us + 2] = RegKind::Unknown;
+                lw.current_kinds[off + a_us + 4] = RegKind::Unknown;
                 if (nvars as usize) >= 2 && a_us + 5 < max_stack {
-                    current_kinds[off + a_us + 5] = RegKind::Unknown;
+                    lw.current_kinds[off + a_us + 5] = RegKind::Unknown;
                 }
             }
             // N-operand concat via helper.
@@ -3016,42 +2657,42 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // kinds (e.g. Str — RegKind doesn't carry Str)
                 // call stack_update_raw which preserves the
                 // existing tag and only refreshes the raw bits.
-                let spill_ref = module.declare_func_in_func(spill_id, bcx.func);
-                let update_raw_ref = module.declare_func_in_func(update_raw_id, bcx.func);
+                let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
+                let update_raw_ref = lw.module.declare_func_in_func(update_raw_id, lw.bcx.func);
                 for slot in a_us..(a_us + n_operands) {
-                    let k = current_kinds[off + slot];
-                    let slot_arg = bcx.ins().iconst(types::I64, slot as i64);
-                    let raw_arg = bcx.use_var(regs[slot]);
+                    let k = lw.current_kinds[off + slot];
+                    let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
+                    let raw_arg = lw.bcx.use_var(regs[slot]);
                     let tag_byte_opt = match k {
                         // an operand is read, so never held on the stack
                         RegKind::StackHeld => return None,
                         k => known_tag(k),
                     };
                     if let Some(tag_byte) = tag_byte_opt {
-                        let tag_arg = bcx.ins().iconst(types::I64, tag_byte as i64);
-                        bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
+                        let tag_arg = lw.bcx.ins().iconst(types::I64, tag_byte as i64);
+                        lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
                     } else {
-                        bcx.ins().call(update_raw_ref, &[slot_arg, raw_arg]);
+                        lw.bcx.ins().call(update_raw_ref, &[slot_arg, raw_arg]);
                     }
                 }
                 // Call helper.
-                let a_arg = bcx.ins().iconst(types::I64, a_us as i64);
-                let n_arg = bcx.ins().iconst(types::I64, n_operands as i64);
-                let func_ref = module.declare_func_in_func(op_concat_id, bcx.func);
-                let call_inst = bcx.ins().call(func_ref, &[a_arg, n_arg]);
-                let status = bcx.inst_results(call_inst)[0];
+                let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
+                let n_arg = lw.bcx.ins().iconst(types::I64, n_operands as i64);
+                let func_ref = lw.module.declare_func_in_func(op_concat_id, lw.bcx.func);
+                let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg]);
+                let status = lw.bcx.inst_results(call_inst)[0];
                 // -1: an error or `__concat`; the interpreter redoes the op
-                let ok = bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
-                guard!(ok, i, rop.pc);
+                let ok = lw.bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
+                guard!(lw, pl, ok, i, rop.pc);
                 // Reload regs[A] (= result Str) from vm.stack via
                 // luna_jit_stack_load helper. The helper deopts on the
                 // `__concat` path, so a result here is always a string.
-                let stack_load_ref = module.declare_func_in_func(stack_load_id, bcx.func);
-                let a_arg_reload = bcx.ins().iconst(types::I64, a_us as i64);
-                let reload_inst = bcx.ins().call(stack_load_ref, &[a_arg_reload]);
-                let result_raw = bcx.inst_results(reload_inst)[0];
-                bcx.def_var(regs[a_us], result_raw);
-                current_kinds[off + a_us] = RegKind::Str;
+                let stack_load_ref = lw.module.declare_func_in_func(stack_load_id, lw.bcx.func);
+                let a_arg_reload = lw.bcx.ins().iconst(types::I64, a_us as i64);
+                let reload_inst = lw.bcx.ins().call(stack_load_ref, &[a_arg_reload]);
+                let result_raw = lw.bcx.inst_results(reload_inst)[0];
+                lw.bcx.def_var(regs[a_us], result_raw);
+                lw.current_kinds[off + a_us] = RegKind::Str;
             }
             // generic-for prep is the leading pc-bump
             // before body_top. Recorder enters at body_top, so this
@@ -3092,7 +2733,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     // the caller's window back to interp stack. Slots at
     // [max_stack..window_size) are inline-frame scratch and must not
     // leak into the dispatcher's reg_state restore.
-    let caller_regs: &[Variable] = &regs_full[..max_stack];
+    let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
     // populated by the `downrec_idx_opt` arm when
     // it emits the stitch sentinel. Flows into `CompiledTrace.
     // downrec_link` at the struct literal below. `None` for every
@@ -3122,8 +2763,8 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         let _ = _target_proto_id;
         let _ = _depth_delta;
 
-        let stitch_blk = bcx.create_block();
-        let deopt_blk = bcx.create_block();
+        let stitch_blk = lw.bcx.create_block();
+        let deopt_blk = lw.bcx.create_block();
 
         // multi-way caller-pc guard. A single CMP
         // (`saved_pc == dr_return_pc`) misses ~90% of the time on a
@@ -3147,7 +2788,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // (caller) frame's `pc` — the runtime analogue of LuaJIT's
         // `[base-8]` in `asm_retf` (`lj_asm_arm64.h:565`).
         let saved_pc_offset = (window_size_us as i32) * 8;
-        let saved_pc = bcx.ins().load(
+        let saved_pc = lw.bcx.ins().load(
             types::I64,
             MemFlagsData::trusted(),
             reg_state,
@@ -3177,17 +2818,17 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // earlier candidates' miss arms branch into a fresh block that
         // becomes the next CMP's "current block".
         for (i, candidate_pc) in candidates.iter().enumerate() {
-            let imm_pc = bcx.ins().iconst(types::I64, *candidate_pc as i64);
-            let eq = bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
+            let imm_pc = lw.bcx.ins().iconst(types::I64, *candidate_pc as i64);
+            let eq = lw.bcx.ins().icmp(IntCC::Equal, saved_pc, imm_pc);
             let miss_blk = if i + 1 < candidates.len() {
-                bcx.create_block()
+                lw.bcx.create_block()
             } else {
                 deopt_blk
             };
-            bcx.ins().brif(eq, stitch_blk, &[], miss_blk, &[]);
+            lw.bcx.ins().brif(eq, stitch_blk, &[], miss_blk, &[]);
             if i + 1 < candidates.len() {
-                bcx.switch_to_block(miss_blk);
-                bcx.seal_block(miss_blk);
+                lw.bcx.switch_to_block(miss_blk);
+                lw.bcx.seal_block(miss_blk);
             }
         }
         let multi_way_candidate_count = candidates.len();
@@ -3201,27 +2842,29 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // at `exec.rs:6354+` decodes through the sentinel switch).
         // The dispatcher's stitch arm reads `parent_ct.downrec_link` for the
         // stitch target rather than looking up via `side_trace_cache`.
-        bcx.switch_to_block(stitch_blk);
-        bcx.seal_block(stitch_blk);
+        lw.bcx.switch_to_block(stitch_blk);
+        lw.bcx.seal_block(stitch_blk);
         let raw_ret =
             (1u64 << 63) | ((SIDE_SENT_DOWNREC_CODE as u64) << 56) | (record.head_pc as u64);
-        let stitch_ret = bcx.ins().iconst(types::I64, raw_ret as i64);
-        bcx.ins().return_(&[stitch_ret]);
+        let stitch_ret = lw.bcx.ins().iconst(types::I64, raw_ret as i64);
+        lw.bcx.ins().return_(&[stitch_ret]);
 
         // Miss: safe deopt-tail. The interpreter runs the head op before
         // anything enters the trace again: entered at once with the same
         // registers it would miss the same way forever.
-        bcx.switch_to_block(deopt_blk);
-        bcx.seal_block(deopt_blk);
-        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
-        bcx.ins().call(r, &[]);
+        lw.bcx.switch_to_block(deopt_blk);
+        lw.bcx.seal_block(deopt_blk);
+        let r = lw
+            .module
+            .declare_func_in_func(suppress_admit_id, lw.bcx.func);
+        lw.bcx.ins().call(r, &[]);
         emit_store_back_and_return_pc(
-            &mut bcx,
+            &mut lw.bcx,
             caller_regs,
-            &stored,
+            &lw.stored,
             reg_state,
             record.head_pc,
-            flush_ctx.as_ref(),
+            lw.flush_ctx.as_ref(),
             0i64,
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3236,7 +2879,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // The dispatcher admits a trace with a link even when it is not
         // dispatchable, so a body already marked (a value of unknown
         // type) gets no link: that mark only ever turns the trace off.
-        if dispatchable {
+        if lw.dispatchable {
             downrec_link_for_compiled = Some((0, record.head_pc));
         }
 
@@ -3253,8 +2896,8 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // the `multi_way_guard_emitted` counter, bumped at the close
         // handler from `downrec_multi_way_count_for_compiled` below.
         if multi_way_candidate_count < 2 {
-            dispatchable = false;
-            dispatch_off_reason = dispatch_off_reason.or(Some("downrec-stitch-pending"));
+            lw.dispatchable = false;
+            lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("downrec-stitch-pending"));
         }
         downrec_multi_way_count_for_compiled =
             multi_way_candidate_count.min(u8::MAX as usize) as u8;
@@ -3294,29 +2937,31 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // depth>0 slots into the extended buffer; the writes are
         // simply dead here. As for the downrec miss, the interpreter runs
         // the head op before the trace is entered again.
-        let r = module.declare_func_in_func(suppress_admit_id, bcx.func);
-        bcx.ins().call(r, &[]);
+        let r = lw
+            .module
+            .declare_func_in_func(suppress_admit_id, lw.bcx.func);
+        lw.bcx.ins().call(r, &[]);
         emit_store_back_and_return_pc(
-            &mut bcx,
+            &mut lw.bcx,
             caller_regs,
-            &stored,
+            &lw.stored,
             reg_state,
             record.head_pc,
-            flush_ctx.as_ref(),
+            lw.flush_ctx.as_ref(),
             0i64,
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
-        dispatchable = false;
-        dispatch_off_reason = dispatch_off_reason.or(Some("self-link-retf-r1"));
+        lw.dispatchable = false;
+        lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("self-link-retf-r1"));
     } else if let Some(call_idx) = call_idx_opt {
         emit_store_back_and_return_pc(
-            &mut bcx,
+            &mut lw.bcx,
             caller_regs,
-            &stored,
+            &lw.stored,
             reg_state,
             record.ops[call_idx].pc,
-            flush_ctx.as_ref(),
+            lw.flush_ctx.as_ref(),
             0i64,
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3327,12 +2972,12 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // below (the interp can't resume at a depth>0 PC without the
         // CallFrames the trace inlined past).
         emit_store_back_and_return_pc(
-            &mut bcx,
+            &mut lw.bcx,
             caller_regs,
-            &stored,
+            &lw.stored,
             reg_state,
             record.ops[inline_abort_idx].pc,
-            flush_ctx.as_ref(),
+            lw.flush_ctx.as_ref(),
             0i64,
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3344,12 +2989,12 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         // it with the correct register state. Subject to the same
         // length-gate dispatchable check below.
         emit_store_back_and_return_pc(
-            &mut bcx,
+            &mut lw.bcx,
             caller_regs,
-            &stored,
+            &lw.stored,
             reg_state,
             record.ops[return_idx].pc,
-            flush_ctx.as_ref(),
+            lw.flush_ctx.as_ref(),
             0i64,
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3372,41 +3017,41 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         let a = rop.inst.a() as usize;
         match rop.inst.op() {
             Op::ForLoop => {
-                let count = bcx.use_var(regs_full[a + 1]);
-                let zero = bcx.ins().iconst(types::I64, 0);
+                let count = lw.bcx.use_var(lw.regs_full[a + 1]);
+                let zero = lw.bcx.ins().iconst(types::I64, 0);
                 // the loop count is unsigned (PUC `lua_Unsigned`)
-                let cond = bcx.ins().icmp(IntCC::NotEqual, count, zero);
+                let cond = lw.bcx.ins().icmp(IntCC::NotEqual, count, zero);
 
-                let continue_blk = bcx.create_block();
-                let exit_blk = bcx.create_block();
-                bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
+                let continue_blk = lw.bcx.create_block();
+                let exit_blk = lw.bcx.create_block();
+                lw.bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
 
                 // exit branch: side-exit at forloop.pc + 1.
-                bcx.switch_to_block(exit_blk);
-                bcx.seal_block(exit_blk);
+                lw.bcx.switch_to_block(exit_blk);
+                lw.bcx.seal_block(exit_blk);
                 emit_store_back_and_return_pc(
-                    &mut bcx,
+                    &mut lw.bcx,
                     caller_regs,
-                    &stored,
+                    &lw.stored,
                     reg_state,
                     rop.pc + 1,
-                    flush_ctx.as_ref(),
+                    lw.flush_ctx.as_ref(),
                     0i64,
                     trace_fn_sig_ref,
                     encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
                 );
 
                 // continue branch: do the increment + decrement + back-edge.
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
-                let cur = bcx.use_var(regs_full[a]);
-                let step = bcx.use_var(regs_full[a + 2]);
-                let next = bcx.ins().iadd(cur, step);
-                bcx.def_var(regs_full[a], next);
-                let one = bcx.ins().iconst(types::I64, 1);
-                let count_new = bcx.ins().isub(count, one);
-                bcx.def_var(regs_full[a + 1], count_new);
-                bcx.def_var(regs_full[a + 3], next);
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
+                let cur = lw.bcx.use_var(lw.regs_full[a]);
+                let step = lw.bcx.use_var(lw.regs_full[a + 2]);
+                let next = lw.bcx.ins().iadd(cur, step);
+                lw.bcx.def_var(lw.regs_full[a], next);
+                let one = lw.bcx.ins().iconst(types::I64, 1);
+                let count_new = lw.bcx.ins().isub(count, one);
+                lw.bcx.def_var(lw.regs_full[a + 1], count_new);
+                lw.bcx.def_var(lw.regs_full[a + 3], next);
                 // ForLoop's continue branch jumps to the loop's
                 // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
                 // backward jump encoding), not record.head_pc.
@@ -3424,24 +3069,24 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // either: that skips the body code before the inner
                 // loop. Compute the body start explicitly.
                 let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
-                let mut tail_kinds = current_kinds[..max_stack].to_vec();
+                let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
                 for k in [a, a + 1, a + 3] {
                     tail_kinds[k] = RegKind::Int;
                 }
                 if do_internal_loop
                     && body_pc == record.head_pc
-                    && loop_kinds_match(&tail_kinds, &head_kinds)
+                    && loop_kinds_match(&tail_kinds, &lw.head_kinds)
                 {
-                    sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
-                    bcx.ins().jump(body_loop, &[]);
+                    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+                    lw.bcx.ins().jump(body_loop, &[]);
                 } else {
                     emit_store_back_and_return_pc(
-                        &mut bcx,
+                        &mut lw.bcx,
                         caller_regs,
-                        &stored,
+                        &lw.stored,
                         reg_state,
                         body_pc,
-                        flush_ctx.as_ref(),
+                        lw.flush_ctx.as_ref(),
                         0i64,
                         trace_fn_sig_ref,
                         encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3466,7 +3111,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                 // correctly (entry's tag for A+4 was Int, so
                 // dispatcher without override would restore as Int
                 // — wrong for Nil).
-                let tag = bcx.use_var(tforcall_tag_var);
+                let tag = lw.bcx.use_var(tforcall_tag_var);
                 // The body was lowered for the head's entry tags; the
                 // back-edge runs it again only with a key (and, when the
                 // loop has one, a value) of those tags. A pairs loop
@@ -3483,71 +3128,79 @@ pub(super) fn lower_trace_into_inner<M: Module>(
                     None
                 };
 
-                let nil_const = bcx
+                let nil_const = lw
+                    .bcx
                     .ins()
                     .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
-                let is_nil = bcx.ins().icmp(IntCC::Equal, tag, nil_const);
-                let nil_exit_blk = bcx.create_block();
-                let not_nil_blk = bcx.create_block();
-                bcx.ins().brif(is_nil, nil_exit_blk, &[], not_nil_blk, &[]);
+                let is_nil = lw.bcx.ins().icmp(IntCC::Equal, tag, nil_const);
+                let nil_exit_blk = lw.bcx.create_block();
+                let not_nil_blk = lw.bcx.create_block();
+                lw.bcx
+                    .ins()
+                    .brif(is_nil, nil_exit_blk, &[], not_nil_blk, &[]);
 
                 // Nil-exit branch: snapshot per_exit_kinds with [A+4]
                 // = Nil, then store back + return tforloop.pc + 1.
-                bcx.switch_to_block(nil_exit_blk);
-                bcx.seal_block(nil_exit_blk);
+                lw.bcx.switch_to_block(nil_exit_blk);
+                lw.bcx.seal_block(nil_exit_blk);
                 // Every loop variable restores as nil: the key is nil, and
                 // the value slots hold what the iterator's last call left
                 // (nil in the helper path), which the loop no longer reads.
-                let mut nil_snapshot: Vec<RegKind> = current_kinds[..max_stack].to_vec();
+                let mut nil_snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
                 for k in (a + 4)..(a + 4 + nvars).min(nil_snapshot.len()) {
                     nil_snapshot[k] = RegKind::Nil;
                 }
                 let tag_side_box_2: Box<TCellPtr> = Box::new(TCellPtr::null());
                 let _tag_side_cell_addr_2 = (&*tag_side_box_2) as *const TCellPtr as i64;
-                let tag_side_local_2 = per_exit_kinds.len() as u32;
-                per_exit_kinds.push((rop.pc + 1, nil_snapshot, tag_side_box_2));
+                let tag_side_local_2 = lw.per_exit_kinds.len() as u32;
+                lw.per_exit_kinds
+                    .push((rop.pc + 1, nil_snapshot, tag_side_box_2));
                 emit_tagged_exit(
-                    &mut bcx,
-                    &mut module,
+                    &mut lw.bcx,
+                    &mut lw.module,
                     suppress_admit_id,
                     caller_regs,
-                    &stored,
+                    &lw.stored,
                     reg_state,
                     rop.pc + 1,
                     record.head_pc,
                     tag_side_local_2,
-                    flush_ctx.as_ref(),
+                    lw.flush_ctx.as_ref(),
                     trace_fn_sig_ref,
                 );
 
-                bcx.switch_to_block(not_nil_blk);
-                bcx.seal_block(not_nil_blk);
-                let mut same_kinds = bcx.ins().icmp_imm_u(IntCC::Equal, tag, i64::from(key_tag));
+                lw.bcx.switch_to_block(not_nil_blk);
+                lw.bcx.seal_block(not_nil_blk);
+                let mut same_kinds = lw
+                    .bcx
+                    .ins()
+                    .icmp_imm_u(IntCC::Equal, tag, i64::from(key_tag));
                 if let Some(val_tag) = val_tag {
-                    let v = bcx.use_var(tforcall_val_tag_var);
-                    let same_val = bcx.ins().icmp_imm_u(IntCC::Equal, v, i64::from(val_tag));
-                    same_kinds = bcx.ins().band(same_kinds, same_val);
+                    let v = lw.bcx.use_var(tforcall_val_tag_var);
+                    let same_val = lw.bcx.ins().icmp_imm_u(IntCC::Equal, v, i64::from(val_tag));
+                    same_kinds = lw.bcx.ins().band(same_kinds, same_val);
                 }
-                let continue_blk = bcx.create_block();
-                let deopt_blk = bcx.create_block();
-                bcx.ins()
+                let continue_blk = lw.bcx.create_block();
+                let deopt_blk = lw.bcx.create_block();
+                lw.bcx
+                    .ins()
                     .brif(same_kinds, continue_blk, &[], deopt_blk, &[]);
 
                 // Deopt: the next key or value has another kind than the
                 // body was compiled for. Store back + return TForLoop.pc
                 // so the interp re-executes the back-edge.
-                bcx.switch_to_block(deopt_blk);
-                bcx.seal_block(deopt_blk);
+                lw.bcx.switch_to_block(deopt_blk);
+                lw.bcx.seal_block(deopt_blk);
                 // The helper already wrote the loop variables to the stack
                 // with their tags, which are not the ones the registers
                 // were compiled for; the dispatcher must leave them there.
                 emit_store_back_and_return(
-                    &mut bcx,
+                    &mut lw.bcx,
                     caller_regs,
-                    &stored,
+                    &lw.stored,
                     reg_state,
                     (luna_core::jit::trace_types::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
-                    flush_ctx.as_ref(),
+                    lw.flush_ctx.as_ref(),
                     0i64,
                     trace_fn_sig_ref,
                     encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3555,33 +3208,33 @@ pub(super) fn lower_trace_into_inner<M: Module>(
 
                 // Continue: R[A+2] = R[A+4] (ctrl writeback) +
                 // back-edge / store_back+head_pc.
-                bcx.switch_to_block(continue_blk);
-                bcx.seal_block(continue_blk);
-                let ctrl = bcx.use_var(regs_full[a + 4]);
-                bcx.def_var(regs_full[a + 2], ctrl);
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
+                let ctrl = lw.bcx.use_var(lw.regs_full[a + 4]);
+                lw.bcx.def_var(lw.regs_full[a + 2], ctrl);
                 // as for ForLoop: continue at the loop body, which is
                 // the trace head only when the trace was recorded from it
                 let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
                 // the loop variables passed the tag check above, and the
                 // control variable is a copy of the key
-                let mut tail_kinds = current_kinds[..max_stack].to_vec();
+                let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
                 let vars = (a + 4)..(a + 4 + nvars.min(2)).min(max_stack);
-                tail_kinds[vars.clone()].copy_from_slice(&head_kinds[vars]);
-                tail_kinds[a + 2] = head_kinds[a + 4];
+                tail_kinds[vars.clone()].copy_from_slice(&lw.head_kinds[vars]);
+                tail_kinds[a + 2] = lw.head_kinds[a + 4];
                 if do_internal_loop
                     && body_pc == record.head_pc
-                    && loop_kinds_match(&tail_kinds, &head_kinds)
+                    && loop_kinds_match(&tail_kinds, &lw.head_kinds)
                 {
-                    sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
-                    bcx.ins().jump(body_loop, &[]);
+                    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+                    lw.bcx.ins().jump(body_loop, &[]);
                 } else {
                     emit_store_back_and_return_pc(
-                        &mut bcx,
+                        &mut lw.bcx,
                         caller_regs,
-                        &stored,
+                        &lw.stored,
                         reg_state,
                         body_pc,
-                        flush_ctx.as_ref(),
+                        lw.flush_ctx.as_ref(),
                         0i64,
                         trace_fn_sig_ref,
                         encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3590,17 +3243,17 @@ pub(super) fn lower_trace_into_inner<M: Module>(
             }
             _ => unreachable!("for_loop_idx_opt only set for Op::ForLoop / Op::TForLoop"),
         }
-    } else if do_internal_loop && loop_kinds_match(&current_kinds[..max_stack], &head_kinds) {
-        sync_reg_state(&mut bcx, &regs_full, &mut stored, reg_state);
-        bcx.ins().jump(body_loop, &[]);
+    } else if do_internal_loop && loop_kinds_match(&lw.current_kinds[..max_stack], &lw.head_kinds) {
+        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        lw.bcx.ins().jump(body_loop, &[]);
     } else {
         emit_store_back_and_return_pc(
-            &mut bcx,
+            &mut lw.bcx,
             caller_regs,
-            &stored,
+            &lw.stored,
             reg_state,
             record.head_pc,
-            flush_ctx.as_ref(),
+            lw.flush_ctx.as_ref(),
             0i64,
             trace_fn_sig_ref,
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
@@ -3610,7 +3263,35 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     // (entry → body_loop in the prelude; tail → body_loop from
     // whichever block we ended up in for the clean-close case
     // when internal loop is on).
-    bcx.seal_block(body_loop);
+    lw.bcx.seal_block(body_loop);
+    let Lower {
+        module,
+        bcx,
+        global_side_trace_box,
+        escape,
+        sunk_alloc_seen,
+        materialize_emit_count,
+        closure_seen,
+        mut current_kinds,
+        mut dispatchable,
+        mut dispatch_off_reason,
+        per_exit_kinds,
+        per_exit_inline_vec,
+        ..
+    } = lower;
+    let Plan {
+        record,
+        max_stack,
+        window_size,
+        effective_end,
+        call_idx_opt,
+        for_loop_idx_opt,
+        inline_abort_idx_opt,
+        return_idx_opt,
+        ..
+    } = *pl;
+    let op_offsets = &pl.op_offsets;
+    let head_live = &pl.head_live;
 
     bcx.finalize(module.target_config());
     drop_unused_block_params(&mut ctx.func);
