@@ -1,4 +1,7 @@
-// CARVE-OUT: opcode dispatch table, one arm per fast opcode
+// CARVE-OUT: opcode dispatch table, one arm per fast opcode. The arms are
+// kept in this one function on purpose: they share the loop's locals
+// (`npc`, `regs`, `fr`, `code`, `kptr`) through local macros, and moving them
+// into separate functions would change the hot loop's register allocation.
 //! The interpreter's fast loop: the opcodes that never call, allocate or
 //! run a metamethod execute here on locals, in a function of their own so
 //! that its register allocation does not depend on the rest of the loop.
