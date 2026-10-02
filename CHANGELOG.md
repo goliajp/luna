@@ -23,6 +23,12 @@ optimization.
 
 ### Changed
 
+- The bytecode verifier rejects a `GETFIELD`, `SETFIELD` or `SELF` whose
+  constant key is not a string. luna's compiler and its translation of
+  PUC 5.1–5.3 bytecode only emit string keys there, but chunks that an
+  older luna translated from PUC 5.1–5.3 and dumped may hold a numeric
+  key in these instructions; load the original PUC chunk again instead
+  of such a dump.
 - Calling a Lua function on 5.2–5.5 sets only the missing parameters to
   nil, as PUC `luaD_precall` does, instead of clearing the function's
   whole register window (5.1 still clears it, as PUC 5.1 does). A
