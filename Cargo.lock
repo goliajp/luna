@@ -1023,6 +1023,7 @@ dependencies = [
  "luna-jit-derive",
  "luna-jit-helpers",
  "luna-jit-llvm",
+ "region",
  "rustyline",
  "target-lexicon",
 ]

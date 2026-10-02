@@ -14,6 +14,7 @@
 
 use super::*;
 
+#[derive(Default)]
 pub(crate) struct Analysis {
     /// Reachable blocks in layout order.
     pub(crate) order: Vec<u32>,
@@ -33,6 +34,17 @@ pub(crate) struct Analysis {
     /// Variables read anywhere: they start out zero, as with Cranelift,
     /// where a variable read on a path that never wrote it is zero.
     pub(crate) entry_vars: Vec<u32>,
+    // scratch, kept for the next trace
+    seen: Vec<bool>,
+    stack: Vec<(u32, u8)>,
+    read: Vec<bool>,
+    /// (loop head position, back edge position)
+    loops: Vec<(u32, u32)>,
+}
+
+fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
+    v.clear();
+    v.resize(n, x);
 }
 
 /// Calls `f` with each vreg `inst` reads.
@@ -100,54 +112,67 @@ fn succs(lir: &Lir, b: u32) -> [u32; 2] {
     }
 }
 
-/// Reverse post-order of the blocks reachable from the entry block.
-fn layout(lir: &Lir) -> Vec<u32> {
+/// Reverse post-order of the blocks reachable from the entry block, into
+/// `an.order`.
+fn layout(lir: &Lir, an: &mut Analysis) {
     let n = lir.blocks.len();
-    let mut seen = vec![false; n];
-    let mut post = Vec::with_capacity(n);
-    let mut stack: Vec<(u32, u8)> = vec![(0, 0)];
-    seen[0] = true;
-    while let Some(top) = stack.last_mut() {
+    reset(&mut an.seen, n, false);
+    an.order.clear();
+    an.stack.clear();
+    an.stack.push((0, 0));
+    an.seen[0] = true;
+    while let Some(top) = an.stack.last_mut() {
         let (b, k) = *top;
         if k == 2 {
-            post.push(b);
-            stack.pop();
+            an.order.push(b);
+            an.stack.pop();
             continue;
         }
         top.1 += 1;
         let s = succs(lir, b)[k as usize];
-        if s != NONE && !seen[s as usize] {
-            seen[s as usize] = true;
-            stack.push((s, 0));
+        if s != NONE && !an.seen[s as usize] {
+            an.seen[s as usize] = true;
+            an.stack.push((s, 0));
         }
     }
-    post.reverse();
-    post
+    an.order.reverse();
 }
 
-pub(crate) fn analyze(lir: &Lir) -> Analysis {
+/// Fills `an` for `lir`, reusing its buffers.
+pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
     let nv = lir.value_ty.len() as u32;
     let nreg = (nv as usize) + lir.var_ty.len();
-    let order = layout(lir);
-    let mut code = Vec::with_capacity(lir.insts.len());
-    let mut block_at = vec![(NONE, NONE); lir.blocks.len()];
-    for &b in &order {
-        let first = code.len() as u32;
+    layout(lir, an);
+    an.code.clear();
+    reset(&mut an.block_at, lir.blocks.len(), (NONE, NONE));
+    for &b in &an.order {
+        let first = an.code.len() as u32;
         let mut i = lir.blocks[b as usize].first;
         while i != NONE {
-            code.push(i);
+            an.code.push(i);
             i = lir.insts[i as usize].next;
         }
-        block_at[b as usize] = (first, code.len() as u32);
+        an.block_at[b as usize] = (first, an.code.len() as u32);
     }
-
-    let mut start = vec![NONE; nreg];
-    let mut end = vec![0u32; nreg];
-    let mut uses = vec![0u32; nv as usize];
-    let mut read = vec![false; lir.var_ty.len()];
-    let mut calls = Vec::new();
-    // (loop head position, back edge position)
-    let mut loops: Vec<(u32, u32)> = Vec::new();
+    reset(&mut an.start, nreg, NONE);
+    reset(&mut an.end, nreg, 0);
+    reset(&mut an.uses, nv as usize, 0);
+    reset(&mut an.read, lir.var_ty.len(), false);
+    an.calls.clear();
+    an.loops.clear();
+    let Analysis {
+        order,
+        code,
+        block_at,
+        start,
+        end,
+        uses,
+        calls,
+        entry_vars,
+        read,
+        loops,
+        ..
+    } = an;
     let mut touch = |r: u32, p: u32| {
         let r = r as usize;
         if start[r] == NONE {
@@ -157,7 +182,7 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
             end[r] = p;
         }
     };
-    for &b in &order {
+    for &b in order.iter() {
         let (lo, hi) = block_at[b as usize];
         for (off, &ii) in code[lo as usize..hi as usize].iter().enumerate() {
             let p = 2 * (lo + off as u32);
@@ -187,7 +212,15 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
     if lir.arg0 != NONE {
         touch(lir.arg0, 0);
     }
-    let mut entry_vars = Vec::new();
+    // a value nothing reads needs no register (its pure instruction is not
+    // emitted; a call's result is dropped)
+    for r in 0..nv as usize {
+        if uses[r] == 0 {
+            start[r] = NONE;
+        }
+    }
+
+    entry_vars.clear();
     for (k, &r) in read.iter().enumerate() {
         if r {
             entry_vars.push(k as u32);
@@ -196,7 +229,7 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
     }
     // inner loops first, so an outer loop sees what they extended
     loops.sort_unstable_by_key(|&(h, e)| e - h);
-    for &(h, e) in &loops {
+    for &(h, e) in loops.iter() {
         for r in 0..nreg {
             let s = start[r];
             if s == NONE || s > e || end[r] < h {
@@ -210,15 +243,5 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
             }
         }
     }
-    Analysis {
-        order,
-        code,
-        block_at,
-        n_values: nv,
-        start,
-        end,
-        uses,
-        calls,
-        entry_vars,
-    }
+    an.n_values = nv;
 }

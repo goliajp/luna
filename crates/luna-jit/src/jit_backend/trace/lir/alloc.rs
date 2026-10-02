@@ -23,11 +23,16 @@ pub(crate) struct Class {
     pub(crate) callee: &'static [u8],
 }
 
+#[derive(Default)]
 pub(crate) struct Allocation {
     pub(crate) loc: Vec<Loc>,
     pub(crate) spill_slots: u32,
     /// Callee-saved registers used, per class (bit per register number).
     pub(crate) callee_used: [u64; 2],
+    // scratch, kept for the next trace
+    first: Vec<u32>,
+    starts: Vec<u32>,
+    ends: Vec<u32>,
 }
 
 fn mask(regs: &[u8]) -> u64 {
@@ -35,9 +40,10 @@ fn mask(regs: &[u8]) -> u64 {
 }
 
 /// The vregs with an interval, ordered by `key` (a counting sort over
-/// positions).
-fn by_position(key: &[u32], live: &[u32], n_pos: usize) -> Vec<u32> {
-    let mut first = vec![0u32; n_pos + 1];
+/// positions), into `out`.
+fn by_position(key: &[u32], live: &[u32], n_pos: usize, first: &mut Vec<u32>, out: &mut Vec<u32>) {
+    first.clear();
+    first.resize(n_pos + 1, 0);
     for (r, &k) in key.iter().enumerate() {
         if live[r] != NONE {
             first[k as usize + 1] += 1;
@@ -46,7 +52,8 @@ fn by_position(key: &[u32], live: &[u32], n_pos: usize) -> Vec<u32> {
     for p in 0..n_pos {
         first[p + 1] += first[p];
     }
-    let mut out = vec![0u32; first[n_pos] as usize];
+    out.clear();
+    out.resize(first[n_pos] as usize, 0);
     for (r, &k) in key.iter().enumerate() {
         if live[r] != NONE {
             let at = &mut first[k as usize];
@@ -54,10 +61,10 @@ fn by_position(key: &[u32], live: &[u32], n_pos: usize) -> Vec<u32> {
             *at += 1;
         }
     }
-    out
 }
 
-pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2]) -> Allocation {
+/// Fills `al` for `lir`, reusing its buffers.
+pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2], al: &mut Allocation) {
     let nv = an.n_values as usize;
     let nreg = an.start.len();
     let float_of = |r: usize| {
@@ -68,20 +75,29 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2]) -> Alloca
         }
     };
     let n_pos = 2 * an.code.len() + 2;
-    let starts = by_position(&an.start, &an.start, n_pos);
-    let ends = by_position(&an.end, &an.start, n_pos);
-    let mut loc = vec![Loc::None; nreg];
+    let Allocation {
+        loc,
+        spill_slots,
+        callee_used,
+        first,
+        starts,
+        ends,
+    } = al;
+    by_position(&an.start, &an.start, n_pos, first, starts);
+    by_position(&an.end, &an.start, n_pos, first, ends);
+    loc.clear();
+    loc.resize(nreg, Loc::None);
     let callee = [mask(classes[0].callee), mask(classes[1].callee)];
     let caller = [mask(classes[0].caller), mask(classes[1].caller)];
     let mut free = [callee[0] | caller[0], callee[1] | caller[1]];
     // which vreg holds each register
     let mut holder = [[NONE; 64]; 2];
-    let mut spill_slots = 0u32;
-    let mut callee_used = [0u64; 2];
+    *spill_slots = 0;
+    *callee_used = [0; 2];
     let mut ei = 0;
     // the first call after the current start; starts only grow
     let mut ci = 0;
-    for &r in &starts {
+    for &r in starts.iter() {
         let ri = r as usize;
         let s = an.start[ri];
         while ci < an.calls.len() && an.calls[ci] <= s {
@@ -125,14 +141,14 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2]) -> Alloca
                 match victim {
                     Some(p) if an.end[holder[k][p as usize] as usize] > an.end[ri] => {
                         let o = holder[k][p as usize] as usize;
-                        loc[o] = Loc::Stack(spill_slots);
-                        spill_slots += 1;
+                        loc[o] = Loc::Stack(*spill_slots);
+                        *spill_slots += 1;
                         free[k] |= 1 << p;
                         p
                     }
                     _ => {
-                        loc[ri] = Loc::Stack(spill_slots);
-                        spill_slots += 1;
+                        loc[ri] = Loc::Stack(*spill_slots);
+                        *spill_slots += 1;
                         continue;
                     }
                 }
@@ -144,10 +160,5 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2]) -> Alloca
         if callee[k] & (1 << p) != 0 {
             callee_used[k] |= 1 << p;
         }
-    }
-    Allocation {
-        loc,
-        spill_slots,
-        callee_used,
     }
 }

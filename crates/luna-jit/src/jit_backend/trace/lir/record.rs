@@ -39,6 +39,7 @@ impl Lir {
 
     pub(super) fn new_value(&mut self, ty: Ty) -> u32 {
         self.value_ty.push(ty);
+        self.konst.push(None);
         (self.value_ty.len() - 1) as u32
     }
 
@@ -160,8 +161,33 @@ impl Lir {
         self.value_ty[v(x) as usize]
     }
 
+    /// `x op y`, in the immediate form when an operand is a constant.
     pub(super) fn bin(&mut self, op: BinOp, x: Value, y: Value) -> Value {
         let ty = self.ty_of_value(x);
+        let imm_ok = matches!(
+            op,
+            BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::And
+                | BinOp::Or
+                | BinOp::Xor
+                | BinOp::Shl
+                | BinOp::Ushr
+                | BinOp::Sshr
+        );
+        let commutes = matches!(
+            op,
+            BinOp::Add | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor
+        );
+        if imm_ok {
+            if let Some(c) = self.konst[v(y) as usize] {
+                return self.def(Op::BinImm(op, c), ty, v(x), NONE, NONE);
+            }
+            if commutes && let Some(c) = self.konst[v(x) as usize] {
+                return self.def(Op::BinImm(op, c), ty, v(y), NONE, NONE);
+            }
+        }
         self.def(Op::Bin(op), ty, v(x), v(y), NONE)
     }
 

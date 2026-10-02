@@ -2,7 +2,7 @@
 //! Windows, which reserve it).
 
 use super::alloc::Class;
-use super::cg::{Alu, Cond, Label, Masm, Width};
+use super::cg::{Alu, Bufs, Cond, Label, Masm, Width};
 use super::*;
 
 const XZR: u32 = 31;
@@ -14,6 +14,7 @@ const TMP: u8 = 15;
 
 pub(crate) struct A64 {
     code: Vec<u32>,
+    bytes: Vec<u8>,
     labels: Vec<u32>,
     /// (instruction index, label, kind: 0 = b, 1 = b.cond / cbz / cbnz)
     fixups: Vec<(u32, u32, u8)>,
@@ -24,18 +25,6 @@ pub(crate) struct A64 {
 }
 
 impl A64 {
-    pub(crate) fn new() -> A64 {
-        A64 {
-            code: Vec::with_capacity(512),
-            labels: Vec::new(),
-            fixups: Vec::new(),
-            saved: Vec::new(),
-            fsaved: Vec::new(),
-            locals: 0,
-            total: 0,
-        }
-    }
-
     fn put(&mut self, w: u32) {
         self.code.push(w);
     }
@@ -93,18 +82,17 @@ impl A64 {
 
     fn save_restore(&mut self, store: bool) {
         let base = self.locals as i32;
-        let regs: Vec<u8> = self.saved.clone();
-        for (k, &r) in regs.iter().enumerate() {
-            let off = base + 8 * k as i32;
+        let n = self.saved.len();
+        for k in 0..n {
+            let (r, off) = (self.saved[k], base + 8 * k as i32);
             if store {
                 self.store(Width::B8, r, Self::SP, off);
             } else {
                 self.load(Width::B8, r, Self::SP, off);
             }
         }
-        let fregs: Vec<u8> = self.fsaved.clone();
-        for (k, &r) in fregs.iter().enumerate() {
-            let off = base + 8 * (regs.len() + k) as i32;
+        for k in 0..self.fsaved.len() {
+            let (r, off) = (self.fsaved[k], base + 8 * (n + k) as i32);
             if store {
                 self.fstore(r, Self::SP, off);
             } else {
@@ -432,8 +420,10 @@ impl Masm for A64 {
         self.put(0xD63F_0000 | (u32::from(r) << 5));
     }
     fn prologue(&mut self, saved: &[u8], fsaved: &[u8], locals: u32) {
-        self.saved = saved.to_vec();
-        self.fsaved = fsaved.to_vec();
+        self.saved.clear();
+        self.saved.extend_from_slice(saved);
+        self.fsaved.clear();
+        self.fsaved.extend_from_slice(fsaved);
         self.locals = locals;
         let save = 8 * (saved.len() + fsaved.len()) as u32;
         self.total = locals + save.div_ceil(16) * 16;
@@ -452,7 +442,29 @@ impl Masm for A64 {
         self.put(0xA8C1_7BFD);
         self.put(0xD65F_03C0);
     }
-    fn finish(mut self) -> Vec<u8> {
+    fn new(b: Bufs) -> A64 {
+        let Bufs {
+            mut bytes,
+            words: mut code,
+            mut labels,
+            mut fixups,
+        } = b;
+        bytes.clear();
+        code.clear();
+        labels.clear();
+        fixups.clear();
+        A64 {
+            code,
+            bytes,
+            labels,
+            fixups,
+            saved: Vec::new(),
+            fsaved: Vec::new(),
+            locals: 0,
+            total: 0,
+        }
+    }
+    fn finish(mut self) -> Bufs {
         for &(at, l, kind) in &self.fixups {
             let target = self.labels[l as usize];
             let delta = target as i64 - i64::from(at);
@@ -463,11 +475,15 @@ impl Masm for A64 {
                 *w |= ((delta as u32) & 0x7FFFF) << 5;
             }
         }
-        let mut out = Vec::with_capacity(self.code.len() * 4);
         for w in &self.code {
-            out.extend_from_slice(&w.to_le_bytes());
+            self.bytes.extend_from_slice(&w.to_le_bytes());
         }
-        out
+        Bufs {
+            bytes: self.bytes,
+            words: self.code,
+            labels: self.labels,
+            fixups: self.fixups,
+        }
     }
 }
 

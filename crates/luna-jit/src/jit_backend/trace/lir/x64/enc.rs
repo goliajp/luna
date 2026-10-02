@@ -3,19 +3,17 @@
 use super::*;
 
 impl X64 {
-    pub(crate) fn new() -> X64 {
-        X64 {
-            code: Vec::with_capacity(2048),
-            labels: Vec::new(),
-            fixups: Vec::new(),
-            saved: Vec::new(),
-            frame: 0,
-        }
-    }
-
     /// `[prefix] [REX] opcode modrm [sib] [disp]`; `byte_reg` forces a REX
     /// so that registers 4-7 mean spl / bpl / sil / dil.
-    fn op(&mut self, prefix: &[u8], w: bool, opc: &[u8], reg: u8, rm: Rm, byte_reg: bool) {
+    pub(super) fn op(
+        &mut self,
+        prefix: &[u8],
+        w: bool,
+        opc: &[u8],
+        reg: u8,
+        rm: Rm,
+        byte_reg: bool,
+    ) {
         self.code.extend_from_slice(prefix);
         let b = match rm {
             Rm::Reg(r) | Rm::Mem(r, _) => r,
@@ -50,11 +48,11 @@ impl X64 {
         }
     }
 
-    fn imm32(&mut self, v: i32) {
+    pub(super) fn imm32(&mut self, v: i32) {
         self.code.extend_from_slice(&v.to_le_bytes());
     }
 
-    fn cc(c: Cond) -> u8 {
+    pub(super) fn cc(c: Cond) -> u8 {
         match c {
             Cond::Eq => 4,
             Cond::Ne => 5,
@@ -69,40 +67,40 @@ impl X64 {
         }
     }
 
-    fn mov32(&mut self, d: u8, s: u8) {
+    pub(super) fn mov32(&mut self, d: u8, s: u8) {
         self.op(&[], false, &[0x89], s, Rm::Reg(d), false);
     }
 
-    fn jcc_raw(&mut self, cc: u8, l: Label) {
+    pub(super) fn jcc_raw(&mut self, cc: u8, l: Label) {
         self.code.extend_from_slice(&[0x0F, 0x80 | cc]);
-        self.fixups.push((self.code.len() as u32, l.0));
+        self.fixups.push((self.code.len() as u32, l.0, 0));
         self.imm32(0);
     }
 
-    fn set8(&mut self, cc: u8, d: u8) {
+    pub(super) fn set8(&mut self, cc: u8, d: u8) {
         self.op(&[], false, &[0x0F, 0x90 | cc], 0, Rm::Reg(d), true);
     }
 
-    fn movzx8(&mut self, d: u8, s: u8) {
+    pub(super) fn movzx8(&mut self, d: u8, s: u8) {
         self.op(&[], false, &[0x0F, 0xB6], d, Rm::Reg(s), true);
     }
 
-    fn sse(&mut self, prefix: u8, opc: u8, d: u8, s: u8) {
+    pub(super) fn sse(&mut self, prefix: u8, opc: u8, d: u8, s: u8) {
         self.op(&[prefix], false, &[0x0F, opc], d, Rm::Reg(s), false);
     }
 
-    fn movaps(&mut self, d: u8, s: u8) {
+    pub(super) fn movaps(&mut self, d: u8, s: u8) {
         if d != s {
             self.op(&[], false, &[0x0F, 0x28], d, Rm::Reg(s), false);
         }
     }
 
-    fn ucomisd(&mut self, a: u8, b: u8) {
+    pub(super) fn ucomisd(&mut self, a: u8, b: u8) {
         self.sse(0x66, 0x2E, a, b);
     }
 
     /// `op rm, imm` (group 1: add 0, or 1, and 4, sub 5, xor 6, cmp 7).
-    fn grp1(&mut self, w: bool, ext: u8, r: u8, imm: i32) {
+    pub(super) fn grp1(&mut self, w: bool, ext: u8, r: u8, imm: i32) {
         if (-128..128).contains(&imm) {
             self.op(&[], w, &[0x83], ext, Rm::Reg(r), false);
             self.code.push(imm as u8);

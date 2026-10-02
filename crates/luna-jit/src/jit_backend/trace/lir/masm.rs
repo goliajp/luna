@@ -92,6 +92,18 @@ pub(crate) struct Label(pub(crate) u32);
 /// The instructions code generation needs from a target. Registers are the
 /// target's encoding numbers; integer and floating-point registers are
 /// separate spaces. 32-bit (`wide == false`) results are zero-extended.
+/// The buffers an assembler writes into, kept from one trace to the next.
+#[derive(Default)]
+pub(crate) struct Bufs {
+    /// The finished code (x86-64 also assembles into it).
+    pub(crate) bytes: Vec<u8>,
+    /// AArch64 instruction words.
+    pub(crate) words: Vec<u32>,
+    pub(crate) labels: Vec<u32>,
+    /// (code offset, label, kind)
+    pub(crate) fixups: Vec<(u32, u32, u8)>,
+}
+
 pub(crate) trait Masm {
     /// The stack pointer as a base register.
     const SP: u8;
@@ -160,5 +172,7 @@ pub(crate) trait Masm {
     /// 16) at the stack pointer.
     fn prologue(&mut self, saved: &[u8], fsaved: &[u8], locals: u32);
     fn epilogue_ret(&mut self);
-    fn finish(self) -> Vec<u8>;
+    fn new(b: Bufs) -> Self;
+    /// The buffers back, `bytes` holding the code.
+    fn finish(self) -> Bufs;
 }

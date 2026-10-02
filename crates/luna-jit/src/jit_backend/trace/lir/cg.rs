@@ -24,8 +24,26 @@ pub(crate) struct Gen<'a, M: Masm> {
     seq: Vec<(Loc, Src)>,
 }
 
-fn bits_of(set: u64) -> Vec<u8> {
-    (0..64u8).filter(|r| set & (1 << r) != 0).collect()
+/// The registers in `set`, in the first `n` entries.
+fn bits_of(set: u64) -> ([u8; 64], usize) {
+    let mut out = [0u8; 64];
+    let mut n = 0;
+    for r in 0..64u8 {
+        if set & (1 << r) != 0 {
+            out[n] = r;
+            n += 1;
+        }
+    }
+    (out, n)
+}
+
+/// The generator's buffers, kept from one trace to the next.
+#[derive(Default)]
+pub(crate) struct CgBufs {
+    labels: Vec<Label>,
+    slot_off: Vec<i32>,
+    mv: [Vec<(Loc, Src)>; 2],
+    seq: Vec<(Loc, Src)>,
 }
 
 /// Generates the function; `Err` names the first primitive the target
@@ -35,9 +53,11 @@ pub(crate) fn generate<M: Masm>(
     an: &Analysis,
     al: &Allocation,
     m: M,
-) -> Result<Vec<u8>, &'static str> {
+    bufs: &mut CgBufs,
+) -> Result<Bufs, &'static str> {
     let mut off = M::CALL_SHADOW as i32;
-    let mut slot_off = Vec::with_capacity(lir.slots.len());
+    let mut slot_off = std::mem::take(&mut bufs.slot_off);
+    slot_off.clear();
     for &(size, align) in &lir.slots {
         let a = 1i32 << align.max(3);
         off = (off + a - 1) & !(a - 1);
@@ -57,19 +77,21 @@ pub(crate) fn generate<M: Masm>(
         an,
         al,
         m,
-        labels: Vec::new(),
+        labels: std::mem::take(&mut bufs.labels),
         slot_off,
         spill_base,
         pending: None,
-        mv: [Vec::new(), Vec::new()],
-        seq: Vec::new(),
+        mv: std::mem::take(&mut bufs.mv),
+        seq: std::mem::take(&mut bufs.seq),
     };
-    g.labels = (0..lir.blocks.len()).map(|_| g.m.new_label()).collect();
-    g.m.prologue(
-        &bits_of(al.callee_used[0]),
-        &bits_of(al.callee_used[1]),
-        locals,
-    );
+    g.labels.clear();
+    for _ in 0..lir.blocks.len() {
+        let l = g.m.new_label();
+        g.labels.push(l);
+    }
+    let (saved, n) = bits_of(al.callee_used[0]);
+    let (fsaved, nf) = bits_of(al.callee_used[1]);
+    g.m.prologue(&saved[..n], &fsaved[..nf], locals);
     // reg_state arrives in the first argument register
     if lir.arg0 != NONE {
         let a0 = M::INT_ARGS[0];
@@ -99,7 +121,21 @@ pub(crate) fn generate<M: Masm>(
             g.inst(ii, peek, next)?;
         }
     }
-    Ok(g.m.finish())
+    let Gen {
+        m,
+        labels,
+        slot_off,
+        mv,
+        seq,
+        ..
+    } = g;
+    *bufs = CgBufs {
+        labels,
+        slot_off,
+        mv,
+        seq,
+    };
+    Ok(m.finish())
 }
 
 impl<M: Masm> Gen<'_, M> {

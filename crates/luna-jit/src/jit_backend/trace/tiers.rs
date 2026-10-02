@@ -56,21 +56,19 @@ fn compile_trace_baseline(
         lir.give();
         return Ok(Some(compiled));
     }
-    let code = lir::assemble(&lir);
+    let Ok(cs) = crate::jit_backend::storage::from_storage(storage) else {
+        lir.give();
+        return Ok(None);
+    };
+    let entry = lir::assemble(&lir, &mut cs.baseline_code);
     lir.give();
-    let code = code?;
+    let entry = entry?;
     BASELINE_CODEGEN.with(|c| c.set(c.get() + 1));
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     // SAFETY: the code implements the `TraceFn` ABI (`extern "C"`, one
-    // pointer argument, an i64 result); it stays mapped while `storage`
-    // holds `code`, which is until the owning Vm releases its code
-    compiled.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(code.entry) };
-    let Ok(cs) = crate::jit_backend::storage::from_storage(storage) else {
-        // SAFETY: nothing has seen the entry
-        unsafe { code.free() };
-        return Ok(None);
-    };
-    cs.baseline_code.push(code);
+    // pointer argument, an i64 result); it stays mapped until the owning
+    // Vm releases its code
+    compiled.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
     Ok(Some(compiled))
 }
 
