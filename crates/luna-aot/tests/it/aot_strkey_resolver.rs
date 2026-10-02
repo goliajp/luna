@@ -166,3 +166,50 @@ fn aot_binary_no_probe_no_diagnostic() {
         "resolver probe should be silent without LUNA_AOT_PROBE; got stderr: {stderr:?}"
     );
 }
+
+#[test]
+fn aot_binary_resolves_the_string_keys_its_trace_uses() {
+    // a hot loop whose trace reads and writes two string-keyed fields:
+    // the deploy side must find both index entries by section name, fill
+    // the slots, and the trace must run through them
+    if cfg!(target_os = "windows") {
+        eprintln!("skipped: see other test");
+        return;
+    }
+    if !have_on_path("cc") || !have_on_path("cargo") {
+        eprintln!("skipped: cc / cargo not on PATH");
+        return;
+    }
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let src_path = td.path().join("fields.lua");
+    fs::write(
+        &src_path,
+        b"local t = { hits = 0, total = 0 }\n\
+          for i = 1, 100000 do\n\
+            t.hits = t.hits + 1\n\
+            t.total = t.total + i\n\
+          end\n\
+          print(t.hits, t.total)\n",
+    )
+    .expect("write source");
+    let out_path = td.path().join("fields_aot");
+    compile_and_link(&src_path, &out_path, None, LuaVersion::Lua55)
+        .unwrap_or_else(|e| panic!("compile_and_link failed: {e}"));
+
+    let (stdout, stderr, code) = run_with_env(&out_path, "LUNA_AOT_PROBE", "1");
+    assert_eq!(code, Some(0), "stdout: {stdout:?}, stderr: {stderr:?}");
+    assert_eq!(stdout, "100000\t5000050000\n", "stderr: {stderr:?}");
+    assert!(
+        stderr.contains("aot_strkey_resolved = 2\n"),
+        "both keys' slots must be filled; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("aot_trace_install_count = 1\n"),
+        "the field trace must be installed; stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("aot_trace_fired pc="),
+        "the field trace must run; stderr: {stderr:?}"
+    );
+}
