@@ -343,6 +343,28 @@ pub(super) fn emit_set_field<M: Module>(
         return None;
     }
     let val = lw.bcx.use_var(regs[ins.c() as usize]);
+    // a number overwriting a value already under the key goes
+    // straight into its slot; anything else through the helper
+    let slot = pl
+        .record
+        .field_slot(i)
+        .filter(|_| matches!(val_kind, RegKind::Int | RegKind::Float));
+    let merge = slot.map(|slot| {
+        let bcx = &mut lw.bcx;
+        let hit = bcx.create_block();
+        bcx.append_block_param(hit, types::I64);
+        let miss = bcx.create_block();
+        let merge = bcx.create_block();
+        field_slot::emit_field_slot_check(bcx, t, key_arg, slot, None, hit, miss);
+        bcx.switch_to_block(hit);
+        bcx.seal_block(hit);
+        let node = bcx.block_params(hit)[0];
+        field_slot::emit_slot_store(bcx, node, val, kind_tag(val_kind));
+        bcx.ins().jump(merge, &[]);
+        bcx.switch_to_block(miss);
+        bcx.seal_block(miss);
+        merge
+    });
     let done = emit_table_set(
         &mut lw.bcx,
         &mut lw.module,
@@ -354,5 +376,10 @@ pub(super) fn emit_set_field<M: Module>(
         val_kind,
     );
     guard!(lw, pl, done, i, rop.pc);
+    if let Some(merge) = merge {
+        lw.bcx.ins().jump(merge, &[]);
+        lw.bcx.switch_to_block(merge);
+        lw.bcx.seal_block(merge);
+    }
     Some(())
 }

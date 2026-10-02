@@ -124,7 +124,7 @@ pub(super) fn scan_math_folds(
                         }
                         i += 4;
                     }
-                    FoldKind::Min2 | FoldKind::Max2 => {
+                    _ => {
                         folded_ops[fold.start_idx] = true;
                         folded_ops[fold.start_idx + 1] = true;
                         folded_ops[fold.call_idx] = true;

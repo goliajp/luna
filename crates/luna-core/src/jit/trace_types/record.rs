@@ -299,7 +299,15 @@ pub struct TraceRecord {
     /// register, or ran into a call). The lowerer types a table read by
     /// it and checks the read against it.
     pub result_tags: Vec<u8>,
+    /// Per recorded op, for a field read or write by a constant string
+    /// key, the hash slot the key was found in while it was recorded, or
+    /// [`FIELD_SLOT_UNKNOWN`]. The lowerer reads and writes that slot
+    /// directly once it checks the slot still holds the key.
+    pub field_slots: Vec<u32>,
 }
+
+/// [`TraceRecord::field_slots`] for an op with no slot.
+pub const FIELD_SLOT_UNKNOWN: u32 = u32::MAX;
 
 /// [`TraceRecord::result_tags`] for an op whose result was not seen.
 pub const RESULT_TAG_UNKNOWN: u8 = u8::MAX;
@@ -311,6 +319,14 @@ impl TraceRecord {
             .get(i)
             .copied()
             .filter(|&t| t != RESULT_TAG_UNKNOWN)
+    }
+
+    /// The hash slot op `i` found its key in, if any.
+    pub fn field_slot(&self, i: usize) -> Option<u32> {
+        self.field_slots
+            .get(i)
+            .copied()
+            .filter(|&s| s != FIELD_SLOT_UNKNOWN)
     }
 
     /// Start a fresh recording at `head_pc` of `proto`. The
@@ -340,6 +356,7 @@ impl TraceRecord {
             downrec_close: None,
             field_ic_snapshot: None,
             result_tags: Vec::with_capacity(MAX_TRACE_LEN),
+            field_slots: Vec::with_capacity(MAX_TRACE_LEN),
         }
     }
 
@@ -377,6 +394,7 @@ impl TraceRecord {
             downrec_close: None,
             field_ic_snapshot: None,
             result_tags: Vec::with_capacity(MAX_TRACE_LEN),
+            field_slots: Vec::with_capacity(MAX_TRACE_LEN),
         }
     }
 
@@ -388,6 +406,7 @@ impl TraceRecord {
         }
         self.ops.push(op);
         self.result_tags.push(RESULT_TAG_UNKNOWN);
+        self.field_slots.push(FIELD_SLOT_UNKNOWN);
         true
     }
 }

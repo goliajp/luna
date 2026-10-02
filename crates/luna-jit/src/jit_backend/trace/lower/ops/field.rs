@@ -105,6 +105,8 @@ pub(super) fn emit_get_field_op<M: Module>(
 
             let v = if ic_active {
                 emit_field_ic_read(lw, pl, oc, t, key_arg, want)
+            } else if let (Some(slot), Some((_, w))) = (record.field_slot(i), want) {
+                emit_field_slot_read(lw, pl, oc, t, key_arg, slot, w)
             } else if let Some((_, w)) = want {
                 checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
             } else {
@@ -130,6 +132,43 @@ pub(super) fn emit_get_field_op<M: Module>(
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
+}
+
+/// A field read straight from the hash slot the key was recorded in,
+/// through the checked helper when the slot no longer holds it.
+#[allow(clippy::too_many_arguments)]
+fn emit_field_slot_read<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    t: Value,
+    key_arg: Value,
+    slot: u32,
+    w: u8,
+) -> Value {
+    let OpHelpers {
+        get_field_checked_id,
+        ..
+    } = lw.h.op;
+    let OpCx { i, rop, .. } = *oc;
+    let hit = lw.bcx.create_block();
+    lw.bcx.append_block_param(hit, types::I64);
+    let miss = lw.bcx.create_block();
+    let merge = lw.bcx.create_block();
+    lw.bcx.append_block_param(merge, types::I64);
+    field_slot::emit_field_slot_check(&mut lw.bcx, t, key_arg, slot, Some(w), hit, miss);
+    lw.bcx.switch_to_block(hit);
+    lw.bcx.seal_block(hit);
+    let node = lw.bcx.block_params(hit)[0];
+    let fast = field_slot::emit_slot_load(&mut lw.bcx, node);
+    lw.bcx.ins().jump(merge, &[fast.into()]);
+    lw.bcx.switch_to_block(miss);
+    lw.bcx.seal_block(miss);
+    let slow = checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i);
+    lw.bcx.ins().jump(merge, &[slow.into()]);
+    lw.bcx.switch_to_block(merge);
+    lw.bcx.seal_block(merge);
+    lw.bcx.block_params(merge)[0]
 }
 
 /// Global reads through an upvalue table.

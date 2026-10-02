@@ -205,8 +205,9 @@ fn call_head_settles_when_recording_it_is_abandoned() {
     assert!(f.proto.trace_call_head_settled.get());
     assert!(f.proto.traces.borrow().is_empty());
     let failed = vm.trace_compile_failed_count();
-    // three for f's entry, at most one for the loop's back-edge
-    assert!((3..=4).contains(&failed), "{failed}");
+    // three for f's entry, up to three for the loop's head (a head is
+    // recorded again after each failure until it is abandoned)
+    assert!((3..=6).contains(&failed), "{failed}");
     for i in 0..200 {
         vm.call_value(Value::Closure(f), &[Value::Int(i)])
             .expect("call f");

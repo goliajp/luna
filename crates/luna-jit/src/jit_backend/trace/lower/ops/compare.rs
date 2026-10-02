@@ -55,7 +55,27 @@ pub(super) fn emit_eqk_op<M: Module>(
                     };
                     lw.bcx.ins().fcmp(float_cc, lhs, rhs)
                 }
-                _ => unreachable!("pre-emit gates Int / Float const only"),
+                luna_core::runtime::Value::Str(k) => match eq_lowering(ka, RegKind::Str) {
+                    EqLowering::Unequal => lw.bcx.ins().iconst(types::I8, i64::from(!ins.k())),
+                    EqLowering::Unknown => return None,
+                    _ => {
+                        let lhs = lw.bcx.use_var(regs[ins.a() as usize]);
+                        let rhs = emit_str_key_arg(
+                            lw.module,
+                            &mut lw.bcx,
+                            k,
+                            pl.opts.aot,
+                            &mut lw.defined_aot_data,
+                        );
+                        let int_cc = if ins.k() {
+                            IntCC::Equal
+                        } else {
+                            IntCC::NotEqual
+                        };
+                        lw.bcx.ins().icmp(int_cc, lhs, rhs)
+                    }
+                },
+                _ => unreachable!("pre-emit gates number and short string consts only"),
             };
 
             let continue_blk = lw.bcx.create_block();
