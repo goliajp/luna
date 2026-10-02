@@ -115,6 +115,7 @@ pub(super) fn build(
     for child in raw.protos.drain(..) {
         protos.push(build(heap, child, translate)?);
     }
+    crate::runtime::function::mark_closing_returns(&mut lowered.code, &protos);
     let env_upval_idx = raw
         .upvals
         .iter()

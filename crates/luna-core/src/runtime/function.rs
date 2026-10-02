@@ -467,5 +467,8 @@ pub struct NativeClosure {
     pub(crate) kind: crate::vm::exec::native_call::NativeKind,
 }
 
+#[path = "function_close.rs"]
+mod close;
+pub(crate) use close::{mark_closing_returns, needs_close};
 #[path = "function_trace.rs"]
 mod trace;

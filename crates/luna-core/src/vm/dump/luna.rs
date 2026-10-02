@@ -333,6 +333,8 @@ fn r_proto(
     // bit (it's an implementation detail of the source-level parlist), so a
     // loaded vararg proto conservatively reports no pseudo — `(vararg table)`
     // would be returned by `lua_getlocal` only on protos compiled here.
+    // a chunk from before returns carried this mark gets it here
+    crate::runtime::function::mark_closing_returns(&mut code, &protos);
     let env_upval_idx = upvals
         .iter()
         .take(u8::MAX as usize)

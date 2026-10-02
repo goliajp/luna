@@ -6398,7 +6398,7 @@ impl Vm {
                     self.top = self.top.max(abs_a + nret);
                     if matches!(inst.op(), Op::Return0 | Op::Return1)
                         && !matches!(
-                            self.return_fast::<true>(base, abs_a, nret, entry_depth),
+                            self.return_fast::<true>(base, abs_a, nret, entry_depth, inst.k()),
                             call_fast::Returned::No
                         )
                     {
