@@ -80,6 +80,7 @@ pub(super) fn lower_and_encode_meta(
             // the same dialect flag the JIT compiled these records with
             pre53: version <= LuaVersion::Lua53,
             aot: true,
+            tier: Default::default(),
         };
         // Re-lower this record into the ObjectModule under a unique
         // exported name. Any bail here = the record was lowerable at

@@ -129,6 +129,19 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     always_codegen: bool,
     float_only: bool,
 ) -> Option<(FuncId, CompiledTrace)> {
+    with_plan(record, opts, float_only, |pl, escape| {
+        lower_clif(module, pl, escape, aot_fn_name, always_codegen)
+    })?
+}
+
+/// Plans `record` and hands the plan to `f`; `None` when the record
+/// cannot be lowered.
+fn with_plan<R>(
+    record: &TraceRecord,
+    opts: CompileOptions,
+    float_only: bool,
+    f: impl FnOnce(&Plan<'_>, EscapeAnalysis) -> R,
+) -> Option<R> {
     checkpoint("enter");
     if !record.closed {
         checkpoint("bail:not-closed");
@@ -150,8 +163,32 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         None => (record, Vec::new()),
     };
     let (plan, escape) = plan_trace(record, vconsts, head_proto, max_stack, opts, float_only)?;
-    let pl = &plan;
+    Some(f(&plan, escape))
+}
 
+/// The trace recorded for the baseline code generator, with what the
+/// emit pass decided; `None` when it cannot be lowered.
+pub(super) fn lower_trace_lir(
+    record: &TraceRecord,
+    opts: CompileOptions,
+    float_only: bool,
+) -> Option<(super::lir::Lir, CompiledTrace)> {
+    with_plan(record, opts, float_only, |pl, escape| {
+        let mut e = super::lir::Lir::new();
+        let h = declare_helpers(&mut e)?;
+        let (e, emitted) = emit_trace(e, pl, h, escape)?;
+        Some((e, build_compiled(pl, emitted)))
+    })?
+}
+
+fn lower_clif<M: Module>(
+    module: &mut M,
+    pl: &Plan<'_>,
+    escape: EscapeAnalysis,
+    aot_fn_name: Option<&str>,
+    always_codegen: bool,
+) -> Option<(FuncId, CompiledTrace)> {
+    let Plan { record, .. } = *pl;
     let mut ctx = module.make_context();
     let mut fbc = FunctionBuilderContext::new();
     let b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
@@ -215,7 +252,6 @@ pub(super) fn lower_trace_into_inner<M: Module>(
         let want_asm_dump = std::env::var("LUNA_TRACE_ASM_DUMP")
             .map(|v| v == "1")
             .unwrap_or(false);
-        let Plan { record, .. } = *pl;
         if want_asm_dump {
             ctx.set_disasm(true);
         }

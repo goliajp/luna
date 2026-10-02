@@ -119,6 +119,22 @@ thread_local! {
     pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
     static TRACE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static BASELINE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static BASELINE_FALLBACK: std::cell::Cell<(u64, &'static str)> =
+        const { std::cell::Cell::new((0, "")) };
+}
+
+/// Traces this thread compiled with the baseline code generator.
+#[doc(hidden)]
+pub fn baseline_codegen_count() -> u64 {
+    BASELINE_CODEGEN.with(|c| c.get())
+}
+
+/// Traces the baseline code generator handed to Cranelift on this thread,
+/// and the reason for the last one.
+#[doc(hidden)]
+pub fn baseline_fallback() -> (u64, &'static str) {
+    BASELINE_FALLBACK.with(|c| c.get())
 }
 
 pub(super) fn checkpoint(s: &'static str) {
@@ -156,8 +172,8 @@ pub fn base_var_scaffold_declared_count() -> u64 {
     BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
 }
 
-/// Traces this thread has run through Cranelift and finalized into
-/// machine code for a Vm or via [`try_compile_trace_with_options`].
+/// Traces this thread has compiled into machine code (either tier) for
+/// a Vm or via [`try_compile_trace_with_options`].
 /// Diagnostic-only: it tells a trace cached with code from one a Vm
 /// cached without, because nothing could enter it.
 #[doc(hidden)]
@@ -338,6 +354,53 @@ pub(crate) fn compile_trace_for_vm(
 /// library converts its number arguments to floats and returns floats
 /// (`math.min(1, 2)` is the float `1`).
 pub(super) fn compile_trace_jit(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    always_codegen: bool,
+    float_only: bool,
+) -> Option<CompiledTrace> {
+    if opts.tier != luna_core::jit::trace::TraceTier::Optimizing {
+        match compile_trace_baseline(storage, record, opts, always_codegen, float_only) {
+            Ok(ct) => return ct,
+            Err(why) => BASELINE_FALLBACK.with(|c| c.set((c.get().0 + 1, why))),
+        }
+    }
+    compile_trace_cranelift(storage, record, opts, always_codegen, float_only)
+}
+
+/// The baseline tier: `Ok(None)` when the record cannot be lowered at all,
+/// `Err` when the baseline code generator cannot take it.
+fn compile_trace_baseline(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    always_codegen: bool,
+    float_only: bool,
+) -> Result<Option<CompiledTrace>, &'static str> {
+    let Some((lir, mut compiled)) = lower_trace_lir(record, opts, float_only) else {
+        return Ok(None);
+    };
+    if !always_codegen && !trace_is_enterable(record, &compiled) {
+        return Ok(Some(compiled));
+    }
+    let code = lir::assemble(&lir)?;
+    BASELINE_CODEGEN.with(|c| c.set(c.get() + 1));
+    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
+    // SAFETY: the code implements the `TraceFn` ABI (`extern "C"`, one
+    // pointer argument, an i64 result); it stays mapped while `storage`
+    // holds `code`, which is until the owning Vm releases its code
+    compiled.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(code.entry) };
+    let Ok(cs) = crate::jit_backend::storage::from_storage(storage) else {
+        // SAFETY: nothing has seen the entry
+        unsafe { code.free() };
+        return Ok(None);
+    };
+    cs.baseline_code.push(code);
+    Ok(Some(compiled))
+}
+
+fn compile_trace_cranelift(
     storage: &mut dyn luna_core::jit::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,

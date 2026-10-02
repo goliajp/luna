@@ -193,6 +193,7 @@ fn setfield_trace_aot_emits_strkey_data_symbols() {
         internal_loop: false,
         pre53: false,
         aot: true,
+        tier: Default::default(),
     };
 
     // The lowerer's `dispatchable` analysis may reject this 1-op
