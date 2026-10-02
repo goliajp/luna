@@ -40,11 +40,7 @@ pub(crate) fn write(lir: &Lir, an: &Analysis, al: &Allocation, code: &[u8]) {
     };
     let mut s = String::new();
     for &b in &an.order {
-        let params: Vec<String> = lir.blocks[b as usize]
-            .params
-            .iter()
-            .map(|&p| name(p))
-            .collect();
+        let params: Vec<String> = lir.block_params(b).iter().map(|&p| name(p)).collect();
         let _ = writeln!(s, "block{b}({}):", params.join(", "));
         let (lo, hi) = an.block_at[b as usize];
         for c in lo..hi {

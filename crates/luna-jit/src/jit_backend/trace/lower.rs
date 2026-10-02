@@ -62,6 +62,7 @@ use downrec_tail::*;
 use exit::*;
 use finish::*;
 use fold::*;
+pub(in crate::jit_backend::trace) use helpers::Helpers;
 use helpers::*;
 use loop_tail::*;
 use ops::*;
@@ -175,7 +176,14 @@ pub(super) fn lower_trace_lir(
 ) -> Option<(super::lir::Lir, CompiledTrace)> {
     with_plan(record, opts, float_only, |pl, escape| {
         let mut e = super::lir::Lir::take();
-        let h = declare_helpers(&mut e)?;
+        let h = match e.helpers {
+            Some((h, _, _)) => h,
+            None => {
+                let h = declare_helpers(&mut e)?;
+                e.helpers = Some((h, e.funcs.len() as u32, e.param_tys.len() as u32));
+                h
+            }
+        };
         let (e, emitted) = emit_trace(e, pl, h, escape)?;
         Some((e, build_compiled(pl, emitted)))
     })?

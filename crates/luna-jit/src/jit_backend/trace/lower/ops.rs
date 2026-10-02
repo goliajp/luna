@@ -32,7 +32,7 @@ pub(super) struct OpCx<'r> {
     pub(super) vk: Option<VConst>,
     pub(super) rc_const: Option<i64>,
     pub(super) off: usize,
-    pub(super) regs: Vec<Variable>,
+    pub(super) regs: &'r [Variable],
     pub(super) ins: Inst,
     pub(super) op: Op,
     pub(super) max_stack: usize,

@@ -77,10 +77,10 @@ pub(crate) fn for_defs(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     }
     match i.op {
         Op::VarWrite => f(nv + i.a),
-        Op::Jump => lir.blocks[i.a as usize].params.iter().for_each(|&p| f(p)),
+        Op::Jump => lir.block_params(i.a).iter().for_each(|&p| f(p)),
         Op::Brif(_) => {
-            lir.blocks[i.b as usize].params.iter().for_each(|&p| f(p));
-            lir.blocks[i.c as usize].params.iter().for_each(|&p| f(p));
+            lir.block_params(i.b).iter().for_each(|&p| f(p));
+            lir.block_params(i.c).iter().for_each(|&p| f(p));
         }
         _ => {}
     }
