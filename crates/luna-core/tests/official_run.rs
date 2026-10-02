@@ -1,4 +1,5 @@
-// own binary: it changes the process cwd, and ci reads its stderr trace under --nocapture
+// own binary: it changes the process cwd, and ci reads its stderr trace under --nocapture;
+// the parse checks share it because they use absolute paths
 
 //! Official PUC Lua test-suite gates for every supported dialect.
 //!
@@ -292,6 +293,8 @@ fn official_suites_expected_pass() {
 
 #[path = "official_run/byte_diff.rs"]
 mod byte_diff;
+#[path = "official_run/parse.rs"]
+mod parse;
 #[path = "official_run/report.rs"]
 mod report;
 #[path = "official_run/run_file.rs"]
