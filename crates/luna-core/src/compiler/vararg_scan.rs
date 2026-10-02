@@ -10,11 +10,15 @@ use super::*;
 
 impl Compiler<'_> {
     pub(super) fn vararg_forced(&self, block: &ast::Block, name: &str) -> bool {
-        block.stats.iter().any(|&s| self.stat_forces(s, name))
+        self.ls(block.stats)
+            .iter()
+            .any(|&s| self.stat_forces(s, name))
     }
 
     fn block_forces(&self, block: &ast::Block, name: &str) -> bool {
-        block.stats.iter().any(|&s| self.stat_forces(s, name))
+        self.ls(block.stats)
+            .iter()
+            .any(|&s| self.stat_forces(s, name))
     }
 
     fn stat_forces(&self, s: StatId, name: &str) -> bool {
@@ -28,8 +32,8 @@ impl Compiler<'_> {
                 self.block_forces(body, name) || self.expr_forces(*cond, name, false)
             }
             If { arms, else_body } => {
-                arms.iter().any(|(c, _, b)| {
-                    self.expr_forces(*c, name, false) || self.block_forces(b, name)
+                self.ls(*arms).iter().any(|a| {
+                    self.expr_forces(a.cond, name, false) || self.block_forces(&a.body, name)
                 }) || else_body
                     .as_ref()
                     .is_some_and(|b| self.block_forces(b, name))
@@ -47,23 +51,34 @@ impl Compiler<'_> {
                     || self.block_forces(body, name)
             }
             GenericFor { exprs, body, .. } => {
-                exprs.iter().any(|&e| self.expr_forces(e, name, false))
+                self.ls(*exprs)
+                    .iter()
+                    .any(|&e| self.expr_forces(e, name, false))
                     || self.block_forces(body, name)
             }
-            Local { exprs, .. } | Global { exprs, .. } => {
-                exprs.iter().any(|&e| self.expr_forces(e, name, false))
-            }
+            Local { exprs, .. } | Global { exprs, .. } => self
+                .ls(*exprs)
+                .iter()
+                .any(|&e| self.expr_forces(e, name, false)),
             GlobalAll { .. } | Break { .. } | Goto(_) | Label(_) => false,
             Assign { targets, exprs } => {
-                targets.iter().any(|&t| self.target_forces(t, name))
-                    || exprs.iter().any(|&e| self.expr_forces(e, name, false))
+                self.ls(*targets)
+                    .iter()
+                    .any(|&t| self.target_forces(t, name))
+                    || self
+                        .ls(*exprs)
+                        .iter()
+                        .any(|&e| self.expr_forces(e, name, false))
             }
             Call(e) => self.expr_forces(*e, name, false),
             // a nested function capturing the name escapes the vararg
             Function { body, .. } | LocalFunction { body, .. } | GlobalFunction { body, .. } => {
                 self.mentions_block(&body.block, name)
             }
-            Return { exprs, .. } => exprs.iter().any(|&e| self.expr_forces(e, name, false)),
+            Return { exprs, .. } => self
+                .ls(*exprs)
+                .iter()
+                .any(|&e| self.expr_forces(e, name, false)),
         }
     }
 
@@ -91,18 +106,24 @@ impl Compiler<'_> {
             }
             Call { func, args, .. } => {
                 self.expr_forces(*func, name, false)
-                    || args.iter().any(|&a| self.expr_forces(a, name, false))
+                    || self
+                        .ls(*args)
+                        .iter()
+                        .any(|&a| self.expr_forces(a, name, false))
             }
             MethodCall { obj, args, .. } => {
                 self.expr_forces(*obj, name, false)
-                    || args.iter().any(|&a| self.expr_forces(a, name, false))
+                    || self
+                        .ls(*args)
+                        .iter()
+                        .any(|&a| self.expr_forces(a, name, false))
             }
             BinOp { lhs, rhs, .. } => {
                 self.expr_forces(*lhs, name, false) || self.expr_forces(*rhs, name, false)
             }
             UnOp { operand, .. } => self.expr_forces(*operand, name, false),
             Paren(inner) => self.expr_forces(*inner, name, false),
-            Table { fields, .. } => fields.iter().any(|f| self.field_forces(f, name)),
+            Table { fields, .. } => self.ls(*fields).iter().any(|f| self.field_forces(f, name)),
             Function(body) => self.mentions_block(&body.block, name),
             Nil | True | False | Vararg | Int(_) | Float(_) | Str(_) => false,
         }
@@ -121,7 +142,9 @@ impl Compiler<'_> {
     /// Whether `name` appears *anywhere* inside a (nested) block — any mention
     /// means the vararg is captured as an upvalue, forcing materialization.
     fn mentions_block(&self, block: &ast::Block, name: &str) -> bool {
-        block.stats.iter().any(|&s| self.mentions_stat(s, name))
+        self.ls(block.stats)
+            .iter()
+            .any(|&s| self.mentions_stat(s, name))
     }
 
     fn mentions_stat(&self, s: StatId, name: &str) -> bool {
@@ -135,8 +158,9 @@ impl Compiler<'_> {
                 self.mentions_block(body, name) || self.mentions_expr(*cond, name)
             }
             If { arms, else_body } => {
-                arms.iter()
-                    .any(|(c, _, b)| self.mentions_expr(*c, name) || self.mentions_block(b, name))
+                self.ls(*arms)
+                    .iter()
+                    .any(|a| self.mentions_expr(a.cond, name) || self.mentions_block(&a.body, name))
                     || else_body
                         .as_ref()
                         .is_some_and(|b| self.mentions_block(b, name))
@@ -154,15 +178,17 @@ impl Compiler<'_> {
                     || self.mentions_block(body, name)
             }
             GenericFor { exprs, body, .. } => {
-                exprs.iter().any(|&e| self.mentions_expr(e, name))
+                self.ls(*exprs).iter().any(|&e| self.mentions_expr(e, name))
                     || self.mentions_block(body, name)
             }
             Local { exprs, .. } | Global { exprs, .. } | Return { exprs, .. } => {
-                exprs.iter().any(|&e| self.mentions_expr(e, name))
+                self.ls(*exprs).iter().any(|&e| self.mentions_expr(e, name))
             }
             Assign { targets, exprs } => {
-                targets.iter().any(|&e| self.mentions_expr(e, name))
-                    || exprs.iter().any(|&e| self.mentions_expr(e, name))
+                self.ls(*targets)
+                    .iter()
+                    .any(|&e| self.mentions_expr(e, name))
+                    || self.ls(*exprs).iter().any(|&e| self.mentions_expr(e, name))
             }
             Call(e) => self.mentions_expr(*e, name),
             Function { body, .. } | LocalFunction { body, .. } | GlobalFunction { body, .. } => {
@@ -178,17 +204,19 @@ impl Compiler<'_> {
             Name(n) => self.nm(n) == name,
             Index { obj, key } => self.mentions_expr(*obj, name) || self.mentions_expr(*key, name),
             Call { func, args, .. } => {
-                self.mentions_expr(*func, name) || args.iter().any(|&a| self.mentions_expr(a, name))
+                self.mentions_expr(*func, name)
+                    || self.ls(*args).iter().any(|&a| self.mentions_expr(a, name))
             }
             MethodCall { obj, args, .. } => {
-                self.mentions_expr(*obj, name) || args.iter().any(|&a| self.mentions_expr(a, name))
+                self.mentions_expr(*obj, name)
+                    || self.ls(*args).iter().any(|&a| self.mentions_expr(a, name))
             }
             BinOp { lhs, rhs, .. } => {
                 self.mentions_expr(*lhs, name) || self.mentions_expr(*rhs, name)
             }
             UnOp { operand, .. } => self.mentions_expr(*operand, name),
             Paren(inner) => self.mentions_expr(*inner, name),
-            Table { fields, .. } => fields.iter().any(|f| match f {
+            Table { fields, .. } => self.ls(*fields).iter().any(|f| match f {
                 ast::TableField::Item(e) => self.mentions_expr(*e, name),
                 ast::TableField::Named(_, e) => self.mentions_expr(*e, name),
                 ast::TableField::Keyed(k, v) => {

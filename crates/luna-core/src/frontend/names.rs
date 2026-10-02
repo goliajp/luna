@@ -1,44 +1,46 @@
-//! Identifier interning for the load path (PUC `luaX_newstring` keeps one
-//! string per distinct name): the lexer hands the parser a number per
-//! identifier, the parser builds the AST with them and the compiler
-//! compares numbers. The text lives once, in one buffer; the public
-//! token and AST types, which own their names, are produced from it only
-//! where they are handed out.
+//! The identifiers and string literals of a chunk, each kept once (PUC
+//! `luaX_newstring` keeps one string per distinct name): the lexer hands
+//! the parser a number per identifier or literal, the tree stores the
+//! numbers and the compiler compares them. The bytes live back to back in
+//! one buffer owned by the chunk.
 
-/// An interned identifier: an index into [`Names`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub(crate) struct Sym(pub(crate) u32);
+/// An interned identifier or string literal: an index into [`Names`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
+pub struct Sym(
+    /// Zero-based number of the entry, in order of first appearance.
+    pub u32,
+);
 
-/// An identifier in the internal AST: its number and the line it was read
-/// on (the internal counterpart of [`crate::frontend::ast::Name`]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct SymName {
-    pub(crate) sym: Sym,
-    pub(crate) line: u32,
-}
-
-/// The identifiers of one chunk.
-#[derive(Default)]
-pub(crate) struct Names {
-    /// every name back to back
-    text: String,
-    /// where each name starts in `text`; the last entry is the end
+/// The identifiers and string literals of one chunk.
+#[derive(Clone, Debug, Default)]
+pub struct Names {
+    /// every entry back to back
+    text: Vec<u8>,
+    /// where each entry starts in `text`; the last element is the end
     ends: Vec<u32>,
-    /// open addressing over `ends` indices plus one (0 is empty); its
-    /// length is a power of two, at most half full
+    /// open addressing over entry numbers plus one (0 is empty); its length
+    /// is a power of two, at most half full. Long literals are not entered:
+    /// hashing them costs more than the duplicate they might save
     table: Vec<u32>,
+    /// entries in `table`
+    hashed: u32,
 }
+
+/// Literals longer than this are stored without looking for an equal one.
+const MAX_HASHED_LEN: usize = 40;
 
 impl Names {
-    pub(crate) fn with_capacity(src_len: usize) -> Names {
+    /// An empty set sized for a chunk of `src_len` source bytes.
+    pub fn with_capacity(src_len: usize) -> Names {
         // about one distinct identifier per 32 source bytes
         let n = (src_len / 32).max(8);
         let mut ends = Vec::with_capacity(n + 1);
         ends.push(0);
         Names {
-            text: String::with_capacity(n * 6),
+            text: Vec::with_capacity(n * 6),
             ends,
             table: vec![0; (2 * n).next_power_of_two()],
+            hashed: 0,
         }
     }
 
@@ -55,6 +57,7 @@ impl Names {
         self.ends.push(0);
         self.table.clear();
         self.table.resize(len, 0);
+        self.hashed = 0;
         self
     }
 
@@ -68,31 +71,40 @@ impl Names {
     }
 
     /// The number of `s`, giving it one when it is new.
-    pub(crate) fn intern(&mut self, s: &str) -> Sym {
+    pub fn intern(&mut self, s: &[u8]) -> Sym {
         if self.ends.is_empty() {
             *self = Names::with_capacity(0);
         }
+        if s.len() > MAX_HASHED_LEN {
+            return self.append(s);
+        }
         let mask = self.table.len() - 1;
-        let mut i = Self::hash(s.as_bytes()) as usize & mask;
+        let mut i = Self::hash(s) as usize & mask;
         loop {
             match self.table[i] {
                 0 => break,
                 e => {
                     let sym = Sym(e - 1);
-                    if self.text(sym) == s {
+                    if self.bytes(sym) == s {
                         return sym;
                     }
                 }
             }
             i = (i + 1) & mask;
         }
-        let sym = Sym(self.ends.len() as u32 - 1);
-        self.text.push_str(s);
-        self.ends.push(self.text.len() as u32);
+        let sym = self.append(s);
         self.table[i] = sym.0 + 1;
-        if (self.ends.len() - 1) * 2 > self.table.len() {
+        self.hashed += 1;
+        if self.hashed as usize * 2 > self.table.len() {
             self.grow();
         }
+        sym
+    }
+
+    fn append(&mut self, s: &[u8]) -> Sym {
+        let sym = Sym(self.ends.len() as u32 - 1);
+        self.text.extend_from_slice(s);
+        self.ends.push(self.text.len() as u32);
         sym
     }
 
@@ -100,7 +112,11 @@ impl Names {
         let len = self.table.len() * 2;
         let mut table = vec![0; len];
         for s in 0..self.ends.len() as u32 - 1 {
-            let mut i = Self::hash(self.text(Sym(s)).as_bytes()) as usize & (len - 1);
+            let b = self.bytes(Sym(s));
+            if b.len() > MAX_HASHED_LEN {
+                continue;
+            }
+            let mut i = Self::hash(b) as usize & (len - 1);
             while table[i] != 0 {
                 i = (i + 1) & (len - 1);
             }
@@ -109,10 +125,26 @@ impl Names {
         self.table = table;
     }
 
-    /// The text of a name.
-    pub(crate) fn text(&self, s: Sym) -> &str {
+    /// The bytes of an entry.
+    pub fn bytes(&self, s: Sym) -> &[u8] {
         let i = s.0 as usize;
         &self.text[self.ends[i] as usize..self.ends[i + 1] as usize]
+    }
+
+    /// The text of an identifier. Identifiers are ASCII; an entry that is
+    /// not UTF-8 (a string literal) reads as the empty string.
+    pub fn text(&self, s: Sym) -> &str {
+        std::str::from_utf8(self.bytes(s)).unwrap_or_default()
+    }
+
+    /// The number of entries.
+    pub fn len(&self) -> usize {
+        self.ends.len().saturating_sub(1)
+    }
+
+    /// Whether there are no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -124,14 +156,28 @@ mod tests {
     fn same_text_same_number() {
         let mut n = Names::with_capacity(0);
         let words: Vec<String> = (0..200).map(|i| format!("v{}", i % 70)).collect();
-        let syms: Vec<Sym> = words.iter().map(|w| n.intern(w)).collect();
+        let syms: Vec<Sym> = words.iter().map(|w| n.intern(w.as_bytes())).collect();
         for (w, s) in words.iter().zip(&syms) {
             assert_eq!(n.text(*s), w);
-            assert_eq!(n.intern(w), *s);
+            assert_eq!(n.intern(w.as_bytes()), *s);
         }
-        assert_eq!(n.ends.len() - 1, 70);
-        assert_ne!(n.intern("a"), n.intern("b"));
-        let e = n.intern("");
+        assert_eq!(n.len(), 70);
+        assert_ne!(n.intern(b"a"), n.intern(b"b"));
+        let e = n.intern(b"");
         assert_eq!(n.text(e), "");
+    }
+
+    #[test]
+    fn long_literals_are_kept_apart() {
+        let mut n = Names::with_capacity(0);
+        let long = vec![b'x'; 100];
+        let a = n.intern(&long);
+        let b = n.intern(&long);
+        assert_ne!(a, b);
+        assert_eq!(n.bytes(a), &long[..]);
+        assert_eq!(n.bytes(b), &long[..]);
+        let bin = n.intern(b"\xff\x00");
+        assert_eq!(n.bytes(bin), b"\xff\x00");
+        assert_eq!(n.text(bin), "");
     }
 }

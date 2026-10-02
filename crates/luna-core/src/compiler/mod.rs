@@ -22,17 +22,10 @@ use const_map::{ConstKey, ConstMap};
 use ctconst::{CtConst, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 
-use crate::frontend::ast::{self, BinOp, Block, ExprId, StatId, UnOp, block_uses_vararg};
-use crate::frontend::names::{Names, SymName};
-
-// the compiler works on the tree with interned names (see `frontend::names`)
-type Chunk = ast::Chunk<SymName>;
-type Expr = ast::Expr<SymName>;
-type Stat = ast::Stat<SymName>;
-type FuncBody = ast::FuncBody<SymName>;
-type AttribName = ast::AttribName<SymName>;
-type TableField = ast::TableField<SymName>;
-type FuncName = ast::FuncName<SymName>;
+use crate::frontend::ast::{
+    self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, FuncName, List, ListItem, Name,
+    Stat, StatId, TableField, UnOp, block_uses_vararg,
+};
 use crate::frontend::error::SyntaxError;
 use crate::numeric::Num;
 use crate::runtime::heap::{GcHeader, ObjTag};
@@ -49,18 +42,7 @@ pub fn compile_chunk(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    let (chunk, names) = intern_chunk(ast);
-    compile_parsed(&chunk, &names, &[], version, source_name, heap)
-}
-
-/// The tree the compiler works on, from the public one.
-fn intern_chunk(ast: &ast::Chunk) -> (Chunk, Names) {
-    let mut names = Names::with_capacity(0);
-    let chunk = ast.map_names(&mut |n: &ast::Name| SymName {
-        sym: names.intern(&n.text),
-        line: n.line,
-    });
-    (chunk, names)
+    compile_parsed(ast, &[], version, source_name, heap)
 }
 
 /// [`compile_chunk`] with the `end` lines the parser recorded for loops
@@ -69,7 +51,6 @@ fn intern_chunk(ast: &ast::Chunk) -> (Chunk, Names) {
 /// line only when they are given.
 pub(crate) fn compile_parsed(
     ast: &Chunk,
-    names: &Names,
     end_lines: &[u32],
     version: LuaVersion,
     source_name: &[u8],
@@ -78,7 +59,6 @@ pub(crate) fn compile_parsed(
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
-        names,
         end_lines,
         heap,
         version,
@@ -122,13 +102,9 @@ pub fn compile_chunk_with_last_target(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let (chunk, names) = intern_chunk(ast);
-    let ast = &chunk;
-    let names = &names;
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
-        names,
         end_lines: &[],
         heap,
         version,
@@ -446,8 +422,6 @@ impl<'a> Level<'a> {
 
 struct Compiler<'a> {
     ast: &'a Chunk,
-    /// the text of the tree's names
-    names: &'a Names,
     /// see [`compile_parsed`]
     end_lines: &'a [u32],
     heap: &'a mut Heap,
@@ -472,8 +446,18 @@ struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     /// The text of a name in the tree.
-    fn nm(&self, n: &SymName) -> &'a str {
-        self.names.text(n.sym)
+    fn nm(&self, n: &Name) -> &'a str {
+        self.ast.name(*n)
+    }
+
+    /// The bytes of a string literal of the tree.
+    fn sb(&self, s: ast::Sym) -> &'a [u8] {
+        self.ast.str(s)
+    }
+
+    /// The items of a list of the tree.
+    fn ls<T: ListItem>(&self, l: List<T>) -> &'a [T] {
+        self.ast.list(l)
     }
 
     // ---- infrastructure ----
@@ -1254,7 +1238,7 @@ impl<'a> Compiler<'a> {
             CtConst::Bool(false) => Exp::False,
             CtConst::Int(i) => Exp::Int(i),
             CtConst::Float(f) => Exp::Float(f),
-            CtConst::Str(s) => Exp::Const(self.str_const(&s)),
+            CtConst::Str(s) => Exp::Const(self.str_const(self.ast.str(s))),
         }
     }
 
@@ -1376,7 +1360,7 @@ impl<'a> Compiler<'a> {
             Expr::False => Ok(Exp::False),
             Expr::Int(i) => Ok(Exp::Int(*i)),
             Expr::Float(f) => Ok(Exp::Float(*f)),
-            Expr::Str(s) => Ok(Exp::Const(self.str_const(s))),
+            Expr::Str(s) => Ok(Exp::Const(self.str_const(self.sb(*s)))),
             Expr::Name(n) => {
                 self.last_line = n.line;
                 self.name_expr(self.nm(n))
@@ -1538,7 +1522,7 @@ impl<'a> Compiler<'a> {
                 self.set_freereg(base);
                 let r = self.exp_to_nextreg(fe)?;
                 debug_assert_eq!(r, base);
-                let (nfixed, open) = self.args_onto_stack(args, base + 1)?;
+                let (nfixed, open) = self.args_onto_stack(self.ls(*args), base + 1)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 1 };
                 let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
@@ -1583,7 +1567,7 @@ impl<'a> Compiler<'a> {
                     self.reserve(2)?;
                     self.emit(Inst::iabc(Op::SelfOp, base, o, kr, false));
                 }
-                let (nfixed, open) = self.args_onto_stack(args, base + 2)?;
+                let (nfixed, open) = self.args_onto_stack(self.ls(*args), base + 2)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 2 };
                 let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
@@ -1627,7 +1611,7 @@ impl<'a> Compiler<'a> {
 
     fn function_exp(&mut self, body: &'a FuncBody, is_method: bool) -> Result<Exp, SyntaxError> {
         let line = body.line;
-        let nparams = body.params.len() + is_method as usize;
+        let nparams = body.params.len as usize + is_method as usize;
         if nparams > 200 {
             return Err(self.err(line, "too many parameters"));
         }
@@ -1680,7 +1664,7 @@ impl<'a> Compiler<'a> {
         if is_method {
             self.declare_local("self", 0, false)?;
         }
-        for (i, p) in body.params.iter().enumerate() {
+        for (i, p) in self.ls(body.params).iter().enumerate() {
             self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
         }
         if let ast::Vararg::Named(n) = &body.vararg {
@@ -2052,8 +2036,8 @@ impl<'a> Compiler<'a> {
         let oe = self.expr(obj)?;
         let o = self.exp_to_anyreg(oe)?;
         let e = match ast.expr(key) {
-            Expr::Str(s) if s.len() <= 255 => {
-                let c = self.str_const(s);
+            Expr::Str(s) if self.sb(*s).len() <= 255 => {
+                let c = self.str_const(self.sb(*s));
                 if c <= 0xFF {
                     Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
                 } else {
@@ -2081,6 +2065,7 @@ impl<'a> Compiler<'a> {
         let Expr::Table { fields, .. } = ast.expr(id) else {
             unreachable!()
         };
+        let fields = ast.list(*fields);
         self.last_line = line;
         let treg = self.reserve(1)?;
         let (mut narr, mut nhash) = (0u32, 0u32);
@@ -2199,14 +2184,14 @@ impl<'a> Compiler<'a> {
     /// trailing — a goto into it lands in those locals' scope (PUC matches a
     /// label with `block_follow(ls, 0)`, which excludes `until`).
     fn stat_block_inner(&mut self, b: &Block, until_follows: bool) -> Result<(), SyntaxError> {
-        for (i, &sid) in b.stats.iter().enumerate() {
+        for (i, &sid) in self.ls(b.stats).iter().enumerate() {
             let ast = self.ast;
             if let Stat::Label(n) = ast.stat(sid) {
                 // a trailing label (only labels after it) does not enter the
                 // scope of the block's locals (continue-style jumps); in a
                 // repeat body the trailing `until` keeps the locals alive.
                 let trailing = !until_follows
-                    && b.stats[i + 1..]
+                    && self.ls(b.stats)[i + 1..]
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
                 self.last_line = n.line;
@@ -2240,9 +2225,9 @@ impl<'a> Compiler<'a> {
                 collective,
                 names,
                 exprs,
-            } => self.local_stat(*collective, names, exprs),
-            Stat::Assign { targets, exprs } => self.assign_stat(targets, exprs),
-            Stat::If { arms, else_body } => self.if_stat(arms, else_body.as_ref()),
+            } => self.local_stat(*collective, self.ls(*names), self.ls(*exprs)),
+            Stat::Assign { targets, exprs } => self.assign_stat(self.ls(*targets), self.ls(*exprs)),
+            Stat::If { arms, else_body } => self.if_stat(self.ls(*arms), else_body.as_ref()),
             Stat::While { cond, body } => self.while_stat(*cond, body, self.stat_end_line(sid)),
             Stat::Repeat { body, cond } => self.repeat_stat(body, *cond),
             Stat::NumericFor {
@@ -2260,7 +2245,13 @@ impl<'a> Compiler<'a> {
                 exprs,
                 body,
                 expr_line,
-            } => self.generic_for(vars, exprs, body, *expr_line, self.stat_end_line(sid)),
+            } => self.generic_for(
+                self.ls(*vars),
+                self.ls(*exprs),
+                body,
+                *expr_line,
+                self.stat_end_line(sid),
+            ),
             Stat::Break { line } => {
                 self.last_line = *line;
                 let Some(loop_floor) = self
@@ -2293,7 +2284,7 @@ impl<'a> Compiler<'a> {
             }
             Stat::Return { exprs, line } => {
                 self.last_line = *line;
-                self.return_stat(exprs)
+                self.return_stat(self.ls(*exprs))
             }
             Stat::Call(e) => {
                 let e = *e;
@@ -2354,7 +2345,7 @@ impl<'a> Compiler<'a> {
                 collective,
                 names,
                 exprs,
-            } => self.global_decl_stat(*collective, names, exprs),
+            } => self.global_decl_stat(*collective, self.ls(*names), self.ls(*exprs)),
             Stat::GlobalAll { attrib } => {
                 let attrib = *attrib;
                 if attrib == Some(ast::Attrib::Close) {
@@ -2386,7 +2377,7 @@ impl<'a> Compiler<'a> {
             }
         }
         let declare = |c: &mut Self| {
-            let text = c.names;
+            let text = &c.ast.names;
             for an in names {
                 let ro = an.attrib.or(collective) == Some(ast::Attrib::Const);
                 c.l()
@@ -2438,7 +2429,7 @@ impl<'a> Compiler<'a> {
         let res = (|| -> Result<(), SyntaxError> {
             let be = self.name_expr(self.nm(&name.base))?;
             let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<&str> = name.path.iter().map(|n| self.nm(n)).collect();
+            let mut fields: Vec<&str> = self.ls(name.path).iter().map(|n| self.nm(n)).collect();
             if let Some(m) = &name.method {
                 fields.push(self.nm(m));
             }
@@ -2643,8 +2634,8 @@ impl<'a> Compiler<'a> {
                     // be mutated by an intervening store), everything else
                     // gets pinned to a fresh register too.
                     let key_kind = match ast.expr(key) {
-                        Expr::Str(s) if s.len() <= 255 => {
-                            let c = self.str_const(s);
+                        Expr::Str(s) if self.sb(*s).len() <= 255 => {
+                            let c = self.str_const(self.sb(*s));
                             if c <= 0xFF {
                                 SetKey::Field(c)
                             } else {
@@ -2850,8 +2841,8 @@ impl<'a> Compiler<'a> {
                 let oe = self.expr(obj)?;
                 let o = self.exp_to_anyreg(oe)?;
                 match ast.expr(key) {
-                    Expr::Str(s) if s.len() <= 255 => {
-                        let c = self.str_const(s);
+                    Expr::Str(s) if self.sb(*s).len() <= 255 => {
+                        let c = self.str_const(self.sb(*s));
                         if c <= 0xFF {
                             self.emit(Inst::iabc(Op::SetField, o, c, vreg, true));
                         } else {
@@ -2879,11 +2870,19 @@ impl<'a> Compiler<'a> {
 
     fn if_stat(
         &mut self,
-        arms: &[(ExprId, u32, Block)],
+        arms: &[ast::IfArm],
         else_body: Option<&Block>,
     ) -> Result<(), SyntaxError> {
         let mut end_jumps = Vec::new();
-        for (i, (cond, then_line, body)) in arms.iter().enumerate() {
+        for (
+            i,
+            ast::IfArm {
+                cond,
+                then_line,
+                body,
+            },
+        ) in arms.iter().enumerate()
+        {
             let (skips, last) = self.cond_jump_false(*cond)?;
             // PUC 5.2/5.3/5.4 attribute BOTH the TEST and the conditional-skip
             // JMP to the `then` keyword's line, because `luaK_goiftrue`
@@ -3089,7 +3088,7 @@ impl<'a> Compiler<'a> {
 
     fn generic_for(
         &mut self,
-        vars: &'a [SymName],
+        vars: &'a [Name],
         exprs: &[ExprId],
         body: &Block,
         expr_line: u32,

@@ -1430,7 +1430,6 @@ impl Vm {
                 crate::frontend::parser::parse_tokens_at_depth(expanded, src, self.version, depth)?;
             crate::compiler::compile_parsed(
                 &parsed.chunk,
-                &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
@@ -1443,7 +1442,6 @@ impl Vm {
             let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
             let proto = crate::compiler::compile_parsed(
                 &parsed.chunk,
-                &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
