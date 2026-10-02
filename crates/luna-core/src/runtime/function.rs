@@ -10,7 +10,7 @@ use crate::vm::isa::Inst;
 pub use crate::runtime::call_frame::{
     AfterClose, CallFrame, CloseCont, ContKind, Frame, FrameTm, MetaAction, MetaCont, NativeCont,
 };
-pub use crate::runtime::debug_info::{LocVar, UpvalDesc};
+pub use crate::runtime::debug_info::{DebugName, LocVar, UpvalDesc};
 pub use crate::runtime::upvalue::{UpvalState, Upvalue};
 
 /// An unused slot of [`Proto::trace_heads`].
