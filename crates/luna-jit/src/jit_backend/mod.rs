@@ -208,8 +208,9 @@ pub(crate) const TABLE_ASIZE_OFFSET: usize = std::mem::offset_of!(luna_core::run
 pub(crate) const TABLE_METATABLE_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, metatable);
 pub(crate) const STR_SHORT_OFFSET: usize = luna_core::runtime::string::jit_layout::STR_SHORT_OFFSET;
-const TABLE_ACOUNT_OFFSET: i32 = luna_core::runtime::table::jit_layout::TABLE_ACOUNT_OFFSET as i32;
-const TABLE_APREFIX_OFFSET: i32 =
+pub(crate) const TABLE_ACOUNT_OFFSET: i32 =
+    luna_core::runtime::table::jit_layout::TABLE_ACOUNT_OFFSET as i32;
+pub(crate) const TABLE_APREFIX_OFFSET: i32 =
     luna_core::runtime::table::jit_layout::TABLE_APREFIX_OFFSET as i32;
 
 /// table-field IC scaffold.

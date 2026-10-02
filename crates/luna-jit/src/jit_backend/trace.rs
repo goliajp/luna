@@ -28,6 +28,7 @@ mod math_fold;
 mod op_helpers;
 use math_fold::*;
 use op_helpers::*;
+mod array_slot;
 mod entry;
 mod field_slot;
 mod kinds;
