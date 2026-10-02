@@ -85,10 +85,13 @@ fn compile_main(
         source,
         levels: level::relabel(std::mem::take(&mut scratch.open)),
         pool: std::mem::take(&mut scratch.levels),
+        sym_strs: std::mem::take(&mut scratch.sym_strs),
         last_line: 0,
         force_line: None,
         str_cache: HashMap::new(),
     };
+    c.sym_strs.clear();
+    c.sym_strs.resize(ast.names.len(), None);
     let mut main = c.new_level(0, true, 0);
     main.upvals.push(UpvalDesc {
         in_stack: false,
@@ -108,6 +111,7 @@ fn compile_main(
     let last_target = lvl.last_target;
     let proto = c.finish_level(lvl, 0, 0);
     scratch.levels = c.pool;
+    scratch.sym_strs = c.sym_strs;
     scratch.open = level::relabel(c.levels);
     Ok((proto, last_target))
 }
@@ -306,6 +310,8 @@ struct Compiler<'a> {
     levels: Vec<Level<'a>>,
     /// emptied vectors of finished functions, for the next function
     pool: Vec<LevelBufs>,
+    /// the heap string of each entry of the chunk's names, once made
+    sym_strs: Vec<Option<Gc<LuaStr>>>,
     last_line: u32,
     /// When `Some(line)`, every `emit` ignores `last_line` and attributes the
     /// new instruction to `line` instead. PUC infix discharges its left
@@ -610,15 +616,34 @@ impl<'a> Compiler<'a> {
     }
 
     fn str_const(&mut self, bytes: &[u8]) -> u32 {
+        let s = self.intern_str(bytes);
+        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+    }
+
+    /// The constant of the tree's string (or name) `s`: each entry of the
+    /// chunk's names is interned on the heap once per load.
+    fn sym_const(&mut self, s: ast::Sym) -> u32 {
+        let i = s.0 as usize;
+        let g = match self.sym_strs[i] {
+            Some(g) => g,
+            None => {
+                let g = self.intern_str(self.sb(s));
+                self.sym_strs[i] = Some(g);
+                g
+            }
+        };
+        self.const_idx(ConstKey::Str(g.as_ptr()), Value::Str(g))
+    }
+
+    fn intern_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         // intern the literal once per chunk so identical constants share an
         // object; heap.intern already dedups short strings, the cache only
         // has to hold long ones
-        let s = if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
+        if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
             self.heap.intern(bytes)
         } else {
             self.long_str(bytes)
-        };
-        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+        }
     }
 
     fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
@@ -1129,7 +1154,7 @@ impl<'a> Compiler<'a> {
             CtConst::Bool(false) => Exp::False,
             CtConst::Int(i) => Exp::Int(i),
             CtConst::Float(f) => Exp::Float(f),
-            CtConst::Str(s) => Exp::Const(self.str_const(self.ast.str(s))),
+            CtConst::Str(s) => Exp::Const(self.sym_const(s)),
         }
     }
 
@@ -1251,7 +1276,7 @@ impl<'a> Compiler<'a> {
             Expr::False => Ok(Exp::False),
             Expr::Int(i) => Ok(Exp::Int(*i)),
             Expr::Float(f) => Ok(Exp::Float(*f)),
-            Expr::Str(s) => Ok(Exp::Const(self.str_const(self.sb(*s)))),
+            Expr::Str(s) => Ok(Exp::Const(self.sym_const(*s))),
             Expr::Name(n) => {
                 self.last_line = n.line;
                 self.name_expr(self.nm(n))
@@ -1432,7 +1457,7 @@ impl<'a> Compiler<'a> {
                 let o = self.exp_to_anyreg(oe)?;
                 self.set_freereg(base);
                 self.reserve(2)?;
-                let c = self.str_const(self.nm(method).as_bytes());
+                let c = self.sym_const(method.sym);
                 self.last_line = line;
                 if c <= 0xFF {
                     self.emit(Inst::iabc(Op::SelfOp, base, o, c, true));
@@ -1925,7 +1950,7 @@ impl<'a> Compiler<'a> {
         let o = self.exp_to_anyreg(oe)?;
         let e = match ast.expr(key) {
             Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                let c = self.str_const(self.sb(*s));
+                let c = self.sym_const(*s);
                 if c <= 0xFF {
                     Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
                 } else {
@@ -2012,7 +2037,7 @@ impl<'a> Compiler<'a> {
                     let saved = self.lr().freereg;
                     let ve = self.expr(*v)?;
                     let vr = self.exp_to_anyreg(ve)?;
-                    let c = self.str_const(self.nm(name).as_bytes());
+                    let c = self.sym_const(name.sym);
                     if c <= 0xFF {
                         self.emit(Inst::iabc(Op::SetField, treg, c, vr, true));
                     } else {
@@ -2523,7 +2548,7 @@ impl<'a> Compiler<'a> {
                     // gets pinned to a fresh register too.
                     let key_kind = match ast.expr(key) {
                         Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                            let c = self.str_const(self.sb(*s));
+                            let c = self.sym_const(*s);
                             if c <= 0xFF {
                                 SetKey::Field(c)
                             } else {
@@ -2730,7 +2755,7 @@ impl<'a> Compiler<'a> {
                 let o = self.exp_to_anyreg(oe)?;
                 match ast.expr(key) {
                     Expr::Str(s) if self.sb(*s).len() <= 255 => {
-                        let c = self.str_const(self.sb(*s));
+                        let c = self.sym_const(*s);
                         if c <= 0xFF {
                             self.emit(Inst::iabc(Op::SetField, o, c, vreg, true));
                         } else {

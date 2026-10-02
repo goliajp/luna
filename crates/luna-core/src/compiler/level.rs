@@ -191,4 +191,5 @@ pub(crate) struct CompileScratch {
     pub(super) levels: Vec<LevelBufs>,
     /// the stack of functions being compiled, empty
     pub(super) open: Vec<Level<'static>>,
+    pub(super) sym_strs: Vec<Option<Gc<LuaStr>>>,
 }
