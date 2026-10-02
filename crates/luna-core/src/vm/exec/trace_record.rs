@@ -39,6 +39,9 @@ impl Vm {
             self.frames.len() - 1 - self.jit.recording_frame_base
         };
         let depth_cap_hit = cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
+        if !returned_past_head {
+            self.note_result_tag(cl, base, cur_depth);
+        }
         let rec = self.jit.active_trace.as_mut().expect("just checked Some");
         let at_head_loop = cur_depth == 0
             && !rec.ops.is_empty()
@@ -200,6 +203,26 @@ impl Vm {
             self.trace_close_recording();
         } else {
             self.trace_record_push(cl, pc, inst, base, cur_depth);
+        }
+    }
+
+    /// Note the tag the last recorded op left in its `R[A]`, when the
+    /// instruction about to run is in the same frame (`base` of `cl` at
+    /// `cur_depth`): the op has finished, and no call it made is running.
+    fn note_result_tag(&mut self, cl: Gc<LuaClosure>, base: u32, cur_depth: usize) {
+        let rec = self.jit.active_trace.as_mut().expect("recording");
+        let Some(last) = rec.ops.last() else {
+            return;
+        };
+        if last.inline_depth as usize != cur_depth
+            || !std::ptr::eq(last.proto.as_ptr(), cl.proto.as_ptr())
+        {
+            return;
+        }
+        let i = rec.ops.len() - 1;
+        let slot = (base + last.inst.a()) as usize;
+        if let (Some(t), Some(v)) = (rec.result_tags.get_mut(i), self.stack.get(slot)) {
+            *t = v.unpack().0;
         }
     }
 

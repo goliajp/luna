@@ -27,7 +27,7 @@ macro_rules! fast_step_macros {
                 // nothing in a fast arm sets `trap`, so `stay` holds for the
                 // whole loop; with a trace this function could enter, the
                 // arms stop at the pcs where one starts, for the dispatcher
-                if WATCH && (!$stay || $npc == $heads[0] || $npc == $heads[1]) {
+                if WATCH && (!$stay || $heads.contains(&$npc)) {
                     // SAFETY: `fr` is the running frame, which no fast arm
                     // moves
                     unsafe { (*$fr).pc = $npc };

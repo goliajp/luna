@@ -77,11 +77,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             // GetX inference: look at the immediate next op. The read
             // is checked against it, so a value of another type (or
             // a table with a metatable) leaves the trace here.
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             if let Some((kind, want)) = getx_want(inferred) {
                 let v = checked_read!(lw, pl, get_int_checked_id, t, k_imm, want, rop.pc, i);
                 lw.bcx.def_var(regs[ins.a() as usize], v);
@@ -114,11 +110,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             }
             let t = lw.bcx.use_var(regs[ins.b() as usize]);
             let key = lw.bcx.use_var(regs[ins.c() as usize]);
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             // the helper reads the key as an integer
             let key_is_int = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
             match getx_want(inferred) {

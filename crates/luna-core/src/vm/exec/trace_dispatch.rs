@@ -117,9 +117,13 @@ impl Vm {
             // missing, and could close as a loop that never ran (a
             // side trace of two ops returning its own head, which
             // the dispatcher then entered forever). Drop it.
-            if self.jit.active_trace.take().is_some() {
+            // Counted as a failure of that head: the per-head hot count
+            // would otherwise start the same doomed recording again and
+            // again.
+            if let Some(rec) = self.jit.active_trace.take() {
                 self.jit.counters.aborted += 1;
                 self.jit.counters.bump_close_cause("reached-compiled-trace");
+                note_trace_compile_failure(rec.head_proto, rec.head_pc);
             }
             self.jit.pending_err = None;
             // Snapshot the pre-entry frame
