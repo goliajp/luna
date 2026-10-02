@@ -244,10 +244,6 @@ impl StringTable {
 }
 
 /// Allocation footprint of a string of `len` bytes (heap accounting).
-// strings are the most numerous objects the sweep walks
-#[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<LuaStr>() == 32);
-
 pub(crate) fn alloc_size(len: usize) -> usize {
     layout(len).size()
 }

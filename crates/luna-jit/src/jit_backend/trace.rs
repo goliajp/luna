@@ -6769,9 +6769,8 @@ fn lower_trace_into_inner<M: Module>(
                         t,
                         super::TABLE_NODE_MASK_OFFSET as i32,
                     );
-                    let mask = (snap.nodes_len as u32).wrapping_sub(1);
-                    let mask_imm = bcx.ins().iconst(types::I32, i64::from(mask));
-                    let len_ok = bcx.ins().icmp(IntCC::Equal, node_mask, mask_imm);
+                    let mask = i64::from((snap.nodes_len as u32).wrapping_sub(1));
+                    let len_ok = bcx.ins().icmp_imm_u(IntCC::Equal, node_mask, mask);
                     let guards_12 = bcx.ins().band(mt_ok, len_ok);
 
                     // 3 blocks: fast (guards 3+4 + load), slow
