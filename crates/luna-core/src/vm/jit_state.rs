@@ -54,6 +54,12 @@ pub struct JitState {
     /// See [`Self::trace_hot_threshold`].
     pub call_hot_threshold: u32,
 
+    /// Back-edge counts per loop head, indexed by a hash of the head
+    /// instruction's address (LuaJIT's `hotcount`): each loop of a
+    /// function gets hot on its own. Two heads sharing a slot only make
+    /// each other hot sooner.
+    pub(crate) loop_hot: Box<[u32; LOOP_HOT_SLOTS]>,
+
     /// Opt-in flag for the self-link cycle catch. Default `false`:
     /// the catch has a known correctness problem, so it ships disabled.
     pub self_link_enabled: bool,
@@ -303,7 +309,25 @@ impl JitCounters {
     }
 }
 
+/// Slots in [`JitState::loop_hot`].
+const LOOP_HOT_SLOTS: usize = 256;
+
 impl JitState {
+    /// Count a back-edge to the loop head at `head`; `true` once that
+    /// head has been crossed more than [`Self::trace_hot_threshold`]
+    /// times, which starts its count over.
+    #[inline]
+    pub(crate) fn loop_hot_tick(&mut self, head: *const crate::vm::isa::Inst) -> bool {
+        let slot = &mut self.loop_hot[(head as usize >> 2) & (LOOP_HOT_SLOTS - 1)];
+        if *slot >= self.trace_hot_threshold {
+            *slot = 0;
+            true
+        } else {
+            *slot += 1;
+            false
+        }
+    }
+
     /// Build an inert `JitState` whose backends are
     /// [`crate::jit::NullJitBackend`], with `enabled` and
     /// `trace_enabled` off: nothing could compile, so the interpreter
@@ -320,6 +344,7 @@ impl JitState {
             trace_enabled_chosen: false,
             trace_hot_threshold: crate::jit::trace::TRACE_HOT_THRESHOLD,
             call_hot_threshold: crate::jit::trace::CALL_HOT_THRESHOLD,
+            loop_hot: Box::new([0; LOOP_HOT_SLOTS]),
             self_link_enabled: false,
             active_trace: None,
             recording_frame_base: 0,

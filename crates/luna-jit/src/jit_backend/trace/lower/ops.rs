@@ -1,6 +1,7 @@
 use super::*;
 
 mod arith;
+mod array;
 mod basic;
 mod call;
 mod closure;
@@ -11,6 +12,7 @@ mod sequence;
 mod table;
 mod tfor;
 use arith::*;
+use array::*;
 use basic::*;
 use call::*;
 use closure::*;

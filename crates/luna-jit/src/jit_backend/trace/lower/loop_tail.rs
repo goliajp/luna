@@ -280,8 +280,12 @@ pub(super) fn emit_tfor_loop_tail<M: Module>(
     // control variable is a copy of the key
     let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
     let vars = (a + 4)..(a + 4 + nvars.min(2)).min(max_stack);
-    tail_kinds[vars.clone()].copy_from_slice(&lw.head_kinds[vars]);
+    tail_kinds[vars.clone()].copy_from_slice(&lw.head_kinds[vars.clone()]);
     tail_kinds[a + 2] = lw.head_kinds[a + 4];
+    // the return below is the trace's clean tail, whose exit tags come
+    // from the kinds the emit pass ends with: the loop variables hold the
+    // next iteration's values, which the interpreter must get back
+    lw.current_kinds[vars.clone()].copy_from_slice(&tail_kinds[vars]);
     if do_internal_loop
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)

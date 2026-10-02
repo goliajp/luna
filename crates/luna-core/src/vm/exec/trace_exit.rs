@@ -52,19 +52,16 @@ impl Vm {
         // 63 is set we re-fetch the child's via the
         // sentinel-keyed cache.
         let from_side_trace = (raw_ret >> 63) & 1 == 1;
-        let (
-            decode_inline,
-            decode_tags,
-            decode_exit_tags,
-            decode_hit_counts,
-            decode_body,
-            child_ran,
-        ) = self.trace_exit_source(cl, pc, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
+        let (child, decode_body, child_ran) =
+            self.trace_exit_source(cl, pc, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
+        let shapes: &CompiledTrace = child.as_deref().unwrap_or(ct);
+        let decode_inline = &shapes.per_exit_inline;
+        let decode_hit_counts = &shapes.exit_hit_counts;
         let decoded = crate::jit::trace::decode_exit_shape(
             decode_body,
-            &decode_inline,
-            &decode_tags,
-            &decode_exit_tags,
+            decode_inline,
+            &shapes.per_exit_tags,
+            &shapes.exit_tags,
         );
         let site_id = decoded.site_id;
         let cont_pc = decoded.cont_pc;
@@ -128,6 +125,7 @@ impl Vm {
             exit_tags_for_pc,
             &reg_state,
             &entry_tags,
+            child_ran,
         );
         // For non-inline exits the
         // helper was never called (no metas chain for

@@ -7,7 +7,6 @@ pub(super) struct OpHelpers {
     pub(super) set_ids: StoreHelpers,
     pub(super) get_field_id: FuncId,
     pub(super) get_tab_up_id: FuncId,
-    pub(super) get_int_checked_id: FuncId,
     pub(super) get_field_checked_id: FuncId,
     pub(super) get_tab_up_checked_id: FuncId,
     pub(super) op_closure_id: FuncId,
@@ -30,8 +29,10 @@ pub(super) struct RuntimeHelpers {
     pub(super) get_int_id: FuncId,
     pub(super) suppress_admit_id: FuncId,
     pub(super) math_fn_check_id: FuncId,
+    pub(super) str_sub_id: FuncId,
     pub(super) len_checked_id: FuncId,
     pub(super) upval_get_id: FuncId,
+    pub(super) upval_get_checked_id: FuncId,
     pub(super) head_closure_id: FuncId,
     pub(super) materialize_id: FuncId,
     pub(super) mat_sunk_id: FuncId,
@@ -112,20 +113,13 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
         .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
         .ok()?;
 
-    // Checked table reads (`luna_jit_table_get_int_checked` et al.):
+    // Checked table reads (`luna_jit_table_get_field_checked` et al.):
     // `fn(table_or_upval, key, want_tag, out: *mut i64) -> ok`.
     let mut get_checked_sig = module.make_signature();
     for _ in 0..4 {
         get_checked_sig.params.push(AbiParam::new(types::I64));
     }
     get_checked_sig.returns.push(AbiParam::new(types::I64));
-    let get_int_checked_id = module
-        .declare_function(
-            "luna_jit_table_get_int_checked",
-            Linkage::Import,
-            &get_checked_sig,
-        )
-        .ok()?;
     let get_field_checked_id = module
         .declare_function(
             "luna_jit_table_get_field_checked",
@@ -227,7 +221,6 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
         set_ids,
         get_field_id,
         get_tab_up_id,
-        get_int_checked_id,
         get_field_checked_id,
         get_tab_up_checked_id,
         op_closure_id,
@@ -238,6 +231,16 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
         stack_tag_id,
         op_concat_id,
     })
+}
+
+/// An imported helper taking `n_params` `i64`s and returning one.
+fn declare_i64_import<M: Module>(module: &mut M, name: &str, n_params: usize) -> Option<FuncId> {
+    let mut sig = module.make_signature();
+    for _ in 0..n_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    module.declare_function(name, Linkage::Import, &sig).ok()
 }
 
 fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> {
@@ -337,6 +340,15 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         )
         .ok()?;
 
+    let mut str_sub_sig = module.make_signature();
+    for _ in 0..3 {
+        str_sub_sig.params.push(AbiParam::new(types::I64));
+    }
+    str_sub_sig.returns.push(AbiParam::new(types::I64));
+    let str_sub_id = module
+        .declare_function("luna_jit_str_sub", Linkage::Import, &str_sub_sig)
+        .ok()?;
+
     let mut len_sig = module.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
@@ -353,6 +365,7 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
     let mut upval_get_sig = module.make_signature();
     upval_get_sig.params.push(AbiParam::new(types::I64));
     upval_get_sig.returns.push(AbiParam::new(types::I64));
+    let upval_get_checked_id = declare_i64_import(module, "luna_jit_upval_get_checked", 3)?;
     let upval_get_id = module
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
@@ -414,8 +427,10 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         get_int_id,
         suppress_admit_id,
         math_fn_check_id,
+        str_sub_id,
         len_checked_id,
         upval_get_id,
+        upval_get_checked_id,
         head_closure_id,
         materialize_id,
         mat_sunk_id,

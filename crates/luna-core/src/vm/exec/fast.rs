@@ -39,7 +39,7 @@ pub(super) struct Fast {
     /// a recording, or more trace heads than `heads` holds)
     pub(super) stay: bool,
     /// the pcs where a trace this function could enter starts
-    pub(super) heads: [u32; 2],
+    pub(super) heads: [u32; crate::runtime::function::TRACE_HEADS_CAP],
 }
 
 /// Why the fast loop handed control back.

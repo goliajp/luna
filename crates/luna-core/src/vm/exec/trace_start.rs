@@ -3,21 +3,18 @@
 use super::*;
 
 impl Vm {
-    /// A backward `Jmp` to `target` in a function past the hot threshold:
-    /// start recording there unless a recording is running, the function
-    /// gave up, or `target` already has a trace or was abandoned. `true`
-    /// when a recording started.
-    ///
-    /// The trigger is "at or past the threshold", not "at" it, so a
-    /// crossing missed while the recorder was busy (a call-triggered
-    /// recording, say) does not lock this back-edge out for good; the
-    /// checks here keep that from recording a target twice.
+    /// A loop head `target` crossed often enough (see
+    /// `JitState::loop_hot_tick`): start recording there unless a
+    /// recording is running, the function gave up, or `target` already
+    /// has a trace or was abandoned. `tfor` is the base register of a
+    /// generic `for`. `true` when a recording started.
     #[inline(never)]
-    pub(super) fn trace_start_at_jmp(
+    pub(super) fn trace_start_at_back_edge(
         &mut self,
         cl: Gc<LuaClosure>,
         base: u32,
         target: u32,
+        tfor: Option<u32>,
     ) -> bool {
         let proto = cl.proto;
         // the cheap tests first, then the borrow and scan of the traces
@@ -28,7 +25,7 @@ impl Vm {
         {
             return false;
         }
-        self.trace_start_at_loop(cl, base, target, None);
+        self.trace_start_at_loop(cl, base, target, tfor);
         true
     }
 

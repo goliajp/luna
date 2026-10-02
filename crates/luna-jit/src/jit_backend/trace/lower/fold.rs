@@ -126,9 +126,7 @@ pub(super) fn emit_fold<M: Module>(
     // GetField mid-op (Min2/Max2 silent), or the Call
     // (Min2/Max2 emit site).
     let fold = pl.math_folds.iter().find(|f| {
-        f.start_idx == i
-            || (matches!(f.kind, FoldKind::Min2 | FoldKind::Max2)
-                && (f.start_idx + 1 == i || f.call_idx == i))
+        f.start_idx == i || (f.kind.split() && (f.start_idx + 1 == i || f.call_idx == i))
     });
     if let Some(fold) = fold {
         // The fold stands for the library function; leave the
@@ -249,7 +247,10 @@ pub(super) fn emit_fold<M: Module>(
             FoldKind::Min2 | FoldKind::Max2 if fold.call_idx == i => {
                 emit_minmax_fold(lw, pl, oc, fold)?;
             }
-            FoldKind::Min2 | FoldKind::Max2 => {
+            FoldKind::StrSub if fold.call_idx == i => {
+                emit_str_sub_fold(lw, oc, fold)?;
+            }
+            FoldKind::Min2 | FoldKind::Max2 | FoldKind::StrSub => {
                 // Silent: this index is either `start_idx`
                 // (GetTabUp) or `start_idx + 1` (GetField).
                 // The Call's emit will fire at `call_idx`
@@ -257,6 +258,39 @@ pub(super) fn emit_fold<M: Module>(
             }
         }
     }
+    Some(())
+}
+
+/// A `string.sub` fold at its call: on a string and integers the trace
+/// knows as such; anything else is not compiled.
+fn emit_str_sub_fold<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    oc: &OpCx<'_>,
+    fold: &TraceMathFold,
+) -> Option<()> {
+    let RuntimeHelpers { str_sub_id, .. } = lw.h.rt;
+    let off = oc.off;
+    let regs: &[Variable] = &oc.regs;
+    let kind = |r: u32| k_op(&lw.current_kinds, off as u32 + r);
+    let a = fold.dst_reg;
+    if kind(a + 1) != RegKind::Str
+        || kind(a + 2) != RegKind::Int
+        || fold.nargs == 3 && kind(a + 3) != RegKind::Int
+    {
+        return None;
+    }
+    let s = lw.bcx.use_var(regs[a as usize + 1]);
+    let from = lw.bcx.use_var(regs[a as usize + 2]);
+    let to = if fold.nargs == 3 {
+        lw.bcx.use_var(regs[a as usize + 3])
+    } else {
+        lw.bcx.ins().iconst(types::I64, -1)
+    };
+    let sub_ref = lw.module.declare_func_in_func(str_sub_id, lw.bcx.func);
+    let call = lw.bcx.ins().call(sub_ref, &[s, from, to]);
+    let r = lw.bcx.inst_results(call)[0];
+    lw.bcx.def_var(regs[a as usize], r);
+    lw.current_kinds[off + a as usize] = RegKind::Str;
     Some(())
 }
 
@@ -319,7 +353,7 @@ pub(super) fn emit_minmax_fold<M: Module>(
                 (FoldKind::Max2, _) => emit_lt_float_int(&mut lw.bcx, f1, a2),
                 (FoldKind::Min2, RegKind::Int) => emit_lt_float_int(&mut lw.bcx, f2, a1),
                 (FoldKind::Min2, _) => emit_lt_int_float(&mut lw.bcx, a2, f1),
-                (FoldKind::Libm1, _) => unreachable!(),
+                (FoldKind::Libm1 | FoldKind::StrSub, _) => unreachable!(),
             };
             let first_wins = lw.bcx.ins().bxor_imm_u(second_wins, 1);
             guard!(lw, pl, first_wins, i, record.ops[fold.start_idx].pc);
@@ -339,7 +373,7 @@ pub(super) fn emit_minmax_fold<M: Module>(
         let second_wins = match fold.kind {
             FoldKind::Min2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a2, a1),
             FoldKind::Max2 => lw.bcx.ins().fcmp(FloatCC::LessThan, a1, a2),
-            FoldKind::Libm1 => unreachable!(),
+            FoldKind::Libm1 | FoldKind::StrSub => unreachable!(),
         };
         let r = lw.bcx.ins().select(second_wins, a2, a1);
         def_var_f64(&mut lw.bcx, regs[fold.dst_reg as usize], r);
@@ -354,7 +388,7 @@ pub(super) fn emit_minmax_fold<M: Module>(
         let r = match fold.kind {
             FoldKind::Min2 => lw.bcx.ins().smin(a1, a2),
             FoldKind::Max2 => lw.bcx.ins().smax(a1, a2),
-            FoldKind::Libm1 => unreachable!(),
+            FoldKind::Libm1 | FoldKind::StrSub => unreachable!(),
         };
         lw.bcx.def_var(regs[fold.dst_reg as usize], r);
         lw.current_kinds[off + fold.dst_reg as usize] = RegKind::Int;

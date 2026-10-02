@@ -18,21 +18,13 @@ impl Vm {
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
-        let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
-        let exit_tags = &ct.exit_tags;
-        let per_exit_tags = &ct.per_exit_tags;
-        let per_exit_inline = &ct.per_exit_inline;
-        let exit_hit_counts = &ct.exit_hit_counts;
         let from_side_trace = (raw_ret >> 63) & 1 == 1;
         if from_side_trace {
             let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
             let body = raw_ret & 0x00FF_FFFF_FFFF_FFFFu64;
             let traces = cl.proto.traces.borrow();
-            let child_idx = traces
-                .iter()
-                .find(|t| t.head_pc == head_pc_val)
-                .and_then(|pct| pct.side_trace_cache.borrow().get(&sentinel_code).copied());
+            let child_idx = ct.side_trace_cache.borrow().get(&sentinel_code).copied();
             if let Some(idx) = child_idx
                 && let Some(child) = traces.get(idx as usize)
             {
@@ -51,14 +43,7 @@ impl Vm {
                         child.is_inline_abort_close,
                     );
                 }
-                (
-                    child.per_exit_inline.clone(),
-                    child.per_exit_tags.clone(),
-                    child.exit_tags.clone(),
-                    child.exit_hit_counts.clone(),
-                    body,
-                    true,
-                )
+                (Some(child.clone()), body, true)
             } else {
                 if crate::jit::trace::v2c_probe_enabled() {
                     eprintln!(
@@ -74,80 +59,50 @@ impl Vm {
                 // skips wiring on mismatch so we
                 // shouldn't reach here when shape
                 // gate held).
-                (
-                    per_exit_inline.clone(),
-                    per_exit_tags.clone(),
-                    exit_tags.clone(),
-                    exit_hit_counts.clone(),
-                    body,
-                    true,
-                )
+                (None, body, true)
             }
+        } else if !ct.has_any_side_wired.get() {
+            (None, raw_ret, false)
         } else {
             // Dispatcher-level side-trace invocation,
             // rather than an IR gate (`load + icmp +
             // brif`) at every emit_store_back callsite,
-            // which measured as a net slowdown. The
-            // tentative decode + cell load always runs:
-            // short-circuiting it on a
-            // `parent_has_side` hint measured slower on
-            // btrees_d8 and no faster on fib_10.
-            {
-                let tentative = crate::jit::trace::decode_exit_shape(
-                    raw_ret,
-                    per_exit_inline,
-                    per_exit_tags,
-                    exit_tags,
-                );
-                let tentative_exit_idx = tentative.exit_hit_idx;
-                let child_invoke = {
-                    let traces = cl.proto.traces.borrow();
-                    traces
+            // which measured as a net slowdown.
+            let tentative = crate::jit::trace::decode_exit_shape(
+                raw_ret,
+                &ct.per_exit_inline,
+                &ct.per_exit_tags,
+                &ct.exit_tags,
+            );
+            let fn_ptr = ct
+                .exit_side_trace_ptrs
+                .get(tentative.exit_hit_idx)
+                .map_or(std::ptr::null(), |cell| cell.get());
+            let child = (!fn_ptr.is_null())
+                .then(|| {
+                    cl.proto
+                        .traces
+                        .borrow()
                         .iter()
-                        .find(|t| t.head_pc == head_pc_val)
-                        .and_then(|pct| {
-                            let cell = pct.exit_side_trace_ptrs.get(tentative_exit_idx)?;
-                            let fn_ptr = cell.get();
-                            if fn_ptr.is_null() {
-                                return None;
-                            }
-                            traces
-                                .iter()
-                                .find(|t| t.entry as *const () as *const u8 == fn_ptr)
-                                .map(|child| {
-                                    (
-                                        child.entry,
-                                        child.per_exit_inline.clone(),
-                                        child.per_exit_tags.clone(),
-                                        child.exit_tags.clone(),
-                                        child.exit_hit_counts.clone(),
-                                        child.entry_tags.clone(),
-                                    )
-                                })
-                        })
+                        .find(|t| t.entry as *const () as *const u8 == fn_ptr)
+                        .cloned()
+                })
+                .flatten();
+            if let Some(child) = child
+                && self.child_reads_stack_held_ok(base_us, entry_tags, &child.entry_tags)
+            {
+                let cent = child.entry;
+                let child_raw_ret = {
+                    // chunk_compiler.enter
+                    // (side-trace entry).
+                    let vm_ptr: *mut Vm = self;
+                    let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
+                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                    unsafe { cent(reg_state.as_mut_ptr()) }
                 };
-                if let Some((cent, cpi, cpt, cet, chc, cent_tags)) = child_invoke
-                    && self.child_reads_stack_held_ok(base_us, entry_tags, &cent_tags)
-                {
-                    let child_raw_ret = {
-                        // chunk_compiler.enter
-                        // (side-trace entry).
-                        let vm_ptr: *mut Vm = self;
-                        let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                        unsafe { cent(reg_state.as_mut_ptr()) }
-                    };
-                    (cpi, cpt, cet, chc, child_raw_ret as u64, true)
-                } else {
-                    (
-                        per_exit_inline.clone(),
-                        per_exit_tags.clone(),
-                        exit_tags.clone(),
-                        exit_hit_counts.clone(),
-                        raw_ret,
-                        false,
-                    )
-                }
+                (Some(child), child_raw_ret as u64, true)
+            } else {
+                (None, raw_ret, false)
             }
         }
     }
@@ -188,6 +143,7 @@ impl Vm {
         exit_tags_for_pc: &[crate::jit::trace::ExitTag],
         reg_state: &[i64],
         entry_tags: &[u8],
+        child_ran: bool,
     ) {
         // At an inline cmp@d>0
         // side-exit, the helper has pushed N frames on
@@ -262,50 +218,58 @@ impl Vm {
             false
         };
         if !fast_path_taken {
-            for i in 0..slot_count {
+            use crate::jit::trace::ExitTag;
+            use crate::runtime::value::raw;
+            // the raw tag each exit tag writes, by discriminant (a table
+            // load where a `match` per slot was an indirect branch);
+            // `Untouched` has none
+            const UNTOUCHED: u8 = u8::MAX;
+            const RAW_OF: [u8; 7] = {
+                let mut m = [0; 7];
+                m[ExitTag::Untouched as usize] = UNTOUCHED;
+                m[ExitTag::Int as usize] = raw::INT;
+                m[ExitTag::Float as usize] = raw::FLOAT;
+                m[ExitTag::Table as usize] = raw::TABLE;
+                m[ExitTag::Closure as usize] = raw::CLOSURE;
+                // written nil (LoadNil): a nil whatever the entry tag
+                m[ExitTag::Nil as usize] = raw::NIL;
+                m[ExitTag::Str as usize] = raw::STR;
+                m
+            };
+            let frame = &mut self.stack[base_us..base_us + slot_count];
+            let regs = &reg_state[..slot_count];
+            for (i, &exit_tag) in exit_tags_for_pc.iter().enumerate() {
+                let mut tag = RAW_OF[exit_tag as usize];
+                if tag == UNTOUCHED {
+                    if i >= max_stack {
+                        tag = raw::NIL;
+                    } else {
+                        // not written: the stack holds the value it entered
+                        // with, unless a side trace ran after the trace that
+                        // wrote it
+                        if !child_ran {
+                            continue;
+                        }
+                        tag = entry_tags[i];
+                        // not checked on entry and not written since: the
+                        // stack still holds the value
+                        if tag == crate::jit::trace::ENTRY_TAG_ANY {
+                            continue;
+                        }
+                    }
+                }
                 if keep_tfor.contains(&i) {
                     continue;
                 }
-                let tag = match exit_tags_for_pc[i] {
-                    crate::jit::trace::ExitTag::Untouched if i < max_stack => {
-                        match entry_tags[i] {
-                            // not checked on entry and not written since:
-                            // the stack still holds the value
-                            crate::jit::trace::ENTRY_TAG_ANY => continue,
-                            t => t,
-                        }
-                    }
-                    crate::jit::trace::ExitTag::Untouched => crate::runtime::value::raw::NIL,
-                    crate::jit::trace::ExitTag::Int => crate::runtime::value::raw::INT,
-                    crate::jit::trace::ExitTag::Float => crate::runtime::value::raw::FLOAT,
-                    crate::jit::trace::ExitTag::Table => crate::runtime::value::raw::TABLE,
-                    crate::jit::trace::ExitTag::Closure => crate::runtime::value::raw::CLOSURE,
-                    // Trace actively wrote Nil
-                    // to this slot (e.g. via Op::LoadNil).
-                    // Restore as Nil regardless of the entry
-                    // tag, since the i64 payload is 0 and
-                    // packing as the entry tag (e.g. INT)
-                    // would mis-type the slot.
-                    crate::jit::trace::ExitTag::Nil => crate::runtime::value::raw::NIL,
-                    // Trace wrote a Str ptr
-                    // to this slot (LoadK Str / Move from
-                    // Str / Concat result). Restore as
-                    // Value::Str with raw bits round-
-                    // tripped.
-                    crate::jit::trace::ExitTag::Str => crate::runtime::value::raw::STR,
-                };
-                // SAFETY: tag is from a verified slot
-                // (entry validated above) or pinned by
-                // the exit-tag analysis to INT/TABLE.
-                // The raw payload sits in reg_state[i].
-                // Stack was extended by the materialize
-                // helper for inline frames.
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                self.stack[base_us + i] = unsafe {
-                    Value::pack(
+                // SAFETY: the tag is the slot's entry tag (checked on
+                // entry) or the kind the exit analysis pins its payload
+                // to; the payload sits in reg_state[i].
+                unsafe {
+                    Value::pack_into(
+                        &mut frame[i],
                         tag,
                         crate::runtime::value::RawVal {
-                            zero: reg_state[i] as u64,
+                            zero: regs[i] as u64,
                         },
                     )
                 };
@@ -314,13 +278,6 @@ impl Vm {
     }
 }
 
-/// Exit shapes to decode a trace's return with, the return bits themselves,
-/// and whether a side trace ran.
-pub(super) type ExitSource = (
-    TArc<[crate::jit::trace_types::InlineSideExit]>,
-    TArc<[(u32, TArc<[crate::jit::trace::ExitTag]>)]>,
-    TArc<[crate::jit::trace::ExitTag]>,
-    TArc<[crate::jit::send_compat::TCellU32]>,
-    u64,
-    bool,
-);
+/// The side trace whose exit shapes decode a trace's return (`None`: the
+/// trace's own), the return bits themselves, and whether a side trace ran.
+pub(super) type ExitSource = (Option<TArc<CompiledTrace>>, u64, bool);

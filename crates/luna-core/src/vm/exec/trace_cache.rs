@@ -150,14 +150,13 @@ pub(super) fn cache_trace(
 ) {
     if ct.dispatchable || ct.downrec_link.is_some() {
         proto.has_dispatchable_trace.set(true);
-        use crate::runtime::function::{TRACE_HEADS_MANY, TRACE_HEADS_NONE};
+        use crate::runtime::function::{TRACE_HEADS_CAP, TRACE_HEADS_MANY, TRACE_HEADS_NONE};
         let mut heads = proto.trace_heads.get();
-        if heads[0] == TRACE_HEADS_NONE || heads[0] == ct.head_pc {
-            heads[0] = ct.head_pc;
-        } else if heads[1] == TRACE_HEADS_NONE || heads[1] == ct.head_pc {
-            heads[1] = ct.head_pc;
-        } else {
-            heads = [TRACE_HEADS_MANY; 2];
+        if heads[0] != TRACE_HEADS_MANY && !heads.contains(&ct.head_pc) {
+            match heads.iter_mut().find(|h| **h == TRACE_HEADS_NONE) {
+                Some(h) => *h = ct.head_pc,
+                None => heads = [TRACE_HEADS_MANY; TRACE_HEADS_CAP],
+            }
         }
         proto.trace_heads.set(heads);
     }

@@ -15,9 +15,12 @@ pub use crate::runtime::upvalue::{UpvalState, Upvalue};
 /// An unused slot of [`Proto::trace_heads`].
 #[doc(hidden)]
 pub const TRACE_HEADS_NONE: u32 = u32::MAX;
-/// [`Proto::trace_heads`] once more than two traces can be entered.
+/// [`Proto::trace_heads`] once more traces can be entered than it holds.
 #[doc(hidden)]
 pub const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
+/// Slots in [`Proto::trace_heads`].
+#[doc(hidden)]
+pub const TRACE_HEADS_CAP: usize = 4;
 
 /// A compiled function (PUC Proto). Immutable after compilation.
 #[repr(C)]
@@ -148,11 +151,11 @@ pub struct Proto {
     #[doc(hidden)]
     pub has_dispatchable_trace: std::cell::Cell<bool>,
     /// Head pcs of the traces that set `has_dispatchable_trace`, so the
-    /// interpreter looks traces up only where one can start: up to two, the
-    /// rest [`TRACE_HEADS_NONE`]; [`TRACE_HEADS_MANY`] in both once there are
-    /// more.
+    /// interpreter looks traces up only where one can start: up to
+    /// [`TRACE_HEADS_CAP`], the rest [`TRACE_HEADS_NONE`]; [`TRACE_HEADS_MANY`]
+    /// in all once there are more.
     #[doc(hidden)]
-    pub trace_heads: std::cell::Cell<[u32; 2]>,
+    pub trace_heads: std::cell::Cell<[u32; TRACE_HEADS_CAP]>,
     /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
     /// a trace is cached there or recording it was abandoned. Set once,
     /// it spares every later call the scan of `traces`.
