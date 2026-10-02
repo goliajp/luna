@@ -63,7 +63,10 @@ macro_rules! fast_call_arms {
                 };
                 let wanted = $inst.c() as i32 - 1;
                 let pf = $regs.wrapping_add($inst.a() as usize);
-                if !WATCH {
+                // a plain native returns to this frame, so a loop watching
+                // for trace heads runs it here too, unless a recording or a
+                // trap wants every instruction at the loop head
+                if !WATCH || $vm.jit.active_trace.is_none() && !$vm.trap {
                     // SAFETY: the called register is in the frame
                     let t = unsafe { raw_tag(pf) };
                     if t == tag::CLOSURE && !$trace_on {
