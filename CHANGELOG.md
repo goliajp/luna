@@ -154,6 +154,12 @@ optimization.
   closure when its upvalues matched, which only PUC 5.2 / 5.3 do: two
   closures from one expression compared equal and collapsed into one table
   key on 5.4 / 5.5. 5.2 and 5.3 keep the cache.
+- In 5.1, `_ENV` is an ordinary name, as in PUC 5.1, which has no `_ENV`:
+  `_ENV = x` assigns the global `_ENV`, and a local named `_ENV` does not
+  change where global names are looked up. luna used to bind the name to
+  the hidden environment of the function, so `_ENV = x` replaced the
+  environment of every function sharing it. `setfenv`, `getfenv` and
+  `module` are unchanged.
 - A table lookup by a short string key no longer goes through the
   general key-comparison walk, which saved and restored a dozen
   registers on every lookup: field reads and writes such as `t.x` run
