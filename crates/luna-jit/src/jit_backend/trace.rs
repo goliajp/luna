@@ -49,7 +49,7 @@ mod accum;
 mod emit;
 mod lir;
 pub(crate) use emit::{ClifEmit, Emit, Ins};
-pub(crate) use lir::BaselineCode;
+pub(crate) use lir::CodeArena;
 mod aot_data;
 mod block_params;
 mod compile;

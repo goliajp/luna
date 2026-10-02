@@ -4,7 +4,7 @@
 //! targets need them. r10 and r11 are the scratch registers.
 
 use super::alloc::Class;
-use super::cg::{Alu, Cond, Label, Masm, Width};
+use super::cg::{Alu, Bufs, Cond, Label, Masm, Width};
 use super::*;
 
 const RAX: u8 = 0;
@@ -27,8 +27,9 @@ enum Rm {
 pub(crate) struct X64 {
     code: Vec<u8>,
     labels: Vec<u32>,
-    /// (offset of a rel32 field, label)
-    fixups: Vec<(u32, u32)>,
+    /// (offset of a rel32 field, label, unused)
+    fixups: Vec<(u32, u32, u8)>,
+    words: Vec<u32>,
     saved: Vec<u8>,
     frame: u32,
 }
@@ -89,7 +90,7 @@ impl Masm for X64 {
     }
     fn jmp(&mut self, l: Label) {
         self.code.push(0xE9);
-        self.fixups.push((self.code.len() as u32, l.0));
+        self.fixups.push((self.code.len() as u32, l.0, 0));
         self.imm32(0);
     }
     fn jcc(&mut self, c: Cond, l: Label) {
@@ -446,12 +447,36 @@ impl Masm for X64 {
         }
         self.code.push(0xC3);
     }
-    fn finish(mut self) -> Vec<u8> {
-        for &(at, l) in &self.fixups {
+    fn new(b: Bufs) -> X64 {
+        let Bufs {
+            bytes: mut code,
+            words,
+            mut labels,
+            mut fixups,
+        } = b;
+        code.clear();
+        labels.clear();
+        fixups.clear();
+        X64 {
+            code,
+            labels,
+            fixups,
+            words,
+            saved: Vec::new(),
+            frame: 0,
+        }
+    }
+    fn finish(mut self) -> Bufs {
+        for &(at, l, _) in &self.fixups {
             let target = self.labels[l as usize] as i64;
             let rel = (target - (i64::from(at) + 4)) as i32;
             self.code[at as usize..at as usize + 4].copy_from_slice(&rel.to_le_bytes());
         }
-        self.code
+        Bufs {
+            bytes: self.code,
+            words: self.words,
+            labels: self.labels,
+            fixups: self.fixups,
+        }
     }
 }

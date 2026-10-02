@@ -15,12 +15,12 @@ mod masm;
 mod pmove;
 mod record;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(windows)))]
 mod a64;
 #[cfg(target_arch = "x86_64")]
 mod x64;
 
-pub(crate) use code::{BaselineCode, assemble};
+pub(crate) use code::{CodeArena, assemble};
 
 /// No value / no block.
 pub(crate) const NONE: u32 = u32::MAX;
@@ -190,6 +190,8 @@ pub(crate) struct Lir {
     pub(crate) insts: Vec<Inst>,
     pub(crate) blocks: Vec<BlockData>,
     pub(crate) value_ty: Vec<Ty>,
+    /// Per value: its value when it is an integer constant.
+    pub(crate) konst: Vec<Option<i64>>,
     pub(crate) var_ty: Vec<Ty>,
     pub(crate) args: Vec<u32>,
     /// `(size, align_log2)` of each explicit stack slot.
@@ -241,6 +243,7 @@ impl Lir {
                 l.insts.clear();
                 l.blocks.clear();
                 l.value_ty.clear();
+                l.konst.clear();
                 l.var_ty.clear();
                 l.args.clear();
                 l.slots.clear();

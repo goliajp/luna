@@ -10,6 +10,7 @@
 use super::record::{mask, v, val};
 use super::*;
 use crate::jit_backend::trace::Ins;
+use cranelift_codegen::ir::condcodes::CondCode;
 use cranelift_codegen::ir::immediates::{Ieee64, Imm64, Offset32};
 use cranelift_codegen::ir::{
     Block, BlockArg, FuncRef, Inst as CInst, MemFlagsData, SigRef, StackSlot, StackSlotData, Type,
@@ -109,7 +110,10 @@ impl Ins for Lir {
 
     fn iconst(&mut self, ty: Type, n: impl Into<Imm64>) -> Value {
         let t = Ty::of(ty);
-        self.def(Op::Iconst(mask(t, n.into().bits())), t, NONE, NONE, NONE)
+        let n = mask(t, n.into().bits());
+        let x = self.def(Op::Iconst(n), t, NONE, NONE, NONE);
+        self.konst[v(x) as usize] = Some(n);
+        x
     }
     fn f64const(&mut self, n: impl Into<Ieee64>) -> Value {
         self.def(Op::Fconst(n.into().bits()), Ty::F64, NONE, NONE, NONE)
@@ -183,9 +187,16 @@ impl Ins for Lir {
         self.bin_imm(BinOp::Sshr, x, y)
     }
     fn icmp(&mut self, cc: impl Into<IntCC>, x: Value, y: Value) -> Value {
+        let cc = cc.into();
         let t = self.ty_of_value(x);
         let d = self.new_value(Ty::I8);
-        self.push(Op::Icmp(cc.into()), t, d, v(x), v(y), NONE);
+        if let Some(c) = self.konst[v(y) as usize] {
+            self.push(Op::IcmpImm(cc, c), t, d, v(x), NONE, NONE);
+        } else if let Some(c) = self.konst[v(x) as usize] {
+            self.push(Op::IcmpImm(cc.swap_args(), c), t, d, v(y), NONE, NONE);
+        } else {
+            self.push(Op::Icmp(cc), t, d, v(x), v(y), NONE);
+        }
         val(d)
     }
     fn icmp_imm_u(&mut self, cc: IntCC, x: Value, y: impl Into<Imm64>) -> Value {
