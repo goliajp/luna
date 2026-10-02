@@ -65,6 +65,9 @@ use luna_core::jit::trace_types::{
 };
 use luna_core::runtime::value::raw;
 use luna_core::vm::isa::Op;
+use regfile::RegFile;
+
+mod regfile;
 
 /// Ops supported by the LLVM trace MVP.
 fn is_mvp_trace_op(op: Op) -> bool {
@@ -270,23 +273,17 @@ fn compile_trace_fn(
     let ptr_type = ctx.ptr_type(inkwell::AddressSpace::default());
     let rs_ptr = builder.build_int_to_ptr(rs_arg, ptr_type, "rs_ptr").ok()?;
 
+    let rf = RegFile {
+        builder: &builder,
+        i64_type,
+        regs_ty,
+        regs,
+        rs_ptr,
+        max_stack,
+        zero: i64_type.const_zero(),
+    };
     // Load reg_state[i] into regs[i] for i in 0..max_stack.
-    let zero = i64_type.const_zero();
-    for i in 0..max_stack {
-        let off = i64_type.const_int(i as u64, false);
-        let src = unsafe {
-            builder
-                .build_in_bounds_gep(i64_type, rs_ptr, &[off], "rs_load_slot")
-                .ok()?
-        };
-        let val = builder.build_load(i64_type, src, "rs_val").ok()?;
-        let dst = unsafe {
-            builder
-                .build_in_bounds_gep(regs_ty, regs, &[zero, off], "reg_slot")
-                .ok()?
-        };
-        builder.build_store(dst, val).ok()?;
-    }
+    rf.load_from_state()?;
     builder.build_unconditional_branch(body_bb).ok()?;
 
     // ── body_loop_bb: emit recorded ops ───────────────────────────────────
@@ -298,79 +295,40 @@ fn compile_trace_fn(
         let rop = &code[op_idx];
         let ins = rop.inst;
 
-        // Helper: load from alloca slot `idx`.
-        let load_reg = |idx: u32, name: &str| -> Option<inkwell::values::IntValue<'static>> {
-            let off = i64_type.const_int(idx as u64, false);
-            let slot = unsafe {
-                builder
-                    .build_in_bounds_gep(regs_ty, regs, &[zero, off], name)
-                    .ok()?
-            };
-            let v = builder.build_load(i64_type, slot, name).ok()?;
-            Some(v.into_int_value())
-        };
-
-        // Helper: store into alloca slot `idx`.
-        let store_reg =
-            |idx: u32, val: inkwell::values::IntValue<'static>, name: &str| -> Option<()> {
-                let off = i64_type.const_int(idx as u64, false);
-                let slot = unsafe {
-                    builder
-                        .build_in_bounds_gep(regs_ty, regs, &[zero, off], name)
-                        .ok()?
-                };
-                builder.build_store(slot, val).ok()?;
-                Some(())
-            };
-
         match ins.op() {
             Op::LoadI => {
                 let sbx = ins.sbx() as i64;
                 let val = i64_type.const_int(sbx as u64, true);
-                store_reg(ins.a(), val, "loadi_dst")?;
+                rf.store(ins.a(), val, "loadi_dst")?;
             }
             Op::Move => {
-                let v = load_reg(ins.b(), "move_src")?;
-                store_reg(ins.a(), v, "move_dst")?;
+                let v = rf.load(ins.b(), "move_src")?;
+                rf.store(ins.a(), v, "move_dst")?;
             }
             Op::Add => {
-                let lhs = load_reg(ins.b(), "add_lhs")?;
-                let rhs = load_reg(ins.c(), "add_rhs")?;
+                let lhs = rf.load(ins.b(), "add_lhs")?;
+                let rhs = rf.load(ins.c(), "add_rhs")?;
                 let res = builder.build_int_add(lhs, rhs, "add_res").ok()?;
-                store_reg(ins.a(), res, "add_dst")?;
+                rf.store(ins.a(), res, "add_dst")?;
             }
             Op::Sub => {
-                let lhs = load_reg(ins.b(), "sub_lhs")?;
-                let rhs = load_reg(ins.c(), "sub_rhs")?;
+                let lhs = rf.load(ins.b(), "sub_lhs")?;
+                let rhs = rf.load(ins.c(), "sub_rhs")?;
                 let res = builder.build_int_sub(lhs, rhs, "sub_res").ok()?;
-                store_reg(ins.a(), res, "sub_dst")?;
+                rf.store(ins.a(), res, "sub_dst")?;
             }
             Op::Mul => {
-                let lhs = load_reg(ins.b(), "mul_lhs")?;
-                let rhs = load_reg(ins.c(), "mul_rhs")?;
+                let lhs = rf.load(ins.b(), "mul_lhs")?;
+                let rhs = rf.load(ins.c(), "mul_rhs")?;
                 let res = builder.build_int_mul(lhs, rhs, "mul_res").ok()?;
-                store_reg(ins.a(), res, "mul_dst")?;
+                rf.store(ins.a(), res, "mul_dst")?;
             }
             Op::Mod => {
                 // Lua floor-mod: sign of result matches divisor.
-                let lhs = load_reg(ins.b(), "mod_lhs")?;
-                let rhs = load_reg(ins.c(), "mod_rhs")?;
-                let raw = builder.build_int_signed_rem(lhs, rhs, "mod_srem").ok()?;
-                let zero_v = i64_type.const_zero();
-                let nonzero = builder
-                    .build_int_compare(IntPredicate::NE, raw, zero_v, "mod_nonzero")
-                    .ok()?;
-                let xor = builder.build_xor(raw, rhs, "mod_xor").ok()?;
-                let sign_differ = builder
-                    .build_int_compare(IntPredicate::SLT, xor, zero_v, "mod_signdif")
-                    .ok()?;
-                let need_fix = builder.build_and(nonzero, sign_differ, "mod_fix").ok()?;
-                let fixed = builder.build_int_add(raw, rhs, "mod_fixed").ok()?;
-                let res = builder
-                    .build_select(need_fix, fixed, raw, "mod_res")
-                    .ok()?
-                    .into_int_value();
-                store_reg(ins.a(), res, "mod_dst")?;
+                let lhs = rf.load(ins.b(), "mod_lhs")?;
+                let rhs = rf.load(ins.c(), "mod_rhs")?;
+                let res = rf.floor_mod(lhs, rhs)?;
+                rf.store(ins.a(), res, "mod_dst")?;
             }
             Op::Lt | Op::Le | Op::Eq => {
                 // These ops are ALWAYS followed by a Jmp in the recorded ops.
@@ -387,8 +345,8 @@ fn compile_trace_fn(
                     Op::Eq => IntPredicate::EQ,
                     _ => unreachable!(),
                 };
-                let lhs = load_reg(ins.a(), "cmp_lhs")?;
-                let rhs = load_reg(ins.b(), "cmp_rhs")?;
+                let lhs = rf.load(ins.a(), "cmp_lhs")?;
+                let rhs = rf.load(ins.b(), "cmp_rhs")?;
                 let cmp = builder.build_int_compare(pred, lhs, rhs, "cmp_res").ok()?;
 
                 // Jmp target formula: (jmp_pc + 1) + sj.
@@ -424,7 +382,7 @@ fn compile_trace_fn(
 
                 // Emit side_exit_bb: flush regs → reg_state, return exit_pc.
                 builder.position_at_end(side_exit_bb);
-                emit_store_back(&builder, i64_type, regs_ty, regs, rs_ptr, max_stack, zero)?;
+                rf.store_back()?;
                 let exit_pc = if ins.k() { fall_pc } else { jmp_target_pc };
                 let exit_pc_val = i64_type.const_int(exit_pc as u64, false);
                 builder.build_return(Some(&exit_pc_val)).ok()?;
@@ -460,78 +418,12 @@ fn compile_trace_fn(
 
     // ── clean_tail_bb: flush regs → reg_state, return head_pc ─────────────
     builder.position_at_end(clean_tail_bb);
-    emit_store_back(&builder, i64_type, regs_ty, regs, rs_ptr, max_stack, zero)?;
+    rf.store_back()?;
     let head_pc_val = i64_type.const_int(head_pc as u64, false);
     builder.build_return(Some(&head_pc_val)).ok()?;
 
     finalize_module(ctx_box, module, Some(&helpers))
 }
 
-/// Emit `store regs[i] → reg_state[i]` for `i in 0..max_stack` into the
-/// builder's current block. Shared by the clean-tail and every side-exit BB.
-fn emit_store_back(
-    builder: &inkwell::builder::Builder<'static>,
-    i64_type: inkwell::types::IntType<'static>,
-    regs_ty: inkwell::types::ArrayType<'static>,
-    regs: inkwell::values::PointerValue<'static>,
-    rs_ptr: inkwell::values::PointerValue<'static>,
-    max_stack: usize,
-    zero: inkwell::values::IntValue<'static>,
-) -> Option<()> {
-    for i in 0..max_stack {
-        let off = i64_type.const_int(i as u64, false);
-        let src = unsafe {
-            builder
-                .build_in_bounds_gep(regs_ty, regs, &[zero, off], "sb_src")
-                .ok()?
-        };
-        let val = builder.build_load(i64_type, src, "sb_val").ok()?;
-        let dst = unsafe {
-            builder
-                .build_in_bounds_gep(i64_type, rs_ptr, &[off], "sb_dst")
-                .ok()?
-        };
-        builder.build_store(dst, val).ok()?;
-    }
-    Some(())
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verify that `is_mvp_trace_op` accepts the expected op set and rejects
-    /// others. Pins the whitelist without requiring a live LLVM context.
-    #[test]
-    fn mvp_whitelist_coverage() {
-        for op in [
-            Op::LoadI,
-            Op::Move,
-            Op::Add,
-            Op::Sub,
-            Op::Mul,
-            Op::Mod,
-            Op::Lt,
-            Op::Le,
-            Op::Eq,
-            Op::Jmp,
-        ] {
-            assert!(is_mvp_trace_op(op), "{op:?} should be in MVP whitelist");
-        }
-        for op in [
-            Op::Call,
-            Op::TailCall,
-            Op::GetUpval,
-            Op::GetTabUp,
-            Op::GetField,
-            Op::Return0,
-            Op::Return1,
-            Op::LoadNil,
-        ] {
-            assert!(
-                !is_mvp_trace_op(op),
-                "{op:?} should NOT be in MVP whitelist"
-            );
-        }
-    }
-}
+mod tests;
