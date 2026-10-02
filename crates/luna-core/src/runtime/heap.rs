@@ -1340,13 +1340,6 @@ impl Heap {
                         // dangling, so reassigning is just a pointer move.
                         (*t).slab = Box::new([]);
                         (*t).drop_hash_part();
-                        // drop the SoA Robin Hood parallel arrays too
-                        // (usually Box::new([]) dangling stubs).
-                        (*t).keys = Box::new([]);
-                        (*t).vals = Box::new([]);
-                        (*t).meta = Box::new([]);
-                        (*t).tombstones = 0;
-                        (*t).iter_depth = 0;
                         (*t).metatable = None;
                         // Stash the raw pointer for future reuse.
                         // SAFETY: t is non-null (came from a live Gc<Table>);

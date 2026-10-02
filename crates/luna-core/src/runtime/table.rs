@@ -65,7 +65,6 @@ mod array;
 mod node;
 #[path = "table_trace.rs"]
 mod trace;
-pub(crate) use node::meta_bits;
 use node::{NONE, Node};
 
 /// Inline storage threshold. Tables whose array part has
@@ -136,22 +135,6 @@ pub struct Table {
     /// `clear_weak` and `resize`; the method JIT's inline array stores
     /// keep it too. Sits in padding, so `Table` does not grow.
     pub(crate) acount: u32,
-    /// SoA Robin Hood hash part, kept parallel to `nodes`. It is not
-    /// on the public get/set/next path yet: the chain `nodes` stay
-    /// authoritative and only the `soa_*` methods touch these arrays.
-    /// `meta` layout per the `meta_bits` module above. Empty
-    /// `Box::new([])` until a `soa_insert` grows it.
-    pub(crate) keys: Box<[Value]>,
-    pub(crate) vals: Box<[Value]>,
-    pub(crate) meta: Box<[u16]>,
-    /// Count of tombstoned-occupied meta slots; rehash trigger.
-    pub(crate) tombstones: u32,
-    /// Iterator-guard counter. Meant to count in-flight `pairs`/`next`
-    /// traversals; while > 0 the SoA path MUST defer rehash (which
-    /// would rebase slot indices and break the PUC
-    /// `nextvar.lua:520-521` invariant). Nothing increments it yet, so
-    /// it stays 0.
-    pub(crate) iter_depth: u32,
     /// Visible outside the module so the JIT can
     /// take its field offset at compile time and emit an inline
     /// "metatable.is_none()" guard before the inline aget fast path.
@@ -195,11 +178,6 @@ impl Table {
             node_mask: u64::MAX,
             lastfree: 0,
             acount: 0,
-            keys: Box::new([]),
-            vals: Box::new([]),
-            meta: Box::new([]),
-            tombstones: 0,
-            iter_depth: 0,
             metatable: None,
             flags: 0,
             aprefix: 0,
@@ -336,10 +314,7 @@ impl Table {
         } else {
             0
         };
-        let soa_external = self.keys.len() * std::mem::size_of::<Value>()
-            + self.vals.len() * std::mem::size_of::<Value>()
-            + self.meta.len() * std::mem::size_of::<u16>();
-        array_external + self.nodes.len() * std::mem::size_of::<Node>() + soa_external
+        array_external + self.nodes.len() * std::mem::size_of::<Node>()
     }
 
     fn asize(&self) -> usize {
@@ -600,8 +575,7 @@ impl Table {
             if tag != raw::NIL {
                 // Nil-val on a live slot must follow the same tombstone
                 // discipline as `set_norm` — routed through
-                // `clear_existing_slot` so the chain layout and any
-                // future data-layout cutover (SoA) stay aligned.
+                // `clear_existing_slot`.
                 if val.is_nil() {
                     self.clear_existing_slot(k);
                 } else {
@@ -639,10 +613,8 @@ impl Table {
     ///     still routes a future re-insert into the same slot without
     ///     a rehash.
     ///
-    /// Centralising the discipline here lets a future SoA cutover
-    /// (linear probe, or any layout that switches `next()`'s filter to
-    /// `meta_bits::is_live`) migrate both entry points in lockstep; if
-    /// they diverge, `pairs()` yields `(key, nil)` zombies.
+    /// Both entry points must clear the same way, or `pairs()` yields
+    /// `(key, nil)` zombies.
     fn clear_existing_slot(&mut self, k: Value) {
         if let Value::Int(i) = k
             && i >= 1
@@ -669,9 +641,7 @@ impl Table {
             && (i as u64) <= self.asize() as u64
         {
             // Live array slot + Nil write goes through the shared
-            // tombstone routine (see `clear_existing_slot` for the
-            // chain ↔ future-SoA rationale). The non-Nil branch is
-            // identical to a bare `aset` today.
+            // tombstone routine (see `clear_existing_slot`).
             if v.is_nil() {
                 self.clear_existing_slot(k);
             } else {
@@ -1227,9 +1197,6 @@ impl Table {
     }
 }
 
-#[path = "table_soa.rs"]
-mod soa;
-
 #[cfg(feature = "gc-verify")]
 #[path = "table_gc_verify.rs"]
 mod gc_verify;
@@ -1529,205 +1496,6 @@ mod tests {
                 assert!(t.get_int(-i).raw_eq(Value::Int(i)), "lost key {}", -i);
             }
         });
-    }
-
-    // -----------------------------------------------------------------
-    // SoA Robin Hood equivalence tests.
-    //
-    // Cross-check the new SoA + RH path against the existing chain-walk
-    // path: replay the same insert/lookup sequence on a table via
-    // `set` (chain) and another via `soa_insert` (SoA), then assert
-    // `get == soa_get` for every key.
-    // -----------------------------------------------------------------
-
-    fn replay_chain(heap: &mut Heap, ops: &[(Value, Value)]) -> *mut Table {
-        let t = heap.new_table();
-        let tref = unsafe { t.as_mut() };
-        for (k, v) in ops.iter().copied() {
-            tref.set(heap, k, v).unwrap();
-        }
-        t.as_ptr()
-    }
-
-    fn replay_soa(heap: &mut Heap, ops: &[(Value, Value)]) -> *mut Table {
-        let t = heap.new_table();
-        let tref = unsafe { t.as_mut() };
-        for (k, v) in ops.iter().copied() {
-            tref.soa_insert(heap, k, v).unwrap();
-        }
-        t.as_ptr()
-    }
-
-    #[test]
-    fn c3_soa_equivalence_string_keys() {
-        let mut heap = Heap::new();
-        let mut ops = Vec::new();
-        for i in 0..40 {
-            let k = Value::Str(heap.intern(format!("key_{i:03}").as_bytes()));
-            ops.push((k, Value::Int(i * 7)));
-        }
-        let chain = unsafe { &*replay_chain(&mut heap, &ops) };
-        let soa = unsafe { &*replay_soa(&mut heap, &ops) };
-        for (k, _) in &ops {
-            let cv = chain.get(*k);
-            let sv = soa.soa_get(*k);
-            assert!(
-                cv.raw_eq(sv),
-                "SoA vs chain mismatch on key — chain={:?} soa={:?}",
-                cv,
-                sv,
-            );
-        }
-        // Absent key returns nil from both paths.
-        let absent = Value::Str(heap.intern(b"never"));
-        assert!(chain.get(absent).is_nil());
-        assert!(soa.soa_get(absent).is_nil());
-    }
-
-    #[test]
-    fn c3_soa_equivalence_negative_int_keys() {
-        // Dense negative ints with identity hashing — same collision
-        // profile as the existing `collision_relocation_keeps_chains_intact`
-        // test, but verified through the SoA RH path. Triggers
-        // rob-from-rich repeatedly.
-        let mut heap = Heap::new();
-        let mut ops = Vec::new();
-        for i in 0..256 {
-            let k = Value::Int(-i);
-            ops.push((k, Value::Int(i)));
-        }
-        let chain = unsafe { &*replay_chain(&mut heap, &ops) };
-        let soa = unsafe { &*replay_soa(&mut heap, &ops) };
-        for (k, _) in &ops {
-            let cv = chain.get(*k);
-            let sv = soa.soa_get(*k);
-            assert!(cv.raw_eq(sv), "SoA mismatch on key {:?}", k);
-        }
-    }
-
-    #[test]
-    fn c3_soa_equivalence_mixed_keys_with_updates() {
-        // Insert, then update the same keys with new values — exercises
-        // the soa_find_slot in-place update branch.
-        let mut heap = Heap::new();
-        let kstr = Value::Str(heap.intern(b"x"));
-        let kint = Value::Int(42);
-        let kbool = Value::Bool(true);
-        let ops: Vec<(Value, Value)> = vec![
-            (kstr, Value::Int(1)),
-            (kint, Value::Int(2)),
-            (kbool, Value::Int(3)),
-            (kstr, Value::Int(11)),  // update
-            (kint, Value::Int(22)),  // update
-            (kbool, Value::Int(33)), // update
-        ];
-        let chain = unsafe { &*replay_chain(&mut heap, &ops) };
-        let soa = unsafe { &*replay_soa(&mut heap, &ops) };
-        for k in [kstr, kint, kbool] {
-            assert!(chain.get(k).raw_eq(soa.soa_get(k)));
-        }
-    }
-
-    #[test]
-    fn c3_soa_equivalence_delete_then_read() {
-        // tombstone delete + read on both paths, verify
-        // matching nil-for-deleted, original-val-for-live.
-        let mut heap = Heap::new();
-        let mut ops_insert = Vec::new();
-        for i in 0..30 {
-            let k = Value::Str(heap.intern(format!("d_key_{i:03}").as_bytes()));
-            ops_insert.push((k, Value::Int(i * 11)));
-        }
-        let chain = unsafe { &mut *replay_chain(&mut heap, &ops_insert) };
-        let soa = unsafe { &mut *replay_soa(&mut heap, &ops_insert) };
-        // Delete every 3rd key.
-        let mut deleted: Vec<Value> = Vec::new();
-        for (i, (k, _)) in ops_insert.iter().enumerate() {
-            if i % 3 == 0 {
-                // chain: set to Nil is the chain-path's delete equivalent
-                chain.set(&mut heap, *k, Value::Nil).unwrap();
-                let was_present = soa.soa_delete(*k);
-                assert!(was_present, "soa_delete miss on inserted key {:?}", k);
-                deleted.push(*k);
-            }
-        }
-        // Read each key: deleted → nil, non-deleted → original val.
-        for (k, v) in &ops_insert {
-            let cv = chain.get(*k);
-            let sv = soa.soa_get(*k);
-            assert!(
-                cv.raw_eq(sv),
-                "delete/read mismatch on key {:?} — chain={:?} soa={:?}",
-                k,
-                cv,
-                sv,
-            );
-            if deleted.iter().any(|d| d.raw_eq(*k)) {
-                assert!(cv.is_nil(), "deleted key {:?} chain non-nil", k);
-                assert!(sv.is_nil(), "deleted key {:?} soa non-nil", k);
-            } else {
-                assert!(cv.raw_eq(*v), "live key {:?} chain val drift", k);
-            }
-        }
-        // Deleting an absent key is a no-op (returns false) on SoA.
-        let absent = Value::Str(heap.intern(b"never_d"));
-        assert!(!soa.soa_delete(absent));
-    }
-
-    #[test]
-    fn c3_soa_delete_then_reinsert_uses_tombstone() {
-        // After delete + reinsert, key is findable with new val. The
-        // SoA path may reuse the tombstoned slot (preferred) or place
-        // elsewhere — either is correct as long as soa_get returns
-        // the new val.
-        let mut heap = Heap::new();
-        let t = heap.new_table();
-        let tref = unsafe { t.as_mut() };
-        let k = Value::Str(heap.intern(b"reinsert_target"));
-        tref.soa_insert(&mut heap, k, Value::Int(100)).unwrap();
-        assert!(tref.soa_get(k).raw_eq(Value::Int(100)));
-        let pre_tombs = tref.tombstones;
-        assert!(tref.soa_delete(k));
-        assert!(tref.tombstones == pre_tombs + 1);
-        assert!(tref.soa_get(k).is_nil());
-        // Reinsert with new val.
-        tref.soa_insert(&mut heap, k, Value::Int(200)).unwrap();
-        assert!(tref.soa_get(k).raw_eq(Value::Int(200)));
-        // Tombstone reused — count back to pre_tombs.
-        assert_eq!(tref.tombstones, pre_tombs);
-    }
-
-    #[test]
-    fn c3_soa_grows_under_load_pressure() {
-        // Stress test: insert enough entries to trigger multiple RH
-        // rehashes (cap doubles at load 0.75). Confirms PSL overflow
-        // never fires and all keys survive grow cycles.
-        let mut heap = Heap::new();
-        let t = heap.new_table();
-        let tref = unsafe { t.as_mut() };
-        for i in 0..1024 {
-            let k = Value::Str(heap.intern(format!("entry_{i:05}").as_bytes()));
-            tref.soa_insert(&mut heap, k, Value::Int(i)).unwrap();
-        }
-        // Verify every key is findable.
-        for i in 0..1024 {
-            let k = Value::Str(heap.intern(format!("entry_{i:05}").as_bytes()));
-            let v = tref.soa_get(k);
-            assert!(
-                v.raw_eq(Value::Int(i)),
-                "SoA lost key entry_{:05} — got {:?}",
-                i,
-                v,
-            );
-        }
-        assert!(tref.soa_live_count() == 1024);
-        // Cap should have grown past the initial SOA_INITIAL_CAP via
-        // the 0.75 load-factor trigger.
-        assert!(
-            tref.soa_cap() >= 2048,
-            "SoA cap = {} after 1024 inserts — load gate didn't grow",
-            tref.soa_cap(),
-        );
     }
 
     #[test]
