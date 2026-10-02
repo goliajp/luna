@@ -406,7 +406,13 @@ impl<'a> Level<'a> {
         }
     }
 
-    fn into_proto(self, source: Gc<LuaStr>, line_defined: u32, last_line_defined: u32) -> Proto {
+    fn into_proto(
+        mut self,
+        source: Gc<LuaStr>,
+        line_defined: u32,
+        last_line_defined: u32,
+    ) -> Proto {
+        crate::runtime::function::mark_closing_returns(&mut self.code, &self.protos);
         let env_upval_idx = self
             .upvals
             .iter()

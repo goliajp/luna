@@ -28,6 +28,8 @@
 //!   `Call`, `Return`, `LoadNil`, `Concat`, `SetList`, `Vararg` and the loop
 //!   ops, lies below `max_stack`;
 //! - constant, upvalue and child-function indices are in range;
+//! - in a function whose registers a nested function captures, or that has
+//!   a to-be-closed variable, `Return0` / `Return1` carry `k`;
 //! - the constant key of `GetField`, `SetField`, `GetTabUp`, `SetTabUp` and
 //!   a `k` `SelfOp` is a string (the interpreter reads it as one);
 //! - every successor (fall-through, jump target, the slot after a skipped
@@ -74,6 +76,7 @@ fn verify_proto(p: &Proto, parent: Option<&Proto>) -> Result<(), String> {
     let ops = decode_ops(p)?;
     let entered = Checker { p, ops: &ops }.check_code()?;
     Checker { p, ops: &ops }.check_open_top(&entered)?;
+    Checker { p, ops: &ops }.check_closing_returns()?;
     for child in p.protos.iter() {
         verify_proto(child, Some(p))?;
     }
@@ -174,6 +177,27 @@ struct Succ {
 }
 
 impl Checker<'_> {
+    /// In a function with something to close, every `Return0` / `Return1`
+    /// carries `k` (see `mark_closing_returns`): without it the fast return
+    /// would leave open upvalues pointing into a popped frame.
+    fn check_closing_returns(&self) -> Result<(), String> {
+        if !crate::runtime::function::needs_close(&self.p.code, &self.p.protos) {
+            return Ok(());
+        }
+        match self.p.code.iter().position(|i| {
+            matches!(
+                i.op(),
+                crate::vm::isa::Op::Return0 | crate::vm::isa::Op::Return1
+            ) && !i.k()
+        }) {
+            Some(pc) => Err(self.err(
+                pc,
+                "return without close in a function with upvalues to close".to_string(),
+            )),
+            None => Ok(()),
+        }
+    }
+
     fn err(&self, pc: usize, msg: String) -> String {
         format!(
             "{}, instruction {} ({:?}): {msg}",
