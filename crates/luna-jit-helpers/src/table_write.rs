@@ -183,6 +183,7 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
         )
     };
     let _ = table.set_int(&mut vm.heap, key, v);
+    barrier_for(vm, g, luna_core::runtime::Value::Int(key), v);
 }
 
 /// Write `Value::pack(tag, raw)` to `t[key_ptr_as_str]`.
@@ -231,6 +232,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
         )
     };
     let _ = table.set(&mut vm.heap, key, v);
+    barrier_for(vm, g, key, v);
 }
 
 /// The trace JIT's table stores, `t[key] = val`, with the value given as
@@ -269,7 +271,25 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
         vm.jit.counters.deopt += 1;
         return 0;
     }
+    barrier_for(vm, g, key, val);
     1
+}
+
+/// The write barrier for a store of `key` / `val` into `g`, as the
+/// interpreter's stores take it: a collectable one in a table the
+/// collector already traced (black) sends the table back to be traced
+/// again, or the new object would be swept while the table holds it.
+fn barrier_for(
+    vm: &mut luna_core::vm::Vm,
+    g: luna_core::runtime::Gc<luna_core::runtime::Table>,
+    key: luna_core::runtime::Value,
+    val: luna_core::runtime::Value,
+) {
+    use luna_core::runtime::value::raw;
+    if raw::is_gc(val.unpack().0) || raw::is_gc(key.unpack().0) {
+        vm.heap
+            .barrier_back(g.as_ptr() as *mut luna_core::runtime::heap::GcHeader);
+    }
 }
 
 /// `t[key] = val` with an integer key; see `checked_store`.
