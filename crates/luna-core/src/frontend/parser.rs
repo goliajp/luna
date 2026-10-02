@@ -12,6 +12,7 @@ use crate::frontend::span::Span;
 use crate::frontend::token::{LexTok, Near, Tok, Token, TokenInfo, near_text};
 use crate::version::LuaVersion;
 
+mod lists;
 mod scratch;
 mod token_source;
 mod upval51;
@@ -448,18 +449,6 @@ impl<'s> Parser<'s> {
         if let Some(g) = gotos {
             for s in syms {
                 g.declare(lex.names().text(s));
-            }
-        }
-    }
-
-    /// Declare a declaration's names to the goto checker.
-    fn declare_attrib_names(&mut self, names: List<AttribName>) {
-        let Parser {
-            gotos, lex, chunk, ..
-        } = self;
-        if let Some(g) = gotos {
-            for an in chunk.list(names) {
-                g.declare(lex.names().text(an.name.sym));
             }
         }
     }
@@ -1090,17 +1079,6 @@ impl<'s> Parser<'s> {
 
     // ---- expressions ----
 
-    fn exprlist(&mut self) -> Result<List<ExprId>, SyntaxError> {
-        let mark = self.stk.exprs.len();
-        let e = self.expr()?;
-        self.stk.exprs.push(e);
-        while self.accept(Token::Comma)? {
-            let e = self.expr()?;
-            self.stk.exprs.push(e);
-        }
-        Ok(finish(&mut self.chunk, &mut self.stk.exprs, mark))
-    }
-
     fn expr(&mut self) -> Result<ExprId, SyntaxError> {
         self.sub_expr(0)
     }
@@ -1265,70 +1243,6 @@ impl<'s> Parser<'s> {
             }
         }
         Ok(e)
-    }
-
-    fn call_args(&mut self) -> Result<List<ExprId>, SyntaxError> {
-        match &self.tok.tok {
-            Token::LParen => {
-                // 5.1 rejects a call paren on a new line (removed in 5.2)
-                if self.version == LuaVersion::Lua51 && self.tok.line != self.prev_line {
-                    return Err(self.error("ambiguous syntax (function call x new statement)"));
-                }
-                let line = self.tok.line;
-                self.advance()?;
-                let args = if self.tok.tok == Token::RParen {
-                    List::EMPTY
-                } else {
-                    self.exprlist()?
-                };
-                self.expect_match(Token::RParen, ")", "(", line)?;
-                Ok(args)
-            }
-            Token::Str(_) => {
-                let s = self.tok_sym;
-                self.advance()?;
-                let e = self.push_expr(Expr::Str(s));
-                Ok(self.chunk.push_list(&[e]))
-            }
-            Token::LBrace => {
-                let e = self.table_constructor()?;
-                Ok(self.chunk.push_list(&[e]))
-            }
-            _ => Err(self.error("function arguments expected")),
-        }
-    }
-
-    fn table_constructor(&mut self) -> Result<ExprId, SyntaxError> {
-        let line = self.tok.line;
-        self.expect(Token::LBrace, "{")?;
-        let mark = self.stk.fields.len();
-        loop {
-            if self.tok.tok == Token::RBrace {
-                break;
-            }
-            if self.tok.tok == Token::LBracket {
-                self.advance()?;
-                let key = self.expr()?;
-                self.expect(Token::RBracket, "]")?;
-                self.expect(Token::Assign, "=")?;
-                let value = self.expr()?;
-                self.stk.fields.push(TableField::Keyed(key, value));
-            } else if matches!(self.tok.tok, Token::Name(_)) && *self.peek()? == Token::Assign {
-                let name = self.expect_name()?;
-                self.advance()?; // '='
-                let value = self.expr()?;
-                self.stk.fields.push(TableField::Named(name, value));
-            } else {
-                let e = self.expr()?;
-                self.stk.fields.push(TableField::Item(e));
-            }
-            if !(self.accept(Token::Comma)? || self.accept(Token::Semi)?) {
-                break;
-            }
-        }
-        self.expect_match(Token::RBrace, "}", "{", line)?;
-        let fields = finish(&mut self.chunk, &mut self.stk.fields, mark);
-        Ok(self.push_expr(Expr::Table { fields, line }))
     }
 
     // ---- functions ----

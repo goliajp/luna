@@ -215,21 +215,6 @@ impl<'s> Lexer<'s> {
 
     /// One token starting at byte `c`. `Err(byte)` is a byte PUC returns as
     /// a single-character token that no Lua syntax uses.
-    /// The public form of a token just lexed by this (non-interning) lexer:
-    /// a name's text is its source, a string's contents are in the buffer.
-    fn token_info(&self, t: LexTok) -> TokenInfo {
-        let (from, to) = self.str_range;
-        TokenInfo {
-            tok: t.tok.map(
-                |()| self.buf[from..to].to_vec(),
-                |()| String::from_utf8_lossy(t.span.slice(self.src)).into(),
-                |()| Box::default(),
-            ),
-            span: t.span,
-            line: t.line,
-        }
-    }
-
     fn token(&mut self, c: u8) -> Result<Result<Tok, u8>, SyntaxError> {
         let v = self.version;
         let tok = match c {
@@ -448,16 +433,6 @@ impl<'s> Lexer<'s> {
         }
         self.save_next();
         Ok(self.str_token(1, self.buf.len() - 1))
-    }
-
-    /// The string token of `buf[from..to]`, interned when this lexer
-    /// interns (see [`Lexer::last_sym`]).
-    fn str_token(&mut self, from: usize, to: usize) -> Tok {
-        match &mut self.names {
-            Some(names) => self.last_sym = names.intern(&self.buf[from..to]),
-            None => self.str_range = (from, to),
-        }
-        Token::Str(())
     }
 
     /// PUC `read_numeral` over the numeral starting at `start` (a leading
