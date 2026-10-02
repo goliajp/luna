@@ -11,6 +11,12 @@ use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 use crate::vm::lib_string::MAX_STR;
 
+mod format;
+#[cfg(test)]
+mod tests;
+
+use format::*;
+
 /// Maximum size for the binary representation of an integer.
 const MAXINTSIZE: u64 = 16;
 /// `sizeof(lua_Integer)`.
@@ -20,162 +26,6 @@ const NATIVE_LITTLE: bool = true;
 /// Native max alignment (`offsetof(struct cD, u)`) on the reference
 /// platform.
 const NATIVE_MAXALIGN: u64 = 8;
-
-/// PUC's size limit: `INT_MAX` through 5.4 (`MAXSIZE`), `LUA_MAXINTEGER`
-/// in 5.5 (`MAX_SIZE`). It bounds numerals in formats and the packsize.
-fn max_size(vm: &Vm) -> u64 {
-    if vm.version() >= LuaVersion::Lua55 {
-        i64::MAX as u64
-    } else {
-        i32::MAX as u64
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum KOption {
-    Int,
-    Uint,
-    Float,
-    Number,
-    Char,
-    Str,
-    Zstr,
-    Padding,
-    PadAlign,
-    Nop,
-}
-
-struct Header {
-    islittle: bool,
-    maxalign: u64,
-}
-
-impl Header {
-    fn new() -> Self {
-        Header {
-            islittle: NATIVE_LITTLE,
-            maxalign: 1,
-        }
-    }
-}
-
-/// Read an integer numeral from `fmt[*pos..]`, or return `df` if none.
-fn getnum(vm: &Vm, fmt: &[u8], pos: &mut usize, df: u64) -> u64 {
-    if !fmt.get(*pos).is_some_and(u8::is_ascii_digit) {
-        return df;
-    }
-    let cap = (max_size(vm) - 9) / 10;
-    let mut a: u64 = 0;
-    loop {
-        a = a * 10 + u64::from(fmt[*pos] - b'0');
-        *pos += 1;
-        if !(fmt.get(*pos).is_some_and(u8::is_ascii_digit) && a <= cap) {
-            return a;
-        }
-    }
-}
-
-/// Read a numeral and error if it is not a legal integral size [1, 16].
-fn getnumlimit(vm: &mut Vm, fmt: &[u8], pos: &mut usize, df: u64) -> Result<u64, LuaError> {
-    let sz = getnum(vm, fmt, pos, df);
-    if sz.wrapping_sub(1) >= MAXINTSIZE {
-        // printed with "%d": 5.5's size_t shows its low 32 bits
-        let shown = sz as u32 as i32;
-        return Err(raise_str(
-            vm,
-            &format!("integral size ({shown}) out of limits [1,{MAXINTSIZE}]"),
-        ));
-    }
-    Ok(sz)
-}
-
-/// Read and classify the next option; returns `(opt, size)`.
-fn getoption(
-    vm: &mut Vm,
-    h: &mut Header,
-    fmt: &[u8],
-    pos: &mut usize,
-) -> Result<(KOption, u64), LuaError> {
-    let opt = fmt[*pos];
-    *pos += 1;
-    Ok(match opt {
-        b'b' => (KOption::Int, 1),
-        b'B' => (KOption::Uint, 1),
-        b'h' => (KOption::Int, 2),
-        b'H' => (KOption::Uint, 2),
-        b'l' | b'j' => (KOption::Int, 8),
-        b'L' | b'J' | b'T' => (KOption::Uint, 8),
-        b'f' => (KOption::Float, 4),
-        b'n' | b'd' => (KOption::Number, 8),
-        b'i' => (KOption::Int, getnumlimit(vm, fmt, pos, 4)?),
-        b'I' => (KOption::Uint, getnumlimit(vm, fmt, pos, 4)?),
-        b's' => (KOption::Str, getnumlimit(vm, fmt, pos, 8)?),
-        b'c' => {
-            let size = getnum(vm, fmt, pos, u64::MAX);
-            if size == u64::MAX {
-                return Err(raise_str(vm, "missing size for format option 'c'"));
-            }
-            (KOption::Char, size)
-        }
-        b'z' => (KOption::Zstr, 0),
-        b'x' => (KOption::Padding, 1),
-        b'X' => (KOption::PadAlign, 0),
-        b' ' => (KOption::Nop, 0),
-        b'<' => {
-            h.islittle = true;
-            (KOption::Nop, 0)
-        }
-        b'>' => {
-            h.islittle = false;
-            (KOption::Nop, 0)
-        }
-        b'=' => {
-            h.islittle = NATIVE_LITTLE;
-            (KOption::Nop, 0)
-        }
-        b'!' => {
-            h.maxalign = getnumlimit(vm, fmt, pos, NATIVE_MAXALIGN)?;
-            (KOption::Nop, 0)
-        }
-        _ => {
-            let mut msg = b"invalid format option '".to_vec();
-            msg.push(opt);
-            msg.push(b'\'');
-            return Err(crate::vm::builtins::raise_bytes(vm, &msg));
-        }
-    })
-}
-
-/// Read, classify, and compute alignment padding for the next option.
-fn getdetails(
-    vm: &mut Vm,
-    h: &mut Header,
-    totalsize: u64,
-    fmt: &[u8],
-    pos: &mut usize,
-) -> Result<(KOption, u64, u64), LuaError> {
-    let (opt, size) = getoption(vm, h, fmt, pos)?;
-    let mut align = size;
-    if opt == KOption::PadAlign {
-        // 'X' takes its alignment from the following option, which it consumes
-        let bad = *pos >= fmt.len() || {
-            let (next, nsize) = getoption(vm, h, fmt, pos)?;
-            align = nsize;
-            next == KOption::Char || align == 0
-        };
-        if bad {
-            return Err(arg_error(vm, 1, "invalid next option for option 'X'"));
-        }
-    }
-    if align <= 1 || opt == KOption::Char {
-        return Ok((opt, size, 0));
-    }
-    let align = align.min(h.maxalign);
-    if align & (align - 1) != 0 {
-        return Err(arg_error(vm, 1, "format asks for alignment not power of 2"));
-    }
-    Ok((opt, size, (align - (totalsize & (align - 1))) & (align - 1)))
-}
 
 /// Pack `n` into `size` bytes, sign-extending past eight bytes when `neg`.
 fn pack_int(out: &mut Vec<u8>, n: u64, islittle: bool, size: usize, neg: bool) {
@@ -478,73 +328,4 @@ pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     results.push(Value::Int((pos + 1) as i64));
     Ok(vm.nat_return(fs, &results))
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::runtime::Value;
-    use crate::version::LuaVersion;
-    use crate::vm::Vm;
-
-    fn run(src: &str) -> Result<Vec<Value>, String> {
-        let mut vm = Vm::new(LuaVersion::Lua55);
-        let cl = vm
-            .load(src.as_bytes(), b"@test")
-            .map_err(|e| e.to_string())?;
-        vm.call_value(Value::Closure(cl), &[])
-            .map_err(|e| vm.error_text(&e))
-    }
-
-    #[test]
-    fn int_roundtrip_endianness() {
-        run(r#"
-            assert(string.unpack("B", string.pack("B", 0xff)) == 0xff)
-            assert(string.unpack("<i4", string.pack("<i4", -1)) == -1)
-            assert(string.unpack(">i4", string.pack(">i4", -1)) == -1)
-            assert(string.pack("<i2", 1) == "\1\0")
-            assert(string.pack(">i2", 1) == "\0\1")
-            assert(string.pack("<I3", 0xAA) == "\xAA\0\0")
-        "#)
-        .unwrap();
-    }
-
-    #[test]
-    fn packsize_and_variable_errors() {
-        run(r#"
-            assert(string.packsize("i4") == 4)
-            assert(string.packsize("<! c3") == 3)
-            assert(string.packsize("!8 xXi8") == 8)
-            local ok = pcall(string.packsize, "s")
-            assert(not ok)
-            local ok2 = pcall(string.packsize, "z")
-            assert(not ok2)
-        "#)
-        .unwrap();
-    }
-
-    #[test]
-    fn strings_and_floats() {
-        run(r#"
-            local s = "alo"
-            assert(string.unpack("z", string.pack("z", s)) == s)
-            assert(string.unpack("s4", string.pack("s4", s)) == s)
-            assert(string.unpack("n", string.pack("n", 1.5)) == 1.5)
-            assert(string.pack("<f", 24) == string.pack(">f", 24):reverse())
-            assert(string.pack("c8", "123456") == "123456\0\0")
-        "#)
-        .unwrap();
-    }
-
-    #[test]
-    fn overflow_and_fit_errors() {
-        run(r#"
-            assert(not pcall(string.pack, "<I1", -1))      -- unsigned overflow
-            assert(not pcall(string.pack, ">i1", 0xFF))    -- integer overflow
-            assert(not pcall(string.pack, "i0", 0))        -- out of limits
-            assert(not pcall(string.pack, "i17", 0))       -- out of limits
-            assert(not pcall(string.pack, "c3", "1234"))   -- longer than
-            assert(not pcall(string.unpack, "i16", string.rep("\3", 16))) -- does not fit
-        "#)
-        .unwrap();
-    }
 }
