@@ -42,6 +42,22 @@ impl Names {
         }
     }
 
+    /// These buffers emptied for a chunk of `src_len` bytes, keeping what
+    /// they have allocated.
+    pub(crate) fn reuse(mut self, src_len: usize) -> Names {
+        if self.ends.capacity() == 0 {
+            return Names::with_capacity(src_len);
+        }
+        let n = (src_len / 32).max(8);
+        let len = (2 * n).next_power_of_two();
+        self.text.clear();
+        self.ends.clear();
+        self.ends.push(0);
+        self.table.clear();
+        self.table.resize(len, 0);
+        self
+    }
+
     fn hash(s: &[u8]) -> u32 {
         // FNV-1a: identifiers are short
         let mut h: u32 = 0x811c_9dc5;

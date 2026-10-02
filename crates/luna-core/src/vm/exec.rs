@@ -96,6 +96,8 @@ pub struct Vm {
     type_mt: [Option<Gc<Table>>; 5],
     /// pre-interned metamethod event names, indexed by `Mm`
     mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
+    /// the parser's vectors, kept from one `load` to the next
+    parse_scratch: crate::frontend::parser::ParseScratch,
     /// native↔Lua nesting depth (PUC C-stack guard analogue)
     c_depth: u32,
     /// number of live pcall/xpcall continuation frames on the running thread
@@ -918,6 +920,7 @@ impl Vm {
             globals,
             type_mt: [None; 5],
             mm_names,
+            parse_scratch: Default::default(),
             c_depth: 0,
             pcall_depth: 0,
             nny: 0,
@@ -1435,15 +1438,18 @@ impl Vm {
         } else {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.c_depth + self.pcall_depth;
-            let parsed = crate::frontend::parser::parse_at_depth(src, self.version, depth)?;
-            crate::compiler::compile_parsed(
+            let scratch = std::mem::take(&mut self.parse_scratch);
+            let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
+            let proto = crate::compiler::compile_parsed(
                 &parsed.chunk,
                 &parsed.names,
                 &parsed.end_lines,
                 self.version,
                 chunkname,
                 &mut self.heap,
-            )?
+            )?;
+            self.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
+            proto
         };
         // PUC `lua_load` (lapi.c) only seeds the loaded closure's first
         // upvalue with the globals table when the closure has *exactly* one
