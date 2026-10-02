@@ -50,21 +50,30 @@ pub(super) fn build_object_module(target: &TargetSpec) -> Result<ObjectModule, A
 
 /// Per-trace emission: lower IR + meta blob.
 ///
-/// Returns the combined blob payload and, per lowered trace,
-/// `(fn_name, meta_blob_offset_within_combined, meta_blob_len)`.
+/// One lowered trace's entry in the meta index.
+pub(super) struct TraceMeta {
+    fn_name: String,
+    hash: [u8; 16],
+    head_pc: u32,
+    blob_offset: u32,
+    blob_len: u32,
+}
+
+/// Returns the combined blob payload and one [`TraceMeta`] per lowered
+/// trace. A trace whose AOT lowering bails is left out, so the entries
+/// carry their own hash and head pc rather than an index into `installable`.
 pub(super) fn lower_and_encode_meta(
     module: &mut ObjectModule,
     installable: &[Installable],
     version: LuaVersion,
     probe_on: bool,
-) -> (Vec<u8>, Vec<(String, u32, u32)>) {
+) -> (Vec<u8>, Vec<TraceMeta>) {
     // We accumulate the meta blobs into one combined `luna_trace_blob`
     // data symbol (so the linker has a single object per pipeline,
     // not N), and emit one `luna_trace_meta_<idx>` entry per trace.
     let mut blob_payload: Vec<u8> = Vec::new();
-    // Per-trace `(fn_name, meta_blob_offset_within_combined, meta_blob_len)`.
-    let mut per_trace_meta: Vec<(String, u32, u32)> = Vec::new();
-    for (idx, _hash, _head_pc, record, ct) in installable.iter() {
+    let mut per_trace_meta: Vec<TraceMeta> = Vec::new();
+    for (idx, hash, head_pc, record, ct) in installable.iter() {
         let fn_name = format!("luna_aot_trace_{idx:08x}");
         let opts = CompileOptions {
             internal_loop: true,
@@ -149,7 +158,13 @@ pub(super) fn lower_and_encode_meta(
         let blob_offset = blob_payload.len() as u32;
         let blob_len = blob.len() as u32;
         blob_payload.extend_from_slice(&blob);
-        per_trace_meta.push((fn_name, blob_offset, blob_len));
+        per_trace_meta.push(TraceMeta {
+            fn_name,
+            hash: *hash,
+            head_pc: *head_pc,
+            blob_offset,
+            blob_len,
+        });
     }
     (blob_payload, per_trace_meta)
 }
@@ -158,9 +173,8 @@ pub(super) fn lower_and_encode_meta(
 /// entry per lowered trace.
 pub(super) fn emit_meta_sections(
     module: &mut ObjectModule,
-    installable: &[Installable],
     blob_payload: Vec<u8>,
-    per_trace_meta: &[(String, u32, u32)],
+    per_trace_meta: &[TraceMeta],
 ) -> Result<(), AotError> {
     // Emit the combined `luna_trace_blob` data symbol. Single object;
     // each per-trace meta entry references it via offset.
@@ -199,9 +213,14 @@ pub(super) fn emit_meta_sections(
     // into the dedicated `luna_trace_meta` section. The static linker
     // auto-brackets via `__start_luna_trace_meta` / `__stop_luna_trace_
     // meta` (ELF) or `section$start$__DATA$luna_trace_meta` (Mach-O).
-    for (idx, (fn_name, blob_offset, blob_len)) in per_trace_meta.iter().enumerate() {
-        let hash = installable[idx].1;
-        let head_pc = installable[idx].2;
+    for (idx, meta) in per_trace_meta.iter().enumerate() {
+        let TraceMeta {
+            fn_name,
+            hash,
+            head_pc,
+            blob_offset,
+            blob_len,
+        } = meta;
 
         let entry_data_id = module
             .declare_data(
@@ -214,7 +233,7 @@ pub(super) fn emit_meta_sections(
         let mut desc = DataDescription::new();
         // 48 bytes: [hash 16] [head_pc 4] [_pad 4] [fn_ptr 8] [meta_ptr 8] [meta_len 4] [_pad2 4]
         let mut payload = [0u8; 48];
-        payload[0..16].copy_from_slice(&hash);
+        payload[0..16].copy_from_slice(hash);
         payload[16..20].copy_from_slice(&head_pc.to_le_bytes());
         // payload[20..24] _pad
         // payload[24..32] fn_ptr — relocation
@@ -286,3 +305,6 @@ fn aot_data_section(triple: &target_lexicon::Triple, name: &str, coff_name: &str
         _ => name.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests;
