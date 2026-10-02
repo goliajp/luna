@@ -1,7 +1,8 @@
 //! Which returns of a function have something to close (PUC `luaK_finish`
 //! turning `OP_RETURN0` / `OP_RETURN1` into `OP_RETURN` with `k`).
 
-use super::{Gc, Proto};
+use crate::runtime::function::Proto;
+use crate::runtime::heap::Gc;
 use crate::vm::isa::{Inst, Op};
 
 /// Whether a return from a function with this code and these nested

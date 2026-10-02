@@ -10,6 +10,7 @@ use call_fast::Returned;
 use fast_arith::{
     arith_arm, arith_imm_arm, cold_path, put_int, raw_flt, raw_gc, raw_int, raw_tag, raw_truthy,
 };
+use index_fast::self_key;
 
 /// The running frame, as the loop head found it.
 pub(super) struct Fast {
@@ -529,43 +530,16 @@ impl Vm {
                         let po = regs.wrapping_add(inst.a() as usize + 1);
                         // SAFETY: registers of the running frame
                         unsafe { Value::copy_whole(po, pb) };
-                        // PUC OP_SELF's C is a constant index when the k-flag is
-                        // set; otherwise it points to a register that holds the
-                        // (constant-loaded) key. luna's compiler falls back to the
-                        // register form when the constant index exceeds OP_SELF's
-                        // 8-bit C field (5.1 big.lua's `a:findfield(...)` against
-                        // a table with 250+ string keys, where "findfield" lands
-                        // past const #255). The exec must honour the same split.
-                        let pk = if inst.k() {
-                            kptr.wrapping_add(inst.c() as usize)
-                        } else {
-                            regs.wrapping_add(inst.c() as usize)
-                        };
-                        // SAFETY: a register or constant of the running frame
-                        // (a string constant when `k` is set, see
-                        // `index_raw_kstr_at`); the object is read from its
-                        // copy, `R[A]` may be `R[B]` or `R[C]`, and is written
-                        // last
-                        let hit = unsafe {
-                            let dst = regs.add(inst.a() as usize);
-                            if inst.k() {
-                                Vm::index_raw_kstr_at(po, pk, dst)
-                            } else {
-                                Vm::index_raw_at(po, pk, dst)
-                            }
-                        };
-                        if hit {
+                        // SAFETY: registers and constants of the running frame;
+                        // the object is read from its copy, `R[A]` is written last
+                        if unsafe { Vm::self_probe(regs, kptr, inst) } {
                             next!()
                         }
                         save!();
                         let dst = base!() + inst.a();
                         // SAFETY: as above, worked out again (see `get_arm!`)
                         unsafe {
-                            let pk = if inst.k() {
-                                kptr.wrapping_add(inst.c() as usize)
-                            } else {
-                                regs.wrapping_add(inst.c() as usize)
-                            };
+                            let pk = self_key(regs, kptr, inst);
                             self.index_miss_at(regs.wrapping_add(inst.a() as usize + 1), pk, dst)
                         }?;
                         resume_same!()
