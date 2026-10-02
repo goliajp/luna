@@ -172,6 +172,25 @@ const BENCHES: &[Bench] = &[
             return total
         "#,
     },
+    // ── Full collections over a growing live set ──────────────────
+    //
+    // A script that keeps small records alive and calls
+    // collectgarbage() as it goes: every collection marks and sweeps
+    // the whole heap, so the cost follows object size and how the
+    // sweep walks memory. Each record is a three-slot table and a
+    // closure with one captured local (no closure reuse).
+    Bench {
+        name: "gc_full_collect",
+        source: r#"
+            local live = {}
+            for i = 1, 4000 do
+                local k = i
+                live[i] = {k, k + 1, function(q) return q + k end}
+                if i % 20 == 0 then collectgarbage() end
+            end
+            return #live
+        "#,
+    },
 ];
 
 fn bench_redis_shape(c: &mut Criterion) {
