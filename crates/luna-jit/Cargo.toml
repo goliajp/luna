@@ -113,10 +113,17 @@ send = ["luna-core/send"]
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
-# the Windows-only tests read the process's memory counters
+# the Windows-only tests read the process's memory counters and drive the
+# REPL through a pseudo console
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
     "Win32_System_Memory",
+    "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }

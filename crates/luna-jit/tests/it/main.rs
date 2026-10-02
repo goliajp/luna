@@ -11,6 +11,8 @@ mod cli_lua_init;
 mod cli_options;
 mod cli_repl;
 mod cli_repl_edges;
+#[cfg(all(windows, feature = "repl-line-editor"))]
+mod cli_repl_terminal;
 mod close_cause_counts;
 mod corrupt_register_state_jit;
 mod downrec_close_recording;
