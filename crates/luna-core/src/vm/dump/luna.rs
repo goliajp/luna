@@ -53,23 +53,6 @@ const HEADER_54: &[u8] = &[
     0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
 ];
 
-/// PUC 5.3 binary-chunk header (33 bytes), per 5.3 `ldump.c DumpHeader`:
-/// signature + 0x53 + format + LUAC_DATA + sizeof(int) + sizeof(size_t) +
-/// sizeof(Instruction) + sizeof(lua_Integer) + sizeof(lua_Number) +
-/// LUAC_INT (0x5678) + LUAC_NUM (370.5). calls.lua :381 packs the first
-/// 25 bytes; the trailing 8-byte LUAC_NUM is not locked by an assertion
-/// but the loader still expects it.
-const HEADER_53: &[u8] = &[
-    0x1b, b'L', b'u', b'a', 0x53, 0x00, 0x19, 0x93, b'\r', b'\n', 0x1a, b'\n',
-    4, // sizeof(int)
-    8, // sizeof(size_t)
-    4, // sizeof(Instruction)
-    8, // sizeof(lua_Integer)
-    8, // sizeof(lua_Number)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_INT = 0x5678
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40, // LUAC_NUM = 370.5
-];
-
 pub(super) fn header_for(version: LuaVersion) -> &'static [u8] {
     header_and_layout(version).0
 }
@@ -77,7 +60,7 @@ pub(super) fn header_for(version: LuaVersion) -> &'static [u8] {
 /// The header luna writes for `version`, with its PUC field layout.
 fn header_and_layout(version: LuaVersion) -> (&'static [u8], &'static [(usize, Bad)]) {
     match version {
-        LuaVersion::Lua53 => (HEADER_53, header::LAYOUT_53),
+        LuaVersion::Lua53 => (header::HEADER_53, header::LAYOUT_53),
         LuaVersion::Lua54 => (HEADER_54, header::LAYOUT_54),
         // 5.1 / 5.2 calls.lua does not test binary-chunk header bytes, so
         // route them through the 5.5 layout (luna's own dump round-trips
@@ -333,8 +316,7 @@ fn r_proto(
     // bit (it's an implementation detail of the source-level parlist), so a
     // loaded vararg proto conservatively reports no pseudo — `(vararg table)`
     // would be returned by `lua_getlocal` only on protos compiled here.
-    // a chunk from before returns carried this mark gets it here
-    crate::runtime::function::mark_closing_returns(&mut code, &protos);
+    crate::runtime::function_close::mark_closing_returns(&mut code, &protos);
     let env_upval_idx = upvals
         .iter()
         .take(u8::MAX as usize)

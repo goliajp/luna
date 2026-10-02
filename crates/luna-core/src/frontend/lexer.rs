@@ -11,6 +11,7 @@ use crate::numeric::{self, Num, hex_digit};
 use crate::version::LuaVersion;
 
 mod escape;
+mod interning;
 
 /// Streaming Lua lexer. Holds a borrowed reference to the source bytes and
 /// the current line counter; `next_token()` produces one [`TokenInfo`] at a
@@ -53,37 +54,6 @@ impl<'s> Lexer<'s> {
             names: None,
             last_sym: Sym(0),
         }
-    }
-
-    /// A lexer that interns identifiers instead of handing out their text
-    /// (see [`Lexer::last_sym`]).
-    pub(crate) fn interning(
-        src: &'s [u8],
-        version: LuaVersion,
-        names: Names,
-        mut buf: Vec<u8>,
-    ) -> Lexer<'s> {
-        buf.clear();
-        Lexer {
-            names: Some(names.reuse(src.len())),
-            buf,
-            ..Lexer::new(src, version)
-        }
-    }
-
-    /// The token buffer, for the next lexer to start with.
-    pub(crate) fn take_buf(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.buf)
-    }
-
-    /// The identifiers an interning lexer has read so far.
-    pub(crate) fn names(&self) -> &Names {
-        self.names.as_ref().expect("an interning lexer")
-    }
-
-    /// The identifiers an interning lexer has read.
-    pub(crate) fn take_names(&mut self) -> Names {
-        self.names.take().unwrap_or_default()
     }
 
     /// Borrow the source bytes the lexer is iterating.

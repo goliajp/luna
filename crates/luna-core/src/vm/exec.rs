@@ -33,6 +33,7 @@ use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod index;
 mod index_fast;
 mod index_miss;
+mod index_set;
 mod limits;
 pub(crate) mod native_call;
 mod num;
@@ -2746,26 +2747,6 @@ impl Vm {
             unsafe { mt.as_mut() }.flags |= bit;
         }
         v
-    }
-
-    /// [`Self::fast_tm`] as the slot holding the metamethod, `None` when it
-    /// is absent (nil).
-    #[inline]
-    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
-    pub(crate) fn fast_tm_slot(&self, mt: Gc<Table>, mm: Mm) -> Option<*const Value> {
-        let bit = 1u32 << mm as u32;
-        if mt.flags & bit != 0 {
-            return None;
-        }
-        // metamethod names are interned, so the pointer walk is exact
-        match mt.str_slot_by_ptr(self.mm_names[mm as usize]) {
-            Some(v) if !v.is_nil() => Some(v as *const Value),
-            _ => {
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                unsafe { mt.as_mut() }.flags |= bit;
-                None
-            }
-        }
     }
 
     /// PUC 5.1 `get_compTM`: a comparison metamethod (`__eq` / `__lt` / `__le`)
