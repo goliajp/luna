@@ -21,7 +21,7 @@ plus two dev-only members:
 | `luna-runtime-helpers` | ✅ | `luna-jit` (behind `jit-helpers` feature) | Static-link runtime entry for AOT-produced binaries. Exposes `luna_aot_run` C-ABI symbol |
 | `luna-aot` | ✅ | `luna-core` + `luna-jit` + Cranelift × 6 + `object` + `clap` | Build-time AOT compiler. Lua source → standalone native binary. Not a runtime dep of the produced binary |
 | `luna-fuzz` | ❌ workspace-excluded | `libfuzzer-sys` + `luna-core` | Fuzz harnesses (parser, binary chunks, VM, AOT metadata, differential against PUC). Nightly toolchain |
-| `luna-tools` | ❌ not published | `clap` + `serde` + `object` + opt `pprof` / `capstone` / `inferno` | Dev tools: `luna-bin-inspect` / `luna-heap-dump` / `luna-profile` / `luna-trace-inspect` / REPL polish |
+| `luna-tools` | ❌ not published | `clap` + `serde` + `object` + opt `pprof` / `inferno` | Dev tools: `luna-bin-inspect` / `luna-heap-dump` / `luna-profile` / `luna-trace-inspect` / `luna-soak` |
 
 The split lets embedders pick the dependency surface:
 

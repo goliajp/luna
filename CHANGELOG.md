@@ -54,6 +54,11 @@ optimization.
   (`Token<S = Vec<u8>, N = Box<str>, Q = Box<[TokenInfo]>>`), so code
   that names `Token` is unchanged; the type is also `Copy` when the
   payload types are.
+- luna-tools (built from the repository, not published) drops the empty
+  `repl-polish` feature with its `luna-repl-polish` stub binary, and the
+  `mcode-disasm` feature with its unused `capstone` dependency. For line
+  editing, build the `luna` binary with luna-jit's `repl-line-editor`
+  feature.
 
 ### Changed
 

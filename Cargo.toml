@@ -21,10 +21,9 @@ members = [
     # driving a `luna-core` `Vm`. Depends only on `luna-core`; the
     # 0-third-party-dep contract on `luna-core` is unaffected.
     "crates/luna-runtime-helpers",
-    # `luna-tools` developer-facing CLIs
-    # (`luna-bin-inspect`, `luna-heap-dump`, + 3 stub
-    # binaries: `luna-profile`, `luna-trace-inspect`,
-    # `luna-repl-polish`). Depends on `luna-jit` (which depends on
+    # `luna-tools` developer-facing CLIs (`luna-bin-inspect`,
+    # `luna-heap-dump`, `luna-profile`, `luna-trace-inspect`,
+    # `luna-soak`); not published. Depends on `luna-jit` (which depends on
     # `luna-core`); pulls `clap` + `serde` + `object` for its own
     # surface but NOT into `luna-core`'s tree. The 0-third-party-dep
     # contract on `luna-core` is unaffected.

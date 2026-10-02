@@ -61,8 +61,7 @@ enum ShowMode {
     /// Add the trace IR ops — **currently deferred** until the trace
     /// IR shape stabilises; using this flag exits non-zero.
     Ir,
-    /// Add capstone-disassembled mcode — **currently deferred** to
-    /// the `--features mcode-disasm` capstone wrapper; using this
+    /// Add disassembled machine code — **not implemented**; using this
     /// flag exits non-zero.
     Mcode,
 }
@@ -113,7 +112,7 @@ fn run(cli: &Cli) -> Result<(), String> {
             return Err("--show ir is reserved while the IR shape is still stabilising".into());
         }
         ShowMode::Mcode => {
-            return Err("--show mcode needs `--features mcode-disasm` (capstone)".into());
+            return Err("--show mcode is reserved: disassembly is not implemented".into());
         }
     }
 
