@@ -218,39 +218,37 @@ impl Vm {
         entry_tags: &mut [u8],
         reg_state: &mut [i64],
     ) -> bool {
+        use crate::jit::trace::ENTRY_TAG_ANY;
         use crate::runtime::value::raw;
+        // the tags whose payload stands for the value
+        const PAYLOAD_TAGS: u32 = 1 << raw::INT
+            | 1 << raw::FLOAT
+            | 1 << raw::TABLE
+            | 1 << raw::CLOSURE
+            | 1 << raw::NATIVE
+            | 1 << raw::STR
+            | 1 << raw::NIL;
         let frame = &self.stack[base_us..base_us + max_stack];
         let regs = &mut reg_state[..max_stack];
         let tags = &mut entry_tags[..max_stack];
-        for (i, v) in frame.iter().enumerate() {
-            let (tag, payload) = v.unpack();
+        for i in 0..max_stack {
+            let (tag, payload) = frame[i].unpack();
             // SAFETY: the raw payload of the slot's own value.
             regs[i] = unsafe { payload.zero as i64 };
-            match compile_entry_tags.get(i).copied() {
+            // a slot past the compile-time tags is checked like one read
+            let want = compile_entry_tags.get(i).copied().unwrap_or(tag);
+            if want == ENTRY_TAG_ANY {
                 // not read before the trace writes it: any value enters,
                 // and an exit that has not written it leaves it as it is
-                Some(crate::jit::trace::ENTRY_TAG_ANY) => {
-                    tags[i] = crate::jit::trace::ENTRY_TAG_ANY;
-                    continue;
-                }
-                // The trace's IR is specialised to the compile-time entry
-                // tags: on another, body ops would misread the raw bits (a
-                // Str pointer as an Int payload). The interpreter runs this
-                // entry; the trace stays for later ones.
-                Some(want) if tag != want => return false,
-                _ => {}
+                tags[i] = ENTRY_TAG_ANY;
+                continue;
             }
-            // the payload of anything else cannot stand for the value
-            if !matches!(
-                tag,
-                raw::INT
-                    | raw::FLOAT
-                    | raw::TABLE
-                    | raw::CLOSURE
-                    | raw::NATIVE
-                    | raw::STR
-                    | raw::NIL
-            ) {
+            // The trace's IR is specialised to the compile-time entry
+            // tags: on another, body ops would misread the raw bits (a Str
+            // pointer as an Int payload). The interpreter runs this entry;
+            // the trace stays for later ones. The payload of anything but
+            // `PAYLOAD_TAGS` cannot stand for the value.
+            if tag != want || PAYLOAD_TAGS >> tag & 1 == 0 {
                 return false;
             }
             tags[i] = tag;

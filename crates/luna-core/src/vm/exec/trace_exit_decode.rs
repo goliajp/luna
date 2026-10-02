@@ -225,13 +225,17 @@ impl Vm {
                     // not written: the stack holds the value it entered
                     // with, unless a side trace ran after the trace that
                     // wrote it
-                    ExitTag::Untouched if i < max_stack && !child_ran => continue,
-                    ExitTag::Untouched if i < max_stack => match entry_tags[i] {
-                        // not checked on entry and not written since: the
-                        // stack still holds the value
-                        crate::jit::trace::ENTRY_TAG_ANY => continue,
-                        t => t,
-                    },
+                    ExitTag::Untouched if i < max_stack => {
+                        if !child_ran {
+                            continue;
+                        }
+                        match entry_tags[i] {
+                            // not checked on entry and not written since:
+                            // the stack still holds the value
+                            crate::jit::trace::ENTRY_TAG_ANY => continue,
+                            t => t,
+                        }
+                    }
                     ExitTag::Untouched => raw::NIL,
                     ExitTag::Int => raw::INT,
                     ExitTag::Float => raw::FLOAT,
@@ -247,8 +251,9 @@ impl Vm {
                 // SAFETY: the tag is the slot's entry tag (checked on
                 // entry) or the kind the exit analysis pins its payload
                 // to; the payload sits in reg_state[i].
-                frame[i] = unsafe {
-                    Value::pack(
+                unsafe {
+                    Value::pack_into(
+                        &mut frame[i],
                         tag,
                         crate::runtime::value::RawVal {
                             zero: regs[i] as u64,
