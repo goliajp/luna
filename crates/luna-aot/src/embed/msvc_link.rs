@@ -1,6 +1,11 @@
 //! Linking an AOT binary with an MSVC-style linker (`link.exe` / `lld-link`).
 
-use super::*;
+use std::path::Path;
+
+use object::Architecture;
+
+use super::AotError;
+use super::target::TargetSpec;
 
 /// MSVC link path. Drives
 /// `lld-link` (cross-platform) or `link.exe` (Windows Build Tools)
