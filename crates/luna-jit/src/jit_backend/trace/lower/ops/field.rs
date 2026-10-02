@@ -116,11 +116,9 @@ pub(super) fn emit_get_field_op<M: Module>(
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
 
-            match inferred {
-                Some(ExitTag::Int) => lw.current_kinds[off + ins.a() as usize] = RegKind::Int,
-                Some(ExitTag::Table) => lw.current_kinds[off + ins.a() as usize] = RegKind::Table,
-                Some(ExitTag::Float) => lw.current_kinds[off + ins.a() as usize] = RegKind::Float,
-                _ => {
+            match getx_want(inferred) {
+                Some((kind, _)) => lw.current_kinds[off + ins.a() as usize] = kind,
+                None => {
                     // as for GetI
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                     lw.dispatchable = false;
@@ -231,11 +229,9 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
                 lw.bcx.inst_results(call)[0]
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
-            match inferred {
-                Some(ExitTag::Int) => lw.current_kinds[off + ins.a() as usize] = RegKind::Int,
-                Some(ExitTag::Table) => lw.current_kinds[off + ins.a() as usize] = RegKind::Table,
-                Some(ExitTag::Float) => lw.current_kinds[off + ins.a() as usize] = RegKind::Float,
-                _ => {
+            match getx_want(inferred) {
+                Some((kind, _)) => lw.current_kinds[off + ins.a() as usize] = kind,
+                None => {
                     // as for GetI
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
                     lw.dispatchable = false;

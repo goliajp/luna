@@ -83,6 +83,7 @@ pub(super) fn infer_getx_exit(record: &TraceRecord, i: usize, end: usize) -> Opt
         raw::INT => Some(ExitTag::Int),
         raw::FLOAT => Some(ExitTag::Float),
         raw::TABLE => Some(ExitTag::Table),
+        raw::STR => Some(ExitTag::Str),
         _ => None,
     });
     seen.or_else(|| {
@@ -235,6 +236,7 @@ pub(super) fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
         Some(ExitTag::Int) => Some((RegKind::Int, raw::INT)),
         Some(ExitTag::Table) => Some((RegKind::Table, raw::TABLE)),
         Some(ExitTag::Float) => Some((RegKind::Float, raw::FLOAT)),
+        Some(ExitTag::Str) => Some((RegKind::Str, raw::STR)),
         _ => None,
     }
 }

@@ -11,7 +11,11 @@ pub(super) fn emit_table_new_get_op<M: Module>(
         effective_end,
         ..
     } = *pl;
-    let OpHelpers { new_table_id, .. } = lw.h.op;
+    let OpHelpers {
+        new_table_id,
+        get_field_checked_id,
+        ..
+    } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
     let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = &oc.regs;
@@ -107,9 +111,16 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             let inferred = infer_getx_exit(record, i, effective_end);
             // the helper reads the key as an integer
             let key_is_int = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
+            let key_is_str = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Str);
             match getx_want(inferred) {
                 Some((kind, want)) if key_is_int => {
                     let v = array_read(lw, pl, oc, t, key, want);
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
+                    lw.current_kinds[off + ins.a() as usize] = kind;
+                }
+                // a string key reads as a field does
+                Some((kind, want)) if key_is_str => {
+                    let v = checked_read!(lw, pl, get_field_checked_id, t, key, want, oc.rop.pc, i);
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
