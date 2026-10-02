@@ -89,7 +89,7 @@ macro_rules! fast_loop_arms {
                     unsafe { (*$fr).pc = $npc };
                     return Ok(FastExit::Reload);
                 }
-                next!()
+                next_jumped!()
             }};
         }
         macro_rules! op_t_for_loop {
@@ -126,7 +126,7 @@ macro_rules! fast_loop_arms {
                         return Ok(FastExit::Reload);
                     }
                 }
-                next!()
+                next_jumped!()
             }};
         }
     };
