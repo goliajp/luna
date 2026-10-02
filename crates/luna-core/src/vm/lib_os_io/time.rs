@@ -165,16 +165,19 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             }
         }
     }
-    // isdst is read (with its metamethods) but UTC has no DST to apply
     let k = Value::Str(vm.heap.intern(b"isdst"));
     let isdst = vm.index_value(Value::Table(t), k)?;
+    // a true isdst (`tm_isdst > 0`; nil is -1, false 0) in a zone without
+    // daylight saving time: glibc's mktime takes DST to be one hour ahead
+    // and moves the result an hour back
+    let dst_shift = if isdst.truthy() { 3600 } else { 0 };
     let secs = mktime(
         year as i64 + 1900,
         mon as i64,
         mday as i64,
         hour as i64,
         min as i64,
-        sec as i64,
+        sec as i64 - dst_shift,
     );
     // 5.3+ write the fields back before checking the result, as PUC does:
     // normalised when the time exists, as given when it overflows (yday and
