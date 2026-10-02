@@ -28,7 +28,7 @@ pub(crate) enum TokenSource<'s> {
 /// grammar rule accepts ([`Token::At`], which only MacroLua lexes, and
 /// MacroLua never parses from a live lexer).
 pub(super) struct Cur {
-    pub(super) info: TokenInfo,
+    pub(super) info: LexTok,
     pub(super) char: Option<u8>,
     /// the interned name of a `Token::Name` or literal of a `Token::Str`,
     /// whose text a live lexer leaves empty
@@ -63,7 +63,7 @@ impl<'s> TokenSource<'s> {
                     let line = tokens.last().map(|t| t.line).unwrap_or(1);
                     let _ = src;
                     Ok(Cur {
-                        info: TokenInfo {
+                        info: LexTok {
                             tok: Token::Eof,
                             span: Span::new(0, 0),
                             line,
@@ -72,7 +72,7 @@ impl<'s> TokenSource<'s> {
                         sym: Sym(0),
                     })
                 } else {
-                    let t = tokens[*cursor].clone();
+                    let t = &tokens[*cursor];
                     *cursor += 1;
                     let sym = match &t.tok {
                         Token::Name(text) => names.intern(text.as_bytes()),
@@ -80,7 +80,11 @@ impl<'s> TokenSource<'s> {
                         _ => Sym(0),
                     };
                     Ok(Cur {
-                        info: t,
+                        info: LexTok {
+                            tok: t.tok.kind(),
+                            span: t.span,
+                            line: t.line,
+                        },
                         char: None,
                         sym,
                     })

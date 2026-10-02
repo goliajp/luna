@@ -9,7 +9,7 @@ use crate::frontend::goto_check::GotoCheck;
 use crate::frontend::lexer::{Lexed, Lexer};
 use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
-use crate::frontend::token::{Near, Token, TokenInfo, near_text};
+use crate::frontend::token::{LexTok, Near, Tok, Token, TokenInfo, near_text};
 use crate::version::LuaVersion;
 
 mod scratch;
@@ -54,7 +54,7 @@ fn bin_priority(op: BinOp) -> (u8, u8) {
 
 const UNARY_PRIORITY: u8 = 12;
 
-fn bin_op_of(tok: &Token) -> Option<BinOp> {
+fn bin_op_of(tok: &Tok) -> Option<BinOp> {
     Some(match tok {
         Token::Plus => BinOp::Add,
         Token::Minus => BinOp::Sub,
@@ -81,7 +81,7 @@ fn bin_op_of(tok: &Token) -> Option<BinOp> {
     })
 }
 
-fn un_op_of(tok: &Token) -> Option<UnOp> {
+fn un_op_of(tok: &Tok) -> Option<UnOp> {
     Some(match tok {
         Token::Minus => UnOp::Neg,
         Token::Not => UnOp::Not,
@@ -254,7 +254,7 @@ fn parse_from_source<'s>(
 
 struct Parser<'s> {
     lex: TokenSource<'s>,
-    tok: TokenInfo,
+    tok: LexTok,
     /// The byte behind a placeholder `tok` (see [`Cur`]).
     tok_char: Option<u8>,
     /// the interned name when `tok` is a `Token::Name`
@@ -309,7 +309,7 @@ struct FnFlow {
 impl<'s> Parser<'s> {
     // ---- token plumbing ----
 
-    fn advance(&mut self) -> Result<TokenInfo, SyntaxError> {
+    fn advance(&mut self) -> Result<LexTok, SyntaxError> {
         self.last_line = self.lex.line();
         let next = match self.peeked.take() {
             Some(t) => t,
@@ -321,7 +321,7 @@ impl<'s> Parser<'s> {
         Ok(std::mem::replace(&mut self.tok, next.info))
     }
 
-    fn peek(&mut self) -> Result<&Token, SyntaxError> {
+    fn peek(&mut self) -> Result<&Tok, SyntaxError> {
         if self.peeked.is_none() {
             self.peeked = Some(self.lex.next_token()?);
         }
@@ -331,12 +331,17 @@ impl<'s> Parser<'s> {
     fn near(&self) -> Vec<u8> {
         match self.tok_char {
             Some(c) => near_text(self.version, Near::Char(c)),
-            None => match &self.tok.tok {
-                // a live lexer leaves the literal's bytes with the names
-                Token::Str(_) => Token::Str(self.lex.names().bytes(self.tok_sym).to_vec())
-                    .near_bytes(self.lex.src(), self.tok.span, self.version),
-                t => t.near_bytes(self.lex.src(), self.tok.span, self.version),
-            },
+            // a string's bytes are with the names; a name is shown from
+            // the source
+            None => self
+                .tok
+                .tok
+                .map(
+                    |()| self.lex.names().bytes(self.tok_sym).to_vec(),
+                    |()| Box::default(),
+                    |()| Box::default(),
+                )
+                .near_bytes(self.lex.src(), self.tok.span, self.version),
         }
     }
 
@@ -374,7 +379,7 @@ impl<'s> Parser<'s> {
         }
     }
 
-    fn accept(&mut self, tok: Token) -> Result<bool, SyntaxError> {
+    fn accept(&mut self, tok: Tok) -> Result<bool, SyntaxError> {
         if self.tok.tok == tok {
             self.advance()?;
             Ok(true)
@@ -383,7 +388,7 @@ impl<'s> Parser<'s> {
         }
     }
 
-    fn expect(&mut self, tok: Token, what: &str) -> Result<(), SyntaxError> {
+    fn expect(&mut self, tok: Tok, what: &str) -> Result<(), SyntaxError> {
         if !self.accept(tok)? {
             return Err(self.error_expected(what));
         }
@@ -393,7 +398,7 @@ impl<'s> Parser<'s> {
     /// Like PUC check_match: closing token with a pointer back to the opener.
     fn expect_match(
         &mut self,
-        tok: Token,
+        tok: Tok,
         what: &str,
         who: &str,
         who_line: u32,
