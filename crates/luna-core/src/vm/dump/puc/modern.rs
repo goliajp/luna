@@ -32,6 +32,12 @@ use super::classic::is_env;
 use super::lower::{Jump, Lowered, Lowering, RawProto, Window, enc_abc, enc_abx, enc_asbx, enc_sj};
 use crate::vm::isa::{self, Op};
 
+mod ops;
+use ops::{
+    closure, compare, compare_imm, const_arith, for_jump, self_op, set_list, store, tfor_call,
+    vararg_prep,
+};
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vm::dump) enum Kind {
     Move,
@@ -296,27 +302,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 lw.get_field(a, b, i.c())?;
             }
             Kind::SetTabUp | Kind::SetTable | Kind::SetI | Kind::SetField => {
-                // RK(C): the value is a constant when k is set.
-                let v = if i.k() {
-                    lw.k_in_temp(i.c())?
-                } else {
-                    lw.r(i.c())?
-                };
-                match k {
-                    Kind::SetTabUp => lw.set_tabup(i.a(), i.b(), v, is_env(raw, i.a()))?,
-                    Kind::SetField => {
-                        let a = lw.r(i.a())?;
-                        lw.set_field(a, i.b(), v)?;
-                    }
-                    Kind::SetTable => {
-                        let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                        lw.emit(enc_abc(Op::SetTable, a, b, v, false)?);
-                    }
-                    _ => {
-                        let a = lw.r(i.a())?;
-                        lw.emit(enc_abc(Op::SetI, a, i.b(), v, false)?);
-                    }
-                }
+                store(&mut lw, raw, k, i)?
             }
             Kind::NewTable => {
                 if follower(Kind::ExtraArg).is_none() {
@@ -327,43 +313,8 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 pc += 1;
             }
             // R[A+1] := R[B]; R[A] := R[B][RK(C)] (5.5: always K[C])
-            Kind::SelfOp => {
-                let (a, b) = (lw.run(i.a(), 2)?, lw.r(i.b())?);
-                if d.v55 || i.k() {
-                    lw.self_k(a, b, i.c())?;
-                } else {
-                    let c = lw.r(i.c())?;
-                    lw.emit(enc_abc(Op::SelfOp, a, b, c, false)?);
-                }
-            }
-            Kind::ArithI | Kind::ArithK => {
-                let mm = if k == Kind::ArithI {
-                    follower(Kind::MmBinI)
-                } else {
-                    follower(Kind::MmBinK)
-                };
-                let Some(mm) = mm else {
-                    return Err(lw.err("constant arithmetic without its MMBINI/MMBINK"));
-                };
-                let Some(op) = event_op(mm.c()) else {
-                    return Err(lw.err(format_args!("MMBIN event {} is not arithmetic", mm.c())));
-                };
-                let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                let t = lw.temp()?;
-                if k == Kind::ArithI {
-                    lw.emit(enc_asbx(Op::LoadI, t, mm.sb())?);
-                } else {
-                    lw.load_k(t, mm.b())?;
-                }
-                // k on the MMBIN: the constant was the left operand.
-                let (l, r) = if mm.k() { (t, b) } else { (b, t) };
-                // `x - 0` ran as `ADDI x 0`: luna's flagged `Add` (see `Op::Add`)
-                if k == Kind::ArithI && op == Op::Sub && mm.sb() == 0 && !mm.k() {
-                    lw.emit(enc_abc(Op::Add, a, l, r, true)?);
-                } else {
-                    lw.emit(enc_abc(op, a, l, r, false)?);
-                }
-            }
+            Kind::SelfOp => self_op(&mut lw, d, i)?,
+            Kind::ArithI | Kind::ArithK => const_arith(&mut lw, k, i, follower)?,
             Kind::Arith(op) => {
                 let (a, b, c) = (lw.r(i.a())?, lw.r(i.b())?, lw.r(i.c())?);
                 lw.emit(enc_abc(op, a, b, c, false)?);
@@ -384,33 +335,14 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
                 lw.emit(enc_abc(op, a, 0, 0, false)?);
             }
             Kind::Jmp => lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, next + i.sj())?,
-            Kind::Eq | Kind::Lt | Kind::Le => {
-                let op = match k {
-                    Kind::Eq => Op::Eq,
-                    Kind::Lt => Op::Lt,
-                    _ => Op::Le,
-                };
-                let (a, b) = (lw.r(i.a())?, lw.r(i.b())?);
-                lw.emit(enc_abc(op, a, b, 0, i.k())?);
-            }
+            Kind::Eq | Kind::Lt | Kind::Le => compare(&mut lw, k, i)?,
             Kind::EqK => {
                 let a = lw.r(i.a())?;
                 lw.emit(enc_abc(Op::EqK, a, i.b(), 0, i.k())?);
             }
             // if ((R[A] <op> sB) ~= k) then pc++; C: the literal was a float
             Kind::EqI | Kind::LtI | Kind::LeI | Kind::GtI | Kind::GeI => {
-                let a = lw.r(i.a())?;
-                let t = lw.temp()?;
-                let load = if i.c() != 0 { Op::LoadF } else { Op::LoadI };
-                lw.emit(enc_asbx(load, t, i.sb())?);
-                let (op, l, r) = match k {
-                    Kind::EqI => (Op::Eq, a, t),
-                    Kind::LtI => (Op::Lt, a, t),
-                    Kind::LeI => (Op::Le, a, t),
-                    Kind::GtI => (Op::Lt, t, a),
-                    _ => (Op::Le, t, a),
-                };
-                lw.emit(enc_abc(op, l, r, 0, i.k())?);
+                compare_imm(&mut lw, k, i)?
             }
             Kind::Test => {
                 let a = lw.r(i.a())?;
@@ -438,30 +370,13 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             }
             // FORPREP skips past its FORLOOP (at pc + 1 + Bx) when the loop
             // does not run; FORLOOP jumps back Bx.
-            Kind::ForPrep | Kind::ForLoop => {
-                let a = for_base(&lw, d, i.a())?;
-                if k == Kind::ForPrep {
-                    let target = next + i.bx() as i64;
-                    lw.jump(enc_abx(Op::ForPrep, a, 0)?, Jump::ForPrep, target)?;
-                } else {
-                    let target = next - i.bx() as i64;
-                    lw.jump(enc_abx(Op::ForLoop, a, 0)?, Jump::Back, target)?;
-                }
-            }
+            Kind::ForPrep | Kind::ForLoop => for_jump(&mut lw, d, k, i, next)?,
             Kind::TForPrep => {
                 let a = for_base(&lw, d, i.a())?;
                 let target = next + i.bx() as i64;
                 lw.jump(enc_abx(Op::TForPrep, a, 0)?, Jump::TForPrep, target)?;
             }
-            Kind::TForCall => {
-                let a = for_base(&lw, d, i.a())?;
-                // luna writes the results from its A+4, PUC 5.5 from A+3.
-                let first = if d.v55 { i.a() + 3 } else { i.a() + 4 };
-                if lw.run(first, i.c().max(1))? != a + 4 {
-                    return Err(lw.err("generic-for results outside the loop's frame"));
-                }
-                lw.emit(enc_abc(Op::TForCall, a, 0, i.c(), false)?);
-            }
+            Kind::TForCall => tfor_call(&mut lw, d, i)?,
             Kind::TForLoop => {
                 let a = for_base(&lw, d, i.a())?;
                 let target = next - i.bx() as i64;
@@ -469,38 +384,11 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             }
             // R[A][C+j] := R[A+j], 1 <= j <= B; k: EXTRAARG extends C
             Kind::SetList => {
-                let (n, c, c_bits) = if d.v55 {
-                    (i.vb(), i.vc(), 10)
-                } else {
-                    (i.b(), i.c(), 8)
-                };
-                let mut offset = c as u64;
-                if i.k() {
-                    let Some(extra) = follower(Kind::ExtraArg) else {
-                        return Err(lw.err("SETLIST without its EXTRAARG"));
-                    };
-                    offset += (extra.ax() as u64) << c_bits;
+                if set_list(&mut lw, d, i, follower)? {
                     pc += 1;
                 }
-                let a = lw.run(i.a(), n + 1)?;
-                lw.set_list(a, n, offset)?;
             }
-            Kind::Closure => {
-                let idx = i.bx() as usize;
-                let Some(child) = raw.protos.get_mut(idx) else {
-                    return Err(lw.err(format_args!("CLOSURE of missing function {idx}")));
-                };
-                if std::mem::replace(&mut closed[idx], true) {
-                    return Err(lw.err(format_args!("function {idx} instantiated twice")));
-                }
-                for u in child.upvals.iter_mut().filter(|u| u.in_stack) {
-                    let r = lw.r(u.index as u32)?;
-                    // `r` is at most 255: `Lowering::reg_at` refuses more.
-                    u.index = r as u8;
-                }
-                let a = lw.r(i.a())?;
-                lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
-            }
+            Kind::Closure => closure(&mut lw, &mut raw.protos, &mut closed, i)?,
             // 5.5's B/k name the vararg table, which luna keeps in the frame.
             Kind::Vararg => {
                 let a = lw.run(i.a(), i.c().saturating_sub(1).max(1))?;
@@ -523,14 +411,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             // (PF_VATAB), otherwise nil. Emitting that store, rather than
             // nothing, also keeps the parameter's local — declared after
             // this instruction — from looking live at function entry.
-            Kind::VarargPrep if d.v55 => {
-                let a = lw.r(raw.num_params as u32)?;
-                if raw.vararg_table {
-                    lw.emit(enc_abc(Op::GetVarg, a, 0, 0, false)?);
-                } else {
-                    lw.emit(enc_abc(Op::LoadNil, a, 0, 0, false)?);
-                }
-            }
+            Kind::VarargPrep if d.v55 => vararg_prep(&mut lw, raw)?,
             Kind::VarargPrep => {}
             Kind::ExtraArg => return Err(lw.err("EXTRAARG without an instruction to extend")),
         }
