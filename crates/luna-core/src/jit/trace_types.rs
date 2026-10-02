@@ -231,9 +231,9 @@ pub struct FieldIcSnapshot {
     /// emit time to decide whether to fire the IC path or fall
     /// through to the original helper-call path.
     pub op_idx: u32,
-    /// `t.nodes.len()` at recorder-fire time. The IC's shape guard
-    /// (`load high fat-ptr word, icmp Equal, cached_len`) bails to
-    /// the helper on mismatch so a rehash deopts predictably.
+    /// The table's hash-part node count at recorder-fire time. The IC's
+    /// shape guard (load the node mask, compare with this count less one)
+    /// bails to the helper on mismatch so a rehash deopts predictably.
     pub nodes_len: u64,
     /// Index of the `Node` slot that holds the cached key. The IC
     /// computes `node_addr = nodes_ptr + slot_idx * SIZEOF_NODE`

@@ -2634,19 +2634,19 @@ impl Vm {
         }
     }
 
-    /// `mt[mm]` through the absent-metamethod bits in `mt.flags` (PUC
+    /// `mt[mm]` through the table's absent-metamethod bits (PUC
     /// `fasttm`): a miss sets the event's bit, and any key the table gains
     /// clears them all.
     #[inline]
     pub(crate) fn fast_tm(&self, mt: Gc<Table>, mm: Mm) -> Value {
         let bit = 1u32 << mm as u32;
-        if mt.flags & bit != 0 {
+        if mt.absent_mm() & bit != 0 {
             return Value::Nil;
         }
         let v = mt.get_str(self.mm_names[mm as usize]);
         if v.is_nil() {
             // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { mt.as_mut() }.flags |= bit;
+            unsafe { mt.as_mut() }.note_absent_mm(bit);
         }
         v
     }

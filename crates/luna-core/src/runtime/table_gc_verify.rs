@@ -19,7 +19,7 @@ impl Table {
         {
             panic!("[gc-verify] find_node QUERY key {p:#x} is freed (dangling)");
         }
-        for (i, n) in self.nodes.iter().enumerate() {
+        for (i, n) in self.nodes().iter().enumerate() {
             // NOTE: tombstones (val nil, key kept) are NOT skipped —
             // the walk below raw_eq's their keys too.
             if n.dead_key {
@@ -60,7 +60,7 @@ impl Table {
                 }
             }
         }
-        for (i, n) in self.nodes.iter().enumerate() {
+        for (i, n) in self.nodes().iter().enumerate() {
             if n.val.is_nil() {
                 continue;
             }
