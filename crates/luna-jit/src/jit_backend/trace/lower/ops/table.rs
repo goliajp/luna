@@ -11,15 +11,9 @@ pub(super) fn emit_table_new_get_op<M: Module>(
         effective_end,
         ..
     } = *pl;
-    let OpHelpers {
-        new_table_id,
-        get_int_checked_id,
-        ..
-    } = lw.h.op;
+    let OpHelpers { new_table_id, .. } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
-    let OpCx {
-        i, rop, off, ins, ..
-    } = *oc;
+    let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = &oc.regs;
     match oc.op {
         Op::NewTable => {
@@ -79,7 +73,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             // a table with a metatable) leaves the trace here.
             let inferred = infer_getx_exit(record, i, effective_end);
             if let Some((kind, want)) = getx_want(inferred) {
-                let v = checked_read!(lw, pl, get_int_checked_id, t, k_imm, want, rop.pc, i);
+                let v = array_read(lw, pl, oc, t, k_imm, want);
                 lw.bcx.def_var(regs[ins.a() as usize], v);
                 lw.current_kinds[off + ins.a() as usize] = kind;
             } else {
@@ -115,7 +109,7 @@ pub(super) fn emit_table_new_get_op<M: Module>(
             let key_is_int = matches!(k_op(&lw.current_kinds, off as u32 + ins.c()), RegKind::Int);
             match getx_want(inferred) {
                 Some((kind, want)) if key_is_int => {
-                    let v = checked_read!(lw, pl, get_int_checked_id, t, key, want, rop.pc, i);
+                    let v = array_read(lw, pl, oc, t, key, want);
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = kind;
                 }
@@ -198,6 +192,7 @@ pub(super) fn emit_table_set_op<M: Module>(
                 return None;
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
+            let stored_inline = array_write(&mut lw.bcx, t, k_imm, val, val_kind);
             let done = emit_table_set(
                 &mut lw.bcx,
                 &mut lw.module,
@@ -209,6 +204,7 @@ pub(super) fn emit_table_set_op<M: Module>(
                 val_kind,
             );
             guard!(lw, pl, done, i, rop.pc);
+            array_write_join(&mut lw.bcx, stored_inline);
         }
         Op::SetTable => {
             // sunk path: escape sweep tagged
@@ -256,6 +252,11 @@ pub(super) fn emit_table_set_op<M: Module>(
                 return None;
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
+            let stored_inline = if key_kind == RegKind::Int {
+                array_write(&mut lw.bcx, t, key, val, val_kind)
+            } else {
+                None
+            };
             let done = emit_table_set(
                 &mut lw.bcx,
                 &mut lw.module,
@@ -267,6 +268,7 @@ pub(super) fn emit_table_set_op<M: Module>(
                 val_kind,
             );
             guard!(lw, pl, done, i, rop.pc);
+            array_write_join(&mut lw.bcx, stored_inline);
         }
         _ => unreachable!("routed by emit_op"),
     }

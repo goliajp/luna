@@ -119,6 +119,18 @@ pub(super) fn emit_sequence_op<M: Module>(
                 _ => return None,
             }
             let t = lw.bcx.use_var(regs[ins.b() as usize]);
+            let hit = lw.bcx.create_block();
+            lw.bcx.append_block_param(hit, types::I64);
+            let miss = lw.bcx.create_block();
+            let merge = lw.bcx.create_block();
+            lw.bcx.append_block_param(merge, types::I64);
+            array_slot::emit_len_check(&mut lw.bcx, t, hit, miss);
+            lw.bcx.switch_to_block(hit);
+            lw.bcx.seal_block(hit);
+            let fast = lw.bcx.block_params(hit)[0];
+            lw.bcx.ins().jump(merge, &[fast.into()]);
+            lw.bcx.switch_to_block(miss);
+            lw.bcx.seal_block(miss);
             let func_ref = lw.module.declare_func_in_func(len_checked_id, lw.bcx.func);
             let call = lw.bcx.ins().call(func_ref, &[t]);
             let v = lw.bcx.inst_results(call)[0];
@@ -128,6 +140,10 @@ pub(super) fn emit_sequence_op<M: Module>(
                 .ins()
                 .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
             guard!(lw, pl, ok, i, rop.pc);
+            lw.bcx.ins().jump(merge, &[v.into()]);
+            lw.bcx.switch_to_block(merge);
+            lw.bcx.seal_block(merge);
+            let v = lw.bcx.block_params(merge)[0];
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
         }
