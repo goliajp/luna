@@ -33,6 +33,7 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         // Commit the previous op's register writes to reg_state.
         sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        alt_join(lw, i);
         let vk = vconst(i);
         // R[C] of a register-operand op, read before this op's own write
         // forgets it (`x = x % 7` divides by the old value)
@@ -157,5 +158,8 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
         }
         emit_op(lw, pl, &oc)?;
     }
+    sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+    alt_join(lw, effective_end);
+    debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
     Some(())
 }

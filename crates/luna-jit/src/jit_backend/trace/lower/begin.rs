@@ -192,5 +192,6 @@ pub(super) fn begin_body<'f, 'm, M: Module>(
         upval_cache,
         head_closure_var,
         known_int,
+        alt_joins: std::collections::HashMap::new(),
     }
 }

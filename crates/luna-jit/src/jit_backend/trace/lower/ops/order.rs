@@ -101,6 +101,11 @@ pub(super) fn emit_order_op<M: Module>(
             };
             lw.bcx.switch_to_block(side_exit_blk);
             lw.bcx.seal_block(side_exit_blk);
+            if alt_taken(lw, pl, oc.i, continue_blk) {
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
+                return Some(());
+            }
             // at depth>0, snapshot the live
             // `call_chain` (each cmp@d>0 site has its OWN chain;
             // a single global depth-indexed array loops fib
