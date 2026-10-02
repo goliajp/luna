@@ -1,0 +1,483 @@
+use super::*;
+
+/// Owner of one compiled trace's mmap'd code. Drop releases the
+/// pages, so the handle is parked on the owning `Vm`'s
+/// `storage.trace_handles` Vec, keeping the entry fn pointer
+/// callable for the lifetime of that `Vm`.
+///
+/// Mirrors the method JIT's `JitHandle` /
+/// `storage.cache_handles` pattern (`jit_backend/mod.rs`).
+pub struct TraceHandle {
+    // Sleeve `JITModule` in the
+    // `SendJitModule` newtype so the module's `Send` claim is
+    // expressed at the field type, not by an `unsafe impl Send` on
+    // the outer struct. The wrapper is `repr(Rust)` newtype with
+    // `Deref<Target = JITModule>` so any internal call site that
+    // touched `handle._module.<method>` still resolves through Deref.
+    _module: crate::jit_backend::SendJitModule,
+    _entry_raw: *const u8,
+}
+
+impl TraceHandle {
+    /// Frees the compiled trace.
+    ///
+    /// # Safety
+    ///
+    /// The trace is not running and will not be entered again.
+    pub(crate) unsafe fn free(self) {
+        // SAFETY: forwarded from the caller
+        unsafe { self._module.free() }
+    }
+
+    /// `#[doc(hidden)]` accessor returning
+    /// the parked `_module` borrowed at the `SendJitModule` newtype.
+    /// Mirror of `JitHandle::__send_module`; lets
+    /// `tests/it/jit_vm_scoped_rebind.rs` statically assert the
+    /// field type.
+    #[doc(hidden)]
+    #[inline]
+    pub fn __send_module(&self) -> &crate::jit_backend::SendJitModule {
+        &self._module
+    }
+}
+
+/// lowerer for Int arith + Move + Int-Int cmp
+/// guards + Table ops + trace-truncating `Op::Call` on a
+/// single-Proto trace.
+///
+/// Attempt to lower a closed [`TraceRecord`] to a native trace fn.
+/// The fn's ABI is `fn(reg_state: *mut i64) -> i64` (see [`TraceFn`]).
+/// At entry, the trace loads every register from the caller's
+/// `reg_state` buffer into a cranelift `Variable`; the body emits
+/// IR per op. Each `Lt / Le / Eq` op emits an `icmp` + `brif` —
+/// on a runtime mismatch with the recorded comparison direction,
+/// control diverts to a side-exit block that stores reg state back
+/// and returns the failing PC. Each `NewTable / SetI / GetI / Len`
+/// op emits a cranelift `call` to the matching `luna_jit_*` helper
+/// (`Linkage::Import`, resolved via `JITBuilder::symbol`); helpers
+/// short-circuit on `vm.jit.pending_err` so a metatable-bearing
+/// table parks a deopt request the dispatcher can
+/// detect after the trace returns. The clean-close tail stores
+/// reg state back and returns `head_pc as i64`.
+///
+/// Returns `None` if:
+/// - the record is not closed yet (open traces can't be entered
+///   safely — the loop edge is the only sound entry/exit),
+/// - any recorded op is outside `is_whitelisted_op`,
+/// - any operand register index ≥ `head_proto.max_stack`,
+/// - a `Lt / Le / Eq` is not followed by a `Jmp` at `cmp.pc + 1`,
+/// - a `Jmp` is neither cmp-consumed nor at the trace's last
+///   position,
+/// - cranelift codegen fails.
+///
+/// On success, the underlying `JITModule` is parked on
+/// `storage.trace_handles` so the returned `CompiledTrace.entry`
+/// stays callable for the lifetime of the owning `Vm`.
+///
+/// **Caller contract for table ops**: before invoking the
+/// returned entry, the caller (the dispatcher or a test harness)
+/// must call [`crate::jit_backend::enter_jit`] to pin
+/// the active Vm in the `JIT_VM` thread-local — the table helpers
+/// pick that up to reach `vm.heap`. After the call, the caller
+/// must inspect `vm.jit.pending_err` to decide whether a metatable
+/// deopt fired; on `Some`, treat the trace's result as invalid and
+/// re-run the work through the interpreter.
+///
+/// This is a convenience wrapper for callers that don't need to
+/// pick options — it forwards to
+/// [`try_compile_trace_with_options`] with [`CompileOptions::default`]
+/// (one-shot, the shape unit tests assume).
+pub fn try_compile_trace(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+) -> Option<CompiledTrace> {
+    try_compile_trace_with_options(storage, record, CompileOptions::default())
+}
+
+// last-checkpoint instrumentation for trace
+// compile failure diagnosis. `try_compile_trace_with_options`
+// updates the thread-local at each major phase; if the function
+// returns `None`, the most recent checkpoint set tells the
+// caller WHICH phase bailed. Vm reads + accumulates this on
+// every compile-failed return.
+thread_local! {
+    pub(crate) static LAST_COMPILE_CHECKPOINT: std::cell::Cell<&'static str> =
+        const { std::cell::Cell::new("not-entered") };
+    pub(crate) static LAST_OP_ID: std::cell::Cell<u8> =
+        const { std::cell::Cell::new(255) };
+    // counter bumped exactly once per
+    // `lower_trace_into_named` invocation that successfully declares
+    // the depth-relative `base_var` scaffold. Used by the regression
+    // test (`base_var_scaffold.rs`) to assert the
+    // scaffold's declaration ran end-to-end.
+    //
+    // Probe-only: dispatched + close-cause counters cover production
+    // behaviour; this cell exists solely so the test can pin "scaffold
+    // ran" without scraping Cranelift IR text. The bump happens AFTER
+    // `declare_var` + `def_var(iconst(0))` so a panic earlier in the
+    // entry block leaves the counter at its prior value.
+    pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    static TRACE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn checkpoint(s: &'static str) {
+    LAST_COMPILE_CHECKPOINT.with(|c| c.set(s));
+}
+
+pub(super) fn set_last_op_id(id: u8) {
+    LAST_OP_ID.with(|c| c.set(id));
+}
+
+/// Name of the lowerer checkpoint most recently reached on this thread.
+/// Diagnostic-only — used to bucket trace-compile failures by phase
+/// (`pre-lower`, `lower-loop`, `finalize`, …).
+pub fn last_compile_checkpoint() -> &'static str {
+    LAST_COMPILE_CHECKPOINT.with(|c| c.get())
+}
+
+/// Opcode id (luna `Op` discriminant) of the last bytecode op the
+/// lowerer touched on this thread. Diagnostic-only.
+pub fn last_op_id() -> u8 {
+    LAST_OP_ID.with(|c| c.get())
+}
+
+/// count of successful `base_var` scaffold
+/// declarations on this thread. Bumped exactly once per
+/// `lower_trace_into_named` invocation that reaches the post-entry
+/// emit point and runs `declare_var` + `def_var(iconst(0))` for the
+/// depth-relative base address handle. No op-arm reads it: the
+/// Variable is in-scope for the entire lowerer body but
+/// `use_var(base_var)` doesn't happen.
+///
+/// Read by `base_var_scaffold.rs`; production paths
+/// (dispatcher / close handler / vm) never read this.
+pub fn base_var_scaffold_declared_count() -> u64 {
+    BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.get())
+}
+
+/// Traces this thread has run through Cranelift and finalized into
+/// machine code for a Vm or via [`try_compile_trace_with_options`].
+/// Diagnostic-only: it tells a trace cached with code from one a Vm
+/// cached without, because nothing could enter it.
+#[doc(hidden)]
+pub fn trace_codegen_count() -> u64 {
+    TRACE_CODEGEN.with(|c| c.get())
+}
+
+/// reset the scaffold-declared counter so
+/// a regression test can assert "the next compile bumped it by 1"
+/// without depending on prior tests in the same thread. Test-only;
+/// production paths never call this.
+pub fn reset_base_var_scaffold_declared_count() {
+    BASE_VAR_SCAFFOLD_DECLARED.with(|c| c.set(0));
+}
+
+/// build a fresh `JITModule` configured with
+/// every trace-side `luna_jit_*` helper symbol registered for
+/// `Linkage::Import` resolution at finalize time.
+///
+/// Companion of [`crate::jit_backend::build_jit_module_with_helpers`] (the int-chunk
+/// counterpart). The AOT pipeline (luna-aot) builds an `ObjectModule`
+/// instead and resolves the same symbols at static-link time.
+///
+/// Both the int-chunk lowerer
+/// ([`crate::jit_backend::lower_int_chunk_into`]) and the trace lowerer
+/// ([`lower_trace_into`]) are fully generic over
+/// `M: cranelift_module::Module`. The two emit-time helper free fns
+/// ([`emit_table_set`] / [`emit_materialize_live_sunk`]) are also
+/// generic. JIT-specific surfaces remaining are: this module-
+/// construction helper, the JIT wrappers ([`try_compile_trace_with_options`]
+/// + [`crate::jit_backend::try_compile_int_chunk`]) that finalize, and the
+/// `TraceHandle` / `JitHandle` types that own the mmap'd `JITModule`
+/// for the entry's lifetime. The trace lowerer returns a
+/// `CompiledTrace` with [`placeholder_trace_fn`] in `entry`; the JIT
+/// wrapper patches the real fn pointer after `finalize_definitions` +
+/// `get_finalized_function`. The AOT pipeline (luna-aot) never
+/// invokes the entry directly — it resolves the trace symbol at
+/// static-link time and dispatches through its own table.
+pub(super) fn build_trace_jit_module() -> Option<JITModule> {
+    let mut builder = JITBuilder::with_isa(trace_isa()?, cranelift_module::default_libcall_names());
+    builder.memory_provider(Box::new(crate::jit_backend::code_memory::CodeMemory::new()));
+    // the lowerer's code calls the `luna_jit_*` helpers (see
+    // `crate::jit_backend::build_jit_module_with_helpers` for why they are looked up
+    // here rather than by dlsym)
+    builder.symbol_lookup_fn(Box::new(trace_helper));
+    Some(JITModule::new(builder))
+}
+
+/// The trace JIT's target, built once (see [`crate::jit_backend::method_isa`]).
+pub(super) fn trace_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
+    static ISA: std::sync::OnceLock<Option<cranelift_codegen::isa::OwnedTargetIsa>> =
+        std::sync::OnceLock::new();
+    ISA.get_or_init(|| {
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false").ok()?;
+        flag_builder.set("is_pic", "false").ok()?;
+        // The egraph optimizer costs a fifth of a trace's compile time and
+        // buys nothing on the code the lowerer emits. The single-pass register
+        // allocator would halve compile time again, but its spills made a
+        // numeric loop trace run 1.9x the instructions; traces keep the
+        // backtracking one.
+        flag_builder.set("opt_level", "none").ok()?;
+        // The IR verifier is a quarter of a trace's compile time (token_bucket:
+        // 175 of 720 us of Cranelift passes). Release builds leave it out, as
+        // wasmtime does; debug builds, which the lib tests run, keep it.
+        if !cfg!(debug_assertions) {
+            flag_builder.set("enable_verifier", "false").ok()?;
+        }
+        cranelift_native::builder()
+            .ok()?
+            .finish(settings::Flags::new(flag_builder))
+            .ok()
+    })
+    .clone()
+}
+
+/// The address of a Rust helper trace code calls.
+pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
+    Some(match name {
+        "luna_jit_new_table" => crate::jit_backend::luna_jit_new_table as *const u8,
+        "luna_jit_table_set_int_checked" => {
+            crate::jit_backend::luna_jit_table_set_int_checked as *const u8
+        }
+        "luna_jit_table_set_field_checked" => {
+            crate::jit_backend::luna_jit_table_set_field_checked as *const u8
+        }
+        "luna_jit_table_set_checked" => crate::jit_backend::luna_jit_table_set_checked as *const u8,
+        "luna_jit_table_get_field" => crate::jit_backend::luna_jit_table_get_field as *const u8,
+        "luna_jit_op_get_tab_up" => crate::jit_backend::luna_jit_op_get_tab_up as *const u8,
+        "luna_jit_table_get_int" => crate::jit_backend::luna_jit_table_get_int as *const u8,
+        "luna_jit_table_get_int_checked" => {
+            crate::jit_backend::luna_jit_table_get_int_checked as *const u8
+        }
+        "luna_jit_table_get_field_checked" => {
+            crate::jit_backend::luna_jit_table_get_field_checked as *const u8
+        }
+        "luna_jit_op_get_tab_up_checked" => {
+            crate::jit_backend::luna_jit_op_get_tab_up_checked as *const u8
+        }
+        "luna_jit_table_len_checked" => crate::jit_backend::luna_jit_table_len_checked as *const u8,
+        "luna_jit_math_fn_is_library" => {
+            crate::jit_backend::luna_jit_math_fn_is_library as *const u8
+        }
+        "luna_jit_suppress_trace_admit" => {
+            crate::jit_backend::luna_jit_suppress_trace_admit as *const u8
+        }
+        "luna_jit_upval_get" => crate::jit_backend::luna_jit_upval_get as *const u8,
+        "luna_jit_head_closure" => crate::jit_backend::luna_jit_head_closure as *const u8,
+        "luna_jit_trace_materialize_frames" => {
+            crate::jit_backend::luna_jit_trace_materialize_frames as *const u8
+        }
+        "luna_jit_materialize_sunk_table" => {
+            crate::jit_backend::luna_jit_materialize_sunk_table as *const u8
+        }
+        "luna_jit_op_closure" => crate::jit_backend::luna_jit_op_closure as *const u8,
+        "luna_jit_spill_to_stack" => crate::jit_backend::luna_jit_spill_to_stack as *const u8,
+        "luna_jit_op_close" => crate::jit_backend::luna_jit_op_close as *const u8,
+        "luna_jit_op_tforcall" => crate::jit_backend::luna_jit_op_tforcall as *const u8,
+        "luna_jit_stack_load" => crate::jit_backend::luna_jit_stack_load as *const u8,
+        "luna_jit_stack_tag" => crate::jit_backend::luna_jit_stack_tag as *const u8,
+        "luna_jit_op_concat" => crate::jit_backend::luna_jit_op_concat as *const u8,
+        "luna_jit_stack_update_raw" => crate::jit_backend::luna_jit_stack_update_raw as *const u8,
+        "luna_jit_str_buf_acquire" => crate::jit_backend::luna_jit_str_buf_acquire as *const u8,
+        "luna_jit_str_buf_release" => crate::jit_backend::luna_jit_str_buf_release as *const u8,
+        "luna_jit_str_buf_extend" => crate::jit_backend::luna_jit_str_buf_extend as *const u8,
+        "luna_jit_str_buf_intern" => crate::jit_backend::luna_jit_str_buf_intern as *const u8,
+        _ => return None,
+    })
+}
+
+/// Variant of [`try_compile_trace`] that takes a [`CompileOptions`]
+/// — the close handler uses this with `internal_loop = true` so the
+/// JIT'd trace runs in a native loop until a cmp side-exits.
+///
+/// thin wrapper around the backend-agnostic
+/// [`lower_trace_into`] generic. Constructs a `JITModule`, finalizes
+/// the compiled trace into RWX memory, patches the real entry fn ptr
+/// into the returned [`CompiledTrace`], and stashes the module in
+/// `storage.trace_handles` so the entry stays callable for the
+/// lifetime of the owning `Vm`.
+pub fn try_compile_trace_with_options(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+) -> Option<CompiledTrace> {
+    compile_trace_jit(storage, record, opts, true, false)
+}
+
+/// [`try_compile_trace_with_options`] for a record of dialect `version`.
+#[doc(hidden)]
+pub fn try_compile_trace_for(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    version: luna_core::version::LuaVersion,
+) -> Option<CompiledTrace> {
+    let float_only = version <= luna_core::version::LuaVersion::Lua52;
+    compile_trace_jit(storage, record, opts, true, float_only)
+}
+
+/// [`try_compile_trace_with_options`] for a Vm's trace cache: a trace
+/// nothing can enter ([`trace_is_enterable`]) comes back without machine
+/// code. Cranelift is most of a trace's compile time, and the cache
+/// entry alone keeps the head from being recorded again. `entry` keeps
+/// the placeholder, which nothing calls.
+pub(crate) fn compile_trace_for_vm(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    float_only: bool,
+) -> Option<CompiledTrace> {
+    compile_trace_jit(storage, record, opts, false, float_only)
+}
+
+/// `float_only`: the record's dialect is 5.1 / 5.2, where the math
+/// library converts its number arguments to floats and returns floats
+/// (`math.min(1, 2)` is the float `1`).
+pub(super) fn compile_trace_jit(
+    storage: &mut dyn luna_core::jit::JitStorage,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    always_codegen: bool,
+    float_only: bool,
+) -> Option<CompiledTrace> {
+    let mut module =
+        crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
+    let (fn_id, mut compiled) =
+        lower_trace_into_inner(&mut *module, record, opts, None, always_codegen, float_only)?;
+    if !always_codegen && !trace_is_enterable(record, &compiled) {
+        return Some(compiled);
+    }
+    module.finalize_definitions().ok()?;
+    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
+    let ptr = module.get_finalized_function(fn_id);
+    // SAFETY: the cranelift fn signature declared by `lower_trace_into`
+    // (`(I64) -> I64`) matches `TraceFn`. The mmap backing the fn body
+    // is owned by `module`, which we park on the per-`Vm` storage's
+    // `trace_handles` Vec immediately below.
+    let entry_fn: TraceFn = unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) };
+    compiled.entry = entry_fn;
+    // `from_storage` is `Result`-shaped. On
+    // `StorageMismatch` (Vm.jit.storage isn't a CraneliftJitStorage)
+    // skip parking the handle and return `None` — the freshly built
+    // `module` drops here and releases its mmap pages; the trace
+    // recorder sees `None` and gives up on this trace, falling back
+    // to interp dispatch. No SIGABRT across the C-ABI boundary.
+    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
+    cs.trace_handles.push(TraceHandle {
+        // Wrap in `SendJitModule` sleeve.
+        _module: module.publish(),
+        _entry_raw: ptr,
+    });
+    Some(compiled)
+}
+
+/// backend-agnostic body of the trace
+/// lowerer. Generic over any `cranelift_module::Module` so the same
+/// codegen pipeline drives the runtime JIT (`JITModule`,
+/// [`try_compile_trace_with_options`]) and the AOT pipeline
+/// (`ObjectModule` in `luna-aot`).
+///
+/// Returns `None` on the same bail conditions as
+/// [`try_compile_trace`] (see its docstring). On success returns the
+/// declared [`FuncId`] for the lowered trace alongside a
+/// [`CompiledTrace`] whose `entry` field holds a private
+/// `placeholder_trace_fn`; backend-specific finalize must patch the
+/// real entry pointer before dispatch (the JIT wrapper does this; the
+/// AOT pipeline resolves the symbol at link time and never invokes
+/// `entry` directly).
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
+pub fn lower_trace_into<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+) -> Option<(FuncId, CompiledTrace)> {
+    lower_trace_into_named(module, record, opts, None)
+}
+
+/// like [`lower_trace_into`] but
+/// lets the caller (luna-aot) pick a unique exported name for the
+/// trace function. Required for AOT: many traces from the same chunk
+/// would otherwise collide on `"luna_jit_trace"`, and `Linkage::Local`
+/// hides the symbol from the deploy-side staticlib's resolver.
+///
+/// `aot_fn_name = None` keeps the original behaviour (anonymous
+/// `Linkage::Local` `"luna_jit_trace"`), so the JIT wrapper and the
+/// existing AOT smoke tests are unaffected.
+///
+/// When `Some(name)`, `name` becomes the cranelift `FuncId` symbol
+/// with `Linkage::Export`, surfacing in the produced `.o`'s symbol
+/// table for the deploy-side `dlsym`/linker to resolve.
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
+pub fn lower_trace_into_named<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    aot_fn_name: Option<&str>,
+) -> Option<(FuncId, CompiledTrace)> {
+    lower_trace_into_inner(module, record, opts, aot_fn_name, true, false)
+}
+
+/// [`lower_trace_into_named`] for a record of dialect `version`.
+// cranelift types in the signature: internal to luna crates, not covered by semver
+#[doc(hidden)]
+pub fn lower_trace_into_named_for<M: Module>(
+    module: &mut M,
+    record: &TraceRecord,
+    opts: CompileOptions,
+    aot_fn_name: Option<&str>,
+    version: luna_core::version::LuaVersion,
+) -> Option<(FuncId, CompiledTrace)> {
+    let float_only = version <= luna_core::version::LuaVersion::Lua52;
+    lower_trace_into_inner(module, record, opts, aot_fn_name, true, float_only)
+}
+
+// SAFETY: `SendJitModule` is `Send` because luna only ever
+// constructs `JITModule` with the default `SystemMemoryProvider`
+// (which is `Send`). `_entry_raw: *const u8` is `!Send` by default;
+// the manual `unsafe impl Send for TraceHandle` therefore stays
+// load-bearing for the outer struct, but the wrapper localizes
+// the JITModule-side soundness reasoning to one place.
+//
+// `_entry_raw` addresses mcode
+// in `_module`'s mmap'd page. Because `_module` ships with the
+// handle (the handle owns it by-value as a `SendJitModule`), the
+// pointer remains dereferenceable on whichever OS thread the
+// handle lands on after a Vm move. The pointer is read-only on
+// the dispatch hot path (transmuted to an `extern "C"` fn and
+// called); no aliasing concerns. Per-dispatch `JIT_VM` / `JIT_CL`
+// TLS slots are scoped via `scoped_jit_vm_rebind` RAII so
+// any thread that calls into the dispatcher re-arms its own slot.
+// Mirror impl: `unsafe impl Send for JitHandle` at
+// `jit_backend/mod.rs` just after the `JitHandle` struct.
+//
+// SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+unsafe impl Send for TraceHandle {}
+
+/// Placeholder `TraceFn` — installed in
+/// [`CompiledTrace::entry`] by the backend-agnostic [`lower_trace_into`]
+/// body and patched to the real finalized entry pointer by the JIT
+/// wrapper [`try_compile_trace_with_options`]. The AOT pipeline
+/// (`luna-aot`) never calls into a TraceFn directly (resolution happens
+/// at the deploy-side runtime, not at codegen time), so the placeholder
+/// reaching the AOT output is harmless; the deploy-side runtime
+/// resolves the trace symbol through the static dispatch table built in
+/// `luna-aot`'s embed pipeline.
+pub(super) unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
+    panic!(
+        "placeholder_trace_fn called: CompiledTrace.entry must be patched by the JIT finalize wrapper before dispatch"
+    );
+}
+
+/// Whether anything can enter `ct` once it is cached: the dispatcher
+/// admits it at its head (dispatchable, or linked for down-recursion), or
+/// it is a side trace whose parent's exit calls it, which the Vm allows
+/// for a trace that is only too short to dispatch on its own.
+pub(crate) fn trace_is_enterable(record: &TraceRecord, ct: &CompiledTrace) -> bool {
+    ct.dispatchable
+        || ct.downrec_link.is_some()
+        || (record.side_trace_parent.is_some() && ct.dispatch_off_reason == Some("length-gate"))
+}
