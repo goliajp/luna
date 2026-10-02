@@ -216,56 +216,42 @@ impl Vm {
             false
         };
         if !fast_path_taken {
-            for i in 0..slot_count {
-                if keep_tfor.contains(&i) {
-                    continue;
-                }
-                let tag = match exit_tags_for_pc[i] {
+            use crate::jit::trace::ExitTag;
+            use crate::runtime::value::raw;
+            let frame = &mut self.stack[base_us..base_us + slot_count];
+            let regs = &reg_state[..slot_count];
+            for (i, &exit_tag) in exit_tags_for_pc.iter().enumerate() {
+                let tag = match exit_tag {
                     // not written: the stack holds the value it entered
                     // with, unless a side trace ran after the trace that
                     // wrote it
-                    crate::jit::trace::ExitTag::Untouched if i < max_stack && !child_ran => {
-                        continue;
-                    }
-                    crate::jit::trace::ExitTag::Untouched if i < max_stack => {
-                        match entry_tags[i] {
-                            // not checked on entry and not written since:
-                            // the stack still holds the value
-                            crate::jit::trace::ENTRY_TAG_ANY => continue,
-                            t => t,
-                        }
-                    }
-                    crate::jit::trace::ExitTag::Untouched => crate::runtime::value::raw::NIL,
-                    crate::jit::trace::ExitTag::Int => crate::runtime::value::raw::INT,
-                    crate::jit::trace::ExitTag::Float => crate::runtime::value::raw::FLOAT,
-                    crate::jit::trace::ExitTag::Table => crate::runtime::value::raw::TABLE,
-                    crate::jit::trace::ExitTag::Closure => crate::runtime::value::raw::CLOSURE,
-                    // Trace actively wrote Nil
-                    // to this slot (e.g. via Op::LoadNil).
-                    // Restore as Nil regardless of the entry
-                    // tag, since the i64 payload is 0 and
-                    // packing as the entry tag (e.g. INT)
-                    // would mis-type the slot.
-                    crate::jit::trace::ExitTag::Nil => crate::runtime::value::raw::NIL,
-                    // Trace wrote a Str ptr
-                    // to this slot (LoadK Str / Move from
-                    // Str / Concat result). Restore as
-                    // Value::Str with raw bits round-
-                    // tripped.
-                    crate::jit::trace::ExitTag::Str => crate::runtime::value::raw::STR,
+                    ExitTag::Untouched if i < max_stack && !child_ran => continue,
+                    ExitTag::Untouched if i < max_stack => match entry_tags[i] {
+                        // not checked on entry and not written since: the
+                        // stack still holds the value
+                        crate::jit::trace::ENTRY_TAG_ANY => continue,
+                        t => t,
+                    },
+                    ExitTag::Untouched => raw::NIL,
+                    ExitTag::Int => raw::INT,
+                    ExitTag::Float => raw::FLOAT,
+                    ExitTag::Table => raw::TABLE,
+                    ExitTag::Closure => raw::CLOSURE,
+                    // written nil (LoadNil): a nil whatever the entry tag
+                    ExitTag::Nil => raw::NIL,
+                    ExitTag::Str => raw::STR,
                 };
-                // SAFETY: tag is from a verified slot
-                // (entry validated above) or pinned by
-                // the exit-tag analysis to INT/TABLE.
-                // The raw payload sits in reg_state[i].
-                // Stack was extended by the materialize
-                // helper for inline frames.
-                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                self.stack[base_us + i] = unsafe {
+                if keep_tfor.contains(&i) {
+                    continue;
+                }
+                // SAFETY: the tag is the slot's entry tag (checked on
+                // entry) or the kind the exit analysis pins its payload
+                // to; the payload sits in reg_state[i].
+                frame[i] = unsafe {
                     Value::pack(
                         tag,
                         crate::runtime::value::RawVal {
-                            zero: reg_state[i] as u64,
+                            zero: regs[i] as u64,
                         },
                     )
                 };

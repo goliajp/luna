@@ -70,8 +70,7 @@ impl Vm {
         // at the end of the dispatch block (success +
         // deopt paths both fall through to the restore).
         let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
-        entry_tags.clear();
-        entry_tags.reserve(max_stack);
+        entry_tags.resize(max_stack, 0);
         // This trace was admitted via the
         // `downrec_link.is_some()` arm rather than the normal
         // `dispatchable=true` arm. The pre-invoke path
@@ -89,7 +88,6 @@ impl Vm {
         // signal that the trace closes via DownRec.
         let is_downrec_entry = ct.downrec_link.is_some();
         let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
-        reg_state.clear();
         // When admitting a downrec trace,
         // size the buffer to `window_size + 1` so the lowerer
         // can `load(I64, ..., reg_state, window_size * 8)`
@@ -101,7 +99,9 @@ impl Vm {
         } else {
             window_size_us
         };
+        // marshal-in fills the frame's registers; the rest start at zero
         reg_state.resize(reg_state_len, 0i64);
+        reg_state[max_stack.min(reg_state_len)..].fill(0);
         let dispatch_ok = self.trace_marshal_in(
             base_us,
             max_stack,
@@ -215,63 +215,45 @@ impl Vm {
         base_us: usize,
         max_stack: usize,
         compile_entry_tags: &[u8],
-        entry_tags: &mut Vec<u8>,
+        entry_tags: &mut [u8],
         reg_state: &mut [i64],
     ) -> bool {
-        for i in 0..max_stack {
-            let v = self.stack[base_us + i];
-            let (tag, raw) = v.unpack();
-            let want = compile_entry_tags.get(i).copied();
-            if want == Some(crate::jit::trace::ENTRY_TAG_ANY) {
+        use crate::runtime::value::raw;
+        let frame = &self.stack[base_us..base_us + max_stack];
+        let regs = &mut reg_state[..max_stack];
+        let tags = &mut entry_tags[..max_stack];
+        for (i, v) in frame.iter().enumerate() {
+            let (tag, payload) = v.unpack();
+            // SAFETY: the raw payload of the slot's own value.
+            regs[i] = unsafe { payload.zero as i64 };
+            match compile_entry_tags.get(i).copied() {
                 // not read before the trace writes it: any value enters,
                 // and an exit that has not written it leaves it as it is
-                // (the restore skips a slot whose entry tag is ANY)
-                entry_tags.push(crate::jit::trace::ENTRY_TAG_ANY);
-                // SAFETY: the raw payload of the slot's own value.
-                reg_state[i] = unsafe { raw.zero as i64 };
-                continue;
+                Some(crate::jit::trace::ENTRY_TAG_ANY) => {
+                    tags[i] = crate::jit::trace::ENTRY_TAG_ANY;
+                    continue;
+                }
+                // The trace's IR is specialised to the compile-time entry
+                // tags: on another, body ops would misread the raw bits (a
+                // Str pointer as an Int payload). The interpreter runs this
+                // entry; the trace stays for later ones.
+                Some(want) if tag != want => return false,
+                _ => {}
             }
-            entry_tags.push(tag);
-            // Entry tag guard. The trace's IR
-            // is specialised to the compile-time entry tags
-            // (via current_kinds propagation from
-            // from_entry_tag). A runtime tag mismatch means
-            // body ops would mis-interpret raw bits (e.g.
-            // treat a Str pointer as Int payload → garbage).
-            // Skip dispatch on mismatch so interp handles
-            // this entry shape; the trace stays cached for
-            // future entries that match.
-            if want.is_some_and(|w| tag != w) {
+            // the payload of anything else cannot stand for the value
+            if !matches!(
+                tag,
+                raw::INT
+                    | raw::FLOAT
+                    | raw::TABLE
+                    | raw::CLOSURE
+                    | raw::NATIVE
+                    | raw::STR
+                    | raw::NIL
+            ) {
                 return false;
             }
-            match tag {
-                // Int / Float / Table / Nil all marshal
-                // to raw payload cleanly; the trace's IR
-                // treats the 8-byte slot as an i64 (with
-                // f64 ops bitcasting around the boundary).
-                crate::runtime::value::raw::INT
-                | crate::runtime::value::raw::FLOAT
-                | crate::runtime::value::raw::TABLE
-                | crate::runtime::value::raw::CLOSURE
-                // Native iter slots (e.g.
-                // R[A] = ipairs_iter) are present in
-                // generic-for traces; the raw bits are a
-                // valid `*mut NativeClosure` and round-trip
-                // cleanly.
-                | crate::runtime::value::raw::NATIVE
-                // Str slots show up in
-                // string-concat traces; raw bits = `*mut
-                // LuaStr` (interned, GC-managed). Round-
-                // trips cleanly as a heap pointer.
-                | crate::runtime::value::raw::STR
-                | crate::runtime::value::raw::NIL => {
-                    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-                    reg_state[i] = unsafe { raw.zero as i64 };
-                }
-                _ => {
-                    return false;
-                }
-            }
+            tags[i] = tag;
         }
         true
     }
