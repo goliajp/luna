@@ -1,8 +1,8 @@
 use super::*;
 
 /// Arithmetic that may produce a float.
-pub(super) fn emit_float_arith_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_float_arith_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -38,15 +38,15 @@ pub(super) fn emit_float_arith_op<M: Module>(
                         lw.bcx.ins().fcvt_from_sint(types::F64, raw)
                     }
                 };
-                let mut pow_sig = lw.module.make_signature();
+                let mut pow_sig = lw.bcx.make_signature();
                 pow_sig.params.push(AbiParam::new(types::F64));
                 pow_sig.params.push(AbiParam::new(types::F64));
                 pow_sig.returns.push(AbiParam::new(types::F64));
                 let pow_id = lw
-                    .module
+                    .bcx
                     .declare_function("pow", Linkage::Import, &pow_sig)
                     .ok()?;
-                let pow_ref = lw.module.declare_func_in_func(pow_id, lw.bcx.func);
+                let pow_ref = lw.bcx.import_func(pow_id);
                 let call = lw.bcx.ins().call(pow_ref, &[lhs, rhs]);
                 let mut r = lw.bcx.inst_results(call)[0];
                 // 5.4+ `luai_numpow` squares by multiplying, which can
@@ -106,8 +106,8 @@ pub(super) fn emit_float_arith_op<M: Module>(
 }
 
 /// Integer-division, modulo, bitwise ops and the unary ops.
-pub(super) fn emit_int_arith_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_int_arith_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {

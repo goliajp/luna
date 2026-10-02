@@ -1,8 +1,8 @@
 use super::*;
 
 /// `TraceEnd::DownRec`: the caller-pc guard and the stitch sentinel.
-pub(super) fn emit_downrec_tail<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_downrec_tail<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     dr_return_pc: u32,
     _target_proto_id: usize,
@@ -136,9 +136,7 @@ pub(super) fn emit_downrec_tail<M: Module>(
     // registers it would miss the same way forever.
     lw.bcx.switch_to_block(deopt_blk);
     lw.bcx.seal_block(deopt_blk);
-    let r = lw
-        .module
-        .declare_func_in_func(suppress_admit_id, lw.bcx.func);
+    let r = lw.bcx.import_func(suppress_admit_id);
     lw.bcx.ins().call(r, &[]);
     emit_store_back_and_return_pc(
         &mut lw.bcx,
@@ -190,7 +188,7 @@ pub(super) fn emit_downrec_tail<M: Module>(
 }
 
 /// A self-link close: a deopt tail.
-pub(super) fn emit_self_link_tail<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) {
+pub(super) fn emit_self_link_tail<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let Plan {
         record, max_stack, ..
     } = *pl;
@@ -239,9 +237,7 @@ pub(super) fn emit_self_link_tail<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Pla
     // depth>0 slots into the extended buffer; the writes are
     // simply dead here. As for the downrec miss, the interpreter runs
     // the head op before the trace is entered again.
-    let r = lw
-        .module
-        .declare_func_in_func(suppress_admit_id, lw.bcx.func);
+    let r = lw.bcx.import_func(suppress_admit_id);
     lw.bcx.ins().call(r, &[]);
     emit_store_back_and_return_pc(
         &mut lw.bcx,

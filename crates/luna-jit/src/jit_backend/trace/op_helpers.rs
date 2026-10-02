@@ -162,12 +162,7 @@ pub(super) fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -
 /// overflowing, and `floor(x / k) = (t / k) ^ s` with an unsigned
 /// division, which Cranelift strength-reduces to a multiply; the
 /// remainder is then `x - k * q` with no sign adjustment.
-pub(super) fn emit_floor_divmod_by(
-    bcx: &mut FunctionBuilder<'_>,
-    op: Op,
-    a: Value,
-    k: i64,
-) -> Value {
+pub(super) fn emit_floor_divmod_by<E: Emit>(bcx: &mut E, op: Op, a: Value, k: i64) -> Value {
     let kv = bcx.ins().iconst(types::I64, k);
     if k > 0 {
         let s = bcx.ins().sshr_imm_u(a, 63);
@@ -197,12 +192,7 @@ pub(super) fn emit_floor_divmod_by(
 /// Lua's integer `//` or `%` for a nonzero divisor: rounded toward minus
 /// infinity (the remainder takes the divisor's sign), and `x // -1` wraps
 /// where a machine division by -1 would trap on minint.
-pub(super) fn emit_floor_divmod(
-    bcx: &mut FunctionBuilder<'_>,
-    op: Op,
-    a: Value,
-    b: Value,
-) -> Value {
+pub(super) fn emit_floor_divmod<E: Emit>(bcx: &mut E, op: Op, a: Value, b: Value) -> Value {
     let minus_one = bcx.ins().iconst(types::I64, -1);
     let one = bcx.ins().iconst(types::I64, 1);
     let zero = bcx.ins().iconst(types::I64, 0);

@@ -50,11 +50,7 @@ impl OpCx<'_> {
 }
 
 /// Lowers one op of the body; `None` when the trace cannot be compiled.
-pub(super) fn emit_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
-    pl: &Plan<'_>,
-    oc: &OpCx<'_>,
-) -> Option<()> {
+pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     match oc.op {
         Op::Jmp | Op::Move | Op::LoadI | Op::LoadF | Op::LoadNil | Op::LoadK => {
             emit_basic_op(lw, pl, oc)

@@ -5,8 +5,8 @@ use cranelift_codegen::ir::MemFlagsData;
 /// the slot is there and holds that type; otherwise the trace leaves for
 /// the interpreter, which runs the read. A helper call in its place
 /// doubled the IR a read takes, and Cranelift's time with it.
-pub(super) fn array_read<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn array_read<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     t: Value,
@@ -40,8 +40,8 @@ pub(super) fn array_read<M: Module>(
 /// inline store and leaves the builder in its miss block, where the
 /// caller emits the helper store and then calls [`array_write_join`] with
 /// the returned block.
-pub(super) fn array_write(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn array_write<E: Emit>(
+    bcx: &mut E,
     t: Value,
     key: Value,
     val: Value,
@@ -59,7 +59,7 @@ pub(super) fn array_write(
 }
 
 /// Joins the helper store with the inline one [`array_write`] emitted.
-pub(super) fn array_write_join(bcx: &mut FunctionBuilder<'_>, stored_inline: Option<Block>) {
+pub(super) fn array_write_join<E: Emit>(bcx: &mut E, stored_inline: Option<Block>) {
     if let Some(stored_inline) = stored_inline {
         bcx.ins().jump(stored_inline, &[]);
         bcx.switch_to_block(stored_inline);

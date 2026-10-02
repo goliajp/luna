@@ -6,7 +6,7 @@ use super::*;
 // in an inlined frame, the frames are rebuilt first. An exit to the
 // head also stops the dispatcher from entering the trace again before
 // the interpreter has run the head op (see `emit_tagged_exit`).
-pub(super) fn guard_exit<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>, pc: u32, i: usize) {
+pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: usize) {
     let Plan {
         record,
         head_proto,
@@ -40,7 +40,6 @@ pub(super) fn guard_exit<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>, pc
         let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
-            &mut lw.module,
             mat_sunk_id,
             &lw.escape,
             &lw.virt_vars,
@@ -65,14 +64,13 @@ pub(super) fn guard_exit<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>, pc
         ));
         let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
         let ptr_arg = emit_chain_ptr_arg(
-            &mut lw.module,
             &mut lw.bcx,
             &chain_for_helper,
             chain_ptr,
             opts.aot,
             &mut lw.defined_aot_data,
         );
-        let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
+        let mat_ref = lw.bcx.import_func(materialize_id);
         let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
         emit_store_back_and_return_site(
             &mut lw.bcx,
@@ -89,7 +87,6 @@ pub(super) fn guard_exit<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>, pc
         let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
-            &mut lw.module,
             mat_sunk_id,
             &lw.escape,
             &lw.virt_vars,
@@ -108,7 +105,6 @@ pub(super) fn guard_exit<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>, pc
         lw.per_exit_kinds.push((side_exit_pc, snapshot, side_box));
         emit_tagged_exit(
             &mut lw.bcx,
-            &mut lw.module,
             suppress_admit_id,
             &lw.regs_full[..max_stack],
             &lw.stored,

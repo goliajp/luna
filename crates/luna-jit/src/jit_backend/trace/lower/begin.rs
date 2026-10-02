@@ -2,9 +2,8 @@ use super::*;
 
 /// The emit-pass state at the loop head.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn begin_body<'f, 'm, M: Module>(
-    module: &'m mut M,
-    bcx: FunctionBuilder<'f>,
+pub(super) fn begin_body<E: Emit>(
+    bcx: E,
     pl: &Plan<'_>,
     h: Helpers,
     head: EntryRegs,
@@ -13,7 +12,7 @@ pub(super) fn begin_body<'f, 'm, M: Module>(
     sunk: (Vec<Option<Vec<Variable>>>, Vec<Option<Vec<RegKind>>>, u32),
     flush_ctx: Option<FlushCtx>,
     blocks: (Option<Block>, Block),
-) -> Lower<'f, 'm, M> {
+) -> Lower<E> {
     let EntryRegs {
         reg_state,
         trace_fn_sig_ref,
@@ -162,7 +161,6 @@ pub(super) fn begin_body<'f, 'm, M: Module>(
     // by a constant needs no runtime guard.
     let known_int: Vec<Option<i64>> = vec![None; window_size_us];
     Lower {
-        module,
         bcx,
         h,
         reg_state,

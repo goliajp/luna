@@ -2,7 +2,7 @@ use super::*;
 
 /// The emit pass over the body: enters the loop head and lowers each
 /// recorded op up to `effective_end`.
-pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> Option<()> {
+pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
     let Plan {
         record,
         max_stack,
@@ -98,9 +98,7 @@ pub(super) fn emit_body<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) -> 
                 // Read piece slot raw bits + buf ptr.
                 let piece_raw = lw.bcx.use_var(regs[ba.piece_slot as usize]);
                 let buf_ptr = lw.bcx.use_var(fctx.buf_var);
-                let extend_ref = lw
-                    .module
-                    .declare_func_in_func(str_buf_extend_id, lw.bcx.func);
+                let extend_ref = lw.bcx.import_func(str_buf_extend_id);
                 let call_inst = lw.bcx.ins().call(extend_ref, &[buf_ptr, piece_raw]);
                 let status = lw.bcx.inst_results(call_inst)[0];
                 // Branch on -1 (signed less than 0) → deopt.
