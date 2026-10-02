@@ -61,6 +61,8 @@ impl Vm {
                 // gate held).
                 (None, body, true)
             }
+        } else if !ct.has_any_side_wired.get() {
+            (None, raw_ret, false)
         } else {
             // Dispatcher-level side-trace invocation,
             // rather than an IR gate (`load + icmp +
@@ -218,33 +220,44 @@ impl Vm {
         if !fast_path_taken {
             use crate::jit::trace::ExitTag;
             use crate::runtime::value::raw;
+            // the raw tag each exit tag writes, by discriminant (a table
+            // load where a `match` per slot was an indirect branch);
+            // `Untouched` has none
+            const UNTOUCHED: u8 = u8::MAX;
+            const RAW_OF: [u8; 7] = {
+                let mut m = [0; 7];
+                m[ExitTag::Untouched as usize] = UNTOUCHED;
+                m[ExitTag::Int as usize] = raw::INT;
+                m[ExitTag::Float as usize] = raw::FLOAT;
+                m[ExitTag::Table as usize] = raw::TABLE;
+                m[ExitTag::Closure as usize] = raw::CLOSURE;
+                // written nil (LoadNil): a nil whatever the entry tag
+                m[ExitTag::Nil as usize] = raw::NIL;
+                m[ExitTag::Str as usize] = raw::STR;
+                m
+            };
             let frame = &mut self.stack[base_us..base_us + slot_count];
             let regs = &reg_state[..slot_count];
             for (i, &exit_tag) in exit_tags_for_pc.iter().enumerate() {
-                let tag = match exit_tag {
-                    // not written: the stack holds the value it entered
-                    // with, unless a side trace ran after the trace that
-                    // wrote it
-                    ExitTag::Untouched if i < max_stack => {
+                let mut tag = RAW_OF[exit_tag as usize];
+                if tag == UNTOUCHED {
+                    if i >= max_stack {
+                        tag = raw::NIL;
+                    } else {
+                        // not written: the stack holds the value it entered
+                        // with, unless a side trace ran after the trace that
+                        // wrote it
                         if !child_ran {
                             continue;
                         }
-                        match entry_tags[i] {
-                            // not checked on entry and not written since:
-                            // the stack still holds the value
-                            crate::jit::trace::ENTRY_TAG_ANY => continue,
-                            t => t,
+                        tag = entry_tags[i];
+                        // not checked on entry and not written since: the
+                        // stack still holds the value
+                        if tag == crate::jit::trace::ENTRY_TAG_ANY {
+                            continue;
                         }
                     }
-                    ExitTag::Untouched => raw::NIL,
-                    ExitTag::Int => raw::INT,
-                    ExitTag::Float => raw::FLOAT,
-                    ExitTag::Table => raw::TABLE,
-                    ExitTag::Closure => raw::CLOSURE,
-                    // written nil (LoadNil): a nil whatever the entry tag
-                    ExitTag::Nil => raw::NIL,
-                    ExitTag::Str => raw::STR,
-                };
+                }
                 if keep_tfor.contains(&i) {
                     continue;
                 }
