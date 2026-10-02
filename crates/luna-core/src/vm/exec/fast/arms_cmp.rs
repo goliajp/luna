@@ -27,7 +27,7 @@ macro_rules! fast_cmp_arms {
                     // SAFETY: a jump target is inside the function
                     if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) && {
                         save!();
-                        $vm.trace_start_at_back_edge(cl!(), base!(), target, None, $pc)
+                        $vm.trace_start_at_back_edge(cl!(), base!(), target, None)
                     } {
                         // the recording sees the next instruction from
                         // the loop head
