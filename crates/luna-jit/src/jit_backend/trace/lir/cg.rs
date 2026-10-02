@@ -177,6 +177,9 @@ pub(crate) struct Gen<'a, M: Masm> {
     spill_base: i32,
     /// A comparison whose result only feeds the next branch: its flags.
     pub(crate) pending: Option<(u32, Cond)>,
+    /// Parallel moves being collected (integer, float), and their order.
+    mv: [Vec<(Loc, Src)>; 2],
+    seq: Vec<(Loc, Src)>,
 }
 
 fn bits_of(set: u64) -> Vec<u8> {
@@ -203,6 +206,10 @@ pub(crate) fn generate<M: Masm>(
     let spill_base = off;
     off += 8 * al.spill_slots as i32;
     let locals = ((off + 15) & !15) as u32;
+    // spill and slot offsets must fit every target's scaled load offset
+    if locals > 32_000 {
+        return Err("frame too large");
+    }
     let mut g = Gen {
         lir,
         an,
@@ -212,6 +219,8 @@ pub(crate) fn generate<M: Masm>(
         slot_off,
         spill_base,
         pending: None,
+        mv: [Vec::new(), Vec::new()],
+        seq: Vec::new(),
     };
     g.labels = (0..lir.blocks.len()).map(|_| g.m.new_label()).collect();
     g.m.prologue(
@@ -343,20 +352,28 @@ impl<M: Masm> Gen<'_, M> {
         if dl == sl || dl == Loc::None {
             return;
         }
-        let mut moves = vec![(dl, Src::Loc(sl))];
-        self.moves(&mut moves, self.is_float(s));
+        let float = self.is_float(s);
+        self.one_move(dl, Src::Loc(sl), float);
     }
 
-    /// Performs `moves` (all of one class) as a parallel move.
-    pub(crate) fn moves(&mut self, moves: &mut Vec<(Loc, Src)>, float: bool) {
+    /// Performs the moves collected in `self.mv[k]` (`k` 1 for floats) as
+    /// one parallel move.
+    fn flush_moves(&mut self, k: usize) {
+        let float = k == 1;
         let park = if float {
             Loc::Reg(M::FSCRATCH[1])
         } else {
             Loc::Reg(M::SCRATCH[1])
         };
-        for (d, s) in sequence(moves, park) {
+        let mut mv = std::mem::take(&mut self.mv[k]);
+        let mut seq = std::mem::take(&mut self.seq);
+        sequence(&mut mv, park, &mut seq);
+        for &(d, s) in &seq {
             self.one_move(d, s, float);
         }
+        mv.clear();
+        self.mv[k] = mv;
+        self.seq = seq;
     }
 
     fn one_move(&mut self, d: Loc, s: Src, float: bool) {
@@ -391,19 +408,18 @@ impl<M: Masm> Gen<'_, M> {
 
     /// Moves the arguments `args` into block `b`'s parameters.
     fn edge_moves(&mut self, b: u32, args: &[u32]) {
-        let params = &self.lir.blocks[b as usize].params;
-        let mut ints = Vec::new();
-        let mut floats = Vec::new();
+        let lir = self.lir;
+        let params = &lir.blocks[b as usize].params;
+        if params.is_empty() {
+            return;
+        }
         for (&p, &a) in params.iter().zip(args) {
             let m = (self.loc(p), Src::Loc(self.loc(a)));
-            if self.is_float(p) {
-                floats.push(m);
-            } else {
-                ints.push(m);
-            }
+            let k = usize::from(self.is_float(p));
+            self.mv[k].push(m);
         }
-        self.moves(&mut ints, false);
-        self.moves(&mut floats, true);
+        self.flush_moves(0);
+        self.flush_moves(1);
     }
 
     pub(crate) fn jump(&mut self, b: u32, args: &[u32], next: u32) {
@@ -454,7 +470,6 @@ impl<M: Masm> Gen<'_, M> {
             let r = self.src(i.a, 0);
             self.m.mov(M::CALL_TARGET, r);
         }
-        let (mut ints, mut floats) = (Vec::new(), Vec::new());
         let (mut ni, mut nf) = (0, 0);
         for (k, (&a, &t)) in args.iter().zip(params).enumerate() {
             let s = Src::Loc(self.loc(a));
@@ -462,15 +477,15 @@ impl<M: Masm> Gen<'_, M> {
                 (ni, nf) = (k, k);
             }
             if t.is_float() {
-                floats.push((Loc::Reg(M::FLOAT_ARGS[nf]), s));
+                self.mv[1].push((Loc::Reg(M::FLOAT_ARGS[nf]), s));
                 nf += 1;
             } else {
-                ints.push((Loc::Reg(M::INT_ARGS[ni]), s));
+                self.mv[0].push((Loc::Reg(M::INT_ARGS[ni]), s));
                 ni += 1;
             }
         }
-        self.moves(&mut ints, false);
-        self.moves(&mut floats, true);
+        self.flush_moves(0);
+        self.flush_moves(1);
         match addr {
             Some(a) => self.m.call_abs(a),
             None => self.m.call_reg(M::CALL_TARGET),

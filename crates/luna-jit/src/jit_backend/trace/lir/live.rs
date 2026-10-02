@@ -1,11 +1,16 @@
-//! Block layout, liveness and live intervals.
+//! Block layout and live intervals.
 //!
 //! Values and variable homes share one virtual-register space: value `n` is
 //! vreg `n`, variable `k` is vreg `n_values + k`. Each instruction `k` in
 //! layout order reads its operands at position `2k` and writes its result at
-//! `2k + 1`; a block's parameters are written by the branches into it. Every
-//! vreg gets one interval, the hull of the positions where it is live: an
-//! over-approximation that keeps allocation a single linear scan.
+//! `2k + 1`; a block's parameters are written by the branches into it.
+//!
+//! Blocks are laid out in reverse post-order, the guarded path first and its
+//! exits after it. In that order every path from a value's definition to a
+//! use that does not take a back edge stays between the two, so a value's
+//! interval is the hull of its occurrences, extended over every loop it is
+//! live into. A variable is written in several places and carried around
+//! loops: its interval covers every loop it occurs in.
 
 use super::*;
 
@@ -25,14 +30,14 @@ pub(crate) struct Analysis {
     pub(crate) uses: Vec<u32>,
     /// Positions of calls (the operand-read position `2k`), ascending.
     pub(crate) calls: Vec<u32>,
-    /// Variables live into the entry block (read before any write).
+    /// Variables read anywhere: they start out zero, as with Cranelift,
+    /// where a variable read on a path that never wrote it is zero.
     pub(crate) entry_vars: Vec<u32>,
 }
 
 /// Calls `f` with each vreg `inst` reads.
 pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     let nv = lir.value_ty.len() as u32;
-    let args = &lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize];
     match i.op {
         Op::Iconst(_) | Op::Fconst(_) | Op::StackAddr(..) | Op::StackLoad(..) => {}
         Op::Bin(_) | Op::Icmp(_) | Op::Fcmp(_) | Op::Store(_) => {
@@ -46,10 +51,13 @@ pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
             f(i.b);
             f(i.c);
         }
-        Op::Jump | Op::Call => args.iter().for_each(|&x| f(x)),
-        Op::Brif(_) | Op::CallIndirect => {
-            f(i.a);
-            args.iter().for_each(|&x| f(x));
+        Op::Jump | Op::Call | Op::Brif(_) | Op::CallIndirect => {
+            if matches!(i.op, Op::Brif(_) | Op::CallIndirect) {
+                f(i.a);
+            }
+            for &x in &lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize] {
+                f(x);
+            }
         }
         Op::Return => {
             if i.a != NONE {
@@ -78,58 +86,43 @@ pub(crate) fn for_defs(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     }
 }
 
-fn succs(lir: &Lir, b: u32) -> (u32, u32) {
+fn succs(lir: &Lir, b: u32) -> [u32; 2] {
     let last = lir.blocks[b as usize].last;
     if last == NONE {
-        return (NONE, NONE);
+        return [NONE, NONE];
     }
     let i = &lir.insts[last as usize];
     match i.op {
-        Op::Jump => (i.a, NONE),
-        Op::Brif(_) => (i.b, i.c),
-        _ => (NONE, NONE),
+        Op::Jump => [i.a, NONE],
+        // the guarded path is visited last, so it is laid out first
+        Op::Brif(_) => [i.c, i.b],
+        _ => [NONE, NONE],
     }
 }
 
-struct Bits {
-    words: usize,
-    data: Vec<u64>,
-}
-
-impl Bits {
-    fn new(rows: usize, bits: usize) -> Bits {
-        let words = bits.div_ceil(64);
-        Bits {
-            words,
-            data: vec![0; rows * words],
-        }
-    }
-    fn row(&self, r: usize) -> &[u64] {
-        &self.data[r * self.words..(r + 1) * self.words]
-    }
-    fn set(&mut self, r: usize, b: u32) {
-        self.data[r * self.words + (b / 64) as usize] |= 1 << (b % 64);
-    }
-    fn get(&self, r: usize, b: u32) -> bool {
-        self.data[r * self.words + (b / 64) as usize] & (1 << (b % 64)) != 0
-    }
-}
-
+/// Reverse post-order of the blocks reachable from the entry block.
 fn layout(lir: &Lir) -> Vec<u32> {
     let n = lir.blocks.len();
     let mut seen = vec![false; n];
-    let mut stack = vec![0u32];
+    let mut post = Vec::with_capacity(n);
+    let mut stack: Vec<(u32, u8)> = vec![(0, 0)];
     seen[0] = true;
-    while let Some(b) = stack.pop() {
-        let (s1, s2) = succs(lir, b);
-        for s in [s1, s2] {
-            if s != NONE && !seen[s as usize] {
-                seen[s as usize] = true;
-                stack.push(s);
-            }
+    while let Some(top) = stack.last_mut() {
+        let (b, k) = *top;
+        if k == 2 {
+            post.push(b);
+            stack.pop();
+            continue;
+        }
+        top.1 += 1;
+        let s = succs(lir, b)[k as usize];
+        if s != NONE && !seen[s as usize] {
+            seen[s as usize] = true;
+            stack.push((s, 0));
         }
     }
-    (0..n as u32).filter(|&b| seen[b as usize]).collect()
+    post.reverse();
+    post
 }
 
 pub(crate) fn analyze(lir: &Lir) -> Analysis {
@@ -148,84 +141,45 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
         block_at[b as usize] = (first, code.len() as u32);
     }
 
-    // per laid-out block (by index in `order`): uses before defs, defs
-    let nb = order.len();
-    let mut slot_of = vec![NONE; lir.blocks.len()];
-    for (k, &b) in order.iter().enumerate() {
-        slot_of[b as usize] = k as u32;
-    }
-    let mut gen_set = Bits::new(nb, nreg);
-    let mut kill = Bits::new(nb, nreg);
-    let mut uses = vec![0u32; nv as usize];
-    for (k, &b) in order.iter().enumerate() {
-        let (lo, hi) = block_at[b as usize];
-        for &ii in &code[lo as usize..hi as usize] {
-            let inst = &lir.insts[ii as usize];
-            for_uses(lir, inst, |r| {
-                if r < nv {
-                    uses[r as usize] += 1;
-                }
-                if !kill.get(k, r) {
-                    gen_set.set(k, r);
-                }
-            });
-            for_defs(lir, inst, |r| kill.set(k, r));
-        }
-    }
-    let mut live_in = Bits::new(nb, nreg);
-    let mut live_out = Bits::new(nb, nreg);
-    let w = live_in.words;
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for k in (0..nb).rev() {
-            let (s1, s2) = succs(lir, order[k]);
-            for wi in 0..w {
-                let mut out = 0u64;
-                for s in [s1, s2] {
-                    if s != NONE {
-                        out |= live_in.row(slot_of[s as usize] as usize)[wi];
-                    }
-                }
-                let inn = gen_set.row(k)[wi] | (out & !kill.row(k)[wi]);
-                if out != live_out.data[k * w + wi] || inn != live_in.data[k * w + wi] {
-                    changed = true;
-                    live_out.data[k * w + wi] = out;
-                    live_in.data[k * w + wi] = inn;
-                }
-            }
-        }
-    }
-
     let mut start = vec![NONE; nreg];
     let mut end = vec![0u32; nreg];
+    let mut uses = vec![0u32; nv as usize];
+    let mut read = vec![false; lir.var_ty.len()];
+    let mut calls = Vec::new();
+    // (loop head position, back edge position)
+    let mut loops: Vec<(u32, u32)> = Vec::new();
     let mut touch = |r: u32, p: u32| {
         let r = r as usize;
-        if start[r] == NONE || p < start[r] {
+        if start[r] == NONE {
             start[r] = p;
         }
         if p > end[r] {
             end[r] = p;
         }
     };
-    let mut calls = Vec::new();
-    for (k, &b) in order.iter().enumerate() {
+    for &b in &order {
         let (lo, hi) = block_at[b as usize];
-        for r in 0..nreg as u32 {
-            if live_in.get(k, r) {
-                touch(r, 2 * lo);
-            }
-            if live_out.get(k, r) {
-                touch(r, 2 * hi.max(lo + 1) - 1);
-            }
-        }
         for (off, &ii) in code[lo as usize..hi as usize].iter().enumerate() {
             let p = 2 * (lo + off as u32);
             let inst = &lir.insts[ii as usize];
-            for_uses(lir, inst, |r| touch(r, p));
+            for_uses(lir, inst, |r| {
+                if r < nv {
+                    uses[r as usize] += 1;
+                } else {
+                    read[(r - nv) as usize] = true;
+                }
+                touch(r, p);
+            });
             for_defs(lir, inst, |r| touch(r, p + 1));
             if matches!(inst.op, Op::Call | Op::CallIndirect) {
                 calls.push(p);
+            }
+        }
+        if hi > lo {
+            for s in succs(lir, b) {
+                if s != NONE && block_at[s as usize].0 <= lo {
+                    loops.push((2 * block_at[s as usize].0, 2 * hi - 1));
+                }
             }
         }
     }
@@ -233,10 +187,29 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
     if lir.arg0 != NONE {
         touch(lir.arg0, 0);
     }
-    let entry_vars = (nv..nreg as u32)
-        .filter(|&r| live_in.get(0, r))
-        .map(|r| r - nv)
-        .collect();
+    let mut entry_vars = Vec::new();
+    for (k, &r) in read.iter().enumerate() {
+        if r {
+            entry_vars.push(k as u32);
+            start[nv as usize + k] = 0;
+        }
+    }
+    // inner loops first, so an outer loop sees what they extended
+    loops.sort_unstable_by_key(|&(h, e)| e - h);
+    for &(h, e) in &loops {
+        for r in 0..nreg {
+            let s = start[r];
+            if s == NONE || s > e || end[r] < h {
+                continue;
+            }
+            if r >= nv as usize {
+                start[r] = s.min(h);
+                end[r] = end[r].max(e);
+            } else if s < h {
+                end[r] = end[r].max(e);
+            }
+        }
+    }
     Analysis {
         order,
         code,
@@ -247,15 +220,5 @@ pub(crate) fn analyze(lir: &Lir) -> Analysis {
         uses,
         calls,
         entry_vars,
-    }
-}
-
-impl Analysis {
-    /// Whether vreg `r` is live across a call (so a caller-saved register
-    /// would not survive).
-    pub(crate) fn crosses_call(&self, r: u32) -> bool {
-        let (s, e) = (self.start[r as usize], self.end[r as usize]);
-        let k = self.calls.partition_point(|&c| c <= s);
-        k < self.calls.len() && self.calls[k] < e
     }
 }

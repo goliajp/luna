@@ -156,20 +156,20 @@ impl<M: Masm> Gen<'_, M> {
                 self.jump(i.a, &args, next);
             }
             Op::Brif(n_then) => self.brif(&i, n_then, next),
-            Op::Call => {
-                let f = &self.lir.funcs[i.a as usize];
-                if f.addr == 0 || !Self::fits(&f.params) {
+            Op::Call | Op::CallIndirect => {
+                let lir = self.lir;
+                let (f, addr) = match i.op {
+                    Op::Call => {
+                        let f = &lir.funcs[i.a as usize];
+                        (f, Some(f.addr))
+                    }
+                    _ => (&lir.sigs[i.b as usize], None),
+                };
+                let params = lir.params(f);
+                if addr == Some(0) || !Self::fits(params) {
                     return Err("call");
                 }
-                let (addr, params) = (f.addr, f.params.clone());
-                self.call(&i, Some(addr), &params);
-            }
-            Op::CallIndirect => {
-                let params = self.lir.sigs[i.b as usize].0.clone();
-                if !Self::fits(&params) {
-                    return Err("call");
-                }
-                self.call(&i, None, &params);
+                self.call(&i, addr, params);
             }
             Op::Return => {
                 if i.a != NONE {
