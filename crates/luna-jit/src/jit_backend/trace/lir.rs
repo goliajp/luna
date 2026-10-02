@@ -11,7 +11,9 @@ mod cg_ops;
 mod code;
 mod dump;
 mod live;
+mod masm;
 mod pmove;
+mod record;
 
 #[cfg(target_arch = "aarch64")]
 mod a64;
