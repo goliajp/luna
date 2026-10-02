@@ -30,6 +30,7 @@ pub(super) struct RuntimeHelpers {
     pub(super) get_int_id: FuncId,
     pub(super) suppress_admit_id: FuncId,
     pub(super) math_fn_check_id: FuncId,
+    pub(super) str_sub_id: FuncId,
     pub(super) len_checked_id: FuncId,
     pub(super) upval_get_id: FuncId,
     pub(super) head_closure_id: FuncId,
@@ -337,6 +338,15 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         )
         .ok()?;
 
+    let mut str_sub_sig = module.make_signature();
+    for _ in 0..3 {
+        str_sub_sig.params.push(AbiParam::new(types::I64));
+    }
+    str_sub_sig.returns.push(AbiParam::new(types::I64));
+    let str_sub_id = module
+        .declare_function("luna_jit_str_sub", Linkage::Import, &str_sub_sig)
+        .ok()?;
+
     let mut len_sig = module.make_signature();
     len_sig.params.push(AbiParam::new(types::I64));
     len_sig.returns.push(AbiParam::new(types::I64));
@@ -414,6 +424,7 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         get_int_id,
         suppress_admit_id,
         math_fn_check_id,
+        str_sub_id,
         len_checked_id,
         upval_get_id,
         head_closure_id,

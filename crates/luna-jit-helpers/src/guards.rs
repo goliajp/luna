@@ -39,9 +39,9 @@ pub unsafe extern "C" fn luna_jit_park_deopt() {
     }
 }
 
-/// Whether `_ENV.math.<name>` of the running closure is still the
-/// library function the JIT inlined for `math.<name>(...)`: 1 if it is,
-/// 0 otherwise. Raw reads suffice: a field that is present is found
+/// Whether `_ENV.<lib>.<name>` of the running closure (`lib` being `math`
+/// or `string`) is still the library function the JIT inlined for
+/// `<lib>.<name>(...)`: 1 if it is, 0 otherwise. Raw reads suffice: a field that is present is found
 /// before any `__index`, and an absent one is not the library function.
 /// The keys are interned strings the compiled code baked in; `_ENV` is
 /// upvalue 0, as the fold matchers require.
@@ -64,6 +64,22 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
     let Value::Native(f) = math.get(Value::Str(name_key)) else {
         return 0;
     };
-    let lib = luna_core::vm::lib_math::inlinable_native(name_key.as_bytes());
+    let lib = match math_key.as_bytes() {
+        b"math" => luna_core::vm::lib_math::inlinable_native(name_key.as_bytes()),
+        b"string" => luna_core::vm::lib_string::inlinable_native(name_key.as_bytes()),
+        _ => None,
+    };
     i64::from(lib.is_some_and(|lib| std::ptr::fn_addr_eq(f.f, lib)))
+}
+
+/// `string.sub(s, i, j)` for the trace JIT, which checked that the call is
+/// the library function and its arguments a string and two integers (`j`
+/// -1 when the call gave none). Returns the result string.
+// SAFETY: `no_mangle` is required for Cranelift's `Linkage::Import` to resolve this symbol from the JIT'd code; this crate is the sole producer of `luna_jit_*` symbols.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_str_sub(s: i64, i: i64, j: i64) -> i64 {
+    // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
+    let vm = unsafe { current_jit_vm() };
+    let s = luna_core::runtime::Gc::from_ptr(s as *mut luna_core::runtime::LuaStr);
+    luna_core::vm::lib_string::str_sub(vm, s, i, j).as_ptr() as i64
 }

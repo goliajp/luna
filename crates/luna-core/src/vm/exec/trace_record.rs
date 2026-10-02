@@ -360,10 +360,32 @@ impl Vm {
                 }
             }
         }
+        let slot = self.field_slot_of(cl, inst, base);
+        let rec = self.jit.active_trace.as_mut().expect("recording");
         if !rec.push(op) {
             // recorder overflow (MAX_TRACE_LEN)
             self.abort_recording("trace-overflow");
+        } else if let (Some(slot), Some(s)) = (slot, rec.field_slots.last_mut()) {
+            *s = slot;
         }
+    }
+
+    /// For `GetField` / `SetField` / `Self`, the hash slot of the table
+    /// operand holding the constant string key, if the key is there.
+    fn field_slot_of(&self, cl: Gc<LuaClosure>, inst: Inst, base: u32) -> Option<u32> {
+        use crate::vm::isa::Op;
+        let (t, k) = match inst.op() {
+            Op::GetField | Op::SelfOp => (inst.b(), inst.c()),
+            Op::SetField => (inst.a(), inst.b()),
+            _ => return None,
+        };
+        let Value::Table(t) = *self.stack.get((base + t) as usize)? else {
+            return None;
+        };
+        let key @ Value::Str(_) = *cl.proto.consts.get(k as usize)? else {
+            return None;
+        };
+        t.find_node_idx(key).map(|i| i as u32)
     }
 
     /// Drop the recording, tallied under `cause`. Counted like a failed

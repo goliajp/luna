@@ -29,6 +29,7 @@ mod op_helpers;
 use math_fold::*;
 use op_helpers::*;
 mod entry;
+mod field_slot;
 mod kinds;
 mod slots;
 use const_operands::{VConst, split_const_operands};
