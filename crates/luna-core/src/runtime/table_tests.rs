@@ -337,3 +337,98 @@ fn length_shortcut_matches_the_border_search() {
         });
     }
 }
+
+/// What a table's layout and contents look like from outside: array and
+/// hash sizes, the length, and the `next` order.
+fn shape(t: &Table) -> String {
+    let mut out = format!(
+        "asize {} nodes {} len {} |",
+        t.asize(),
+        t.nodes().len(),
+        t.len()
+    );
+    let mut k = Value::Nil;
+    while let Some((nk, v)) = t.next(k).unwrap() {
+        out.push_str(&format!(" {nk:?}={v:?}"));
+        k = nk;
+    }
+    out
+}
+
+/// Run `ops` on two fresh tables of one heap (so strings hash alike), one
+/// with the append shortcut and one with the full rehash only; the shapes
+/// after every step must agree. Returns how often the shortcut ran.
+fn same_as_full_rehash(ops: &[&dyn Fn(&mut Heap, &mut Table)]) -> u32 {
+    let mut heap = Heap::new();
+    let a = heap.new_table();
+    let b = heap.new_table();
+    // SAFETY: two distinct live tables of this heap, used one at a time
+    let (a, b) = unsafe { (a.as_mut(), b.as_mut()) };
+    grow::APPEND_REHASHES.with(|c| c.set(0));
+    for (i, op) in ops.iter().enumerate() {
+        op(&mut heap, a);
+        let taken = grow::APPEND_REHASHES.with(|c| c.get());
+        grow::FULL_REHASH_ONLY.with(|c| c.set(true));
+        op(&mut heap, b);
+        grow::FULL_REHASH_ONLY.with(|c| c.set(false));
+        assert_eq!(grow::APPEND_REHASHES.with(|c| c.get()), taken);
+        assert_eq!(shape(a), shape(b), "step {i}");
+    }
+    grow::APPEND_REHASHES.with(|c| c.get())
+}
+
+fn append(n: i64) -> impl Fn(&mut Heap, &mut Table) {
+    move |heap, t| {
+        for _ in 0..n {
+            let k = t.len() + 1;
+            t.set_int(heap, k, Value::Int(k)).unwrap();
+        }
+    }
+}
+
+fn put(k: i64, v: Value) -> impl Fn(&mut Heap, &mut Table) {
+    move |heap, t| t.set_int(heap, k, v).unwrap()
+}
+
+#[test]
+fn appending_past_a_full_array_matches_the_full_rehash() {
+    let taken = same_as_full_rehash(&[&append(300)]);
+    assert!(taken >= 8, "the shortcut ran {taken} times");
+    // holes: the length then picks some border, and a refilled hole
+    same_as_full_rehash(&[
+        &append(40),
+        &put(10, Value::Nil),
+        &put(20, Value::Nil),
+        &append(30),
+        &put(10, Value::Int(1)),
+        &append(100),
+    ]);
+    // keys in the hash part first, then the array fills under them
+    same_as_full_rehash(&[
+        &put(100, Value::Int(1)),
+        &put(5, Value::Int(1)),
+        &append(4),
+        &append(200),
+    ]);
+    // a string key and a shrink: the upper half emptied, then rehashed
+    // by hash inserts, then appended to again
+    same_as_full_rehash(&[
+        &append(64),
+        &|heap: &mut Heap, t: &mut Table| {
+            for k in 33..=64 {
+                t.set_int(heap, k, Value::Nil).unwrap();
+            }
+            for i in 0..40 {
+                let s = Value::Str(heap.intern(format!("s{i}").as_bytes()));
+                t.set(heap, s, Value::Int(i)).unwrap();
+            }
+        },
+        &append(70),
+    ]);
+    // an array part that is not a power of two
+    same_as_full_rehash(&[
+        &|heap: &mut Heap, t: &mut Table| t.ensure_array(heap, 3),
+        &append(3),
+        &append(20),
+    ]);
+}
