@@ -1,4 +1,3 @@
-// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Trace JIT data structures and lowering.
 //!
 //! Where `src/jit/mod.rs` is the *method* JIT (compiles one Proto's
@@ -49,6 +48,7 @@ mod block_params;
 mod compile;
 mod escape;
 mod escape_scan;
+mod escape_sweep;
 mod exits;
 mod lower;
 mod shape;
@@ -60,6 +60,7 @@ use block_params::*;
 pub use compile::*;
 pub use escape::*;
 use escape_scan::*;
+use escape_sweep::*;
 use exits::*;
 use lower::*;
 use shape::*;
