@@ -151,9 +151,6 @@ pub(super) fn emit_table_set_op<M: Module>(
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
-    let Plan {
-        head_proto, opts, ..
-    } = *pl;
     let OpHelpers { set_ids, .. } = lw.h.op;
     let OpCx {
         i, rop, off, ins, ..
@@ -161,74 +158,7 @@ pub(super) fn emit_table_set_op<M: Module>(
     let regs: &[Variable] = &oc.regs;
     match oc.op {
         Op::SetField => {
-            // sunk path: when escape sweep tagged
-            // SetFieldSunkWrite, def_var the source register into
-            // the matching virt slot (array_cap + hash_slot) +
-            // propagate the source RegKind into virt_kinds.
-            if let Some(OpAction::SetFieldSunkWrite {
-                site_idx,
-                hash_slot,
-            }) = lw.escape.op_actions[i]
-                && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
-                && lw.virt_vars[site_idx as usize].is_some()
-            {
-                let array_cap = lw.escape.sites[site_idx as usize].array_cap as usize;
-                let slot = array_cap + hash_slot as usize;
-                let src_kind = lw.current_kinds[off + ins.c() as usize];
-                let v = lw.bcx.use_var(regs[ins.c() as usize]);
-                let vars = lw.virt_vars[site_idx as usize]
-                    .as_ref()
-                    .expect("Sinkable site has virt_vars");
-                lw.bcx.def_var(vars[slot], v);
-                let kinds_vec = lw.virt_kinds[site_idx as usize]
-                    .as_mut()
-                    .expect("Sinkable site has virt_kinds");
-                kinds_vec[slot] = src_kind;
-                return Some(());
-            }
-            // helper path: R[A][K[B]:string] := R[C].
-            // the helpers read the operand as a table. A number,
-            // string or closure (entry-guarded or computed here) leaves
-            // the op to the interpreter; Nil can be a lookahead guess
-            // for a value the recording indexed, so it stays
-            match k_op(&lw.current_kinds, off as u32 + ins.a()) {
-                RegKind::Table | RegKind::Nil => {}
-                RegKind::Unset | RegKind::Unknown => {
-                    lw.dispatchable = false;
-                    lw.dispatch_off_reason =
-                        lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
-                }
-                _ => return None,
-            }
-            let t = lw.bcx.use_var(regs[ins.a() as usize]);
-            let key_v = match head_proto.consts[ins.b() as usize] {
-                luna_core::runtime::Value::Str(s) => s,
-                _ => unreachable!("pre-emit gates Str const at K[B]"),
-            };
-            let key_arg = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                key_v,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
-            let val_kind = k_op(&lw.current_kinds, off as u32 + ins.c());
-            // a value of unknown kind cannot be tagged for the table
-            if val_kind.untyped() {
-                return None;
-            }
-            let val = lw.bcx.use_var(regs[ins.c() as usize]);
-            let done = emit_table_set(
-                &mut lw.bcx,
-                &mut lw.module,
-                &set_ids,
-                t,
-                key_arg,
-                RegKind::Str,
-                val,
-                val_kind,
-            );
-            guard!(lw, pl, done, i, rop.pc);
+            emit_set_field(lw, pl, oc)?;
         }
         Op::SetI => {
             // sunk path: when escape sweep tagged
@@ -348,5 +278,89 @@ pub(super) fn emit_table_set_op<M: Module>(
         }
         _ => unreachable!("routed by emit_op"),
     }
+    Some(())
+}
+
+/// `Op::SetField`: into a sunk table's slot, or through the checked store helper.
+pub(super) fn emit_set_field<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+) -> Option<()> {
+    let Plan {
+        head_proto, opts, ..
+    } = *pl;
+    let OpHelpers { set_ids, .. } = lw.h.op;
+    let OpCx {
+        i, rop, off, ins, ..
+    } = *oc;
+    let regs: &[Variable] = &oc.regs;
+    // sunk path: when escape sweep tagged
+    // SetFieldSunkWrite, def_var the source register into
+    // the matching virt slot (array_cap + hash_slot) +
+    // propagate the source RegKind into virt_kinds.
+    if let Some(OpAction::SetFieldSunkWrite {
+        site_idx,
+        hash_slot,
+    }) = lw.escape.op_actions[i]
+        && lw.escape.sites[site_idx as usize].state == EscapeState::Sinkable
+        && lw.virt_vars[site_idx as usize].is_some()
+    {
+        let array_cap = lw.escape.sites[site_idx as usize].array_cap as usize;
+        let slot = array_cap + hash_slot as usize;
+        let src_kind = lw.current_kinds[off + ins.c() as usize];
+        let v = lw.bcx.use_var(regs[ins.c() as usize]);
+        let vars = lw.virt_vars[site_idx as usize]
+            .as_ref()
+            .expect("Sinkable site has virt_vars");
+        lw.bcx.def_var(vars[slot], v);
+        let kinds_vec = lw.virt_kinds[site_idx as usize]
+            .as_mut()
+            .expect("Sinkable site has virt_kinds");
+        kinds_vec[slot] = src_kind;
+        return Some(());
+    }
+    // helper path: R[A][K[B]:string] := R[C].
+    // the helpers read the operand as a table. A number,
+    // string or closure (entry-guarded or computed here) leaves
+    // the op to the interpreter; Nil can be a lookahead guess
+    // for a value the recording indexed, so it stays
+    match k_op(&lw.current_kinds, off as u32 + ins.a()) {
+        RegKind::Table | RegKind::Nil => {}
+        RegKind::Unset | RegKind::Unknown => {
+            lw.dispatchable = false;
+            lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
+        }
+        _ => return None,
+    }
+    let t = lw.bcx.use_var(regs[ins.a() as usize]);
+    let key_v = match head_proto.consts[ins.b() as usize] {
+        luna_core::runtime::Value::Str(s) => s,
+        _ => unreachable!("pre-emit gates Str const at K[B]"),
+    };
+    let key_arg = emit_str_key_arg(
+        lw.module,
+        &mut lw.bcx,
+        key_v,
+        opts.aot,
+        &mut lw.defined_aot_data,
+    );
+    let val_kind = k_op(&lw.current_kinds, off as u32 + ins.c());
+    // a value of unknown kind cannot be tagged for the table
+    if val_kind.untyped() {
+        return None;
+    }
+    let val = lw.bcx.use_var(regs[ins.c() as usize]);
+    let done = emit_table_set(
+        &mut lw.bcx,
+        &mut lw.module,
+        &set_ids,
+        t,
+        key_arg,
+        RegKind::Str,
+        val,
+        val_kind,
+    );
+    guard!(lw, pl, done, i, rop.pc);
     Some(())
 }
