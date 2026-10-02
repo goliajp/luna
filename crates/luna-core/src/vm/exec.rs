@@ -95,7 +95,7 @@ pub struct Vm {
     /// own. Settable via debug.setmetatable.
     type_mt: [Option<Gc<Table>>; 5],
     /// pre-interned metamethod event names, indexed by `Mm`
-    mm_names: Vec<Gc<crate::runtime::LuaStr>>,
+    mm_names: [Gc<crate::runtime::LuaStr>; MM_NAMES.len()],
     /// native↔Lua nesting depth (PUC C-stack guard analogue)
     c_depth: u32,
     /// number of live pcall/xpcall continuation frames on the running thread
@@ -905,7 +905,7 @@ impl Vm {
         // finalize in a single cycle (5.4/5.5 gc.lua :544 assert exactly one).
         heap.defer_thread_cycle_finalize = version == LuaVersion::Lua53;
         let globals = heap.new_table();
-        let mm_names = MM_NAMES.iter().map(|n| heap.intern(n.as_bytes())).collect();
+        let mm_names = std::array::from_fn(|i| heap.intern(MM_NAMES[i].as_bytes()));
 
         Vm {
             heap,
