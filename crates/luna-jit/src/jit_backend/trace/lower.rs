@@ -174,7 +174,7 @@ pub(super) fn lower_trace_lir(
     float_only: bool,
 ) -> Option<(super::lir::Lir, CompiledTrace)> {
     with_plan(record, opts, float_only, |pl, escape| {
-        let mut e = super::lir::Lir::new();
+        let mut e = super::lir::Lir::take();
         let h = declare_helpers(&mut e)?;
         let (e, emitted) = emit_trace(e, pl, h, escape)?;
         Some((e, build_compiled(pl, emitted)))

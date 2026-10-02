@@ -30,8 +30,31 @@ pub(crate) struct Allocation {
     pub(crate) callee_used: [u64; 2],
 }
 
-fn is_callee(c: &Class, r: u8) -> bool {
-    c.callee.contains(&r)
+fn mask(regs: &[u8]) -> u64 {
+    regs.iter().fold(0, |m, &r| m | (1 << r))
+}
+
+/// The vregs with an interval, ordered by `key` (a counting sort over
+/// positions).
+fn by_position(key: &[u32], live: &[u32], n_pos: usize) -> Vec<u32> {
+    let mut first = vec![0u32; n_pos + 1];
+    for (r, &k) in key.iter().enumerate() {
+        if live[r] != NONE {
+            first[k as usize + 1] += 1;
+        }
+    }
+    for p in 0..n_pos {
+        first[p + 1] += first[p];
+    }
+    let mut out = vec![0u32; first[n_pos] as usize];
+    for (r, &k) in key.iter().enumerate() {
+        if live[r] != NONE {
+            let at = &mut first[k as usize];
+            out[*at as usize] = r as u32;
+            *at += 1;
+        }
+    }
+    out
 }
 
 pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2]) -> Allocation {
@@ -44,73 +67,82 @@ pub(crate) fn allocate(lir: &Lir, an: &Analysis, classes: [&Class; 2]) -> Alloca
             lir.var_ty[r - nv].is_float()
         }
     };
-    let mut order: Vec<u32> = (0..nreg as u32)
-        .filter(|&r| an.start[r as usize] != NONE)
-        .collect();
-    order.sort_unstable_by_key(|&r| an.start[r as usize]);
+    let n_pos = 2 * an.code.len() + 2;
+    let starts = by_position(&an.start, &an.start, n_pos);
+    let ends = by_position(&an.end, &an.start, n_pos);
     let mut loc = vec![Loc::None; nreg];
-    let mut free = [0u64; 2];
-    for (k, c) in classes.iter().enumerate() {
-        for &r in c.caller.iter().chain(c.callee) {
-            free[k] |= 1 << r;
-        }
-    }
-    let mut active: [Vec<u32>; 2] = [Vec::new(), Vec::new()];
+    let callee = [mask(classes[0].callee), mask(classes[1].callee)];
+    let caller = [mask(classes[0].caller), mask(classes[1].caller)];
+    let mut free = [callee[0] | caller[0], callee[1] | caller[1]];
+    // which vreg holds each register
+    let mut holder = [[NONE; 64]; 2];
     let mut spill_slots = 0u32;
     let mut callee_used = [0u64; 2];
-    for &r in &order {
+    let mut ei = 0;
+    // the first call after the current start; starts only grow
+    let mut ci = 0;
+    for &r in &starts {
         let ri = r as usize;
-        let k = usize::from(float_of(ri));
-        let class = classes[k];
         let s = an.start[ri];
-        active[k].retain(|&o| {
-            if an.end[o as usize] < s {
-                if let Loc::Reg(p) = loc[o as usize] {
+        while ci < an.calls.len() && an.calls[ci] <= s {
+            ci += 1;
+        }
+        while ei < ends.len() && an.end[ends[ei] as usize] < s {
+            let o = ends[ei] as usize;
+            ei += 1;
+            if let Loc::Reg(p) = loc[o] {
+                let k = usize::from(float_of(o));
+                if holder[k][p as usize] == o as u32 {
+                    holder[k][p as usize] = NONE;
                     free[k] |= 1 << p;
                 }
-                false
-            } else {
-                true
             }
-        });
-        let crosses = an.crosses_call(r);
-        let pick = |set: &[u8]| set.iter().copied().find(|&p| free[k] & (1 << p) != 0);
-        let got = if crosses {
-            pick(class.callee)
-        } else {
-            pick(class.caller).or_else(|| pick(class.callee))
-        };
-        if let Some(p) = got {
-            free[k] &= !(1 << p);
-            loc[ri] = Loc::Reg(p);
-            if is_callee(class, p) {
-                callee_used[k] |= 1 << p;
-            }
-            active[k].push(r);
-            continue;
         }
-        // spill whichever ends last: an active interval whose register this
-        // one may take, or this one
-        let victim = active[k]
-            .iter()
-            .copied()
-            .filter(|&o| match loc[o as usize] {
-                Loc::Reg(p) => !crosses || is_callee(class, p),
-                _ => false,
-            })
-            .max_by_key(|&o| an.end[o as usize]);
-        match victim {
-            Some(o) if an.end[o as usize] > an.end[ri] => {
-                loc[ri] = loc[o as usize];
-                loc[o as usize] = Loc::Stack(spill_slots);
-                spill_slots += 1;
-                active[k].retain(|&x| x != o);
-                active[k].push(r);
+        let k = usize::from(float_of(ri));
+        let crosses = ci < an.calls.len() && an.calls[ci] < an.end[ri];
+        let pick = |set: u64| {
+            let m = free[k] & set;
+            (m != 0).then(|| m.trailing_zeros() as u8)
+        };
+        let got = if crosses {
+            pick(callee[k])
+        } else {
+            pick(caller[k]).or_else(|| pick(callee[k]))
+        };
+        let p = match got {
+            Some(p) => p,
+            None => {
+                // spill whichever ends last: a holder whose register this
+                // interval may take, or this one
+                let allowed = if crosses {
+                    callee[k]
+                } else {
+                    callee[k] | caller[k]
+                };
+                let victim = (0..64u8)
+                    .filter(|&p| allowed & (1 << p) != 0 && holder[k][p as usize] != NONE)
+                    .max_by_key(|&p| an.end[holder[k][p as usize] as usize]);
+                match victim {
+                    Some(p) if an.end[holder[k][p as usize] as usize] > an.end[ri] => {
+                        let o = holder[k][p as usize] as usize;
+                        loc[o] = Loc::Stack(spill_slots);
+                        spill_slots += 1;
+                        free[k] |= 1 << p;
+                        p
+                    }
+                    _ => {
+                        loc[ri] = Loc::Stack(spill_slots);
+                        spill_slots += 1;
+                        continue;
+                    }
+                }
             }
-            _ => {
-                loc[ri] = Loc::Stack(spill_slots);
-                spill_slots += 1;
-            }
+        };
+        free[k] &= !(1 << p);
+        holder[k][p as usize] = r;
+        loc[ri] = Loc::Reg(p);
+        if callee[k] & (1 << p) != 0 {
+            callee_used[k] |= 1 << p;
         }
     }
     Allocation {

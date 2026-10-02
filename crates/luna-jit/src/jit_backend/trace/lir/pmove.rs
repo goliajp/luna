@@ -11,9 +11,9 @@ pub(crate) enum Src {
 /// The moves of one register class, in an order that reads every source
 /// before it is overwritten; `park` is a location no move touches, used to
 /// break cycles.
-pub(crate) fn sequence(moves: &mut Vec<(Loc, Src)>, park: Loc) -> Vec<(Loc, Src)> {
+pub(crate) fn sequence(moves: &mut Vec<(Loc, Src)>, park: Loc, out: &mut Vec<(Loc, Src)>) {
     moves.retain(|&(d, s)| s != Src::Loc(d) && d != Loc::None);
-    let mut out = Vec::with_capacity(moves.len() + 1);
+    out.clear();
     while !moves.is_empty() {
         let ready = (0..moves.len()).find(|&k| {
             let d = moves[k].0;
@@ -36,7 +36,6 @@ pub(crate) fn sequence(moves: &mut Vec<(Loc, Src)>, park: Loc) -> Vec<(Loc, Src)
             }
         }
     }
-    out
 }
 
 #[cfg(test)]
@@ -55,7 +54,9 @@ mod tests {
             st.get(&l).copied().unwrap_or_else(|| init(l))
         };
         let mut v = moves.to_vec();
-        for (d, s) in sequence(&mut v, Loc::Reg(99)) {
+        let mut out = Vec::new();
+        sequence(&mut v, Loc::Reg(99), &mut out);
+        for (d, s) in out {
             let Src::Loc(l) = s;
             let x = read(&state, l);
             state.insert(d, x);

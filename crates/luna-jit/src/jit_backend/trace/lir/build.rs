@@ -93,27 +93,54 @@ impl Lir {
         i.n_args = self.args.len() as u32 - at;
     }
 
-    fn block_args<'a>(&mut self, args: impl IntoIterator<Item = &'a BlockArg>) -> Vec<u32> {
-        args.into_iter()
-            .map(|a| match a {
+    fn push_block_args<'a>(&mut self, args: impl IntoIterator<Item = &'a BlockArg>) -> u32 {
+        let at = self.args.len();
+        for a in args {
+            let x = match a {
                 BlockArg::Value(x) => v(*x),
                 _ => {
                     self.unsupported = Some("block argument other than a value");
                     0
                 }
-            })
-            .collect()
+            };
+            self.args.push(x);
+        }
+        (self.args.len() - at) as u32
     }
 
-    /// A branch from the current block to `b`.
+    /// A branch from the current block to `b`. A block not entered yet
+    /// keeps the variables' values every branch into it agrees on.
     fn edge(&mut self, b: Block) {
-        let blk = &mut self.blocks[b.as_u32() as usize];
+        let bi = b.as_u32() as usize;
+        let blk = &mut self.blocks[bi];
         blk.preds += 1;
-        blk.inherit = if blk.preds == 1 && !blk.entered {
-            Some(self.var_cur.clone())
-        } else {
-            None
-        };
+        if blk.entered {
+            // a back edge: what the block assumed on entry may not hold
+            if self
+                .pending_inherit
+                .is_some_and(|(pb, _)| pb as usize == bi)
+            {
+                self.pending_inherit = None;
+            }
+            return;
+        }
+        let (at, n) = blk.inherit;
+        if blk.preds == 1 {
+            let at = self.snaps.len() as u32;
+            self.snaps.extend_from_slice(&self.var_cur);
+            self.blocks[bi].inherit = (at, self.var_cur.len() as u32);
+        } else if at != NONE {
+            for k in 0..n as usize {
+                let s = &mut self.snaps[at as usize + k];
+                if *s != self.var_cur[k] {
+                    *s = NONE;
+                }
+            }
+        }
+    }
+
+    fn restore(&mut self, (at, n): (u32, u32)) {
+        self.var_cur[..n as usize].copy_from_slice(&self.snaps[at as usize..(at + n) as usize]);
     }
 
     fn ty_of_value(&self, x: Value) -> Ty {
@@ -135,10 +162,16 @@ impl Lir {
         self.def(Op::Un(op), ty, v(x), NONE, NONE)
     }
 
-    fn sig_tys(sig: &Signature) -> (Vec<Ty>, Option<Ty>) {
-        let params = sig.params.iter().map(|p| Ty::of(p.value_type)).collect();
-        let ret = sig.returns.first().map(|r| Ty::of(r.value_type));
-        (params, ret)
+    fn callee(&mut self, addr: usize, sig: &Signature) -> Callee {
+        let params_at = self.param_tys.len() as u32;
+        self.param_tys
+            .extend(sig.params.iter().map(|p| Ty::of(p.value_type)));
+        Callee {
+            addr,
+            params_at,
+            n_params: sig.params.len() as u32,
+            ret: sig.returns.first().map(|r| Ty::of(r.value_type)),
+        }
     }
 
     fn call_result(&mut self, inst: u32, ret: Option<Ty>) {
@@ -156,6 +189,7 @@ impl Ins for Lir {
         self.blocks.push(BlockData {
             first: NONE,
             last: NONE,
+            inherit: (NONE, 0),
             ..BlockData::default()
         });
         Block::from_u32(self.blocks.len() as u32 - 1)
@@ -164,16 +198,19 @@ impl Ins for Lir {
         let bi = b.as_u32();
         self.cur = bi;
         let blk = &mut self.blocks[bi as usize];
-        let inherit = if blk.entered { None } else { blk.inherit.take() };
+        let inherit = if blk.entered { (NONE, 0) } else { blk.inherit };
         blk.entered = true;
+        let sealed = blk.sealed;
         self.var_cur.iter_mut().for_each(|x| *x = NONE);
         // a block entered before it is sealed may still gain a predecessor
         // (a loop head's back edge); its values are known only once it is
         // sealed with nothing emitted yet
-        match inherit {
-            Some(m) if blk.sealed => self.var_cur = m,
-            Some(m) => self.pending_inherit = Some((bi, m)),
-            None => {}
+        if inherit.0 != NONE {
+            if sealed {
+                self.restore(inherit);
+            } else {
+                self.pending_inherit = Some((bi, inherit));
+            }
         }
     }
     fn seal_block(&mut self, b: Block) {
@@ -182,11 +219,10 @@ impl Ins for Lir {
         blk.sealed = true;
         if blk.first == NONE
             && bi == self.cur
-            && blk.preds == 1
-            && let Some((pb, m)) = self.pending_inherit.take()
+            && let Some((pb, snap)) = self.pending_inherit.take()
             && pb == bi
         {
-            self.var_cur = m;
+            self.restore(snap);
         }
     }
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value {
@@ -443,10 +479,12 @@ impl Ins for Lir {
         CInst::from_u32(self.push(op, t, NONE, v(x), NONE, NONE))
     }
     fn jump<'a>(&mut self, b: Block, args: impl IntoIterator<Item = &'a BlockArg>) -> CInst {
-        let a = self.block_args(args);
         self.edge(b);
         let i = self.push(Op::Jump, Ty::I64, NONE, b.as_u32(), NONE, NONE);
-        self.with_args(i, a);
+        let at = self.args.len() as u32;
+        let n = self.push_block_args(args);
+        let inst = &mut self.insts[i as usize];
+        (inst.args_at, inst.n_args) = (at, n);
         CInst::from_u32(i)
     }
     fn brif<'a>(
@@ -457,11 +495,11 @@ impl Ins for Lir {
         else_b: Block,
         else_args: impl IntoIterator<Item = &'a BlockArg>,
     ) -> CInst {
-        let mut a = self.block_args(then_args);
-        let n_then = a.len() as u32;
-        a.extend(self.block_args(else_args));
         self.edge(then_b);
         self.edge(else_b);
+        let at = self.args.len() as u32;
+        let n_then = self.push_block_args(then_args);
+        let n_else = self.push_block_args(else_args);
         let i = self.push(
             Op::Brif(n_then),
             Ty::I8,
@@ -470,7 +508,8 @@ impl Ins for Lir {
             then_b.as_u32(),
             else_b.as_u32(),
         );
-        self.with_args(i, a);
+        let inst = &mut self.insts[i as usize];
+        (inst.args_at, inst.n_args) = (at, n_then + n_else);
         CInst::from_u32(i)
     }
     fn call(&mut self, f: FuncRef, args: &[Value]) -> CInst {
@@ -482,7 +521,7 @@ impl Ins for Lir {
         CInst::from_u32(i)
     }
     fn call_indirect(&mut self, sig: SigRef, callee: Value, args: &[Value]) -> CInst {
-        let ret = self.sigs[sig.as_u32() as usize].1;
+        let ret = self.sigs[sig.as_u32() as usize].ret;
         let i = self.push(
             Op::CallIndirect,
             Ty::I64,
@@ -518,15 +557,16 @@ impl Emit for Lir {
                 0
             }
         };
-        let (params, ret) = Lir::sig_tys(sig);
-        self.funcs.push(Callee { addr, params, ret });
+        let c = self.callee(addr, sig);
+        self.funcs.push(c);
         Ok(FuncId::from_u32(self.funcs.len() as u32 - 1))
     }
     fn import_func(&mut self, id: FuncId) -> FuncRef {
         FuncRef::from_u32(id.as_u32())
     }
     fn import_signature(&mut self, sig: Signature) -> SigRef {
-        self.sigs.push(Lir::sig_tys(&sig));
+        let c = self.callee(0, &sig);
+        self.sigs.push(c);
         SigRef::from_u32(self.sigs.len() as u32 - 1)
     }
     fn target_triple(&self) -> target_lexicon::Triple {

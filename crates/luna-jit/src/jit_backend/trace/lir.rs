@@ -166,15 +166,18 @@ pub(crate) struct BlockData {
     pub(crate) preds: u32,
     pub(crate) sealed: bool,
     pub(crate) entered: bool,
-    /// The variables' values at the end of the only predecessor so far.
-    pub(crate) inherit: Option<Vec<u32>>,
+    /// The variables' values at the end of the only predecessor so far:
+    /// `(offset, len)` in [`Lir::snaps`], offset `NONE` for none.
+    pub(crate) inherit: (u32, u32),
 }
 
-/// A function a trace calls.
-#[derive(Clone, Debug)]
+/// A function a trace calls, or the signature of one it calls indirectly.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Callee {
     pub(crate) addr: usize,
-    pub(crate) params: Vec<Ty>,
+    /// `params_at..params_at + n_params` in [`Lir::param_tys`].
+    pub(crate) params_at: u32,
+    pub(crate) n_params: u32,
     pub(crate) ret: Option<Ty>,
 }
 
@@ -189,14 +192,59 @@ pub(crate) struct Lir {
     /// `(size, align_log2)` of each explicit stack slot.
     pub(crate) slots: Vec<(u32, u8)>,
     pub(crate) funcs: Vec<Callee>,
-    pub(crate) sigs: Vec<(Vec<Ty>, Option<Ty>)>,
+    pub(crate) sigs: Vec<Callee>,
+    pub(crate) param_tys: Vec<Ty>,
+    /// Snapshots of [`Lir::var_cur`] taken at branches.
+    pub(crate) snaps: Vec<u32>,
     /// The function's parameter (`reg_state`).
     pub(crate) arg0: u32,
     pub(crate) cur: u32,
     pub(crate) var_cur: Vec<u32>,
     /// The values a block entered before being sealed inherits if it is
     /// sealed before anything is emitted into it.
-    pub(crate) pending_inherit: Option<(u32, Vec<u32>)>,
+    pub(crate) pending_inherit: Option<(u32, (u32, u32))>,
     /// A primitive the backend does not implement was emitted.
     pub(crate) unsupported: Option<&'static str>,
+}
+
+impl Lir {
+    pub(crate) fn params(&self, c: &Callee) -> &[Ty] {
+        &self.param_tys[c.params_at as usize..(c.params_at + c.n_params) as usize]
+    }
+}
+
+thread_local! {
+    static SPARE: std::cell::RefCell<Option<Lir>> = const { std::cell::RefCell::new(None) };
+}
+
+impl Lir {
+    /// A cleared `Lir`, reusing the buffers of the last one given back on
+    /// this thread.
+    pub(crate) fn take() -> Lir {
+        match SPARE.with(|s| s.borrow_mut().take()) {
+            Some(mut l) => {
+                l.insts.clear();
+                l.blocks.clear();
+                l.value_ty.clear();
+                l.var_ty.clear();
+                l.args.clear();
+                l.slots.clear();
+                l.funcs.clear();
+                l.sigs.clear();
+                l.param_tys.clear();
+                l.snaps.clear();
+                l.var_cur.clear();
+                l.arg0 = NONE;
+                l.cur = NONE;
+                l.unsupported = None;
+                l.pending_inherit = None;
+                l
+            }
+            None => Lir::new(),
+        }
+    }
+
+    pub(crate) fn give(self) {
+        SPARE.with(|s| *s.borrow_mut() = Some(self));
+    }
 }

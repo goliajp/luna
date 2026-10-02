@@ -382,9 +382,12 @@ fn compile_trace_baseline(
         return Ok(None);
     };
     if !always_codegen && !trace_is_enterable(record, &compiled) {
+        lir.give();
         return Ok(Some(compiled));
     }
-    let code = lir::assemble(&lir)?;
+    let code = lir::assemble(&lir);
+    lir.give();
+    let code = code?;
     BASELINE_CODEGEN.with(|c| c.set(c.get() + 1));
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     // SAFETY: the code implements the `TraceFn` ABI (`extern "C"`, one
