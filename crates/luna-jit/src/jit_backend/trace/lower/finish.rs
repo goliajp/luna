@@ -256,7 +256,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         let v: Vec<TCellPtr> = (0..total).map(|_| TCellPtr::null()).collect();
         v.into()
     };
-    let compiled = CompiledTrace {
+    CompiledTrace {
         head_pc: record.head_pc,
         // caller (JIT wrapper or AOT pipeline)
         // patches `entry` after finalize. See [`placeholder_trace_fn`].
@@ -341,6 +341,5 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // `1` for single-CMP-fallback DownRec; `>= 2` for the
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
-    };
-    compiled
+    }
 }

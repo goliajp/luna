@@ -25,7 +25,6 @@ pub(super) fn emit_downrec_tail<M: Module>(
     // the caller window: see `emit_tail`
     let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
     let mut downrec_link_for_compiled: Option<(u32, u32)> = None;
-    let downrec_multi_way_count_for_compiled: u8;
     // `TraceEnd::DownRec` close: emit the
     // stitch-sentinel + caller-pc-guard.
     //
@@ -182,7 +181,8 @@ pub(super) fn emit_downrec_tail<M: Module>(
         lw.dispatchable = false;
         lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("downrec-stitch-pending"));
     }
-    downrec_multi_way_count_for_compiled = multi_way_candidate_count.min(u8::MAX as usize) as u8;
+    let downrec_multi_way_count_for_compiled =
+        multi_way_candidate_count.min(u8::MAX as usize) as u8;
     (
         downrec_link_for_compiled,
         downrec_multi_way_count_for_compiled,
