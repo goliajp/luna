@@ -14,36 +14,8 @@
 
 use crate::version::LuaVersion;
 
-struct Label {
-    name: Box<str>,
-    line: u32,
-    /// active locals where the label stands
-    nactvar: usize,
-}
-
-struct Goto {
-    name: Box<str>,
-    line: u32,
-    /// active locals at the goto; lowered as it moves out of blocks
-    nactvar: usize,
-}
-
-struct Block {
-    nactvar: usize,
-    first_label: usize,
-    first_goto: usize,
-    is_loop: bool,
-}
-
-/// A label whose trailing no-op statements are still being read: PUC
-/// decides whether it ends its block (and so sits outside the block's
-/// locals) only after skipping them.
-struct Open {
-    name: Box<str>,
-    line: u32,
-    /// 5.2/5.3 enter the label in the list before skipping
-    entry: Option<usize>,
-}
+mod records;
+use records::{Block, Goto, Label, Open};
 
 /// The dialect's goto bookkeeping (PUC `Dyndata` + `BlockCnt`).
 pub(crate) struct GotoCheck {
@@ -63,21 +35,6 @@ pub(crate) struct GotoCheck {
 }
 
 impl GotoCheck {
-    /// The checker for dialects with goto (5.2+).
-    pub(crate) fn new(version: LuaVersion) -> Option<GotoCheck> {
-        version.has_goto().then(|| GotoCheck {
-            v54: version >= LuaVersion::Lua54,
-            v55: version >= LuaVersion::Lua55,
-            actvar: Vec::new(),
-            names: String::new(),
-            labels: Vec::new(),
-            pending: Vec::new(),
-            blocks: Vec::new(),
-            funcs: Vec::new(),
-            open: Vec::new(),
-        })
-    }
-
     pub(crate) fn enter_function(&mut self) {
         self.funcs.push(self.blocks.len());
         self.enter_block(false);

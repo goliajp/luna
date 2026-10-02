@@ -6,7 +6,7 @@ pub mod error;
 mod goto_check;
 pub mod lexer;
 pub mod macro_expander;
-pub(crate) mod names;
+pub mod names;
 pub mod parser;
 pub mod span;
 pub mod token;

@@ -17,22 +17,20 @@ mod cond;
 mod const_map;
 mod ctconst;
 mod fold;
+mod level;
+mod small_list;
 mod vararg_scan;
 use const_map::{ConstKey, ConstMap};
 use ctconst::{CtConst, ct_value};
 use fold::{fold_arith, is_logical, numeral};
+pub(crate) use level::CompileScratch;
+use level::{Level, LevelBufs};
+use small_list::{Jumps, SmallList};
 
-use crate::frontend::ast::{self, BinOp, Block, ExprId, StatId, UnOp, block_uses_vararg};
-use crate::frontend::names::{Names, SymName};
-
-// the compiler works on the tree with interned names (see `frontend::names`)
-type Chunk = ast::Chunk<SymName>;
-type Expr = ast::Expr<SymName>;
-type Stat = ast::Stat<SymName>;
-type FuncBody = ast::FuncBody<SymName>;
-type AttribName = ast::AttribName<SymName>;
-type TableField = ast::TableField<SymName>;
-type FuncName = ast::FuncName<SymName>;
+use crate::frontend::ast::{
+    self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, FuncName, List, ListItem, Name,
+    Stat, StatId, TableField, UnOp, block_uses_vararg,
+};
 use crate::frontend::error::SyntaxError;
 use crate::numeric::Num;
 use crate::runtime::heap::{GcHeader, ObjTag};
@@ -49,46 +47,52 @@ pub fn compile_chunk(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    let (chunk, names) = intern_chunk(ast);
-    compile_parsed(&chunk, &names, &[], version, source_name, heap)
-}
-
-/// The tree the compiler works on, from the public one.
-fn intern_chunk(ast: &ast::Chunk) -> (Chunk, Names) {
-    let mut names = Names::with_capacity(0);
-    let chunk = ast.map_names(&mut |n: &ast::Name| SymName {
-        sym: names.intern(&n.text),
-        line: n.line,
-    });
-    (chunk, names)
+    let mut scratch = CompileScratch::default();
+    let source = heap.intern(source_name);
+    compile_parsed(ast, &[], version, source, heap, &mut scratch)
 }
 
 /// [`compile_chunk`] with the `end` lines the parser recorded for loops
 /// ([`crate::frontend::parser::Parsed::end_lines`]); a [`ast::Chunk`] carries no
 /// such lines, so code PUC emits after a loop's `end` is placed on that
-/// line only when they are given.
+/// line only when they are given. The functions are built in the vectors
+/// of `scratch`.
 pub(crate) fn compile_parsed(
     ast: &Chunk,
-    names: &Names,
     end_lines: &[u32],
     version: LuaVersion,
-    source_name: &[u8],
+    source: Gc<LuaStr>,
     heap: &mut Heap,
+    scratch: &mut CompileScratch,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    let source = heap.intern(source_name);
+    compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
+}
+
+/// Compile the main function; also gives its `last_target`.
+fn compile_main(
+    ast: &Chunk,
+    end_lines: &[u32],
+    version: LuaVersion,
+    source: Gc<LuaStr>,
+    heap: &mut Heap,
+    scratch: &mut CompileScratch,
+) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let mut c = Compiler {
         ast,
-        names,
         end_lines,
         heap,
         version,
         source,
-        levels: Vec::new(),
+        levels: level::relabel(std::mem::take(&mut scratch.open)),
+        pool: std::mem::take(&mut scratch.levels),
+        sym_strs: std::mem::take(&mut scratch.sym_strs),
         last_line: 0,
         force_line: None,
         str_cache: HashMap::new(),
     };
-    let mut main = Level::new(0, true, 0);
+    c.sym_strs.clear();
+    c.sym_strs.resize(ast.names.len(), None);
+    let mut main = c.new_level(0, true, 0);
     main.upvals.push(UpvalDesc {
         in_stack: false,
         index: 0,
@@ -104,7 +108,12 @@ pub(crate) fn compile_parsed(
     c.last_line = ast.end_line;
     c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
     let lvl = c.levels.pop().expect("main level");
-    Ok(c.heap.adopt_proto(lvl.into_proto(source, 0, 0)))
+    let last_target = lvl.last_target;
+    let proto = c.finish_level(lvl, 0, 0);
+    scratch.levels = c.pool;
+    scratch.sym_strs = c.sym_strs;
+    scratch.open = level::relabel(c.levels);
+    Ok((proto, last_target))
 }
 
 /// Diagnostic version of [`compile_chunk`] that also returns the main
@@ -112,51 +121,15 @@ pub(crate) fn compile_parsed(
 /// destination — PUC `fs->lasttarget` equivalent). Used by the
 /// jump-target tracker unit tests at
 /// `crates/luna-core/tests/it/compiler_jump_target_tracker.rs`.
-///
-/// This entry point is intentionally separate from `compile_chunk` so
-/// production callers do not pay the destructure cost; it exists purely
-/// to expose the tracker subsystem for verification.
 pub fn compile_chunk_with_last_target(
     ast: &ast::Chunk,
     version: LuaVersion,
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let (chunk, names) = intern_chunk(ast);
-    let ast = &chunk;
-    let names = &names;
+    let mut scratch = CompileScratch::default();
     let source = heap.intern(source_name);
-    let mut c = Compiler {
-        ast,
-        names,
-        end_lines: &[],
-        heap,
-        version,
-        source,
-        levels: Vec::new(),
-        last_line: 0,
-        force_line: None,
-        str_cache: HashMap::new(),
-    };
-    let mut main = Level::new(0, true, 0);
-    main.upvals.push(UpvalDesc {
-        in_stack: false,
-        index: 0,
-        name: "_ENV".into(),
-        read_only: false,
-    });
-    c.levels.push(main);
-    c.enter_block(false);
-    c.stat_block(&ast.block)?;
-    c.leave_block()?;
-    c.last_line = ast.end_line;
-    c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
-    let lvl = c.levels.pop().expect("main level");
-    let last_target = lvl.last_target;
-    Ok((
-        c.heap.adopt_proto(lvl.into_proto(source, 0, 0)),
-        last_target,
-    ))
+    compile_main(ast, &[], version, source, heap, &mut scratch)
 }
 
 /// PUC `luaK_checkstack`'s register cap, as the most registers a function
@@ -187,11 +160,13 @@ const MAX_LOCALS: u32 = 200;
 /// Per-target plan for `assign_stat`'s two-phase store (snapshot first, then
 /// emit RHS, then stores) so a later store cannot reorder around an earlier
 /// one's table/key reads (PUC manual §3.3.3).
+#[derive(Clone, Copy)]
 enum LhsPlan {
     Name(ExprId),
     Indexed { obj: u32, key: SetKey },
 }
 
+#[derive(Clone, Copy)]
 enum SetKey {
     /// String constant index for OP_SetField (k ≤ 0xFF).
     Field(u32),
@@ -326,134 +301,18 @@ enum Exp {
     },
 }
 
-struct Level<'a> {
-    code: Vec<Inst>,
-    lines: Vec<u32>,
-    consts: Vec<Value>,
-    const_map: ConstMap,
-    locals: Vec<LocalVar<'a>>,
-    /// ordered active-variable sequence (locals + global decls) for goto scope
-    avars: Vec<AVar<'a>>,
-    blocks: Vec<BlockCx>,
-    freereg: u32,
-    max_stack: u32,
-    upvals: Vec<UpvalDesc>,
-    protos: Vec<Gc<Proto>>,
-    /// completed local-variable debug records (flushed on scope exit)
-    locvars: Vec<crate::runtime::LocVar>,
-    num_params: u8,
-    is_vararg: bool,
-    /// Mirrors PUC `(vararg table)` locvar emission: true only for an explicit
-    /// anonymous `(...)` parlist (NOT a main chunk's implicit vararg).
-    has_vararg_table_pseudo: bool,
-    /// PUC 5.1 LUAI_COMPAT_VARARG: the hidden `arg` table local was reserved.
-    /// The runtime populates it on entry; see Proto::has_compat_vararg_arg.
-    has_compat_vararg_arg: bool,
-    #[allow(dead_code)]
-    line_defined: u32,
-    /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
-    /// of any patched jump (forward jump landing here, backward jump-back to a
-    /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
-    /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
-    ///
-    /// Read by peephole passes (see `no_jump_lands_here`) that rewrite the
-    /// just-emitted instruction at pc `here() - 1` in place of emitting a
-    /// Move at `here()`: that is safe only when no jump lands at `here()`,
-    /// i.e. `last_target < here()` or `last_target == None`. Consumed by the
-    /// Reloc-landing peephole at `assign_name` and the trailing-Move elision
-    /// at `assign_stat`.
-    ///
-    /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
-    /// called from every code path that turns some `pc` into a jump landing
-    /// point.
-    last_target: Option<usize>,
-    /// 5.1: the first zero this function loaded as a constant. PUC 5.1 keys
-    /// its constant table by number value, where `0 == -0`, so every later
-    /// zero, of either sign, loads that one.
-    zero_51: Option<f64>,
-}
-
-impl<'a> Level<'a> {
-    fn new(num_params: u8, is_vararg: bool, line_defined: u32) -> Level<'a> {
-        // sized for a small function, past most of the regrowth steps
-        Level {
-            code: Vec::with_capacity(32),
-            lines: Vec::with_capacity(32),
-            consts: Vec::with_capacity(8),
-            const_map: ConstMap::with_capacity_and_hasher(8, Default::default()),
-            locals: Vec::with_capacity(8),
-            avars: Vec::with_capacity(8),
-            blocks: Vec::with_capacity(4),
-            freereg: num_params as u32,
-            max_stack: (num_params as u32).max(2),
-            upvals: Vec::new(),
-            protos: Vec::new(),
-            locvars: Vec::new(),
-            num_params,
-            is_vararg,
-            has_vararg_table_pseudo: false,
-            has_compat_vararg_arg: false,
-            line_defined,
-            last_target: None,
-            zero_51: None,
-        }
-    }
-
-    fn into_proto(
-        mut self,
-        source: Gc<LuaStr>,
-        line_defined: u32,
-        last_line_defined: u32,
-    ) -> Proto {
-        crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
-        let env_upval_idx = self
-            .upvals
-            .iter()
-            .take(u8::MAX as usize)
-            .position(|u| &*u.name == "_ENV")
-            .map_or(u8::MAX, |i| i as u8);
-        Proto {
-            hdr: GcHeader::new(ObjTag::Proto),
-            code: self.code.into_boxed_slice(),
-            consts: self.consts.into_boxed_slice(),
-            protos: self.protos.into_boxed_slice(),
-            upvals: self.upvals.into_boxed_slice(),
-            num_params: self.num_params,
-            is_vararg: self.is_vararg,
-            has_vararg_table_pseudo: self.has_vararg_table_pseudo,
-            has_compat_vararg_arg: self.has_compat_vararg_arg,
-            max_stack: self.max_stack as u8,
-            lines: self.lines.into_boxed_slice(),
-            source,
-            line_defined,
-            last_line_defined,
-            locvars: self.locvars.into_boxed_slice(),
-            cache: std::cell::Cell::new(None),
-            jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
-            env_upval_idx,
-            trace_hot_count: std::cell::Cell::new(0),
-            call_hot_count: std::cell::Cell::new(0),
-            trace_discard_count: std::cell::Cell::new(0),
-            trace_gave_up: std::cell::Cell::new(false),
-            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
-            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
-            has_dispatchable_trace: std::cell::Cell::new(false),
-            trace_heads: std::cell::Cell::new([crate::runtime::function::TRACE_HEADS_NONE; 2]),
-            trace_call_head_settled: std::cell::Cell::new(false),
-        }
-    }
-}
-
 struct Compiler<'a> {
     ast: &'a Chunk,
-    /// the text of the tree's names
-    names: &'a Names,
     /// see [`compile_parsed`]
     end_lines: &'a [u32],
     heap: &'a mut Heap,
     version: LuaVersion,
     source: Gc<LuaStr>,
     levels: Vec<Level<'a>>,
+    /// emptied vectors of finished functions, for the next function
+    pool: Vec<LevelBufs>,
+    /// the heap string of each entry of the chunk's names, once made
+    sym_strs: Vec<Option<Gc<LuaStr>>>,
     last_line: u32,
     /// When `Some(line)`, every `emit` ignores `last_line` and attributes the
     /// new instruction to `line` instead. PUC infix discharges its left
@@ -472,11 +331,34 @@ struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     /// The text of a name in the tree.
-    fn nm(&self, n: &SymName) -> &'a str {
-        self.names.text(n.sym)
+    fn nm(&self, n: &Name) -> &'a str {
+        self.ast.name(*n)
+    }
+
+    /// The bytes of a string literal of the tree.
+    fn sb(&self, s: ast::Sym) -> &'a [u8] {
+        self.ast.str(s)
+    }
+
+    /// The items of a list of the tree.
+    fn ls<T: ListItem>(&self, l: List<T>) -> &'a [T] {
+        self.ast.list(l)
     }
 
     // ---- infrastructure ----
+
+    /// A level for a new function, in kept vectors when there are some.
+    fn new_level(&mut self, num_params: u8, is_vararg: bool, line: u32) -> Level<'a> {
+        let bufs = self.pool.pop().unwrap_or_default();
+        Level::new(num_params, is_vararg, line, bufs)
+    }
+
+    /// The finished function `lvl` on the heap; its vectors are kept.
+    fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+        let (proto, bufs) = lvl.into_proto(self.source, line, last_line);
+        self.pool.push(bufs);
+        self.heap.adopt_proto(proto)
+    }
 
     /// The `end` line the parser recorded for statement `sid`.
     fn stat_end_line(&self, sid: StatId) -> Option<u32> {
@@ -735,15 +617,34 @@ impl<'a> Compiler<'a> {
     }
 
     fn str_const(&mut self, bytes: &[u8]) -> u32 {
+        let s = self.intern_str(bytes);
+        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+    }
+
+    /// The constant of the tree's string (or name) `s`: each entry of the
+    /// chunk's names is interned on the heap once per load.
+    fn sym_const(&mut self, s: ast::Sym) -> u32 {
+        let i = s.0 as usize;
+        let g = match self.sym_strs[i] {
+            Some(g) => g,
+            None => {
+                let g = self.intern_str(self.sb(s));
+                self.sym_strs[i] = Some(g);
+                g
+            }
+        };
+        self.const_idx(ConstKey::Str(g.as_ptr()), Value::Str(g))
+    }
+
+    fn intern_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         // intern the literal once per chunk so identical constants share an
         // object; heap.intern already dedups short strings, the cache only
         // has to hold long ones
-        let s = if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
+        if bytes.len() <= crate::runtime::string::MAX_SHORT_LEN {
             self.heap.intern(bytes)
         } else {
             self.long_str(bytes)
-        };
-        self.const_idx(ConstKey::Str(s.as_ptr()), Value::Str(s))
+        }
     }
 
     fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
@@ -1254,7 +1155,7 @@ impl<'a> Compiler<'a> {
             CtConst::Bool(false) => Exp::False,
             CtConst::Int(i) => Exp::Int(i),
             CtConst::Float(f) => Exp::Float(f),
-            CtConst::Str(s) => Exp::Const(self.str_const(&s)),
+            CtConst::Str(s) => Exp::Const(self.sym_const(s)),
         }
     }
 
@@ -1376,7 +1277,7 @@ impl<'a> Compiler<'a> {
             Expr::False => Ok(Exp::False),
             Expr::Int(i) => Ok(Exp::Int(*i)),
             Expr::Float(f) => Ok(Exp::Float(*f)),
-            Expr::Str(s) => Ok(Exp::Const(self.str_const(s))),
+            Expr::Str(s) => Ok(Exp::Const(self.sym_const(*s))),
             Expr::Name(n) => {
                 self.last_line = n.line;
                 self.name_expr(self.nm(n))
@@ -1538,7 +1439,7 @@ impl<'a> Compiler<'a> {
                 self.set_freereg(base);
                 let r = self.exp_to_nextreg(fe)?;
                 debug_assert_eq!(r, base);
-                let (nfixed, open) = self.args_onto_stack(args, base + 1)?;
+                let (nfixed, open) = self.args_onto_stack(self.ls(*args), base + 1)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 1 };
                 let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
@@ -1557,7 +1458,7 @@ impl<'a> Compiler<'a> {
                 let o = self.exp_to_anyreg(oe)?;
                 self.set_freereg(base);
                 self.reserve(2)?;
-                let c = self.str_const(self.nm(method).as_bytes());
+                let c = self.sym_const(method.sym);
                 self.last_line = line;
                 if c <= 0xFF {
                     self.emit(Inst::iabc(Op::SelfOp, base, o, c, true));
@@ -1583,7 +1484,7 @@ impl<'a> Compiler<'a> {
                     self.reserve(2)?;
                     self.emit(Inst::iabc(Op::SelfOp, base, o, kr, false));
                 }
-                let (nfixed, open) = self.args_onto_stack(args, base + 2)?;
+                let (nfixed, open) = self.args_onto_stack(self.ls(*args), base + 2)?;
                 self.last_line = line;
                 let b = if open { 0 } else { nfixed + 2 };
                 let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
@@ -1627,12 +1528,12 @@ impl<'a> Compiler<'a> {
 
     fn function_exp(&mut self, body: &'a FuncBody, is_method: bool) -> Result<Exp, SyntaxError> {
         let line = body.line;
-        let nparams = body.params.len() + is_method as usize;
+        let nparams = body.params.len as usize + is_method as usize;
         if nparams > 200 {
             return Err(self.err(line, "too many parameters"));
         }
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
-        let mut level = Level::new(nparams as u8, is_vararg, line);
+        let mut level = self.new_level(nparams as u8, is_vararg, line);
         // PUC 5.5 `parlist`: emit a hidden `(vararg table)` locvar only for
         // an explicit anonymous `(...)` (Named goes through a real local;
         // main chunks set is_vararg implicitly with no pseudo). 5.4 and
@@ -1680,7 +1581,7 @@ impl<'a> Compiler<'a> {
         if is_method {
             self.declare_local("self", 0, false)?;
         }
-        for (i, p) in body.params.iter().enumerate() {
+        for (i, p) in self.ls(body.params).iter().enumerate() {
             self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
         }
         if let ast::Vararg::Named(n) = &body.vararg {
@@ -1736,10 +1637,7 @@ impl<'a> Compiler<'a> {
         self.last_line = body.end_line;
         self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
         let lvl = self.levels.pop().expect("function level");
-        let source = self.source;
-        let proto = self
-            .heap
-            .adopt_proto(lvl.into_proto(source, line, body.end_line));
+        let proto = self.finish_level(lvl, line, body.end_line);
         let idx = self.lr().protos.len() as u32;
         if idx > MAX_BX {
             return Err(self.err(line, "too many nested functions"));
@@ -2052,8 +1950,8 @@ impl<'a> Compiler<'a> {
         let oe = self.expr(obj)?;
         let o = self.exp_to_anyreg(oe)?;
         let e = match ast.expr(key) {
-            Expr::Str(s) if s.len() <= 255 => {
-                let c = self.str_const(s);
+            Expr::Str(s) if self.sb(*s).len() <= 255 => {
+                let c = self.sym_const(*s);
                 if c <= 0xFF {
                     Exp::Reloc(self.emit(Inst::iabc(Op::GetField, 0, o, c, true)))
                 } else {
@@ -2081,6 +1979,7 @@ impl<'a> Compiler<'a> {
         let Expr::Table { fields, .. } = ast.expr(id) else {
             unreachable!()
         };
+        let fields = ast.list(*fields);
         self.last_line = line;
         let treg = self.reserve(1)?;
         let (mut narr, mut nhash) = (0u32, 0u32);
@@ -2139,7 +2038,7 @@ impl<'a> Compiler<'a> {
                     let saved = self.lr().freereg;
                     let ve = self.expr(*v)?;
                     let vr = self.exp_to_anyreg(ve)?;
-                    let c = self.str_const(self.nm(name).as_bytes());
+                    let c = self.sym_const(name.sym);
                     if c <= 0xFF {
                         self.emit(Inst::iabc(Op::SetField, treg, c, vr, true));
                     } else {
@@ -2199,14 +2098,14 @@ impl<'a> Compiler<'a> {
     /// trailing — a goto into it lands in those locals' scope (PUC matches a
     /// label with `block_follow(ls, 0)`, which excludes `until`).
     fn stat_block_inner(&mut self, b: &Block, until_follows: bool) -> Result<(), SyntaxError> {
-        for (i, &sid) in b.stats.iter().enumerate() {
+        for (i, &sid) in self.ls(b.stats).iter().enumerate() {
             let ast = self.ast;
             if let Stat::Label(n) = ast.stat(sid) {
                 // a trailing label (only labels after it) does not enter the
                 // scope of the block's locals (continue-style jumps); in a
                 // repeat body the trailing `until` keeps the locals alive.
                 let trailing = !until_follows
-                    && b.stats[i + 1..]
+                    && self.ls(b.stats)[i + 1..]
                         .iter()
                         .all(|&s| matches!(self.ast.stat(s), Stat::Label(_)));
                 self.last_line = n.line;
@@ -2240,9 +2139,9 @@ impl<'a> Compiler<'a> {
                 collective,
                 names,
                 exprs,
-            } => self.local_stat(*collective, names, exprs),
-            Stat::Assign { targets, exprs } => self.assign_stat(targets, exprs),
-            Stat::If { arms, else_body } => self.if_stat(arms, else_body.as_ref()),
+            } => self.local_stat(*collective, self.ls(*names), self.ls(*exprs)),
+            Stat::Assign { targets, exprs } => self.assign_stat(self.ls(*targets), self.ls(*exprs)),
+            Stat::If { arms, else_body } => self.if_stat(self.ls(*arms), else_body.as_ref()),
             Stat::While { cond, body } => self.while_stat(*cond, body, self.stat_end_line(sid)),
             Stat::Repeat { body, cond } => self.repeat_stat(body, *cond),
             Stat::NumericFor {
@@ -2260,7 +2159,13 @@ impl<'a> Compiler<'a> {
                 exprs,
                 body,
                 expr_line,
-            } => self.generic_for(vars, exprs, body, *expr_line, self.stat_end_line(sid)),
+            } => self.generic_for(
+                self.ls(*vars),
+                self.ls(*exprs),
+                body,
+                *expr_line,
+                self.stat_end_line(sid),
+            ),
             Stat::Break { line } => {
                 self.last_line = *line;
                 let Some(loop_floor) = self
@@ -2293,7 +2198,7 @@ impl<'a> Compiler<'a> {
             }
             Stat::Return { exprs, line } => {
                 self.last_line = *line;
-                self.return_stat(exprs)
+                self.return_stat(self.ls(*exprs))
             }
             Stat::Call(e) => {
                 let e = *e;
@@ -2354,7 +2259,7 @@ impl<'a> Compiler<'a> {
                 collective,
                 names,
                 exprs,
-            } => self.global_decl_stat(*collective, names, exprs),
+            } => self.global_decl_stat(*collective, self.ls(*names), self.ls(*exprs)),
             Stat::GlobalAll { attrib } => {
                 let attrib = *attrib;
                 if attrib == Some(ast::Attrib::Close) {
@@ -2386,7 +2291,7 @@ impl<'a> Compiler<'a> {
             }
         }
         let declare = |c: &mut Self| {
-            let text = c.names;
+            let text = &c.ast.names;
             for an in names {
                 let ro = an.attrib.or(collective) == Some(ast::Attrib::Const);
                 c.l()
@@ -2438,7 +2343,7 @@ impl<'a> Compiler<'a> {
         let res = (|| -> Result<(), SyntaxError> {
             let be = self.name_expr(self.nm(&name.base))?;
             let mut holder = self.exp_to_anyreg(be)?;
-            let mut fields: Vec<&str> = name.path.iter().map(|n| self.nm(n)).collect();
+            let mut fields: Vec<&str> = self.ls(name.path).iter().map(|n| self.nm(n)).collect();
             if let Some(m) = &name.method {
                 fields.push(self.nm(m));
             }
@@ -2615,7 +2520,7 @@ impl<'a> Compiler<'a> {
         // PUC's `check_conflict` only snapshots locals that actually clash;
         // we copy unconditionally — costs one extra MOVE per Index LHS, much
         // simpler than tracking pairwise conflicts and never wrong.
-        let mut plans: Vec<LhsPlan> = Vec::with_capacity(targets.len());
+        let mut plans: SmallList<LhsPlan, 4> = SmallList::new();
         for &t in targets {
             match self.ast.expr(t) {
                 Expr::Name(_) => plans.push(LhsPlan::Name(t)),
@@ -2643,8 +2548,8 @@ impl<'a> Compiler<'a> {
                     // be mutated by an intervening store), everything else
                     // gets pinned to a fresh register too.
                     let key_kind = match ast.expr(key) {
-                        Expr::Str(s) if s.len() <= 255 => {
-                            let c = self.str_const(s);
+                        Expr::Str(s) if self.sb(*s).len() <= 255 => {
+                            let c = self.sym_const(*s);
                             if c <= 0xFF {
                                 SetKey::Field(c)
                             } else {
@@ -2701,9 +2606,9 @@ impl<'a> Compiler<'a> {
         // PUC `restassign` stores on the way back out of its recursion: the
         // last target first. The order is visible through `__newindex` and
         // when a target repeats (`a, a = 1, 2` leaves 1).
-        for (i, plan) in plans.into_iter().enumerate().rev() {
+        for i in (0..plans.len()).rev() {
             let vreg = alt_vreg.unwrap_or(base + i as u32);
-            match plan {
+            match plans.get(i) {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
                 LhsPlan::Indexed { obj, key } => match key {
                     SetKey::Field(c) => {
@@ -2850,8 +2755,8 @@ impl<'a> Compiler<'a> {
                 let oe = self.expr(obj)?;
                 let o = self.exp_to_anyreg(oe)?;
                 match ast.expr(key) {
-                    Expr::Str(s) if s.len() <= 255 => {
-                        let c = self.str_const(s);
+                    Expr::Str(s) if self.sb(*s).len() <= 255 => {
+                        let c = self.sym_const(*s);
                         if c <= 0xFF {
                             self.emit(Inst::iabc(Op::SetField, o, c, vreg, true));
                         } else {
@@ -2879,11 +2784,19 @@ impl<'a> Compiler<'a> {
 
     fn if_stat(
         &mut self,
-        arms: &[(ExprId, u32, Block)],
+        arms: &[ast::IfArm],
         else_body: Option<&Block>,
     ) -> Result<(), SyntaxError> {
-        let mut end_jumps = Vec::new();
-        for (i, (cond, then_line, body)) in arms.iter().enumerate() {
+        let mut end_jumps = Jumps::new();
+        for (
+            i,
+            ast::IfArm {
+                cond,
+                then_line,
+                body,
+            },
+        ) in arms.iter().enumerate()
+        {
             let (skips, last) = self.cond_jump_false(*cond)?;
             // PUC 5.2/5.3/5.4 attribute BOTH the TEST and the conditional-skip
             // JMP to the `then` keyword's line, because `luaK_goiftrue`
@@ -2910,14 +2823,14 @@ impl<'a> Compiler<'a> {
             if !is_last {
                 end_jumps.push(self.emit_jump());
             }
-            for skip in skips {
+            for skip in skips.iter() {
                 self.patch_to_here(skip)?;
             }
         }
         if let Some(eb) = else_body {
             self.block_scoped(eb)?;
         }
-        for j in end_jumps {
+        for j in end_jumps.iter() {
             self.patch_to_here(j)?;
         }
         Ok(())
@@ -2951,7 +2864,7 @@ impl<'a> Compiler<'a> {
         self.jump_back(top)?;
         self.l().blocks.last_mut().expect("while block").end_line = end_line;
         self.leave_block()?;
-        for exit in exits {
+        for exit in exits.iter() {
             self.patch_to_here(exit)?;
         }
         Ok(())
@@ -2971,7 +2884,7 @@ impl<'a> Compiler<'a> {
         if self.block_captured() {
             let floor = self.block_floor();
             let exit = self.emit_jump();
-            for pc in again {
+            for pc in again.iter() {
                 self.patch_to_here(pc)?;
             }
             let first = self.l().blocks.last().expect("repeat block").first_local;
@@ -2979,7 +2892,7 @@ impl<'a> Compiler<'a> {
             self.jump_back(top)?;
             self.patch_to_here(exit)?;
         } else {
-            for pc in again {
+            for pc in again.iter() {
                 self.patch_back(pc, top)?;
             }
         }
@@ -3089,7 +3002,7 @@ impl<'a> Compiler<'a> {
 
     fn generic_for(
         &mut self,
-        vars: &'a [SymName],
+        vars: &'a [Name],
         exprs: &[ExprId],
         body: &Block,
         expr_line: u32,

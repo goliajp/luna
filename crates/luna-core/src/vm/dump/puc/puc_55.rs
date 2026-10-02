@@ -310,7 +310,7 @@ fn read_proto(
     let mut locvars = Vec::with_capacity(n);
     for _ in 0..n {
         locvars.push(RawLocVar {
-            name: read_name(r, heap, strings)?,
+            name: read_name(r, heap, strings)?.into(),
             start_pc: read_int(r)?,
             end_pc: read_int(r)?,
         });
@@ -318,7 +318,7 @@ fn read_proto(
     // A non-zero count means "one name per upvalue".
     if read_int(r)? != 0 {
         for u in upvals.iter_mut() {
-            u.name = read_name(r, heap, strings)?;
+            u.name = read_name(r, heap, strings)?.into();
         }
     }
 

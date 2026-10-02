@@ -1,9 +1,16 @@
 //! Arena AST: nodes live in flat vectors inside [`Chunk`], referenced by
-//! typed 4-byte ids. Dense storage, no per-node boxing.
+//! typed 4-byte ids. Lists of ids (a block's statements, a call's
+//! arguments, ...) are ranges into shared vectors of the chunk ([`List`]),
+//! and names and string literals are numbers into the chunk's [`Names`].
+//! Building a tree allocates no memory per node.
 
-mod map_names;
+mod chunk;
+mod list;
 mod rhs_calls;
 mod vararg;
+pub use super::names::{Names, Sym};
+pub use chunk::Chunk;
+pub use list::{List, ListItem};
 pub use rhs_calls::*;
 pub use vararg::block_uses_vararg;
 
@@ -21,12 +28,13 @@ pub struct StatId(
     pub u32,
 );
 
-/// An identifier token captured during parsing, together with its source
-/// line for error reporting and debug-info emission.
-#[derive(Clone, Debug)]
+/// An identifier captured during parsing, together with its source line
+/// for error reporting and debug-info emission. Its text is
+/// [`Chunk::name`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Name {
-    /// UTF-8 source text of the identifier.
-    pub text: Box<str>,
+    /// The identifier's number in [`Chunk::names`].
+    pub sym: Sym,
     /// 1-based source line where the identifier was lexed.
     pub line: u32,
 }
@@ -41,35 +49,49 @@ pub enum Attrib {
 }
 
 /// One declared name with its optional `<attrib>`.
-#[derive(Clone, Debug)]
-pub struct AttribName<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub struct AttribName {
     /// Identifier being declared.
-    pub name: N,
+    pub name: Name,
     /// Optional attribute (`<const>` / `<close>`).
     pub attrib: Option<Attrib>,
 }
 
 /// A sequence of statements; the lexical scope unit in Lua.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Block {
     /// Statements in source order.
-    pub stats: Vec<StatId>,
+    pub stats: List<StatId>,
+}
+
+/// One `if` / `elseif` arm of [`Stat::If`].
+#[derive(Clone, Copy, Debug)]
+pub struct IfArm {
+    /// The arm's condition.
+    pub cond: ExprId,
+    /// Source line of the arm's `then` keyword. PUC 5.3 attributes the
+    /// conditional-skip JMP to that line so a taken if-then-else fires a
+    /// line hook for the `then` keyword before the body; 5.4 collapsed that
+    /// back to the body's first line.
+    pub then_line: u32,
+    /// The arm's body.
+    pub body: Block,
 }
 
 /// `function a.b.c:m() ...` target path.
-#[derive(Clone, Debug)]
-pub struct FuncName<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub struct FuncName {
     /// First identifier in the path (`a` in `a.b.c:m`).
-    pub base: N,
+    pub base: Name,
     /// Dotted sub-keys after the base, in left-to-right order.
-    pub path: Vec<N>,
+    pub path: List<Name>,
     /// Method name after `:`, if any (adds an implicit `self` parameter).
-    pub method: Option<N>,
+    pub method: Option<Name>,
 }
 
 /// Vararg form for a function definition.
-#[derive(Clone, Debug)]
-pub enum Vararg<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub enum Vararg {
     /// No vararg in the parameter list.
     None,
     /// Anonymous `...`; accessible via `...` in the body.
@@ -77,17 +99,17 @@ pub enum Vararg<N = Name> {
     /// 5.5 named vararg table: `function f(...t)`.
     Named(
         /// Bound name receiving the captured varargs as a sequence.
-        N,
+        Name,
     ),
 }
 
 /// A function literal's body — parameters plus the contained block.
-#[derive(Clone, Debug)]
-pub struct FuncBody<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub struct FuncBody {
     /// Fixed parameter list, in declaration order.
-    pub params: Vec<N>,
+    pub params: List<Name>,
     /// Vararg form, if any.
-    pub vararg: Vararg<N>,
+    pub vararg: Vararg,
     /// Body block.
     pub block: Block,
     /// Source line of the opening `function` / `(` token.
@@ -97,8 +119,8 @@ pub struct FuncBody<N = Name> {
 }
 
 /// Top-level statement kinds — every Lua syntactic form except expressions.
-#[derive(Clone, Debug)]
-pub enum Stat<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub enum Stat {
     /// `do ... end` block.
     Do(
         /// Inner block.
@@ -120,21 +142,15 @@ pub enum Stat<N = Name> {
     },
     /// `if ... elseif ... else ... end`.
     If {
-        /// `(condition, then_line, body)` for the `if` and each `elseif`. The
-        /// `then_line` is the source line of the `then` keyword for that arm
-        /// — PUC 5.3 attributes the conditional-skip JMP to that line so a
-        /// taken if-then-else fires a line hook for the `then` keyword before
-        /// the body (`for i=1,n do … then … end` traces include the `then`
-        /// keyword line). 5.4 collapsed that back to the body's first line;
-        /// see `if_stat` in the compiler for the version split.
-        arms: Vec<(ExprId, u32, Block)>,
+        /// The `if` arm and each `elseif` arm, in source order.
+        arms: List<IfArm>,
         /// Optional `else` body.
         else_body: Option<Block>,
     },
     /// `for var = start, limit [, step] do ... end`.
     NumericFor {
         /// Induction variable.
-        var: N,
+        var: Name,
         /// Starting value expression.
         start: ExprId,
         /// Upper bound expression.
@@ -147,10 +163,10 @@ pub enum Stat<N = Name> {
     /// `for v1, v2, ... in exprs do ... end`.
     GenericFor {
         /// Loop variables receiving each iterator call's results.
-        vars: Vec<N>,
+        vars: List<Name>,
         /// Expression list yielding iterator, state, control, and (5.4)
         /// to-be-closed value.
-        exprs: Vec<ExprId>,
+        exprs: List<ExprId>,
         /// Loop body.
         body: Block,
         /// Line of the first token after `in` (PUC `forlist` `line`); used to
@@ -164,18 +180,18 @@ pub enum Stat<N = Name> {
         /// Single attribute applied to every name (5.4 `local <const>`).
         collective: Option<Attrib>,
         /// Names being introduced, each with its optional per-name attribute.
-        names: Vec<AttribName<N>>,
+        names: List<AttribName>,
         /// Initializer expressions; missing names get `nil`.
-        exprs: Vec<ExprId>,
+        exprs: List<ExprId>,
     },
     /// 5.5 `global` declaration.
     Global {
         /// Attribute applied to every name.
         collective: Option<Attrib>,
         /// Declared global names.
-        names: Vec<AttribName<N>>,
+        names: List<AttribName>,
         /// Initializer expressions.
-        exprs: Vec<ExprId>,
+        exprs: List<ExprId>,
     },
     /// 5.5 `global [attrib] *`.
     GlobalAll {
@@ -185,10 +201,10 @@ pub enum Stat<N = Name> {
     /// Multiple assignment `targets = exprs`.
     Assign {
         /// Assignment targets — each must be an lvalue (`Name` / `Index`).
-        targets: Vec<ExprId>,
+        targets: List<ExprId>,
         /// Right-hand side expressions, evaluated before any target is
         /// assigned.
-        exprs: Vec<ExprId>,
+        exprs: List<ExprId>,
     },
     /// Expression statement (function or method call).
     Call(
@@ -198,28 +214,28 @@ pub enum Stat<N = Name> {
     /// `function a.b.c:m() ... end`.
     Function {
         /// Target path of the assignment.
-        name: FuncName<N>,
+        name: FuncName,
         /// Function body.
-        body: FuncBody<N>,
+        body: FuncBody,
     },
     /// `local function name() ... end`.
     LocalFunction {
         /// Local name being bound.
-        name: N,
+        name: Name,
         /// Function body.
-        body: FuncBody<N>,
+        body: FuncBody,
     },
     /// 5.5 `global function f() ...`.
     GlobalFunction {
         /// Global name being bound.
-        name: N,
+        name: Name,
         /// Function body.
-        body: FuncBody<N>,
+        body: FuncBody,
     },
     /// `return exprs`.
     Return {
         /// Returned expressions; empty for a bare `return`.
-        exprs: Vec<ExprId>,
+        exprs: List<ExprId>,
         /// Source line of the `return` keyword.
         line: u32,
     },
@@ -231,12 +247,12 @@ pub enum Stat<N = Name> {
     /// `goto label`.
     Goto(
         /// Target label.
-        N,
+        Name,
     ),
     /// `::label::` declaration.
     Label(
         /// Label name.
-        N,
+        Name,
     ),
 }
 
@@ -301,8 +317,8 @@ pub enum UnOp {
 }
 
 /// One field in a table constructor literal.
-#[derive(Clone, Debug)]
-pub enum TableField<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub enum TableField {
     /// positional `expr`
     Item(
         /// Value expression.
@@ -311,7 +327,7 @@ pub enum TableField<N = Name> {
     /// `name = expr`
     Named(
         /// Field name used as a string key.
-        N,
+        Name,
         /// Value expression.
         ExprId,
     ),
@@ -325,8 +341,8 @@ pub enum TableField<N = Name> {
 }
 
 /// Expression kinds — produces a Lua value when evaluated.
-#[derive(Clone, Debug)]
-pub enum Expr<N = Name> {
+#[derive(Clone, Copy, Debug)]
+pub enum Expr {
     /// `nil` literal.
     Nil,
     /// `true` literal.
@@ -345,15 +361,17 @@ pub enum Expr<N = Name> {
         /// The IEEE-754 double value.
         f64,
     ),
-    /// String literal (raw bytes — Lua strings are 8-bit clean).
+    /// String literal (raw bytes — Lua strings are 8-bit clean); also the
+    /// key of `obj.name`.
     Str(
-        /// Raw byte contents (no terminator).
-        Vec<u8>,
+        /// The literal's number in [`Chunk::names`]; its bytes are
+        /// [`Chunk::str`].
+        Sym,
     ),
     /// Identifier reference (resolved later to local / upvalue / global).
     Name(
         /// The identifier.
-        N,
+        Name,
     ),
     /// `obj.key` and `obj[key]` (dot keys become string-literal keys).
     Index {
@@ -367,7 +385,7 @@ pub enum Expr<N = Name> {
         /// Callee expression.
         func: ExprId,
         /// Argument expressions in call order.
-        args: Vec<ExprId>,
+        args: List<ExprId>,
         /// Source line of the call site.
         line: u32,
     },
@@ -376,21 +394,21 @@ pub enum Expr<N = Name> {
         /// Receiver expression.
         obj: ExprId,
         /// Method name (looked up on `obj`).
-        method: N,
+        method: Name,
         /// Argument expressions after the implicit receiver.
-        args: Vec<ExprId>,
+        args: List<ExprId>,
         /// Source line of the call site.
         line: u32,
     },
     /// `function ... end` function literal.
     Function(
         /// Function body.
-        FuncBody<N>,
+        FuncBody,
     ),
     /// `{ ... }` table constructor.
     Table {
         /// Fields in source order.
-        fields: Vec<TableField<N>>,
+        fields: List<TableField>,
         /// Source line of the opening `{`.
         line: u32,
     },
@@ -419,37 +437,4 @@ pub enum Expr<N = Name> {
         /// Inner expression.
         ExprId,
     ),
-}
-
-/// A parsed chunk: the top-level block plus the node arenas.
-#[derive(Clone, Debug)]
-pub struct Chunk<N = Name> {
-    /// Arena of all expression nodes; index with [`ExprId`].
-    pub exprs: Vec<Expr<N>>,
-    /// Arena of all statement nodes; index with [`StatId`].
-    pub stats: Vec<Stat<N>>,
-    /// starting source line of each statement, indexed by `StatId`
-    pub stat_lines: Vec<u32>,
-    /// Top-level block (the script body).
-    pub block: Block,
-    /// line of the final `<eof>` token (PUC main-chunk `lastlinedefined`); the
-    /// implicit final return is attributed here
-    pub end_line: u32,
-}
-
-impl<N> Chunk<N> {
-    /// Borrow an expression node by id.
-    pub fn expr(&self, id: ExprId) -> &Expr<N> {
-        &self.exprs[id.0 as usize]
-    }
-
-    /// Borrow a statement node by id.
-    pub fn stat(&self, id: StatId) -> &Stat<N> {
-        &self.stats[id.0 as usize]
-    }
-
-    /// Starting source line of statement `id` (0 if unrecorded).
-    pub fn stat_line(&self, id: StatId) -> u32 {
-        self.stat_lines.get(id.0 as usize).copied().unwrap_or(0)
-    }
 }
