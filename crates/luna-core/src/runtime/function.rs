@@ -369,7 +369,8 @@ pub struct LuaClosure {
     pub(crate) consts: *const Value,
     /// Single source of truth for "where are the upvals?". Points to
     /// either `inline_storage` (when `upvals_len <= INLINE_UPVALS_N`)
-    /// or `overflow.as_mut_ptr()` (otherwise). Set up by
+    /// or a leaked `Box<[Gc<Upvalue>]>` of `upvals_len` this closure owns
+    /// (otherwise; freed by `Drop`). Set up by
     /// `Heap::new_closure*` after the LuaClosure reaches its stable
     /// heap address.
     pub(crate) upvals_ptr: *mut Gc<Upvalue>,
@@ -385,16 +386,18 @@ pub struct LuaClosure {
     /// access goes through `upvals_ptr` / `.get()`.
     pub(crate) inline_storage:
         std::cell::UnsafeCell<[std::mem::MaybeUninit<Gc<Upvalue>>; INLINE_UPVALS_N]>,
-    /// Overflow box for closures with `> INLINE_UPVALS_N` upvalues.
-    /// Empty box (dangling, no allocation) otherwise.
-    pub(crate) overflow: Box<[Gc<Upvalue>]>,
 }
 
 // SAFETY: `upvals_ptr` always refers to memory the same LuaClosure
-// owns (its own inline_storage or its `overflow` Box). The closure is
+// owns (its own inline_storage or its overflow allocation). The closure is
 // heap-allocated and never moves post-adoption.
 unsafe impl Send for LuaClosure {}
 unsafe impl Sync for LuaClosure {}
+
+// one per Lua function value, walked by every sweep: 72 bytes, an 80-byte
+// allocation
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<LuaClosure>() == 72);
 
 impl LuaClosure {
     /// View of all upvalues as a `&[Gc<Upvalue>]`. Backed by inline
@@ -433,11 +436,28 @@ impl LuaClosure {
     /// Heap closure constructors once the LuaClosure is at its stable
     /// heap address (inline_storage's address is only valid after the
     /// Box::new move into the heap).
+    /// The overflow case's storage was set by `set_overflow` already.
     pub(crate) fn init_upvals_ptr(&mut self) {
         if self.upvals_len as usize <= INLINE_UPVALS_N {
             self.upvals_ptr = self.inline_storage.get() as *mut Gc<Upvalue>;
-        } else {
-            self.upvals_ptr = self.overflow.as_mut_ptr();
+        }
+    }
+
+    /// Hand a closure with more than `INLINE_UPVALS_N` upvalues its storage.
+    pub(crate) fn set_overflow(&mut self, upvals: Box<[Gc<Upvalue>]>) {
+        debug_assert_eq!(upvals.len(), self.upvals_len as usize);
+        debug_assert!(upvals.len() > INLINE_UPVALS_N);
+        self.upvals_ptr = Box::into_raw(upvals) as *mut Gc<Upvalue>;
+    }
+}
+
+impl Drop for LuaClosure {
+    fn drop(&mut self) {
+        let n = self.upvals_len as usize;
+        if n > INLINE_UPVALS_N {
+            // SAFETY: an overflow closure's `upvals_ptr` came from
+            // `Box::into_raw` of a slice of `n` (`set_overflow`)
+            drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(self.upvals_ptr, n)) });
         }
     }
 }

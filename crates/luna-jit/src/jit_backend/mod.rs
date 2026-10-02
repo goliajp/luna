@@ -186,14 +186,13 @@ const MATH_LIBM_FNS: &[(&[u8], &str)] = &[
 /// The offsets are computed at compile time via `std::mem::offset_of!`,
 /// so the IR follows whatever `Table`'s `#[repr(C)]` layout chooses
 /// today. The static asserts below pin the assumptions the IR
-/// itself can't verify (`Box<[u64]>` as a `(ptr, len)` fat pointer,
-/// `RawVal` packed to 8 bytes, and the `Table.asize` field width).
+/// itself can't verify (`RawVal` packed to 8 bytes, and the `Table.asize` field width).
 ///
 /// Table keeps `array_ptr: *mut u8` as the single
 /// source of truth for "where does the array part live?". The pointer
 /// targets either the inline storage embedded in the Table struct
-/// (asize <= INLINE_ASIZE) or an external `slab: Box<[u64]>`. The JIT
-/// loads `array_ptr` directly — no branching, no `slab.ptr` indirection
+/// (asize <= INLINE_ASIZE) or an external slab the table owns. The JIT
+/// loads `array_ptr` directly — no branching, no indirection
 /// — and computes `atags_ptr = array_ptr + asize * 8` on the fly.
 pub(crate) const TABLE_ARRAY_PTR_OFFSET: usize =
     std::mem::offset_of!(luna_core::runtime::Table, array_ptr);
