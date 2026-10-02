@@ -30,10 +30,12 @@ pub(crate) use handle::flush_all;
 use handle::*;
 use lines::*;
 use numeral::*;
+#[cfg(any(unix, windows))]
 pub(crate) use open::shell_command;
 use open::*;
 use read::*;
 pub(crate) use results::c_str;
+#[cfg(any(unix, windows))]
 pub(crate) use results::exec_result;
 pub(crate) use results::file_fail;
 pub(crate) use results::os_path;
