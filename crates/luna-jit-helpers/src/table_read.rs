@@ -23,7 +23,7 @@ pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     }
     let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
         luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
-    let v = g.get(luna_core::runtime::Value::Str(key_gc));
+    let v = g.get_str(key_gc);
     let (_tag, raw) = v.unpack();
     // SAFETY: called only from Cranelift-emitted JIT code under an active JitVmGuard; the guard guarantees JIT_VM TLS holds a live &mut Vm for the dispatch window.
     unsafe { raw.zero as i64 }
@@ -69,7 +69,7 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
     }
     let key_gc: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
         luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
-    let v = g.get(luna_core::runtime::Value::Str(key_gc));
+    let v = g.get_str(key_gc);
     let (_tag, raw) = v.unpack();
     // SAFETY: pulled from `RawVal` of a freshly unpacked Value above.
     unsafe { raw.zero as i64 }
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn luna_jit_table_get_field_checked(
     let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
         luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
     // SAFETY: see `checked_read`.
-    unsafe { checked_read(g.get(luna_core::runtime::Value::Str(key)), want_tag, out) }
+    unsafe { checked_read(g.get_str(key), want_tag, out) }
 }
 
 /// `upvals[upval_idx][key]` (a global read through `_ENV`); see
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up_checked(
     let key: luna_core::runtime::Gc<luna_core::runtime::LuaStr> =
         luna_core::runtime::Gc::from_ptr(key_ptr as *mut luna_core::runtime::LuaStr);
     // SAFETY: see `checked_read`.
-    unsafe { checked_read(g.get(luna_core::runtime::Value::Str(key)), want_tag, out) }
+    unsafe { checked_read(g.get_str(key), want_tag, out) }
 }
 
 /// `t[key]` where the JIT statically expects an Int
