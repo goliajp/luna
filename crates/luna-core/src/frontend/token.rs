@@ -4,8 +4,11 @@ use crate::frontend::span::Span;
 use crate::version::LuaVersion;
 
 /// One lexical token produced by the lexer.
-#[derive(Clone, PartialEq, Debug)]
-pub enum Token {
+///
+/// The type parameters are the payloads of [`Token::Str`], [`Token::Name`]
+/// and [`Token::MacroQuote`]; every token handed out uses the defaults.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Token<S = Vec<u8>, N = Box<str>, Q = Box<[TokenInfo]>> {
     // keywords
     /// `and` keyword.
     And,
@@ -134,12 +137,12 @@ pub enum Token {
     /// String literal (raw bytes; Lua strings are 8-bit clean).
     Str(
         /// Decoded byte contents.
-        Vec<u8>,
+        S,
     ),
     /// Identifier.
     Name(
         /// Source text of the identifier.
-        Box<str>,
+        N,
     ),
     /// MacroLua `@` sigil. Lexed only when
     /// `version.is_macro_lua()`; PUC 5.1-5.5 sources continue to
@@ -158,7 +161,7 @@ pub enum Token {
     /// before the parser proper sees them.
     MacroQuote(
         /// Captured token run.
-        Box<[TokenInfo]>,
+        Q,
     ),
     /// End-of-file marker.
     Eof,
@@ -270,4 +273,166 @@ pub struct TokenInfo {
     pub span: Span,
     /// 1-based source line where the token starts.
     pub line: u32,
+}
+
+/// A token as the lexer and parser pass it around inside the crate: the
+/// payloads of strings and names live elsewhere (the lex buffer, the
+/// source, or the chunk's interned names), so it is `Copy`.
+pub(crate) type Tok = Token<(), (), ()>;
+
+impl<S, N, Q> Token<S, N, Q> {
+    /// This token with its payloads replaced.
+    pub(crate) fn map<S2, N2, Q2>(
+        self,
+        s: impl FnOnce(S) -> S2,
+        n: impl FnOnce(N) -> N2,
+        q: impl FnOnce(Q) -> Q2,
+    ) -> Token<S2, N2, Q2> {
+        match self {
+            Token::And => Token::And,
+            Token::Break => Token::Break,
+            Token::Do => Token::Do,
+            Token::Else => Token::Else,
+            Token::Elseif => Token::Elseif,
+            Token::End => Token::End,
+            Token::False => Token::False,
+            Token::For => Token::For,
+            Token::Function => Token::Function,
+            Token::Global => Token::Global,
+            Token::Goto => Token::Goto,
+            Token::If => Token::If,
+            Token::In => Token::In,
+            Token::Local => Token::Local,
+            Token::Nil => Token::Nil,
+            Token::Not => Token::Not,
+            Token::Or => Token::Or,
+            Token::Repeat => Token::Repeat,
+            Token::Return => Token::Return,
+            Token::Then => Token::Then,
+            Token::True => Token::True,
+            Token::Until => Token::Until,
+            Token::While => Token::While,
+            Token::Plus => Token::Plus,
+            Token::Minus => Token::Minus,
+            Token::Star => Token::Star,
+            Token::Slash => Token::Slash,
+            Token::DSlash => Token::DSlash,
+            Token::Percent => Token::Percent,
+            Token::Caret => Token::Caret,
+            Token::Hash => Token::Hash,
+            Token::Amp => Token::Amp,
+            Token::Tilde => Token::Tilde,
+            Token::Pipe => Token::Pipe,
+            Token::Shl => Token::Shl,
+            Token::Shr => Token::Shr,
+            Token::Eq => Token::Eq,
+            Token::Ne => Token::Ne,
+            Token::Le => Token::Le,
+            Token::Ge => Token::Ge,
+            Token::Lt => Token::Lt,
+            Token::Gt => Token::Gt,
+            Token::Assign => Token::Assign,
+            Token::LParen => Token::LParen,
+            Token::RParen => Token::RParen,
+            Token::LBrace => Token::LBrace,
+            Token::RBrace => Token::RBrace,
+            Token::LBracket => Token::LBracket,
+            Token::RBracket => Token::RBracket,
+            Token::DColon => Token::DColon,
+            Token::Semi => Token::Semi,
+            Token::Colon => Token::Colon,
+            Token::Comma => Token::Comma,
+            Token::Dot => Token::Dot,
+            Token::Concat => Token::Concat,
+            Token::Ellipsis => Token::Ellipsis,
+            Token::At => Token::At,
+            Token::MacroBraceOpen => Token::MacroBraceOpen,
+            Token::MacroBraceClose => Token::MacroBraceClose,
+            Token::Eof => Token::Eof,
+            Token::Int(v) => Token::Int(v),
+            Token::Float(v) => Token::Float(v),
+            Token::Str(v) => Token::Str(s(v)),
+            Token::Name(v) => Token::Name(n(v)),
+            Token::MacroQuote(v) => Token::MacroQuote(q(v)),
+        }
+    }
+
+    /// The token's kind, without its payloads.
+    pub(crate) fn kind(&self) -> Tok {
+        match self {
+            Token::And => Token::And,
+            Token::Break => Token::Break,
+            Token::Do => Token::Do,
+            Token::Else => Token::Else,
+            Token::Elseif => Token::Elseif,
+            Token::End => Token::End,
+            Token::False => Token::False,
+            Token::For => Token::For,
+            Token::Function => Token::Function,
+            Token::Global => Token::Global,
+            Token::Goto => Token::Goto,
+            Token::If => Token::If,
+            Token::In => Token::In,
+            Token::Local => Token::Local,
+            Token::Nil => Token::Nil,
+            Token::Not => Token::Not,
+            Token::Or => Token::Or,
+            Token::Repeat => Token::Repeat,
+            Token::Return => Token::Return,
+            Token::Then => Token::Then,
+            Token::True => Token::True,
+            Token::Until => Token::Until,
+            Token::While => Token::While,
+            Token::Plus => Token::Plus,
+            Token::Minus => Token::Minus,
+            Token::Star => Token::Star,
+            Token::Slash => Token::Slash,
+            Token::DSlash => Token::DSlash,
+            Token::Percent => Token::Percent,
+            Token::Caret => Token::Caret,
+            Token::Hash => Token::Hash,
+            Token::Amp => Token::Amp,
+            Token::Tilde => Token::Tilde,
+            Token::Pipe => Token::Pipe,
+            Token::Shl => Token::Shl,
+            Token::Shr => Token::Shr,
+            Token::Eq => Token::Eq,
+            Token::Ne => Token::Ne,
+            Token::Le => Token::Le,
+            Token::Ge => Token::Ge,
+            Token::Lt => Token::Lt,
+            Token::Gt => Token::Gt,
+            Token::Assign => Token::Assign,
+            Token::LParen => Token::LParen,
+            Token::RParen => Token::RParen,
+            Token::LBrace => Token::LBrace,
+            Token::RBrace => Token::RBrace,
+            Token::LBracket => Token::LBracket,
+            Token::RBracket => Token::RBracket,
+            Token::DColon => Token::DColon,
+            Token::Semi => Token::Semi,
+            Token::Colon => Token::Colon,
+            Token::Comma => Token::Comma,
+            Token::Dot => Token::Dot,
+            Token::Concat => Token::Concat,
+            Token::Ellipsis => Token::Ellipsis,
+            Token::At => Token::At,
+            Token::MacroBraceOpen => Token::MacroBraceOpen,
+            Token::MacroBraceClose => Token::MacroBraceClose,
+            Token::Eof => Token::Eof,
+            Token::Int(v) => Token::Int(*v),
+            Token::Float(v) => Token::Float(*v),
+            Token::Str(_) => Token::Str(()),
+            Token::Name(_) => Token::Name(()),
+            Token::MacroQuote(_) => Token::MacroQuote(()),
+        }
+    }
+}
+
+/// A [`Tok`] plus where it came from (the crate's [`TokenInfo`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LexTok {
+    pub(crate) tok: Tok,
+    pub(crate) span: Span,
+    pub(crate) line: u32,
 }
