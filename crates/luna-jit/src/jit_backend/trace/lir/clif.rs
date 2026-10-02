@@ -315,6 +315,14 @@ pub(crate) fn define<M: Module>(lir: &Lir, module: &mut M) -> Option<FuncId> {
     }
     r.b.seal_all_blocks();
     r.b.finalize(module.target_config());
+    crate::jit_backend::trace::drop_unused_block_params(&mut ctx.func);
+    // `LUNA_TRACE_IR_DUMP=1`, as for the lowerer's own Cranelift IR
+    if std::env::var_os("LUNA_TRACE_IR_DUMP").is_some_and(|v| v == "1") {
+        eprintln!(
+            "=== TRACE IR DUMP (from baseline) ===\n{}\n=== END ===",
+            ctx.func.display()
+        );
+    }
     module.define_function(fn_id, &mut ctx).ok()?;
     module.clear_context(&mut ctx);
     Some(fn_id)
