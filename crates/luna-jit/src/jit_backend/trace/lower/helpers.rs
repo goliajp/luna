@@ -33,6 +33,7 @@ pub(super) struct RuntimeHelpers {
     pub(super) str_sub_id: FuncId,
     pub(super) len_checked_id: FuncId,
     pub(super) upval_get_id: FuncId,
+    pub(super) upval_get_checked_id: FuncId,
     pub(super) head_closure_id: FuncId,
     pub(super) materialize_id: FuncId,
     pub(super) mat_sunk_id: FuncId,
@@ -241,6 +242,16 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
     })
 }
 
+/// An imported helper taking `n_params` `i64`s and returning one.
+fn declare_i64_import<M: Module>(module: &mut M, name: &str, n_params: usize) -> Option<FuncId> {
+    let mut sig = module.make_signature();
+    for _ in 0..n_params {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    module.declare_function(name, Linkage::Import, &sig).ok()
+}
+
 fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> {
     // `fn luna_jit_str_buf_acquire() -> i64`.
     // Returns a `*mut Vec<u8>` (boxed-leaked); used by buffered
@@ -363,6 +374,7 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
     let mut upval_get_sig = module.make_signature();
     upval_get_sig.params.push(AbiParam::new(types::I64));
     upval_get_sig.returns.push(AbiParam::new(types::I64));
+    let upval_get_checked_id = declare_i64_import(module, "luna_jit_upval_get_checked", 3)?;
     let upval_get_id = module
         .declare_function("luna_jit_upval_get", Linkage::Import, &upval_get_sig)
         .ok()?;
@@ -427,6 +439,7 @@ fn declare_runtime_helpers<M: Module>(module: &mut M) -> Option<RuntimeHelpers> 
         str_sub_id,
         len_checked_id,
         upval_get_id,
+        upval_get_checked_id,
         head_closure_id,
         materialize_id,
         mat_sunk_id,

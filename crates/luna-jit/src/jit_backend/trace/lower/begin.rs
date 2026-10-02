@@ -190,6 +190,8 @@ pub(super) fn begin_body<'f, 'm, M: Module>(
         per_exit_inline_vec,
         call_chain,
         upval_cache,
+        upval_checked: std::collections::HashMap::new(),
+        upval_check_done: Vec::new(),
         head_closure_var,
         known_int,
         alt_joins: std::collections::HashMap::new(),

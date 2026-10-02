@@ -82,7 +82,11 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
 /// value has tag `want_tag` and the table has no metatable (whose
 /// `__index` the helper would bypass); otherwise they return `0` and the
 /// caller side-exits at the reading op, so the interpreter performs it.
-unsafe fn checked_read(v: luna_core::runtime::Value, want_tag: i64, out: *mut i64) -> i64 {
+pub(crate) unsafe fn checked_read(
+    v: luna_core::runtime::Value,
+    want_tag: i64,
+    out: *mut i64,
+) -> i64 {
     let (tag, raw) = v.unpack();
     if tag as i64 != want_tag {
         return 0;
