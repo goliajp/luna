@@ -81,7 +81,7 @@ macro_rules! fast_loop_arms {
                     // SAFETY: as for `Jmp`
                     if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) {
                         save!();
-                        slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None);
+                        slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None, $pc);
                     }
                 }
                 if slow {
@@ -112,7 +112,7 @@ macro_rules! fast_loop_arms {
                         // SAFETY: as for `Jmp`
                         if $vm.jit.loop_hot_tick(unsafe { $code.add(target as usize) }) {
                             save!();
-                            $vm.trace_start_at_back_edge(cl!(), base!(), target, Some(a));
+                            $vm.trace_start_at_back_edge(cl!(), base!(), target, Some(a), $pc);
                         }
                     }
                     // SAFETY: as above

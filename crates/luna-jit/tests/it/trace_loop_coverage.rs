@@ -104,7 +104,7 @@ fn every_loop_of_a_function_gets_its_own_trace() {
             while j < n do j = j + 1 u = u + j end
             return s, t, u
         end";
-    let (_, f, entries) = run_both(src, &[Value::Int(1000)], 3);
+    let (_vm, f, entries) = run_both(src, &[Value::Int(1000)], 3);
     assert_eq!(
         dispatchable_heads(f).len(),
         3,
@@ -126,7 +126,7 @@ fn a_table_read_is_typed_by_the_value_the_recording_saw() {
             while i <= #w and w[i] < lim - 1 do i = i + 1 end
             return i
         end";
-    let (_, f, entries) = run_both(src, &[Value::Int(250)], 3);
+    let (_vm, f, entries) = run_both(src, &[Value::Int(250)], 3);
     assert_eq!(dispatchable_heads(f).len(), 1);
     assert_eq!(entries, 1);
 }
@@ -145,7 +145,7 @@ fn a_present_field_is_read_and_written_in_its_slot_past_a_metatable() {
             for i = 1, k do o.n = o.n + o.step end
             return o.n
         end";
-    let (_, f, entries) = run_both(src, &[Value::Int(1000)], 3);
+    let (_vm, f, entries) = run_both(src, &[Value::Int(1000)], 3);
     assert_eq!(dispatchable_heads(f).len(), 1);
     assert_eq!(entries, 1);
 }
@@ -163,7 +163,7 @@ fn array_reads_writes_and_lengths_stay_in_the_trace() {
             for j = 1, #out do s = s + out[j] end
             return #out, s
         end";
-    let (_, f, entries) = run_both(src, &[], 3);
+    let (_vm, f, entries) = run_both(src, &[], 3);
     assert_eq!(dispatchable_heads(f).len(), 2);
     // the appends past the array part grow it through the helper, which
     // the trace survives
@@ -230,7 +230,7 @@ fn a_comparison_s_other_branch_runs_inside_the_trace() {
             end
             return last3, last5, big
         end";
-    let (_, f, entries) = run_both(src, &[Value::Int(1000)], 3);
+    let (_vm, f, entries) = run_both(src, &[Value::Int(1000)], 3);
     assert_eq!(dispatchable_heads(f).len(), 1);
     assert_eq!(entries, 1);
 }
@@ -250,7 +250,7 @@ fn string_keys_and_string_constants_stay_in_the_trace() {
             end
             return s, last
         end";
-    let (_, f, entries) = run_both(src, &[], 3);
+    let (_vm, f, entries) = run_both(src, &[], 3);
     assert_eq!(dispatchable_heads(f).len(), 1);
     assert_eq!(entries, 1);
 }

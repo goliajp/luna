@@ -106,6 +106,12 @@ struct Lower<'f, 'm, M: Module> {
     )>,
     call_chain: Vec<FrameMaterializeInfo>,
     upval_cache: std::collections::HashMap<u32, Variable>,
+    /// Per upvalue index, the checked typed read: its variable, out slot,
+    /// check result and type.
+    upval_checked:
+        std::collections::HashMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
+    /// The upvalues whose checked read has been guarded.
+    upval_check_done: Vec<u32>,
     head_closure_var: Option<Variable>,
     known_int: Vec<Option<i64>>,
     /// Blocks the other way of a comparison jumps to, by the recorded op

@@ -132,9 +132,26 @@ pub(super) fn emit_closure_op<M: Module>(
             } else {
                 None
             };
+            // otherwise typed by the value the recording saw, the read
+            // checked against it once, where it is made
+            let seen = getx_want(record.result_tag(i).and_then(|t| {
+                use luna_core::runtime::value::raw;
+                match t {
+                    raw::INT => Some(ExitTag::Int),
+                    raw::FLOAT => Some(ExitTag::Float),
+                    raw::TABLE => Some(ExitTag::Table),
+                    raw::STR => Some(ExitTag::Str),
+                    _ => None,
+                }
+            }));
             match inferred {
                 Some(ExitTag::Closure) => {
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;
+                }
+                _ if let Some((kind, want)) = seen => {
+                    let v = checked_upval_read(lw, pl, oc, idx_b, want)?;
+                    lw.bcx.def_var(regs[ins.a() as usize], v);
+                    lw.current_kinds[off + ins.a() as usize] = kind;
                 }
                 _ => {
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Unknown;
@@ -147,4 +164,49 @@ pub(super) fn emit_closure_op<M: Module>(
         _ => unreachable!("routed by emit_op"),
     }
     Some(())
+}
+
+/// Upvalue `idx` read through the checked helper, typed `want`: the call
+/// made once per trace, at the first read, and guarded there.
+fn checked_upval_read<M: Module>(
+    lw: &mut Lower<'_, '_, M>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    idx: u32,
+    want: u8,
+) -> Option<Value> {
+    let RuntimeHelpers {
+        upval_get_checked_id,
+        ..
+    } = lw.h.rt;
+    let OpCx { i, rop, .. } = *oc;
+    let bcx = &mut lw.bcx;
+    let module = &mut lw.module;
+    let checked = lw.upval_checked.entry(idx).or_insert_with(|| {
+        let var = bcx.declare_var(types::I64);
+        let ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+            8,
+            3,
+        ));
+        let out = bcx.ins().stack_addr(types::I64, ss, 0);
+        let idx_arg = bcx.ins().iconst(types::I64, i64::from(idx));
+        let want_arg = bcx.ins().iconst(types::I64, i64::from(want));
+        let f = module.declare_func_in_func(upval_get_checked_id, bcx.func);
+        let call = bcx.ins().call(f, &[idx_arg, want_arg, out]);
+        let ok = bcx.inst_results(call)[0];
+        (var, ss, ok, want)
+    });
+    let (var, ss, ok, checked_want) = *checked;
+    if checked_want != want {
+        return None;
+    }
+    // the first read of this upvalue made the check
+    if !lw.upval_check_done.contains(&idx) {
+        lw.upval_check_done.push(idx);
+        guard!(lw, pl, ok, i, rop.pc);
+        let v = lw.bcx.ins().stack_load(types::I64, types::I64, ss, 0);
+        lw.bcx.def_var(var, v);
+    }
+    Some(lw.bcx.use_var(var))
 }

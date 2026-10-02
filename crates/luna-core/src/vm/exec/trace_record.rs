@@ -243,6 +243,15 @@ impl Vm {
             return;
         }
         let rec = self.jit.active_trace.as_mut().expect("recording");
+        if cur_depth == 0
+            && let Some(end) = rec.loop_end
+            && (pc < rec.head_pc || pc > end)
+            && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
+        {
+            self.abort_recording("leaves-loop");
+            return;
+        }
+        let rec = self.jit.active_trace.as_mut().expect("recording");
         // Depth-aware push at the
         // current `cur_depth`. The `depth_cap_hit` /
         // `returned_past_head` early-exit is handled by
