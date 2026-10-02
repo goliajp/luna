@@ -905,10 +905,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
                     "'setfenv' cannot change environment of given object",
                 ));
             };
-            let uv = cl.upvals()[env_idx];
-            // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-            unsafe { uv.as_mut() }.set_closed(Value::Table(env_t));
-            vm.barrier_forward_upvalue(uv, Value::Table(env_t));
+            vm.set_closure_env(cl, env_idx, env_t);
         }
         Value::Coro(co) => {
             // the running thread's globals are the Vm's; a suspended one
