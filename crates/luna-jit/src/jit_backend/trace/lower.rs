@@ -42,20 +42,26 @@ macro_rules! guard {
     }};
 }
 
+mod begin;
 mod body;
+mod downrec_tail;
 mod exit;
 mod finish;
 mod fold;
 mod helpers;
+mod loop_tail;
 mod ops;
 mod plan;
 mod prologue;
 mod tail;
+use begin::*;
 use body::*;
+use downrec_tail::*;
 use exit::*;
 use finish::*;
 use fold::*;
 use helpers::*;
+use loop_tail::*;
 use ops::*;
 use plan::*;
 use prologue::*;
