@@ -1,4 +1,3 @@
-// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Byte-driven lexer. The source is an arbitrary byte sequence (Lua sources
 //! and string literals are not required to be UTF-8); only `\u{...}` escapes
 //! produce UTF-8 output.

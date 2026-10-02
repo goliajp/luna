@@ -1,4 +1,3 @@
-// CARVE-OUT: pre-existing god file, shrinking on every touch
 //! Function objects: compiled prototypes, Lua closures, upvalues.
 
 use crate::runtime::fnv::FnvHash128;
