@@ -211,7 +211,7 @@ pub(super) fn emit_store_back_and_return(
     // reg_state already holds `stored[idx]` (see `sync_reg_state`); only
     // a register whose value changed since is written.
     for (idx, v) in regs.iter().copied().enumerate() {
-        let val = bcx.use_var(v);
+        let val = use_var_resolved(bcx, v);
         if stored.get(idx).copied().flatten() == Some(val) {
             continue;
         }
@@ -231,6 +231,14 @@ pub(super) fn emit_store_back_and_return(
     );
 }
 
+/// `use_var` seen through aliases: past a merge the SSA builder can hand
+/// back a fresh alias of the value reg_state already holds, which would
+/// compare unequal to it and store every register again.
+pub(super) fn use_var_resolved(bcx: &mut FunctionBuilder<'_>, v: Variable) -> Value {
+    let val = bcx.use_var(v);
+    bcx.func.dfg.resolve_aliases(val)
+}
+
 /// Writes every register whose SSA value differs from what reg_state
 /// holds (`stored`) and records the new values. Called at the start of
 /// each recorded op and before every back-edge, it keeps reg_state equal
@@ -245,7 +253,7 @@ pub(super) fn sync_reg_state(
     reg_state: Value,
 ) {
     for (idx, v) in regs.iter().copied().enumerate() {
-        let val = bcx.use_var(v);
+        let val = use_var_resolved(bcx, v);
         if stored[idx] == Some(val) {
             continue;
         }
@@ -324,7 +332,7 @@ pub(super) fn emit_store_back_and_return_site(
     // reg_state already holds `stored[idx]` (see `sync_reg_state`); only
     // a register whose value changed since is written.
     for (idx, v) in regs.iter().copied().enumerate() {
-        let val = bcx.use_var(v);
+        let val = use_var_resolved(bcx, v);
         if stored.get(idx).copied().flatten() == Some(val) {
             continue;
         }
