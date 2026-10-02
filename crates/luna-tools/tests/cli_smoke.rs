@@ -60,11 +60,6 @@ fn help_luna_trace_inspect() {
 }
 
 #[test]
-fn help_luna_repl_polish() {
-    assert_help_ok("luna-repl-polish");
-}
-
-#[test]
 fn luna_heap_dump_runs_toy_script() {
     let dir = tempfile::tempdir().expect("tempdir");
     let script_path = dir.path().join("toy.lua");

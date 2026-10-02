@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
+publish = false
 
 [lib]
 # rlib only: luna-tools is a build of CLIs + shared format types
@@ -31,10 +32,6 @@ path = "src/bin/luna_profile.rs"
 [[bin]]
 name = "luna-trace-inspect"
 path = "src/bin/luna_trace_inspect.rs"
-
-[[bin]]
-name = "luna-repl-polish"
-path = "src/bin/luna_repl_polish.rs"
 
 # Long-running workload runner with RSS + Vm
 # memory sampling. Consumed by `.github/workflows/soak-nightly.yml`
@@ -86,23 +83,11 @@ inferno = { version = "0.12", optional = true }
 # `--all-features` flag is load-bearing.)
 pprof = { version = "0.15", optional = true }
 
-# Optional: disassembly for `luna-trace-inspect --show mcode`.
-# Capstone wraps a C library so it's a build-toolchain ask;
-# opt-feature only.
-capstone = { version = "0.12", optional = true }
-
 [features]
-# Default ships luna-bin-inspect / luna-heap-dump fully wired.
-# The optional parts of luna-profile / luna-trace-inspect /
-# luna-repl-polish compile as stubs without the extra deps;
-# embedders that want the real impl opt in.
+# Default ships every binary; luna-profile's pprof output needs
+# `flame-graph`.
 default = []
-# rustyline v15.x is the pinned target for REPL polish. Listed as
-# a placeholder feature today so future commits can land
-# the dep + impl without re-opening the binary list.
-repl-polish = []
 flame-graph = ["dep:inferno", "dep:pprof"]
-mcode-disasm = ["dep:capstone"]
 
 [dev-dependencies]
 # Smoke-test harness: per-binary `<bin> --help` exit-0 + small
