@@ -13,6 +13,10 @@ pub(crate) struct ListStacks {
     pub(super) attribs: Vec<AttribName>,
     pub(super) fields: Vec<TableField>,
     pub(super) arms: Vec<IfArm>,
+    /// the parser's per-function stacks and goto checker
+    pub(super) func_local_count: Vec<(u32, u32, u32)>,
+    pub(super) funcs: Vec<FnFlow>,
+    pub(super) gotos: Option<GotoCheck>,
 }
 
 /// The items gathered on `stack` since `mark`, moved to `chunk` as a list.

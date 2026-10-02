@@ -12,17 +12,18 @@
 //! goto to a label every loop places at its end; 5.1 and 5.5 check it on
 //! the spot.
 
+use crate::runtime::DebugName;
 use crate::version::LuaVersion;
 
 struct Label {
-    name: Box<str>,
+    name: DebugName,
     line: u32,
     /// active locals where the label stands
     nactvar: usize,
 }
 
 struct Goto {
-    name: Box<str>,
+    name: DebugName,
     line: u32,
     /// active locals at the goto; lowered as it moves out of blocks
     nactvar: usize,
@@ -39,7 +40,7 @@ struct Block {
 /// decides whether it ends its block (and so sits outside the block's
 /// locals) only after skipping them.
 struct Open {
-    name: Box<str>,
+    name: DebugName,
     line: u32,
     /// 5.2/5.3 enter the label in the list before skipping
     entry: Option<usize>,
@@ -63,11 +64,15 @@ pub(crate) struct GotoCheck {
 }
 
 impl GotoCheck {
-    /// The checker for dialects with goto (5.2+).
-    pub(crate) fn new(version: LuaVersion) -> Option<GotoCheck> {
-        version.has_goto().then(|| GotoCheck {
-            v54: version >= LuaVersion::Lua54,
-            v55: version >= LuaVersion::Lua55,
+    /// The checker for dialects with goto (5.2+), in the vectors of an
+    /// earlier one when given.
+    pub(crate) fn new(version: LuaVersion, old: Option<GotoCheck>) -> Option<GotoCheck> {
+        if !version.has_goto() {
+            return None;
+        }
+        let mut g = old.unwrap_or_else(|| GotoCheck {
+            v54: false,
+            v55: false,
             actvar: Vec::new(),
             names: String::new(),
             labels: Vec::new(),
@@ -75,7 +80,22 @@ impl GotoCheck {
             blocks: Vec::new(),
             funcs: Vec::new(),
             open: Vec::new(),
-        })
+        });
+        g.clear();
+        g.v54 = version >= LuaVersion::Lua54;
+        g.v55 = version >= LuaVersion::Lua55;
+        Some(g)
+    }
+
+    /// Forget everything, keeping the vectors.
+    fn clear(&mut self) {
+        self.actvar.clear();
+        self.names.clear();
+        self.labels.clear();
+        self.pending.clear();
+        self.blocks.clear();
+        self.funcs.clear();
+        self.open.clear();
     }
 
     pub(crate) fn enter_function(&mut self) {
