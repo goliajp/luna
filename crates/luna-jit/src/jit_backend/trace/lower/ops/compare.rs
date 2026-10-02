@@ -86,6 +86,11 @@ pub(super) fn emit_eqk_op<M: Module>(
 
             lw.bcx.switch_to_block(side_exit_blk);
             lw.bcx.seal_block(side_exit_blk);
+            if alt_taken(lw, pl, oc.i, continue_blk) {
+                lw.bcx.switch_to_block(continue_blk);
+                lw.bcx.seal_block(continue_blk);
+                return Some(());
+            }
             let side_exit_pc = rop.pc + 2;
             // at depth>0, the side-exit must
             // materialise the inlined frames before the interp can
