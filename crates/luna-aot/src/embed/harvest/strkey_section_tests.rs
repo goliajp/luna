@@ -35,7 +35,7 @@ fn harvest_object_for(triple: &str) -> Vec<u8> {
     let dump = compile_to_dump(&src, LuaVersion::Lua55).expect("compile source");
     let target = TargetSpec::from_triple(triple).expect("target triple");
     let out = td.path().join("traces.o");
-    let harvested = harvest_and_emit_aot_traces(&dump, LuaVersion::Lua55, &out, &target)
+    let harvested = harvest_and_emit_aot_traces(&dump, LuaVersion::Lua55, &out, &target, false)
         .unwrap_or_else(|e| panic!("harvest for {triple}: {e}"));
     assert!(
         matches!(harvested, HarvestedTraces::Some),

@@ -1,5 +1,3 @@
-// own binary: it sets LUNA_AOT_HARVEST_PROBE for the whole process
-
 //! Runtime fire measurement for the AOT inline-chain reloc path.
 //!
 //! NOT a pass/fail test — pure measurement. Prints every relevant
@@ -28,7 +26,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use luna_aot::embed::compile_and_link;
+use luna_aot::embed::{AotOptions, compile_and_link_with};
 use luna_core::version::LuaVersion;
 
 fn have_on_path(bin: &str) -> bool {
@@ -66,18 +64,16 @@ fn measure(label: &str, src: &[u8], expected_stdout: &str) {
     fs::write(&src_path, src).expect("write source");
 
     let out_path = td.path().join(format!("{label}_aot"));
-    // Surface harvest diagnostics so the output shows the filter
-    // accept/reject reason per workload, not just the final
-    // installed-trace count.
-    // SAFETY: single-threaded test, set_var on a string env key is
-    // sound here (cargo test runs each test fn serially within the
-    // process unless the test explicitly opts into parallel exec).
-    unsafe {
-        std::env::set_var("LUNA_AOT_HARVEST_PROBE", "1");
-    }
-    compile_and_link(&src_path, &out_path, None, LuaVersion::Lua55).unwrap_or_else(|e| {
-        panic!("[{label}] compile_and_link failed: {e}");
-    });
+    // surface the harvest filter's accept / reject reason per workload,
+    // not just the final installed-trace count
+    let options = AotOptions {
+        harvest_probe: true,
+    };
+    compile_and_link_with(&src_path, &out_path, None, LuaVersion::Lua55, options).unwrap_or_else(
+        |e| {
+            panic!("[{label}] compile_and_link failed: {e}");
+        },
+    );
 
     let (stdout, stderr, code) = run_with_env(&out_path, "LUNA_AOT_PROBE", "1");
 
