@@ -286,3 +286,6 @@ fn select_installable(
     }
     installable
 }
+
+#[cfg(test)]
+mod strkey_section_tests;
