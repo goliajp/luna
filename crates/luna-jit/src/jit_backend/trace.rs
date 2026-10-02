@@ -46,6 +46,8 @@ use kinds::*;
 use slots::op_writes_at_offset;
 pub use slots::{compute_body_writes, compute_live_in_slots, op_reads_writes};
 mod accum;
+mod emit;
+pub(crate) use emit::{ClifEmit, Emit, Ins};
 mod aot_data;
 mod block_params;
 mod compile;

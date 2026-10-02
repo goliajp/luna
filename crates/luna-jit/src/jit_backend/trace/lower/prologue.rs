@@ -13,11 +13,7 @@ pub(super) struct EntryRegs {
 /// Emits the entry block: loads the caller window from `reg_state`,
 /// zeroes the inline frames' registers and declares the trace-wide
 /// variables.
-pub(super) fn emit_entry<M: Module>(
-    bcx: &mut FunctionBuilder<'_>,
-    module: &mut M,
-    pl: &Plan<'_>,
-) -> EntryRegs {
+pub(super) fn emit_entry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> EntryRegs {
     let Plan {
         max_stack,
         window_size_us,
@@ -56,10 +52,10 @@ pub(super) fn emit_entry<M: Module>(
     // every side-exit emit can `call_indirect` into a child side
     // trace. Matches the parent's own signature (`(I64) -> I64`).
     let trace_fn_sig_ref: cranelift_codegen::ir::SigRef = {
-        let mut sig = module.make_signature();
+        let mut sig = bcx.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        bcx.func.import_signature(sig)
+        bcx.import_signature(sig)
     };
     // singleton GLOBAL side-trace cell shared by
     // every non-INLINE / non-TAG callsite (clean-tail, Call
@@ -154,8 +150,8 @@ pub(super) fn emit_entry<M: Module>(
 
 /// Declares the virtual registers of each sinkable table site, demoting
 /// the sites that cannot be sunk.
-pub(super) fn alloc_sunk_sites(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn alloc_sunk_sites<E: Emit>(
+    bcx: &mut E,
     pl: &Plan<'_>,
     escape: &mut EscapeAnalysis,
 ) -> (Vec<Option<Vec<Variable>>>, Vec<Option<Vec<RegKind>>>, u32) {
@@ -257,9 +253,8 @@ pub(super) fn alloc_sunk_sites(
 
 /// Starts the string buffer of the accumulator idiom, when the trace
 /// has one, and returns what its exits need to flush it.
-pub(super) fn start_accum<M: Module>(
-    bcx: &mut FunctionBuilder<'_>,
-    module: &mut M,
+pub(super) fn start_accum<E: Emit>(
+    bcx: &mut E,
     pl: &Plan<'_>,
     h: Helpers,
     regs_full: &[Variable],
@@ -287,10 +282,10 @@ pub(super) fn start_accum<M: Module>(
     // back to reg_state.
     if let Some(ref ba) = active_accum {
         let buf_var = bcx.declare_var(types::I64);
-        let acquire_ref = module.declare_func_in_func(str_buf_acquire_id, bcx.func);
-        let intern_ref = module.declare_func_in_func(str_buf_intern_id, bcx.func);
-        let release_ref = module.declare_func_in_func(str_buf_release_id, bcx.func);
-        let extend_ref = module.declare_func_in_func(str_buf_extend_id, bcx.func);
+        let acquire_ref = bcx.import_func(str_buf_acquire_id);
+        let intern_ref = bcx.import_func(str_buf_intern_id);
+        let release_ref = bcx.import_func(str_buf_release_id);
+        let extend_ref = bcx.import_func(str_buf_extend_id);
         let call_inst = bcx.ins().call(acquire_ref, &[]);
         let ptr = bcx.inst_results(call_inst)[0];
         bcx.def_var(buf_var, ptr);
@@ -320,10 +315,7 @@ pub(super) fn start_accum<M: Module>(
 
 /// Creates the loop head (and the math-fold precheck block, when the
 /// folds are checked once) and jumps there from the entry block.
-pub(super) fn open_body_loop(
-    bcx: &mut FunctionBuilder<'_>,
-    pl: &Plan<'_>,
-) -> (Option<Block>, Block) {
+pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> (Option<Block>, Block) {
     let Plan {
         record,
         head_proto,

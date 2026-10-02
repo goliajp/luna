@@ -26,8 +26,8 @@ fn mem_tag(r: u8) -> u8 {
 /// `__index` or `__newindex` would be consulted, so the table's metatable
 /// does not matter. Leaves the builder in no block; the caller seals `hit`
 /// and `miss`.
-pub(super) fn emit_field_slot_check(
-    bcx: &mut FunctionBuilder<'_>,
+pub(super) fn emit_field_slot_check<E: Emit>(
+    bcx: &mut E,
     t: Value,
     key: Value,
     slot: u32,
@@ -99,7 +99,7 @@ pub(super) fn emit_field_slot_check(
 
 /// Load the value payload of the node at `node` (from
 /// [`emit_field_slot_check`]'s `hit`).
-pub(super) fn emit_slot_load(bcx: &mut FunctionBuilder<'_>, node: Value) -> Value {
+pub(super) fn emit_slot_load<E: Emit>(bcx: &mut E, node: Value) -> Value {
     bcx.ins().load(
         types::I64,
         MemFlagsData::trusted(),
@@ -111,7 +111,7 @@ pub(super) fn emit_slot_load(bcx: &mut FunctionBuilder<'_>, node: Value) -> Valu
 /// Overwrite the value of the node at `node` with `val` of raw tag `r`.
 /// Only for a value the collector does not trace: a store of a
 /// collectable one into a table needs the write barrier.
-pub(super) fn emit_slot_store(bcx: &mut FunctionBuilder<'_>, node: Value, val: Value, r: u8) {
+pub(super) fn emit_slot_store<E: Emit>(bcx: &mut E, node: Value, val: Value, r: u8) {
     debug_assert!(!luna_core::runtime::value::raw::is_gc(r));
     let flags = MemFlagsData::trusted();
     let tag = bcx.ins().iconst(types::I8, i64::from(mem_tag(r)));

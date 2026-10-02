@@ -1,8 +1,8 @@
 use super::*;
 
 /// Register comparisons.
-pub(super) fn emit_order_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_order_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -127,8 +127,8 @@ pub(super) fn emit_order_op<M: Module>(
 }
 
 /// The side exit of a register comparison, at `side_exit_pc`.
-pub(super) fn emit_cmp_side_exit<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_cmp_side_exit<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     side_exit_pc: u32,
@@ -169,7 +169,6 @@ pub(super) fn emit_cmp_side_exit<M: Module>(
         let mut kinds_snapshot: Vec<RegKind> = lw.current_kinds.clone();
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
-            &mut lw.module,
             mat_sunk_id,
             &lw.escape,
             &lw.virt_vars,
@@ -195,14 +194,13 @@ pub(super) fn emit_cmp_side_exit<M: Module>(
         ));
         let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
         let ptr_arg = emit_chain_ptr_arg(
-            &mut lw.module,
             &mut lw.bcx,
             &chain_for_helper,
             chain_ptr,
             opts.aot,
             &mut lw.defined_aot_data,
         );
-        let mat_ref = lw.module.declare_func_in_func(materialize_id, lw.bcx.func);
+        let mat_ref = lw.bcx.import_func(materialize_id);
         let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg]);
         emit_store_back_and_return_site(
             &mut lw.bcx,
@@ -221,7 +219,6 @@ pub(super) fn emit_cmp_side_exit<M: Module>(
         let mut snapshot: Vec<RegKind> = lw.current_kinds[..max_stack].to_vec();
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
-            &mut lw.module,
             mat_sunk_id,
             &lw.escape,
             &lw.virt_vars,
@@ -242,7 +239,6 @@ pub(super) fn emit_cmp_side_exit<M: Module>(
             .push((side_exit_pc, snapshot, tag_side_box_1));
         emit_tagged_exit(
             &mut lw.bcx,
-            &mut lw.module,
             suppress_admit_id,
             &lw.regs_full[..max_stack],
             &lw.stored,
@@ -257,8 +253,8 @@ pub(super) fn emit_cmp_side_exit<M: Module>(
 }
 
 /// The condition of `==` on two non-float registers of kinds `ka` and `kb`.
-pub(super) fn emit_eq_cond<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_eq_cond<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     ka: RegKind,
@@ -282,7 +278,7 @@ pub(super) fn emit_eq_cond<M: Module>(
             // equal long strings); the interpreter decides those
             let same = lw.bcx.ins().icmp(IntCC::Equal, lhs, rhs);
             let decided = if kind == RegKind::Table {
-                let no_mt = |bcx: &mut FunctionBuilder<'_>, t| {
+                let no_mt = |bcx: &mut E, t| {
                     let mt = bcx.ins().load(
                         types::I64,
                         MemFlagsData::trusted(),
@@ -295,7 +291,7 @@ pub(super) fn emit_eq_cond<M: Module>(
                 let r = no_mt(&mut lw.bcx, rhs);
                 lw.bcx.ins().band(l, r)
             } else {
-                let short = |bcx: &mut FunctionBuilder<'_>, s| {
+                let short = |bcx: &mut E, s| {
                     let b = bcx.ins().load(
                         types::I8,
                         MemFlagsData::trusted(),

@@ -3,7 +3,7 @@ use super::*;
 /// Checks once, before the loop head, that each folded `math.<fn>` is
 /// still the library function (only when nothing in the trace can
 /// reassign it).
-pub(super) fn emit_fold_precheck<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan<'_>) {
+pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let Plan {
         record,
         head_proto,
@@ -51,23 +51,9 @@ pub(super) fn emit_fold_precheck<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan
                 continue;
             }
             checked.push(name_ptr);
-            let m = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                math_key,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
-            let k = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                name_key,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
-            let check_ref = lw
-                .module
-                .declare_func_in_func(math_fn_check_id, lw.bcx.func);
+            let m = emit_str_key_arg(&mut lw.bcx, math_key, opts.aot, &mut lw.defined_aot_data);
+            let k = emit_str_key_arg(&mut lw.bcx, name_key, opts.aot, &mut lw.defined_aot_data);
+            let check_ref = lw.bcx.import_func(math_fn_check_id);
             let call = lw.bcx.ins().call(check_ref, &[m, k]);
             let is_library = lw.bcx.inst_results(call)[0];
             let ok_blk = lw.bcx.create_block();
@@ -84,7 +70,6 @@ pub(super) fn emit_fold_precheck<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan
             ));
             emit_tagged_exit(
                 &mut lw.bcx,
-                &mut lw.module,
                 suppress_admit_id,
                 &lw.regs_full[..max_stack],
                 &entry_stored,
@@ -104,11 +89,7 @@ pub(super) fn emit_fold_precheck<M: Module>(lw: &mut Lower<'_, '_, M>, pl: &Plan
 
 /// Lowers op `oc.i` of a math fold: the folded call at its emit position,
 /// nothing at the silent ones.
-pub(super) fn emit_fold<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
-    pl: &Plan<'_>,
-    oc: &OpCx<'_>,
-) -> Option<()> {
+pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
     let Plan {
         record,
         head_proto,
@@ -144,23 +125,9 @@ pub(super) fn emit_fold<M: Module>(
             else {
                 unreachable!("the fold matcher took both keys as strings");
             };
-            let m = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                math_key,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
-            let k = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                name_key,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
-            let check_ref = lw
-                .module
-                .declare_func_in_func(math_fn_check_id, lw.bcx.func);
+            let m = emit_str_key_arg(&mut lw.bcx, math_key, opts.aot, &mut lw.defined_aot_data);
+            let k = emit_str_key_arg(&mut lw.bcx, name_key, opts.aot, &mut lw.defined_aot_data);
+            let check_ref = lw.bcx.import_func(math_fn_check_id);
             let call = lw.bcx.ins().call(check_ref, &[m, k]);
             let is_library = lw.bcx.inst_results(call)[0];
             guard!(lw, pl, is_library, i, rop.pc);
@@ -169,14 +136,14 @@ pub(super) fn emit_fold<M: Module>(
             FoldKind::Libm1 if fold.start_idx == i => {
                 // Declare libm fn fresh per fold (cranelift
                 // dedups by name in the same module).
-                let mut libm_sig = lw.module.make_signature();
+                let mut libm_sig = lw.bcx.make_signature();
                 libm_sig.params.push(AbiParam::new(types::F64));
                 libm_sig.returns.push(AbiParam::new(types::F64));
                 let libm_id = lw
-                    .module
+                    .bcx
                     .declare_function(fold.fn_name, Linkage::Import, &libm_sig)
                     .ok()?;
-                let libm_ref = lw.module.declare_func_in_func(libm_id, lw.bcx.func);
+                let libm_ref = lw.bcx.import_func(libm_id);
                 // Libm1 always has a Reg arg_src — coerce
                 // to f64 via the existing Int→f64 / bitcast
                 // ladder based on current_kinds.
@@ -222,15 +189,15 @@ pub(super) fn emit_fold<M: Module>(
                 };
                 let call = if fold.fn_name == "atan" {
                     // Only on 5.4+ (see the matcher): atan2(y, 1).
-                    let mut atan2_sig = lw.module.make_signature();
+                    let mut atan2_sig = lw.bcx.make_signature();
                     atan2_sig.params.push(AbiParam::new(types::F64));
                     atan2_sig.params.push(AbiParam::new(types::F64));
                     atan2_sig.returns.push(AbiParam::new(types::F64));
                     let atan2_id = lw
-                        .module
+                        .bcx
                         .declare_function("atan2", Linkage::Import, &atan2_sig)
                         .ok()?;
-                    let atan2_ref = lw.module.declare_func_in_func(atan2_id, lw.bcx.func);
+                    let atan2_ref = lw.bcx.import_func(atan2_id);
                     let one = lw.bcx.ins().f64const(1.0);
                     lw.bcx.ins().call(atan2_ref, &[arg_f64, one])
                 } else {
@@ -263,8 +230,8 @@ pub(super) fn emit_fold<M: Module>(
 
 /// A `string.sub` fold at its call: on a string and integers the trace
 /// knows as such; anything else is not compiled.
-fn emit_str_sub_fold<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+fn emit_str_sub_fold<E: Emit>(
+    lw: &mut Lower<E>,
     oc: &OpCx<'_>,
     fold: &TraceMathFold,
 ) -> Option<()> {
@@ -286,7 +253,7 @@ fn emit_str_sub_fold<M: Module>(
     } else {
         lw.bcx.ins().iconst(types::I64, -1)
     };
-    let sub_ref = lw.module.declare_func_in_func(str_sub_id, lw.bcx.func);
+    let sub_ref = lw.bcx.import_func(str_sub_id);
     let call = lw.bcx.ins().call(sub_ref, &[s, from, to]);
     let r = lw.bcx.inst_results(call)[0];
     lw.bcx.def_var(regs[a as usize], r);
@@ -295,8 +262,8 @@ fn emit_str_sub_fold<M: Module>(
 }
 
 /// A two-argument `math.min` / `math.max` fold at its call.
-pub(super) fn emit_minmax_fold<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_minmax_fold<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     fold: &TraceMathFold,

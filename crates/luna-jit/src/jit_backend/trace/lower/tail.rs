@@ -2,8 +2,8 @@ use super::*;
 
 /// Emits the tail, the way the trace closes, and seals the loop head.
 /// Returns the down-recursion link and guard count for `CompiledTrace`.
-pub(super) fn emit_tail<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_tail<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
 ) -> Option<(Option<(u32, u32)>, u8)> {
     let Plan {

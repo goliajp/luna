@@ -1,8 +1,8 @@
 use super::*;
 
 /// The loop edge at `effective_end`.
-pub(super) fn emit_loop_tail<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_loop_tail<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     for_loop_idx: usize,
 ) -> Option<()> {
@@ -31,8 +31,8 @@ pub(super) fn emit_loop_tail<M: Module>(
 }
 
 /// `Op::ForLoop` (the 5.4+ integer count form).
-pub(super) fn emit_for_loop_tail<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_for_loop_tail<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     rop: &RecordedOp,
     a: usize,
@@ -129,8 +129,8 @@ pub(super) fn emit_for_loop_tail<M: Module>(
 }
 
 /// `Op::TForLoop`, the generic-for back-edge.
-pub(super) fn emit_tfor_loop_tail<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_tfor_loop_tail<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     for_loop_idx: usize,
     rop: &RecordedOp,
@@ -218,7 +218,6 @@ pub(super) fn emit_tfor_loop_tail<M: Module>(
         .push((rop.pc + 1, nil_snapshot, tag_side_box_2));
     emit_tagged_exit(
         &mut lw.bcx,
-        &mut lw.module,
         suppress_admit_id,
         caller_regs,
         &lw.stored,

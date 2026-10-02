@@ -1,8 +1,8 @@
 use super::*;
 
 /// String-key reads.
-pub(super) fn emit_get_field_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_get_field_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -62,13 +62,7 @@ pub(super) fn emit_get_field_op<M: Module>(
                 luna_core::runtime::Value::Str(s) => s,
                 _ => unreachable!("pre-emit gates Str const at K[C]"),
             };
-            let key_arg = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                key_v,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
+            let key_arg = emit_str_key_arg(&mut lw.bcx, key_v, opts.aot, &mut lw.defined_aot_data);
             let inferred = infer_getx_exit(record, i, effective_end);
             let want = getx_want(inferred);
 
@@ -110,7 +104,7 @@ pub(super) fn emit_get_field_op<M: Module>(
             } else if let Some((_, w)) = want {
                 checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
             } else {
-                let func_ref = lw.module.declare_func_in_func(get_field_id, lw.bcx.func);
+                let func_ref = lw.bcx.import_func(get_field_id);
                 let call = lw.bcx.ins().call(func_ref, &[t, key_arg]);
                 lw.bcx.inst_results(call)[0]
             };
@@ -136,8 +130,8 @@ pub(super) fn emit_get_field_op<M: Module>(
 /// trace leaves for the interpreter when the slot no longer holds it (see
 /// `array_read`).
 #[allow(clippy::too_many_arguments)]
-fn emit_field_slot_read<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+fn emit_field_slot_read<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     t: Value,
@@ -166,8 +160,8 @@ fn emit_field_slot_read<M: Module>(
 }
 
 /// Global reads through an upvalue table.
-pub(super) fn emit_get_tab_up_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_get_tab_up_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -200,13 +194,7 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
                 luna_core::runtime::Value::Str(s) => s,
                 _ => unreachable!("pre-emit gates Str const at K[C]"),
             };
-            let key_arg = emit_str_key_arg(
-                lw.module,
-                &mut lw.bcx,
-                key_v,
-                opts.aot,
-                &mut lw.defined_aot_data,
-            );
+            let key_arg = emit_str_key_arg(&mut lw.bcx, key_v, opts.aot, &mut lw.defined_aot_data);
             let inferred = infer_getx_exit(record, i, effective_end);
             let v = if let Some((_, w)) = getx_want(inferred) {
                 checked_read!(
@@ -220,7 +208,7 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
                     i
                 )
             } else {
-                let func_ref = lw.module.declare_func_in_func(get_tab_up_id, lw.bcx.func);
+                let func_ref = lw.bcx.import_func(get_tab_up_id);
                 let call = lw.bcx.ins().call(func_ref, &[upval_idx_arg, key_arg]);
                 lw.bcx.inst_results(call)[0]
             };
@@ -242,8 +230,8 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
 }
 
 /// The inline-cached read of `t[key]`: guarded load from the cached node, helper on a miss.
-pub(super) fn emit_field_ic_read<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_field_ic_read<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
     t: Value,
@@ -344,7 +332,7 @@ pub(super) fn emit_field_ic_read<M: Module>(
     let v_slow = if let Some((_, w)) = want {
         checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i)
     } else {
-        let func_ref = lw.module.declare_func_in_func(get_field_id, lw.bcx.func);
+        let func_ref = lw.bcx.import_func(get_field_id);
         let call = lw.bcx.ins().call(func_ref, &[t, key_arg]);
         lw.bcx.inst_results(call)[0]
     };

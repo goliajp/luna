@@ -1,8 +1,8 @@
 use super::*;
 
 /// List stores, lengths and concatenation.
-pub(super) fn emit_sequence_op<M: Module>(
-    lw: &mut Lower<'_, '_, M>,
+pub(super) fn emit_sequence_op<E: Emit>(
+    lw: &mut Lower<E>,
     pl: &Plan<'_>,
     oc: &OpCx<'_>,
 ) -> Option<()> {
@@ -91,16 +91,7 @@ pub(super) fn emit_sequence_op<M: Module>(
                 let val = lw.bcx.use_var(regs[a + ii]);
                 // Always stored: SetList fills the fresh table of a
                 // constructor, which has no metatable, at integer keys.
-                let _ = emit_table_set(
-                    &mut lw.bcx,
-                    &mut lw.module,
-                    &set_ids,
-                    t,
-                    key,
-                    RegKind::Int,
-                    val,
-                    src_kind,
-                );
+                let _ = emit_table_set(&mut lw.bcx, &set_ids, t, key, RegKind::Int, val, src_kind);
             }
         }
         Op::Len => {
@@ -131,7 +122,7 @@ pub(super) fn emit_sequence_op<M: Module>(
             lw.bcx.ins().jump(merge, &[fast.into()]);
             lw.bcx.switch_to_block(miss);
             lw.bcx.seal_block(miss);
-            let func_ref = lw.module.declare_func_in_func(len_checked_id, lw.bcx.func);
+            let func_ref = lw.bcx.import_func(len_checked_id);
             let call = lw.bcx.ins().call(func_ref, &[t]);
             let v = lw.bcx.inst_results(call)[0];
             // -1: the table has a metatable
@@ -156,8 +147,8 @@ pub(super) fn emit_sequence_op<M: Module>(
             // kinds (e.g. Str — RegKind doesn't carry Str)
             // call stack_update_raw which preserves the
             // existing tag and only refreshes the raw bits.
-            let spill_ref = lw.module.declare_func_in_func(spill_id, lw.bcx.func);
-            let update_raw_ref = lw.module.declare_func_in_func(update_raw_id, lw.bcx.func);
+            let spill_ref = lw.bcx.import_func(spill_id);
+            let update_raw_ref = lw.bcx.import_func(update_raw_id);
             for slot in a_us..(a_us + n_operands) {
                 let k = lw.current_kinds[off + slot];
                 let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
@@ -177,7 +168,7 @@ pub(super) fn emit_sequence_op<M: Module>(
             // Call helper.
             let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
             let n_arg = lw.bcx.ins().iconst(types::I64, n_operands as i64);
-            let func_ref = lw.module.declare_func_in_func(op_concat_id, lw.bcx.func);
+            let func_ref = lw.bcx.import_func(op_concat_id);
             let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg]);
             let status = lw.bcx.inst_results(call_inst)[0];
             // -1: an error or `__concat`; the interpreter redoes the op
@@ -186,7 +177,7 @@ pub(super) fn emit_sequence_op<M: Module>(
             // Reload regs[A] (= result Str) from vm.stack via
             // luna_jit_stack_load helper. The helper deopts on the
             // `__concat` path, so a result here is always a string.
-            let stack_load_ref = lw.module.declare_func_in_func(stack_load_id, lw.bcx.func);
+            let stack_load_ref = lw.bcx.import_func(stack_load_id);
             let a_arg_reload = lw.bcx.ins().iconst(types::I64, a_us as i64);
             let reload_inst = lw.bcx.ins().call(stack_load_ref, &[a_arg_reload]);
             let result_raw = lw.bcx.inst_results(reload_inst)[0];
