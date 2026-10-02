@@ -17,10 +17,15 @@ mod cond;
 mod const_map;
 mod ctconst;
 mod fold;
+mod level;
+mod small_list;
 mod vararg_scan;
 use const_map::{ConstKey, ConstMap};
 use ctconst::{CtConst, ct_value};
 use fold::{fold_arith, is_logical, numeral};
+pub(crate) use level::CompileScratch;
+use level::{Level, LevelBufs};
+use small_list::{Jumps, SmallList};
 
 use crate::frontend::ast::{
     self, AttribName, BinOp, Block, Chunk, Expr, ExprId, FuncBody, FuncName, List, ListItem, Name,
@@ -42,20 +47,35 @@ pub fn compile_chunk(
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    compile_parsed(ast, &[], version, source_name, heap)
+    let mut scratch = CompileScratch::default();
+    compile_parsed(ast, &[], version, source_name, heap, &mut scratch)
 }
 
 /// [`compile_chunk`] with the `end` lines the parser recorded for loops
 /// ([`crate::frontend::parser::Parsed::end_lines`]); a [`ast::Chunk`] carries no
 /// such lines, so code PUC emits after a loop's `end` is placed on that
-/// line only when they are given.
+/// line only when they are given. The functions are built in the vectors
+/// of `scratch`.
 pub(crate) fn compile_parsed(
     ast: &Chunk,
     end_lines: &[u32],
     version: LuaVersion,
     source_name: &[u8],
     heap: &mut Heap,
+    scratch: &mut CompileScratch,
 ) -> Result<Gc<Proto>, SyntaxError> {
+    compile_main(ast, end_lines, version, source_name, heap, scratch).map(|(p, _)| p)
+}
+
+/// Compile the main function; also gives its `last_target`.
+fn compile_main(
+    ast: &Chunk,
+    end_lines: &[u32],
+    version: LuaVersion,
+    source_name: &[u8],
+    heap: &mut Heap,
+    scratch: &mut CompileScratch,
+) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
@@ -63,12 +83,13 @@ pub(crate) fn compile_parsed(
         heap,
         version,
         source,
-        levels: Vec::new(),
+        levels: level::relabel(std::mem::take(&mut scratch.open)),
+        pool: std::mem::take(&mut scratch.levels),
         last_line: 0,
         force_line: None,
         str_cache: HashMap::new(),
     };
-    let mut main = Level::new(0, true, 0);
+    let mut main = c.new_level(0, true, 0);
     main.upvals.push(UpvalDesc {
         in_stack: false,
         index: 0,
@@ -84,7 +105,11 @@ pub(crate) fn compile_parsed(
     c.last_line = ast.end_line;
     c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
     let lvl = c.levels.pop().expect("main level");
-    Ok(c.heap.adopt_proto(lvl.into_proto(source, 0, 0)))
+    let last_target = lvl.last_target;
+    let proto = c.finish_level(lvl, 0, 0);
+    scratch.levels = c.pool;
+    scratch.open = level::relabel(c.levels);
+    Ok((proto, last_target))
 }
 
 /// Diagnostic version of [`compile_chunk`] that also returns the main
@@ -92,47 +117,14 @@ pub(crate) fn compile_parsed(
 /// destination — PUC `fs->lasttarget` equivalent). Used by the
 /// jump-target tracker unit tests at
 /// `crates/luna-core/tests/it/compiler_jump_target_tracker.rs`.
-///
-/// This entry point is intentionally separate from `compile_chunk` so
-/// production callers do not pay the destructure cost; it exists purely
-/// to expose the tracker subsystem for verification.
 pub fn compile_chunk_with_last_target(
     ast: &ast::Chunk,
     version: LuaVersion,
     source_name: &[u8],
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let source = heap.intern(source_name);
-    let mut c = Compiler {
-        ast,
-        end_lines: &[],
-        heap,
-        version,
-        source,
-        levels: Vec::new(),
-        last_line: 0,
-        force_line: None,
-        str_cache: HashMap::new(),
-    };
-    let mut main = Level::new(0, true, 0);
-    main.upvals.push(UpvalDesc {
-        in_stack: false,
-        index: 0,
-        name: "_ENV".into(),
-        read_only: false,
-    });
-    c.levels.push(main);
-    c.enter_block(false);
-    c.stat_block(&ast.block)?;
-    c.leave_block()?;
-    c.last_line = ast.end_line;
-    c.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
-    let lvl = c.levels.pop().expect("main level");
-    let last_target = lvl.last_target;
-    Ok((
-        c.heap.adopt_proto(lvl.into_proto(source, 0, 0)),
-        last_target,
-    ))
+    let mut scratch = CompileScratch::default();
+    compile_main(ast, &[], version, source_name, heap, &mut scratch)
 }
 
 /// PUC `luaK_checkstack`'s register cap, as the most registers a function
@@ -163,11 +155,13 @@ const MAX_LOCALS: u32 = 200;
 /// Per-target plan for `assign_stat`'s two-phase store (snapshot first, then
 /// emit RHS, then stores) so a later store cannot reorder around an earlier
 /// one's table/key reads (PUC manual §3.3.3).
+#[derive(Clone, Copy)]
 enum LhsPlan {
     Name(ExprId),
     Indexed { obj: u32, key: SetKey },
 }
 
+#[derive(Clone, Copy)]
 enum SetKey {
     /// String constant index for OP_SetField (k ≤ 0xFF).
     Field(u32),
@@ -302,124 +296,6 @@ enum Exp {
     },
 }
 
-struct Level<'a> {
-    code: Vec<Inst>,
-    lines: Vec<u32>,
-    consts: Vec<Value>,
-    const_map: ConstMap,
-    locals: Vec<LocalVar<'a>>,
-    /// ordered active-variable sequence (locals + global decls) for goto scope
-    avars: Vec<AVar<'a>>,
-    blocks: Vec<BlockCx>,
-    freereg: u32,
-    max_stack: u32,
-    upvals: Vec<UpvalDesc>,
-    protos: Vec<Gc<Proto>>,
-    /// completed local-variable debug records (flushed on scope exit)
-    locvars: Vec<crate::runtime::LocVar>,
-    num_params: u8,
-    is_vararg: bool,
-    /// Mirrors PUC `(vararg table)` locvar emission: true only for an explicit
-    /// anonymous `(...)` parlist (NOT a main chunk's implicit vararg).
-    has_vararg_table_pseudo: bool,
-    /// PUC 5.1 LUAI_COMPAT_VARARG: the hidden `arg` table local was reserved.
-    /// The runtime populates it on entry; see Proto::has_compat_vararg_arg.
-    has_compat_vararg_arg: bool,
-    #[allow(dead_code)]
-    line_defined: u32,
-    /// PUC `fs->lasttarget` equivalent: the highest pc that is the destination
-    /// of any patched jump (forward jump landing here, backward jump-back to a
-    /// previously saved pc, ForLoop / TForLoop back-edge, or a defined label).
-    /// `None` is PUC's sentinel `-1` — no target has been recorded yet.
-    ///
-    /// Read by peephole passes (see `no_jump_lands_here`) that rewrite the
-    /// just-emitted instruction at pc `here() - 1` in place of emitting a
-    /// Move at `here()`: that is safe only when no jump lands at `here()`,
-    /// i.e. `last_target < here()` or `last_target == None`. Consumed by the
-    /// Reloc-landing peephole at `assign_name` and the trailing-Move elision
-    /// at `assign_stat`.
-    ///
-    /// Maintained monotonically (only advances upward) by `mark_target(pc)`,
-    /// called from every code path that turns some `pc` into a jump landing
-    /// point.
-    last_target: Option<usize>,
-    /// 5.1: the first zero this function loaded as a constant. PUC 5.1 keys
-    /// its constant table by number value, where `0 == -0`, so every later
-    /// zero, of either sign, loads that one.
-    zero_51: Option<f64>,
-}
-
-impl<'a> Level<'a> {
-    fn new(num_params: u8, is_vararg: bool, line_defined: u32) -> Level<'a> {
-        // sized for a small function, past most of the regrowth steps
-        Level {
-            code: Vec::with_capacity(32),
-            lines: Vec::with_capacity(32),
-            consts: Vec::with_capacity(8),
-            const_map: ConstMap::with_capacity_and_hasher(8, Default::default()),
-            locals: Vec::with_capacity(8),
-            avars: Vec::with_capacity(8),
-            blocks: Vec::with_capacity(4),
-            freereg: num_params as u32,
-            max_stack: (num_params as u32).max(2),
-            upvals: Vec::new(),
-            protos: Vec::new(),
-            locvars: Vec::new(),
-            num_params,
-            is_vararg,
-            has_vararg_table_pseudo: false,
-            has_compat_vararg_arg: false,
-            line_defined,
-            last_target: None,
-            zero_51: None,
-        }
-    }
-
-    fn into_proto(
-        mut self,
-        source: Gc<LuaStr>,
-        line_defined: u32,
-        last_line_defined: u32,
-    ) -> Proto {
-        crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
-        let env_upval_idx = self
-            .upvals
-            .iter()
-            .take(u8::MAX as usize)
-            .position(|u| &*u.name == "_ENV")
-            .map_or(u8::MAX, |i| i as u8);
-        Proto {
-            hdr: GcHeader::new(ObjTag::Proto),
-            code: self.code.into_boxed_slice(),
-            consts: self.consts.into_boxed_slice(),
-            protos: self.protos.into_boxed_slice(),
-            upvals: self.upvals.into_boxed_slice(),
-            num_params: self.num_params,
-            is_vararg: self.is_vararg,
-            has_vararg_table_pseudo: self.has_vararg_table_pseudo,
-            has_compat_vararg_arg: self.has_compat_vararg_arg,
-            max_stack: self.max_stack as u8,
-            lines: self.lines.into_boxed_slice(),
-            source,
-            line_defined,
-            last_line_defined,
-            locvars: self.locvars.into_boxed_slice(),
-            cache: std::cell::Cell::new(None),
-            jit: std::cell::Cell::new(crate::runtime::function::JitProtoState::Untried),
-            env_upval_idx,
-            trace_hot_count: std::cell::Cell::new(0),
-            call_hot_count: std::cell::Cell::new(0),
-            trace_discard_count: std::cell::Cell::new(0),
-            trace_gave_up: std::cell::Cell::new(false),
-            trace_compile_failures: crate::jit::send_compat::TRefLock::new(Vec::new()),
-            traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
-            has_dispatchable_trace: std::cell::Cell::new(false),
-            trace_heads: std::cell::Cell::new([crate::runtime::function::TRACE_HEADS_NONE; 2]),
-            trace_call_head_settled: std::cell::Cell::new(false),
-        }
-    }
-}
-
 struct Compiler<'a> {
     ast: &'a Chunk,
     /// see [`compile_parsed`]
@@ -428,6 +304,8 @@ struct Compiler<'a> {
     version: LuaVersion,
     source: Gc<LuaStr>,
     levels: Vec<Level<'a>>,
+    /// emptied vectors of finished functions, for the next function
+    pool: Vec<LevelBufs>,
     last_line: u32,
     /// When `Some(line)`, every `emit` ignores `last_line` and attributes the
     /// new instruction to `line` instead. PUC infix discharges its left
@@ -461,6 +339,19 @@ impl<'a> Compiler<'a> {
     }
 
     // ---- infrastructure ----
+
+    /// A level for a new function, in kept vectors when there are some.
+    fn new_level(&mut self, num_params: u8, is_vararg: bool, line: u32) -> Level<'a> {
+        let bufs = self.pool.pop().unwrap_or_default();
+        Level::new(num_params, is_vararg, line, bufs)
+    }
+
+    /// The finished function `lvl` on the heap; its vectors are kept.
+    fn finish_level(&mut self, lvl: Level<'a>, line: u32, last_line: u32) -> Gc<Proto> {
+        let (proto, bufs) = lvl.into_proto(self.source, line, last_line);
+        self.pool.push(bufs);
+        self.heap.adopt_proto(proto)
+    }
 
     /// The `end` line the parser recorded for statement `sid`.
     fn stat_end_line(&self, sid: StatId) -> Option<u32> {
@@ -1616,7 +1507,7 @@ impl<'a> Compiler<'a> {
             return Err(self.err(line, "too many parameters"));
         }
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
-        let mut level = Level::new(nparams as u8, is_vararg, line);
+        let mut level = self.new_level(nparams as u8, is_vararg, line);
         // PUC 5.5 `parlist`: emit a hidden `(vararg table)` locvar only for
         // an explicit anonymous `(...)` (Named goes through a real local;
         // main chunks set is_vararg implicitly with no pseudo). 5.4 and
@@ -1720,10 +1611,7 @@ impl<'a> Compiler<'a> {
         self.last_line = body.end_line;
         self.emit(Inst::iabc(Op::Return0, 0, 0, 0, false));
         let lvl = self.levels.pop().expect("function level");
-        let source = self.source;
-        let proto = self
-            .heap
-            .adopt_proto(lvl.into_proto(source, line, body.end_line));
+        let proto = self.finish_level(lvl, line, body.end_line);
         let idx = self.lr().protos.len() as u32;
         if idx > MAX_BX {
             return Err(self.err(line, "too many nested functions"));
@@ -2606,7 +2494,7 @@ impl<'a> Compiler<'a> {
         // PUC's `check_conflict` only snapshots locals that actually clash;
         // we copy unconditionally — costs one extra MOVE per Index LHS, much
         // simpler than tracking pairwise conflicts and never wrong.
-        let mut plans: Vec<LhsPlan> = Vec::with_capacity(targets.len());
+        let mut plans: SmallList<LhsPlan, 4> = SmallList::new();
         for &t in targets {
             match self.ast.expr(t) {
                 Expr::Name(_) => plans.push(LhsPlan::Name(t)),
@@ -2692,9 +2580,9 @@ impl<'a> Compiler<'a> {
         // PUC `restassign` stores on the way back out of its recursion: the
         // last target first. The order is visible through `__newindex` and
         // when a target repeats (`a, a = 1, 2` leaves 1).
-        for (i, plan) in plans.into_iter().enumerate().rev() {
+        for i in (0..plans.len()).rev() {
             let vreg = alt_vreg.unwrap_or(base + i as u32);
-            match plan {
+            match plans.get(i) {
                 LhsPlan::Name(t) => self.assign_to(t, vreg)?,
                 LhsPlan::Indexed { obj, key } => match key {
                     SetKey::Field(c) => {
@@ -2873,7 +2761,7 @@ impl<'a> Compiler<'a> {
         arms: &[ast::IfArm],
         else_body: Option<&Block>,
     ) -> Result<(), SyntaxError> {
-        let mut end_jumps = Vec::new();
+        let mut end_jumps = Jumps::new();
         for (
             i,
             ast::IfArm {
@@ -2909,14 +2797,14 @@ impl<'a> Compiler<'a> {
             if !is_last {
                 end_jumps.push(self.emit_jump());
             }
-            for skip in skips {
+            for skip in skips.iter() {
                 self.patch_to_here(skip)?;
             }
         }
         if let Some(eb) = else_body {
             self.block_scoped(eb)?;
         }
-        for j in end_jumps {
+        for j in end_jumps.iter() {
             self.patch_to_here(j)?;
         }
         Ok(())
@@ -2950,7 +2838,7 @@ impl<'a> Compiler<'a> {
         self.jump_back(top)?;
         self.l().blocks.last_mut().expect("while block").end_line = end_line;
         self.leave_block()?;
-        for exit in exits {
+        for exit in exits.iter() {
             self.patch_to_here(exit)?;
         }
         Ok(())
@@ -2970,7 +2858,7 @@ impl<'a> Compiler<'a> {
         if self.block_captured() {
             let floor = self.block_floor();
             let exit = self.emit_jump();
-            for pc in again {
+            for pc in again.iter() {
                 self.patch_to_here(pc)?;
             }
             let first = self.l().blocks.last().expect("repeat block").first_local;
@@ -2978,7 +2866,7 @@ impl<'a> Compiler<'a> {
             self.jump_back(top)?;
             self.patch_to_here(exit)?;
         } else {
-            for pc in again {
+            for pc in again.iter() {
                 self.patch_back(pc, top)?;
             }
         }
