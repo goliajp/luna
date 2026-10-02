@@ -233,25 +233,7 @@ pub(super) fn translate(
             }
             Kind::Concat => lw.concat_range(i.a, i.b, i.c)?,
             // pc += sBx; if (A) close all upvalues >= R(A - 1)
-            Kind::Jmp => {
-                let target = next + i.sbx();
-                if i.a == 0 {
-                    lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)?;
-                } else {
-                    let close = lw.r(i.a - 1)?;
-                    let guarded = pc > 0
-                        && matches!(
-                            kind(ops, code[pc - 1]),
-                            Some(Kind::Eq | Kind::Lt | Kind::Le | Kind::Test | Kind::TestSet)
-                        );
-                    if guarded {
-                        lw.jump_closing(close, target)?;
-                    } else {
-                        lw.emit(enc_abc(Op::Close, close, 0, 0, false)?);
-                        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)?;
-                    }
-                }
-            }
+            Kind::Jmp => lower_jmp(&mut lw, ops, code, pc, i, next)?,
             Kind::Eq => lw.compare_rk(Op::Eq, i.a != 0, i.b, i.c)?,
             Kind::Lt => lw.compare_rk(Op::Lt, i.a != 0, i.b, i.c)?,
             Kind::Le => lw.compare_rk(Op::Le, i.a != 0, i.b, i.c)?,
@@ -300,38 +282,8 @@ pub(super) fn translate(
                 let a = lw.run(base, 3)?;
                 lw.jump(enc_abx(Op::TForLoop, a, 0)?, Jump::Back, next + i.sbx())?;
             }
-            Kind::SetList => {
-                let block = if i.c == 0 {
-                    pc += 1;
-                    match code.get(pc) {
-                        Some(&w) if kind(ops, w) == Some(Kind::ExtraArg) => ax(w),
-                        _ => return Err(lw.err("SETLIST without its EXTRAARG")),
-                    }
-                } else {
-                    i.c
-                };
-                if block == 0 {
-                    return Err(lw.err("SETLIST block number 0"));
-                }
-                let a = lw.run(i.a, i.b + 1)?;
-                lw.set_list(a, i.b, (block as u64 - 1) * FIELDS_PER_FLUSH)?;
-            }
-            Kind::Closure => {
-                let idx = i.bx() as usize;
-                let Some(child) = raw.protos.get_mut(idx) else {
-                    return Err(lw.err(format_args!("CLOSURE of missing function {idx}")));
-                };
-                if std::mem::replace(&mut closed[idx], true) {
-                    return Err(lw.err(format_args!("function {idx} instantiated twice")));
-                }
-                for u in child.upvals.iter_mut().filter(|u| u.in_stack) {
-                    let r = lw.r(u.index as u32)?;
-                    // `r` is at most 255: `Lowering::reg_at` refuses more.
-                    u.index = r as u8;
-                }
-                let a = lw.r(i.a)?;
-                lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
-            }
+            Kind::SetList => pc = lower_set_list(&mut lw, ops, code, pc, i)?,
+            Kind::Closure => lower_closure(&mut lw, &mut raw.protos, &mut closed, i)?,
             Kind::Vararg => {
                 let b = lw.byte(i.b, "VARARG B")?;
                 let a = lw.run(i.a, b.saturating_sub(1).max(1))?;
@@ -342,4 +294,80 @@ pub(super) fn translate(
         pc += 1;
     }
     lw.finish(&raw.locvars)
+}
+
+// pc += sBx; if (A) close all upvalues >= R(A - 1)
+fn lower_jmp(
+    lw: &mut Lowering,
+    ops: &[Kind],
+    code: &[u32],
+    pc: usize,
+    i: I,
+    next: i64,
+) -> Result<(), String> {
+    let target = next + i.sbx();
+    if i.a == 0 {
+        return lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target);
+    }
+    let close = lw.r(i.a - 1)?;
+    let guarded = pc > 0
+        && matches!(
+            kind(ops, code[pc - 1]),
+            Some(Kind::Eq | Kind::Lt | Kind::Le | Kind::Test | Kind::TestSet)
+        );
+    if guarded {
+        lw.jump_closing(close, target)
+    } else {
+        lw.emit(enc_abc(Op::Close, close, 0, 0, false)?);
+        lw.jump(enc_sj(Op::Jmp, 0)?, Jump::Jmp, target)
+    }
+}
+
+/// Lowers `SETLIST` and returns the pc of its last word (the `EXTRAARG`
+/// when `C = 0` takes the block number from it).
+fn lower_set_list(
+    lw: &mut Lowering,
+    ops: &[Kind],
+    code: &[u32],
+    mut pc: usize,
+    i: I,
+) -> Result<usize, String> {
+    let block = if i.c == 0 {
+        pc += 1;
+        match code.get(pc) {
+            Some(&w) if kind(ops, w) == Some(Kind::ExtraArg) => ax(w),
+            _ => return Err(lw.err("SETLIST without its EXTRAARG")),
+        }
+    } else {
+        i.c
+    };
+    if block == 0 {
+        return Err(lw.err("SETLIST block number 0"));
+    }
+    let a = lw.run(i.a, i.b + 1)?;
+    lw.set_list(a, i.b, (block as u64 - 1) * FIELDS_PER_FLUSH)?;
+    Ok(pc)
+}
+
+fn lower_closure(
+    lw: &mut Lowering,
+    protos: &mut [RawProto],
+    closed: &mut [bool],
+    i: I,
+) -> Result<(), String> {
+    let idx = i.bx() as usize;
+    let Some(child) = protos.get_mut(idx) else {
+        return Err(lw.err(format_args!("CLOSURE of missing function {idx}")));
+    };
+    if std::mem::replace(&mut closed[idx], true) {
+        return Err(lw.err(format_args!("function {idx} instantiated twice")));
+    }
+    for u in child.upvals.iter_mut().filter(|u| u.in_stack) {
+        let r = lw.r(u.index as u32)?;
+        // `r` is at most 255: `Lowering::reg_at` refuses more.
+        u.index = r as u8;
+    }
+    let a = lw.r(i.a)?;
+    lw.emit(enc_abx(Op::Closure, a, idx as u32)?);
+    Ok(())
 }

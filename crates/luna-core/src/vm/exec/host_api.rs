@@ -1,0 +1,375 @@
+//! The embedder-facing surface: globals, natives, loading and calling
+//! chunks, the random generator and the macro hooks.
+
+use super::*;
+
+impl Vm {
+    /// xoshiro256** next.
+    pub(crate) fn rng_next(&mut self) -> u64 {
+        let s = &mut self.rng;
+        let result = s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
+        let t = s[1] << 17;
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+        s[2] ^= t;
+        s[3] = s[3].rotate_left(45);
+        result
+    }
+
+    /// Seed the RNG via splitmix64 expansion (PUC randseed shape).
+    pub(crate) fn rng_seed(&mut self, a: u64, b: u64) {
+        // PUC setseed: state = [n1, 0xff, n2, 0] (0xff avoids an all-zero
+        // state), then 16 discards to spread the seed. Matches PUC's exact
+        // sequence so the low-level conformance test passes.
+        self.rng = [a, 0xff, b, 0];
+        for _ in 0..16 {
+            self.rng_next();
+        }
+    }
+
+    /// Wall-clock since VM creation (os.clock approximation).
+    pub(crate) fn uptime(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+
+    /// Entropy for math.randomseed() with no arguments.
+    pub(crate) fn rng_auto_seed(&mut self) -> (i64, i64) {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let addr = &self.rng as *const _ as u64;
+        (t as i64, addr as i64)
+    }
+
+    /// Allocate a native function object (no upvalues): builtin registration.
+    pub fn native(&mut self, f: crate::runtime::value::NativeFn) -> Value {
+        Value::Native(self.heap.new_native(f, Box::new([])))
+    }
+
+    /// Allocate a native function object with captured upvalues.
+    pub fn native_with(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: Box<[Value]>,
+    ) -> Value {
+        Value::Native(self.heap.new_native(f, upvals))
+    }
+
+    /// Install the shared string metatable (string library).
+    pub fn set_string_metatable(&mut self, mt: Option<Gc<Table>>) {
+        self.type_mt[3] = mt;
+    }
+
+    /// The current globals table (`_G` / `_ENV` source for new chunks).
+    pub fn globals(&self) -> Gc<Table> {
+        self.globals
+    }
+
+    /// Remaining VM stack slots (PUC `L->stack_last - L->top` analogue).
+    /// Library code that pushes a known number of fresh slots — e.g.
+    /// `table.unpack` returning N values — consults this to refuse when
+    /// the push would blow past `LUAI_MAXSTACK`. 5.3 coroutine.lua :530's
+    /// `for j in {lim-10, lim-5, …}` series pins this contract: the
+    /// coroutine's already-built table eats a few slots, so an unpack of
+    /// ~lim values can't fit.
+    pub(crate) fn stack_room(&self) -> i64 {
+        PUC_MAXSTACK - (self.stack.len() as i64)
+    }
+
+    /// Repoint the thread's "global table" used by *future* `Vm::load` calls
+    /// for the chunk's `_ENV` upvalue (PUC 5.1 `setfenv(0, env)` rewrites
+    /// `L->l_gt`). Already-loaded chunks keep their own snapshot via the
+    /// per-closure cell-0 clone in `Op::Closure`, so they are unaffected.
+    pub(crate) fn set_globals(&mut self, env: Gc<Table>) {
+        self.globals = env;
+    }
+
+    /// The Lua dialect this VM was constructed for (5.1 / 5.2 / 5.3 / 5.4 /
+    /// 5.5). Determines numeric semantics, available standard libraries, and
+    /// metamethod behavior.
+    pub fn version(&self) -> LuaVersion {
+        self.version
+    }
+
+    /// Set a global by name. `v` may be any `IntoValue`: a primitive
+    /// (`i64`, `f64`, `bool`, `&str`, `String`, `Vec<u8>`), a `Value`
+    /// directly, an `Option<T>`, or a `Gc<Table>` / `Gc<LuaClosure>` /
+    /// `Gc<NativeClosure>` handle.
+    ///
+    /// Returns `Err(LuaError)` only if the globals table overflows
+    /// (extremely unlikely in practice — `MAX_ASIZE = 1 << 27`).
+    /// String interning + key construction cannot fail.
+    ///
+    /// ```
+    /// # use luna_core::vm::Vm;
+    /// # use luna_core::version::LuaVersion;
+    /// let mut vm = Vm::sandbox(LuaVersion::Lua55).open_base().build();
+    /// vm.set_global("answer", 42).unwrap();
+    /// vm.set_global("ratio", 0.5_f64).unwrap();
+    /// vm.set_global("hello", "world").unwrap();
+    /// let r = vm.eval("return answer, ratio, hello").unwrap();
+    /// assert_eq!(r.len(), 3);
+    /// ```
+    pub fn set_global<V: crate::vm::IntoValue>(
+        &mut self,
+        name: &str,
+        v: V,
+    ) -> Result<(), LuaError> {
+        let v = v.into_value(self);
+        let k = Value::Str(self.heap.intern(name.as_bytes()));
+        // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+        unsafe { self.globals.as_mut() }.set(&mut self.heap, k, v)?;
+        self.heap
+            .barrier_back(self.globals.as_ptr() as *mut crate::runtime::heap::GcHeader);
+        Ok(())
+    }
+
+    /// Backward write barrier shorthand for native lib code: demote `t` from
+    /// BLACK back to gray so the next propagate step re-traces its fields.
+    /// No-op outside Propagate (parent is never BLACK at mutation time).
+    pub(crate) fn barrier_back_table(&mut self, t: Gc<Table>) {
+        self.heap
+            .barrier_back(t.as_ptr() as *mut crate::runtime::heap::GcHeader);
+    }
+
+    /// Forward write barrier shorthand: a closed upvalue is a single-slot
+    /// container — `barrier_forward` is cheaper than `barrier_back` here.
+    /// No-op outside Propagate.
+    pub(crate) fn barrier_forward_upvalue(&mut self, uv: Gc<Upvalue>, child: Value) {
+        self.heap
+            .barrier_forward(uv.as_ptr() as *mut crate::runtime::heap::GcHeader, child);
+    }
+
+    /// Register a MacroLua macro under `name`. Inert
+    /// under non-MacroLua dialects (the macro is stored but the load
+    /// path only consults the registry when
+    /// `self.version == LuaVersion::MacroLua`).
+    ///
+    /// `name` is stored without the leading `@` — source code writes
+    /// `@double(x)` to invoke a macro registered as `"double"`.
+    pub fn define_macro(&mut self, name: &str, m: Box<dyn crate::frontend::macro_expander::Macro>) {
+        self.macro_registry.register(name, m);
+    }
+
+    /// Drop all MacroLua macros (built-in + custom).
+    /// Mostly useful for tests.
+    pub fn clear_macros(&mut self) {
+        self.macro_registry.clear();
+    }
+
+    /// PUC `luaL_loadfilex`: compile the file `name` (standard input when
+    /// `None`, named `stdin`) into a function. A first line starting with
+    /// `#` is skipped; `mode` (`"t"`, `"b"`, `"bt"`, `None` for both)
+    /// limits the chunk to text and/or binary. The error is the message
+    /// PUC's function leaves: `cannot open <name>: <reason>` when the file
+    /// cannot be read, or the positioned syntax error.
+    pub fn load_file(
+        &mut self,
+        name: Option<&[u8]>,
+        mode: Option<&[u8]>,
+    ) -> Result<Value, LuaError> {
+        crate::vm::lib_os_io::load_path(self, name, mode).map_err(LuaError)
+    }
+
+    /// PUC `luaL_loadbufferx`: compile `src` under `chunkname`, the chunk
+    /// kind limited by `mode` as in [`Vm::load_file`]. A syntax error comes
+    /// back as its positioned message (`<chunk id>:<line>: <message>`), the
+    /// string `load` returns.
+    pub fn load_buffer(
+        &mut self,
+        src: &[u8],
+        chunkname: &[u8],
+        mode: Option<&[u8]>,
+    ) -> Result<Value, LuaError> {
+        crate::vm::lib_os_io::load_chunk(self, src, chunkname, mode).map_err(LuaError)
+    }
+
+    /// Compile and run `src` as an anonymous chunk; return its results.
+    /// Source name in the traceback is `"=eval"`. Syntax errors are
+    /// surfaced as `LuaError` carrying the formatted PUC-style message
+    /// (interned through the heap so the error value composes with
+    /// `pcall` / `error_text` like any runtime error).
+    pub fn eval(&mut self, src: &str) -> Result<Vec<Value>, LuaError> {
+        self.eval_chunk(src, "=eval")
+    }
+
+    /// Render an error value for messages/tests. Non-string errors —
+    /// `error({code=…})`, `error(42)`, etc. — collapse to a type tag
+    /// (`"(error object is a table value)"`); embedders that need
+    /// structured payloads should inspect `e.0` directly. Errors whose
+    /// text starts with `"native panic:"` indicate a Rust panic
+    /// crossed `catch_unwind` — the Vm may be inconsistent and should
+    /// be dropped (do not reuse).
+    pub fn error_text(&self, e: &LuaError) -> String {
+        match e.0 {
+            Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            v => format!("(error object is a {} value)", v.type_name()),
+        }
+    }
+
+    /// Render an error value the way PUC's standalone `msghandler`
+    /// does (lua.c): strings pass through, numbers stringify, and any
+    /// other object is given a chance at its `__tostring` metamethod
+    /// (the result must be a string) before collapsing to the
+    /// `"(error object is a … value)"` tag. Needs `&mut self` because
+    /// `__tostring` runs arbitrary Lua — `error_text` remains the
+    /// non-executing variant.
+    pub fn error_display(&mut self, e: &LuaError) -> String {
+        match e.0 {
+            Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            v @ (Value::Int(_) | Value::Float(_)) => {
+                String::from_utf8_lossy(&self.tostring_basic(v)).into_owned()
+            }
+            v => {
+                let mm = self.get_mm(v, Mm::ToString);
+                if !mm.is_nil()
+                    && let Ok(r) = self.call_value(mm, &[v])
+                    && let Some(Value::Str(s)) = r.first()
+                {
+                    return String::from_utf8_lossy(s.as_bytes()).into_owned();
+                }
+                format!("(error object is a {} value)", v.type_name())
+            }
+        }
+    }
+
+    /// Call `f` with `args` in protected mode with the message handler
+    /// `msgh`: PUC `lua_pcall(L, nargs, LUA_MULTRET, msgh)` made from a C
+    /// function of the host's, as lua.c's `docall` does from `pmain`.
+    ///
+    /// `msgh` runs where the error was raised, before the stack unwinds, so
+    /// it can take a traceback of the failing call ([`Vm::traceback`]); an
+    /// error inside it calls it again with the new error, as in PUC. The
+    /// returned error carries what the handler returned.
+    ///
+    /// The call counts as one C level on the stack, the host function
+    /// making it: `debug.getinfo` finds it below `f`, and a traceback taken
+    /// inside ends with `[C]: in ?` (`[C]: ?` in 5.1).
+    pub fn call_value_with_handler(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        let level = self.native(crate::vm::builtins::nat_host_xpcall);
+        let mut call_args = Vec::with_capacity(args.len() + 2);
+        call_args.push(f);
+        call_args.push(msgh);
+        call_args.extend_from_slice(args);
+        let mut results = self.call_value(level, &call_args)?;
+        // the protected call's `true, results...` or `false, handled error`
+        if results.first().is_some_and(|ok| ok.truthy()) {
+            results.remove(0);
+            Ok(results)
+        } else {
+            Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
+        }
+    }
+
+    /// PUC `luaL_getmetafield`: the field `event` of `v`'s metatable, read
+    /// raw; nil when `v` has no metatable or the field is absent.
+    pub fn metafield(&mut self, v: Value, event: &str) -> Value {
+        match self.metatable_of(v) {
+            Some(mt) => {
+                let key = Value::Str(self.heap.intern(event.as_bytes()));
+                mt.get(key)
+            }
+            None => Value::Nil,
+        }
+    }
+
+    /// Call any callable value from the host (or from natives like pcall).
+    pub fn call_value(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+        // host-level entry (no enclosing exec): drop any error state from a
+        // prior call that propagated uncaught (`error_traceback` would
+        // otherwise leak into the next debug.traceback call).
+        if self.public_call_depth == 0 {
+            self.error_traceback = None;
+        }
+        self.public_call_depth += 1;
+        // JIT fast path. A host call with no args targeting a Lua
+        // chunk whose body fits the int-arith whitelist short-circuits
+        // the whole interpreter dispatch and runs straight through the
+        // mmap'd native code. The lookup is one Cell::get + one match —
+        // the slow path (compile attempt on first reach) is paid once per
+        // Proto.
+        if args.is_empty()
+            && let Value::Closure(cl) = f
+            && let Some(vs) = self.try_jit_call(cl)
+        {
+            self.public_call_depth -= 1;
+            return Ok(vs);
+        }
+        let r = self.call_value_impl(f, args, true);
+        self.public_call_depth -= 1;
+        r
+    }
+
+    /// `call_value` with control over the `from_c` debug boundary. A `__close`
+    /// handler runs *within* the closing Lua frame's activation (PUC luaF_close
+    /// invokes it inside that ci), so it is called with `from_c = false`: its
+    /// debug parent is the closing function, not a synthetic C level.
+    pub(super) fn call_value_impl(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        from_c: bool,
+    ) -> Result<Vec<Value>, LuaError> {
+        if self.c_depth >= MAX_C_DEPTH {
+            // PUC `luaE_checkcstack`: at the limit the call fails; an xpcall
+            // handler running on the error gets a tenth more room before its
+            // own failure is "error in error handling"
+            if self.msgh_depth == 0 {
+                return Err(self.runerror("C stack overflow"));
+            }
+            if self.c_depth >= MAX_C_DEPTH / 10 * 11 {
+                return Err(self.plain_err("error in error handling"));
+            }
+        }
+        self.c_depth += 1;
+        let func_slot = self.stack.len() as u32;
+        self.stack.push(f);
+        self.stack.extend_from_slice(args);
+        self.top = self.stack.len() as u32;
+        let r = self.call_at(func_slot, args.len() as u32, from_c);
+        self.c_depth -= 1;
+        if r.is_err()
+            && self.yielding.is_none()
+            && self.terminating.is_none()
+            && !self.host_yield_pending
+            && self.pending_async_native_fut.is_none()
+        {
+            // A `coroutine.yield` in flight raises a sentinel error to unwind the
+            // Rust stack, but the suspended coroutine's frames/registers (which
+            // sit at/above `func_slot`) must survive for the next resume — so we
+            // only truncate on a real error. A self-close termination is in the
+            // same boat: the dying thread's state is discarded wholesale.
+            // A `host_yield_pending` cooperative yield is in
+            // the same boat as `yielding`: the next `EvalFuture::poll`
+            // resumes the same call, so the in-flight frames must
+            // survive.
+            self.stack.truncate(func_slot as usize);
+            self.top = func_slot;
+        }
+        r
+    }
+
+    /// Invoke `f` with the running thread marked non-yieldable for the duration
+    /// (PUC `luaD_callnoyield`): a `coroutine.yield` inside `f` hits the C-call
+    /// boundary and errors instead of suspending. Used by library callbacks
+    /// (sort comparator, gsub replacement) that run via synchronous Rust
+    /// recursion and so could not be re-entered after a yield.
+    pub(crate) fn call_noyield(
+        &mut self,
+        f: Value,
+        args: &[Value],
+    ) -> Result<Vec<Value>, LuaError> {
+        self.nny += 1;
+        let r = self.call_value(f, args);
+        self.nny -= 1;
+        r
+    }
+}
