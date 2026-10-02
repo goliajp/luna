@@ -26,6 +26,7 @@
 //!   (CI builds all five from lua.org tarballs; `make posix` for
 //!   ≤5.4, `make linux` for 5.5).
 //! - `PUC_LUA` — 5.5 fallback for local dev (PATH `lua5.5`).
+//! - PUC runs with `TZ=UTC`: luna has no time zones, so local time is UTC.
 //! - `LUNA_DIFF_PUC_VERBOSE=1` — print both outputs on success.
 //! - `PUC_LUAC_51` … `PUC_LUAC_55` — per-dialect `luac` paths. With the
 //!   matching `PUC_LUA_5X`, `diff_puc_bytecode` compiles every fixture of
@@ -105,6 +106,7 @@ fn list_fixtures(dialect_dir: &str) -> Vec<PathBuf> {
 fn run_on_puc(path: &Path, bin: &str, source: &str) -> Option<String> {
     let mut child = match Command::new(bin)
         .arg("-")
+        .env("TZ", "UTC")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -228,6 +230,7 @@ fn normalize_err(text: &str) -> (bool, String) {
 fn diff_one_err(path: &Path, bin: &str, version: LuaVersion, source: &str) {
     let mut child = match Command::new(bin)
         .arg("-")
+        .env("TZ", "UTC")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

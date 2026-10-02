@@ -54,6 +54,11 @@ optimization.
   (`Token<S = Vec<u8>, N = Box<str>, Q = Box<[TokenInfo]>>`), so code
   that names `Token` is unchanged; the type is also `Copy` when the
   payload types are.
+- luna-tools (built from the repository, not published) drops the empty
+  `repl-polish` feature with its `luna-repl-polish` stub binary, and the
+  `mcode-disasm` feature with its unused `capstone` dependency. For line
+  editing, build the `luna` binary with luna-jit's `repl-line-editor`
+  feature.
 
 ### Changed
 
@@ -189,6 +194,10 @@ optimization.
 - With the JIT on, a 5.1 / 5.2 function that the method JIT compiled and
   that stored into a table under a NaN key went on silently instead of
   raising "table index is NaN" as the interpreter does.
+- `os.time` (5.3 and later) now writes the normalised fields back into
+  its table before raising "time result cannot be represented" for a
+  time of exactly -1, as PUC does; a time past the range of `tm_year`
+  (5.4 / 5.5) writes the fields back as given.
 
 ### Added
 

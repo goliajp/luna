@@ -1,18 +1,24 @@
 //! Every .lua file of the vendored official test suites must
-//! lex + parse under its suite's version mode.
+//! lex + parse under its suite's version mode. The suite paths are absolute:
+//! the runner in this binary changes the process cwd while these run.
 
 use luna_core::frontend::lexer::Lexer;
 use luna_core::frontend::parse;
 use luna_core::version::LuaVersion;
 
 fn parse_suite(dir: &str, version: LuaVersion) {
-    let mut files: Vec<_> = std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("cannot read {dir}: {e}"))
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
         .map(|entry| entry.unwrap().path())
         .filter(|p| p.extension().is_some_and(|ext| ext == "lua"))
         .collect();
     files.sort();
-    assert!(!files.is_empty(), "no .lua files found in {dir}");
+    assert!(
+        !files.is_empty(),
+        "no .lua files found in {}",
+        dir.display()
+    );
     let mut failures = Vec::new();
     for path in &files {
         let src = std::fs::read(path).unwrap();
