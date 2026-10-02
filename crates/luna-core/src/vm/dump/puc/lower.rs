@@ -61,7 +61,7 @@ pub(super) use super::encode::{RK_BIT, enc_abc, enc_abx, enc_asbx, enc_ax, enc_s
 
 /// A local-variable record as PUC dumps it: PUC pcs, no register.
 pub(super) struct RawLocVar {
-    pub name: Box<str>,
+    pub name: crate::runtime::DebugName,
     pub start_pc: u32,
     pub end_pc: u32,
 }
