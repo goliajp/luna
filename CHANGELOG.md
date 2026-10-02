@@ -205,6 +205,10 @@ optimization.
 
 ### Added
 
+- `luna_aot::embed::compile_and_link_with` and `AotOptions`: the same
+  build as `compile_and_link`, with the harvest diagnostics switched on by
+  a field instead of the `LUNA_AOT_HARVEST_PROBE` environment variable
+  (`compile_and_link` still reads it).
 - `luna_core::runtime::table::jit_layout::{TABLE_ACOUNT_OFFSET,
   TABLE_APREFIX_OFFSET}`: offsets of the two array-part counters behind
   `#t`, which the method JIT's inline array stores keep up to date.

@@ -120,6 +120,7 @@ pub(super) fn harvest_and_emit_aot_traces(
     version: LuaVersion,
     out: &Path,
     target: &TargetSpec,
+    probe_on: bool,
 ) -> Result<HarvestedTraces, AotError> {
     // the captured records point into the warmup vm's heap (head_proto and
     // the traces hanging off it), so the vm must outlive every use of them
@@ -127,7 +128,6 @@ pub(super) fn harvest_and_emit_aot_traces(
         return Ok(HarvestedTraces::None);
     };
 
-    let probe_on = std::env::var_os("LUNA_AOT_HARVEST_PROBE").is_some();
     if probe_on {
         eprintln!("luna-aot harvest: captured {} TraceRecords", captured.len());
     }
