@@ -73,7 +73,26 @@ pub(super) fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
     }
 }
 
-/// Look-ahead variant of [`infer_getx_exit`]: walks the recorded ops
+/// The type the table read at `ops[i]` is typed as: the tag it was seen to
+/// produce while recording, when the trace can hold a value of it, else
+/// what the ops after it (up to `end`) use it as. The read is checked
+/// against it either way.
+pub(super) fn infer_getx_exit(record: &TraceRecord, i: usize, end: usize) -> Option<ExitTag> {
+    use luna_core::runtime::value::raw;
+    let seen = record.result_tag(i).and_then(|t| match t {
+        raw::INT => Some(ExitTag::Int),
+        raw::FLOAT => Some(ExitTag::Float),
+        raw::TABLE => Some(ExitTag::Table),
+        _ => None,
+    });
+    seen.or_else(|| {
+        (i + 1 < end)
+            .then(|| infer_getx_exit_lookahead(record.ops[i].inst.a(), &record.ops[i + 1..end]))
+            .flatten()
+    })
+}
+
+/// Look-ahead part of [`infer_getx_exit`]: walks the recorded ops
 /// after the GetX, skipping ops that are *transparent* (provably
 /// don't read `R[getx_a]` and don't overwrite it). Returns as soon
 /// as the first non-transparent op classifies the use, or `None` if

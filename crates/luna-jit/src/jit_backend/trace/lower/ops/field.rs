@@ -69,11 +69,7 @@ pub(super) fn emit_get_field_op<M: Module>(
                 opts.aot,
                 &mut lw.defined_aot_data,
             );
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             let want = getx_want(inferred);
 
             // table-field IC scaffold.
@@ -178,11 +174,7 @@ pub(super) fn emit_get_tab_up_op<M: Module>(
                 opts.aot,
                 &mut lw.defined_aot_data,
             );
-            let inferred = if i + 1 < effective_end {
-                infer_getx_exit_lookahead(ins.a(), &record.ops[i + 1..effective_end])
-            } else {
-                None
-            };
+            let inferred = infer_getx_exit(record, i, effective_end);
             let v = if let Some((_, w)) = getx_want(inferred) {
                 checked_read!(
                     lw,
