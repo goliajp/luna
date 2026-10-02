@@ -16,6 +16,8 @@
 //! `$LUNA_FUZZ_JIT=<tiers>,<trace hot>,<call hot>` (tiers `both`, `trace`
 //! or `method`) replaces the JIT setup read from the input, so one saved
 //! input can be replayed under every setup; the program stays the same.
+//! `$LUNA_FUZZ_SRC=<file>` runs that Lua source instead of the generated
+//! program, for replaying a program an older generator made from an input.
 //!
 //! Run:
 //!     cd crates/luna-fuzz
@@ -207,7 +209,11 @@ fuzz_target!(|data: &[u8]| {
         2 => Tiers::TraceOnly,
         _ => Tiers::MethodOnly,
     };
-    let src = jit_program::Gen::new(&mut u, program::dialect()).program();
+    let mut src = jit_program::Gen::new(&mut u, program::dialect()).program();
+    if let Some(path) = std::env::var_os("LUNA_FUZZ_SRC") {
+        src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("LUNA_FUZZ_SRC {}: {e}", path.display()));
+    }
     let (tiers, trace, call) = jit_override().unwrap_or((tiers, trace, call));
 
     let show = std::env::var_os("LUNA_FUZZ_SHOW").is_some();
