@@ -48,7 +48,8 @@ pub fn compile_chunk(
     heap: &mut Heap,
 ) -> Result<Gc<Proto>, SyntaxError> {
     let mut scratch = CompileScratch::default();
-    compile_parsed(ast, &[], version, source_name, heap, &mut scratch)
+    let source = heap.intern(source_name);
+    compile_parsed(ast, &[], version, source, heap, &mut scratch)
 }
 
 /// [`compile_chunk`] with the `end` lines the parser recorded for loops
@@ -60,11 +61,11 @@ pub(crate) fn compile_parsed(
     ast: &Chunk,
     end_lines: &[u32],
     version: LuaVersion,
-    source_name: &[u8],
+    source: Gc<LuaStr>,
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<Gc<Proto>, SyntaxError> {
-    compile_main(ast, end_lines, version, source_name, heap, scratch).map(|(p, _)| p)
+    compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
 }
 
 /// Compile the main function; also gives its `last_target`.
@@ -72,11 +73,10 @@ fn compile_main(
     ast: &Chunk,
     end_lines: &[u32],
     version: LuaVersion,
-    source_name: &[u8],
+    source: Gc<LuaStr>,
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let source = heap.intern(source_name);
     let mut c = Compiler {
         ast,
         end_lines,
@@ -128,7 +128,8 @@ pub fn compile_chunk_with_last_target(
     heap: &mut Heap,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let mut scratch = CompileScratch::default();
-    compile_main(ast, &[], version, source_name, heap, &mut scratch)
+    let source = heap.intern(source_name);
+    compile_main(ast, &[], version, source, heap, &mut scratch)
 }
 
 /// PUC `luaK_checkstack`'s register cap, as the most registers a function
