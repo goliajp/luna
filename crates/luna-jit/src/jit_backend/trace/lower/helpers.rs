@@ -7,7 +7,6 @@ pub(super) struct OpHelpers {
     pub(super) set_ids: StoreHelpers,
     pub(super) get_field_id: FuncId,
     pub(super) get_tab_up_id: FuncId,
-    pub(super) get_int_checked_id: FuncId,
     pub(super) get_field_checked_id: FuncId,
     pub(super) get_tab_up_checked_id: FuncId,
     pub(super) op_closure_id: FuncId,
@@ -114,20 +113,13 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
         .declare_function("luna_jit_op_get_tab_up", Linkage::Import, &get_tab_up_sig)
         .ok()?;
 
-    // Checked table reads (`luna_jit_table_get_int_checked` et al.):
+    // Checked table reads (`luna_jit_table_get_field_checked` et al.):
     // `fn(table_or_upval, key, want_tag, out: *mut i64) -> ok`.
     let mut get_checked_sig = module.make_signature();
     for _ in 0..4 {
         get_checked_sig.params.push(AbiParam::new(types::I64));
     }
     get_checked_sig.returns.push(AbiParam::new(types::I64));
-    let get_int_checked_id = module
-        .declare_function(
-            "luna_jit_table_get_int_checked",
-            Linkage::Import,
-            &get_checked_sig,
-        )
-        .ok()?;
     let get_field_checked_id = module
         .declare_function(
             "luna_jit_table_get_field_checked",
@@ -229,7 +221,6 @@ fn declare_op_helpers<M: Module>(module: &mut M) -> Option<OpHelpers> {
         set_ids,
         get_field_id,
         get_tab_up_id,
-        get_int_checked_id,
         get_field_checked_id,
         get_tab_up_checked_id,
         op_closure_id,

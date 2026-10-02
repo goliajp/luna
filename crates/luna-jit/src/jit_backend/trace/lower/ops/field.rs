@@ -132,8 +132,9 @@ pub(super) fn emit_get_field_op<M: Module>(
     Some(())
 }
 
-/// A field read straight from the hash slot the key was recorded in,
-/// through the checked helper when the slot no longer holds it.
+/// A field read straight from the hash slot the key was recorded in; the
+/// trace leaves for the interpreter when the slot no longer holds it (see
+/// `array_read`).
 #[allow(clippy::too_many_arguments)]
 fn emit_field_slot_read<M: Module>(
     lw: &mut Lower<'_, '_, M>,
@@ -144,10 +145,6 @@ fn emit_field_slot_read<M: Module>(
     slot: u32,
     w: u8,
 ) -> Value {
-    let OpHelpers {
-        get_field_checked_id,
-        ..
-    } = lw.h.op;
     let OpCx { i, rop, .. } = *oc;
     let hit = lw.bcx.create_block();
     lw.bcx.append_block_param(hit, types::I64);
@@ -162,8 +159,7 @@ fn emit_field_slot_read<M: Module>(
     lw.bcx.ins().jump(merge, &[fast.into()]);
     lw.bcx.switch_to_block(miss);
     lw.bcx.seal_block(miss);
-    let slow = checked_read!(lw, pl, get_field_checked_id, t, key_arg, w, rop.pc, i);
-    lw.bcx.ins().jump(merge, &[slow.into()]);
+    guard_exit(lw, pl, rop.pc, i);
     lw.bcx.switch_to_block(merge);
     lw.bcx.seal_block(merge);
     lw.bcx.block_params(merge)[0]

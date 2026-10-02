@@ -285,3 +285,31 @@ fn a_generic_for_trace_hands_back_the_next_loop_variables() {
         assert!(vm.trace_dispatched_count() > 0, "{v:?}: no trace ran");
     }
 }
+
+/// An inline array or field read whose slot no longer holds what the
+/// trace was recorded with (a key past the array part, a field moved by a
+/// rehash) leaves the trace for the interpreter, which runs the read, and
+/// the loop goes on in the trace.
+#[test]
+fn an_inline_read_that_misses_leaves_the_trace_and_comes_back() {
+    let src = "
+        return function()
+            local t = {1, 2, 3, 4, 5, 6, 7, 8}
+            local o = {a = 1}
+            local s = 0
+            for i = 1, 400 do
+                local v = t[i % 10 + 1]
+                if v then s = s + v end
+                s = s + o.a
+                if i == 200 then
+                    for k = 1, 20 do o['k' .. k] = k end
+                end
+            end
+            return s
+        end";
+    let (_vm, f, entries) = run_both(src, &[], 3);
+    // the outer loop and the one that reshapes `o`
+    assert_eq!(dispatchable_heads(f).len(), 2);
+    // each miss is one more entry; the loop still runs in the trace
+    assert!(entries > 2 && entries < 200, "{entries} entries");
+}
