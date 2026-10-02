@@ -198,6 +198,10 @@ optimization.
   its table before raising "time result cannot be represented" for a
   time of exactly -1, as PUC does; a time past the range of `tm_year`
   (5.4 / 5.5) writes the fields back as given.
+- `os.time` ignored the table's `isdst` field. A true `isdst` (any value
+  other than nil and false) now moves the result one hour back, as PUC
+  5.1–5.5 on glibc do in UTC, which has no daylight saving time; the
+  fields written back (5.3 and later) are those of the shifted time.
 
 ### Added
 
