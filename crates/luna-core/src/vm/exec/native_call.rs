@@ -67,7 +67,7 @@ impl Vm {
                 // Fire the "call" hook BEFORE
                 // building the future. Mirrors the sync native
                 // path's `hook_call(true, nargs)` site
-                // (`exec.rs` further down) so embedders with a
+                // (`begin_call`) so embedders with a
                 // Rust debug hook installed see a Call event
                 // for async natives identical to the sync
                 // path. The matching "return" hook fires from
