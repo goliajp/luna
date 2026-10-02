@@ -254,3 +254,34 @@ fn string_keys_and_string_constants_stay_in_the_trace() {
     assert_eq!(dispatchable_heads(f).len(), 1);
     assert_eq!(entries, 1);
 }
+
+/// A generic-for trace that cannot loop inside itself returns to its head
+/// after each iteration; the loop variables it read for the next one must
+/// go back to the interpreter. They were left as they were, so the body
+/// ran again on the old value and every element the trace fetched was
+/// skipped (a metatable built in a loop was missing metamethods).
+#[test]
+fn a_generic_for_trace_hands_back_the_next_loop_variables() {
+    let src = r#"
+        local mt = {}
+        for _, e in ipairs({"add", "sub", "mul", "div", "mod", "pow"}) do
+          local k = "__" .. e
+          mt[k] = function() return e end
+        end
+        local ks = {}
+        for k, f in pairs(mt) do ks[#ks + 1] = k .. "=" .. f() end
+        table.sort(ks)
+        return table.concat(ks, " ")"#;
+    for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
+        let mut vm = luna_jit::new_with_jit(v);
+        vm.set_jit_enabled(false);
+        vm.jit.trace_hot_threshold = 1;
+        let r = vm.eval(src).expect("runs");
+        assert_eq!(
+            show(&r),
+            "__add=add __div=div __mod=mod __mul=mul __pow=pow __sub=sub",
+            "{v:?}"
+        );
+        assert!(vm.trace_dispatched_count() > 0, "{v:?}: no trace ran");
+    }
+}
