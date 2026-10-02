@@ -217,7 +217,7 @@ fn loop_windows(d: &Dialect, code: &[u32]) -> Result<Vec<Window>, String> {
 
 pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, String> {
     let windows = loop_windows(d, &raw.code)?;
-    let mut lw = Lowering::new(d.name, raw.code.len(), raw.max_stack, windows);
+    let mut lw = Lowering::new(d.name, raw.code.len(), raw.max_stack, windows, &raw.consts);
     let mut closed = vec![false; raw.protos.len()];
     let code = &raw.code;
     let mut pc = 0;
@@ -330,7 +330,7 @@ pub(super) fn translate(d: &Dialect, raw: &mut RawProto) -> Result<Lowered, Stri
             Kind::SelfOp => {
                 let (a, b) = (lw.run(i.a(), 2)?, lw.r(i.b())?);
                 if d.v55 || i.k() {
-                    lw.emit(enc_abc(Op::SelfOp, a, b, i.c(), true)?);
+                    lw.self_k(a, b, i.c())?;
                 } else {
                     let c = lw.r(i.c())?;
                     lw.emit(enc_abc(Op::SelfOp, a, b, c, false)?);

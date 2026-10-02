@@ -211,6 +211,10 @@ pub(super) struct Lowering {
     trampolines: Vec<Trampoline>,
     pc: usize,
     line: u32,
+    /// which constants are strings: only those may be the key of `GetField`,
+    /// `SetField`, `GetTabUp`, `SetTabUp` and a `k` `SelfOp`, which the
+    /// interpreter reads as strings without looking
+    kstr: Vec<bool>,
 }
 
 impl Lowering {
@@ -221,6 +225,7 @@ impl Lowering {
         n_puc: usize,
         frame: u8,
         windows: Vec<Window>,
+        consts: &[Value],
     ) -> Lowering {
         let depth = windows
             .iter()
@@ -246,7 +251,13 @@ impl Lowering {
             trampolines: Vec::new(),
             pc: 0,
             line: 0,
+            kstr: consts.iter().map(|v| matches!(v, Value::Str(_))).collect(),
         }
+    }
+
+    /// Whether `K[k]` is a string (see `kstr`).
+    fn is_kstr(&self, k: u32) -> bool {
+        self.kstr.get(k as usize).copied().unwrap_or(false)
     }
 
     /// A translation error, located at the PUC pc being lowered.
@@ -390,7 +401,7 @@ impl Lowering {
 
     /// `R[dst] := R[t][K[k]]`.
     pub(super) fn get_field(&mut self, dst: u32, t: u32, k: u32) -> Result<(), String> {
-        if k <= isa::MAX_C {
+        if k <= isa::MAX_C && self.is_kstr(k) {
             self.emit(enc_abc(Op::GetField, dst, t, k, false)?);
         } else {
             let key = self.k_in_temp(k)?;
@@ -401,7 +412,7 @@ impl Lowering {
 
     /// `R[t][K[k]] := R[v]`.
     pub(super) fn set_field(&mut self, t: u32, k: u32, v: u32) -> Result<(), String> {
-        if k <= isa::MAX_B {
+        if k <= isa::MAX_B && self.is_kstr(k) {
             self.emit(enc_abc(Op::SetField, t, k, v, false)?);
         } else {
             let key = self.k_in_temp(k)?;
@@ -415,7 +426,7 @@ impl Lowering {
     /// the table was fetched into a register first, as its own compiler
     /// does for any other upvalue.
     pub(super) fn get_tabup(&mut self, dst: u32, up: u32, k: u32, env: bool) -> Result<(), String> {
-        if env && k <= isa::MAX_C {
+        if env && k <= isa::MAX_C && self.is_kstr(k) {
             self.emit(enc_abc(Op::GetTabUp, dst, up, k, false)?);
         } else {
             let t = self.temp()?;
@@ -427,7 +438,7 @@ impl Lowering {
 
     /// `Upvalue[up][K[k]] := R[v]`; `env` as for [`Self::get_tabup`].
     pub(super) fn set_tabup(&mut self, up: u32, k: u32, v: u32, env: bool) -> Result<(), String> {
-        if env && k <= isa::MAX_B {
+        if env && k <= isa::MAX_B && self.is_kstr(k) {
             self.emit(enc_abc(Op::SetTabUp, up, k, v, false)?);
         } else {
             let t = self.temp()?;
@@ -528,9 +539,21 @@ impl Lowering {
         let a = self.run(a, 2)?;
         let b = self.r(b)?;
         if key & RK_BIT != 0 {
-            self.emit(enc_abc(Op::SelfOp, a, b, key & 0xFF, true)?);
+            self.self_k(a, b, key & 0xFF)
         } else {
             let key = self.r(key)?;
+            self.emit(enc_abc(Op::SelfOp, a, b, key, false)?);
+            Ok(())
+        }
+    }
+
+    /// `R[a+1] := R[b]; R[a] := R[b][K[k]]` with `a` and `b` already
+    /// mapped; a key that is not a string goes through a register.
+    pub(super) fn self_k(&mut self, a: u32, b: u32, k: u32) -> Result<(), String> {
+        if self.is_kstr(k) {
+            self.emit(enc_abc(Op::SelfOp, a, b, k, true)?);
+        } else {
+            let key = self.k_in_temp(k)?;
             self.emit(enc_abc(Op::SelfOp, a, b, key, false)?);
         }
         Ok(())
@@ -685,7 +708,7 @@ mod tests {
     use super::*;
 
     fn lowering(n: usize, frame: u8, windows: Vec<Window>) -> Lowering {
-        Lowering::new("test", n, frame, windows)
+        Lowering::new("test", n, frame, windows, &[])
     }
 
     #[test]

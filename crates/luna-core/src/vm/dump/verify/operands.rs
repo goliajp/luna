@@ -33,6 +33,16 @@ impl Checker<'_> {
         Ok(())
     }
 
+    /// A constant the interpreter reads as a string key without checking
+    /// (`GetField`, `SetField`, `GetTabUp`, `SetTabUp`, a `k` `SelfOp`).
+    fn kstr(&self, pc: usize, k: u32) -> Result<(), String> {
+        self.konst(pc, k)?;
+        if !matches!(self.p.consts[k as usize], crate::runtime::Value::Str(_)) {
+            return Err(self.err(pc, format!("constant {k} is not a string")));
+        }
+        Ok(())
+    }
+
     fn upval(&self, pc: usize, u: u32) -> Result<(), String> {
         let n = self.p.upvals.len();
         if u as usize >= n {
@@ -79,7 +89,7 @@ impl Checker<'_> {
             Op::GetTabUp => {
                 self.reg(pc, a)?;
                 self.upval(pc, b)?;
-                self.konst(pc, c)
+                self.kstr(pc, c)
             }
             Op::GetTable | Op::SetTable => {
                 self.reg(pc, a)?;
@@ -89,11 +99,11 @@ impl Checker<'_> {
             Op::GetField => {
                 self.reg(pc, a)?;
                 self.reg(pc, b)?;
-                self.konst(pc, c)
+                self.kstr(pc, c)
             }
             Op::SetTabUp => {
                 self.upval(pc, a)?;
-                self.konst(pc, b)?;
+                self.kstr(pc, b)?;
                 self.reg(pc, c)
             }
             Op::SetI => {
@@ -102,7 +112,7 @@ impl Checker<'_> {
             }
             Op::SetField => {
                 self.reg(pc, a)?;
-                self.konst(pc, b)?;
+                self.kstr(pc, b)?;
                 self.reg(pc, c)
             }
             Op::SetList => {
@@ -116,7 +126,7 @@ impl Checker<'_> {
                 self.regs(pc, a, 2)?;
                 self.reg(pc, b)?;
                 if i.k() {
-                    self.konst(pc, c)
+                    self.kstr(pc, c)
                 } else {
                     self.reg(pc, c)
                 }
