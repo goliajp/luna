@@ -115,6 +115,7 @@ pub(super) fn build(
     for child in raw.protos.drain(..) {
         protos.push(build(heap, child, translate)?);
     }
+    crate::runtime::function_close::mark_closing_returns(&mut lowered.code, &protos);
     let env_upval_idx = raw
         .upvals
         .iter()
@@ -211,6 +212,10 @@ pub(super) struct Lowering {
     trampolines: Vec<Trampoline>,
     pc: usize,
     line: u32,
+    /// which constants are strings: only those may be the key of `GetField`,
+    /// `SetField`, `GetTabUp`, `SetTabUp` and a `k` `SelfOp`, which the
+    /// interpreter reads as strings without looking
+    kstr: Vec<bool>,
 }
 
 impl Lowering {
@@ -221,6 +226,7 @@ impl Lowering {
         n_puc: usize,
         frame: u8,
         windows: Vec<Window>,
+        consts: &[Value],
     ) -> Lowering {
         let depth = windows
             .iter()
@@ -246,7 +252,13 @@ impl Lowering {
             trampolines: Vec::new(),
             pc: 0,
             line: 0,
+            kstr: consts.iter().map(|v| matches!(v, Value::Str(_))).collect(),
         }
+    }
+
+    /// Whether `K[k]` is a string (see `kstr`).
+    pub(super) fn is_kstr(&self, k: u32) -> bool {
+        self.kstr.get(k as usize).copied().unwrap_or(false)
     }
 
     /// A translation error, located at the PUC pc being lowered.
@@ -388,55 +400,6 @@ impl Lowering {
         Ok(t)
     }
 
-    /// `R[dst] := R[t][K[k]]`.
-    pub(super) fn get_field(&mut self, dst: u32, t: u32, k: u32) -> Result<(), String> {
-        if k <= isa::MAX_C {
-            self.emit(enc_abc(Op::GetField, dst, t, k, false)?);
-        } else {
-            let key = self.k_in_temp(k)?;
-            self.emit(enc_abc(Op::GetTable, dst, t, key, false)?);
-        }
-        Ok(())
-    }
-
-    /// `R[t][K[k]] := R[v]`.
-    pub(super) fn set_field(&mut self, t: u32, k: u32, v: u32) -> Result<(), String> {
-        if k <= isa::MAX_B {
-            self.emit(enc_abc(Op::SetField, t, k, v, false)?);
-        } else {
-            let key = self.k_in_temp(k)?;
-            self.emit(enc_abc(Op::SetTable, t, key, v, false)?);
-        }
-        Ok(())
-    }
-
-    /// `R[dst] := Upvalue[up][K[k]]`. luna reserves `GetTabUp` for reads of
-    /// the global environment and names the upvalue in an error only when
-    /// the table was fetched into a register first, as its own compiler
-    /// does for any other upvalue.
-    pub(super) fn get_tabup(&mut self, dst: u32, up: u32, k: u32, env: bool) -> Result<(), String> {
-        if env && k <= isa::MAX_C {
-            self.emit(enc_abc(Op::GetTabUp, dst, up, k, false)?);
-        } else {
-            let t = self.temp()?;
-            self.emit(enc_abc(Op::GetUpval, t, up, 0, false)?);
-            self.get_field(dst, t, k)?;
-        }
-        Ok(())
-    }
-
-    /// `Upvalue[up][K[k]] := R[v]`; `env` as for [`Self::get_tabup`].
-    pub(super) fn set_tabup(&mut self, up: u32, k: u32, v: u32, env: bool) -> Result<(), String> {
-        if env && k <= isa::MAX_B {
-            self.emit(enc_abc(Op::SetTabUp, up, k, v, false)?);
-        } else {
-            let t = self.temp()?;
-            self.emit(enc_abc(Op::GetUpval, t, up, 0, false)?);
-            self.set_field(t, k, v)?;
-        }
-        Ok(())
-    }
-
     /// `return R[a], ..., R[a+b-2]` (`b == 0`: up to the stack top), in the
     /// form luna's own compiler uses for zero and one value. The three
     /// return ops behave alike in the interpreter; the JIT compiles only the
@@ -497,42 +460,6 @@ impl Lowering {
         let l = self.rk(b)?;
         let r = self.rk(c)?;
         self.emit(enc_abc(op, l, r, 0, k)?);
-        Ok(())
-    }
-
-    /// `R[dst] := R[t][RK(key)]`.
-    pub(super) fn get_table_rk(&mut self, dst: u32, t: u32, key: u32) -> Result<(), String> {
-        if key & RK_BIT != 0 {
-            self.get_field(dst, t, key & 0xFF)
-        } else {
-            let key = self.r(key)?;
-            self.emit(enc_abc(Op::GetTable, dst, t, key, false)?);
-            Ok(())
-        }
-    }
-
-    /// `R[t][RK(key)] := RK(val)`.
-    pub(super) fn set_table_rk(&mut self, t: u32, key: u32, val: u32) -> Result<(), String> {
-        let v = self.rk(val)?;
-        if key & RK_BIT != 0 {
-            self.set_field(t, key & 0xFF, v)
-        } else {
-            let key = self.r(key)?;
-            self.emit(enc_abc(Op::SetTable, t, key, v, false)?);
-            Ok(())
-        }
-    }
-
-    /// `R[a+1] := R[b]; R[a] := R[b][RK(key)]`.
-    pub(super) fn self_rk(&mut self, a: u32, b: u32, key: u32) -> Result<(), String> {
-        let a = self.run(a, 2)?;
-        let b = self.r(b)?;
-        if key & RK_BIT != 0 {
-            self.emit(enc_abc(Op::SelfOp, a, b, key & 0xFF, true)?);
-        } else {
-            let key = self.r(key)?;
-            self.emit(enc_abc(Op::SelfOp, a, b, key, false)?);
-        }
         Ok(())
     }
 
@@ -685,7 +612,7 @@ mod tests {
     use super::*;
 
     fn lowering(n: usize, frame: u8, windows: Vec<Window>) -> Lowering {
-        Lowering::new("test", n, frame, windows)
+        Lowering::new("test", n, frame, windows, &[])
     }
 
     #[test]

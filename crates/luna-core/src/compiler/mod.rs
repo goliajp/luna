@@ -14,9 +14,11 @@ use std::collections::HashMap;
 mod assign_gate;
 mod binop;
 mod cond;
+mod const_map;
 mod ctconst;
 mod fold;
 mod vararg_scan;
+use const_map::{ConstKey, ConstMap};
 use ctconst::{CtConst, ct_value};
 use fold::{fold_arith, is_logical, numeral};
 
@@ -182,13 +184,6 @@ fn max_upvals(version: LuaVersion) -> u32 {
 /// PUC `MAXVARS`: the per-function active-locals cap.
 const MAX_LOCALS: u32 = 200;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum ConstKey {
-    Int(i64),
-    Float(u64),
-    Str(*mut LuaStr),
-}
-
 /// Per-target plan for `assign_stat`'s two-phase store (snapshot first, then
 /// emit RHS, then stores) so a later store cannot reorder around an earlier
 /// one's table/key reads (PUC manual §3.3.3).
@@ -335,7 +330,7 @@ struct Level<'a> {
     code: Vec<Inst>,
     lines: Vec<u32>,
     consts: Vec<Value>,
-    const_map: HashMap<ConstKey, u32>,
+    const_map: ConstMap,
     locals: Vec<LocalVar<'a>>,
     /// ordered active-variable sequence (locals + global decls) for goto scope
     avars: Vec<AVar<'a>>,
@@ -385,7 +380,7 @@ impl<'a> Level<'a> {
             code: Vec::with_capacity(32),
             lines: Vec::with_capacity(32),
             consts: Vec::with_capacity(8),
-            const_map: HashMap::with_capacity(8),
+            const_map: ConstMap::with_capacity_and_hasher(8, Default::default()),
             locals: Vec::with_capacity(8),
             avars: Vec::with_capacity(8),
             blocks: Vec::with_capacity(4),
@@ -404,7 +399,13 @@ impl<'a> Level<'a> {
         }
     }
 
-    fn into_proto(self, source: Gc<LuaStr>, line_defined: u32, last_line_defined: u32) -> Proto {
+    fn into_proto(
+        mut self,
+        source: Gc<LuaStr>,
+        line_defined: u32,
+        last_line_defined: u32,
+    ) -> Proto {
+        crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
         let env_upval_idx = self
             .upvals
             .iter()
@@ -731,17 +732,6 @@ impl<'a> Compiler<'a> {
         if r > l.max_stack {
             l.max_stack = r;
         }
-    }
-
-    fn const_idx(&mut self, key: ConstKey, v: Value) -> u32 {
-        let l = self.l();
-        if let Some(&i) = l.const_map.get(&key) {
-            return i;
-        }
-        let i = l.consts.len() as u32;
-        l.consts.push(v);
-        l.const_map.insert(key, i);
-        i
     }
 
     fn str_const(&mut self, bytes: &[u8]) -> u32 {

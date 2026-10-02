@@ -91,6 +91,8 @@ impl Vm {
     /// `complete_return` would do. `false`, having done nothing, otherwise.
     /// Without `WATCH` no hook is armed: arming one sets `trap`, which the
     /// fast loop leaves for its head before running anything else.
+    /// `close` is the return's `k`: only then can the frame have open
+    /// upvalues or to-be-closed slots (see `mark_closing_returns`).
     #[inline(always)]
     pub(super) fn return_fast<const WATCH: bool>(
         &mut self,
@@ -98,13 +100,15 @@ impl Vm {
         abs_a: u32,
         nret: u32,
         entry_depth: usize,
+        close: bool,
     ) -> Returned {
         let n = self.frames.len();
         if n <= entry_depth
             || n < 2
             || WATCH && self.hook.ret && self.hook_armed()
-            || self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
-            || self.tbc.last().is_some_and(|&s| s >= base)
+            || close
+                && (self.open_upvals.last().is_some_and(|&(s, _)| s >= base)
+                    || self.tbc.last().is_some_and(|&s| s >= base))
         {
             return Returned::No;
         }

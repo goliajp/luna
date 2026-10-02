@@ -8,6 +8,8 @@ use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
 use fast_arith::{raw_gc, raw_int, raw_tag};
+#[cfg_attr(feature = "gc-verify", allow(unused_imports))]
+use index_set::{table_raw_set_at, table_set_existing_at};
 
 /// Raw `tb[*pk]` with the key read in place (strings by pointer, integers
 /// in the array part, other keys by the general lookup out of line),
@@ -63,18 +65,17 @@ unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool 
     }
 }
 
-/// [`table_get_into`] for a constant key (`GetField`, `GetTabUp`, `SelfOp`),
-/// which is nearly always a string: that case first, the rest out of line.
+/// [`table_get_into`] for a string constant key (`GetField`, `GetTabUp`, a
+/// `k` `SelfOp`): the compiler, the PUC translators and the bytecode
+/// verifier keep those keys strings, so the tag is not looked at.
 ///
 /// # Safety
-/// As for `table_get_into`.
+/// As for `table_get_into`, and `pk` points at a string.
 #[inline(always)]
 unsafe fn table_get_kstr_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool {
-    // SAFETY: the caller's contract; payloads are read after their tags
+    // SAFETY: the caller's contract
     unsafe {
-        if raw_tag(pk) != tag::STR {
-            return table_get_cold(tb, *pk, dst, tb.metatable().is_none());
-        }
+        debug_assert_eq!(raw_tag(pk), tag::STR);
         let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
         match tb.str_slot_by_ptr(key) {
             Some(slot) => {
@@ -112,84 +113,19 @@ unsafe fn table_get_cold(tb: &Table, key: Value, dst: *mut Value, plain: bool) -
     true
 }
 
-/// Overwrite `tb[*pk]` with `*pv` when the key is present with a non-nil
-/// value (PUC `luaV_fastset`); `false`, having done nothing, otherwise.
-/// The value is copied from its register in place (see [`Value::copy_raw`]).
-///
-/// # Safety
-/// `pk` and `pv` point at initialised values.
+/// `SelfOp`'s key: `K[C]` when `k` is set, else `R[C]`. PUC OP_SELF's C is
+/// a constant index when the k-flag is set; otherwise it points to a
+/// register that holds the (constant-loaded) key. luna's compiler falls back
+/// to the register form when the constant index exceeds OP_SELF's 8-bit C
+/// field (5.1 big.lua's `a:findfield(...)` against a table with 250+ string
+/// keys, where "findfield" lands past const #255).
 #[inline(always)]
-unsafe fn table_set_existing_at(tb: &mut Table, pk: *const Value, pv: *const Value) -> bool {
-    // SAFETY: the caller's contract; payloads are read after their tags
-    unsafe {
-        match raw_tag(pk) {
-            tag::STR => {
-                let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
-                match tb.str_slot_by_ptr_mut(key) {
-                    // a nil value in a node is how a removed key is kept
-                    Some(slot) if raw_tag(slot) != tag::NIL => {
-                        Value::copy_raw(slot, pv);
-                        true
-                    }
-                    Some(_) => false,
-                    None if key.is_short() => false,
-                    None => table_set_existing_cold(tb, *pk, *pv),
-                }
-            }
-            tag::INT => {
-                let i = raw_int(pk);
-                if i >= 1 && i as u64 <= tb.asize {
-                    let idx = i as usize - 1;
-                    if *tb.atags().get_unchecked(idx) == crate::runtime::value::raw::NIL {
-                        return false;
-                    }
-                    tb.aset_at(idx, pv);
-                    return true;
-                }
-                table_set_existing_cold(tb, Value::Int(i), *pv)
-            }
-            _ => table_set_existing_cold(tb, *pk, *pv),
-        }
+pub(super) fn self_key(regs: *mut Value, kptr: *const Value, inst: Inst) -> *const Value {
+    if inst.k() {
+        kptr.wrapping_add(inst.c() as usize)
+    } else {
+        regs.wrapping_add(inst.c() as usize)
     }
-}
-
-/// `tb[*pk] := *pv` as a raw set (PUC `luaH_finishset` with no `__newindex`
-/// to call): an integer in the array part in place, anything else through
-/// [`Table::set`] out of line. `false` when that refuses the key (nil, NaN,
-/// overflow), having done nothing; the miss path then raises the error.
-///
-/// # Safety
-/// `pk` and `pv` point at initialised values.
-#[inline(always)]
-unsafe fn table_raw_set_at(
-    tb: &mut Table,
-    heap: &mut Heap,
-    pk: *const Value,
-    pv: *const Value,
-) -> bool {
-    // SAFETY: the caller's contract; the payload is read after the tag
-    unsafe {
-        if raw_tag(pk) == tag::INT {
-            let i = raw_int(pk);
-            if i >= 1 && i as u64 <= tb.asize {
-                tb.aset_at(i as usize - 1, pv);
-                return true;
-            }
-        }
-        table_raw_set_cold(tb, heap, *pk, *pv)
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> bool {
-    tb.set(heap, key, v).is_ok()
-}
-
-#[cold]
-#[inline(never)]
-fn table_set_existing_cold(tb: &mut Table, key: Value, v: Value) -> bool {
-    tb.try_set_existing(key, v)
 }
 
 impl Vm {
@@ -213,11 +149,11 @@ impl Vm {
         false
     }
 
-    /// [`Self::index_raw_at`] for a constant key (see
+    /// [`Self::index_raw_at`] for a string constant key (see
     /// [`table_get_kstr_into`]).
     ///
     /// # Safety
-    /// As for `index_raw_at`.
+    /// As for `index_raw_at`, and `pk` points at a string.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_kstr_at(
@@ -235,10 +171,34 @@ impl Vm {
         false
     }
 
+    /// `SelfOp`'s read `R[A] := R[A+1][key]` (see [`self_key`]) without
+    /// `__index`: a `k` key is a string constant (see
+    /// [`table_get_kstr_into`]), a register key may be anything.
+    ///
+    /// # Safety
+    /// `regs` and `kptr` are the running frame's, and `R[A+1]` holds the
+    /// object.
+    #[inline(always)]
+    pub(super) unsafe fn self_probe(regs: *mut Value, kptr: *const Value, inst: Inst) -> bool {
+        let (po, pk) = (
+            regs.wrapping_add(inst.a() as usize + 1),
+            self_key(regs, kptr, inst),
+        );
+        let dst = regs.wrapping_add(inst.a() as usize);
+        // SAFETY: the caller's contract
+        unsafe {
+            if inst.k() {
+                Vm::index_raw_kstr_at(po, pk, dst)
+            } else {
+                Vm::index_raw_at(po, pk, dst)
+            }
+        }
+    }
+
     /// [`Self::index_raw_kstr_at`] on a table value.
     ///
     /// # Safety
-    /// `pk` points at an initialised value and `dst` at a register.
+    /// `pk` points at a string and `dst` at a register.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn index_raw_kstr_key_at(
@@ -289,12 +249,12 @@ impl Vm {
         false
     }
 
-    /// [`Self::newindex_raw_at`] for a constant key (`SetField`), nearly
-    /// always a string: an existing string key is overwritten here, the
+    /// [`Self::newindex_raw_at`] for a string constant key (`SetField`; see
+    /// [`table_get_kstr_into`]): an existing key is overwritten here, the
     /// rest goes through [`Self::newindex_raw_at`] out of line.
     ///
     /// # Safety
-    /// As for `newindex_raw_at`.
+    /// As for `newindex_raw_at`, and `pk` points at a string.
     #[inline(always)]
     #[cfg_attr(feature = "gc-verify", allow(unused_variables))]
     pub(super) unsafe fn newindex_raw_kstr_at(
@@ -306,7 +266,8 @@ impl Vm {
         #[cfg(not(feature = "gc-verify"))]
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
-            if raw_tag(pt) == tag::TABLE && raw_tag(pk) == tag::STR {
+            debug_assert_eq!(raw_tag(pk), tag::STR);
+            if raw_tag(pt) == tag::TABLE {
                 let tb = raw_gc(pt) as *mut Table;
                 let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
                 // a nil value in a node is how a removed key is kept

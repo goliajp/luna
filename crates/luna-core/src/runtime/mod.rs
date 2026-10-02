@@ -22,6 +22,7 @@ mod call_frame;
 mod debug_info;
 mod fnv;
 pub mod function;
+pub(crate) mod function_close;
 pub mod heap;
 pub mod string;
 pub mod table;

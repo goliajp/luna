@@ -176,10 +176,18 @@ impl Vm {
     ) -> Result<(), LuaError> {
         use super::fast_arith::{raw_gc, raw_tag};
         use crate::runtime::value::tag;
-        // SAFETY: the caller's contract
-        let t = unsafe { *pt };
-        let mut on_table = matches!(t, Value::Table(_));
-        let mut mt = self.metatable_of(t);
+        // the object's tag and payload are read on their own: the register
+        // was usually just written, and a whole-value read of it would wait
+        // for that store to reach the cache
+        // SAFETY: the caller's contract; a table tag means a live table
+        let mut on_table = unsafe { raw_tag(pt) } == tag::TABLE;
+        let mut mt = if on_table {
+            // SAFETY: as above
+            unsafe { (*(raw_gc(pt) as *const Table)).metatable() }
+        } else {
+            // SAFETY: the caller's contract
+            self.metatable_of(unsafe { *pt })
+        };
         // the slots are read in place and the value copied to its register
         // directly (see `table_get_into`)
         let out = self.stack.as_mut_ptr().wrapping_add(dst as usize);
@@ -222,6 +230,30 @@ impl Vm {
             }
             on_table = true;
         }
+        // SAFETY: the caller's contract; nothing above wrote the stack
+        let t = unsafe { *pt };
         self.op_index_from(t, Value::Str(key), dst, matches!(t, Value::Table(_)))
+    }
+}
+
+impl Vm {
+    /// [`Self::fast_tm`] as the slot holding the metamethod, `None` when it
+    /// is absent (nil).
+    #[inline]
+    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
+    pub(crate) fn fast_tm_slot(&self, mt: Gc<Table>, mm: Mm) -> Option<*const Value> {
+        let bit = 1u32 << mm as u32;
+        if mt.flags & bit != 0 {
+            return None;
+        }
+        // metamethod names are interned, so the pointer walk is exact
+        match mt.str_slot_by_ptr(self.mm_names[mm as usize]) {
+            Some(v) if !v.is_nil() => Some(v as *const Value),
+            _ => {
+                // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
+                unsafe { mt.as_mut() }.flags |= bit;
+                None
+            }
+        }
     }
 }

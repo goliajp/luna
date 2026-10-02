@@ -28,6 +28,10 @@
 //!   `Call`, `Return`, `LoadNil`, `Concat`, `SetList`, `Vararg` and the loop
 //!   ops, lies below `max_stack`;
 //! - constant, upvalue and child-function indices are in range;
+//! - in a function whose registers a nested function captures, or that has
+//!   a to-be-closed variable, `Return0` / `Return1` carry `k`;
+//! - the constant key of `GetField`, `SetField`, `GetTabUp`, `SetTabUp` and
+//!   a `k` `SelfOp` is a string (the interpreter reads it as one);
 //! - every successor (fall-through, jump target, the slot after a skipped
 //!   instruction) lies inside the code, so control never runs off its end;
 //! - `ExtraArg` follows exactly `LoadKx` and `SetList` with `k` set, and is
@@ -56,7 +60,9 @@
 //! debug library can change both from plain source code, so they are the
 //! interpreter's to check, not the loader's.
 
+mod header;
 mod operands;
+use header::check_header;
 
 use crate::runtime::function::Proto;
 use crate::vm::isa::{Inst, NUM_OPS, Op};
@@ -72,6 +78,7 @@ fn verify_proto(p: &Proto, parent: Option<&Proto>) -> Result<(), String> {
     let ops = decode_ops(p)?;
     let entered = Checker { p, ops: &ops }.check_code()?;
     Checker { p, ops: &ops }.check_open_top(&entered)?;
+    Checker { p, ops: &ops }.check_closing_returns()?;
     for child in p.protos.iter() {
         verify_proto(child, Some(p))?;
     }
@@ -85,56 +92,6 @@ fn describe(p: &Proto) -> String {
     } else {
         format!("function at line {}", p.line_defined)
     }
-}
-
-fn check_header(p: &Proto, parent: Option<&Proto>) -> Result<(), String> {
-    if p.code.is_empty() {
-        return Err("no instructions".to_string());
-    }
-    if p.num_params > p.max_stack {
-        return Err(format!(
-            "{} parameters exceed stack size {}",
-            p.num_params, p.max_stack
-        ));
-    }
-    if p.has_compat_vararg_arg && p.num_params >= p.max_stack {
-        return Err(format!(
-            "no register for 'arg' after {} parameters (stack size {})",
-            p.num_params, p.max_stack
-        ));
-    }
-    if !p.lines.is_empty() && p.lines.len() != p.code.len() {
-        return Err(format!(
-            "{} line entries for {} instructions",
-            p.lines.len(),
-            p.code.len()
-        ));
-    }
-    // the debug library reads and writes a named local at its register
-    if let Some(v) = p.locvars.iter().find(|v| v.reg >= u32::from(p.max_stack)) {
-        return Err(format!(
-            "local '{}' in register {} out of range (stack size {})",
-            v.name, v.reg, p.max_stack
-        ));
-    }
-    let Some(parent) = parent else {
-        return Ok(());
-    };
-    for (i, u) in p.upvals.iter().enumerate() {
-        let (limit, what) = if u.in_stack {
-            (parent.max_stack as usize, "register")
-        } else {
-            (parent.upvals.len(), "enclosing upvalue")
-        };
-        if u.index as usize >= limit {
-            return Err(format!(
-                "upvalue {} captures {what} {} out of range (limit {limit})",
-                i + 1,
-                u.index
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Decode every opcode, refusing a byte that names no `Op`.
@@ -172,6 +129,27 @@ struct Succ {
 }
 
 impl Checker<'_> {
+    /// In a function with something to close, every `Return0` / `Return1`
+    /// carries `k` (see `mark_closing_returns`): without it the fast return
+    /// would leave open upvalues pointing into a popped frame.
+    fn check_closing_returns(&self) -> Result<(), String> {
+        if !crate::runtime::function_close::needs_close(&self.p.code, &self.p.protos) {
+            return Ok(());
+        }
+        match self.p.code.iter().position(|i| {
+            matches!(
+                i.op(),
+                crate::vm::isa::Op::Return0 | crate::vm::isa::Op::Return1
+            ) && !i.k()
+        }) {
+            Some(pc) => Err(self.err(
+                pc,
+                "return without close in a function with upvalues to close".to_string(),
+            )),
+            None => Ok(()),
+        }
+    }
+
     fn err(&self, pc: usize, msg: String) -> String {
         format!(
             "{}, instruction {} ({:?}): {msg}",
