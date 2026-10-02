@@ -1,6 +1,7 @@
 use super::*;
 
 /// The checked table-store helpers, by the key's kind.
+#[derive(Clone, Copy)]
 pub(super) struct StoreHelpers {
     pub(super) int_key: cranelift_module::FuncId,
     pub(super) str_key: cranelift_module::FuncId,
