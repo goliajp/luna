@@ -674,7 +674,7 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         let reader = argcheck::check_function(vm, a, 0)?;
         let name = name.map_or_else(|| b"=(load)".to_vec(), |n| n.as_bytes().to_vec());
         return match read_chunk(vm, reader)? {
-            Ok(src) => load_chunk(vm, a, &src, &name, None),
+            Ok(src) => load_chunk(vm, a, &src, ChunkName::Bytes(&name), None),
             Err(msg) => Ok(vm.nat_return(fs, &[Value::Nil, msg])),
         };
     }
@@ -690,16 +690,16 @@ pub(crate) fn nat_load(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // a string chunk is read in place: the argument keeps it alive
     if let Value::Str(src) = first {
         let name = name.unwrap_or(src);
-        return load_chunk(vm, a, src.as_bytes(), name.as_bytes(), mode);
+        return load_chunk(vm, a, src.as_bytes(), ChunkName::Str(&name), mode);
     }
     if let Some(src) = argcheck::to_str_bytes(vm, first) {
         let name = name.map_or_else(|| src.clone(), |n| n.as_bytes().to_vec());
-        return load_chunk(vm, a, &src, &name, mode);
+        return load_chunk(vm, a, &src, ChunkName::Bytes(&name), mode);
     }
     let name = name.map_or_else(|| b"=(load)".to_vec(), |n| n.as_bytes().to_vec());
     let reader = argcheck::check_function(vm, a, 0)?;
     match read_chunk(vm, reader)? {
-        Ok(src) => load_chunk(vm, a, &src, &name, mode),
+        Ok(src) => load_chunk(vm, a, &src, ChunkName::Bytes(&name), mode),
         Err(msg) => Ok(vm.nat_return(fs, &[Value::Nil, msg])),
     }
 }
@@ -710,7 +710,7 @@ fn nat_loadstring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let src = argcheck::check_string(vm, a, 0)?;
     let name = argcheck::opt_string(vm, a, 1)?.unwrap_or(src);
-    load_chunk(vm, a, src.as_bytes(), name.as_bytes(), None)
+    load_chunk(vm, a, src.as_bytes(), ChunkName::Str(&name), None)
 }
 
 /// The `mode` argument of 5.2+ `load`: `luaL_optstring` with the dialect's
@@ -804,9 +804,13 @@ fn load_chunk(
     vm: &mut Vm,
     a: Args,
     src: &[u8],
-    name: &[u8],
+    name: ChunkName<'_>,
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
+    let (name, name_str) = match name {
+        ChunkName::Bytes(b) => (b, None),
+        ChunkName::Str(s) => (s.as_bytes(), Some(*s)),
+    };
     let binary = crate::vm::dump::is_binary_chunk(src);
     let kind: &[u8] = if binary { b"b" } else { b"t" };
     // `strchr`: the mode is a C string, so it ends at the first NUL.
@@ -821,7 +825,7 @@ fn load_chunk(
         let m = Value::Str(vm.heap.intern(msg.as_bytes()));
         return Ok(vm.nat_return(a.fs, &[Value::Nil, m]));
     }
-    match vm.load(src, name) {
+    match vm.load_named(src, name, name_str) {
         Ok(cl) => {
             // `lua_setupvalue(L, -2, 1)`: a function without upvalues
             // ignores the env.
@@ -844,6 +848,13 @@ fn load_chunk(
             Ok(vm.nat_return(a.fs, &[Value::Nil, m]))
         }
     }
+}
+
+/// The name of a chunk `load` was given: bytes, or a string the chunk can
+/// keep as its source name without making another.
+enum ChunkName<'a> {
+    Bytes(&'a [u8]),
+    Str(&'a Gc<LuaStr>),
 }
 
 /// PUC 5.1 `newproxy([false | true | proxy])`: an empty userdata, with no

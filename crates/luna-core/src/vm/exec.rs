@@ -1384,6 +1384,17 @@ impl Vm {
 
     /// Parse + compile a chunk and close it over the globals table.
     pub fn load(&mut self, src: &[u8], chunkname: &[u8]) -> Result<Gc<LuaClosure>, SyntaxError> {
+        self.load_named(src, chunkname, None)
+    }
+
+    /// [`Vm::load`] with the chunk name already a heap string (`name`,
+    /// whose bytes are `chunkname`), which the functions then share.
+    pub(crate) fn load_named(
+        &mut self,
+        src: &[u8],
+        chunkname: &[u8],
+        name: Option<Gc<crate::runtime::LuaStr>>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // Reject oversize input *before* handing the parser/lexer a
         // potentially multi-GB slice. The PUC-shaped `not enough memory`
         // message keeps `heavy.lua::loadrep` compatibility: that test
@@ -1409,6 +1420,7 @@ impl Vm {
             crate::vm::dump::undump_named(src, &mut self.heap, self.version, allow_puc, chunkname)
                 .map_err(SyntaxError::unpositioned)?
         } else if self.version.is_macro_lua() {
+            let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
             // MacroLua dialect: drain the lexer into a
             // token vec, run the macro expander pre-pass against the
             // per-Vm registry, then hand the rewritten stream to
@@ -1435,20 +1447,21 @@ impl Vm {
                 &parsed.chunk,
                 &parsed.end_lines,
                 self.version,
-                chunkname,
+                source,
                 &mut self.heap,
                 &mut self.compile_scratch,
             )?
         } else {
             // PUC's `nCcalls` counts protected calls as well
             let depth = self.c_depth + self.pcall_depth;
+            let source = name.unwrap_or_else(|| self.heap.intern(chunkname));
             let scratch = std::mem::take(&mut self.parse_scratch);
             let parsed = crate::frontend::parser::parse_reusing(src, self.version, depth, scratch)?;
             let proto = crate::compiler::compile_parsed(
                 &parsed.chunk,
                 &parsed.end_lines,
                 self.version,
-                chunkname,
+                source,
                 &mut self.heap,
                 &mut self.compile_scratch,
             )?;
