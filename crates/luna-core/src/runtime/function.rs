@@ -59,7 +59,7 @@ pub struct Proto {
     pub last_line_defined: u32,
     /// local-variable debug records (name + live pc range)
     pub locvars: Box<[LocVar]>,
-    /// PUC 5.2+ closure cache (`Proto.cache`): the last LClosure built from
+    /// PUC 5.2 / 5.3 closure cache (`Proto.cache`): the last LClosure built from
     /// this Proto. When OP_CLOSURE fires, the VM compares each candidate
     /// upvalue to the cached closure's same-slot upvalue (`getcached`); on a
     /// full match the cached closure is reused, so two `function() ... end`
