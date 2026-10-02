@@ -61,6 +61,10 @@ pub struct GcHeader {
     pub(crate) aux: u32,
 }
 
+// strings are the most numerous objects the sweep walks
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<LuaStr>() == 32);
+
 const WHITE0: u8 = 1;
 const WHITE1: u8 = 2;
 const BLACK: u8 = 4;
