@@ -60,20 +60,17 @@ impl Ins for Lir {
     }
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value {
         let d = self.new_value(Ty::of(ty));
-        let blk = &mut self.blocks[b.as_u32() as usize];
-        blk.params.push(d);
-        blk.param_vals.push(val(d));
+        self.add_block_param(b.as_u32(), d);
         val(d)
     }
     fn append_block_params_for_function_params(&mut self, b: Block) {
         let d = self.new_value(Ty::I64);
         self.arg0 = d;
-        let blk = &mut self.blocks[b.as_u32() as usize];
-        blk.params.push(d);
-        blk.param_vals.push(val(d));
+        self.add_block_param(b.as_u32(), d);
     }
     fn block_params(&self, b: Block) -> &[Value] {
-        &self.blocks[b.as_u32() as usize].param_vals
+        let blk = &self.blocks[b.as_u32() as usize];
+        &self.bparam_vals[blk.params_at as usize..(blk.params_at + blk.n_params) as usize]
     }
     fn declare_var(&mut self, ty: Type) -> Variable {
         self.var_ty.push(Ty::of(ty));

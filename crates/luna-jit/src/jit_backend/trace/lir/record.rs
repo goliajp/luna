@@ -134,6 +134,24 @@ impl Lir {
         }
     }
 
+    /// Appends `d` to block `b`'s parameters, moving them to the end of the
+    /// pool first when another block's were appended since.
+    pub(super) fn add_block_param(&mut self, b: u32, d: u32) {
+        let (at, n) = {
+            let blk = &self.blocks[b as usize];
+            (blk.params_at as usize, blk.n_params as usize)
+        };
+        if n == 0 || at + n != self.bparams.len() {
+            let new_at = self.bparams.len();
+            self.bparams.extend_from_within(at..at + n);
+            self.bparam_vals.extend_from_within(at..at + n);
+            self.blocks[b as usize].params_at = new_at as u32;
+        }
+        self.bparams.push(d);
+        self.bparam_vals.push(val(d));
+        self.blocks[b as usize].n_params += 1;
+    }
+
     pub(super) fn restore(&mut self, (at, n): (u32, u32)) {
         self.var_cur[..n as usize].copy_from_slice(&self.snaps[at as usize..(at + n) as usize]);
     }

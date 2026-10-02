@@ -163,8 +163,9 @@ pub(crate) struct Inst {
 pub(crate) struct BlockData {
     pub(crate) first: u32,
     pub(crate) last: u32,
-    pub(crate) params: Vec<u32>,
-    pub(crate) param_vals: Vec<cranelift_codegen::ir::Value>,
+    /// `params_at..params_at + n_params` in [`Lir::bparams`].
+    pub(crate) params_at: u32,
+    pub(crate) n_params: u32,
     pub(crate) preds: u32,
     pub(crate) sealed: bool,
     pub(crate) entered: bool,
@@ -196,6 +197,9 @@ pub(crate) struct Lir {
     pub(crate) funcs: Vec<Callee>,
     pub(crate) sigs: Vec<Callee>,
     pub(crate) param_tys: Vec<Ty>,
+    /// Block parameters (value numbers and as the lowerer sees them).
+    pub(crate) bparams: Vec<u32>,
+    pub(crate) bparam_vals: Vec<cranelift_codegen::ir::Value>,
     /// Snapshots of [`Lir::var_cur`] taken at branches.
     pub(crate) snaps: Vec<u32>,
     /// The function's parameter (`reg_state`).
@@ -207,9 +211,18 @@ pub(crate) struct Lir {
     pub(crate) pending_inherit: Option<(u32, (u32, u32))>,
     /// A primitive the backend does not implement was emitted.
     pub(crate) unsupported: Option<&'static str>,
+    /// The helpers declared by the first trace this `Lir` recorded, and how
+    /// many [`Lir::funcs`] / [`Lir::param_tys`] entries they take: they stay
+    /// declared for the next trace.
+    pub(crate) helpers: Option<(super::lower::Helpers, u32, u32)>,
 }
 
 impl Lir {
+    pub(crate) fn block_params(&self, b: u32) -> &[u32] {
+        let blk = &self.blocks[b as usize];
+        &self.bparams[blk.params_at as usize..(blk.params_at + blk.n_params) as usize]
+    }
+
     pub(crate) fn params(&self, c: &Callee) -> &[Ty] {
         &self.param_tys[c.params_at as usize..(c.params_at + c.n_params) as usize]
     }
@@ -231,10 +244,13 @@ impl Lir {
                 l.var_ty.clear();
                 l.args.clear();
                 l.slots.clear();
-                l.funcs.clear();
+                let (nf, np) = l.helpers.map_or((0, 0), |(_, f, p)| (f, p));
+                l.funcs.truncate(nf as usize);
                 l.sigs.clear();
-                l.param_tys.clear();
+                l.param_tys.truncate(np as usize);
                 l.snaps.clear();
+                l.bparams.clear();
+                l.bparam_vals.clear();
                 l.var_cur.clear();
                 l.arg0 = NONE;
                 l.cur = NONE;

@@ -40,7 +40,7 @@ pub(super) struct RuntimeHelpers {
 
 /// Every helper a trace calls, declared in `bcx` once per trace.
 #[derive(Clone, Copy)]
-pub(super) struct Helpers {
+pub(in crate::jit_backend::trace) struct Helpers {
     pub(super) op: OpHelpers,
     pub(super) rt: RuntimeHelpers,
 }

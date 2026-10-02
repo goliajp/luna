@@ -251,7 +251,7 @@ impl<M: Masm> Gen<'_, M> {
     /// Moves the arguments `args` into block `b`'s parameters.
     fn edge_moves(&mut self, b: u32, args: &[u32]) {
         let lir = self.lir;
-        let params = &lir.blocks[b as usize].params;
+        let params = lir.block_params(b);
         if params.is_empty() {
             return;
         }
