@@ -170,3 +170,9 @@ pub(super) fn jmp_target(pc: usize, inst: Inst) -> usize {
     let new_pc = pc as i64 + 1 + inst.sj() as i64;
     new_pc as usize
 }
+
+/// The kind `k` gives register `idx`, Int past its end.
+#[inline]
+pub(super) fn a_kind(k: &[RegKind], idx: u32) -> RegKind {
+    k.get(idx as usize).copied().unwrap_or(RegKind::Int)
+}
