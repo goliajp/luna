@@ -21,6 +21,40 @@ optimization.
 
 ## [Unreleased]
 
+### Breaking
+
+- The syntax tree in `luna_core::frontend::ast` no longer allocates per
+  node. Every list in it (a block's statements, call arguments,
+  expression lists, assignment targets, declared names, parameters,
+  `function a.b.c` paths, table fields, `if` arms) is a `List<T>`, a
+  range into a vector of the `Chunk`; read it with `chunk.list(l)`, which
+  gives a `&[T]` (`chunk.block_stats(&block)` for a block). Identifiers
+  and string literals are interned in `chunk.names`: `Name` is now
+  `Name { sym: Sym, line: u32 }` (its text is `chunk.name(n)`), and
+  `Expr::Str` holds a `Sym` (its bytes are `chunk.str(s)`). The arms of
+  `Stat::If` are `IfArm { cond, then_line, body }` instead of
+  `(ExprId, u32, Block)` tuples. The node types are `Copy` and lose the
+  name type parameter they had (`Chunk<N = Name>` and so on), and
+  `block_uses_vararg` takes a plain `&Chunk`. To build a tree by hand,
+  add lists with `chunk.push_list(&items)` and names or literals with
+  `chunk.names.intern(bytes)`. Migration: replace `block.stats.iter()`
+  with `chunk.list(block.stats).iter()` (likewise for `args`, `exprs`,
+  `targets`, `names`, `vars`, `params`, `path`, `fields`, `arms`),
+  `name.text` with `chunk.name(name)`, and the bytes of `Expr::Str(s)`
+  with `chunk.str(*s)`. `parse`, `parse_tokens`, `compile_chunk`,
+  `walk_rhs_for_calls`, `metamethod_safe_for_index_lhs` and
+  `rhs_calls_nothing_unknown` keep their signatures.
+- `LocVar::name` and `UpvalDesc::name` are a `DebugName` instead of a
+  `Box<str>`. A `DebugName` dereferences to `str` (so `&*lv.name`,
+  `lv.name.to_string()` and `lv.name == "x"` keep working) and stores a
+  name of up to 22 bytes without a heap allocation. Build one with
+  `DebugName::from` a `&str`, `String` or `Box<str>`.
+- `luna_core::frontend::token::Token` has three type parameters, the
+  payloads of `Str`, `Name` and `MacroQuote`, with defaults
+  (`Token<S = Vec<u8>, N = Box<str>, Q = Box<[TokenInfo]>>`), so code
+  that names `Token` is unchanged; the type is also `Copy` when the
+  payload types are.
+
 ### Changed
 
 - The bytecode verifier rejects a `GETFIELD`, `SETFIELD` or `SELF` whose
