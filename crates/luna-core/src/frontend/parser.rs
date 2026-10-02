@@ -7,7 +7,7 @@ use crate::frontend::ast::*;
 use crate::frontend::error::SyntaxError;
 use crate::frontend::goto_check::GotoCheck;
 use crate::frontend::lexer::{Lexed, Lexer};
-use crate::frontend::names::{Names, Sym, SymName};
+use crate::frontend::names::{Names, Sym};
 use crate::frontend::span::Span;
 use crate::frontend::token::{Near, Token, TokenInfo, near_text};
 use crate::version::LuaVersion;
@@ -15,8 +15,8 @@ use crate::version::LuaVersion;
 mod scratch;
 mod token_source;
 mod upval51;
-use scratch::Arenas;
 pub(crate) use scratch::ParseScratch;
+use scratch::{ListStacks, finish};
 use token_source::Cur;
 pub(crate) use token_source::TokenSource;
 use upval51::FnUvSlot;
@@ -31,17 +31,8 @@ const MAX_DEPTH: u32 = 200;
 /// PUC `MAXVARS`: active locals per function.
 const MAXVARS: u32 = 200;
 
-// the parser builds the tree with interned names (see `names`)
-type Expr = crate::frontend::ast::Expr<SymName>;
-type Stat = crate::frontend::ast::Stat<SymName>;
-type FuncBody = crate::frontend::ast::FuncBody<SymName>;
-type AttribName = crate::frontend::ast::AttribName<SymName>;
-type Vararg = crate::frontend::ast::Vararg<SymName>;
-type TableField = crate::frontend::ast::TableField<SymName>;
-type FuncName = crate::frontend::ast::FuncName<SymName>;
-
 /// `(collective attrib, declared names, initializer exprs)` of a declaration.
-type DeclList = (Option<Attrib>, Vec<AttribName>, Vec<ExprId>);
+type DeclList = (Option<Attrib>, List<AttribName>, List<ExprId>);
 
 /// Binary operator priorities from lparser.c (left, right); right < left
 /// means right-associative.
@@ -109,31 +100,20 @@ fn un_op_of(tok: &Token) -> Option<UnOp> {
 /// transparently for MacroLua; direct callers feed expanded tokens via
 /// [`parse_tokens`].
 pub fn parse(src: &[u8], version: LuaVersion) -> Result<Chunk, SyntaxError> {
-    parse_at_depth(src, version, 0).map(Parsed::into_chunk)
+    parse_at_depth(src, version, 0).map(|p| p.chunk)
 }
 
 /// A parsed chunk with what the public [`Chunk`] has no place for.
 pub(crate) struct Parsed {
-    pub(crate) chunk: Chunk<SymName>,
-    /// the text of the chunk's names
-    pub(crate) names: Names,
+    pub(crate) chunk: Chunk,
     /// the line of the closing `end` of each `while` / `for` statement, by
     /// `StatId` (0 for other statements): PUC attributes the code it emits
     /// after reading that `end` to its line
     pub(crate) end_lines: Vec<u32>,
     /// the lexer's token buffer, kept for the next load
     pub(crate) lex_buf: Vec<u8>,
-}
-
-impl Parsed {
-    /// The public tree, every name with its own text.
-    pub(crate) fn into_chunk(self) -> Chunk {
-        let names = &self.names;
-        self.chunk.map_names(&mut |n: &SymName| Name {
-            text: names.text(n.sym).into(),
-            line: n.line,
-        })
-    }
+    /// the parser's list stacks, kept for the next load
+    pub(crate) stacks: ListStacks,
 }
 
 /// [`parse`] run by a VM that is `c_depth` C calls deep. PUC's parser
@@ -156,14 +136,21 @@ pub(crate) fn parse_reusing(
     c_depth: u32,
     scratch: ParseScratch,
 ) -> Result<Parsed, SyntaxError> {
-    let lex = Lexer::interning(src, version, scratch.names, scratch.lex_buf);
-    let arenas = (
-        scratch.exprs,
-        scratch.stats,
-        scratch.stat_lines,
-        scratch.end_lines,
-    );
-    parse_from_source(TokenSource::Lexer(lex), version, c_depth, src.len(), arenas)
+    let ParseScratch {
+        mut chunk,
+        end_lines,
+        lex_buf,
+        stacks,
+    } = scratch;
+    let names = std::mem::take(&mut chunk.names);
+    let lex = Lexer::interning(src, version, names, lex_buf);
+    parse_from_source(
+        TokenSource::Lexer(lex),
+        version,
+        c_depth,
+        src.len(),
+        (chunk, end_lines, stacks),
+    )
 }
 
 /// Parse a **pre-materialized** token stream. Used by the MacroLua
@@ -175,7 +162,7 @@ pub fn parse_tokens(
     src: &[u8],
     version: LuaVersion,
 ) -> Result<Chunk, SyntaxError> {
-    parse_tokens_at_depth(tokens, src, version, 0).map(Parsed::into_chunk)
+    parse_tokens_at_depth(tokens, src, version, 0).map(|p| p.chunk)
 }
 
 /// [`parse_tokens`] at a C depth (see [`parse_at_depth`]).
@@ -204,16 +191,16 @@ fn parse_from_source<'s>(
     version: LuaVersion,
     c_depth: u32,
     src_len: usize,
-    arenas: Arenas,
+    vecs: (Chunk, Vec<u32>, ListStacks),
 ) -> Result<Parsed, SyntaxError> {
-    let (mut exprs, mut stats, mut stat_lines, mut end_lines) = arenas;
+    let (mut chunk, mut end_lines, stacks) = vecs;
     let cur = lex.next_token()?;
     // typical source has an expression node per dozen bytes or so and a
     // statement per few dozen; starting near that skips most regrowth
     let (n_exprs, n_stats) = (src_len / 16, src_len / 64);
-    exprs.reserve(n_exprs);
-    stats.reserve(n_stats);
-    stat_lines.reserve(n_stats);
+    chunk.exprs.reserve(n_exprs);
+    chunk.stats.reserve(n_stats);
+    chunk.stat_lines.reserve(n_stats);
     end_lines.reserve(n_stats);
     let mut p = Parser {
         lex,
@@ -222,9 +209,8 @@ fn parse_from_source<'s>(
         tok_sym: cur.sym,
         peeked: None,
         prev_line: 1,
-        exprs,
-        stats,
-        stat_lines,
+        chunk,
+        stk: stacks,
         end_lines,
         depth: c_depth,
         version,
@@ -254,17 +240,15 @@ fn parse_from_source<'s>(
     }
     p.close_function()?;
     let end_line = p.prev_line;
+    let mut chunk = p.chunk;
+    chunk.names = p.lex.take_names();
+    chunk.block = block;
+    chunk.end_line = end_line;
     Ok(Parsed {
-        names: p.lex.take_names(),
         lex_buf: p.lex.take_buf(),
-        chunk: Chunk {
-            exprs: p.exprs,
-            stats: p.stats,
-            stat_lines: p.stat_lines,
-            block,
-            end_line,
-        },
+        chunk,
         end_lines: p.end_lines,
+        stacks: p.stk,
     })
 }
 
@@ -287,11 +271,10 @@ struct Parser<'s> {
     last_line: u32,
     /// line of the previously consumed token (for the 5.1 ambiguity check)
     prev_line: u32,
-    exprs: Vec<Expr>,
-    stats: Vec<Stat>,
-    /// starting source line of each statement (by StatId), for precise per-
-    /// instruction line info in the compiler
-    stat_lines: Vec<u32>,
+    /// the tree being built (its names stay with the lexer until the end)
+    chunk: Chunk,
+    /// lists being collected, before they are moved into `chunk`
+    stk: ListStacks,
     /// see [`Parsed::end_lines`]
     end_lines: Vec<u32>,
     depth: u32,
@@ -348,10 +331,12 @@ impl<'s> Parser<'s> {
     fn near(&self) -> Vec<u8> {
         match self.tok_char {
             Some(c) => near_text(self.version, Near::Char(c)),
-            None => self
-                .tok
-                .tok
-                .near_bytes(self.lex.src(), self.tok.span, self.version),
+            None => match &self.tok.tok {
+                // a live lexer leaves the literal's bytes with the names
+                Token::Str(_) => Token::Str(self.lex.names().bytes(self.tok_sym).to_vec())
+                    .near_bytes(self.lex.src(), self.tok.span, self.version),
+                t => t.near_bytes(self.lex.src(), self.tok.span, self.version),
+            },
         }
     }
 
@@ -424,13 +409,13 @@ impl<'s> Parser<'s> {
         Ok(())
     }
 
-    fn expect_name(&mut self) -> Result<SymName, SyntaxError> {
+    fn expect_name(&mut self) -> Result<Name, SyntaxError> {
         if !matches!(self.tok.tok, Token::Name(_)) {
             return Err(self.error_expected("<name>"));
         }
         let sym = self.tok_sym;
         let info = self.advance()?;
-        Ok(SymName {
+        Ok(Name {
             sym,
             line: info.line,
         })
@@ -447,6 +432,18 @@ impl<'s> Parser<'s> {
         if let Some(g) = gotos {
             for s in syms {
                 g.declare(lex.names().text(s));
+            }
+        }
+    }
+
+    /// Declare a declaration's names to the goto checker.
+    fn declare_attrib_names(&mut self, names: List<AttribName>) {
+        let Parser {
+            gotos, lex, chunk, ..
+        } = self;
+        if let Some(g) = gotos {
+            for an in chunk.list(names) {
+                g.declare(lex.names().text(an.name.sym));
             }
         }
     }
@@ -497,13 +494,13 @@ impl<'s> Parser<'s> {
     }
 
     fn push_expr(&mut self, e: Expr) -> ExprId {
-        self.exprs.push(e);
-        ExprId((self.exprs.len() - 1) as u32)
+        self.chunk.exprs.push(e);
+        ExprId((self.chunk.exprs.len() - 1) as u32)
     }
 
     fn push_stat(&mut self, s: Stat) -> StatId {
-        self.stats.push(s);
-        StatId((self.stats.len() - 1) as u32)
+        self.chunk.stats.push(s);
+        StatId((self.chunk.stats.len() - 1) as u32)
     }
 
     /// Push a statement that ended with the `end` just read.
@@ -536,7 +533,7 @@ impl<'s> Parser<'s> {
             g.enter_block(false);
             Ok(())
         })?;
-        let mut stats = Vec::new();
+        let mark = self.stk.stats.len();
         loop {
             // labels wait for the no-op statements that follow them
             if self.gotos.as_ref().is_some_and(GotoCheck::has_open_labels)
@@ -552,18 +549,20 @@ impl<'s> Parser<'s> {
                 break;
             }
             if self.tok.tok == Token::Return {
-                stats.push(self.return_stat()?);
+                let s = self.return_stat()?;
+                self.stk.stats.push(s);
                 break;
             }
             if self.tok.tok == Token::Break && self.version.break_is_last_statement() {
                 let line = self.tok.line;
                 self.break_stat()?;
-                stats.push(self.push_stat(Stat::Break { line }));
+                let s = self.push_stat(Stat::Break { line });
+                self.stk.stats.push(s);
                 self.accept(Token::Semi)?;
                 break;
             }
             if let Some(s) = self.statement()? {
-                stats.push(s);
+                self.stk.stats.push(s);
             }
             if !self.version.has_empty_statement() {
                 // 5.1: ';' is a separator after a statement, not a statement
@@ -574,14 +573,16 @@ impl<'s> Parser<'s> {
         self.leave();
         self.func_local_count.last_mut().expect("func ctx").0 = local_snapshot;
         self.restore_locals_51(locals_51_snap);
-        Ok(Block { stats })
+        Ok(Block {
+            stats: finish(&mut self.chunk, &mut self.stk.stats, mark),
+        })
     }
 
     fn return_stat(&mut self) -> Result<StatId, SyntaxError> {
         let line = self.tok.line;
         self.advance()?;
         let exprs = if self.block_follow() || self.tok.tok == Token::Semi {
-            Vec::new()
+            List::EMPTY
         } else {
             self.exprlist()?
         };
@@ -672,10 +673,10 @@ impl<'s> Parser<'s> {
 
     fn set_stat_line(&mut self, sid: StatId, line: u32) {
         let idx = sid.0 as usize;
-        if self.stat_lines.len() <= idx {
-            self.stat_lines.resize(idx + 1, 0);
+        if self.chunk.stat_lines.len() <= idx {
+            self.chunk.stat_lines.resize(idx + 1, 0);
         }
-        self.stat_lines[idx] = line;
+        self.chunk.stat_lines[idx] = line;
     }
 
     /// Consume `break`, checking it the way the dialect does: 5.1 and 5.5
@@ -701,14 +702,21 @@ impl<'s> Parser<'s> {
     /// A loop body with the loop's own variables (`vars`) in scope: PUC's
     /// loop block, which places the "break" label, around a block for the
     /// declared variables.
-    fn loop_block(&mut self, vars: &[SymName]) -> Result<Block, SyntaxError> {
+    fn loop_block(&mut self, vars: List<Name>) -> Result<Block, SyntaxError> {
         self.funcs.last_mut().expect("func ctx").loops += 1;
         self.goto_step(|g| {
             g.enter_block(true);
             g.enter_block(false);
             Ok(())
         })?;
-        self.declare(vars.iter().map(|v| v.sym));
+        let Parser {
+            gotos, lex, chunk, ..
+        } = self;
+        if let Some(g) = gotos {
+            for v in chunk.list(vars) {
+                g.declare(lex.names().text(v.sym));
+            }
+        }
         let body = self.block()?;
         self.goto_step(|g| {
             g.leave_block()?;
@@ -747,18 +755,29 @@ impl<'s> Parser<'s> {
     fn if_stat(&mut self) -> Result<StatId, SyntaxError> {
         let line = self.tok.line;
         self.advance()?;
-        let mut arms = Vec::new();
+        let mark = self.stk.arms.len();
         let cond = self.expr()?;
         let then_line = self.tok.line;
         self.expect(Token::Then, "then")?;
-        arms.push((cond, then_line, self.block()?));
+        let body = self.block()?;
+        self.stk.arms.push(IfArm {
+            cond,
+            then_line,
+            body,
+        });
         while self.tok.tok == Token::Elseif {
             self.advance()?;
             let cond = self.expr()?;
             let then_line = self.tok.line;
             self.expect(Token::Then, "then")?;
-            arms.push((cond, then_line, self.block()?));
+            let body = self.block()?;
+            self.stk.arms.push(IfArm {
+                cond,
+                then_line,
+                body,
+            });
         }
+        let arms = finish(&mut self.chunk, &mut self.stk.arms, mark);
         let else_body = if self.accept(Token::Else)? {
             Some(self.block()?)
         } else {
@@ -773,7 +792,7 @@ impl<'s> Parser<'s> {
         self.advance()?;
         let cond = self.expr()?;
         self.expect(Token::Do, "do")?;
-        let body = self.loop_block(&[])?;
+        let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::End, "end", "while", line)?;
         Ok(self.push_ended_stat(Stat::While { cond, body }))
     }
@@ -781,7 +800,7 @@ impl<'s> Parser<'s> {
     fn repeat_stat(&mut self) -> Result<StatId, SyntaxError> {
         let line = self.tok.line;
         self.advance()?;
-        let body = self.loop_block(&[])?;
+        let body = self.loop_block(List::EMPTY)?;
         self.expect_match(Token::Until, "until", "repeat", line)?;
         let cond = self.expr()?;
         Ok(self.push_stat(Stat::Repeat { body, cond }))
@@ -804,7 +823,8 @@ impl<'s> Parser<'s> {
                 };
                 self.expect(Token::Do, "do")?;
                 self.add_local_51(first.sym);
-                let body = self.loop_block(std::slice::from_ref(&first))?;
+                let var = self.chunk.push_list(&[first]);
+                let body = self.loop_block(var)?;
                 self.expect_match(Token::End, "end", "for", line)?;
                 Ok(self.push_ended_stat(Stat::NumericFor {
                     var: first,
@@ -815,18 +835,21 @@ impl<'s> Parser<'s> {
                 }))
             }
             Token::Comma | Token::In => {
-                let mut vars = vec![first];
+                let mark = self.stk.names.len();
+                self.stk.names.push(first);
                 while self.accept(Token::Comma)? {
-                    vars.push(self.expect_name()?);
+                    let n = self.expect_name()?;
+                    self.stk.names.push(n);
                 }
+                let vars = finish(&mut self.chunk, &mut self.stk.names, mark);
                 self.expect(Token::In, "in")?;
                 let expr_line = self.tok.line;
                 let exprs = self.exprlist()?;
                 self.expect(Token::Do, "do")?;
-                for v in &vars {
-                    self.add_local_51(v.sym);
+                for i in vars.range() {
+                    self.add_local_51(self.chunk.name_lists[i].sym);
                 }
-                let body = self.loop_block(&vars)?;
+                let body = self.loop_block(vars)?;
                 self.expect_match(Token::End, "end", "for", line)?;
                 Ok(self.push_ended_stat(Stat::GenericFor {
                     vars,
@@ -843,10 +866,12 @@ impl<'s> Parser<'s> {
         let line = self.tok.line;
         self.advance()?;
         let base = self.expect_name()?;
-        let mut path = Vec::new();
+        let mark = self.stk.names.len();
         while self.accept(Token::Dot)? {
-            path.push(self.expect_name()?);
+            let n = self.expect_name()?;
+            self.stk.names.push(n);
         }
+        let path = finish(&mut self.chunk, &mut self.stk.names, mark);
         let method = if self.accept(Token::Colon)? {
             Some(self.expect_name()?)
         } else {
@@ -887,20 +912,21 @@ impl<'s> Parser<'s> {
         } else {
             None
         };
-        let mut names = Vec::new();
+        let mark = self.stk.attribs.len();
         loop {
             let name = self.expect_name()?;
             self.new_local()?;
             let attrib = self.attrib()?;
-            names.push(AttribName { name, attrib });
+            self.stk.attribs.push(AttribName { name, attrib });
             if !self.accept(Token::Comma)? {
                 break;
             }
         }
+        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
-            Vec::new()
+            List::EMPTY
         };
         Ok((collective, names, exprs))
     }
@@ -921,10 +947,9 @@ impl<'s> Parser<'s> {
         }
         let (collective, names, exprs) = self.attnamelist()?;
         self.activate_locals()?;
-        let syms: Vec<Sym> = names.iter().map(|an| an.name.sym).collect();
-        self.declare(syms.iter().copied());
-        for s in syms {
-            self.add_local_51(s);
+        self.declare_attrib_names(names);
+        for i in names.range() {
+            self.add_local_51(self.chunk.attrib_name_lists[i].name.sym);
         }
         Ok(self.push_stat(Stat::Local {
             collective,
@@ -951,23 +976,23 @@ impl<'s> Parser<'s> {
             })?;
             return Ok(self.push_stat(Stat::GlobalAll { attrib: leading }));
         }
-        let mut names = Vec::new();
+        let mark = self.stk.attribs.len();
         loop {
             let name = self.expect_name()?;
             let attrib = self.attrib()?;
-            names.push(AttribName { name, attrib });
+            self.stk.attribs.push(AttribName { name, attrib });
             if !self.accept(Token::Comma)? {
                 break;
             }
         }
+        let names = finish(&mut self.chunk, &mut self.stk.attribs, mark);
         let exprs = if self.accept(Token::Assign)? {
             self.exprlist()?
         } else {
-            Vec::new()
+            List::EMPTY
         };
         // the declared names come into scope after their initializers
-        let syms: Vec<Sym> = names.iter().map(|an| an.name.sym).collect();
-        self.declare(syms);
+        self.declare_attrib_names(names);
         Ok(self.push_stat(Stat::Global {
             collective: leading,
             names,
@@ -978,7 +1003,7 @@ impl<'s> Parser<'s> {
     fn expr_stat(&mut self) -> Result<StatId, SyntaxError> {
         let first = self.suffixed_expr()?;
         let is_call = matches!(
-            self.exprs[first.0 as usize],
+            self.chunk.exprs[first.0 as usize],
             Expr::Call { .. } | Expr::MethodCall { .. }
         );
         // 5.1 `exprstat` takes anything that is not a call as the start of
@@ -997,12 +1022,13 @@ impl<'s> Parser<'s> {
         }
         // PUC `assignment`/`restassign` check each target as soon as it is
         // parsed, so the near-token is the one following that target.
-        let mut targets = vec![first];
+        let mark = self.stk.exprs.len();
+        self.stk.exprs.push(first);
         let mut entered = 0;
         loop {
-            let last = *targets.last().expect("one target");
+            let last = *self.stk.exprs.last().expect("one target");
             if !matches!(
-                self.exprs[last.0 as usize],
+                self.chunk.exprs[last.0 as usize],
                 Expr::Name(_) | Expr::Index { .. }
             ) {
                 return Err(self.error("syntax error"));
@@ -1015,8 +1041,9 @@ impl<'s> Parser<'s> {
             // targets), after reading the target: 5.1 as a count of
             // "variables in assignment", 5.2/5.3 as C levels, 5.4+ by
             // entering a level that stays entered until the statement ends.
-            let nvars = targets.len() as u32;
-            targets.push(self.suffixed_expr()?);
+            let nvars = (self.stk.exprs.len() - mark) as u32;
+            let t = self.suffixed_expr()?;
+            self.stk.exprs.push(t);
             match self.version {
                 LuaVersion::Lua51 => {
                     let limit = MAX_DEPTH.saturating_sub(self.depth);
@@ -1038,6 +1065,7 @@ impl<'s> Parser<'s> {
                 }
             }
         }
+        let targets = finish(&mut self.chunk, &mut self.stk.exprs, mark);
         self.expect(Token::Assign, "=")?;
         let exprs = self.exprlist()?;
         self.depth -= entered;
@@ -1046,12 +1074,15 @@ impl<'s> Parser<'s> {
 
     // ---- expressions ----
 
-    fn exprlist(&mut self) -> Result<Vec<ExprId>, SyntaxError> {
-        let mut list = vec![self.expr()?];
+    fn exprlist(&mut self) -> Result<List<ExprId>, SyntaxError> {
+        let mark = self.stk.exprs.len();
+        let e = self.expr()?;
+        self.stk.exprs.push(e);
         while self.accept(Token::Comma)? {
-            list.push(self.expr()?);
+            let e = self.expr()?;
+            self.stk.exprs.push(e);
         }
-        Ok(list)
+        Ok(finish(&mut self.chunk, &mut self.stk.exprs, mark))
     }
 
     fn expr(&mut self) -> Result<ExprId, SyntaxError> {
@@ -1121,9 +1152,8 @@ impl<'s> Parser<'s> {
                 Expr::Float(v)
             }
             Token::Str(_) => {
-                let Token::Str(s) = self.advance()?.tok else {
-                    unreachable!()
-                };
+                let s = self.tok_sym;
+                self.advance()?;
                 Expr::Str(s)
             }
             Token::LBrace => return self.table_constructor(),
@@ -1177,8 +1207,7 @@ impl<'s> Parser<'s> {
                 Token::Dot => {
                     self.advance()?;
                     let name = self.expect_name()?;
-                    let key = self.text(name.sym).as_bytes().to_vec();
-                    let key = self.push_expr(Expr::Str(key));
+                    let key = self.push_expr(Expr::Str(name.sym));
                     e = self.push_expr(Expr::Index { obj: e, key });
                 }
                 Token::LBracket => {
@@ -1222,7 +1251,7 @@ impl<'s> Parser<'s> {
         Ok(e)
     }
 
-    fn call_args(&mut self) -> Result<Vec<ExprId>, SyntaxError> {
+    fn call_args(&mut self) -> Result<List<ExprId>, SyntaxError> {
         match &self.tok.tok {
             Token::LParen => {
                 // 5.1 rejects a call paren on a new line (removed in 5.2)
@@ -1232,7 +1261,7 @@ impl<'s> Parser<'s> {
                 let line = self.tok.line;
                 self.advance()?;
                 let args = if self.tok.tok == Token::RParen {
-                    Vec::new()
+                    List::EMPTY
                 } else {
                     self.exprlist()?
                 };
@@ -1240,12 +1269,15 @@ impl<'s> Parser<'s> {
                 Ok(args)
             }
             Token::Str(_) => {
-                let Token::Str(s) = self.advance()?.tok else {
-                    unreachable!()
-                };
-                Ok(vec![self.push_expr(Expr::Str(s))])
+                let s = self.tok_sym;
+                self.advance()?;
+                let e = self.push_expr(Expr::Str(s));
+                Ok(self.chunk.push_list(&[e]))
             }
-            Token::LBrace => Ok(vec![self.table_constructor()?]),
+            Token::LBrace => {
+                let e = self.table_constructor()?;
+                Ok(self.chunk.push_list(&[e]))
+            }
             _ => Err(self.error("function arguments expected")),
         }
     }
@@ -1253,7 +1285,7 @@ impl<'s> Parser<'s> {
     fn table_constructor(&mut self) -> Result<ExprId, SyntaxError> {
         let line = self.tok.line;
         self.expect(Token::LBrace, "{")?;
-        let mut fields = Vec::new();
+        let mark = self.stk.fields.len();
         loop {
             if self.tok.tok == Token::RBrace {
                 break;
@@ -1264,20 +1296,22 @@ impl<'s> Parser<'s> {
                 self.expect(Token::RBracket, "]")?;
                 self.expect(Token::Assign, "=")?;
                 let value = self.expr()?;
-                fields.push(TableField::Keyed(key, value));
+                self.stk.fields.push(TableField::Keyed(key, value));
             } else if matches!(self.tok.tok, Token::Name(_)) && *self.peek()? == Token::Assign {
                 let name = self.expect_name()?;
                 self.advance()?; // '='
                 let value = self.expr()?;
-                fields.push(TableField::Named(name, value));
+                self.stk.fields.push(TableField::Named(name, value));
             } else {
-                fields.push(TableField::Item(self.expr()?));
+                let e = self.expr()?;
+                self.stk.fields.push(TableField::Item(e));
             }
             if !(self.accept(Token::Comma)? || self.accept(Token::Semi)?) {
                 break;
             }
         }
         self.expect_match(Token::RBrace, "}", "{", line)?;
+        let fields = finish(&mut self.chunk, &mut self.stk.fields, mark);
         Ok(self.push_expr(Expr::Table { fields, line }))
     }
 
@@ -1287,7 +1321,7 @@ impl<'s> Parser<'s> {
         self.expect(Token::LParen, "(")?;
         self.func_local_count.push((0, line, 0));
         self.enter_fn_51(line);
-        let mut params = Vec::new();
+        let mark = self.stk.names.len();
         let mut vararg = Vararg::None;
         if self.tok.tok != Token::RParen {
             loop {
@@ -1311,7 +1345,7 @@ impl<'s> Parser<'s> {
                         let p = self.expect_name()?;
                         self.new_local()?;
                         self.add_local_51(p.sym);
-                        params.push(p);
+                        self.stk.names.push(p);
                     }
                     _ => return Err(self.error("<name> or '...' expected")),
                 }
@@ -1325,8 +1359,15 @@ impl<'s> Parser<'s> {
             g.enter_function();
             Ok(())
         })?;
-        let syms: Vec<Sym> = params.iter().map(|p| p.sym).collect();
-        self.declare(syms);
+        let params = finish(&mut self.chunk, &mut self.stk.names, mark);
+        let Parser {
+            gotos, lex, chunk, ..
+        } = self;
+        if let Some(g) = gotos {
+            for p in chunk.list(params) {
+                g.declare(lex.names().text(p.sym));
+            }
+        }
         self.expect(Token::RParen, ")")?;
         self.funcs.push(FnFlow {
             vararg: !matches!(vararg, Vararg::None),

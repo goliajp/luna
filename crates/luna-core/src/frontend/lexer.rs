@@ -26,10 +26,11 @@ pub struct Lexer<'s> {
     /// dialect's scanner leaves it in (escapes half-decoded, delimiters
     /// kept, and so on).
     buf: Vec<u8>,
-    /// set for the load path: identifiers are interned here and handed out
-    /// as `last_sym` with an empty `Token::Name`
+    /// set for the load path: identifiers and string literals are interned
+    /// here and handed out as `last_sym` with an empty `Token::Name` /
+    /// `Token::Str`
     names: Option<Names>,
-    /// the number of the identifier just read, when interning
+    /// the number of the identifier or literal just read, when interning
     pub(crate) last_sym: Sym,
 }
 
@@ -217,7 +218,7 @@ impl<'s> Lexer<'s> {
             b'0'..=b'9' => self.number(self.pos)?,
             b'"' | b'\'' => self.string(c)?,
             b'[' => match self.skip_sep() {
-                Some(level) => Token::Str(self.long_string(level, false)?),
+                Some(level) => self.long_string(level, false)?,
                 None if self.buf.len() == 1 => Token::LBracket,
                 None => return Err(self.buf_error("invalid long string delimiter")),
             },
@@ -328,7 +329,7 @@ impl<'s> Lexer<'s> {
                 let text = unsafe { str::from_utf8_unchecked(text) };
                 match &mut self.names {
                     Some(names) => {
-                        self.last_sym = names.intern(text);
+                        self.last_sym = names.intern(text.as_bytes());
                         Token::Name(Box::default())
                     }
                     None => Token::Name(text.into()),
@@ -354,8 +355,8 @@ impl<'s> Lexer<'s> {
     }
 
     /// Body of a long string/comment; the opener up to its second bracket is
-    /// in the buffer, that bracket is current. Returns the contents.
-    fn long_string(&mut self, level: u32, is_comment: bool) -> Result<Vec<u8>, SyntaxError> {
+    /// in the buffer, that bracket is current. Returns the string token.
+    fn long_string(&mut self, level: u32, is_comment: bool) -> Result<Token, SyntaxError> {
         let open_line = self.line;
         self.save_next();
         if self.cur_is_newline() {
@@ -376,10 +377,10 @@ impl<'s> Lexer<'s> {
                     if self.skip_sep() == Some(level) {
                         self.save_next();
                         if is_comment {
-                            return Ok(Vec::new());
+                            return Ok(Token::Eof);
                         }
                         let n = 2 + level as usize;
-                        return Ok(self.buf[n..self.buf.len() - n].to_vec());
+                        return Ok(self.str_token(n, self.buf.len() - n));
                     }
                 }
                 // 5.1 (LUA_COMPAT_LSTR == 1) rejects a nested `[[` inside a
@@ -433,7 +434,19 @@ impl<'s> Lexer<'s> {
             }
         }
         self.save_next();
-        Ok(Token::Str(self.buf[1..self.buf.len() - 1].to_vec()))
+        Ok(self.str_token(1, self.buf.len() - 1))
+    }
+
+    /// The string token of `buf[from..to]`: interned when this lexer
+    /// interns (see [`Lexer::last_sym`]), else with its own bytes.
+    fn str_token(&mut self, from: usize, to: usize) -> Token {
+        match &mut self.names {
+            Some(names) => {
+                self.last_sym = names.intern(&self.buf[from..to]);
+                Token::Str(Vec::new())
+            }
+            None => Token::Str(self.buf[from..to].to_vec()),
+        }
     }
 
     /// PUC `read_numeral` over the numeral starting at `start` (a leading

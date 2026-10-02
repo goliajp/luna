@@ -35,9 +35,9 @@ fn p(src: &str) -> Chunk {
 /// statement in the chunk; preceding `Local` / `local function` setup
 /// stats are skipped.
 fn assign_parts(chunk: &Chunk) -> (Vec<ExprId>, Vec<ExprId>) {
-    for &sid in chunk.block.stats.iter().rev() {
+    for &sid in chunk.block_stats(&chunk.block).iter().rev() {
         if let Stat::Assign { targets, exprs } = chunk.stat(sid) {
-            return (targets.clone(), exprs.clone());
+            return (chunk.list(*targets).to_vec(), chunk.list(*exprs).to_vec());
         }
     }
     panic!("no Assign statement in chunk");

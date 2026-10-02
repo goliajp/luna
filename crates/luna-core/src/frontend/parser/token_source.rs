@@ -30,7 +30,8 @@ pub(crate) enum TokenSource<'s> {
 pub(super) struct Cur {
     pub(super) info: TokenInfo,
     pub(super) char: Option<u8>,
-    /// the interned name of a `Token::Name`, whose text is left empty
+    /// the interned name of a `Token::Name` or literal of a `Token::Str`,
+    /// whose text a live lexer leaves empty
     pub(super) sym: Sym,
 }
 
@@ -74,7 +75,8 @@ impl<'s> TokenSource<'s> {
                     let t = tokens[*cursor].clone();
                     *cursor += 1;
                     let sym = match &t.tok {
-                        Token::Name(text) => names.intern(text),
+                        Token::Name(text) => names.intern(text.as_bytes()),
+                        Token::Str(bytes) => names.intern(bytes),
                         _ => Sym(0),
                     };
                     Ok(Cur {
