@@ -40,81 +40,7 @@ pub(super) fn detect_accumulators(
         return Vec::new();
     }
 
-    // Step 1: idiom scan. For each Concat at index `ci`, check the
-    // 3 surrounding ops match.
-    let mut candidates: Vec<(AccumSite, usize, usize, usize, usize)> = Vec::new();
-    for ci in 2..upper.saturating_sub(1) {
-        let concat_rop = &record.ops[ci];
-        if !matches!(concat_rop.inst.op(), Op::Concat) {
-            continue;
-        }
-        if concat_rop.inline_depth != 0 {
-            continue;
-        }
-        if concat_rop.inst.b() != 2 {
-            continue;
-        }
-        let tmp = concat_rop.inst.a();
-
-        // Pre-Move 1: Move A=tmp B=s_slot
-        let pre1 = &record.ops[ci - 2];
-        if pre1.inline_depth != 0 || !matches!(pre1.inst.op(), Op::Move) || pre1.inst.a() != tmp {
-            continue;
-        }
-        let s_slot = pre1.inst.b();
-
-        // Pre-Move 2: Move A=tmp+1 B=v_slot
-        let pre2 = &record.ops[ci - 1];
-        if pre2.inline_depth != 0 || !matches!(pre2.inst.op(), Op::Move) || pre2.inst.a() != tmp + 1
-        {
-            continue;
-        }
-        let v_slot = pre2.inst.b();
-
-        // Post-Move: Move A=s_slot B=tmp
-        let post = &record.ops[ci + 1];
-        if post.inline_depth != 0
-            || !matches!(post.inst.op(), Op::Move)
-            || post.inst.a() != s_slot
-            || post.inst.b() != tmp
-        {
-            continue;
-        }
-
-        // both the accumulator slot and the
-        // piece slot must be Str at recorder-fire time for the
-        // buffered emit to be sound. `luna_jit_str_buf_extend`
-        // unconditionally interprets the raw bits as a
-        // `*const LuaStr`; a non-Str payload (e.g. Int(1) =
-        // raw=1) would dereference address 0x1 → SIGSEGV. The
-        // dispatcher's entry-tag guard (`src/vm/exec.rs:~5124`)
-        // ensures runtime tags match `record.entry_tags`, so
-        // gating on Str-at-recorder-fire is sufficient. Covered by
-        // `trace_ipairs_val_tag_guard::ipairs_mixed_tag_array_deopts
-        // _no_garbage` with `{'a', 1, 'c'}`.
-        let entry_tags = &record.entry_tags;
-        let s_tag = entry_tags.get(s_slot as usize).copied();
-        let v_tag = entry_tags.get(v_slot as usize).copied();
-        if s_tag != Some(luna_core::runtime::value::raw::STR)
-            || v_tag != Some(luna_core::runtime::value::raw::STR)
-        {
-            continue;
-        }
-        candidates.push((
-            AccumSite {
-                op_idx: ci,
-                pc: concat_rop.pc,
-                accum_slot: s_slot,
-                piece_slot: v_slot,
-                inline_depth: 0,
-                state: BufferState::Bufferable,
-            },
-            ci - 2, // pre1 idx
-            ci - 1, // pre2 idx
-            ci,     // concat idx
-            ci + 1, // post idx
-        ));
-    }
+    let candidates = accum_candidates(record, upper);
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -241,4 +167,90 @@ pub(super) fn detect_accumulators(
         out.push(site);
     }
     out
+}
+
+/// Step 1 of [`detect_accumulators`]: the idiom matches, each with its
+/// four op indices (pre1, pre2, concat, post).
+fn accum_candidates(
+    record: &TraceRecord,
+    upper: usize,
+) -> Vec<(AccumSite, usize, usize, usize, usize)> {
+    use luna_core::vm::isa::Op;
+
+    // Step 1: idiom scan. For each Concat at index `ci`, check the
+    // 3 surrounding ops match.
+    let mut candidates: Vec<(AccumSite, usize, usize, usize, usize)> = Vec::new();
+    for ci in 2..upper.saturating_sub(1) {
+        let concat_rop = &record.ops[ci];
+        if !matches!(concat_rop.inst.op(), Op::Concat) {
+            continue;
+        }
+        if concat_rop.inline_depth != 0 {
+            continue;
+        }
+        if concat_rop.inst.b() != 2 {
+            continue;
+        }
+        let tmp = concat_rop.inst.a();
+
+        // Pre-Move 1: Move A=tmp B=s_slot
+        let pre1 = &record.ops[ci - 2];
+        if pre1.inline_depth != 0 || !matches!(pre1.inst.op(), Op::Move) || pre1.inst.a() != tmp {
+            continue;
+        }
+        let s_slot = pre1.inst.b();
+
+        // Pre-Move 2: Move A=tmp+1 B=v_slot
+        let pre2 = &record.ops[ci - 1];
+        if pre2.inline_depth != 0 || !matches!(pre2.inst.op(), Op::Move) || pre2.inst.a() != tmp + 1
+        {
+            continue;
+        }
+        let v_slot = pre2.inst.b();
+
+        // Post-Move: Move A=s_slot B=tmp
+        let post = &record.ops[ci + 1];
+        if post.inline_depth != 0
+            || !matches!(post.inst.op(), Op::Move)
+            || post.inst.a() != s_slot
+            || post.inst.b() != tmp
+        {
+            continue;
+        }
+
+        // both the accumulator slot and the
+        // piece slot must be Str at recorder-fire time for the
+        // buffered emit to be sound. `luna_jit_str_buf_extend`
+        // unconditionally interprets the raw bits as a
+        // `*const LuaStr`; a non-Str payload (e.g. Int(1) =
+        // raw=1) would dereference address 0x1 → SIGSEGV. The
+        // dispatcher's entry-tag guard (`src/vm/exec.rs:~5124`)
+        // ensures runtime tags match `record.entry_tags`, so
+        // gating on Str-at-recorder-fire is sufficient. Covered by
+        // `trace_ipairs_val_tag_guard::ipairs_mixed_tag_array_deopts
+        // _no_garbage` with `{'a', 1, 'c'}`.
+        let entry_tags = &record.entry_tags;
+        let s_tag = entry_tags.get(s_slot as usize).copied();
+        let v_tag = entry_tags.get(v_slot as usize).copied();
+        if s_tag != Some(luna_core::runtime::value::raw::STR)
+            || v_tag != Some(luna_core::runtime::value::raw::STR)
+        {
+            continue;
+        }
+        candidates.push((
+            AccumSite {
+                op_idx: ci,
+                pc: concat_rop.pc,
+                accum_slot: s_slot,
+                piece_slot: v_slot,
+                inline_depth: 0,
+                state: BufferState::Bufferable,
+            },
+            ci - 2, // pre1 idx
+            ci - 1, // pre2 idx
+            ci,     // concat idx
+            ci + 1, // post idx
+        ));
+    }
+    candidates
 }
