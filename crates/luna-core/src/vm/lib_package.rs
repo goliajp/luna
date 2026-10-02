@@ -641,7 +641,7 @@ fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         let pv = str_value(vm, &name[..cut]);
         vm.newindex_value(mv, pk, pv)?;
     }
-    set_caller_env(vm, mv)?;
+    set_caller_env(vm, module)?;
     // options: 5.1 calls every extra argument, 5.2 only the functions
     for i in 1..nargs {
         let opt = a.get(vm, i);
@@ -656,20 +656,20 @@ fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Ok(vm.nat_return(fs, &[mv]))
 }
 
-/// Make `env` the environment of the Lua function that called `module`:
-/// 5.1's `setfenv` rewrites its (per-closure) `_ENV` cell, 5.2's
-/// `lua_setupvalue(f, 1)` its first upvalue.
-fn set_caller_env(vm: &mut Vm, env: Value) -> Result<(), LuaError> {
+/// Make `env` (the module table) the environment of the Lua function that
+/// called `module`: 5.1's `setfenv`, which gives the caller a new `_ENV`
+/// cell (the old one may be shared), 5.2's `lua_setupvalue(f, 1)` on its
+/// first upvalue.
+fn set_caller_env(vm: &mut Vm, env: Gc<Table>) -> Result<(), LuaError> {
     let Some(cl) = lua_caller(vm) else {
         return Err(raise_str(vm, "'module' not called from a Lua function"));
     };
-    let idx = if vm.version() == LuaVersion::Lua51 {
-        cl.proto.upvals.iter().position(|d| &*d.name == "_ENV")
-    } else {
-        (!cl.upvals().is_empty()).then_some(0)
-    };
-    if let Some(i) = idx {
-        vm.upvalue_set_value(cl, i, env);
+    if vm.version() == LuaVersion::Lua51 {
+        if let Some(i) = cl.proto.upvals.iter().position(|d| &*d.name == "_ENV") {
+            vm.set_closure_env(cl, i, env);
+        }
+    } else if !cl.upvals().is_empty() {
+        vm.upvalue_set_value(cl, 0, Value::Table(env));
     }
     Ok(())
 }

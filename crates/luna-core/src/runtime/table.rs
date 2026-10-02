@@ -361,7 +361,7 @@ impl Table {
         } else {
             0
         };
-        array_external + self.nodes().len() * std::mem::size_of::<Node>()
+        array_external + std::mem::size_of_val(self.nodes())
     }
 
     fn asize(&self) -> usize {
