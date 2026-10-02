@@ -1,5 +1,4 @@
-//! The hash-part entry of a table, and the slot-state word of the SoA
-//! hash part.
+//! The hash-part entry of a table, and the string-key probes over it.
 
 use crate::runtime::heap::Gc;
 use crate::runtime::value::Value;
@@ -96,65 +95,6 @@ impl Node {
     }
 }
 
-/// SoA Robin Hood meta-word layout.
-///
-/// Each `meta[idx]` slot encodes the open-addressing slot state in a
-/// single u16:
-/// - bit 15 (`OCCUPIED_BIT`): 0 = empty, 1 = occupied
-/// - bit 14 (`TOMBSTONE_BIT`): 0 = live, 1 = tombstoned-occupied
-/// - bits 13..0 (`PSL_MASK`): probe-sequence length (0..16383)
-///
-/// The 14-bit PSL field is **far** beyond any realistic Robin Hood
-/// max-PSL at load ≤ 0.75 (expected max ~20 on 1024 slots; even the
-/// long-tail outliers seen empirically with luna's existing hash
-/// distributions stay under 200). 2 bytes/slot is still 20× smaller
-/// than the 40-byte Node, so the SoA bandwidth gain is preserved.
-///
-/// A 1-byte meta with a 6-bit PSL cap of 63 is too narrow: under load
-/// 0.676 on cap=1024 the LuaStr+mix64 hash distribution produces a
-/// long-tail PSL of 64+.
-///
-/// Tombstones do NOT free the slot for `find` (probe continues past), but
-/// DO free it for `insert` (write the new entry, clear the tomb bit). They
-/// accumulate; the rehash path compacts them periodically.
-#[allow(dead_code)]
-pub(crate) mod meta_bits {
-    pub const OCCUPIED_BIT: u16 = 0b1000_0000_0000_0000;
-    pub const TOMBSTONE_BIT: u16 = 0b0100_0000_0000_0000;
-    pub const PSL_MASK: u16 = 0b0011_1111_1111_1111;
-    pub const PSL_MAX: u16 = PSL_MASK;
-    /// Empty slot — bit 15 = 0, all others 0.
-    pub const EMPTY: u16 = 0;
-
-    #[inline(always)]
-    pub fn is_occupied(m: u16) -> bool {
-        (m & OCCUPIED_BIT) != 0
-    }
-    #[inline(always)]
-    pub fn is_tombstone(m: u16) -> bool {
-        (m & TOMBSTONE_BIT) != 0
-    }
-    /// Live = occupied AND not tombstoned. `next()` iteration cursor returns
-    /// these. `find_slot_rh` short-circuits on a live match.
-    #[inline(always)]
-    pub fn is_live(m: u16) -> bool {
-        (m & (OCCUPIED_BIT | TOMBSTONE_BIT)) == OCCUPIED_BIT
-    }
-    #[inline(always)]
-    pub fn psl(m: u16) -> u16 {
-        m & PSL_MASK
-    }
-    #[inline(always)]
-    pub fn pack(psl: u16, tomb: bool) -> u16 {
-        debug_assert!(psl <= PSL_MAX);
-        let mut m = OCCUPIED_BIT | (psl & PSL_MASK);
-        if tomb {
-            m |= TOMBSTONE_BIT;
-        }
-        m
-    }
-}
-
 impl super::Table {
     /// The node holding the string key `key`, found by pointer (PUC
     /// `luaH_getshortstr`). Exact for a short (interned) string; for a long
@@ -164,17 +104,16 @@ impl super::Table {
         #[cfg(feature = "gc-verify")]
         self.verify_find_node_keys(Value::Str(key));
         let mask = self.node_mask;
-        if mask >> 63 != 0 {
+        if mask >> 31 != 0 {
             return None;
         }
-        debug_assert_eq!(mask as usize + 1, self.nodes.len());
         // a short string's hash is set when it is interned; a long one's
         // may still be the seed, which only makes a hit unlikely
-        let mut idx = (u64::from(key.stored_hash()) & mask) as usize;
+        let mut idx = (key.stored_hash() & mask) as usize;
         loop {
             // SAFETY: the main position is masked to the node count and
             // every `next` link is a node index written by `insert_new`
-            let node = unsafe { self.nodes.get_unchecked(idx) };
+            let node = unsafe { &*self.nodes.add(idx) };
             if node.key_is_str(key) {
                 return Some(idx);
             }
@@ -193,7 +132,7 @@ impl super::Table {
     ) -> Option<&Value> {
         let i = self.str_node_by_ptr(key)?;
         // SAFETY: a node index found above
-        Some(unsafe { &self.nodes.get_unchecked(i).val })
+        Some(unsafe { &(*self.nodes.add(i)).val })
     }
 
     /// [`Self::str_slot_by_ptr`] for a write.
@@ -205,12 +144,49 @@ impl super::Table {
     ) -> Option<&mut Value> {
         let i = self.str_node_by_ptr(key)?;
         // SAFETY: a node index found above
-        Some(unsafe { &mut self.nodes.get_unchecked_mut(i).val })
+        Some(unsafe { &mut (*self.nodes.add(i)).val })
+    }
+
+    /// The hash part.
+    #[inline(always)]
+    pub(crate) fn nodes(&self) -> &[Node] {
+        // SAFETY: `nodes` holds `node_mask + 1` nodes (0 when the mask is
+        // `u32::MAX`; the pointer is then dangling, which a zero-length
+        // slice allows)
+        unsafe { std::slice::from_raw_parts(self.nodes, self.node_mask.wrapping_add(1) as usize) }
+    }
+
+    /// The hash part, for a write.
+    #[inline(always)]
+    pub(crate) fn nodes_mut(&mut self) -> &mut [Node] {
+        // SAFETY: as in `nodes`; `&mut self` makes the access exclusive
+        unsafe {
+            std::slice::from_raw_parts_mut(self.nodes, self.node_mask.wrapping_add(1) as usize)
+        }
+    }
+
+    /// Install `nodes` (empty or a power-of-two length) as the hash part.
+    /// The previous one must have been taken already.
+    pub(super) fn set_hash_part(&mut self, nodes: Box<[Node]>) {
+        debug_assert!(nodes.len().is_power_of_two() || nodes.is_empty());
+        self.node_mask = (nodes.len() as u32).wrapping_sub(1);
+        self.nodes = Box::into_raw(nodes) as *mut Node;
+    }
+
+    /// Take the hash part out, leaving an empty one.
+    pub(super) fn take_hash_part(&mut self) -> Box<[Node]> {
+        let len = self.node_mask.wrapping_add(1) as usize;
+        let p = std::ptr::slice_from_raw_parts_mut(self.nodes, len);
+        self.nodes = std::ptr::NonNull::dangling().as_ptr();
+        self.node_mask = u32::MAX;
+        // SAFETY: `nodes` came from `Box::into_raw` of a slice of `len`
+        // (or is dangling with `len` 0, which is how an empty boxed slice
+        // is represented); it is not used again
+        unsafe { Box::from_raw(p) }
     }
 
     /// Give the hash part back (a pooled table's reset).
     pub(crate) fn drop_hash_part(&mut self) {
-        self.nodes = Box::new([]);
-        self.node_mask = u64::MAX;
+        drop(self.take_hash_part());
     }
 }

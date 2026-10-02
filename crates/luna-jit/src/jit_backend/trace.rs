@@ -6754,7 +6754,7 @@ fn lower_trace_into_inner<M: Module>(
                         .as_ref()
                         .expect("ic_active implies snapshot present");
 
-                    // --- Guards 1 & 2: metatable + nodes.len() ---
+                    // --- Guards 1 & 2: metatable + node count ---
                     let mt = bcx.ins().load(
                         types::I64,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
@@ -6763,14 +6763,14 @@ fn lower_trace_into_inner<M: Module>(
                     );
                     let zero = bcx.ins().iconst(types::I64, 0);
                     let mt_ok = bcx.ins().icmp(IntCC::Equal, mt, zero);
-                    let nodes_len = bcx.ins().load(
-                        types::I64,
+                    let node_mask = bcx.ins().load(
+                        types::I32,
                         cranelift_codegen::ir::MemFlagsData::trusted(),
                         t,
-                        super::TABLE_NODES_LEN_OFFSET as i32,
+                        super::TABLE_NODE_MASK_OFFSET as i32,
                     );
-                    let nodes_len_imm = bcx.ins().iconst(types::I64, snap.nodes_len as i64);
-                    let len_ok = bcx.ins().icmp(IntCC::Equal, nodes_len, nodes_len_imm);
+                    let mask = i64::from((snap.nodes_len as u32).wrapping_sub(1));
+                    let len_ok = bcx.ins().icmp_imm_u(IntCC::Equal, node_mask, mask);
                     let guards_12 = bcx.ins().band(mt_ok, len_ok);
 
                     // 3 blocks: fast (guards 3+4 + load), slow

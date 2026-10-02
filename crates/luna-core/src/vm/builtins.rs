@@ -96,9 +96,9 @@ pub(crate) fn open_base(vm: &mut Vm) {
         vm.set_global("gcinfo", f).expect("stdlib registration");
         // PUC 5.1 `setfenv`/`getfenv` — every Lua function carries its own
         // env (5.1 `LClosure.env`); 5.2 retired them in favour of the `_ENV`
-        // upvalue model. The Op::Closure path here clones cell 0 per
-        // closure under 5.1, so writing through the per-closure cell only
-        // affects that closure (events.lua / locals.lua / nextvar.lua).
+        // upvalue model. A 5.1 closure shares its creator's `_ENV` cell and
+        // `setfenv` replaces the cell, so the change only affects that
+        // closure (events.lua / locals.lua / nextvar.lua).
         let f = vm.native(nat_setfenv);
         vm.set_global("setfenv", f).expect("stdlib registration");
         let f = vm.native(nat_getfenv);
@@ -764,9 +764,8 @@ fn env_upvalue(cl: crate::runtime::Gc<crate::runtime::LuaClosure>) -> Option<usi
 }
 
 /// PUC 5.1 `setfenv(f|level, env)`: replace the env of the Lua function `f`
-/// (or of the Lua function at stack `level`). Writes through the closure's
-/// `_ENV` cell (which the 5.1 `Op::Closure` path keeps per-closure, so the
-/// rewrite only affects this specific function — not its siblings).
+/// (or of the Lua function at stack `level`). The closure gets a new `_ENV`
+/// cell, so the change does not reach the functions that shared the old one.
 fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let env = argcheck::check_table(vm, a, 1)?;
@@ -792,10 +791,7 @@ fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     };
     let env_idx = env_upvalue(cl)
         .ok_or_else(|| raise_str(vm, "'setfenv' cannot change environment of given object"))?;
-    let uv = cl.upvals()[env_idx];
-    // SAFETY: Gc<T> is NonNull<T> over the GC heap; the heap is single-threaded and the pointer is live as long as it is reachable from active roots (see heap.rs:5-7).
-    unsafe { uv.as_mut() }.set_closed(Value::Table(env));
-    vm.barrier_forward_upvalue(uv, Value::Table(env));
+    vm.set_closure_env(cl, env_idx, env);
     Ok(vm.nat_return(fs, &[Value::Closure(cl)]))
 }
 
